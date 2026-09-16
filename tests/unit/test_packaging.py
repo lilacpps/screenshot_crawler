@@ -87,6 +87,29 @@ def test_package_uses_manifest_files_and_ignores_extra_png(tmp_path) -> None:
 
     with zipfile.ZipFile(result.archive_path) as archive:
         assert archive.namelist() == ["作品名/page-0001.png"]
+    assert (crawl_dir / "page-9999.png").exists()
+
+
+def test_package_does_not_rmtree_unrelated_files(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "page-0001.png").write_bytes(b"declared")
+    unrelated = crawl_dir / "notes.txt"
+    unrelated.write_text("keep", encoding="utf-8")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+
+    result = package_crawl_output(
+        crawl_dir,
+        {"title": "作品名", "genre": "漫画"},
+        library_dir=tmp_path / "Books",
+    )
+
+    assert result.archive_path.exists()
+    assert crawl_dir.exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep"
 
 
 def test_package_fails_when_manifest_page_is_missing(tmp_path) -> None:

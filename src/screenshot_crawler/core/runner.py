@@ -34,20 +34,14 @@ class RunResult:
     stop_reason: str
 
 
-def _identity_key(identity: ContentIdentity) -> tuple[object, ...] | None:
-    """Return an explicit page identity, excluding the capture fingerprint.
+def _identity_key(identity: ContentIdentity) -> tuple[object, ...]:
+    """Return the complete identity record for progress/debug bookkeeping."""
 
-    ``source_id`` identifies the work/chapter, not necessarily the page. A
-    page number or page ID is therefore required before identity can be the
-    duplicate authority; otherwise the capture fingerprint is the fallback.
-    """
-
-    if identity.page_id is None and identity.page_number is None:
-        return None
     return (
         identity.page_id,
         identity.page_number,
         identity.source_id,
+        identity.fingerprint,
     )
 
 
@@ -129,6 +123,7 @@ class CrawlerRunner:
 
         saved_pages: list[CapturedPage] = []
         seen_identities: set[tuple[object, ...]] = set()
+        seen_fingerprints: set[str] = set()
         same_content_count = 0
         previous_identity: ContentIdentity | None = None
 
@@ -163,6 +158,7 @@ class CrawlerRunner:
                 identity = await self._adapter_call(
                     adapter.get_content_identity(page), "get_content_identity"
                 )
+                identity_key = _identity_key(identity)
                 targets = await self._adapter_call(
                     adapter.get_capture_targets(page), "get_capture_targets"
                 )
@@ -177,20 +173,10 @@ class CrawlerRunner:
                         "cleanup_capture_targets",
                     )
                 fingerprints = [fingerprint_bytes(capture.data) for capture in captures]
-                explicit_identity = _identity_key(identity)
                 new_captures = [
                     (index, capture, fingerprints[index])
                     for index, capture in enumerate(captures)
-                    if (
-                        (
-                            "identity",
-                            explicit_identity,
-                            index,
-                        )
-                        if explicit_identity is not None
-                        else ("fingerprint", fingerprints[index])
-                    )
-                    not in seen_identities
+                    if fingerprints[index] not in seen_fingerprints
                 ]
                 if not new_captures:
                     same_content_count += 1
@@ -226,16 +212,9 @@ class CrawlerRunner:
                         ),
                     )
                     saved_pages.append(captured)
-                    seen_identities.add(
-                        (
-                            "identity",
-                            explicit_identity,
-                            part_index,
-                        )
-                        if explicit_identity is not None
-                        else ("fingerprint", fingerprint)
-                    )
+                    seen_fingerprints.add(fingerprint)
                     store.add_page(captured, fingerprint=fingerprint)
+                seen_identities.add(identity_key)
                 previous_identity = identity
 
                 await self._adapter_call(adapter.go_next(page), "go_next")

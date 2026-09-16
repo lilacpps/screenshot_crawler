@@ -14,7 +14,7 @@ state/
 # Browser profiles / secrets
 browser-data/
 .auth/
-.chrome-bookwalker/
+.chrome-*/
 .env
 
 # IDE

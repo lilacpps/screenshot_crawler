@@ -289,7 +289,7 @@ async def test_runner_rejects_content_after_max_pages(
         ).run(FakePage(), adapter)
 
 
-async def test_runner_keeps_same_fingerprint_for_different_explicit_identities(
+async def test_runner_keeps_fingerprint_as_duplicate_authority(
     tmp_path: Path,
     fake_capture: None,
 ) -> None:
@@ -299,36 +299,6 @@ async def test_runner_keeps_same_fingerprint_for_different_explicit_identities(
             ContentIdentity(page_number=1, source_id="work-1"),
             ContentIdentity(page_number=2, source_id="work-1"),
         ],
-    )
-
-    result = await CrawlerRunner(
-        RunConfig(
-            site="test",
-            source_url="https://example.test/viewer",
-            output_dir=tmp_path / "run",
-            diagnostics_dir=tmp_path / "diagnostics",
-        )
-    ).run(FakePage(), adapter)
-
-    assert len(result.pages) == 2
-
-
-async def test_runner_uses_same_identity_even_when_repeated_capture_differs(
-    tmp_path: Path,
-    fake_capture: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    async def capture(_target: object) -> CaptureResult:
-        nonlocal calls
-        calls += 1
-        return CaptureResult(data=f"capture-{calls}".encode(), width=100, height=200)
-
-    monkeypatch.setattr("screenshot_crawler.core.runner.capture_locator", capture)
-    adapter = FakeAdapter(
-        [PageState.CONTENT],
-        [ContentIdentity(page_number=1, source_id="work-1")],
     )
 
     with pytest.raises(PageChangeTimeoutError, match="same content"):
@@ -341,7 +311,6 @@ async def test_runner_uses_same_identity_even_when_repeated_capture_differs(
             )
         ).run(FakePage(), adapter)
 
-    assert calls > 1
     assert len(json.loads((tmp_path / "run" / "manifest.json").read_text())["pages"]) == 1
 
 
@@ -383,6 +352,28 @@ async def test_runner_does_not_overwrite_existing_run(
 
     assert (output_dir / "manifest.json").read_text(encoding="utf-8") == '{"keep": true}\n'
     assert (output_dir / "page-0001.png").read_bytes() == b"old"
+
+
+async def test_runner_rejects_non_empty_output_directory(
+    tmp_path: Path,
+    fake_capture: None,
+) -> None:
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    unrelated = output_dir / "notes.txt"
+    unrelated.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(RunAlreadyExistsError, match="not empty"):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=output_dir,
+                diagnostics_dir=tmp_path / "diagnostics",
+            )
+        ).run(FakePage(), FakeAdapter([PageState.END], []))
+
+    assert unrelated.read_text(encoding="utf-8") == "keep"
 
 
 def test_progress_store_does_not_overwrite_existing_manifest_or_progress(

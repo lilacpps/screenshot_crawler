@@ -110,6 +110,24 @@ def _manifest_page_files(source: Path) -> list[tuple[Path, PurePosixPath]]:
     return result
 
 
+def _source_contains_only_generated_files(
+    source: Path, page_files: list[tuple[Path, PurePosixPath]]
+) -> bool:
+    """Allow cleanup only when every source entry is a known run artifact."""
+
+    if source.name.lower() == "output":
+        return False
+    expected = {"manifest.json", "progress.json"}
+    for _, relative_file in page_files:
+        if len(relative_file.parts) != 1:
+            return False
+        expected.add(relative_file.name)
+    entries = list(source.iterdir())
+    return len(entries) == len(expected) and all(
+        entry.is_file() and entry.name in expected for entry in entries
+    )
+
+
 def package_crawl_output(
     output_dir: str | Path,
     metadata: Mapping[str, str | None],
@@ -120,7 +138,8 @@ def package_crawl_output(
 
     The ZIP contains only captured PNG pages under a top-level folder whose
     name matches the archive stem. The source crawl directory is removed only
-    after the archive and completion status have been written successfully.
+    when it contains generated run files and the archive and completion
+    status have been written successfully.
     """
 
     source = Path(output_dir)
@@ -167,14 +186,9 @@ def package_crawl_output(
     }
     atomic_write_json(status_path, status)
 
-    # Keep failed runs available for diagnostics, but remove the intermediate
-    # crawl directory after a successfully archived run. Require the files
-    # produced by ProgressStore before deleting anything as a safety guard.
-    removable = (
-        source.name.lower() != "output"
-        and (source / "manifest.json").is_file()
-        and (source / "progress.json").is_file()
-    )
+    # Keep failed runs and directories containing user files available. Only
+    # remove a source directory whose complete contents are generated files.
+    removable = _source_contains_only_generated_files(source, page_files)
     cleanup_error: str | None = None
     if removable:
         try:

@@ -83,25 +83,17 @@ class MangaOneAdapter(SiteAdapter):
     page_change_timeout_ms = 10_000
     render_stable_checks = 3
     advance_retry_count = 2
+    end_grace_ms = 2_500
 
     viewer_selector = ".viewer-container"
     page_selector = '.viewer-container img[alt^="page_"]'
     fullscreen_label = "全画面"
-    end_selectors = (
-        "#endOfChapter",
-        "#chapterEnd",
-        "#end-of-chapter",
-        '[data-viewer-state="end"]',
-        '[data-viewer-state="ended"]',
-        '[data-state="end"]',
-        '[data-state="ended"]',
-        '[data-end-of-chapter="true"]',
-    )
 
     def __init__(self) -> None:
         self._initial_url: str | None = None
         self._initial_context: ContentContext | None = None
         self._advance_pending = False
+        self._ended = False
         self._output_title: str | None = None
         self._output_order: str | None = None
 
@@ -225,6 +217,7 @@ class MangaOneAdapter(SiteAdapter):
     async def initialize(self, page: Page) -> None:
         self._initial_url = page.url
         self._advance_pending = False
+        self._ended = False
         # The chapter page mounts the reader controls asynchronously. Wait for
         # the first image before looking for the Full Screen control, then wait
         # again because entering Full Screen changes the image geometry.
@@ -245,6 +238,9 @@ class MangaOneAdapter(SiteAdapter):
         }
 
     async def detect_state(self, page: Page) -> PageState:
+        if self._ended:
+            return PageState.END
+
         if self._initial_url is not None:
             initial_work, initial_chapter = self.chapter_parts_from_url(self._initial_url)
             current_work, current_chapter = self.chapter_parts_from_url(page.url)
@@ -255,9 +251,6 @@ class MangaOneAdapter(SiteAdapter):
             ):
                 return PageState.NEXT_CONTENT
 
-        if await self._explicit_end_visible(page):
-            return PageState.END
-
         if await self._page_image_rows(page):
             return PageState.CONTENT
         if await page.locator(self.page_selector).count():
@@ -265,14 +258,6 @@ class MangaOneAdapter(SiteAdapter):
         if await self._visible(page.locator(self.viewer_selector)):
             return PageState.LOADING if self._advance_pending else PageState.UNKNOWN
         return PageState.UNKNOWN
-
-    async def _explicit_end_visible(self, page: Page) -> bool:
-        """Return only for a viewer-provided, explicit end marker/state."""
-
-        for selector in self.end_selectors:
-            if await self._visible(page.locator(selector)):
-                return True
-        return False
 
     async def get_capture_target(self, page: Page) -> Locator:
         targets = await self._visible_page_images(page)
@@ -345,14 +330,14 @@ class MangaOneAdapter(SiteAdapter):
         elapsed_ms = 0
         retry_count = 0
         retry_at_ms = self.page_change_timeout_ms // (self.advance_retry_count + 1)
+        no_page_since: int | None = None
         while elapsed_ms < self.page_change_timeout_ms:
-            state = await self.detect_state(page)
-            if state in {PageState.END, PageState.NEXT_CONTENT}:
-                self._advance_pending = False
+            if self._ended:
                 return
 
             rows = await self._page_image_rows(page)
             if rows:
+                no_page_since = None
                 current = await self.get_content_identity(page)
                 if current != previous_identity:
                     await self._wait_for_render_ready(page)
@@ -364,6 +349,13 @@ class MangaOneAdapter(SiteAdapter):
                     retry_at_ms = self.page_change_timeout_ms * (retry_count + 1) // (
                         self.advance_retry_count + 1
                     )
+            else:
+                if no_page_since is None:
+                    no_page_since = elapsed_ms
+                if elapsed_ms - no_page_since >= self.end_grace_ms:
+                    self._ended = True
+                    self._advance_pending = False
+                    return
 
             await page.wait_for_timeout(100)
             elapsed_ms += 100

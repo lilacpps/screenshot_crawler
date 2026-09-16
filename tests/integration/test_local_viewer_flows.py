@@ -19,6 +19,7 @@ _IMAGE = (
     "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
     "width='200' height='300'%3E%3Crect width='200' height='300' fill='%23bada55'/%3E%3C/svg%3E"
 )
+_IMAGE_ALT = _IMAGE.replace("%23bada55", "%23255f9a")
 
 
 @pytest.fixture
@@ -42,7 +43,10 @@ class LocalViewerAdapter(SiteAdapter):
         self.spread = spread
 
     async def initialize(self, page: Page) -> None:
-        return
+        await page.wait_for_function("document.body.dataset.state !== undefined")
+        await page.wait_for_function(
+            "Array.from(document.images).every(image => image.complete && image.naturalWidth > 0)"
+        )
 
     async def detect_state(self, page: Page) -> PageState:
         value = await page.locator("body").get_attribute("data-state")
@@ -80,10 +84,13 @@ class LocalViewerAdapter(SiteAdapter):
 
 def local_viewer_html(steps: list[dict[str, object]]) -> str:
     serialized = json.dumps(steps)
+    default_image = json.dumps(_IMAGE)
     return f"""
     <style>
       body {{ margin: 0; }}
       img {{ width: 200px; height: 300px; object-fit: fill; }}
+      #right, #left {{ position: fixed; left: 0; top: 0; }}
+      #next {{ position: fixed; left: 400px; top: 0; z-index: 5; }}
     </style>
     <img id="single" src="{_IMAGE}">
     <img id="right" src="{_IMAGE}" hidden>
@@ -96,6 +103,9 @@ def local_viewer_html(steps: list[dict[str, object]]) -> str:
         const step = steps[index];
         document.body.dataset.state = step.state;
         document.body.dataset.identity = step.identity || '';
+        for (const image of document.querySelectorAll('img')) {{
+          image.src = step.image || {default_image};
+        }}
         document.querySelector('#single').hidden = step.state !== 'content' || !!step.spread;
         document.querySelector('#right').hidden = step.state !== 'content' || !step.spread;
         document.querySelector('#left').hidden = step.state !== 'content' || !step.spread;
@@ -124,7 +134,7 @@ async def install_route(page: Page, url: str, body: str) -> None:
         (
             [
                 {"state": "content", "identity": "p1"},
-                {"state": "content", "identity": "p2"},
+                {"state": "content", "identity": "p2", "image": _IMAGE_ALT},
                 {"state": "end"},
             ],
             2,
@@ -134,7 +144,7 @@ async def install_route(page: Page, url: str, body: str) -> None:
             [
                 {"state": "content", "identity": "p1"},
                 {"state": "ad"},
-                {"state": "content", "identity": "p2"},
+                {"state": "content", "identity": "p2", "image": _IMAGE_ALT},
                 {"state": "end"},
             ],
             2,
@@ -143,7 +153,7 @@ async def install_route(page: Page, url: str, body: str) -> None:
         (
             [
                 {"state": "content", "identity": "p1"},
-                {"state": "content", "identity": "p2"},
+                {"state": "content", "identity": "p2", "image": _IMAGE_ALT},
                 {"state": "next_content"},
             ],
             2,
@@ -153,7 +163,7 @@ async def install_route(page: Page, url: str, body: str) -> None:
             [
                 {"state": "content", "identity": "p1"},
                 {"state": "loading", "auto_to": 2},
-                {"state": "content", "identity": "p2"},
+                {"state": "content", "identity": "p2", "image": _IMAGE_ALT},
                 {"state": "end"},
             ],
             2,
@@ -302,7 +312,7 @@ async def test_runner_local_dom_exact_max_pages_can_stop(
         local_viewer_html(
             [
                 {"state": "content", "identity": "p1"},
-                {"state": "content", "identity": "p2"},
+                {"state": "content", "identity": "p2", "image": _IMAGE_ALT},
                 {"state": terminal_state.value},
             ]
         ),
@@ -332,7 +342,7 @@ async def test_runner_local_dom_content_after_max_pages_fails(
         local_viewer_html(
             [
                 {"state": "content", "identity": "p1"},
-                {"state": "content", "identity": "p2"},
+                {"state": "content", "identity": "p2", "image": _IMAGE_ALT},
             ]
         ),
     )
@@ -354,12 +364,11 @@ def mangaone_html() -> str:
     <title>Fixture 第1話</title>
     <div class="viewer-container" style="width: 600px; height: 500px;">
       <img alt="page_0" src="{_IMAGE}" style="width: 200px; height: 300px;">
-      <div id="endOfChapter" hidden>END</div>
     </div>
     """
 
 
-async def test_mangaone_image_gap_times_out_instead_of_becoming_end(
+async def test_mangaone_image_gap_becomes_end_after_grace_period(
     browser_page: Page,
 ) -> None:
     url = "http://manga-one.test/manga/work/chapter/1"
@@ -375,11 +384,11 @@ async def test_mangaone_image_gap_times_out_instead_of_becoming_end(
     await adapter.go_next(browser_page)
 
     assert await adapter.detect_state(browser_page) is PageState.LOADING
-    with pytest.raises(PageChangeTimeoutError):
-        await adapter.wait_for_change(browser_page, identity)
+    await adapter.wait_for_change(browser_page, identity)
+    assert await adapter.detect_state(browser_page) is PageState.END
 
 
-async def test_mangaone_explicit_end_is_end_and_chapter_change_is_next_content(
+async def test_mangaone_graceful_end_and_chapter_change_are_distinct(
     browser_page: Page,
 ) -> None:
     first_url = "http://manga-one.test/manga/work/chapter/1"
@@ -390,16 +399,19 @@ async def test_mangaone_explicit_end_is_end_and_chapter_change_is_next_content(
     adapter = MangaOneAdapter()
     await adapter.initialize(browser_page)
 
-    await browser_page.locator("#endOfChapter").evaluate(
-        "element => element.hidden = false"
-    )
+    await browser_page.goto(second_url)
+    assert await adapter.detect_state(browser_page) is PageState.NEXT_CONTENT
+
+    await browser_page.goto(first_url)
+    adapter = MangaOneAdapter()
+    await adapter.initialize(browser_page)
+    identity = await adapter.get_content_identity(browser_page)
     await browser_page.locator("img[alt^='page_']").evaluate(
         "element => element.style.display = 'none'"
     )
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, identity)
     assert await adapter.detect_state(browser_page) is PageState.END
-
-    await browser_page.goto(second_url)
-    assert await adapter.detect_state(browser_page) is PageState.NEXT_CONTENT
 
 
 async def test_mangaone_unknown_after_image_and_viewer_disappear_times_out(

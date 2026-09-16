@@ -66,7 +66,7 @@ def _context_dict(context: ContentContext | None) -> dict[str, Any]:
 
 
 def ensure_new_run(output_dir: str | Path) -> Path:
-    """Reject a directory that contains recognizable artifacts from a run.
+    """Reject a directory that is not empty before starting a new run.
 
     Resume is deliberately not implemented yet. Refusing these directories
     keeps a new manifest/progress pair from being associated with old PNGs.
@@ -81,23 +81,13 @@ def ensure_new_run(output_dir: str | Path) -> Path:
     if not destination.exists():
         return destination
 
-    artifacts = [
-        path
-        for path in (
-            destination / "manifest.json",
-            destination / "progress.json",
-            destination / ".manifest.json.tmp",
-            destination / ".progress.json.tmp",
-        )
-        if path.exists()
-    ]
-    artifacts.extend(path for path in destination.glob("page-*.png") if path.is_file())
-    if artifacts:
-        names = ", ".join(path.name for path in artifacts[:3])
-        if len(artifacts) > 3:
+    entries = list(destination.iterdir())
+    if entries:
+        names = ", ".join(path.name for path in entries[:3])
+        if len(entries) > 3:
             names += ", ..."
         raise RunAlreadyExistsError(
-            f"Output directory already contains a crawl run ({names}). "
+            f"Output directory is not empty ({names}). "
             "Resume is not implemented; choose a new output directory."
         )
     return destination
