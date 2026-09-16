@@ -1,145 +1,225 @@
-# 01. BookWalker対応の設計・実装記録
+# 01. BookWalker 現行実装ノート
 
-## 1. 目的
+このファイルはBookWalker Adapterの**現在の実装詳細と実サイト観測**をまとめる。BookWalker固有の実装・運用を変更した場合は、このnoteも同じ変更で更新する。
 
-BookWalkerの電子書籍ビューアから、本文ページだけを順番にPNG保存する。
+共通Runner / output / packagingの詳細は `note/00_core.md` を参照。
 
-今回の対象では、次の要件を満たすことを目標にした。
+最終同期: 2026-09-17
 
-- 商品ページから「試し読み」「読む」「10分まる読み」のいずれかでビューアへ移動する
-- 本文以外の広告・終了画面・BookWalkerロゴを保存しない
-- 見開き表示を左右のページに分割する
-- 中央寄せの単ページ表示は不要な左右余白を保存しない
-- ライトノベルの冒頭にある大きな単ページ画像にも対応する
-- 最終ページを取りこぼさない
-- 次話・次コンテンツへ移動した場合は保存せず停止する
-- 同じページを重複保存しない
-- 正常完了後は中間ファイルを整理し、ZIPを残す
+## 1. 目的と現在のscope
 
-対象商品の実確認では、59/59ページまで本文を保存できた。
+BookWalkerの商品ページまたはviewer URLから、現在コンテンツの本文だけを順番にPNG保存する。
 
-## 2. 対象サイトの調査結果
+現在対応している主な挙動:
 
-### 2.1 商品ページからビューアへ移動する
+- 商品ページからreader候補を見つけてviewerへ移動
+- Canvas本文取得
+- 単ページ / 横長ページ / 見開き
+- 見開きを右→左の読書順で個別PNG化
+- loading待ちとbounded retry
+- 最終本文を保存した後のBookWalker logo等を保存しない
+- NEXT_CONTENTをcaptureせず停止
+- 商品情報からtitle / volume / author / genreを生成
+- END / NEXT_CONTENT正常終了時にZIP化
+- 専用Chrome profile + CDP + login CLI
 
-入力URLは、直接ビューアURLだけでなく、次のようなBookWalker商品ページも受け付ける。
+実サイト確認では、対象trial readerで59/59まで本文を保存し、その後のlogo screenを保存せず正常終了した実績がある。
+
+## 2. Entry flow
+
+入力は直接viewer URLだけでなく、次のBookWalker商品URLも受け付ける。
 
 ```text
 https://bookwalker.jp/de<content-id>/
 ```
 
-商品ページでは、以下の候補を調べる。
+`initialize()` 時、viewer shellがまだ存在せず商品ページだと判断した場合、商品metadataを取得してreader入口を探す。
+
+候補signal:
 
 - `試し読み`
 - `読む`
 - `10分まる読み`
-- `viewer.bookwalker.jp` を含むリンク
+- viewer URL
 - `data-action-label`
-- 現在の商品IDと一致する `data-uuid`
+- 商品content IDと一致する `data-uuid`
 
-リンクの表示順だけには依存せず、ビューアURL、content ID、アクション名、表示文字列を使って候補をスコアリングする。
+DOM順だけには依存せず、reader URL / content ID / action / visible textをスコアリングする。
 
-`target=_blank` の場合でも、ログイン自動化や認証回避はせず、既存のタブで通常のリンククリックとして開くために `target` 属性だけを取り除く。
+`more_read` やcover/check系のcontrolはreader入口として除外する。
 
-### 2.2 本文の描画方式
+reader linkが `target=_blank` の場合は、同じCrawler tabで遷移させるためtarget属性を外してclickする。Crawlerが別windowを追跡する構造にはしていない。
 
-本文は通常の `img` 要素ではなく、主にCanvasへ描画されている。
+## 3. Viewer / capture target
 
-使用する本文Canvasは次のDOMを優先する。
+BookWalker本文は主にCanvas renderer。
+
+優先する現在画面:
 
 ```text
 #renderer .currentScreen canvas:not(.dummy)
 ```
 
-Canvas自体には、ビューアのUIや描画領域が含まれる場合がある。そのため、画面全体のスクリーンショットは使用せず、CanvasのPNGバッファを取得する。
+fallbackとして `#renderer canvas:not(.dummy)` も見る。
 
-### 2.3 Canvas内のページ領域
+Canvasは単にLocator screenshotするのではなく、Core `capture.py` がcanvas raw PNG bufferを取得する。これによりbrowser UIや周辺DOMを避ける。
 
-Canvasの中央で単純に二分すると、単ページ表示や作品ごとに異なる余白に対応できない。そのため、ページ初期化前に `CanvasRenderingContext2D.drawImage` を監視するスクリプトを登録した。
+## 4. drawImage geometry trace
 
-描画時の次の情報を記録する。
+BookWalkerは1つのCanvasへページを描くため、単純な画面中央splitだけでは表紙・挿絵・横長ページ・spreadを正しく切り出せない。
 
-- 描画先の `x`
-- 描画先の `y`
-- 描画先の `width`
-- 描画先の `height`
-- 対象CanvasのID
+`prepare_page()` でnavigation前に `CanvasRenderingContext2D.prototype.drawImage` をhookし、対象Canvasへのdraw callからdestination rectangleを記録する。
 
-現在のCanvas上で最も大きい有効な描画矩形をページ領域として扱う。過去ページの描画が残る場合は、他の矩形に完全に含まれる小さい矩形を除外する。
-
-この矩形を一時Canvasへコピーし、CoreのLocator単位PNG取得に渡す。
-
-これにより、次の表示に対応する。
-
-- 中央に1ページだけ表示される表紙・挿絵
-- 横長の単ページ
-- 2ページの見開き
-- ブラウザ左右の余白を除いた本文領域
-
-描画矩形が取得できない場合だけ、限定的なフォールバックとしてCanvasの横幅と高さを比較し、十分に横長なら中央分割する。
-
-## 3. 表示サイズと見開き
-
-専用Chromeは次のサイズで起動する。
+記録する主情報:
 
 ```text
-window-size: 1920,1080
+canvas id
+x
+y
+width
+height
 ```
 
-物理モニターの解像度には依存しない。4Kモニターを150%表示で使っていても、BookWalkerへ渡す論理的な表示領域をFull HD相当にする。
+有効な大きさのrectangleだけ残し、完全に包含される古い/小さいrectangleは除外する。
 
-実際の環境では、ブラウザの論理viewportはおおむね次の値になった。
+現在画面のpage rectangleが得られれば、その範囲を一時Canvasへコピーしてcapture targetとして返す。
+
+対応する主ケース:
+
+- 中央単ページ
+- 表紙 / 挿絵
+- 横長単ページ
+- true spread
+- viewer周辺余白を除いた本文
+
+## 5. Spread fallback
+
+drawImage geometryが取得できない場合のみbounded fallbackを使う。
+
+Canvasが縦長/通常比率なら単一ページとして扱う。十分に横長 (`spread_ratio = 1.25`) なら中央で左右に分ける。
+
+BookWalkerは右開きとして、capture targetを**右ページ → 左ページ**の順で返す。
+
+一時Canvasには `data-bookwalker-capture-run` を付け、capture後に `cleanup_capture_targets()` で削除する。draw traceもcapture cycleごとにclearする。
+
+manifestには複数target時に以下を記録する。
+
+```json
+{"part": 1, "parts": 2}
+{"part": 2, "parts": 2}
+```
+
+## 6. Browser size / CDP
+
+専用Chrome launcher:
+
+```powershell
+.\scripts\start_bookwalker_chrome.ps1
+```
+
+現在のlauncherは:
 
 ```text
-innerWidth: 1906
-innerHeight: 987
-devicePixelRatio: 1.5
+--window-size=1920,1080
+--user-data-dir=.chrome-bookwalker
+--remote-debugging-port=<Port>
 ```
 
-本文が見開きの場合は、BookWalkerの読み順に合わせて右ページ、左ページの順に保存する。manifestには見開きの `part` と `parts` も記録する。
+を使う。
 
-## 4. ページ送り
+目的はBookWalkerがspreadを描画しやすいFull HD相当のlogical windowを与えること。
 
-BookWalkerのデスクトップビューアでは、左側の操作領域で次ページへ進む。
+実環境ではWindows scaling / devicePixelRatioにより `innerWidth/innerHeight` が完全に1920x1080になるとは限らないため、capture実装は固定pixel cropへ依存しない。
 
-優先操作は次の通り。
+`.chrome-bookwalker` は `.chrome-*` としてgitignore対象。
 
-1. `#viewport1` の左端付近をクリックする
-2. クリックできない場合は `ArrowLeft` を送る
+## 7. Navigation
 
-画面全体の中央クリックやマウス座標の固定値には依存しない。これにより、Windowsの表示倍率によるマウス座標ずれを避ける。
+次ページは右開きreaderの左側操作。
 
-ページ変更は固定sleepだけで判定せず、次の変化を待つ。
+優先:
 
-- `#pageSliderCounter` のページ番号
-- URLの `cid`
-- Canvasの簡易fingerprint
-- ローディング表示の消失
-- Canvasの描画安定
+1. `#viewport1` の左端付近をclick
+2. clickできない場合 `ArrowLeft`
 
-冒頭の画像や表紙では、最初の左操作がページ番号変更に使われないことがある。そのため、同一ページのままの場合に限り、最大2回までページ送り操作を再試行する。
+`go_next()` は操作前に `#pageSliderCounter` が最終 `N/N` か確認し、`_final_navigation_pending` を記録する。
 
-## 5. 状態判定
+## 8. Render ready
 
-Coreの状態機械へ、BookWalker固有のDOM判定結果を渡す。
+`_wait_for_render_ready()` は固定sleepだけに依存しない。
 
-### CONTENT
+確認signal:
 
-本文Canvasが表示され、ローディング中ではない状態。
+- `#loaderStatusDialog` がvisibleでない
+- 有効なvisible canvasがある
+- Canvasを64x64へ縮小した簡易signatureが取得できる
+- non-white pixelsがある
+- signatureが複数回安定する
 
-この状態では、以下を行う。
+`render_stable_checks = 4`。
 
-1. content identityを取得
-2. 同一ページ・同一fingerprintでないことを確認
-3. 本文のcapture targetを取得
-4. PNGを保存
-5. manifestとprogressを更新
-6. 次ページ操作
-7. 変更待ち
+`page_change_timeout_ms = 10_000` 内に安定しなければ `PageChangeTimeoutError`。
+
+## 9. Page identity
+
+主signalは `#pageSliderCounter`。
+
+`parse_page_counter()` は表示文字列から最初の数字を `page_number` として取得し、normalized counter text全体を `page_id` として使う。
+
+content IDはURL query `cid` または商品URL `/de<uuid>/` から取得する。
+
+概念:
+
+```text
+page_id: page counter text。取れない場合content_id fallback
+page_number: parsed current page
+source_id: content_id
+```
+
+**保存duplicate判定はこのidentityではなくCoreのcapture SHA-256 fingerprintがauthority。** Identityは主にchange detection / manifest / context補助に使う。
+
+## 10. Content context
+
+BookWalkerのcontent IDを:
+
+```text
+content_id
+work_id
+```
+
+として保持する。
+
+`#pagetitle` があればtitleもcontextへ入れる。
+
+開始時と現在のcontent IDが明確に変わればCore側でもNEXT_CONTENT扱い可能。
+
+## 11. State detection
+
+### NEXT_CONTENT
+
+次のいずれか:
+
+- URLから得られるcurrent content IDがinitial content IDから変化
+- `#eobNext` がvisible
+- Coreのstrong content context change
+
+NEXT_CONTENT画面は保存せず正常終了。
+
+### END
+
+ENDには複数signalを組み合わせる。
+
+- `#endOfBook` がvisible
+- 最終 `N/N` ページからnext操作済み (`_final_navigation_pending`) でcounterがまだ最終
+- renderer ready後、最終counter状態でgrace中に `#endOfBook` が出現
+
+重要なのは、**最終本文自体は先に保存済み**であること。次操作後にBookWalker logo canvasへ変わっても、`N/N` が残るケースをCONTENTとして再captureしない。
+
+実サイト確認では59/59後にBookWalker logoがCanvas内へ出て、同時に `#endOfBook` がvisibleになった。
 
 ### AD
 
-次の明示的なDOMが見える場合だけ広告と判定する。
+以下の明示selectorがvisibleの場合だけAD:
 
 ```text
 [data-ad]
@@ -148,256 +228,196 @@ Coreの状態機械へ、BookWalker固有のDOM判定結果を渡す。
 #advertisement
 ```
 
-広告と断定できない画面を、色や平均輝度だけで広告扱いにはしない。
-
-### END
-
-次のいずれかで終了と判定する。
-
-- `#endOfBook` が表示される
-- 最終ページから次操作を行った後、ページカウンターが `N/N` のまま変化しない
-
-BookWalkerでは、最終ページ後にロゴCanvasを出す場合がある。このロゴ画面にも `59/59` が残ることがあるため、最終ページからの次操作後は、同じ `N/N` を本文として再取得しない。
-
-最終ページ本体は、最終ページへ到達した時点で先に保存する。その後のロゴ画面だけをENDとして除外する。
-
-### NEXT_CONTENT
-
-次の情報で別コンテンツへの移動を検知する。
-
-- URLの `cid` が初期値から変わる
-- `#eobNext` が表示される
-- content contextの強いIDが変わる
-
-NEXT_CONTENTになった画面は保存せず、正常停止する。
+色や平均輝度だけで広告を推測しない。
 
 ### LOADING
 
-`#loaderStatusDialog` が表示されている間は待つ。ただし、Runnerのretry回数とタイムアウトに上限を設け、無限待機はしない。
+`#loaderStatusDialog` visible。
+
+### CONTENT
+
+上記terminal/ad/loadingでなく、rendererがready。
 
 ### UNKNOWN
 
-本文・広告・終了・次コンテンツのどれとも安全に判定できない場合は、無理にページ送りをしない。diagnosticsを保存して異常終了する。
+どれにも安全に分類できない場合。無理にadvanceせずCoreで停止する。
 
-## 6. 重複保存防止と安全装置
+## 12. wait_for_change / retry
 
-Core側で次のguardを使う。
+`wait_for_change()` は次stateをboundedに確認する。
 
-- `max_pages`: 既定値1000
-- `max_same_content`: 同一内容の連続回数上限
-- Canvas PNG bytesのSHA-256 fingerprint
-- ページ変更timeout
-- loading retry上限
+- AD / END / NEXT_CONTENT → return
+- CONTENTでidentity変化 → render readyを待ってreturn
+- CONTENTでidentity同一かつ最終counter → 最終ページ後の既知挙動としてreturn
+- CONTENTでidentity同一 → retry可能
 
-見開きの各ページは個別のPNG fingerprintを記録する。同じfingerprintの画像しか得られない場合は、同じ内容を保存し続けず停止する。
+冒頭cover等で最初のclickが消費されるケースに備え、同一CONTENT時だけnext操作を最大2回追加retryする。
 
-## 7. 商品情報と命名
+無限retryしない。
 
-商品ページから、ビューアへ移動する前に次の情報を取得する。
+## 13. Duplicate / safety
 
-- メインタイトル
-- 著者欄
-- 商品IDに一致するシリーズカードのタイトル
-- シリーズ冊数
-- カテゴリ
+共通仕様は `note/00_core.md`。
 
-`【期間限定】` や `【電子特別版】` などのBookWalker向けキャンペーン表示はタイトルから除去する。
+BookWalker captureでも保存dedupeは各PNGのSHA-256 fingerprint。
 
-タイトル末尾の数字は巻数候補として扱う。
+主guard:
+
+- `max_pages = 1000` default
+- `max_same_content = 3` default
+- bounded page-change timeout
+- bounded loading retry
+- fingerprint duplicate guard
+- content context change
+
+同一fingerprintが繰り返される場合は保存を増やし続けない。
+
+## 14. Product metadata / naming
+
+商品ページからviewerへ移る前に、可能なら以下を取得する。
+
+- main title
+- author block / author links
+- current productと一致するseries card title
+- series count
+- category
+
+キャンペーンtag `【...】` はtitleから除去する。
+
+末尾数字はvolume候補。
 
 ```text
 作品名4【電子特別版】
-↓
-作品名 / 第04巻
+→ 作品名 / 第04巻
 ```
 
-命名は `docs/BOOK_NAMING_RULES.md` に合わせる。
-
-- 通常は2桁ゼロ埋め: `第01巻`
-- 100巻以上のシリーズは3桁: `第001巻`
-- 著者が複数いる場合は `・` で連結
-- Windowsで使えない文字は除去
-- ジャンルはファイル名に含めずフォルダで分類
-
-## 8. ZIPと中間ファイル
-
-正常完了すると、既定では次の場所に保存する。
+series countが100以上なら3桁volumeを使う。
 
 ```text
-output/Books/<ジャンル>/<作品名>/<作品名>-<巻数>-<著者>.zip
+第001巻
 ```
 
-ZIP内は次の構造にする。
+categoryから現在は概ね:
 
-```text
-<ZIP拡張子を除いたファイル名>/
-├─page-0001.png
-├─page-0002.png
-└─...
-```
+- マンガ → 漫画
+- 技術 → 技術書
+- 雑誌 → 雑誌
+- その他 → 小説
 
-`manifest.json` と `progress.json` はZIPへ含めない。成果物として必要なのは本文PNGだけであり、実行管理情報を配布用ZIPへ混ぜないためである。
+へ分類する。
 
-正常完了した中間crawlフォルダは削除する。
+命名詳細は `docs/BOOK_NAMING_RULES.md`。
 
-完了の確認用に、次のstatus JSONを残す。
+## 15. Login
 
-```text
-output/crawl-status/<ZIP名>.json
-```
+Real-site login/crawlは専用ChromeへCDP接続する。
 
-statusには次を記録する。
-
-- `status: completed`
-- 作成したZIPのパス
-- PNGページ数
-- 元のcrawlフォルダ
-- crawlフォルダを削除できたか
-
-失敗した場合は、crawlフォルダを削除しない。Runnerが保存するdiagnosticsを使って、次を確認できる。
-
-```text
-screenshot.png
-page.html
-metadata.json
-error.txt
-```
-
-## 9. 認証とブラウザ起動
-
-ログインは、サイト固有のSite Adapterに実装したCLIコマンドで自動化する。
-認証情報と起点URLは`.env`に保存し、サイト名を接頭辞にして複数サイトの設定を区別する。
-
-BookWalkerの設定例:
+`.env` の例:
 
 ```env
-BOOKWALKER_URL=https://bookwalker.jp/st3/
-BOOKWALKER_EMAIL=<メールアドレス>
-BOOKWALKER_PASSWORD=<パスワード>
+BOOKWALKER_URL=https://bookwalker.jp/
+BOOKWALKER_EMAIL=<email>
+BOOKWALKER_PASSWORD=<password>
 BOOKWALKER_CDP_ENDPOINT=http://127.0.0.1:9222
 ```
 
-`.env`は`.gitignore`で除外し、認証情報をリポジトリやノートへ保存しない。
+実値はnoteへ書かない。
 
-BookWalkerの実確認では、通常利用ブラウザと分離した専用ChromeをCDP付きで起動し、ユーザーが必要な操作を行った状態で接続する方式を使った。
-
-```powershell
-.\scripts\start_bookwalker_chrome.ps1
-```
-
-専用Chrome起動後、次のコマンドで既存Chromeへ接続し、BookWalkerのログイン画面を操作する。
+launcher後:
 
 ```powershell
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli login --site bookwalker
 ```
 
-`--env-file`の既定値は`.env`である。別ファイルを使う場合だけ明示的に指定する。
+login flowは:
 
-ログインコマンドは、次の操作を行う。
+1. BookWalker pageへ移動
+2. visibleな「ログイン」control
+3. email field
+4. password field
+5. submit
+6. post-login navigation / form消失確認
 
-1. CDP接続済みChromeの既存ContextとPageを取得する
-2. `.env`の`BOOKWALKER_URL`へ移動する
-3. 右上のログインボタンをクリックする
-4. `j_username`へメールアドレス、`j_password`へパスワードを入力する
-5. ログインボタンをクリックする
-6. URL遷移後にログインフォームが消えたことを確認する
+CAPTCHA / MFA / validation errorを自動突破しない。login formが残る場合は安全にerror。
 
-BookWalker側でCAPTCHA、MFA、入力エラーが表示された場合は、無理に再試行せず停止する。
-ログイン成功後は、そのまま次のように既存Chromeへ接続してCrawlerを実行する。
+## 16. Crawl command
+
+例:
 
 ```powershell
-uv run python -m screenshot_crawler.cli crawl `
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli crawl `
   --site bookwalker `
-  --cdp-endpoint http://127.0.0.1:9222 `
   --url "https://bookwalker.jp/de<content-id>/" `
-  --output-dir output/crawl-bookwalker-run `
-  --max-pages 1000
+  --output-dir output\crawl-bookwalker
 ```
 
-`--diagnostics-dir` を指定しなくても、異常時にはoutput-dir配下へdiagnosticsが作られる。
+CDP endpointは:
 
-正常完了時はビューアのタブだけを閉じ、CDP接続先のChrome本体は閉じない。
+1. `--cdp-endpoint`
+2. `BOOKWALKER_CDP_ENDPOINT`
+3. default `http://127.0.0.1:9222`
 
-## 10. 実サイトで確認したこと
+の順。
 
-対象商品で次を確認した。
+`crawl` のoutput directoryは存在しないか空である必要がある。既存runへの暗黙resumeはしない。
 
-- 商品ページから試し読み用ビューアへ移動できる
-- Canvas描画から本文領域を取り出せる
-- 単ページと見開きを判定できる
-- 見開きを右ページ、左ページの順に分割できる
-- 左側操作でページを進められる
-- 冒頭の画像ページを保存できる
-- ページ変更をページカウンターと描画安定性で待てる
-- 59ページ分を保存できる
-- 最終ページ後のBookWalkerロゴを保存しない
-- 最終ページ後に正常終了できる
-- 59枚のPNGをZIP化できる
-- ZIPにmanifest/progressを含めない
-- 正常完了後に中間crawlフォルダを削除できる
-- CDPで起動済みの専用Chromeへ接続できる
-- `.env`のBookWalker設定を読み込める
-- 商品ページのログインボタン、メールアドレス欄、パスワード欄、ログインボタンを順に操作できる
-- ログイン送信後に`https://bookwalker.jp/st3/`へ戻ることを確認できる
+## 17. Output / packaging
 
-## 11. 未解決・今後の注意点
+正常 `END` / `NEXT_CONTENT` 後、Coreがmanifest記載PNGだけをZIP化する。
 
-- BookWalkerの商品ページのDOMクラスやビューア仕様が変更された場合、商品情報抽出やCanvas判定の再調査が必要になる。
-- すべての作品形式で同じCanvas描画矩形が得られるとは限らない。矩形が取れない場合はフォールバック分割になるため、未知作品では少数ページで確認する。
-- 100巻以上の判定は、シリーズ見出しの冊数がDOMから取得できることを前提にしている。
-- 直接ビューアURLから開始した場合、商品ページ由来の著者情報が得られないため、ZIP名の著者部分が省略されることがある。
-- 実行前に既存の同名ZIPがあると上書きせずエラーにする。
-
-## 12. 新しいチャットへ引き継ぐ場合
-
-新しいチャットでは、前の会話で確認したCDP接続先やリポジトリの前提が引き継がれないことがある。その場合は、次の内容を最初に伝える。
+既定:
 
 ```text
-このリポジトリで作業してください。
-
-リポジトリ:
-C:\Users\kensu\projects\screenshot_crawler_starter
-
-BookWalker操作用の専用ChromeはCDPで起動済みです。
-接続先は次です。
-
-http://127.0.0.1:9222
-
-通常のブラウザ操作機能ではなく、リポジトリ内のPlaywright Pythonコードから
-connect_over_cdp("http://127.0.0.1:9222")
-で既存Chromeへ接続してください。
-
-まず以下を確認してください。
-
-1. http://127.0.0.1:9222/json/version に接続できるか
-2. Playwrightで既存BrowserContextとPageを取得できるか
-3. 現在開いているタブのURLを確認する
-
-BookWalkerのログイン自動化を確認する場合は、`.env`を用意したうえで次を実行します。
-
-.\.venv\Scripts\python.exe -m screenshot_crawler.cli login --site bookwalker
-
-ログイン自動化がCAPTCHAやMFAで停止した場合は、ユーザーがChrome上で必要な操作を手動で完了し、その後Crawlerを実行します。
+output/Books/<genre>/<title>/<title>-<volume>-<author>.zip
 ```
 
-あわせて、作業開始前に次のファイルを読む。
+ZIP内:
 
 ```text
-AGENTS.md
-docs/SPEC.md
-docs/ARCHITECTURE.md
-docs/DECISIONS.md
-docs/CODEX_IMPLEMENTATION_GUIDE.md
-docs/SITE_ADAPTER_GUIDE.md
-docs/TEST_STRATEGY.md
-docs/BOOK_NAMING_RULES.md
-note/01_bookwalker.md
+<archive-stem>/
+├─ page-0001.png
+├─ page-0002.png
+└─ ...
 ```
 
-専用Chromeをまだ起動していない場合は、リポジトリ直下のPowerShellで次を実行する。
+manifest/progressは現在ZIPへ入れない。
 
-```powershell
-.\scripts\start_bookwalker_chrome.ps1
-```
+completion statusは `output/crawl-status/` 配下。
 
-このノートは、認証情報、Cookie、storage stateの内容などの秘密情報を記録しない。
+中間crawl directoryは、内容がmanifest / progress / manifest記載PNGだけの場合に限り削除する。余分なPNG、diagnostics、user file等があればdirectory全体を削除しない。
+
+失敗runは残す。
+
+## 18. 実サイト確認済み事項
+
+これまでのlive verificationで確認済み:
+
+- 商品ページからtrial readerへ遷移
+- Canvasから本文領域取得
+- centered single page
+- spread
+- 右→左のsplit order
+- left-side navigation
+- page counter / loading / canvas stabilityによるchange wait
+- 59/59本文まで保存
+- 最終本文後のBookWalker logoを非保存
+- `#endOfBook` を含むEND遷移
+- 59 PNGのZIP化
+- CDP dedicated Chrome workflow
+- BookWalker login form操作
+
+過去のlive checkでは、1200x900 windowでspreadを2枚 (`890x1209`, `889x1209`) に分割できた。またFull HD系viewportでdraw traceから2つのpage rectangle (`1111x1481`) を観測した。
+
+これらの数値は観測例であり、固定capture size仕様ではない。
+
+## 19. Known limitations / maintenance
+
+- BookWalker DOM / Canvas rendererが変わればselector・draw trace再調査が必要。
+- drawImage geometryが取れない未知作品ではcenter split fallbackになる可能性があるため、少数ページ確認を推奨。
+- 直接viewer URLから開始すると商品ページmetadataがないため、title/authorが不足し `unknown-title` 等になる可能性がある。
+- 同名完成ZIPが既にある場合は上書きせずerror。
+- 保存dedupeがglobal fingerprint authorityなので、別ページがpixel完全一致する特殊ケースは1枚として扱われる。変更は実viewer調査後に行う。
+- `config.yaml` は現在runtime loaderから利用されるauthorityではない。実Adapter Pythonを優先する。
+- diagnosticsのAdapter固有metadata統合は未実装。
+
+このnoteにはpassword、Cookie、storage state、session secretを記録しない。
