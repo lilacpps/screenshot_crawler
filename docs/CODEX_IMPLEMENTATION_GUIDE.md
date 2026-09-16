@@ -12,6 +12,9 @@
 4. `docs/DECISIONS.md`
 5. 対象Site Adapter README
 6. 対象コードとテスト
+7. 対応する `note/`
+
+`note/` は詳細な現行実装スナップショットだが、上位authorityではない。上位authority / code / testsと食い違う場合はnoteを修正する。
 
 現行仕様とコードが競合して見える場合、勝手に大規模変更せず差分を報告する。
 
@@ -29,8 +32,24 @@
 - 実装変更には対応テストを追加・更新
 - 外部サイト依存CIを作らない
 - 実サイト著作物をfixtureへ保存しない
+- **実装・仕様変更と同じ変更で対応する `note/` を必ず同期する**
 
-## 3. Core bug fix時
+## 3. Note同期
+
+変更対象ごとの更新先:
+
+- Core / Runner / output / packaging / browser / diagnostics / resume → `note/00_core.md`
+- BookWalker → `note/01_bookwalker.md`
+- Manga ONE → `note/02_mangaone.md`
+- 新規site → 対応するsite noteを追加
+
+共通変更が特定siteの実挙動に影響する場合、Core noteとsite noteの両方を更新する。
+
+noteは履歴ログではなく**現行仕様の詳細説明**として保つ。古い仕様を残したまま末尾へ新情報だけ追記しない。現在の挙動、主要signal、CLI/設定、出力、安全装置、既知の制約、live verificationを読み直して本文を更新する。
+
+秘密情報は書かない。詳細は `note/README.md`。
+
+## 4. Core bug fix時
 
 最初に、問題がSite Adapter固有かCore共通かを分離する。
 
@@ -47,9 +66,11 @@ Core変更では特に確認する。
 
 現行Runnerではcapture fingerprintが保存dedupeのauthority。identity優先方式へ変更する場合は、BookWalker/Manga ONEの実viewer遷移を先に確認する。
 
-## 4. Site Adapter bug fix時
+Coreの挙動を変えたら `note/00_core.md` を更新する。
 
-変更前にsite READMEのlive observationsを読む。
+## 5. Site Adapter bug fix時
+
+変更前にsite READMEとsite noteのlive observationsを読む。
 
 調査すること:
 
@@ -71,7 +92,9 @@ Core変更では特に確認する。
 
 page counter / `#endOfBook` / `#eobNext` / known final-navigation behaviorを組み合わせている。単一signalへ単純化しない。
 
-## 5. Output / packaging変更時
+Site Adapterの挙動を変えたら対応site noteを更新する。
+
+## 6. Output / packaging変更時
 
 必須:
 
@@ -84,7 +107,9 @@ page counter / `#endOfBook` / `#eobNext` / known final-navigation behaviorを組
 
 Resumeは現在未実装。resume機能を追加する場合は明示CLIと受け入れ条件を先に定義する。
 
-## 6. 新規Site Adapter追加時
+変更後は `note/00_core.md` のoutput / packaging / resume説明を同期する。
+
+## 7. 新規Site Adapter追加時
 
 最初にProbeまたは手動観測で以下を確認する。
 
@@ -103,12 +128,13 @@ Resumeは現在未実装。resume機能を追加する場合は明示CLIと受�
 
 - `site_adapters/<site>/adapter.py`
 - `site_adapters/<site>/README.md`
+- `note/<nn>_<site>.md`
 - 必要なら明示的に利用される設定ファイル
 - unit / local integration tests
 
 `config.yaml` は必須ではない。Pythonと二重authorityになる未使用configは追加しない。
 
-## 7. Test
+## 8. Test
 
 ```bash
 pytest -q
@@ -119,11 +145,19 @@ Playwright integrationがskipされた場合は、その件数と理由を最終
 
 実サイトでしか確認できない事項は「未確認」と明示する。
 
-## 8. 完了報告
+## 9. 完了条件 / 報告
 
-最低限:
+完了前に確認する。
+
+- 実装とdocsが一致している
+- 変更に対応するtestsがある
+- 対応する `note/` が現行実装へ同期されている
+- note更新不要なら理由が明確
+
+最終報告には最低限:
 
 - 変更ファイル
+- 更新したnote
 - 変更した挙動
 - 既存挙動をどう保護したか
 - 追加/更新テスト
