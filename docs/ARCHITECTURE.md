@@ -5,139 +5,148 @@
 依存方向を単純に保つ。
 
 ```text
-CLI / Runner
+CLI / orchestration
     ↓
-Core contracts
+Core contracts / Runner / packaging
     ↓
 Site Adapter
     ↓
 Playwright Page
 ```
 
-`site_adapters/` は `core/` の型を利用してよい。
-
-`core/` は個別サイトのAdapterやselectorをimportしてはならない。Adapter解決はregistryまたはCLI層で行う。
+`site_adapters/` は `core/` の型を利用してよい。`core/` は個別サイトAdapterやselectorをimportしない。Adapter解決はregistry / CLI層で行う。
 
 ## 2. ディレクトリ責務
 
 ### `core/`
 
-サイトに依存しない共通ロジック。
+サイト非依存ロジック。
 
 - `models.py`: 共通データ構造
-- `state.py`: 状態列挙と遷移補助
-- `browser.py`: Playwright lifecycle
-- `runner.py`: メインループ
-- `capture.py`: 保存処理
-- `fingerprint.py`: hash / fingerprint
-- `progress.py`: manifest / progress
-- `diagnostics.py`: 異常時情報保存
+- `state.py`: PageState
+- `browser.py`: Playwright lifecycle / CDP接続補助
+- `runner.py`: 状態ループ
+- `capture.py`: capture / PNG保存
+- `fingerprint.py`: SHA-256
+- `progress.py`: manifest / progressと新規run安全確認
+- `diagnostics.py`: 異常時情報
+- `packaging.py`: manifest基準のZIP/library出力
 - `errors.py`: 独自例外
 
 ### `site_adapters/`
 
 サイト固有差分。
 
-- `base.py`: Adapter抽象インターフェース
-- `registry.py`: site名→Adapterの解決
+- `base.py`: Adapter contract
+- `registry.py`: site名→Adapter
 - `<site>/adapter.py`: サイト固有実装
-- `<site>/config.yaml`: 単純なselectorやtimeoutなど
-- `<site>/README.md`: 調査結果・最終ページ挙動・確認日
+- `<site>/README.md`: 実観測、終了挙動、制約、確認記録
+- `<site>/config.yaml`: 存在しても自動的にauthorityにはならない。実装が明示的に読み込む場合のみ設定として有効
+
+現行のreal adaptersでは、複雑なselector/state/timeoutはPython Adapter実装がauthorityである。未使用YAMLとPythonを二重authorityにしない。
 
 ### `patterns/`
 
-再利用可能な「表示方式」の補助コード。継承階層を深くしない。Site Adapterが必要な関数だけ利用する。
+再利用可能な表示方式の補助部品。必須frameworkではない。
 
 ### `probe/`
 
-新規サイトの観察・診断情報取得。
+新規サイト調査用。
 
-## 3. なぜSite Adapterを独立させるか
+## 3. Browser / authentication
 
-サイト差分はDOMだけではない。
+Coreには通常launch/context管理もあるが、現行real-site crawl/login CLIは既存ChromeへCDP接続する。
 
-- 広告の入り方
-- 次ページ操作
-- 見開き/単ページ
-- 最終ページ後の画面
-- SPAでURLが変わらない
-- 次話へ自動遷移
+理由:
 
-これらをCoreのif文で吸収すると、追加サイトごとに回帰リスクが上がる。
+- 通常Chromeのlogin/sessionを維持しやすい
+- viewer固有の通常browser挙動を壊しにくい
+- crawler終了時にremote Chrome自体を終了しない
 
-## 4. なぜ設定ファイルだけにしないか
+Siteごとの専用Chrome profileはrepositoryにcommitしない。
 
-単純selectorはYAMLに置けるが、状態判定や特殊なページ送りを設定だけで表現しようとすると独自DSL化する。
+## 4. Runnerの概念フロー
 
-原則:
+```text
+ensure output directory is new/empty
+prepare page
+open URL
+adapter.initialize
+initial context
+create manifest/progress
 
-- データはYAML
-- 条件分岐・操作はPython
+loop:
+    state = adapter.detect_state
 
-## 5. Adapterの最小契約
+    END/NEXT_CONTENT:
+        stop normally
 
-Adapterは以下を実装する。
+    UNKNOWN:
+        diagnostics + error
+
+    AD:
+        go_next + bounded wait
+
+    CONTENT:
+        enforce max_pages before additional capture
+        validate context
+        get identity
+        get one or more capture targets
+        capture
+        SHA-256 fingerprint dedupe
+        save PNG + manifest/progress
+        go_next + bounded wait
+```
+
+`max_pages`到達後も、次stateがEND/NEXT_CONTENTなら正常終了できる。
+
+## 5. Duplicateの考え方
+
+現行Runnerはcapture fingerprintを保存重複判定authorityにする。ContentIdentityはAdapterのchange detection、manifest、debug情報として重要だが、保存dedupeをidentity優先へ変更しない。
+
+この判断はBookWalker/Manga ONEの既知挙動維持を優先したもの。変更する場合はreal viewerの連続spread/遷移を先に観測する。
+
+## 6. Output / packaging
+
+manifestのページ一覧を完成成果物のauthorityとする。packagingでdirectory globをauthorityにしない。
+
+新規runは非空output directoryを拒否する。正常packaging後も、無関係ファイルが含まれるdirectoryは丸ごと削除しない。
+
+## 7. Site Adapterの最小契約
+
+概念上:
 
 ```python
+prepare_page(page)
 initialize(page)
 detect_state(page)
 get_capture_target(page)
+get_capture_targets(page)
+cleanup_capture_targets(page)
 get_content_identity(page)
 get_content_context(page)
 go_next(page)
 wait_for_change(page, previous_identity)
 ```
 
-詳細は `site_adapters/base.py` を参照。
+実際のdefault method / optional hookは `site_adapters/base.py` をauthorityとする。
 
-## 6. Runnerの概念フロー
+## 8. Site固有の終了判定
 
-```text
-launch browser
-open URL
-adapter.initialize
-initial_context = adapter.get_content_context
+終了方法は共通化しすぎない。
 
-loop:
-    state = adapter.detect_state
+- BookWalkerはviewer DOM / page counter / known final transitionを使う
+- Manga ONEはchapter URL changeと、最終advance後にpage imagesが一定時間消失する既知挙動を使う
 
-    CONTENT:
-        identity = adapter.get_content_identity
-        duplicate check
-        capture
-        save manifest/progress
-        adapter.go_next
-        adapter.wait_for_change
+「明示END DOMがなければENDにしない」のような一般ルールで、実サイト確認済み挙動を置換しない。
 
-    AD:
-        adapter.go_next
-        adapter.wait_for_change
+## 9. Safety
 
-    LOADING:
-        wait/retry
+別コンテンツや無関係ファイルを誤処理するより停止を優先する。
 
-    END/NEXT_CONTENT:
-        stop normally
-
-    UNKNOWN:
-        save diagnostics
-        stop with error
-```
-
-## 7. Patternの扱い
-
-Patternは「Adapterを薄くするための便利関数」であり、必須の継承基盤ではない。
-
-例:
-
-- imgのsrcをidentityとして取得する
-- canvasのPNGをhash化する
-- background-image URLを取得する
-
-Adapterが特殊なら直接Pythonで書いてよい。
-
-## 8. 安全側に倒す
-
-誤って別コンテンツを大量保存するより、UNKNOWNで停止する方を優先する。
-
-特に「最終ページ→広告→次話」はCoreが推測せず、Adapterのcontent context判定で止める。
+- UNKNOWNは停止
+- retryはbounded
+- 非空run dirは拒否
+- resumeは暗黙実行しない
+- packagingはmanifestをauthorityにする
+- Coreへsite-specific ifを追加しない
