@@ -16,25 +16,50 @@
 - output metadata / ZIP packaging
 - manifest-based packaging safety
 - non-empty output directory protection
+- Browser Session共通化の設計確定
+
+## Current priority — Browser Session unification
+
+採用済み仕様:
+
+```text
+shared Crawler Chrome/profile (.chrome-crawler/)
+    ↑ CDP
+Playwright Browser/Context/Page
+    ↓
+Core Runner
+    ↓
+Site Adapter
+```
+
+次の実装作業:
+
+- `start_crawler_chrome.ps1` を追加
+- 共通profile `.chrome-crawler/` を標準化
+- `CRAWLER_CDP_ENDPOINT` をglobal defaultとして追加
+- endpoint precedenceを `CLI > site override > global > default` に整理
+- login / crawlを同じBrowser Session modelへ揃える
+- site-specific launcherをdeprecated後に削除
+- BookWalker/Manga ONEを共通profileでlive smoke test
+
+Browser Session整理のために既存Adapterのcapture/navigation/END logicを変更しない。
 
 ## Current maintenance priorities
 
 - 実サイトで動いているBookWalker / Manga ONEの挙動を回帰させない
-- Adapter変更時はsite READMEのlive observationsを確認する
+- Adapter変更時はsite READMEとsite noteのlive observationsを確認する
 - Core変更はlocal integration testsとsite-specific unit testsで固定する
-- docsを現在実装と同期する
+- docs / noteを現在実装と同期する
 
 ## Next when needed
 
 - diagnosticsへのAdapter固有debug metadata統合
-- explicit resume機能 (`--resume`) の設計・実装
+- explicit resume機能 (`--resume`)
 - CIでのunit/integration実行
-- config.yamlの扱い整理（実際に使うか削除するか）
+- config.yamlの扱い整理
 - identity/fingerprint dedupe方式の再評価
 
 ## Later
-
-必要になってから検討する。
 
 - URL batch入力
 - OCR

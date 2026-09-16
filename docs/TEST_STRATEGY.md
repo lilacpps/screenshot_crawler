@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Core回帰とSite Adapter前提崩壊を分けて検出する。実サイト確認済みの挙動を、根拠なく一般化したロジックで置換しない。
+Core回帰、Browser Session回帰、Site Adapter前提崩壊を分けて検出する。実サイト確認済みの挙動を、根拠なく一般化したロジックで置換しない。
 
 ## 2. Unit Tests
 
@@ -17,8 +17,38 @@ Core回帰とSite Adapter前提崩壊を分けて検出する。実サイト確�
 - output directory safety
 - packaging / manifest validation
 - Adapter helper / parser / naming
+- CDP endpoint resolution
+- global endpoint / site override precedence
 
-## 3. Integration Tests
+## 3. Browser Session Tests
+
+共通Crawler Chrome実装時に最低限確認する。
+
+### Endpoint precedence
+
+```text
+--cdp-endpoint
+> <SITE>_CDP_ENDPOINT
+> CRAWLER_CDP_ENDPOINT
+> default 9222
+```
+
+### Lifecycle
+
+- CDP connectionから既存BrowserContextを取得できる
+- Crawler用Pageを作れる
+- crawl終了時にCrawler Pageだけcloseする
+- remote Chrome process自体をcloseしない
+- loginとcrawlが同じBrowser Session helperを利用できる
+
+### Adapter boundary
+
+- Adapterがendpoint/profile/Chrome launchを要求しない
+- AdapterへPlaywright Pageを渡せば従来どおり動く
+
+Raw CDP helperを追加する場合は、Playwright APIで代替できない理由をtest/docに残す。
+
+## 4. Integration Tests
 
 `tests/integration/test_local_viewer_flows.py` でPlaywright + 人工ローカルviewerを使う。
 
@@ -38,9 +68,9 @@ Core回帰とSite Adapter前提崩壊を分けて検出する。実サイト確�
 
 外部サイトへ常時依存するCIテストは置かない。
 
-Integration testsはChromiumが利用できない環境ではskipされる。そのためテスト結果を確認するときは、単にpytest exit codeだけでなくpassed / skipped件数も確認する。
+Integration testsはChromiumが利用できない環境ではskipされる。そのためpytest exit codeだけでなくpassed / skipped件数も確認する。
 
-## 4. Packaging tests
+## 5. Packaging tests
 
 最低限:
 
@@ -49,7 +79,7 @@ Integration testsはChromiumが利用できない環境ではskipされる。そ
 - manifest記載PNG欠落は失敗
 - 無関係ファイルがあるsource directoryをrmtreeしない
 
-## 5. 実サイト確認
+## 6. 実サイト確認
 
 Adapterの挙動を変更する場合は、可能な範囲で対象サイトを確認する。
 
@@ -66,7 +96,33 @@ Adapterの挙動を変更する場合は、可能な範囲で対象サイトを�
 
 実サイトの著作物・DOM snapshotを恒久fixtureへコピーしない。
 
-## 6. Regression priority
+## 7. Browser Session migration smoke test
+
+共通 `.chrome-crawler/` 実装後にBookWalker/Manga ONEそれぞれで確認する。
+
+### 共通Chrome
+
+- 同じCrawler Chrome processへ接続できる
+- BookWalker login sessionが維持される
+- Manga ONE login sessionが維持される
+- 一方のloginが他方を壊さない
+- Crawler Pageを閉じてもChromeと他tabは残る
+
+### BookWalker
+
+- 商品ページ→viewer
+- single/spread capture
+- final END
+
+### Manga ONE
+
+- chapter viewer
+- spread order
+- final image disappearance END
+
+Browser Session移行のためにsite-specific viewer logicを変更しない。
+
+## 8. Regression priority
 
 優先度が高い失敗:
 
@@ -78,12 +134,6 @@ Adapterの挙動を変更する場合は、可能な範囲で対象サイトを�
 - user fileをcleanupで削除
 - UNKNOWNなのに進行
 - Coreへのsite-specific分岐混入
-
-## 7. 実行
-
-```bash
-pytest -q
-ruff check src tests
-```
-
-実サイトAdapterの変更がないdocs-only変更では、コードテストの再実行は必須ではない。ただしdocsが記述する挙動は現在コードと既存テストに照らして確認する。
+- AdapterへのCDP/profile管理混入
+- Crawler終了時にremote Chromeを誤ってclose
+- site-specific overrideがglobal defaultを壊す

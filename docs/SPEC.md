@@ -1,4 +1,4 @@
-# Screenshot Crawler 仕様書 v1.1
+# Screenshot Crawler 仕様書 v1.2
 
 ## 1. 目的
 
@@ -10,12 +10,77 @@
 
 - Python 3.12+
 - Playwright Python
-- Chromium / Chrome CDP
+- Chrome / Chromium
+- Chrome DevTools Protocol (CDP)
 - asyncio
 - PNG出力
 - Windowsを主対象
 
-## 3. 入力とBrowser
+## 3. Browser Session Model
+
+Real-site automationの標準は、**1つの専用Crawler ChromeへCDP接続し、そのChromeをPlaywrightで操作する方式**とする。
+
+目標構成:
+
+```text
+Crawler Chrome
+└─ shared profile: .chrome-crawler/
+      ├─ BookWalker session
+      ├─ Manga ONE session
+      └─ other site sessions
+          ↑
+          │ CDP
+          ↓
+Playwright Browser / Context / Page
+          ↓
+Core Runner
+          ↓
+Site Adapter
+```
+
+CDPは接続transportであり、通常のnavigation / DOM / click / wait / captureはPlaywright APIを使う。
+
+Raw CDP ProtocolはPlaywrightで実現困難なChrome固有機能に限る。
+
+### 3.1 Chrome profile
+
+標準profileは:
+
+```text
+.chrome-crawler/
+```
+
+とする。
+
+BookWalkerやManga ONEのlogin sessionは、Chrome自身がCookie / localStorage / IndexedDB等としてsiteごとに保持する。
+
+Crawlerはsite別storage-state JSONを標準の認証authorityにしない。
+
+### 3.2 CDP endpoint
+
+目標の解決順:
+
+1. `--cdp-endpoint`
+2. `<SITE>_CDP_ENDPOINT`
+3. `CRAWLER_CDP_ENDPOINT`
+4. `http://127.0.0.1:9222`
+
+通常はglobal endpointを使う。
+
+site-specific endpoint/profileは例外として許可する。用途例:
+
+- 複数account
+- extension / browser setting差
+- session分離
+- 共通profileでは正常動作しないsite
+
+### 3.3 Browser lifecycle
+
+Crawlerは既存Chromeへ接続し、Crawler用Pageを作成する。
+
+正常終了時はCrawlerが使用したPageを閉じるが、remote Chrome processは閉じない。
+
+## 4. 入力
 
 Crawler本体はURLを収集しない。URLは人手または別プログラムから渡す。
 
@@ -29,9 +94,27 @@ python -m screenshot_crawler.cli crawl --site <site> --url "https://..."
 python -m screenshot_crawler.cli probe --url "https://..."
 ```
 
-CoreにはPlaywright browser/context管理機能がある。現行の実サイト `crawl` / `login` CLIは、ログイン済み通常Chromeのsessionを維持するためCDP接続を使用する。Probeは通常launchとCDP接続の両方を利用できる。
+Probeは通常launchとCDP接続の両方を利用できてよい。
 
-## 4. PageState
+## 5. Authentication
+
+Real-site loginは共通Crawler ChromeへCDP接続し、そのPageをPlaywrightでsite固有login handlerが操作する。
+
+認証情報は `.env` 等から入力してよい。
+
+login後のsession保存先はChrome profileであり、Crawler独自のsite別storage stateを標準経路としない。
+
+login handlerは:
+
+- email/password等のform入力
+- submit
+- login結果確認
+
+を行ってよい。
+
+CAPTCHA / MFA / validation errorを自動突破しない。
+
+## 6. PageState
 
 - `CONTENT`: 保存対象本文
 - `AD`: 保存対象外の中間画面
@@ -42,9 +125,10 @@ CoreにはPlaywright browser/context管理機能がある。現行の実サイ�
 
 `UNKNOWN` は無理に突破せずdiagnosticsを残して停止する。
 
-## 5. Coreの責務
+## 7. Coreの責務
 
-- browser/context接続補助
+- Browser Session / CDP接続補助
+- BrowserContext / Page lifecycle
 - URLアクセス
 - Site Adapter呼び出し
 - 状態ループ
@@ -60,7 +144,7 @@ CoreにはPlaywright browser/context管理機能がある。現行の実サイ�
 
 Coreはサイト固有DOM、next操作、広告、終了、次コンテンツを推測しない。
 
-## 6. Site Adapterの責務
+## 8. Site Adapterの責務
 
 - `prepare_page`
 - `initialize`
@@ -75,23 +159,56 @@ Coreはサイト固有DOM、next操作、広告、終了、次コンテンツを
 
 詳細は `site_adapters/base.py` をauthorityとする。
 
-## 7. Capture
+Site Adapterは以下を担当しない。
+
+- Chrome launch
+- profile選択
+- CDP endpoint解決
+- `connect_over_cdp()`
+- BrowserContext lifecycle
+
+AdapterはPlaywright `Page` / `Locator` を操作する。
+
+## 9. Playwright / Raw CDP policy
+
+通常操作はPlaywrightを標準とする。
+
+```text
+navigation
+DOM query
+Locator
+click / keyboard / mouse
+wait
+frame / popup handling
+evaluate
+screenshot / canvas capture
+```
+
+Raw CDP Protocolを使う場合は:
+
+- Playwrightで代替できない理由を明記
+- Browser Session/Core側の小さいhelperへ隔離
+- site Adapterへ低レベルCDP操作を広げない
+
+ことを原則とする。
+
+## 10. Capture
 
 本文DOM Locatorを優先する。Canvasではraw PNG bufferを利用できる。見開きなど1画面に複数ページがある場合、Adapterは複数capture targetを読書順で返してよい。
 
 保存連番とサイト上のページ番号は別物とする。
 
-## 8. ContentIdentity / fingerprint
+## 11. ContentIdentity / fingerprint
 
 `ContentIdentity` はAdapterが取得できるpage id / page number / source id等を保持し、ページ変更待ちや記録に利用する。
 
 現行Runnerの**保存重複判定authorityはcapture bytesのSHA-256 fingerprint**である。同一fingerprintは、identityが異なっていても重複captureとして保存しない。
 
-これは既存BookWalker/Manga ONEで確認済みの挙動を維持するためのv1仕様であり、identity優先dedupeへの変更は実サイト遷移を確認してから別途行う。
+これは既存BookWalker/Manga ONEで確認済みの挙動を維持するためのv1系仕様であり、identity優先dedupeへの変更は実サイト遷移を確認してから別途行う。
 
 fingerprintだけを終了条件にはしない。
 
-## 9. ContentContext
+## 12. ContentContext
 
 開始作品・話・章を識別する。
 
@@ -103,7 +220,7 @@ fingerprintだけを終了条件にはしない。
 
 開始時と現在の同一strong fieldが明確に異なる場合、`NEXT_CONTENT` として正常終了できる。後からoptional fieldが追加されたことだけではcontext changeにしない。
 
-## 10. 広告
+## 13. 広告
 
 `AD` は保存しない。広告表示自体は終了条件ではない。
 
@@ -113,7 +230,7 @@ CONTENT → AD → END
 CONTENT → AD → NEXT_CONTENT
 ```
 
-## 11. 終了条件
+## 14. 終了条件
 
 `END` / `NEXT_CONTENT` の判定ロジックはSite Adapterに置く。サイト固有の実観測挙動を優先する。
 
@@ -134,7 +251,7 @@ CONTENT → AD → NEXT_CONTENT
 
 `保存済みページ数 == max_pages` の状態でも、次stateが `END` / `NEXT_CONTENT` なら正常終了を優先する。
 
-## 12. Run output
+## 15. Run output
 
 新規runのoutput directoryは、存在しないか空でなければならない。非空directoryは拒否し、自動削除・暗黙上書きをしない。
 
@@ -147,7 +264,7 @@ CONTENT → AD → NEXT_CONTENT
 └─ diagnostics/  # 異常時に作られる場合あり
 ```
 
-## 13. Manifest / progress
+## 16. Manifest / progress
 
 manifestは保存ページのauthorityである。
 
@@ -177,7 +294,7 @@ manifestは保存ページのauthorityである。
 
 JSONはtemporary file → replaceで更新する。
 
-## 14. Packaging
+## 17. Packaging
 
 正常な `END` / `NEXT_CONTENT` 後、manifestの `pages[].file` をauthorityとしてZIPを作成する。
 
@@ -189,15 +306,15 @@ JSONはtemporary file → replaceで更新する。
 - 中間crawl directoryは、内容がmanifest / progress / manifest記載PNGだけの場合に限り削除する
 - 無関係ファイルや余分なPNGがあればdirectory全体を削除しない
 
-## 15. Resume
+## 18. Resume
 
-**v1.1では自動resumeを実装しない。**
+**自動resumeは未実装。**
 
 既存の非空run directoryは新規runとして拒否する。`ProgressStore` は既存manifest/progressを暗黙上書きしない。
 
 将来resumeを実装する場合は、明示的な `--resume` 等を導入し、新規runと区別する。
 
-## 16. Retry / safety guard
+## 19. Retry / safety guard
 
 一時的なloadingやクリックはbounded retryしてよい。
 
@@ -210,7 +327,7 @@ JSONはtemporary file → replaceで更新する。
 
 `max_pages` とsame-content guardは無限進行防止として必須。
 
-## 17. Diagnostics
+## 20. Diagnostics
 
 失敗時は設定されたdiagnostics directoryへ、可能な範囲で以下を保存する。
 
@@ -223,7 +340,7 @@ metadataは最低限URL / title / viewport / detected state / context / errorを
 
 diagnostics保存失敗で元例外を隠さない。
 
-## 18. Probe
+## 21. Probe
 
 新規サイト調査用。Crawler本体とは分離する。
 
@@ -236,11 +353,11 @@ diagnostics保存失敗で元例外を隠さない。
 
 正しいnext selectorの完全自動探索は要求しない。
 
-## 19. Patterns
+## 22. Patterns
 
 Patternは必須frameworkではなく補助部品。2サイト以上で実際に共通化できる場合だけ利用し、1サイト固有処理はAdapterに置く。
 
-## 20. v1非対象
+## 23. 非対象
 
 - OCR
 - PDF化
@@ -253,7 +370,15 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - 複雑なPlugin Framework
 - 自動resume
 
-## 21. 受け入れ条件
+## 24. 受け入れ条件
+
+### Browser Session
+
+- 共通Crawler Chrome/profileをdefaultにできる
+- CDP接続後の通常操作はPlaywrightで行う
+- site-specific endpoint/profileを例外overrideできる
+- Crawler終了時にremote Chromeを閉じない
+- Site AdapterがCDP/profile管理を持たない
 
 ### Core
 
@@ -278,7 +403,20 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - 次コンテンツを本文として保存しない
 - UNKNOWNでは停止
 
-## 22. 完了確認
+## 25. 移行状態
+
+このv1.2 Browser Session Modelは採用済みの目標仕様。
+
+ドキュメント更新時点では実装にsite別launcher/profileとsite別endpoint fallbackが残っている。次の実装変更で以下へ移行する。
+
+- `start_crawler_chrome.ps1`
+- `.chrome-crawler/`
+- `CRAWLER_CDP_ENDPOINT`
+- site-specific endpointはoverride扱い
+
+移行中は既存BookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
+
+## 26. 完了確認
 
 最低限:
 
@@ -293,3 +431,5 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - UNKNOWN
 - `max_pages`境界
 - packagingで余分なPNGが混入しないこと
+- 共通Crawler Chromeで複数site sessionを再利用できること
+- site-specific endpoint overrideがdefaultを壊さないこと

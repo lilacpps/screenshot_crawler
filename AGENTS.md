@@ -16,6 +16,32 @@
 
 仕様と実装が競合した場合、黙って仕様を変更しない。差分を明示し、既存の実サイト確認済み挙動を壊さない最小修正を選ぶ。
 
+## Browser Session policy
+
+Real-site automationの標準設計は次とする。
+
+```text
+shared Crawler Chrome/profile
+    ↑ CDP
+Playwright Browser / Context / Page
+    ↓
+Core Runner
+    ↓
+Site Adapter
+```
+
+必須ルール:
+
+- Real-site browserへの接続は原則CDP
+- 接続後の通常操作はPlaywright `Page` / `Locator`
+- 共通profile `.chrome-crawler/` をdefaultとする
+- global endpoint `CRAWLER_CDP_ENDPOINT` をdefaultとする
+- site-specific endpoint/profileは必要な場合だけoverride
+- Site AdapterからChrome launch / profile選択 / endpoint解決 / `connect_over_cdp()` を行わない
+- Raw CDP ProtocolはPlaywrightで代替できない場合だけ使う
+
+Browser Session共通化の実装が完了するまでは既存site別launcher/profileがコードに残っていてよいが、最終設計として拡張しない。
+
 ## Implementation rules
 
 - Python 3.12+ / Playwright Pythonを使用する。
@@ -45,7 +71,7 @@
 
 noteには少なくとも、現在の挙動、主要な判定ロジック、設定/CLI、出力、既知の制約、実サイト確認状況を残す。
 
-履歴だけを追記して古い仕様を残すのではなく、**読めば現行仕様が分かる状態へ本文を更新する**。古い判断を残す必要がある場合は `docs/DECISIONS.md` またはGit履歴を使う。
+履歴だけを追記して古い仕様を残すのではなく、読めば現行仕様が分かる状態へ本文を更新する。古い判断を残す必要がある場合は `docs/DECISIONS.md` またはGit履歴を使う。
 
 認証情報、Cookie、storage state、秘密情報はnoteへ書かない。
 
@@ -55,7 +81,8 @@ noteには少なくとも、現在の挙動、主要な判定ロジック、設�
 
 1. `docs/CODEX_IMPLEMENTATION_GUIDE.md` を読む。
 2. 変更対象に対応する `note/` を読む。
-3. noteとコードが食い違う場合はコード/テストと上位authorityを確認し、作業内でnoteも同期する。
+3. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
+4. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
 
 ## After coding
 

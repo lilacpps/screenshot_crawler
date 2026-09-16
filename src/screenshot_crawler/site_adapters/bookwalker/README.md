@@ -12,7 +12,7 @@ The adapter traces renderer `drawImage` geometry and creates temporary page-size
 
 ## Spread and order
 
-With the dedicated wide Chrome window, BookWalker can render a spread. The adapter saves the right page first and the left page second. Split files record `metadata.part` / `metadata.parts`.
+BookWalker can render a spread in a wide Chrome window. The adapter saves the right page first and the left page second. Split files record `metadata.part` / `metadata.parts`.
 
 ## Navigation and page change
 
@@ -32,6 +32,43 @@ The URL `cid` is stored as content/work/source ID.
 
 Do not simplify this to a single END signal without live verification.
 
+## Browser Session policy
+
+The adopted target architecture uses one shared Crawler Chrome/profile for all real sites.
+
+```text
+shared Crawler Chrome (.chrome-crawler/)
+    ↑ CDP
+Playwright Page
+    ↓
+BookWalker adapter
+```
+
+The adapter should not own Chrome launch, profile selection, CDP endpoint resolution, or `connect_over_cdp()`.
+
+CDP is the connection transport; normal BookWalker interaction remains Playwright `Page` / `Locator` operations.
+
+Authentication state should normally stay in the shared Chrome profile. A BookWalker-specific endpoint/profile is an exception override, not the default design.
+
+### Current transition state
+
+The repository still contains `start_bookwalker_chrome.ps1` and `.chrome-bookwalker` behavior until the Browser Session migration is implemented. These are compatibility mechanisms, not the final architecture. Do not create additional site-specific launchers by copying this pattern.
+
+## Authentication
+
+BookWalker login DOM automation remains site-specific, but it should receive a Playwright Page from the common Browser Session layer.
+
+Target endpoint precedence:
+
+1. `--cdp-endpoint`
+2. `BOOKWALKER_CDP_ENDPOINT`
+3. `CRAWLER_CDP_ENDPOINT`
+4. `http://127.0.0.1:9222`
+
+`CRAWLER_CDP_ENDPOINT` support is part of the adopted target specification and is pending implementation.
+
+CAPTCHA / MFA / validation errors are not automatically bypassed.
+
 ## Live verification
 
 Live headed-CDP checks confirmed:
@@ -41,7 +78,9 @@ Live headed-CDP checks confirmed:
 - renderer geometry-based page split
 - final `59/59` transition where the BookWalker logo appears in the canvas while `#endOfBook` becomes visible
 
-These observations are the basis for the current site-specific logic.
+These observations remain the basis for the site-specific logic and should not be changed merely as part of Browser Session unification.
+
+A fresh live check using the shared `.chrome-crawler/` profile is required after the migration is implemented.
 
 ## Output naming and packaging
 

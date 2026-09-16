@@ -17,10 +17,94 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - manifestをauthorityにしたZIP packagingとlibrary出力
 - unit testsとPlaywrightローカルfixture integration tests
 
+## 採用するBrowser Session設計
+
+Real-site automationは、**1つの専用Crawler ChromeへCDP接続し、そのChromeをPlaywrightで操作する**構成へ統一します。
+
+```text
+Crawler Chrome
+└─ shared profile (.chrome-crawler/)
+      ├─ BookWalker login session
+      ├─ Manga ONE login session
+      └─ other site sessions
+          ↑
+          │ CDP
+          ↓
+Playwright Browser / Context / Page
+          ↓
+Core Runner
+          ↓
+Site Adapter
+```
+
+役割は明確に分けます。
+
+- CDP: Chromeへ接続する
+- Playwright: `Page` / `Locator` で通常操作する
+- Site Adapter: 本文・next・END等のsite固有logicを持つ
+
+Raw CDP Protocolを通常のsite操作には使いません。Playwrightで実現できないChrome固有機能が必要な場合だけ例外的に使います。
+
+### Login session
+
+共通Crawler Chromeのprofile内にChrome自身がsiteごとのCookie / localStorage等を保存します。
+
+Crawler側で:
+
+```text
+bookwalker-auth.json
+mangaone-auth.json
+```
+
+のようなsite別auth-state fileを標準管理する設計にはしません。
+
+### CDP endpoint
+
+目標の解決順:
+
+```text
+--cdp-endpoint
+    ↓
+<SITE>_CDP_ENDPOINT
+    ↓
+CRAWLER_CDP_ENDPOINT
+    ↓
+http://127.0.0.1:9222
+```
+
+通常はglobal endpointを使い、site-specific endpoint/profileは必要なケースだけoverrideします。
+
+## 移行状態
+
+上記は採用済みの目標仕様です。
+
+**ドキュメント更新時点では実装移行前**のため、現在のrepositoryには:
+
+```text
+scripts/start_bookwalker_chrome.ps1
+scripts/start_mangaone_chrome.ps1
+.chrome-bookwalker/
+.chrome-mangaone/
+```
+
+を前提としたコードが残っています。
+
+次の実装変更で:
+
+```text
+scripts/start_crawler_chrome.ps1
+.chrome-crawler/
+CRAWLER_CDP_ENDPOINT
+```
+
+へ統一します。
+
+この移行ではBookWalker/Manga ONEのcapture・page navigation・END判定を原則変更せず、Browser Session層だけを整理します。
+
 ## 最初に読むもの
 
 1. `docs/SPEC.md` — 現在の製品仕様・受け入れ条件
-2. `docs/ARCHITECTURE.md` — 責務分離と依存方向
+2. `docs/ARCHITECTURE.md` — 責務分離とBrowser Session設計
 3. `docs/DECISIONS.md` — 重要な設計判断
 4. `docs/CODEX_IMPLEMENTATION_GUIDE.md` — 既存実装を変更するときのルール
 5. `docs/SITE_ADAPTER_GUIDE.md` — 新規サイト対応の作り方
@@ -42,25 +126,31 @@ Windows PowerShellを主な実行環境として想定しています。
 
 ## 基本ワークフロー
 
+目標:
+
 ```text
+Crawler Chromeを1回起動
+        ↓
+必要なsiteへlogin
+        ↓
 URLを人手または別プログラムから取得
         ↓
-必要ならprobeで対象サイトを観察
+必要ならprobe
         ↓
 既存Adapterまたは新規Adapterを使用
-        ↓
-少数ページ・最終ページ付近を確認
         ↓
 本実行
         ↓
 END / NEXT_CONTENTで正常終了したらZIP化
+        ↓
+Crawler tabだけclose、Chromeは維持
 ```
 
 Crawler本体はURL一覧の収集を担当しません。
 
-## CDPで既存Chromeへ接続
+## 現行実装でのChrome起動
 
-BookWalkerやManga ONEのcrawl/loginは、通常のChromeセッションを維持するため、専用profileで起動したChromeへCDP接続します。
+共通launcher実装前は既存scriptを利用します。
 
 BookWalker:
 
@@ -74,14 +164,14 @@ Manga ONE:
 powershell -ExecutionPolicy Bypass -File .\scripts\start_mangaone_chrome.ps1
 ```
 
-必要なら `.env` のサイト別 `*_CDP_ENDPOINT` で接続先を変更できます。
+これらは移行対象であり、新規site向けに同種のlauncherを増やす方針ではありません。
 
-例:
+## Crawl例
 
 ```powershell
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli crawl `
   --site bookwalker `
-  --url "https://bookwalker.jp/de6de7534d-7022-481d-b2d3-05f03f384454/" `
+  --url "https://bookwalker.jp/de<content-id>/" `
   --output-dir output\crawl-bookwalker
 ```
 
@@ -95,8 +185,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_mangaone_chrome.ps1
 ## Outputの安全ルール
 
 新規crawlの `--output-dir` は、存在しないdirectoryまたは空directoryである必要があります。既存runの暗黙resumeは行いません。
-
-実行中は概ね次の形になります。
 
 ```text
 output/crawl-xxx/
@@ -113,8 +201,8 @@ output/crawl-xxx/
 
 ## Resume
 
-自動resumeは現在未実装です。既存の非空run directoryを新規runとして上書きせず、明示的に拒否します。`progress.json` は実行状況の記録であり、現時点では自動resume機能を意味しません。
+自動resumeは現在未実装です。既存の非空run directoryを新規runとして上書きせず、明示的に拒否します。`progress.json` は実行状況の記録であり、自動resume機能を意味しません。
 
 ## サイト固有の挙動
 
-実サイトで確認済みの判定ロジックを、一般論だけを理由に変更しないでください。特にBookWalkerとManga ONEの終了判定・ページ送り・capture方式は各Adapter READMEをauthorityとして確認してください。
+実サイトで確認済みの判定ロジックを、Browser Session整理のために変更しないでください。特にBookWalkerとManga ONEの終了判定・ページ送り・capture方式は各Adapter READMEとsite noteを確認してください。

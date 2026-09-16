@@ -13,6 +13,23 @@
 - [x] SHA-256 fingerprint
 - [x] unit tests
 
+## Browser Session architecture
+
+仕様は確定済み、実装移行は未完了。
+
+- [x] 共通Crawler Chrome/profile方針をdocsで確定
+- [x] CDP=接続 / Playwright=操作 の責務分離をdocsで確定
+- [x] Adapterがbrowser接続方式を知らない方針をdocsで確定
+- [x] global endpoint + site-specific override方針をdocsで確定
+- [ ] `scripts/start_crawler_chrome.ps1`
+- [ ] 共通profile `.chrome-crawler/`
+- [ ] `CRAWLER_CDP_ENDPOINT`
+- [ ] endpoint precedence実装: CLI > site override > global > default
+- [ ] login / crawlを共通Browser Session helperへ統一
+- [ ] site-specific launcherのdeprecated化
+- [ ] BookWalker共通profile smoke test
+- [ ] Manga ONE共通profile smoke test
+
 ## Persistence / safety
 
 - [x] manifest JSON
@@ -24,7 +41,7 @@
 - [x] manifest基準packaging
 - [x] manifest外PNG混入防止
 - [x] cleanup時の無関係ファイル保護
-- [ ] 自動resume（v1.1非対象）
+- [ ] 自動resume
 - [ ] Adapter固有debug metadataのdiagnostics統合
 
 ## Runner
@@ -64,9 +81,11 @@
 - [x] final page / END確認
 - [x] NEXT_CONTENT判定
 - [x] output metadata / ZIP naming
-- [x] CDP profile workflow
-- [x] site README
+- [x] CDP workflow
+- [x] login handler
+- [x] site README / note
 - [x] live verification記録
+- [ ] shared `.chrome-crawler/` で再確認
 
 ## Manga ONE
 
@@ -77,13 +96,16 @@
 - [x] final image disappearance heuristic
 - [x] chapter change -> NEXT_CONTENT
 - [x] output metadata / ZIP naming
-- [x] CDP profile workflow
-- [x] site README
+- [x] CDP workflow
+- [x] login handler
+- [x] site README / note
 - [x] live working implementation maintained
+- [ ] shared `.chrome-crawler/` で再確認
 
 ## Maintenance
 
 - [x] local artificial integration fixture
 - [x] packaging regression tests
-- [ ] GitHub CI workflow（必要になってから）
+- [x] note同期ルール
+- [ ] GitHub CI workflow
 - [ ] identity優先dedupeの再検討（実サイト遷移データが揃ってから）

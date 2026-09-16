@@ -2,7 +2,7 @@
 
 このファイルはManga ONE Adapterの**現在の実装詳細と実サイト観測**をまとめる。Manga ONE固有の実装・運用を変更した場合は、このnoteも同じ変更で更新する。
 
-共通Runner / output / packagingの詳細は `note/00_core.md` を参照。
+共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
 最終同期: 2026-09-17
 
@@ -22,42 +22,32 @@ Manga ONEのWeb viewerから、指定chapterの本文画像を順番にPNG保存
 - final advance後の画像消失をENDとして扱う既知heuristic
 - chapter URL changeをNEXT_CONTENTとして停止
 - title / 話数 / 前編後編のZIP naming
-- 専用Chrome profile + CDP + login CLI
+- CDP接続した通常Chrome上でlogin/crawl
 
-対象chapterで、話単位ZIPが生成されることを実サイト確認している。
+対象chapterで話単位ZIPが生成されることを実サイト確認している。
 
 ## 2. URL / content context
 
-chapter URLは概ね:
+chapter URL:
 
 ```text
 https://manga-one.com/manga/{work_id}/chapter/{chapter_id}
 ```
 
-query stringが追加されてもpathからIDを取得する。
-
-例:
-
-```text
-/manga/2379/chapter/214131
-```
-
 context:
 
 ```text
-work_id: 2379
-chapter_id: 214131
-content_id: 214131
-episode_id: 214131
+work_id
+chapter_id
+content_id = chapter_id
+episode_id = chapter_id
 ```
 
 開始chapterと異なるchapter URLへ変化した場合は `NEXT_CONTENT`。
 
 ## 3. Viewer / capture target
 
-本文はCanvasではなく個別 `img`。
-
-現在のselector:
+本文は個別 `img`。
 
 ```text
 .viewer-container img[alt^="page_"]
@@ -72,71 +62,65 @@ page_2
 ...
 ```
 
-`src` はruntimeでBlob URL等になり得るため、永続page identityとしては使わない。
+`src` はBlob URL等になり得るため永続page identityには使わない。
 
 Adapterはviewportと重なるready画像だけを本文候補にする。
-
-ready条件には概ね:
-
-- rect width / height > 0
-- viewportとoverlap
-- `element.complete`
-- `naturalWidth > 0`
-
-を使う。
 
 ## 4. Full Screen initialization
 
 `initialize()` の流れ:
 
 1. initial URL記録
-2. 最初のpage image群がstableになるまで待つ
+2. page image群がstableになるまで待つ
 3. visibleな「全画面」buttonがあればclick
-4. もう一度page image群のgeometry安定を待つ
+4. page image群のgeometry安定を再確認
 5. initial content context取得
 6. page titleからoutput title / orderを抽出
 
-Full Screen controlが見つからない場合は、そこで即失敗せず現在viewerを継続利用する。
+Full Screen controlが見つからない場合は現在viewerを継続利用する。
 
-## 5. Browser / CDP
+## 5. Browser Session / CDP
 
-専用Chrome launcher:
+### 採用済みの目標仕様
+
+Manga ONE専用Chromeを標準とせず、共通Crawler Chrome/profileを使う。
+
+```text
+.chrome-crawler/
+    └─ Manga ONE sessionもChrome自身が保持
+```
+
+接続はCDP、通常操作はPlaywright。
+
+Manga ONE AdapterはChrome launch / profile / endpoint / `connect_over_cdp()` を扱わない。
+
+### 現行実装
+
+移行前のため現在は:
 
 ```powershell
 .\scripts\start_mangaone_chrome.ps1
 ```
 
-現在のlauncherは:
+と `.chrome-mangaone` が存在する。
 
-```text
---window-size=1920,1080
---user-data-dir=.chrome-mangaone
---remote-debugging-port=<Port>
-```
+BookWalker launcherとdefault port `9222` が同じため、site別profileを同時に立ち上げる場合はport管理が必要だった。これは共通Crawler Chromeへ統合することで解消する予定。
 
-を使う。
-
-`.chrome-mangaone` は `.chrome-*` としてgitignore対象。
-
-注意: BookWalker launcherとManga ONE launcherは現在どちらもdefault port `9222`。すでにそのportでCDP Chromeが動いている場合、launcherは既存listenerを利用する旨を表示して終了する。site専用profileを同時に別々に起動する場合は、portを明示的に分ける必要がある。
-
-Real-site `crawl` は既存ChromeへCDP接続するため、`crawl --headed` は現在の有効CLIではない。headed/native launch optionは主に `probe` 側。
+次のBrowser Session実装変更で共通 `start_crawler_chrome.ps1` / `.chrome-crawler/` へ移行する。
 
 ## 6. 1ページ / spread判定
 
 表示中のpage imgを毎回列挙し、viewportに見えているtargetだけを使う。
 
-- visible targetが1枚 → 1 PNG
-- visible targetが2枚 → 2 PNG
+- visible target 1枚 → 1 PNG
+- visible target 2枚 → 2 PNG
 - opening/finalで片側だけ → 1 PNG
 
-固定の中央splitや背景色推測は使わない。
+固定中央splitや背景色推測は使わない。
 
 ## 7. Reading order
 
-右開きviewerなので、visible imgのx座標を降順に並べる。
-
-例:
+右開きviewerなのでvisible imgのx座標を降順に並べる。
 
 ```text
 右: page_1
@@ -145,8 +129,6 @@ Real-site `crawl` は既存ChromeへCDP接続するため、`crawl --headed` は
 capture order:
 page_1 -> page_2
 ```
-
-Coreへはこの順でLocator tupleを返す。
 
 ## 8. Page identity
 
@@ -166,13 +148,13 @@ page_number: max(label number) + 1
 source_id: chapter_id
 ```
 
-これはAdapterのchange detection / manifest等に使う。
+これはAdapter change detection / manifest等に使う。
 
-**保存duplicateのauthorityはCoreのcapture SHA-256 fingerprint。** Identityが異なってもPNG bytesが同一なら保存duplicateとして扱われる。
+**保存duplicateのauthorityはCoreのcapture SHA-256 fingerprint。**
 
 ## 9. Render stability
 
-`_page_signature()` はvisible page群について、主に:
+`_page_signature()` はvisible page群の:
 
 ```text
 alt
@@ -182,9 +164,7 @@ width
 height
 ```
 
-をtuple化する。
-
-`_wait_for_render_ready()` はsignatureが連続で安定することを要求する。
+を主に使う。
 
 現行:
 
@@ -200,45 +180,29 @@ page_change_timeout_ms = 10000
 次表示への主操作:
 
 1. `.viewer-container` の左端付近をclick
-2. bounding boxが取れない/操作できない場合はwindow左側をmouse click
-
-右開きreaderの次ページ操作として左側を使う。
+2. bounding boxが取れない場合はwindow左側をmouse click
 
 `go_next()` すると `_advance_pending = True`。
 
 ## 11. wait_for_change / retry
 
-前identityがある場合、timeout内でvisible page rowsを監視する。
+新しいpage rowsがありidentityが変わればrender stable後return。
 
-### 新しいpage rowsがある
-
-current identityがprevious identityと異なれば:
-
-1. render stableを待つ
-2. `_advance_pending = False`
-3. return
-
-同一identityが続く場合、bounded retryで `go_next()` を再実行する。
-
-現行:
+同一identityが続く場合はbounded retry。
 
 ```text
 advance_retry_count = 2
 ```
 
-### page rowsがない
-
-`no_page_since` を記録する。
-
-画像なし状態が:
+page rowsがなくなった場合は `no_page_since` を記録する。
 
 ```text
 end_grace_ms = 2500
 ```
 
-継続すると `_ended = True` とし、ENDとして扱う。
+画像なし状態が継続すると `_ended = True`。
 
-これはManga ONE実サイトで動作していた既知の終端heuristicを維持したもの。実DOM未確認のgeneric END selectorへ置き換えない。
+これは実サイトで動作していた既知終端heuristic。未確認generic END selectorへ置換しない。
 
 ## 12. State detection
 
@@ -250,17 +214,13 @@ initial URLとcurrent URLの `work_id/chapter_id` が明確に異なる場合。
 
 `_ended == True`。
 
-`_ended` はfinal advance後等にpage imageが `end_grace_ms` 継続して消失した際に設定される。
-
 ### CONTENT
 
-readyなvisible page rowsが1つ以上ある。
+readyなvisible page rowsが1つ以上。
 
 ### LOADING
 
-page selector自体は存在するがready/visible rowsがまだない場合。
-
-またviewer containerはvisibleで `_advance_pending` の場合もLOADING。
+page selector自体は存在するがready/visible rowsがまだない場合。またviewer container visibleかつ `_advance_pending` の場合。
 
 ### UNKNOWN
 
@@ -270,29 +230,23 @@ UNKNOWNをENDへ推測変換しない。
 
 ## 13. ENDとUNKNOWNの境界
 
-重要:
-
 - `go_next()` 後、viewerは残りpage imageだけ消える → grace後ENDになり得る
-- viewer自体が消えてUNKNOWNになる → `wait_for_change()` はtimeoutしてerror
+- viewer自体が消えてUNKNOWNになる → timeout/error
 - chapter URLが変わる → NEXT_CONTENT
 
-つまり「何も見えない = 常にEND」ではない。
+「何も見えない = 常にEND」ではない。
 
 ## 14. 宣伝ページ
 
 chapter末尾の宣伝/告知画像が通常本文と同じ `page_N` imgとして配信されるケースがある。
 
-現在、安定したsemantic DOM markerがないため、Adapterは推測削除しない。
+安定したsemantic DOM markerがないため、Adapterは推測削除しない。
 
-そのため話単位ZIPには末尾promotion pageが含まれる場合がある。
-
-固定で「末尾2枚削除」等はCrawler本体へ入れていない。
+固定で「末尾N枚削除」はCrawler本体へ入れない。
 
 ## 15. Title / episode naming
 
 page titleから作品名とepisode labelを抽出する。
-
-例:
 
 ```text
 獣王と薬草 第1話 | マンガワン
@@ -302,11 +256,8 @@ page titleから作品名とepisode labelを抽出する。
 
 ```text
 獣王と薬草 第80話(前編) | マンガワン
-→ title: 獣王と薬草
 → order: 第80話-前編
 ```
-
-全角/半角括弧の前編・後編に対応。
 
 Adapter output metadata:
 
@@ -319,24 +270,26 @@ genre: 漫画
 
 ## 16. Login
 
-Manga ONE loginは**現在実装済み**。
+Manga ONE loginは実装済み。
 
-`.env` 例:
+Browser Session目標:
+
+```text
+shared Crawler Chrome/profile
+→ CDP
+→ Playwright Page
+→ login_mangaone()
+```
+
+credentials input例:
 
 ```env
 MANGAONE_URL=https://manga-one.com/login
 MANGAONE_EMAIL=<email>
 MANGAONE_PASSWORD=<password>
-MANGAONE_CDP_ENDPOINT=http://127.0.0.1:9222
 ```
 
-実値はnoteへ書かない。
-
-専用Chrome起動後:
-
-```powershell
-.\.venv\Scripts\python.exe -m screenshot_crawler.cli login --site mangaone
-```
+目標では通常endpointは `CRAWLER_CDP_ENDPOINT`。`MANGAONE_CDP_ENDPOINT` は例外overrideとして残せる。
 
 login flow:
 
@@ -344,15 +297,13 @@ login flow:
 2. visible email field探索
 3. visible password field探索
 4. fill
-5. login form内submit button click
+5. submit
 6. URL change待ち
-7. login formが残っていないことを確認
+7. login form消失確認
 
-validation error / CAPTCHA / MFA等でformが残る、またはURLが変わらない場合は安全にerror。
+validation error / CAPTCHA / MFA等では安全にerror。
 
 ## 17. Crawl command
-
-例:
 
 ```powershell
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli crawl `
@@ -361,46 +312,24 @@ validation error / CAPTCHA / MFA等でformが残る、またはURLが変わら�
   --output-dir output\crawl-mangaone
 ```
 
-CDP endpointは:
+目標endpoint優先順位:
 
 1. `--cdp-endpoint`
 2. `MANGAONE_CDP_ENDPOINT`
-3. default `http://127.0.0.1:9222`
+3. `CRAWLER_CDP_ENDPOINT`
+4. default `http://127.0.0.1:9222`
 
-の順。
-
-新規output directoryは存在しないか空でなければならない。
+`CRAWLER_CDP_ENDPOINT` fallbackはdocs決定済み・実装待ち。
 
 ## 18. Output / ZIP
 
 正常 `END` / `NEXT_CONTENT` 後、Coreがmanifest記載PNGだけをZIP化する。
 
-既定:
-
 ```text
 output/Books/漫画/<title>/<title>-<order>.zip
 ```
 
-例:
-
-```text
-output/Books/漫画/獣王と薬草/獣王と薬草-第80話-前編.zip
-```
-
-ZIP内:
-
-```text
-獣王と薬草-第80話-前編/
-├─ page-0001.png
-├─ page-0002.png
-└─ ...
-```
-
-manifest / progressは現在ZIPへ含めない。
-
 source crawl directoryは、manifest / progress / manifest記載PNG以外を含まない場合に限りcleanupされる。
-
-余分なPNG、diagnostics、user file等があればdirectory全体を削除しない。
 
 ## 19. Tests
 
@@ -412,41 +341,35 @@ Unit testsでは主に:
 - episode title parse
 - identity生成
 
-を確認する。
-
 Playwright local integration testsでは主に:
 
-- image gapがgrace後ENDになる
+- image gapがgrace後END
 - chapter changeがNEXT_CONTENT
 - viewer/pageが不明状態ならtimeout/UNKNOWN
 
-を固定する。
-
-固定の `pytest: N passed` はnoteへ現在値として残さない。変更後は実際に `pytest -q` / `ruff check src tests` を実行し、作業報告へ結果を書く。
+Browser Session共通化後は共通profile/CDPでも実サイトsmoke checkする。
 
 ## 20. 実サイト確認済み事項
 
-これまでに確認した主な事項:
-
-- chapter viewerで本文imgを取得できる
+- chapter viewerで本文img取得
 - opening single page
 - left-side navigation
-- spreadへ遷移
+- spread遷移
 - right→left capture order
-- 前編titleから `第80話-前編` を生成
+- 前編title parse
 - chapter単位ZIP生成
-- 最終advance後のpage image disappearanceによるEND方式で動作
+- final advance後のpage image disappearanceによるEND
 
-site DOM/classが変われば再調査が必要。
+共通 `.chrome-crawler/` へ統合した状態でのlive verificationは実装変更後に行う。
 
 ## 21. Known limitations / maintenance
 
-- 末尾promotion pageを本文と確実に区別できないためZIPへ残ることがある。
-- 前編/後編の統合はCrawlerでは行わない。
-- 話数→巻数変換はCrawlerでは行わない。
-- 保存dedupeがglobal fingerprint authorityなので、別ページがpixel完全一致する特殊ケースは1枚として扱われる。
-- `config.yaml` は現在runtime loaderのauthorityではなく、Adapter Pythonが実挙動のauthority。
-- BookWalker/Manga ONE launcherはdefault CDP portが同じため、同時にsite別profileを立ち上げる場合はport管理が必要。
-- diagnosticsのAdapter固有metadata統合は未実装。
+- 末尾promotion pageがZIPへ残ることがある。
+- 前編/後編統合はCrawlerで行わない。
+- 話数→巻数変換はCrawlerで行わない。
+- global fingerprint dedupeによりpixel完全一致別ページは1枚扱いになる。
+- `config.yaml` はruntime authorityではない。
+- diagnostics Adapter固有metadata統合は未実装。
+- Browser Session共通化はdocs決定済み・実装待ち。
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。

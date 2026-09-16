@@ -31,16 +31,53 @@ If no valid transition can be established within the bounded page-change timeout
 
 Chapter-end promotional pages are ordinary chapter images and currently have no stable DOM marker that distinguishes them from manga pages. They are kept to avoid deleting valid final content. A fixed number of trailing pages is intentionally not enabled.
 
-## Authentication / CDP profile
+## Browser Session policy
 
-Authentication uses the shared `login` CLI against an existing CDP browser. Credentials come from `.env`; the command does not print them or create a separate auth-state file. The `.chrome-mangaone` profile keeps the Chrome session locally and is ignored by git through `.chrome-*/`.
+The adopted target architecture uses one shared Crawler Chrome/profile for all real sites.
+
+```text
+shared Crawler Chrome (.chrome-crawler/)
+    ↑ CDP
+Playwright Page
+    ↓
+Manga ONE adapter
+```
+
+The adapter should not own Chrome launch, profile selection, CDP endpoint resolution, or `connect_over_cdp()`.
+
+CDP is the connection transport; normal Manga ONE interaction remains Playwright `Page` / `Locator` operations.
+
+Authentication state should normally stay in the shared Chrome profile. A Manga ONE-specific endpoint/profile is an exception override, not the default design.
+
+### Current transition state
+
+The repository still contains `start_mangaone_chrome.ps1` and `.chrome-mangaone` behavior until the Browser Session migration is implemented. These are compatibility mechanisms, not the final architecture. Do not create additional site-specific launchers by copying this pattern.
+
+## Authentication
+
+Authentication uses the shared `login` CLI against a CDP-connected Chrome. Credentials come from `.env`; the command does not print them or create a separate auth-state file.
+
+Target endpoint precedence:
+
+1. `--cdp-endpoint`
+2. `MANGAONE_CDP_ENDPOINT`
+3. `CRAWLER_CDP_ENDPOINT`
+4. `http://127.0.0.1:9222`
+
+`CRAWLER_CDP_ENDPOINT` support is part of the adopted target specification and is pending implementation.
+
+The site-specific login handler should receive a Playwright Page from the common Browser Session layer. CAPTCHA / MFA / validation errors are not automatically bypassed.
+
+## Current crawl example
+
+Until the common launcher is implemented, the existing Manga ONE launcher remains usable:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_mangaone_chrome.ps1
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli login --site mangaone
 ```
 
-After login:
+Then:
 
 ```powershell
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli crawl `
@@ -48,8 +85,6 @@ After login:
   --url "https://manga-one.com/manga/2379/chapter/214131" `
   --output-dir output\crawl-mangaone
 ```
-
-`--cdp-endpoint` is optional when `MANGAONE_CDP_ENDPOINT` is set; otherwise the current CLI default is `http://127.0.0.1:9222`.
 
 ## Output naming and ZIP packaging
 
@@ -62,4 +97,8 @@ The adapter exposes the chapter title as archive title and the episode label as 
 
 Normal `END` / `NEXT_CONTENT` completion packages manifest-declared PNGs under `output/Books/漫画/<title>/` by default. Episode parts remain separate archives.
 
-Last verified: 2026-09-16.
+## Live verification
+
+The current site-specific capture/navigation/END behavior has been verified against the live viewer. A fresh live check using the shared `.chrome-crawler/` profile is required after Browser Session migration is implemented.
+
+Last verified for current adapter behavior: 2026-09-16.

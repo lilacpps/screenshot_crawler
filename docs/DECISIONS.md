@@ -70,13 +70,15 @@ Patternを重い継承frameworkにしない。
 
 ---
 
-## D-008 Real-site crawlはCDP接続を標準とする
+## D-008 Real-site automationはCDP接続を標準とする
 
 ### 決定
-現行BookWalker/Manga ONEのcrawl/loginは専用profileで起動した通常ChromeへCDP接続する。
+Real-siteの `crawl` / `login` は、外部で起動した通常ChromeへPlaywright `connect_over_cdp()` で接続する方式を標準とする。
+
+Crawlerが実サイトごとにChromiumをlaunchして認証状態を個別管理する方式は標準にしない。
 
 ### 理由
-login/sessionと通常browser viewer behaviorを維持しやすい。
+通常Chromeのlogin/session、Cookie、localStorage等を維持しやすく、viewer固有の通常browser挙動を保ちやすい。またCrawler終了時にChrome process自体を終了せず、Crawlerが利用したPageだけを閉じられる。
 
 ---
 
@@ -135,3 +137,95 @@ noteはauthority orderではcode/testsより下に置き、上位authorityと競
 
 ### 理由
 実装詳細をチャットや過去コミットだけに依存せず、次回作業時に現在の前提・既知の実サイト挙動・運用方法を素早く復元できるようにするため。
+
+---
+
+## D-014 共通Crawler Chrome / profileを標準とする
+
+### 決定
+Real-site automationでは、原則として1つの専用Crawler Chromeと1つの共通profileを利用する。
+
+目標profile:
+
+```text
+.chrome-crawler/
+```
+
+BookWalker、Manga ONE、将来追加するサイトの認証状態は、Chrome自身がこのprofile内のCookie / localStorage / IndexedDB等としてサイトごとに保持する。
+
+Crawler側では `bookwalker-auth.json` のようなsite別storage-state fileを標準の認証authorityにしない。
+
+### 理由
+普通のChromeで複数サイトへログインするのと同じモデルに寄せることで、認証状態管理をCrawlerから切り離し、site追加時のbrowser/session実装を減らすため。
+
+---
+
+## D-015 接続はCDP、操作はPlaywrightを標準とする
+
+### 決定
+CDPはBrowser Sessionへの接続手段として使い、通常のサイト操作はPlaywrightの高水準APIで行う。
+
+標準:
+
+- `connect_over_cdp()`
+- `Page`
+- `Locator`
+- `goto()`
+- `click()`
+- `wait_for_*()`
+- `evaluate()`
+- `screenshot()` / canvas capture
+
+Raw CDP Protocol (`new_cdp_session()` / `session.send()` 等) は、Playwright APIでは実現困難なChrome固有機能が必要な場合だけ使う。
+
+### 理由
+Locator、auto-wait、frame/popup処理、timeout、screenshot等をPlaywrightへ任せた方が実装が単純で安定する。CDPを低レベル操作APIとして各Adapterへ広げると保守性が下がる。
+
+---
+
+## D-016 Site AdapterはBrowser接続方式を知らない
+
+### 決定
+Site AdapterはPlaywright `Page` / `Locator` を受け取り、サイト固有DOMとviewer挙動だけを扱う。
+
+Adapterから以下を行わない。
+
+- Chrome process launch
+- profile directory選択
+- CDP endpoint解決
+- `connect_over_cdp()`
+- BrowserContext lifecycle管理
+
+これらはCLI / Browser Session Layerの責務とする。
+
+### 理由
+Browser session管理とsite-specific automationを分離し、新規site追加をAdapter実装だけに近づけるため。
+
+---
+
+## D-017 共通CDP endpointをdefaultとしsite-specific overrideを許可する
+
+### 決定
+目標のendpoint解決順は次とする。
+
+1. 明示CLI `--cdp-endpoint`
+2. site-specific `<SITE>_CDP_ENDPOINT`
+3. global `CRAWLER_CDP_ENDPOINT`
+4. default `http://127.0.0.1:9222`
+
+通常はglobal endpointと共通Crawler Chromeを使う。siteごとに別profile / Chrome instanceが必要になった場合だけsite-specific endpointでoverrideする。
+
+### 理由
+通常運用を単純化しつつ、複数account、extension差、site固有設定、session分離などの例外を将来許容するため。
+
+---
+
+## D-018 Browser Session共通化は仕様先行で移行する
+
+### 決定
+まずdocsを上記モデルへ更新し、その後に実装を移行する。
+
+移行完了までは既存の `start_bookwalker_chrome.ps1` / `start_mangaone_chrome.ps1` とsite-specific profileがコード上に残っていてよい。ただしそれらを最終設計とは扱わない。
+
+### 理由
+BookWalker/Manga ONEの実サイトで動作しているAdapter挙動を壊さず、browser/session層だけを段階的に差し替えるため。

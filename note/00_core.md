@@ -1,6 +1,6 @@
 # 00. Core 現行実装ノート
 
-このファイルは、Screenshot Crawler Coreの**現在の実装詳細**をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
+このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
 最終同期: 2026-09-17
 
@@ -42,21 +42,156 @@ src/screenshot_crawler/core/
 
 `site_adapters/base.py` がAdapter contract。
 
-## 3. Browser / CDP
+## 3. Browser Session Model
 
-Coreには通常launch/context作成もあるが、現行のreal-site `crawl` / `login` CLIは既存ChromeへCDP接続する。
+### 3.1 採用済みの目標仕様
 
-理由:
+Real-site automationは、1つの共通Crawler Chrome/profileへCDP接続し、そのChromeをPlaywrightで操作する。
 
-- 通常Chromeのlogin/sessionを維持できる
-- viewer固有のbrowser挙動を保ちやすい
-- crawl終了時にChrome本体を閉じず、Crawlerが作ったtabだけを閉じられる
+```text
+Crawler Chrome
+└─ .chrome-crawler/
+      ├─ bookwalker.jp session
+      ├─ manga-one.com session
+      └─ other site sessions
+          ↑
+          │ CDP
+          ↓
+Playwright Browser / Context / Page
+          ↓
+Core Runner
+          ↓
+Site Adapter
+```
 
-現行CLIのCDP endpointは、引数 → site別 `.env` → `http://127.0.0.1:9222` の順で解決する。
+役割:
 
-BookWalker / Manga ONEとも専用profile launcherがあり、profile directoryは `.chrome-*` としてgitignoreされる。
+- CDP = Chromeへの接続transport
+- Playwright = 通常のbrowser/site操作API
+- Adapter = site固有viewer logic
 
-## 4. PageState loop
+Raw CDP ProtocolはPlaywrightで代替できない場合だけ使う。
+
+### 3.2 現行実装との差
+
+ドキュメント更新時点では、実装にはまだsite別launcher/profileが残る。
+
+```text
+scripts/start_bookwalker_chrome.ps1
+scripts/start_mangaone_chrome.ps1
+.chrome-bookwalker/
+.chrome-mangaone/
+```
+
+現行CLIのendpoint解決も:
+
+```text
+--cdp-endpoint
+→ site-specific *_CDP_ENDPOINT
+→ http://127.0.0.1:9222
+```
+
+で、global `CRAWLER_CDP_ENDPOINT` は未実装。
+
+次の実装変更で:
+
+```text
+scripts/start_crawler_chrome.ps1
+.chrome-crawler/
+CRAWLER_CDP_ENDPOINT
+```
+
+へ移行する。
+
+### 3.3 移行時の非変更範囲
+
+Browser Session統一のために以下を変更しない。
+
+- BookWalker capture方式
+- BookWalker END/NEXT_CONTENT
+- Manga ONE capture方式
+- Manga ONE image-disappearance END heuristic
+- Runner fingerprint dedupe
+- output/packaging semantics
+
+Browser/session管理だけを差し替える。
+
+## 4. Authentication model
+
+目標ではlogin sessionのauthorityは共通Chrome profile。
+
+Chrome自身がsiteごとに:
+
+- Cookie
+- localStorage
+- IndexedDB
+- その他browser storage
+
+を保持する。
+
+Crawlerはsite別storage-state JSONを標準管理しない。
+
+login CLIは:
+
+```text
+Browser Session Layer
+→ Playwright Page
+→ site-specific login handler
+```
+
+で動く。
+
+credentialsのinputは `.env` 等を使ってよいが、session保存はChromeへ任せる。
+
+CAPTCHA / MFA / validation errorは自動突破しない。
+
+## 5. CDP endpoint policy
+
+目標の優先順位:
+
+```text
+--cdp-endpoint
+→ <SITE>_CDP_ENDPOINT
+→ CRAWLER_CDP_ENDPOINT
+→ http://127.0.0.1:9222
+```
+
+通常はglobal endpointだけを使う。
+
+site-specific overrideは例外用:
+
+- 別account
+- extension差
+- browser setting差
+- session分離
+- 共通profileでは正常動作しない場合
+
+## 6. Adapterとの境界
+
+Adapterへ渡るものはPlaywright `Page`。
+
+Adapterは:
+
+- Locator取得
+- click / keyboard / mouse
+- wait
+- evaluate
+- capture target決定
+- END / NEXT_CONTENT判定
+
+を行う。
+
+Adapterは:
+
+- Chrome launch
+- profile選択
+- endpoint解決
+- `connect_over_cdp()`
+- BrowserContext lifecycle
+
+を行わない。
+
+## 7. PageState loop
 
 PageState:
 
@@ -104,7 +239,7 @@ loop:
 
 LOADINGはbounded retryし、解消しなければ `PageChangeTimeoutError`。
 
-## 5. max_pages
+## 8. max_pages
 
 `max_pages` は保存ページ数の安全上限。
 
@@ -114,33 +249,31 @@ LOADINGはbounded retryし、解消しなければ `PageChangeTimeoutError`。
 - `saved == max_pages` のあとさらに `CONTENT` → `MaxPagesExceededError`
 - `max_pages`を超えるPNGは保存しない
 
-この順序は「実ページ数とmax_pagesが同じ本」を異常終了させないために必要。
+## 9. Identity / fingerprint / duplicate
 
-## 6. Identity / fingerprint / duplicate
+`ContentIdentity` はpage id / page number / source id等を保持し、主に:
 
-`ContentIdentity` はpage id / page number / source id等を保持し、主に以下に使う。
+- Adapter change detection
+- manifest
+- debug / progress
 
-- Adapterのchange detection
-- manifest記録
-- debug / progress情報
+へ使う。
 
 **保存duplicateのauthorityはcapture bytesのSHA-256 fingerprint。**
 
-現行Runnerは、すでに保存済みのfingerprintと同じcaptureを再保存しない。identityが異なっていてもfingerprintが同一ならduplicate扱い。
+identityが異なっていてもfingerprintが同一ならduplicate扱い。
 
-これはBookWalker / Manga ONEで動いていた既存挙動を維持するための現行仕様。identity優先dedupeへ変更する場合は、実viewerで連続spreadや重なり遷移を観測してから設計する。
+これは既存BookWalker / Manga ONEの動作互換を優先した現行仕様。
 
-複数capture targetのspreadでは各targetごとにfingerprintを計算する。
-
-## 7. same-content guard
+## 10. same-content guard
 
 新しいcaptureが得られない状態が続いた場合は `same_content_count` を増やす。
 
 既定 `max_same_content = 3`。
 
-上限到達で `PageChangeTimeoutError` として停止し、同じ内容を無限保存/進行しない。
+上限到達で `PageChangeTimeoutError` として停止する。
 
-## 8. Context / NEXT_CONTENT
+## 11. Context / NEXT_CONTENT
 
 開始時 `ContentContext` と現在contextのstrong fieldを比較する。
 
@@ -151,21 +284,21 @@ strong fields:
 - episode_id
 - chapter_id
 
-同じfieldが開始時・現在とも存在し、値が変わった場合だけcontext changeとする。
+同じfieldが開始時・現在とも存在し、値が変わった場合だけcontext change。
 
 optional情報が後から埋まっただけではNEXT_CONTENTにしない。
 
-## 9. Capture
+## 12. Capture
 
 基本はLocator単位capture。
 
-Canvas targetの場合、`capture.py` はcanvasのraw PNG bufferを取得できる。これにより画面UIやbrowser chromeを避ける。
+Canvas targetの場合、`capture.py` はcanvas raw PNG bufferを取得できる。
 
 Adapterは `get_capture_targets()` で複数targetを返せる。保存順はAdapterが返した順。
 
-一時targetを作るAdapterは `cleanup_capture_targets()` で後始末する。
+一時targetは `cleanup_capture_targets()` で後始末する。
 
-## 10. Run output safety
+## 13. Run output safety
 
 新規runの `output_dir` は、存在しないか完全に空でなければならない。
 
@@ -179,7 +312,7 @@ Adapterは `get_capture_targets()` で複数targetを返せる。保存順はAda
 
 `ProgressStore` も既存manifest/progressを暗黙上書きしない。
 
-## 11. Manifest / progress
+## 14. Manifest / progress
 
 実行中:
 
@@ -194,61 +327,49 @@ Adapterは `get_capture_targets()` で複数targetを返せる。保存順はAda
 
 manifestは保存ページ一覧のauthority。
 
-各pageには概ね以下を記録する。
-
-- sequence
-- page_number
-- file
-- width / height
-- fingerprint
-- identity
-- metadata (`part` / `parts` 等)
-
 `progress.json` はlast sequence / identity / fingerprint / contextを持つが、**自動resume機能ではない**。
 
 JSON更新はtemporary file → `os.replace`。
 
-## 12. Resume
+## 15. Resume
 
-現行v1.1ではresume未実装。
+現行ではresume未実装。
 
 - 非空run dirは拒否
 - 既存manifest/progressを読み込んで続行しない
 - 暗黙resumeしない
 
-将来追加するなら、`--resume` 等で新規runと明示的に分離する。
+将来追加するなら `--resume` 等で新規runと明示的に分離する。
 
-## 13. Packaging
+## 16. Packaging
 
 正常な `END` / `NEXT_CONTENT` 後だけZIP化する。
 
-ZIP対象はdirectory globではなく、`manifest.json` の `pages[].file` がauthority。
+ZIP対象はdirectory globではなく `manifest.json` の `pages[].file` がauthority。
 
 安全ルール:
 
 - manifest外PNGをZIPへ入れない
-- manifest記載PNGが欠けていればfail
-- absolute path / traversal / unsafe pathを拒否
-- 同じfileをmanifestに重複指定できない
+- manifest記載PNG欠落はfail
+- unsafe path拒否
+- manifest file重複指定拒否
 - 既存同名ZIPは上書きしない
 
 ZIPはlibrary treeへ保存し、completion status JSONを別途残す。
 
-## 14. Intermediate directory cleanup
+## 17. Intermediate directory cleanup
 
 ZIP作成後、source crawl directoryを削除するのは、directory内容が次だけの場合に限る。
 
 - `manifest.json`
 - `progress.json`
-- manifestに記載されたpage PNG
+- manifest記載page PNG
 
 余分なPNG、diagnostics、user file、その他directoryがあればsource全体を `rmtree` しない。
 
-失敗runは調査用に残す。
+失敗runは残す。
 
-## 15. Diagnostics
-
-Runnerの通常エラー時はbest-effortでdiagnosticsを書く。
+## 18. Diagnostics
 
 現在の `write_diagnostics()` が保存するもの:
 
@@ -259,30 +380,27 @@ metadata.json
 error.txt
 ```
 
-metadataにはURL、title、viewport、Runnerから渡されたstate/context/saved count、error type等が入る。
-
 既知の制約:
 
 - diagnostics pathはrun-specific subdirectoryを自動生成しない
-- `SiteAdapter.collect_debug_metadata()` hookはcontractにあるが、現行Runnerではまだ統合していない
+- `SiteAdapter.collect_debug_metadata()` hookはcontractにあるがRunner未統合
 - diagnostics保存失敗は元例外を隠さない
 
-Adapter固有debug metadata統合は今後の改善候補。
+## 19. CLI / packaging flow
 
-## 16. CLI / packaging flow
-
-Real-site crawlの概念:
+目標real-site crawl:
 
 ```text
 CLI
- -> AdapterRegistry
- -> CDP connect
- -> new page
+ -> endpoint resolution
+ -> shared Crawler ChromeへCDP connect
+ -> existing BrowserContext
+ -> new Page
  -> CrawlerRunner.run
  -> END / NEXT_CONTENT
- -> crawler tab close
+ -> crawler Page close
  -> package_crawl_output
- -> remote Chromeは残す
+ -> Crawler Chromeは残す
 ```
 
 主なcrawl引数:
@@ -300,9 +418,7 @@ CLI
 --keep-open
 ```
 
-`crawl` には `--headed` はない。headed/native launch optionsは主に `probe` 側。
-
-## 17. Tests
+## 20. Tests
 
 Unit testsで主に確認するもの:
 
@@ -315,29 +431,24 @@ Unit testsで主に確認するもの:
 - packaging / manifest validation
 - site parser/helper
 
-Playwright local integration testsで主に確認するもの:
+Browser Session共通化実装時に追加するもの:
 
-- CONTENT → CONTENT → END
-- AD skip
-- NEXT_CONTENT
-- LOADING
-- UNKNOWN
-- spread
-- max_pages境界
-- Manga ONE終端heuristic
+- global endpoint precedence
+- site-specific override
+- shared context/page取得
+- remote Chromeをcloseしない
+- login/crawl共通session model
+- Adapterがbrowser接続方式へ依存しない
 
-Chromiumが利用できない環境ではintegrationがskipされるため、pytestのpassed/skipped件数も確認する。
+## 21. Known maintenance items
 
-## 18. Known maintenance items
-
-現時点の主な未実装/整理候補:
-
+- Browser Session共通化（docs決定済み、実装待ち）
 - explicit resume
 - Adapter `collect_debug_metadata()` のRunner統合
 - diagnostics run directory分離
-- config.yamlを実際に使うか削除するかの整理
-- identity/fingerprint dedupe方式の再検討
+- config.yaml整理
+- identity/fingerprint dedupe再検討
 - GitHub CI
-- tracked `.egg-info` の整理
+- tracked `.egg-info` 整理
 
 これらを変更した場合は、このnoteを必ず更新する。
