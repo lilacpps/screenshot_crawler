@@ -76,7 +76,7 @@ Raw CDP ProtocolはPlaywrightで代替できない場合だけ使う。
 
 real-siteの標準launcherは `scripts/start_crawler_chrome.ps1` である。repository root基準の
 `.chrome-crawler/` profileを使い、default port `9222`でshared Crawler Chromeを起動する。
-指定portに既存CDP listenerがある場合は二重起動せず、既存Chromeを利用して終了する。
+指定portに既存CDP listenerがある場合はChrome processのcommand lineでportとshared profileを確認する。一致すれば既存Chromeを再利用し、一致しない・確認できない場合は二重起動せずerrorで停止する。
 
 ```text
 scripts/start_crawler_chrome.ps1
@@ -107,6 +107,10 @@ core.browser.BrowserSession
 
 `CRAWLER_CDP_ENDPOINT` はshared Crawler Chromeを指す標準global endpointである。
 site-specific endpointは特殊なprofile/account等のための例外overrideとして残している。
+
+既存CDP listenerがある場合、launcherはprocess command lineのremote debugging portと
+`--user-data-dir`をshared profileと照合する。一致しない、またはprocessを確認できない場合は
+既存Chromeを黙って再利用せずerrorで停止する。
 
 ### 3.3 移行時の非変更範囲
 
@@ -150,6 +154,12 @@ real-siteのcrawl/loginは `BrowserSession.connect()` でCDP接続し、既存�
 BrowserContextからPageを作成する。crawlが作成した作業Pageは終了時に閉じる。
 loginは別siteの既存タブを再利用せず、常にlogin用new Pageを作成して終了時に閉じる。
 BrowserSessionの終了はPlaywright接続を切断するだけで、remote Chrome processは閉じない。
+
+Probeのnative Playwright launchでは `launch_browser()` / `create_browser_context()` を使う。
+`connect_browser()` と `close_browser()` はProbeおよびBrowserSessionで使うため残している。
+repository-wideでcall siteがなかった `BrowserSession.existing_page()` と `create_page()` は削除した。
+保存済みauth-stateの補助 (`auth.storage` / `save_auth.py`) もProbe・互換workflowで到達可能なため、
+real-site標準がChrome profileであることだけを理由に削除しない。
 
 credentialsのinputは `.env` 等を使ってよいが、session保存はChromeへ任せる。
 
@@ -454,6 +464,7 @@ Browser Session共通化で現在確認しているもの:
 
 - BookWalker/Manga ONEのshared `.chrome-crawler/` live smoke test
 - site-specific launcher/profileの削除判断（Phase 3）
+- `BrowserSession`の不要Page helper再発防止
 - explicit resume
 - Adapter `collect_debug_metadata()` のRunner統合
 - diagnostics run directory分離

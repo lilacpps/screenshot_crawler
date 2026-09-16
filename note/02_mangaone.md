@@ -299,6 +299,10 @@ MANGAONE_PASSWORD=<password>
 
 loginは共通Browser Sessionが作成する専用new Pageで実行し、既存の別site tabは再利用しない。login後はPageを閉じるが、shared Chrome/profileは残す。
 
+shared launcherは指定portの既存listenerを、Chrome process command lineのremote debugging portと
+`--user-data-dir=.chrome-crawler` が一致する場合だけ再利用する。一致しない、または確認できない場合は
+別profile Chromeを黙って再利用せずerrorで停止する。
+
 login flow:
 
 1. configured login URLへgoto

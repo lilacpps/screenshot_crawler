@@ -74,9 +74,6 @@ class FakeLoginSession:
     async def connect(cls, endpoint: str) -> "FakeLoginSession":
         return cls(endpoint)
 
-    def existing_page(self) -> object:
-        raise AssertionError("login must not reuse an existing page")
-
     async def new_page(self) -> object:
         return self.page
 

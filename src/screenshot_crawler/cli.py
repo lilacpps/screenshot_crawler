@@ -13,6 +13,7 @@ from screenshot_crawler.auth.env import (
     require_site_env_value,
 )
 from screenshot_crawler.core.browser import (
+    DEFAULT_CDP_ENDPOINT,
     BrowserSession,
     close_browser,
     connect_browser,
@@ -43,7 +44,10 @@ def _parser() -> argparse.ArgumentParser:
     probe.add_argument("--headed", action="store_true")
     probe.add_argument(
         "--cdp-endpoint",
-        help="Attach to an existing Chromium browser, for example http://127.0.0.1:9222",
+        help=(
+            "Attach to an existing Chromium browser, "
+            f"for example {DEFAULT_CDP_ENDPOINT}"
+        ),
     )
     probe.add_argument(
         "--native-window",
@@ -74,7 +78,7 @@ def _parser() -> argparse.ArgumentParser:
         "--cdp-endpoint",
         help=(
             "Attach to an existing Chromium browser "
-            "(default: site .env, CRAWLER_CDP_ENDPOINT, or http://127.0.0.1:9222)"
+            f"(default: site .env, CRAWLER_CDP_ENDPOINT, or {DEFAULT_CDP_ENDPOINT})"
         ),
     )
     crawl.add_argument(

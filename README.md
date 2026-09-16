@@ -159,7 +159,7 @@ Crawler本体はURL一覧の収集を担当しません。
 powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
 ```
 
-既にport 9222でCDP listenerがある場合、既存Chromeを表示して二重起動せず終了します。
+既にport 9222でCDP listenerがある場合、実行中Chromeのcommand lineがshared profileとportを示すときだけ既存Chromeを再利用します。確認できない場合は二重起動せずerrorで停止します。
 
 旧launcherはcompatibility pathとして引き続き利用できます。
 

@@ -194,7 +194,7 @@ Browser Session共通化では最低限:
 
 を確認する。
 
-Phase 2では `scripts/start_crawler_chrome.ps1` と `.chrome-crawler/` を標準運用にし、loginは既存タブを再利用せず専用new Pageを閉じる。旧site launcher/profileはrollback用に残す。
+Phase 2では `scripts/start_crawler_chrome.ps1` と `.chrome-crawler/` を標準運用にし、loginは既存タブを再利用せず専用new Pageを閉じる。Phase 3では既存CDP listenerのprocess command lineがshared profileを示す場合だけ再利用し、それ以外は安全停止する。旧site launcher/profileはrollback用に残す。
 
 Playwright integrationがskipされた場合は件数と理由を報告する。
 

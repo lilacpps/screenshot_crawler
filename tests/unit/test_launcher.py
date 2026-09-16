@@ -21,7 +21,10 @@ def test_shared_launcher_checks_existing_cdp_listener_before_starting_chrome() -
     listener_check = script.index("/json/version")
     process_start = script.index("Start-Process")
     assert listener_check < process_start
+    assert "Test-SharedCrawlerChromeProcess" in script
+    assert "Get-CimInstance -ClassName Win32_Process" in script
     assert "no second browser will be started" in script
+    assert "could not be verified as using the shared crawler profile" in script
 
 
 def test_shared_chrome_profile_is_covered_by_existing_gitignore_rule() -> None:

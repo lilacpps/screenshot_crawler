@@ -235,7 +235,7 @@ BookWalker/Manga ONEの実サイトで動作しているAdapter挙動を壊さ�
 ## D-019 共通Crawler Chrome launcherを標準運用にする
 
 ### 決定
-Phase 2以降のreal-site運用では、`scripts/start_crawler_chrome.ps1` がrepository root基準で `.chrome-crawler/` をprofileに使い、port `9222` でChromeを起動する。既存listenerがある場合は二重起動せず、既存Chromeを利用する。
+Phase 2以降のreal-site運用では、`scripts/start_crawler_chrome.ps1` がrepository root基準で `.chrome-crawler/` をprofileに使い、port `9222` でChromeを起動する。既存listenerがある場合はprocess command lineでportとshared profileを確認し、一致する場合だけ二重起動せず既存Chromeを利用する。確認できない場合はerrorで停止する。
 
 BookWalker/Manga ONEのloginは共通Chromeの専用new Pageで実行し、login後はPageだけ閉じる。認証sessionはshared profileへ保存し、remote Chrome processは閉じない。
 

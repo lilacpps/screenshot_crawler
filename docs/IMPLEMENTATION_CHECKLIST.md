@@ -27,6 +27,7 @@ Phase 2の共通launcher/profile切替まで実装済み。実サイトshared-pr
 - [x] endpoint precedence実装: CLI > site override > global > default
 - [x] login / crawlを共通Browser Session helperへ統一
 - [x] site-specific launcherをlegacy / compatibility pathとして位置付け
+- [x] 既存CDP listenerのshared profile確認と不一致時の安全停止
 - [ ] site-specific launcher/profile削除（Phase 3判断）
 - [ ] BookWalker共通profile smoke test
 - [ ] Manga ONE共通profile smoke test

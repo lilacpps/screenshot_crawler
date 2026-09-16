@@ -112,11 +112,6 @@ class BrowserSession:
             raise
         return cls(playwright, browser, context)
 
-    def existing_page(self) -> Any | None:
-        """Return an already-open page, if one exists."""
-
-        return self.context.pages[0] if self.context.pages else None
-
     async def new_page(self) -> Any:
         """Create a page for a crawl or site-specific login handler."""
 
@@ -193,12 +188,6 @@ async def create_browser_context(
     if state_path is not None:
         options["storage_state"] = str(state_path)
     return await browser.new_context(**options)
-
-
-async def create_page(context: BrowserContext) -> Any:
-    """Create a Page from a managed BrowserContext."""
-
-    return await context.new_page()
 
 
 async def close_browser(
