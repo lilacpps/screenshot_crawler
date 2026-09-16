@@ -1,210 +1,133 @@
 # Codex Implementation Guide
 
-このファイルはCodexに実装を依頼するときのauthorityです。
+このrepositoryはCore・Probe・BookWalker・Manga ONEまで実装済み。Codexは「Phase 1から新規実装する」のではなく、既存動作を保ちながら変更する。
 
-## 0. 共通ルール
+## 1. Authority
 
-Codexは実装前に次を読むこと。
+作業前に最低限読む。
 
-1. `docs/SPEC.md`
-2. `docs/ARCHITECTURE.md`
-3. `docs/DECISIONS.md`
-4. 対象フェーズの受け入れ条件
+1. `AGENTS.md`
+2. `docs/SPEC.md`
+3. `docs/ARCHITECTURE.md`
+4. `docs/DECISIONS.md`
+5. 対象Site Adapter README
+6. 対象コードとテスト
 
-守ること:
+現行仕様とコードが競合して見える場合、勝手に大規模変更せず差分を報告する。
 
-- Coreにサイト固有コードを入れない
+**BookWalker / Manga ONEで実サイト確認済みの挙動を、一般論だけを理由に変更しない。**
+
+## 2. 共通ルール
+
+- Coreにsite-specific selector / URL branchを入れない
 - 不要な抽象化を追加しない
 - 独自DSLを作らない
 - Patternのための深い継承を作らない
 - UNKNOWNを無理に突破しない
-- 実装と同時にテストを追加する
-- 既存仕様とコードが競合したら、仕様を勝手に変更せず差分を報告する
+- retry / waitはbounded
+- データ破壊より停止を優先
+- 実装変更には対応テストを追加・更新
+- 外部サイト依存CIを作らない
+- 実サイト著作物をfixtureへ保存しない
 
-## Phase 1: Contracts / Models
+## 3. Core bug fix時
 
-### 目的
+最初に、問題がSite Adapter固有かCore共通かを分離する。
 
-CoreとSite Adapterの境界を固定する。
+Core変更では特に確認する。
 
-### 変更範囲
-
-- `core/models.py`
-- `core/state.py`
-- `core/errors.py`
-- `site_adapters/base.py`
-- unit tests
-
-### 必須事項
-
-- `PageState`
-- `ContentIdentity`
-- `ContentContext`
-- `CapturedPage`
-- `RunConfig`
-- Adapter ABC
-
-### 受け入れ条件
-
-- 型が循環importしない
-- Adapter契約がSPECを満たす
-- unit testが通る
-
-## Phase 2: Browser / Capture / Fingerprint
-
-### 目的
-
-ページループ以外の共通I/Oを実装する。
-
-### 変更範囲
-
-- `core/browser.py`
-- `core/capture.py`
-- `core/fingerprint.py`
-- tests
-
-### 必須事項
-
-- Chromium起動・Context管理
-- locator screenshot bytes取得/保存
-- SHA-256
-- viewport設定
-
-### 非対象
-
-- Runnerの状態遷移
-- Site Adapter実装
-
-## Phase 3: Progress / Manifest / Diagnostics
-
-### 目的
-
-途中状態と異常時情報を確実に残す。
-
-### 変更範囲
-
-- `core/progress.py`
-- `core/diagnostics.py`
-- tests
-
-### 受け入れ条件
-
-- JSONがatomicに近い形で更新されること（temporary file → replaceを推奨）
-- 既存manifestを壊しにくい
-- diagnostics失敗が元例外を隠さない
-
-## Phase 4: Runner
-
-### 目的
-
-状態機械を実装する。
-
-### 変更範囲
-
-- `core/runner.py`
-- unit/integration tests
-
-### 状態遷移
-
-- CONTENT: capture対象
-- AD: skipして次へ
-- LOADING: bounded retry
-- END / NEXT_CONTENT: 正常終了
-- UNKNOWN: diagnostics保存して異常終了
-
-### 受け入れ条件
-
-- max_pages
+- END / NEXT_CONTENTをcaptureしない
+- `max_pages`到達後でもterminal stateを正常終了できる
+- fingerprint duplicate guard
 - same-content guard
-- retry上限
-- Adapter例外の扱い
-- 正常終了と異常終了を区別
+- multiple capture targets
+- context change
+- output directory安全性
+- manifest基準packaging
 
-## Phase 5: Probe
+現行Runnerではcapture fingerprintが保存dedupeのauthority。identity優先方式へ変更する場合は、BookWalker/Manga ONEの実viewer遷移を先に確認する。
 
-### 目的
+## 4. Site Adapter bug fix時
 
-新規サイト対応の材料収集。
+変更前にsite READMEのlive observationsを読む。
 
-### 変更範囲
+調査すること:
 
-- `probe/collector.py`
-- `probe/models.py`
-- CLI
+1. capture target
+2. page identity
+3. content context
+4. next操作
+5. page change wait
+6. loading
+7. final content
+8. final advance後の挙動
+9. NEXT_CONTENT
 
-### 収集候補
+### Manga ONE
 
-- screenshot
-- HTML
-- URL/title
-- visible img metadata
-- canvas metadata
-- button候補
-- computed background-image候補
+現在のENDは「final advance後、page imagesが `end_grace_ms` 継続して消失する」既知挙動を利用する。実DOM未確認のgeneric END selectorへ置換しない。
 
-### 非対象
+### BookWalker
 
-- 正しい次ボタンの完全自動特定
-- AI分類
+page counter / `#endOfBook` / `#eobNext` / known final-navigation behaviorを組み合わせている。単一signalへ単純化しない。
 
-## Phase 6: Example Adapter
+## 5. Output / packaging変更時
 
-### 目的
+必須:
 
-Adapter実装の見本を1つ用意する。
+- 新規runは非空output directoryを拒否
+- 既存runを暗黙上書きしない
+- ZIP対象はmanifest `pages[].file`
+- manifest外PNGを混入させない
+- manifest記載ファイル欠落はfail
+- user fileを含むdirectoryを丸ごと削除しない
 
-`site_adapters/example/` は実サイトではなくfixtureベースでよい。
+Resumeは現在未実装。resume機能を追加する場合は明示CLIと受け入れ条件を先に定義する。
 
-### 受け入れ条件
+## 6. 新規Site Adapter追加時
 
-- Coreを変更せずAdapter追加だけで動くことを示す
-- READMEに判定方式を記録
+最初にProbeまたは手動観測で以下を確認する。
 
-## 新規サイト対応時のCodex指示テンプレート
-
-```text
-対象サイトのSite Adapterを実装してください。
-
-最初に以下をauthorityとして読んでください。
-- docs/SPEC.md
-- docs/ARCHITECTURE.md
-- docs/SITE_ADAPTER_GUIDE.md
-- 既存patterns/
-- 既存site_adapters/
-- 対象probe出力
-
-目的:
-指定URLの現在コンテンツについて、本文だけを順番にPNG保存し、広告を保存せず、次話へ移る前に停止する。
-
-必ず調査すること:
-1. 本文描画方式
-2. capture target
-3. next操作
-4. page change検知
-5. page number / page id
-6. episode/chapter/content id
-7. 広告判定
-8. 最終ページ後の挙動
-9. 次話遷移の検知
-10. loading完了判定
-
-制約:
-- Coreへのサイト固有if追加は禁止
-- 既存Patternが使えるなら再利用
-- 1サイト固有ならPattern追加しない
-- UNKNOWNでは停止
-
-成果物:
-- site_adapters/<site>/adapter.py
-- site_adapters/<site>/config.yaml
-- site_adapters/<site>/README.md
-- 必要なテスト
-
-確認:
-- 通常ページ
-- 広告前後
-- 最終ページ
+- 本文描画方式
+- capture target
+- next操作
+- page change検知
+- identity
+- content context
+- 広告
 - 最終ページ後
-- 次話遷移
-- ページ変更失敗
+- NEXT_CONTENT
+- loading完了
+
+成果物の目安:
+
+- `site_adapters/<site>/adapter.py`
+- `site_adapters/<site>/README.md`
+- 必要なら明示的に利用される設定ファイル
+- unit / local integration tests
+
+`config.yaml` は必須ではない。Pythonと二重authorityになる未使用configは追加しない。
+
+## 7. Test
+
+```bash
+pytest -q
+ruff check src tests
 ```
+
+Playwright integrationがskipされた場合は、その件数と理由を最終報告に書く。
+
+実サイトでしか確認できない事項は「未確認」と明示する。
+
+## 8. 完了報告
+
+最低限:
+
+- 変更ファイル
+- 変更した挙動
+- 既存挙動をどう保護したか
+- 追加/更新テスト
+- pytest / ruff結果
+- skipped test
+- 実サイト確認の有無
+- 残課題

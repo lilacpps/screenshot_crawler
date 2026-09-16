@@ -1,67 +1,89 @@
 # Implementation Checklist
 
-Codexで段階実装するときの進捗管理用。
+現在の実装状況を記録する。単にファイルが存在するだけでなく、テストまたは実サイト確認済みかを基準にする。
 
-## Phase 1 — Contracts / Models
-- [ ] 共通models確定
-- [ ] PageState確定
-- [ ] SiteAdapter ABC確定
-- [ ] errors確定
-- [ ] unit tests
+## Core contracts / I/O
 
-## Phase 2 — Browser / Capture / Fingerprint
-- [ ] Browser lifecycle
-- [ ] Context / viewport
-- [ ] Locator screenshot
-- [ ] PNG保存
-- [ ] SHA-256
-- [ ] unit tests
+- [x] 共通models / PageState / errors
+- [x] SiteAdapter contract / registry
+- [x] Browser lifecycle
+- [x] CDP接続
+- [x] Locator / canvas capture
+- [x] PNG保存
+- [x] SHA-256 fingerprint
+- [x] unit tests
 
-## Phase 3 — Progress / Manifest / Diagnostics
-- [ ] manifest JSON
-- [ ] progress JSON
-- [ ] atomic write
-- [ ] diagnostics screenshot
-- [ ] diagnostics HTML
-- [ ] diagnostics metadata
-- [ ] tests
+## Persistence / safety
 
-## Phase 4 — Runner
-- [ ] CONTENT
-- [ ] AD
-- [ ] LOADING
-- [ ] END
-- [ ] NEXT_CONTENT
-- [ ] UNKNOWN
-- [ ] max_pages
-- [ ] same-content guard
-- [ ] retry
-- [ ] tests
+- [x] manifest JSON
+- [x] progress JSON
+- [x] atomic write
+- [x] basic diagnostics screenshot / HTML / metadata / error
+- [x] 非空output directory拒否
+- [x] 既存manifest/progressの暗黙上書き防止
+- [x] manifest基準packaging
+- [x] manifest外PNG混入防止
+- [x] cleanup時の無関係ファイル保護
+- [ ] 自動resume（v1.1非対象）
+- [ ] Adapter固有debug metadataのdiagnostics統合
 
-## Phase 5 — Probe
-- [ ] screenshot
-- [ ] HTML
-- [ ] img metadata
-- [ ] canvas metadata
-- [ ] button candidates
-- [ ] background-image candidates
-- [ ] CLI
+## Runner
 
-## Phase 6 — Example Adapter / Fixture
-- [ ] artificial viewer fixture
-- [ ] example adapter
-- [ ] normal pages
-- [ ] ad transition
-- [ ] end transition
-- [ ] next-content transition
-- [ ] integration test
+- [x] CONTENT
+- [x] AD
+- [x] LOADING
+- [x] END
+- [x] NEXT_CONTENT
+- [x] UNKNOWN
+- [x] max_pages
+- [x] max_pages == actual pages の正常終了
+- [x] fingerprint duplicate guard
+- [x] same-content guard
+- [x] bounded retry / timeout
+- [x] context change detection
+- [x] multiple capture targets / spread
+- [x] unit tests
+- [x] Playwright local integration tests
 
-## Phase 7 — First real site
-- [ ] probe実行
-- [ ] adapter実装
-- [ ] config
-- [ ] site README
-- [ ] normal page確認
-- [ ] 広告前後確認
-- [ ] 最終ページ確認
-- [ ] 次話停止確認
+## Probe
+
+- [x] screenshot
+- [x] HTML
+- [x] img metadata
+- [x] canvas metadata
+- [x] button candidates
+- [x] background-image candidates
+- [x] CLI
+
+## BookWalker
+
+- [x] product URL / viewer URL entry
+- [x] canvas capture
+- [x] spread capture
+- [x] page change wait / bounded retry
+- [x] final page / END確認
+- [x] NEXT_CONTENT判定
+- [x] output metadata / ZIP naming
+- [x] CDP profile workflow
+- [x] site README
+- [x] live verification記録
+
+## Manga ONE
+
+- [x] chapter URL parsing
+- [x] image capture
+- [x] right-to-left spread order
+- [x] page change wait / bounded retry
+- [x] final image disappearance heuristic
+- [x] chapter change -> NEXT_CONTENT
+- [x] output metadata / ZIP naming
+- [x] CDP profile workflow
+- [x] site README
+- [x] live working implementation maintained
+
+## Maintenance
+
+- [x] local artificial integration fixture
+- [x] packaging regression tests
+- [ ] GitHub CI workflow（必要になってから）
+- [ ] identity優先dedupeの再検討（実サイト遷移データが揃ってから）
