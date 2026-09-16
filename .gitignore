@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Runtime output
+output/
+diagnostics/
+state/
+
+# Browser profiles / secrets
+browser-data/
+.auth/
+.chrome-bookwalker/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

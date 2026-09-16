@@ -1,0 +1,18 @@
+site_name: example
+
+viewport:
+  width: 1920
+  height: 1080
+
+timeouts:
+  navigation_ms: 10000
+  page_change_ms: 10000
+
+limits:
+  max_pages: 1000
+  max_same_content: 3
+
+selectors:
+  viewer: null
+  content: null
+  next: null

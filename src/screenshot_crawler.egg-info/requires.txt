@@ -1,0 +1,7 @@
+playwright<2,>=1.55
+PyYAML<7,>=6
+
+[dev]
+pytest<9,>=8
+pytest-asyncio<1,>=0.24
+ruff<1,>=0.8

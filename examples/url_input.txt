@@ -1,0 +1,2 @@
+# URL入力の例。実際のURLは別プログラムまたは人手で与える想定。
+https://example.invalid/viewer/123

@@ -1,0 +1,2 @@
+[console_scripts]
+screenshot-crawler = screenshot_crawler.cli:main

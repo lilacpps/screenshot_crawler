@@ -1,0 +1,24 @@
+site_name: mangaone
+
+viewer_type: image
+
+viewport:
+  width: 1920
+  height: 1080
+  device_scale_factor: 1
+
+timeouts:
+  navigation_ms: 10000
+  page_change_ms: 10000
+
+limits:
+  max_pages: 1000
+  max_same_content: 3
+
+selectors:
+  viewer: ".viewer-container"
+  page: '.viewer-container img[alt^="page_"]'
+  fullscreen_button_label: "全画面"
+
+notes:
+  trailing_promo_pages: "not skipped automatically; page content has no reliable semantic marker"

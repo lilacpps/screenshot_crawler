@@ -1,0 +1,27 @@
+site_name: bookwalker
+
+viewer_type: canvas
+
+viewport:
+  width: 1920
+  height: 1080
+  device_scale_factor: 1
+
+timeouts:
+  navigation_ms: 10000
+  page_change_ms: 10000
+
+limits:
+  max_pages: 1000
+  max_same_content: 3
+
+selectors:
+  renderer: "#renderer"
+  canvas: "#renderer .currentScreen canvas:not(.dummy)"
+  page_counter: "#pageSliderCounter"
+  page_title: "#pagetitle"
+  next_tap_area: "#leftTapArea"
+  loading: "#loaderStatusDialog"
+  end: "#endOfBook"
+  next_content: "#eobNext"
+  explicit_ad: "[data-ad], .ad, #ad, #advertisement"
