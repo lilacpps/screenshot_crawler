@@ -9,17 +9,17 @@ from pathlib import Path
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.auth.env import (
-    env_value,
     read_env_file,
     require_site_env_value,
-    site_env_name,
 )
 from screenshot_crawler.core.browser import (
+    BrowserSession,
     close_browser,
     connect_browser,
     create_browser_context,
     default_browser_context,
     launch_browser,
+    resolve_cdp_endpoint,
 )
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import package_crawl_output
@@ -74,7 +74,7 @@ def _parser() -> argparse.ArgumentParser:
         "--cdp-endpoint",
         help=(
             "Attach to an existing Chromium browser "
-            "(default: site .env value or http://127.0.0.1:9222)"
+            "(default: site .env, CRAWLER_CDP_ENDPOINT, or http://127.0.0.1:9222)"
         ),
     )
     crawl.add_argument(
@@ -181,27 +181,18 @@ async def _run_crawl(args: argparse.Namespace) -> None:
     )
 
     values = read_env_file(args.env_file) if args.env_file.is_file() else {}
-    endpoint = args.cdp_endpoint or env_value(
-        site_env_name(args.site, "CDP_ENDPOINT"),
-        values,
-        default="http://127.0.0.1:9222",
+    endpoint = resolve_cdp_endpoint(
+        site=args.site,
+        cli_endpoint=args.cdp_endpoint,
+        values=values,
     )
-    playwright, browser = await connect_browser(endpoint)
+    session = await BrowserSession.connect(endpoint)
     try:
-        context = default_browser_context(browser)
-    except BaseException:
-        await close_browser(playwright, browser, close_browser_instance=False)
-        raise
-    try:
-        page = await context.new_page()
+        page = await session.new_page()
         try:
             result = await CrawlerRunner(config).run(page, adapter)
             print(f"Saved {len(result.pages)} pages; stopped at {result.stop_reason}.")
             if result.stop_state in {PageState.END, PageState.NEXT_CONTENT}:
-                # A normal terminal state means the viewer has completed. Close
-                # only this tab; leave remote Chromium itself under the user's
-                # control when --cdp-endpoint is used.
-                await page.close()
                 package = package_crawl_output(
                     output_dir,
                     adapter.get_output_metadata(),
@@ -218,22 +209,20 @@ async def _run_crawl(args: argparse.Namespace) -> None:
             if args.keep_open:
                 print("Browser is open. Inspect it manually, then press Enter here to close it.")
                 await asyncio.to_thread(input)
+        finally:
+            await session.close_page(page)
     finally:
-        await close_browser(
-            playwright,
-            browser,
-            close_browser_instance=False,
-        )
+        await session.close()
 
 
 async def _run_login(args: argparse.Namespace) -> None:
     """Connect to the existing CDP browser and perform site login."""
 
     values = read_env_file(args.env_file)
-    endpoint = args.cdp_endpoint or env_value(
-        site_env_name(args.site, "CDP_ENDPOINT"),
-        values,
-        default="http://127.0.0.1:9222",
+    endpoint = resolve_cdp_endpoint(
+        site=args.site,
+        cli_endpoint=args.cdp_endpoint,
+        values=values,
     )
     email = require_site_env_value(args.site, "EMAIL", values)
     password = require_site_env_value(args.site, "PASSWORD", values)
@@ -244,17 +233,21 @@ async def _run_login(args: argparse.Namespace) -> None:
     if login is None:
         raise ValueError(f"Site adapter '{args.site}' does not provide a login flow")
 
-    playwright, browser = await connect_browser(endpoint)
+    session = await BrowserSession.connect(endpoint)
+    page = session.existing_page()
+    page_created = page is None
     try:
-        context = default_browser_context(browser)
-        page = context.pages[0] if context.pages else await context.new_page()
+        if page is None:
+            page = await session.new_page()
         await login(page, email=email, password=password, home_url=home_url)
         print(f"Login submitted for site '{args.site}'. Credentials were not printed.")
         if args.keep_open:
             print("Browser is open. Press Enter here to disconnect.")
             await asyncio.to_thread(input)
     finally:
-        await close_browser(playwright, browser, close_browser_instance=False)
+        if page_created and page is not None:
+            await session.close_page(page)
+        await session.close()
 
 
 def main() -> None:

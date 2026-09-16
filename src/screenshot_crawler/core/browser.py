@@ -3,17 +3,48 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, async_playwright
 
+from screenshot_crawler.auth.env import env_value, site_env_name
 from screenshot_crawler.auth.storage import (
     AUTH_STATE_NOT_FOUND_MESSAGE,
     AuthenticationStateNotFoundError,
     auth_state_path,
     require_auth_state,
 )
+
+DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+
+
+def resolve_cdp_endpoint(
+    *,
+    site: str | None = None,
+    cli_endpoint: str | None = None,
+    values: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve a real-site CDP endpoint using the shared precedence policy."""
+
+    if cli_endpoint:
+        return cli_endpoint
+
+    env_values = dict(values or {})
+    if site is not None:
+        site_endpoint = env_value(
+            site_env_name(site, "CDP_ENDPOINT"),
+            env_values,
+        )
+        if site_endpoint:
+            return site_endpoint
+
+    return env_value(
+        "CRAWLER_CDP_ENDPOINT",
+        env_values,
+        default=DEFAULT_CDP_ENDPOINT,
+    ) or DEFAULT_CDP_ENDPOINT
 
 
 async def launch_browser(
@@ -55,6 +86,51 @@ async def connect_browser(endpoint: str) -> tuple[Any, Browser]:
         await playwright.stop()
         raise
     return playwright, browser
+
+
+class BrowserSession:
+    """Own a Playwright connection to an already-running crawler Chrome.
+
+    The session owns the Playwright connection and any pages it creates, but
+    never owns or closes the remote Chrome process itself.
+    """
+
+    def __init__(self, playwright: Any, browser: Browser, context: BrowserContext) -> None:
+        self.playwright = playwright
+        self.browser = browser
+        self.context = context
+
+    @classmethod
+    async def connect(cls, endpoint: str) -> BrowserSession:
+        """Connect to CDP and select the existing remote browser context."""
+
+        playwright, browser = await connect_browser(endpoint)
+        try:
+            context = default_browser_context(browser)
+        except BaseException:
+            await close_browser(playwright, browser, close_browser_instance=False)
+            raise
+        return cls(playwright, browser, context)
+
+    def existing_page(self) -> Any | None:
+        """Return an already-open page, if one exists."""
+
+        return self.context.pages[0] if self.context.pages else None
+
+    async def new_page(self) -> Any:
+        """Create a page for a crawl or site-specific login handler."""
+
+        return await self.context.new_page()
+
+    async def close_page(self, page: Any) -> None:
+        """Close a work page without affecting the remote browser."""
+
+        await page.close()
+
+    async def close(self) -> None:
+        """Disconnect Playwright while leaving remote Chrome running."""
+
+        await close_browser(self.playwright, self.browser, close_browser_instance=False)
 
 
 def default_browser_context(browser: Browser) -> BrowserContext:

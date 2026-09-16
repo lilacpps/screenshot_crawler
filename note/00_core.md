@@ -28,7 +28,7 @@ Site固有selector、END判定、NEXT操作は `site_adapters/<site>/` の責務
 
 ```text
 src/screenshot_crawler/core/
-├─ browser.py       browser launch / CDP connection / context
+├─ browser.py       browser launch / CDP endpoint / CDP connection / session
 ├─ capture.py       Locator / canvas capture, PNG save
 ├─ diagnostics.py   screenshot / HTML / metadata / error
 ├─ errors.py        crawler errors
@@ -74,7 +74,8 @@ Raw CDP ProtocolはPlaywrightで代替できない場合だけ使う。
 
 ### 3.2 現行実装との差
 
-ドキュメント更新時点では、実装にはまだsite別launcher/profileが残る。
+実装にはまだsite別launcher/profileが残るが、real-siteのcrawl/loginは共通の
+endpoint resolverとBrowser Sessionを利用する。
 
 ```text
 scripts/start_bookwalker_chrome.ps1
@@ -88,20 +89,23 @@ scripts/start_mangaone_chrome.ps1
 ```text
 --cdp-endpoint
 → site-specific *_CDP_ENDPOINT
+→ CRAWLER_CDP_ENDPOINT
 → http://127.0.0.1:9222
 ```
 
-で、global `CRAWLER_CDP_ENDPOINT` は未実装。
+で統一されている。CLI指定を最優先し、site-specific endpointは例外overrideとして
+維持する。`.env`の値よりプロセス環境変数が優先される。
 
-次の実装変更で:
+Phase 1では、次を実装済みである。
 
 ```text
-scripts/start_crawler_chrome.ps1
-.chrome-crawler/
 CRAWLER_CDP_ENDPOINT
+core.browser.resolve_cdp_endpoint()
+core.browser.BrowserSession
 ```
 
-へ移行する。
+既存の `scripts/start_bookwalker_chrome.ps1` / `scripts/start_mangaone_chrome.ps1` と
+`.chrome-bookwalker` / `.chrome-mangaone` は互換運用のため残している。
 
 ### 3.3 移行時の非変更範囲
 
@@ -140,6 +144,11 @@ Browser Session Layer
 ```
 
 で動く。
+
+real-siteのcrawl/loginは `BrowserSession.connect()` でCDP接続し、既存の
+BrowserContextからPageを取得・作成する。crawlが作成した作業Pageは終了時に閉じる。
+loginは従来どおり既存Pageを優先し、Pageがなければ作成して終了時に閉じる。
+BrowserSessionの終了はPlaywright接続を切断するだけで、remote Chrome processは閉じない。
 
 credentialsのinputは `.env` 等を使ってよいが、session保存はChromeへ任せる。
 
@@ -393,9 +402,9 @@ error.txt
 ```text
 CLI
  -> endpoint resolution
- -> shared Crawler ChromeへCDP connect
+ -> BrowserSession.connect()
  -> existing BrowserContext
- -> new Page
+ -> crawler/login Page
  -> CrawlerRunner.run
  -> END / NEXT_CONTENT
  -> crawler Page close
@@ -431,18 +440,19 @@ Unit testsで主に確認するもの:
 - packaging / manifest validation
 - site parser/helper
 
-Browser Session共通化実装時に追加するもの:
+Browser Session共通化で現在確認しているもの:
 
-- global endpoint precedence
-- site-specific override
+- endpoint precedence（CLI > site override > global > default）
+- BookWalker / Manga ONEが同じresolverを使うこと
 - shared context/page取得
 - remote Chromeをcloseしない
-- login/crawl共通session model
+- login/crawl共通BrowserSession
 - Adapterがbrowser接続方式へ依存しない
 
 ## 21. Known maintenance items
 
-- Browser Session共通化（docs決定済み、実装待ち）
+- shared launcher/profileへの移行（Phase 2以降）
+- 共通profile `.chrome-crawler/` の運用化
 - explicit resume
 - Adapter `collect_debug_metadata()` のRunner統合
 - diagnostics run directory分離
