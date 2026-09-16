@@ -25,6 +25,9 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 4. `docs/CODEX_IMPLEMENTATION_GUIDE.md` — 既存実装を変更するときのルール
 5. `docs/SITE_ADAPTER_GUIDE.md` — 新規サイト対応の作り方
 6. `docs/TEST_STRATEGY.md` — テスト方針
+7. `note/README.md` — 現行実装ノートの更新ルールとファイル対応
+
+`note/` は現在の実装詳細を復元するためのcurrent implementation snapshotです。仕様・実装・運用を変更した場合は、対応するnoteも同じ変更で同期します。
 
 ## セットアップ
 
