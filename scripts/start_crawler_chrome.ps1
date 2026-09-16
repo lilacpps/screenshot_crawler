@@ -71,10 +71,11 @@ if (-not $chromePath) {
 }
 
 New-Item -ItemType Directory -Force -Path $profileDirectory | Out-Null
+$quotedProfileDirectory = '"' + $profileDirectory + '"'
 
 $arguments = @(
     "--remote-debugging-port=$Port",
-    "--user-data-dir=$profileDirectory",
+    "--user-data-dir=$quotedProfileDirectory",
     "--window-size=1920,1080",
     "about:blank"
 )
@@ -84,10 +85,15 @@ Start-Sleep -Seconds 2
 
 try {
     Invoke-RestMethod "http://127.0.0.1:$Port/json/version" -TimeoutSec 5 | Out-Null
-    Write-Host "Shared Crawler Chrome started."
-    Write-Host "Profile: $profileDirectory"
-    Write-Host "CDP endpoint: http://127.0.0.1:$Port"
-    Write-Host "BookWalker and Manga ONE can share this Chrome profile."
 } catch {
     throw "Chrome started, but CDP endpoint http://127.0.0.1:$Port is not available."
 }
+
+if (-not (Test-SharedCrawlerChromeProcess -ExpectedPort $Port -ExpectedProfileDirectory $normalizedProfileDirectory)) {
+    throw "Chrome started and CDP endpoint http://127.0.0.1:$Port responded, but the Chrome process could not be verified as using the shared crawler profile '$profileDirectory'."
+}
+
+Write-Host "Shared Crawler Chrome started."
+Write-Host "Profile: $profileDirectory"
+Write-Host "CDP endpoint: http://127.0.0.1:$Port"
+Write-Host "BookWalker and Manga ONE can share this Chrome profile."

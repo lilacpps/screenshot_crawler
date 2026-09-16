@@ -78,6 +78,8 @@ real-siteの標準launcherは `scripts/start_crawler_chrome.ps1` である。rep
 `.chrome-crawler/` profileを使い、default port `9222`でshared Crawler Chromeを起動する。
 指定portに既存CDP listenerがある場合はChrome processのcommand lineでportとshared profileを確認する。一致すれば既存Chromeを再利用し、一致しない・確認できない場合は二重起動せずerrorで停止する。
 
+起動時の `--user-data-dir` はquoteして渡す。起動後も `/json/version` 応答だけを成功条件にせず、同じprocess確認を再実行し、remote debugging portとshared profileの一致を確認してから成功メッセージを表示する。
+
 ```text
 scripts/start_crawler_chrome.ps1
 .chrome-crawler/
