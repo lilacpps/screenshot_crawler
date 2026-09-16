@@ -72,17 +72,18 @@ Site Adapter
 
 Raw CDP ProtocolはPlaywrightで代替できない場合だけ使う。
 
-### 3.2 現行実装との差
+### 3.2 現行実装
 
-実装にはまだsite別launcher/profileが残るが、real-siteのcrawl/loginは共通の
-endpoint resolverとBrowser Sessionを利用する。
+real-siteの標準launcherは `scripts/start_crawler_chrome.ps1` である。repository root基準の
+`.chrome-crawler/` profileを使い、default port `9222`でshared Crawler Chromeを起動する。
+指定portに既存CDP listenerがある場合は二重起動せず、既存Chromeを利用して終了する。
 
 ```text
-scripts/start_bookwalker_chrome.ps1
-scripts/start_mangaone_chrome.ps1
-.chrome-bookwalker/
-.chrome-mangaone/
+scripts/start_crawler_chrome.ps1
+.chrome-crawler/
 ```
+
+旧site-specific launcher/profileはrollback用のlegacy / compatibility pathとして残している。
 
 現行CLIのendpoint解決も:
 
@@ -96,7 +97,7 @@ scripts/start_mangaone_chrome.ps1
 で統一されている。CLI指定を最優先し、site-specific endpointは例外overrideとして
 維持する。`.env`の値よりプロセス環境変数が優先される。
 
-Phase 1では、次を実装済みである。
+Phase 1/2では、次を実装済みである。
 
 ```text
 CRAWLER_CDP_ENDPOINT
@@ -104,8 +105,8 @@ core.browser.resolve_cdp_endpoint()
 core.browser.BrowserSession
 ```
 
-既存の `scripts/start_bookwalker_chrome.ps1` / `scripts/start_mangaone_chrome.ps1` と
-`.chrome-bookwalker` / `.chrome-mangaone` は互換運用のため残している。
+`CRAWLER_CDP_ENDPOINT` はshared Crawler Chromeを指す標準global endpointである。
+site-specific endpointは特殊なprofile/account等のための例外overrideとして残している。
 
 ### 3.3 移行時の非変更範囲
 
@@ -122,7 +123,7 @@ Browser/session管理だけを差し替える。
 
 ## 4. Authentication model
 
-目標ではlogin sessionのauthorityは共通Chrome profile。
+login sessionのauthorityは共通Chrome profile。
 
 Chrome自身がsiteごとに:
 
@@ -146,8 +147,8 @@ Browser Session Layer
 で動く。
 
 real-siteのcrawl/loginは `BrowserSession.connect()` でCDP接続し、既存の
-BrowserContextからPageを取得・作成する。crawlが作成した作業Pageは終了時に閉じる。
-loginは従来どおり既存Pageを優先し、Pageがなければ作成して終了時に閉じる。
+BrowserContextからPageを作成する。crawlが作成した作業Pageは終了時に閉じる。
+loginは別siteの既存タブを再利用せず、常にlogin用new Pageを作成して終了時に閉じる。
 BrowserSessionの終了はPlaywright接続を切断するだけで、remote Chrome processは閉じない。
 
 credentialsのinputは `.env` 等を使ってよいが、session保存はChromeへ任せる。
@@ -156,7 +157,7 @@ CAPTCHA / MFA / validation errorは自動突破しない。
 
 ## 5. CDP endpoint policy
 
-目標の優先順位:
+現行の優先順位:
 
 ```text
 --cdp-endpoint
@@ -397,7 +398,7 @@ error.txt
 
 ## 19. CLI / packaging flow
 
-目標real-site crawl:
+現行real-site crawl:
 
 ```text
 CLI
@@ -451,8 +452,8 @@ Browser Session共通化で現在確認しているもの:
 
 ## 21. Known maintenance items
 
-- shared launcher/profileへの移行（Phase 2以降）
-- 共通profile `.chrome-crawler/` の運用化
+- BookWalker/Manga ONEのshared `.chrome-crawler/` live smoke test
+- site-specific launcher/profileの削除判断（Phase 3）
 - explicit resume
 - Adapter `collect_debug_metadata()` のRunner統合
 - diagnostics run directory分離

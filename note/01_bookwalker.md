@@ -108,9 +108,17 @@ BookWalker Adapterは:
 
 を行わない。
 
-### 現行実装
+### Legacy / compatibility launcher
 
-移行前のため、現在はまだ:
+共通launcherが標準運用である:
+
+```powershell
+.\scripts\start_crawler_chrome.ps1
+```
+
+profileは `.chrome-crawler` で、Manga ONEとlogin sessionを共存できる。
+
+rollback用に旧launcherも残している:
 
 ```powershell
 .\scripts\start_bookwalker_chrome.ps1
@@ -118,9 +126,7 @@ BookWalker Adapterは:
 
 と `.chrome-bookwalker` が存在する。
 
-これは互換運用用の現行実装であり、今後新規siteへ同種launcherを増やす設計ではない。
-
-次のBrowser Session実装変更で共通 `start_crawler_chrome.ps1` / `.chrome-crawler/` へ移行する。
+これはlegacy / compatibility pathであり、今後新規siteへ同種launcherを増やす設計ではない。
 
 ## 7. Navigation
 
@@ -284,11 +290,13 @@ BOOKWALKER_EMAIL=<email>
 BOOKWALKER_PASSWORD=<password>
 ```
 
-目標では通常endpointは `CRAWLER_CDP_ENDPOINT` を使う。`BOOKWALKER_CDP_ENDPOINT` は例外overrideとして残せる。
+通常endpointは `CRAWLER_CDP_ENDPOINT` を使う。`BOOKWALKER_CDP_ENDPOINT` は例外overrideとして残せる。
+
+loginは共通Browser Sessionが作成する専用new Pageで実行し、既存の別site tabは再利用しない。login後はPageを閉じるが、shared Chrome/profileは残す。
 
 CAPTCHA / MFA / validation errorを自動突破しない。
 
-現行実装ではsite別launcher/profileを使えるが、sessionの最終authorityをsite別JSONへ移す方針ではない。
+現行実装ではlegacyのsite別launcher/profileも使えるが、標準運用はshared launcher/profileである。sessionの最終authorityをsite別JSONへ移す方針ではない。
 
 ## 16. Crawl command
 
@@ -299,14 +307,14 @@ CAPTCHA / MFA / validation errorを自動突破しない。
   --output-dir output\crawl-bookwalker
 ```
 
-目標endpoint優先順位:
+endpoint優先順位:
 
 1. `--cdp-endpoint`
 2. `BOOKWALKER_CDP_ENDPOINT`
 3. `CRAWLER_CDP_ENDPOINT`
 4. default `http://127.0.0.1:9222`
 
-`CRAWLER_CDP_ENDPOINT` fallbackはdocs決定済み・実装待ち。
+`CRAWLER_CDP_ENDPOINT` fallbackは実装済み。
 
 ## 17. Output / packaging
 
@@ -336,7 +344,7 @@ completion statusは `output/crawl-status/` 配下。
 - CDP Chrome workflow
 - BookWalker login form操作
 
-共通 `.chrome-crawler/` へ統合した状態でのlive verificationは、Browser Session実装変更後に行う。
+共通 `.chrome-crawler/` でのlogin/crawl live verificationは未実施。site-specific adapter behaviorのlive verification記録は維持する。
 
 ## 19. Known limitations / maintenance
 
@@ -347,6 +355,7 @@ completion statusは `output/crawl-status/` 配下。
 - global fingerprint dedupeのためpixel完全一致の別ページは1枚扱いになる。
 - `config.yaml` はruntime authorityではない。
 - diagnosticsのAdapter固有metadata統合は未実装。
-- Browser Session共通化はdocs決定済み・実装待ち。
+- shared `.chrome-crawler/` login/crawl live smoke test
+- 旧site-specific launcher/profile削除の判断（Phase 3）
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。

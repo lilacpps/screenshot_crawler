@@ -12,6 +12,7 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - BookWalker Adapter
 - Manga ONE Adapter
 - 既存ChromeへCDP接続するcrawl/loginフロー
+- 共通Crawler Chrome launcher (`scripts/start_crawler_chrome.ps1`)
 - BookWalker canvas / spread capture
 - Manga ONE img / spread capture
 - manifestをauthorityにしたZIP packagingとlibrary出力
@@ -58,9 +59,11 @@ mangaone-auth.json
 
 のようなsite別auth-state fileを標準管理する設計にはしません。
 
+login CLIは既存Chromeの別site tabを再利用せず、login専用のnew Pageを作成します。login後はそのPageだけをcloseし、remote Chromeとshared profileは維持します。
+
 ### CDP endpoint
 
-目標の解決順:
+現在の解決順:
 
 ```text
 --cdp-endpoint
@@ -74,11 +77,21 @@ http://127.0.0.1:9222
 
 通常はglobal endpointを使い、site-specific endpoint/profileは必要なケースだけoverrideします。
 
-## 移行状態
+## Browser Session移行状態
 
-上記は採用済みの目標仕様です。
+shared Crawler ChromeへのPhase 2切替を実装済みです。
 
-**ドキュメント更新時点では実装移行前**のため、現在のrepositoryには:
+標準運用は:
+
+```text
+scripts/start_crawler_chrome.ps1
+.chrome-crawler/
+CRAWLER_CDP_ENDPOINT=http://127.0.0.1:9222
+```
+
+です。BookWalkerとManga ONEのlogin sessionは同じChrome profileに保存できます。
+
+旧構成はrollback用のlegacy / compatibility pathとして残しています。
 
 ```text
 scripts/start_bookwalker_chrome.ps1
@@ -87,17 +100,7 @@ scripts/start_mangaone_chrome.ps1
 .chrome-mangaone/
 ```
 
-を前提としたコードが残っています。
-
-次の実装変更で:
-
-```text
-scripts/start_crawler_chrome.ps1
-.chrome-crawler/
-CRAWLER_CDP_ENDPOINT
-```
-
-へ統一します。
+Phase 3で旧構成の削除を判断します。
 
 この移行ではBookWalker/Manga ONEのcapture・page navigation・END判定を原則変更せず、Browser Session層だけを整理します。
 
@@ -148,9 +151,17 @@ Crawler tabだけclose、Chromeは維持
 
 Crawler本体はURL一覧の収集を担当しません。
 
-## 現行実装でのChrome起動
+## 共通Crawler Chromeの起動
 
-共通launcher実装前は既存scriptを利用します。
+通常はrepository rootで次を実行します。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
+```
+
+既にport 9222でCDP listenerがある場合、既存Chromeを表示して二重起動せず終了します。
+
+旧launcherはcompatibility pathとして引き続き利用できます。
 
 BookWalker:
 
@@ -164,7 +175,7 @@ Manga ONE:
 powershell -ExecutionPolicy Bypass -File .\scripts\start_mangaone_chrome.ps1
 ```
 
-これらは移行対象であり、新規site向けに同種のlauncherを増やす方針ではありません。
+これらはlegacy / compatibility pathであり、新規site向けに同種のlauncherを増やす方針ではありません。
 
 ## Crawl例
 

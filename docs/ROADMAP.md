@@ -17,8 +17,12 @@
 - manifest-based packaging safety
 - non-empty output directory protection
 - Browser Session共通化の設計確定
+- shared Crawler Chrome launcher (`start_crawler_chrome.ps1`)
+- shared profile `.chrome-crawler/`
+- global endpoint `CRAWLER_CDP_ENDPOINT`
+- login専用new Page lifecycle
 
-## Current priority — Browser Session unification
+## Current priority — Shared Chrome verification and Phase 3 cleanup
 
 採用済み仕様:
 
@@ -32,15 +36,18 @@ Core Runner
 Site Adapter
 ```
 
-次の実装作業:
+完了したPhase 2:
 
 - `start_crawler_chrome.ps1` を追加
 - 共通profile `.chrome-crawler/` を標準化
 - `CRAWLER_CDP_ENDPOINT` をglobal defaultとして追加
-- endpoint precedenceを `CLI > site override > global > default` に整理
-- login / crawlを同じBrowser Session modelへ揃える
-- site-specific launcherをdeprecated後に削除
+- login / crawlを同じBrowser Session modelへ統一
+- loginは専用new Pageを使用してclose
+
+次の実装・確認作業:
+
 - BookWalker/Manga ONEを共通profileでlive smoke test
+- site-specific launcher/profileをPhase 3で削除できるか判断
 
 Browser Session整理のために既存Adapterのcapture/navigation/END logicを変更しない。
 

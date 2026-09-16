@@ -94,9 +94,17 @@ Manga ONE専用Chromeを標準とせず、共通Crawler Chrome/profileを使う�
 
 Manga ONE AdapterはChrome launch / profile / endpoint / `connect_over_cdp()` を扱わない。
 
-### 現行実装
+### Legacy / compatibility launcher
 
-移行前のため現在は:
+共通launcherが標準運用である:
+
+```powershell
+.\scripts\start_crawler_chrome.ps1
+```
+
+profileは `.chrome-crawler` で、BookWalkerとlogin sessionを共存できる。
+
+rollback用に旧launcherも残している:
 
 ```powershell
 .\scripts\start_mangaone_chrome.ps1
@@ -104,9 +112,7 @@ Manga ONE AdapterはChrome launch / profile / endpoint / `connect_over_cdp()` �
 
 と `.chrome-mangaone` が存在する。
 
-BookWalker launcherとdefault port `9222` が同じため、site別profileを同時に立ち上げる場合はport管理が必要だった。これは共通Crawler Chromeへ統合することで解消する予定。
-
-次のBrowser Session実装変更で共通 `start_crawler_chrome.ps1` / `.chrome-crawler/` へ移行する。
+これはlegacy / compatibility pathであり、旧site別profileを標準にはしない。
 
 ## 6. 1ページ / spread判定
 
@@ -289,7 +295,9 @@ MANGAONE_EMAIL=<email>
 MANGAONE_PASSWORD=<password>
 ```
 
-目標では通常endpointは `CRAWLER_CDP_ENDPOINT`。`MANGAONE_CDP_ENDPOINT` は例外overrideとして残せる。
+通常endpointは `CRAWLER_CDP_ENDPOINT`。`MANGAONE_CDP_ENDPOINT` は例外overrideとして残せる。
+
+loginは共通Browser Sessionが作成する専用new Pageで実行し、既存の別site tabは再利用しない。login後はPageを閉じるが、shared Chrome/profileは残す。
 
 login flow:
 
@@ -312,14 +320,14 @@ validation error / CAPTCHA / MFA等では安全にerror。
   --output-dir output\crawl-mangaone
 ```
 
-目標endpoint優先順位:
+endpoint優先順位:
 
 1. `--cdp-endpoint`
 2. `MANGAONE_CDP_ENDPOINT`
 3. `CRAWLER_CDP_ENDPOINT`
 4. default `http://127.0.0.1:9222`
 
-`CRAWLER_CDP_ENDPOINT` fallbackはdocs決定済み・実装待ち。
+`CRAWLER_CDP_ENDPOINT` fallbackは実装済み。
 
 ## 18. Output / ZIP
 
@@ -347,7 +355,7 @@ Playwright local integration testsでは主に:
 - chapter changeがNEXT_CONTENT
 - viewer/pageが不明状態ならtimeout/UNKNOWN
 
-Browser Session共通化後は共通profile/CDPでも実サイトsmoke checkする。
+共通profile/CDPでの実サイトsmoke checkは未実施。
 
 ## 20. 実サイト確認済み事項
 
@@ -360,7 +368,7 @@ Browser Session共通化後は共通profile/CDPでも実サイトsmoke checkす�
 - chapter単位ZIP生成
 - final advance後のpage image disappearanceによるEND
 
-共通 `.chrome-crawler/` へ統合した状態でのlive verificationは実装変更後に行う。
+共通 `.chrome-crawler/` でのlogin/crawl live verificationは未実施。site-specific adapter behaviorのlive verification記録は維持する。
 
 ## 21. Known limitations / maintenance
 
@@ -370,6 +378,7 @@ Browser Session共通化後は共通profile/CDPでも実サイトsmoke checkす�
 - global fingerprint dedupeによりpixel完全一致別ページは1枚扱いになる。
 - `config.yaml` はruntime authorityではない。
 - diagnostics Adapter固有metadata統合は未実装。
-- Browser Session共通化はdocs決定済み・実装待ち。
+- shared `.chrome-crawler/` login/crawl live smoke test
+- 旧site-specific launcher/profile削除の判断（Phase 3）
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。

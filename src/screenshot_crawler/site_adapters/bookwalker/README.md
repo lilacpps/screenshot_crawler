@@ -50,9 +50,9 @@ CDP is the connection transport; normal BookWalker interaction remains Playwrigh
 
 Authentication state should normally stay in the shared Chrome profile. A BookWalker-specific endpoint/profile is an exception override, not the default design.
 
-### Current transition state
+### Current launcher state
 
-The repository still contains `start_bookwalker_chrome.ps1` and `.chrome-bookwalker` behavior until the Browser Session migration is implemented. These are compatibility mechanisms, not the final architecture. Do not create additional site-specific launchers by copying this pattern.
+The standard launcher is `scripts/start_crawler_chrome.ps1` with the shared `.chrome-crawler` profile. BookWalker and Manga ONE sessions can coexist there. The repository still contains `start_bookwalker_chrome.ps1` and `.chrome-bookwalker` as legacy / compatibility mechanisms for rollback. Do not create additional site-specific launchers by copying this pattern.
 
 ## Authentication
 
@@ -65,7 +65,9 @@ Target endpoint precedence:
 3. `CRAWLER_CDP_ENDPOINT`
 4. `http://127.0.0.1:9222`
 
-`CRAWLER_CDP_ENDPOINT` support is part of the adopted target specification and is pending implementation.
+`CRAWLER_CDP_ENDPOINT` is the standard global endpoint. `BOOKWALKER_CDP_ENDPOINT` remains an exception override.
+
+The login CLI always creates a dedicated new Page, does not reuse another site's tab, closes that Page after login, and leaves the remote Chrome/profile running.
 
 CAPTCHA / MFA / validation errors are not automatically bypassed.
 
@@ -80,7 +82,7 @@ Live headed-CDP checks confirmed:
 
 These observations remain the basis for the site-specific logic and should not be changed merely as part of Browser Session unification.
 
-A fresh live check using the shared `.chrome-crawler/` profile is required after the migration is implemented.
+A fresh live check using the shared `.chrome-crawler/` profile is still required. The adapter-specific viewer observations above remain valid and were not changed by the launcher migration.
 
 ## Output naming and packaging
 

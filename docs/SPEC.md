@@ -98,7 +98,9 @@ Probeは通常launchとCDP接続の両方を利用できてよい。
 
 ## 5. Authentication
 
-Real-site loginは共通Crawler ChromeへCDP接続し、そのPageをPlaywrightでsite固有login handlerが操作する。
+Real-site loginは共通Crawler ChromeへCDP接続し、login用に新規作成したPageをPlaywrightでsite固有login handlerが操作する。
+
+既存Chromeタブは別siteの可能性があるため、loginの標準経路では再利用しない。login完了後はlogin用Pageだけを閉じ、Chrome processとprofileは残す。
 
 認証情報は `.env` 等から入力してよい。
 
@@ -405,16 +407,18 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 
 ## 25. 移行状態
 
-このv1.2 Browser Session Modelは採用済みの目標仕様。
+このv1.2 Browser Session Modelは採用済みで、Phase 2の共通launcher実装まで完了している。
 
-ドキュメント更新時点では実装にsite別launcher/profileとsite別endpoint fallbackが残っている。次の実装変更で以下へ移行する。
+標準運用は以下である。
 
 - `start_crawler_chrome.ps1`
 - `.chrome-crawler/`
 - `CRAWLER_CDP_ENDPOINT`
 - site-specific endpointはoverride扱い
 
-移行中は既存BookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
+既存の `start_bookwalker_chrome.ps1` / `start_mangaone_chrome.ps1` とsite-specific profileは、rollback用legacy / compatibility pathとして残す。Phase 3で削除を検討する。
+
+移行中もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
 
 ## 26. 完了確認
 

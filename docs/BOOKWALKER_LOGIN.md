@@ -12,6 +12,8 @@ Playwright Page
 BookWalker login handler
 ```
 
+Loginは既存タブを再利用せず、専用のnew Pageで実行する。完了後はそのPageだけを閉じ、remote Chromeとshared profileは維持する。
+
 The login handler is responsible only for BookWalker DOM interaction. Chrome launch, profile selection, CDP endpoint resolution, and BrowserContext lifecycle belong to the common Browser Session layer.
 
 The resulting BookWalker session remains in the shared Chrome profile for later crawls. The crawler does not create a second BookWalker-specific auth-state file as the standard path.
@@ -40,11 +42,15 @@ Target endpoint precedence:
 
 The command does not print credentials. CAPTCHA, MFA, and validation errors are not automatically bypassed.
 
-## Current transition state
+## Current launcher state
 
-The common `start_crawler_chrome.ps1` / `.chrome-crawler/` implementation is still pending.
+The common `start_crawler_chrome.ps1` / `.chrome-crawler/` launcher is the standard path:
 
-Until that migration is implemented, the existing launcher remains usable:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
+```
+
+The existing launcher remains usable as a legacy / compatibility path:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_bookwalker_chrome.ps1

@@ -49,9 +49,9 @@ CDP is the connection transport; normal Manga ONE interaction remains Playwright
 
 Authentication state should normally stay in the shared Chrome profile. A Manga ONE-specific endpoint/profile is an exception override, not the default design.
 
-### Current transition state
+### Current launcher state
 
-The repository still contains `start_mangaone_chrome.ps1` and `.chrome-mangaone` behavior until the Browser Session migration is implemented. These are compatibility mechanisms, not the final architecture. Do not create additional site-specific launchers by copying this pattern.
+The standard launcher is `scripts/start_crawler_chrome.ps1` with the shared `.chrome-crawler` profile. Manga ONE and BookWalker sessions can coexist there. The repository still contains `start_mangaone_chrome.ps1` and `.chrome-mangaone` as legacy / compatibility mechanisms for rollback. Do not create additional site-specific launchers by copying this pattern.
 
 ## Authentication
 
@@ -64,13 +64,21 @@ Target endpoint precedence:
 3. `CRAWLER_CDP_ENDPOINT`
 4. `http://127.0.0.1:9222`
 
-`CRAWLER_CDP_ENDPOINT` support is part of the adopted target specification and is pending implementation.
+`CRAWLER_CDP_ENDPOINT` is the standard global endpoint. `MANGAONE_CDP_ENDPOINT` remains an exception override.
+
+The login CLI always creates a dedicated new Page, does not reuse another site's tab, closes that Page after login, and leaves the remote Chrome/profile running.
 
 The site-specific login handler should receive a Playwright Page from the common Browser Session layer. CAPTCHA / MFA / validation errors are not automatically bypassed.
 
 ## Current crawl example
 
-Until the common launcher is implemented, the existing Manga ONE launcher remains usable:
+The common launcher is the standard path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
+```
+
+The existing Manga ONE launcher remains usable as a legacy / compatibility path:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_mangaone_chrome.ps1
@@ -99,6 +107,6 @@ Normal `END` / `NEXT_CONTENT` completion packages manifest-declared PNGs under `
 
 ## Live verification
 
-The current site-specific capture/navigation/END behavior has been verified against the live viewer. A fresh live check using the shared `.chrome-crawler/` profile is required after Browser Session migration is implemented.
+The current site-specific capture/navigation/END behavior has been verified against the live viewer. A fresh live check using the shared `.chrome-crawler/` profile is still required; the launcher migration did not change that adapter behavior.
 
 Last verified for current adapter behavior: 2026-09-16.

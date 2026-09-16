@@ -145,12 +145,12 @@ Site Adapterへ低レベルCDP session操作を広げない。
 
 ## 7. Authentication
 
-login CLIはBrowser Session Layerから既存Crawler ChromeのPageを受け取り、site固有login functionがPlaywrightでDOM操作する。
+login CLIはBrowser Session Layerから既存Crawler Chromeへlogin用Pageを新規作成し、site固有login functionがPlaywrightでDOM操作する。既存タブは再利用しない。
 
 ```text
 Crawler Chrome/profile
     ↓ CDP
-Playwright Page
+new login Page
     ↓
 login_bookwalker / login_mangaone / future login handler
 ```
@@ -266,8 +266,8 @@ BrowserContext lifecycle管理
 
 ## 14. 移行状態
 
-このarchitectureは採用済みの目標仕様。
+このarchitectureは採用済みで、共通launcherまで実装済み。
 
-ドキュメント更新時点では、実装にはsite別launcher/profile (`.chrome-bookwalker`, `.chrome-mangaone`) が残っている。次の実装変更で共通 `start_crawler_chrome.ps1` / `.chrome-crawler/` / global endpointへ移行する。
+標準launcherは `start_crawler_chrome.ps1`、profileは `.chrome-crawler`、global endpointは `CRAWLER_CDP_ENDPOINT` である。site別launcher/profile (`.chrome-bookwalker`, `.chrome-mangaone`) はlegacy / compatibility pathとして残している。
 
-移行時もBookWalker/Manga ONEのviewer/capture/END判定は原則変更しない。Browser Session Layerだけを差し替える。
+Phase 3でsite別launcher/profileの削除を判断する。BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを切り替える。

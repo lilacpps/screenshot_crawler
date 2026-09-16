@@ -15,18 +15,19 @@
 
 ## Browser Session architecture
 
-仕様は確定済み、実装移行は未完了。
+Phase 2の共通launcher/profile切替まで実装済み。実サイトshared-profile smoke testは別途確認する。
 
 - [x] 共通Crawler Chrome/profile方針をdocsで確定
 - [x] CDP=接続 / Playwright=操作 の責務分離をdocsで確定
 - [x] Adapterがbrowser接続方式を知らない方針をdocsで確定
 - [x] global endpoint + site-specific override方針をdocsで確定
-- [ ] `scripts/start_crawler_chrome.ps1`
-- [ ] 共通profile `.chrome-crawler/`
-- [ ] `CRAWLER_CDP_ENDPOINT`
-- [ ] endpoint precedence実装: CLI > site override > global > default
-- [ ] login / crawlを共通Browser Session helperへ統一
-- [ ] site-specific launcherのdeprecated化
+- [x] `scripts/start_crawler_chrome.ps1`
+- [x] 共通profile `.chrome-crawler/`
+- [x] `CRAWLER_CDP_ENDPOINT`
+- [x] endpoint precedence実装: CLI > site override > global > default
+- [x] login / crawlを共通Browser Session helperへ統一
+- [x] site-specific launcherをlegacy / compatibility pathとして位置付け
+- [ ] site-specific launcher/profile削除（Phase 3判断）
 - [ ] BookWalker共通profile smoke test
 - [ ] Manga ONE共通profile smoke test
 

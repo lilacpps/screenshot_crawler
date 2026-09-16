@@ -234,18 +234,16 @@ async def _run_login(args: argparse.Namespace) -> None:
         raise ValueError(f"Site adapter '{args.site}' does not provide a login flow")
 
     session = await BrowserSession.connect(endpoint)
-    page = session.existing_page()
-    page_created = page is None
+    page = None
     try:
-        if page is None:
-            page = await session.new_page()
+        page = await session.new_page()
         await login(page, email=email, password=password, home_url=home_url)
         print(f"Login submitted for site '{args.site}'. Credentials were not printed.")
         if args.keep_open:
             print("Browser is open. Press Enter here to disconnect.")
             await asyncio.to_thread(input)
     finally:
-        if page_created and page is not None:
+        if page is not None:
             await session.close_page(page)
         await session.close()
 

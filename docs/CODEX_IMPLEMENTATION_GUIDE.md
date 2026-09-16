@@ -57,7 +57,7 @@ Site Adapter
 - Site AdapterはChrome launch / profile / endpoint / `connect_over_cdp()` を扱わない
 - Raw CDP ProtocolはPlaywrightで代替できない場合だけ使う
 
-目標endpoint優先順位:
+endpoint優先順位:
 
 1. `--cdp-endpoint`
 2. `<SITE>_CDP_ENDPOINT`
@@ -68,7 +68,7 @@ site-specific endpoint/profileは例外overrideでありdefaultではない。
 
 ## 4. Browser Session移行時
 
-現在コードにはsite別launcher/profileが残っている。移行ではbrowser/session層だけを変更し、BookWalker/Manga ONEのviewer logicを原則変更しない。
+共通launcher/profileへのPhase 2移行を実装済み。移行ではbrowser/session層だけを変更し、BookWalker/Manga ONEのviewer logicを原則変更しない。
 
 目標成果物:
 
@@ -76,7 +76,7 @@ site-specific endpoint/profileは例外overrideでありdefaultではない。
 - `.chrome-crawler/`
 - global `CRAWLER_CDP_ENDPOINT`
 - site-specific endpoint overrideのfallback
-- 既存site launcherはdeprecated後に削除
+- 既存site launcherはlegacy / compatibility pathとして残し、Phase 3で削除を判断
 
 禁止:
 
@@ -90,7 +90,7 @@ site-specific endpoint/profileは例外overrideでありdefaultではない。
 login sessionのauthorityはChrome profile。
 
 - credentials inputは `.env` 等でよい
-- login DOM操作はsite handler + Playwright
+- login DOM操作はsite handler + Playwrightの専用new Page
 - Cookie / localStorage / IndexedDB等のsession保存はChromeへ任せる
 - site別storage-state JSONを標準経路として増やさない
 - CAPTCHA / MFA / validation errorを自動突破しない
@@ -193,6 +193,8 @@ Browser Session共通化では最低限:
 - login/crawlが同じBrowser Session modelを使う
 
 を確認する。
+
+Phase 2では `scripts/start_crawler_chrome.ps1` と `.chrome-crawler/` を標準運用にし、loginは既存タブを再利用せず専用new Pageを閉じる。旧site launcher/profileはrollback用に残す。
 
 Playwright integrationがskipされた場合は件数と理由を報告する。
 
