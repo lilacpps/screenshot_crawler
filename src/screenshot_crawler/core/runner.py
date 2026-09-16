@@ -22,7 +22,7 @@ from screenshot_crawler.core.models import (
     ContentIdentity,
     RunConfig,
 )
-from screenshot_crawler.core.progress import ProgressStore, normalize_path
+from screenshot_crawler.core.progress import ProgressStore, ensure_new_run, normalize_path
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 
@@ -34,12 +34,20 @@ class RunResult:
     stop_reason: str
 
 
-def _identity_key(identity: ContentIdentity) -> tuple[object, ...]:
+def _identity_key(identity: ContentIdentity) -> tuple[object, ...] | None:
+    """Return an explicit page identity, excluding the capture fingerprint.
+
+    ``source_id`` identifies the work/chapter, not necessarily the page. A
+    page number or page ID is therefore required before identity can be the
+    duplicate authority; otherwise the capture fingerprint is the fallback.
+    """
+
+    if identity.page_id is None and identity.page_number is None:
+        return None
     return (
         identity.page_id,
         identity.page_number,
         identity.source_id,
-        identity.fingerprint,
     )
 
 
@@ -99,6 +107,7 @@ class CrawlerRunner:
 
     async def run(self, page: Page, adapter: SiteAdapter) -> RunResult:
         output_dir = normalize_path(self.config.output_dir)
+        ensure_new_run(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         await self._adapter_call(adapter.prepare_page(page), "prepare_page")
         await page.goto(
@@ -120,17 +129,11 @@ class CrawlerRunner:
 
         saved_pages: list[CapturedPage] = []
         seen_identities: set[tuple[object, ...]] = set()
-        seen_fingerprints: set[str] = set()
         same_content_count = 0
         previous_identity: ContentIdentity | None = None
 
         try:
             while True:
-                if len(saved_pages) >= self.config.max_pages:
-                    raise MaxPagesExceededError(
-                        f"max_pages exceeded: {self.config.max_pages}"
-                    )
-
                 state = await self._detect_non_loading_state(page, adapter)
                 if state in {PageState.END, PageState.NEXT_CONTENT}:
                     return RunResult(tuple(saved_pages), state, state.value)
@@ -144,6 +147,10 @@ class CrawlerRunner:
                     continue
                 if state is not PageState.CONTENT:
                     raise UnknownPageStateError(f"Unsupported page state: {state}")
+                if len(saved_pages) >= self.config.max_pages:
+                    raise MaxPagesExceededError(
+                        f"max_pages exceeded: {self.config.max_pages}"
+                    )
 
                 current_context = await self._adapter_call(
                     adapter.get_content_context(page), "get_content_context"
@@ -156,7 +163,6 @@ class CrawlerRunner:
                 identity = await self._adapter_call(
                     adapter.get_content_identity(page), "get_content_identity"
                 )
-                identity_key = _identity_key(identity)
                 targets = await self._adapter_call(
                     adapter.get_capture_targets(page), "get_capture_targets"
                 )
@@ -171,10 +177,20 @@ class CrawlerRunner:
                         "cleanup_capture_targets",
                     )
                 fingerprints = [fingerprint_bytes(capture.data) for capture in captures]
+                explicit_identity = _identity_key(identity)
                 new_captures = [
                     (index, capture, fingerprints[index])
                     for index, capture in enumerate(captures)
-                    if fingerprints[index] not in seen_fingerprints
+                    if (
+                        (
+                            "identity",
+                            explicit_identity,
+                            index,
+                        )
+                        if explicit_identity is not None
+                        else ("fingerprint", fingerprints[index])
+                    )
+                    not in seen_identities
                 ]
                 if not new_captures:
                     same_content_count += 1
@@ -210,9 +226,16 @@ class CrawlerRunner:
                         ),
                     )
                     saved_pages.append(captured)
-                    seen_fingerprints.add(fingerprint)
+                    seen_identities.add(
+                        (
+                            "identity",
+                            explicit_identity,
+                            part_index,
+                        )
+                        if explicit_identity is not None
+                        else ("fingerprint", fingerprint)
+                    )
                     store.add_page(captured, fingerprint=fingerprint)
-                seen_identities.add(identity_key)
                 previous_identity = identity
 
                 await self._adapter_call(adapter.go_next(page), "go_next")

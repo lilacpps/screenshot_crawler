@@ -1,4 +1,7 @@
+import json
 import zipfile
+
+import pytest
 
 from screenshot_crawler.core.packaging import archive_stem, package_crawl_output
 
@@ -37,7 +40,9 @@ def test_package_crawl_output_creates_library_tree_and_zip(tmp_path) -> None:
     crawl_dir = tmp_path / "crawl"
     crawl_dir.mkdir()
     (crawl_dir / "page-0001.png").write_bytes(b"png")
-    (crawl_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+    )
     (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
 
     result = package_crawl_output(
@@ -62,3 +67,39 @@ def test_package_crawl_output_creates_library_tree_and_zip(tmp_path) -> None:
         assert sorted(archive.namelist()) == [
             "作品名-第01巻-著者/page-0001.png",
         ]
+
+
+def test_package_uses_manifest_files_and_ignores_extra_png(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "page-0001.png").write_bytes(b"declared")
+    (crawl_dir / "page-9999.png").write_bytes(b"old-run")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+
+    result = package_crawl_output(
+        crawl_dir,
+        {"title": "作品名", "genre": "漫画"},
+        library_dir=tmp_path / "Books",
+    )
+
+    with zipfile.ZipFile(result.archive_path) as archive:
+        assert archive.namelist() == ["作品名/page-0001.png"]
+
+
+def test_package_fails_when_manifest_page_is_missing(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="Manifest page file not found"):
+        package_crawl_output(
+            crawl_dir,
+            {"title": "作品名", "genre": "漫画"},
+            library_dir=tmp_path / "Books",
+        )

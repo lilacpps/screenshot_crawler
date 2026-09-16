@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from screenshot_crawler.core.errors import RunAlreadyExistsError
 from screenshot_crawler.core.models import CapturedPage, ContentContext, ContentIdentity
 
 
@@ -64,8 +65,46 @@ def _context_dict(context: ContentContext | None) -> dict[str, Any]:
     return asdict(context) if context is not None else {}
 
 
+def ensure_new_run(output_dir: str | Path) -> Path:
+    """Reject a directory that contains recognizable artifacts from a run.
+
+    Resume is deliberately not implemented yet. Refusing these directories
+    keeps a new manifest/progress pair from being associated with old PNGs.
+    An empty, pre-created directory remains usable.
+    """
+
+    destination = normalize_path(output_dir)
+    if destination.exists() and not destination.is_dir():
+        raise RunAlreadyExistsError(
+            f"Run output path is not a directory: {destination}"
+        )
+    if not destination.exists():
+        return destination
+
+    artifacts = [
+        path
+        for path in (
+            destination / "manifest.json",
+            destination / "progress.json",
+            destination / ".manifest.json.tmp",
+            destination / ".progress.json.tmp",
+        )
+        if path.exists()
+    ]
+    artifacts.extend(path for path in destination.glob("page-*.png") if path.is_file())
+    if artifacts:
+        names = ", ".join(path.name for path in artifacts[:3])
+        if len(artifacts) > 3:
+            names += ", ..."
+        raise RunAlreadyExistsError(
+            f"Output directory already contains a crawl run ({names}). "
+            "Resume is not implemented; choose a new output directory."
+        )
+    return destination
+
+
 class ProgressStore:
-    """Keep manifest and resume information synchronized on every capture."""
+    """Keep manifest and progress information synchronized on every capture."""
 
     def __init__(
         self,
@@ -76,8 +115,14 @@ class ProgressStore:
         site: str,
         content_context: ContentContext,
     ) -> None:
-        self.manifest_path = Path(manifest_path)
-        self.progress_path = Path(progress_path)
+        self.manifest_path = normalize_path(manifest_path)
+        self.progress_path = normalize_path(progress_path)
+        ensure_new_run(self.manifest_path.parent)
+        if self.manifest_path.exists() or self.progress_path.exists():
+            raise RunAlreadyExistsError(
+                "Manifest or progress already exists. Resume is not implemented; "
+                "choose a new output directory."
+            )
         self._manifest: dict[str, Any] = {
             "source_url": source_url,
             "site": site,

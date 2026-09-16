@@ -14,5 +14,9 @@ class MaxPagesExceededError(CrawlerError):
     """Raised by the infinite-loop guard."""
 
 
+class RunAlreadyExistsError(CrawlerError):
+    """Raised when a new crawl would overwrite an existing run."""
+
+
 class AuthenticationStateNotFoundError(CrawlerError):
     """Raised when a site requires auth state that has not been saved."""

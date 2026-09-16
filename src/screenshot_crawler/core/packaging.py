@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from tempfile import NamedTemporaryFile
 
 from screenshot_crawler.core.progress import atomic_write_json
@@ -61,6 +62,54 @@ def archive_stem(metadata: Mapping[str, str | None]) -> tuple[str, str, str, str
     return "-".join(components), title, genre, order, author
 
 
+def _manifest_page_files(source: Path) -> list[tuple[Path, PurePosixPath]]:
+    """Resolve and validate the PNG files declared by ``manifest.json``."""
+
+    manifest_path = source / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Manifest not found: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid manifest JSON: {manifest_path}") from exc
+
+    pages = manifest.get("pages") if isinstance(manifest, dict) else None
+    if not isinstance(pages, list) or not pages:
+        raise ValueError("Manifest must contain a non-empty pages list")
+
+    source_resolved = source.resolve()
+    result: list[tuple[Path, PurePosixPath]] = []
+    seen: set[str] = set()
+    for index, page in enumerate(pages, start=1):
+        file_name = page.get("file") if isinstance(page, dict) else None
+        if not isinstance(file_name, str) or not file_name or "\\" in file_name:
+            raise ValueError(f"Manifest page {index} has an invalid file path")
+        relative = PurePosixPath(file_name)
+        if (
+            relative.is_absolute()
+            or PureWindowsPath(file_name).is_absolute()
+            or PureWindowsPath(file_name).root
+            or PureWindowsPath(file_name).drive
+            or any(part in {"", ".", ".."} for part in relative.parts)
+            or relative.suffix.lower() != ".png"
+        ):
+            raise ValueError(f"Manifest page {index} has an unsafe PNG path: {file_name}")
+        normalized_name = relative.as_posix()
+        if normalized_name in seen:
+            raise ValueError(f"Manifest contains duplicate page file: {file_name}")
+        seen.add(normalized_name)
+
+        candidate = (source / Path(*relative.parts)).resolve()
+        try:
+            candidate.relative_to(source_resolved)
+        except ValueError as exc:
+            raise ValueError(f"Manifest page escapes output directory: {file_name}") from exc
+        if not candidate.is_file():
+            raise FileNotFoundError(f"Manifest page file not found: {candidate}")
+        result.append((candidate, relative))
+    return result
+
+
 def package_crawl_output(
     output_dir: str | Path,
     metadata: Mapping[str, str | None],
@@ -78,16 +127,13 @@ def package_crawl_output(
     if not source.is_dir():
         raise FileNotFoundError(f"Crawl output directory not found: {source}")
 
+    page_files = _manifest_page_files(source)
     stem, title, genre, order, author = archive_stem(metadata)
     destination_dir = Path(library_dir) / genre / title
     destination_dir.mkdir(parents=True, exist_ok=True)
     destination = destination_dir / f"{stem}.zip"
     if destination.exists():
         raise FileExistsError(f"Archive already exists: {destination}")
-
-    page_files = sorted(source.glob("page-*.png"))
-    if not page_files:
-        raise FileNotFoundError(f"No captured PNG pages found in: {source}")
 
     # Keep the temporary archive outside the source tree so it cannot be added
     # to itself while the source is being walked.
@@ -103,8 +149,8 @@ def package_crawl_output(
     try:
         with zipfile.ZipFile(temporary_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             archive_root = Path(stem)
-            for file_path in page_files:
-                archive.write(file_path, archive_root / file_path.name)
+            for file_path, relative_file in page_files:
+                archive.write(file_path, (archive_root / relative_file).as_posix())
         os.replace(temporary_path, destination)
     except BaseException:
         temporary_path.unlink(missing_ok=True)

@@ -5,10 +5,14 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
-from screenshot_crawler.core.errors import PageChangeTimeoutError
+from screenshot_crawler.core.errors import (
+    MaxPagesExceededError,
+    PageChangeTimeoutError,
+    RunAlreadyExistsError,
+)
 from screenshot_crawler.core.fingerprint import fingerprint_bytes
 from screenshot_crawler.core.models import ContentContext, ContentIdentity, RunConfig
-from screenshot_crawler.core.progress import atomic_write_json
+from screenshot_crawler.core.progress import ProgressStore, atomic_write_json
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
@@ -237,3 +241,168 @@ async def test_runner_saves_each_capture_target_in_a_spread(
     ]
     manifest = json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
     assert len(manifest["pages"]) == 2
+
+
+@pytest.mark.parametrize("terminal_state", [PageState.END, PageState.NEXT_CONTENT])
+async def test_runner_allows_exact_max_pages_before_terminal_state(
+    tmp_path: Path,
+    fake_capture: None,
+    terminal_state: PageState,
+) -> None:
+    adapter = FakeAdapter(
+        [PageState.CONTENT, terminal_state],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+            max_pages=1,
+        )
+    ).run(FakePage(), adapter)
+
+    assert len(result.pages) == 1
+    assert result.stop_state is terminal_state
+
+
+async def test_runner_rejects_content_after_max_pages(
+    tmp_path: Path,
+    fake_capture: None,
+) -> None:
+    adapter = FakeAdapter(
+        [PageState.CONTENT],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    with pytest.raises(MaxPagesExceededError):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=tmp_path / "run",
+                diagnostics_dir=tmp_path / "diagnostics",
+                max_pages=1,
+            )
+        ).run(FakePage(), adapter)
+
+
+async def test_runner_keeps_same_fingerprint_for_different_explicit_identities(
+    tmp_path: Path,
+    fake_capture: None,
+) -> None:
+    adapter = FakeAdapter(
+        [PageState.CONTENT, PageState.CONTENT, PageState.END],
+        [
+            ContentIdentity(page_number=1, source_id="work-1"),
+            ContentIdentity(page_number=2, source_id="work-1"),
+        ],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+        )
+    ).run(FakePage(), adapter)
+
+    assert len(result.pages) == 2
+
+
+async def test_runner_uses_same_identity_even_when_repeated_capture_differs(
+    tmp_path: Path,
+    fake_capture: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def capture(_target: object) -> CaptureResult:
+        nonlocal calls
+        calls += 1
+        return CaptureResult(data=f"capture-{calls}".encode(), width=100, height=200)
+
+    monkeypatch.setattr("screenshot_crawler.core.runner.capture_locator", capture)
+    adapter = FakeAdapter(
+        [PageState.CONTENT],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    with pytest.raises(PageChangeTimeoutError, match="same content"):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=tmp_path / "run",
+                diagnostics_dir=tmp_path / "diagnostics",
+            )
+        ).run(FakePage(), adapter)
+
+    assert calls > 1
+    assert len(json.loads((tmp_path / "run" / "manifest.json").read_text())["pages"]) == 1
+
+
+async def test_runner_uses_fingerprint_when_identity_is_unavailable(
+    tmp_path: Path,
+    fake_capture: None,
+) -> None:
+    adapter = FakeAdapter([PageState.CONTENT], [ContentIdentity()])
+
+    with pytest.raises(PageChangeTimeoutError, match="same content"):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=tmp_path / "run",
+                diagnostics_dir=tmp_path / "diagnostics",
+            )
+        ).run(FakePage(), adapter)
+
+
+async def test_runner_does_not_overwrite_existing_run(
+    tmp_path: Path,
+    fake_capture: None,
+) -> None:
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "manifest.json").write_text('{"keep": true}\n', encoding="utf-8")
+    (output_dir / "page-0001.png").write_bytes(b"old")
+
+    with pytest.raises(RunAlreadyExistsError, match="Resume is not implemented"):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=output_dir,
+                diagnostics_dir=tmp_path / "diagnostics",
+            )
+        ).run(FakePage(), FakeAdapter([PageState.END], []))
+
+    assert (output_dir / "manifest.json").read_text(encoding="utf-8") == '{"keep": true}\n'
+    assert (output_dir / "page-0001.png").read_bytes() == b"old"
+
+
+def test_progress_store_does_not_overwrite_existing_manifest_or_progress(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    manifest = output_dir / "manifest.json"
+    progress = output_dir / "progress.json"
+    manifest.write_text('{"keep": true}\n', encoding="utf-8")
+    progress.write_text('{"keep": true}\n', encoding="utf-8")
+
+    with pytest.raises(RunAlreadyExistsError):
+        ProgressStore(
+            manifest_path=manifest,
+            progress_path=progress,
+            source_url="https://example.test/viewer",
+            site="test",
+            content_context=ContentContext(),
+        )
+
+    assert manifest.read_text(encoding="utf-8") == '{"keep": true}\n'
+    assert progress.read_text(encoding="utf-8") == '{"keep": true}\n'
