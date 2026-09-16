@@ -416,9 +416,9 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - `CRAWLER_CDP_ENDPOINT`
 - site-specific endpointはoverride扱い
 
-既存の `start_bookwalker_chrome.ps1` / `start_mangaone_chrome.ps1` とsite-specific profileは、rollback用legacy / compatibility pathとして残す。Phase 3で削除を検討する。
+BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` とshared `.chrome-crawler/`を標準とする。site-specific launcherは削除済みであり、site-specific endpoint/profileは例外overrideとしてのみ許可する。
 
-移行中もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
+移行後もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
 
 ## 26. 完了確認
 

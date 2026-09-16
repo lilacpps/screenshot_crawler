@@ -15,7 +15,7 @@
 
 ## Browser Session architecture
 
-Phase 2の共通launcher/profile切替まで実装済み。実サイトshared-profile smoke testは別途確認する。
+Browser Session migrationとshared-profile live verificationまで完了。
 
 - [x] 共通Crawler Chrome/profile方針をdocsで確定
 - [x] CDP=接続 / Playwright=操作 の責務分離をdocsで確定
@@ -26,11 +26,10 @@ Phase 2の共通launcher/profile切替まで実装済み。実サイトshared-pr
 - [x] `CRAWLER_CDP_ENDPOINT`
 - [x] endpoint precedence実装: CLI > site override > global > default
 - [x] login / crawlを共通Browser Session helperへ統一
-- [x] site-specific launcherをlegacy / compatibility pathとして位置付け
+- [x] site-specific launcherを削除し、共通launcherを標準化
 - [x] 既存CDP listenerのshared profile確認と不一致時の安全停止
-- [ ] site-specific launcher/profile削除（Phase 3判断）
-- [ ] BookWalker共通profile smoke test
-- [ ] Manga ONE共通profile smoke test
+- [x] BookWalker共通profile smoke test
+- [x] Manga ONE共通profile smoke test
 
 ## Persistence / safety
 
@@ -87,7 +86,7 @@ Phase 2の共通launcher/profile切替まで実装済み。実サイトshared-pr
 - [x] login handler
 - [x] site README / note
 - [x] live verification記録
-- [ ] shared `.chrome-crawler/` で再確認
+- [x] shared `.chrome-crawler/` でlogin/crawl/session共存を確認
 
 ## Manga ONE
 
@@ -102,7 +101,7 @@ Phase 2の共通launcher/profile切替まで実装済み。実サイトshared-pr
 - [x] login handler
 - [x] site README / note
 - [x] live working implementation maintained
-- [ ] shared `.chrome-crawler/` で再確認
+- [x] shared `.chrome-crawler/` でlogin/crawl/session共存を確認
 
 ## Maintenance
 

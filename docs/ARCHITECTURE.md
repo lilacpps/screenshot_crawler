@@ -266,8 +266,8 @@ BrowserContext lifecycle管理
 
 ## 14. 移行状態
 
-このarchitectureは採用済みで、共通launcherまで実装済み。
+このarchitectureは採用済みで、共通launcherとshared-profile live verificationまで完了している。
 
-標準launcherは `start_crawler_chrome.ps1`、profileは `.chrome-crawler`、global endpointは `CRAWLER_CDP_ENDPOINT` である。site別launcher/profile (`.chrome-bookwalker`, `.chrome-mangaone`) はlegacy / compatibility pathとして残している。
+標準launcherは `start_crawler_chrome.ps1`、profileは `.chrome-crawler`、global endpointは `CRAWLER_CDP_ENDPOINT` である。site別launcherは削除済みで、site-specific endpoint/profileは例外overrideとしてのみ扱う。BookWalker/Manga ONEのshared-profile login/crawlとsession共存はlive verification済みである。
 
-Phase 3でsite別launcher/profileの削除を判断する。BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを切り替える。
+BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。

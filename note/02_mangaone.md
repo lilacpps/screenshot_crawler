@@ -94,7 +94,7 @@ Manga ONE専用Chromeを標準とせず、共通Crawler Chrome/profileを使う�
 
 Manga ONE AdapterはChrome launch / profile / endpoint / `connect_over_cdp()` を扱わない。
 
-### Legacy / compatibility launcher
+### Browser Session launcher
 
 共通launcherが標準運用である:
 
@@ -102,17 +102,7 @@ Manga ONE AdapterはChrome launch / profile / endpoint / `connect_over_cdp()` �
 .\scripts\start_crawler_chrome.ps1
 ```
 
-profileは `.chrome-crawler` で、BookWalkerとlogin sessionを共存できる。
-
-rollback用に旧launcherも残している:
-
-```powershell
-.\scripts\start_mangaone_chrome.ps1
-```
-
-と `.chrome-mangaone` が存在する。
-
-これはlegacy / compatibility pathであり、旧site別profileを標準にはしない。
+profileは `.chrome-crawler` で、BookWalkerとlogin sessionを共存できる。site-specific launcherは現行運用に含めない。
 
 ## 6. 1ページ / spread判定
 
@@ -359,7 +349,8 @@ Playwright local integration testsでは主に:
 - chapter changeがNEXT_CONTENT
 - viewer/pageが不明状態ならtimeout/UNKNOWN
 
-共通profile/CDPでの実サイトsmoke checkは未実施。
+2026-09-17にshared `.chrome-crawler/`でManga ONE login/crawlに成功し、BookWalker sessionとの共存を確認した。
+loginは既存tabを再利用せず専用new Pageで実行し、終了後はPageだけをcloseしてremote Chromeを維持した。
 
 ## 20. 実サイト確認済み事項
 
@@ -372,7 +363,7 @@ Playwright local integration testsでは主に:
 - chapter単位ZIP生成
 - final advance後のpage image disappearanceによるEND
 
-共通 `.chrome-crawler/` でのlogin/crawl live verificationは未実施。site-specific adapter behaviorのlive verification記録は維持する。
+capture・navigation・page identity・END / NEXT_CONTENT・metadata behaviorに回帰はなかった。
 
 ## 21. Known limitations / maintenance
 
@@ -382,7 +373,5 @@ Playwright local integration testsでは主に:
 - global fingerprint dedupeによりpixel完全一致別ページは1枚扱いになる。
 - `config.yaml` はruntime authorityではない。
 - diagnostics Adapter固有metadata統合は未実装。
-- shared `.chrome-crawler/` login/crawl live smoke test
-- 旧site-specific launcher/profile削除の判断（Phase 3）
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。

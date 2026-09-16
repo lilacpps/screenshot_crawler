@@ -40,7 +40,7 @@ Site Adapter
 - Site AdapterからChrome launch / profile選択 / endpoint解決 / `connect_over_cdp()` を行わない
 - Raw CDP ProtocolはPlaywrightで代替できない場合だけ使う
 
-共通launcher/profileを標準化した後も、shared profileでBookWalker/Manga ONEのlive verificationが完了するまでは既存site別launcher/profileをrollback用に残してよい。ただし最終設計として拡張せず、live verification完了後に削除を判断する。
+shared profileでBookWalker/Manga ONEのlogin・crawl・session共存と既存viewer behaviorをlive verification済みである。real-siteのlauncher/profileは共通構成を標準とし、site-specific endpoint/profileは例外overrideとしてのみ扱う。
 
 ## Implementation rules
 

@@ -225,7 +225,7 @@ Browser session管理とsite-specific automationを分離し、新規site追加�
 ### 決定
 まずdocsを上記モデルへ更新し、その後に実装を移行する。
 
-移行完了までは既存の `start_bookwalker_chrome.ps1` / `start_mangaone_chrome.ps1` とsite-specific profileがコード上に残っていてよい。ただしそれらを最終設計とは扱わない。
+移行期間中はsite-specific launcher/profileを一時的なrollback経路として扱っていたが、これは完了後の標準構成ではない。
 
 ### 理由
 BookWalker/Manga ONEの実サイトで動作しているAdapter挙動を壊さず、browser/session層だけを段階的に差し替えるため。
@@ -239,7 +239,7 @@ Phase 2以降のreal-site運用では、`scripts/start_crawler_chrome.ps1` がre
 
 BookWalker/Manga ONEのloginは共通Chromeの専用new Pageで実行し、login後はPageだけ閉じる。認証sessionはshared profileへ保存し、remote Chrome processは閉じない。
 
-旧site-specific launcher/profileはrollback用legacy / compatibility pathとして残し、削除はPhase 3で判断する。
+shared-profileでのBookWalker/Manga ONE login・crawl・session共存と既存viewer behaviorを確認できたため、site-specific launcherは削除し、共通launcherを唯一の標準real-site入口とする。
 
 ### 理由
 siteごとのprofile競合を避け、BookWalkerとManga ONEのsessionを同じChromeで保持できるようにする。既存viewer behaviorを変更せず、運用入口だけを共通化するため。

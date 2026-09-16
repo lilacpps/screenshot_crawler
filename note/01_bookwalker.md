@@ -108,7 +108,7 @@ BookWalker Adapterは:
 
 を行わない。
 
-### Legacy / compatibility launcher
+### Browser Session launcher
 
 共通launcherが標準運用である:
 
@@ -116,17 +116,7 @@ BookWalker Adapterは:
 .\scripts\start_crawler_chrome.ps1
 ```
 
-profileは `.chrome-crawler` で、Manga ONEとlogin sessionを共存できる。
-
-rollback用に旧launcherも残している:
-
-```powershell
-.\scripts\start_bookwalker_chrome.ps1
-```
-
-と `.chrome-bookwalker` が存在する。
-
-これはlegacy / compatibility pathであり、今後新規siteへ同種launcherを増やす設計ではない。
+profileは `.chrome-crawler` で、Manga ONEとlogin sessionを共存できる。site-specific launcherは現行運用に含めない。
 
 ## 7. Navigation
 
@@ -300,7 +290,7 @@ shared launcherは指定portの既存listenerを、Chrome process command line�
 
 CAPTCHA / MFA / validation errorを自動突破しない。
 
-現行実装ではlegacyのsite別launcher/profileも使えるが、標準運用はshared launcher/profileである。sessionの最終authorityをsite別JSONへ移す方針ではない。
+現行運用はshared launcher/profileのみである。site-specific endpoint/profileは例外overrideとして残し、sessionの最終authorityをsite別JSONへ移す方針ではない。
 
 ## 16. Crawl command
 
@@ -348,7 +338,9 @@ completion statusは `output/crawl-status/` 配下。
 - CDP Chrome workflow
 - BookWalker login form操作
 
-共通 `.chrome-crawler/` でのlogin/crawl live verificationは未実施。site-specific adapter behaviorのlive verification記録は維持する。
+2026-09-17にshared `.chrome-crawler/`でBookWalker login/crawlに成功し、Manga ONE sessionとの共存を確認した。
+loginは既存tabを再利用せず専用new Pageで実行し、終了後はPageだけをcloseしてremote Chromeを維持した。
+capture・navigation・page counter・END / NEXT_CONTENT・metadata behaviorに回帰はなかった。
 
 ## 19. Known limitations / maintenance
 
@@ -359,7 +351,5 @@ completion statusは `output/crawl-status/` 配下。
 - global fingerprint dedupeのためpixel完全一致の別ページは1枚扱いになる。
 - `config.yaml` はruntime authorityではない。
 - diagnosticsのAdapter固有metadata統合は未実装。
-- shared `.chrome-crawler/` login/crawl live smoke test
-- 旧site-specific launcher/profile削除の判断（Phase 3）
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。

@@ -51,7 +51,7 @@ Authentication state should normally stay in the shared Chrome profile. A Manga 
 
 ### Current launcher state
 
-The standard launcher is `scripts/start_crawler_chrome.ps1` with the shared `.chrome-crawler` profile. Manga ONE and BookWalker sessions can coexist there. The repository still contains `start_mangaone_chrome.ps1` and `.chrome-mangaone` as legacy / compatibility mechanisms for rollback. Do not create additional site-specific launchers by copying this pattern.
+The only standard launcher is `scripts/start_crawler_chrome.ps1` with the shared `.chrome-crawler` profile. Manga ONE and BookWalker sessions can coexist there. Site-specific launcher/profile paths are not part of the current operation; site-specific CDP endpoint/profile settings remain exception overrides only.
 
 ## Authentication
 
@@ -78,10 +78,7 @@ The common launcher is the standard path:
 powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
 ```
 
-The existing Manga ONE launcher remains usable as a legacy / compatibility path:
-
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start_mangaone_chrome.ps1
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli login --site mangaone
 ```
 
@@ -107,6 +104,6 @@ Normal `END` / `NEXT_CONTENT` completion packages manifest-declared PNGs under `
 
 ## Live verification
 
-The current site-specific capture/navigation/END behavior has been verified against the live viewer. A fresh live check using the shared `.chrome-crawler/` profile is still required; the launcher migration did not change that adapter behavior.
+Shared-profile live verification confirmed Manga ONE login and crawl, coexistence with the BookWalker session, dedicated login Page cleanup, remote Chrome preservation, and no regression in the adapter-specific capture, navigation, or END behavior.
 
-Last verified for current adapter behavior: 2026-09-16.
+Last verified for the shared-profile workflow: 2026-09-17.

@@ -42,7 +42,7 @@ Target endpoint precedence:
 
 The command does not print credentials. CAPTCHA, MFA, and validation errors are not automatically bypassed.
 
-## Current launcher state
+## Current launcher
 
 The common `start_crawler_chrome.ps1` / `.chrome-crawler/` launcher is the standard path:
 
@@ -50,12 +50,4 @@ The common `start_crawler_chrome.ps1` / `.chrome-crawler/` launcher is the stand
 powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
 ```
 
-The existing launcher remains usable as a legacy / compatibility path:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start_bookwalker_chrome.ps1
-```
-
-and the current session may be stored in `.chrome-bookwalker`.
-
-This is a compatibility path during migration, not the final Browser Session architecture. Do not duplicate this per-site launcher/profile pattern for new sites.
+BookWalker login/crawl and coexistence with the Manga ONE session were verified using the shared `.chrome-crawler/` profile. Site-specific launcher/profile paths are not part of the current operation.

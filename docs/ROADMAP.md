@@ -22,7 +22,7 @@
 - global endpoint `CRAWLER_CDP_ENDPOINT`
 - login専用new Page lifecycle
 
-## Current priority — Shared Chrome verification and Phase 3 cleanup
+## Current state — Browser Session migration complete
 
 採用済み仕様:
 
@@ -44,10 +44,13 @@ Site Adapter
 - login / crawlを同じBrowser Session modelへ統一
 - loginは専用new Pageを使用してclose
 
-次の実装・確認作業:
+完了したlive verification:
 
-- BookWalker/Manga ONEを共通profileでlive smoke test
-- site-specific launcher/profileをPhase 3で削除できるか判断
+- BookWalker login / crawl
+- Manga ONE login / crawl
+- shared `.chrome-crawler/`での両site session共存
+- remote Chrome processの維持とlogin専用Page lifecycle
+- BookWalker / Manga ONEのcapture・navigation・END behaviorに回帰なし
 
 Browser Session整理のために既存Adapterのcapture/navigation/END logicを変更しない。
 

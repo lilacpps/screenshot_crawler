@@ -98,7 +98,7 @@ Adapterの挙動を変更する場合は、可能な範囲で対象サイトを�
 
 ## 7. Browser Session migration smoke test
 
-共通 `.chrome-crawler/` 実装後にBookWalker/Manga ONEそれぞれで確認する。
+共通 `.chrome-crawler/` でBookWalker/Manga ONEそれぞれのlogin/crawlとsession共存を確認済みである。以後はこの確認項目をBrowser Session回帰の基準として維持する。
 
 ### 共通Chrome
 

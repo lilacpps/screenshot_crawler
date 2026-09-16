@@ -79,7 +79,7 @@ http://127.0.0.1:9222
 
 ## Browser Session移行状態
 
-shared Crawler ChromeへのPhase 2切替を実装済みです。
+shared Crawler ChromeへのBrowser Session移行とlive verificationを完了しています。
 
 標準運用は:
 
@@ -91,16 +91,8 @@ CRAWLER_CDP_ENDPOINT=http://127.0.0.1:9222
 
 です。BookWalkerとManga ONEのlogin sessionは同じChrome profileに保存できます。
 
-旧構成はrollback用のlegacy / compatibility pathとして残しています。
-
-```text
-scripts/start_bookwalker_chrome.ps1
-scripts/start_mangaone_chrome.ps1
-.chrome-bookwalker/
-.chrome-mangaone/
-```
-
-Phase 3で旧構成の削除を判断します。
+BookWalker login/crawl、Manga ONE login/crawl、同一profileでのsession共存をshared `.chrome-crawler/`で確認済みです。
+既存のcapture・page navigation・END判定にも回帰はありません。
 
 この移行ではBookWalker/Manga ONEのcapture・page navigation・END判定を原則変更せず、Browser Session層だけを整理します。
 
@@ -161,21 +153,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
 
 既にport 9222でCDP listenerがある場合、実行中Chromeのcommand lineがshared profileとportを示すときだけ既存Chromeを再利用します。確認できない場合は二重起動せずerrorで停止します。
 
-旧launcherはcompatibility pathとして引き続き利用できます。
-
-BookWalker:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start_bookwalker_chrome.ps1
-```
-
-Manga ONE:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start_mangaone_chrome.ps1
-```
-
-これらはlegacy / compatibility pathであり、新規site向けに同種のlauncherを増やす方針ではありません。
+移行前に作成されたsite-specific profile directoryが残っていても、共通launcherは自動削除しません。不要なruntime directoryは確認のうえ手動削除してください。
 
 ## Crawl例
 

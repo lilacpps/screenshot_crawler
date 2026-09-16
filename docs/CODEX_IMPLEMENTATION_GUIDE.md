@@ -68,7 +68,7 @@ site-specific endpoint/profileは例外overrideでありdefaultではない。
 
 ## 4. Browser Session移行時
 
-共通launcher/profileへのPhase 2移行を実装済み。移行ではbrowser/session層だけを変更し、BookWalker/Manga ONEのviewer logicを原則変更しない。
+共通launcher/profileへのBrowser Session移行とshared-profile live verificationを完了している。移行ではbrowser/session層だけを変更し、BookWalker/Manga ONEのviewer logicを原則変更しない。
 
 目標成果物:
 
@@ -76,7 +76,8 @@ site-specific endpoint/profileは例外overrideでありdefaultではない。
 - `.chrome-crawler/`
 - global `CRAWLER_CDP_ENDPOINT`
 - site-specific endpoint overrideのfallback
-- 既存site launcherはlegacy / compatibility pathとして残し、Phase 3で削除を判断
+- BookWalker/Manga ONEのshared-profile login/crawl/session共存live verification
+- real-site launcherは共通launcherのみ
 
 禁止:
 
@@ -194,7 +195,7 @@ Browser Session共通化では最低限:
 
 を確認する。
 
-Phase 2では `scripts/start_crawler_chrome.ps1` と `.chrome-crawler/` を標準運用にし、loginは既存タブを再利用せず専用new Pageを閉じる。Phase 3では既存CDP listenerのprocess command lineがshared profileを示す場合だけ再利用し、それ以外は安全停止する。旧site launcher/profileはrollback用に残す。
+Browser Session移行後は `scripts/start_crawler_chrome.ps1` と `.chrome-crawler/` を標準運用にし、loginは既存タブを再利用せず専用new Pageを閉じる。既存CDP listenerのprocess command lineがshared profileを示す場合だけ再利用し、それ以外は安全停止する。site-specific launcherは削除済みである。
 
 Playwright integrationがskipされた場合は件数と理由を報告する。
 

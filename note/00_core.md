@@ -85,7 +85,7 @@ scripts/start_crawler_chrome.ps1
 .chrome-crawler/
 ```
 
-旧site-specific launcher/profileはrollback用のlegacy / compatibility pathとして残している。
+BookWalker/Manga ONEのshared-profile live verificationが完了しているため、real-site launcherはこの共通launcherのみを標準とする。移行前に作成されたsite-specific profile directoryが残っていても、launcherは自動削除しない。
 
 現行CLIのendpoint解決も:
 
@@ -160,7 +160,7 @@ BrowserSessionの終了はPlaywright接続を切断するだけで、remote Chro
 Probeのnative Playwright launchでは `launch_browser()` / `create_browser_context()` を使う。
 `connect_browser()` と `close_browser()` はProbeおよびBrowserSessionで使うため残している。
 repository-wideでcall siteがなかった `BrowserSession.existing_page()` と `create_page()` は削除した。
-保存済みauth-stateの補助 (`auth.storage` / `save_auth.py`) もProbe・互換workflowで到達可能なため、
+保存済みauth-stateの補助 (`auth.storage` / `save_auth.py`) もProbe・local auth workflowで到達可能なため、
 real-site標準がChrome profileであることだけを理由に削除しない。
 
 credentialsのinputは `.env` 等を使ってよいが、session保存はChromeへ任せる。
@@ -462,10 +462,12 @@ Browser Session共通化で現在確認しているもの:
 - login/crawl共通BrowserSession
 - Adapterがbrowser接続方式へ依存しない
 
+2026-09-17にshared `.chrome-crawler/`でBookWalker/Manga ONEのlogin・crawl・session共存を確認済みである。
+loginは既存tabを再利用せず専用new Pageを使い、Pageだけをcloseしてremote Chromeを維持する。
+両siteのcapture・navigation・END behaviorに回帰はない。
+
 ## 21. Known maintenance items
 
-- BookWalker/Manga ONEのshared `.chrome-crawler/` live smoke test
-- site-specific launcher/profileの削除判断（Phase 3）
 - `BrowserSession`の不要Page helper再発防止
 - explicit resume
 - Adapter `collect_debug_metadata()` のRunner統合

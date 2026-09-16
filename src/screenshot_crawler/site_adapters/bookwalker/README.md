@@ -52,7 +52,7 @@ Authentication state should normally stay in the shared Chrome profile. A BookWa
 
 ### Current launcher state
 
-The standard launcher is `scripts/start_crawler_chrome.ps1` with the shared `.chrome-crawler` profile. BookWalker and Manga ONE sessions can coexist there. The repository still contains `start_bookwalker_chrome.ps1` and `.chrome-bookwalker` as legacy / compatibility mechanisms for rollback. Do not create additional site-specific launchers by copying this pattern.
+The only standard launcher is `scripts/start_crawler_chrome.ps1` with the shared `.chrome-crawler` profile. BookWalker and Manga ONE sessions can coexist there. Site-specific launcher/profile paths are not part of the current operation; site-specific CDP endpoint/profile settings remain exception overrides only.
 
 ## Authentication
 
@@ -82,7 +82,7 @@ Live headed-CDP checks confirmed:
 
 These observations remain the basis for the site-specific logic and should not be changed merely as part of Browser Session unification.
 
-A fresh live check using the shared `.chrome-crawler/` profile is still required. The adapter-specific viewer observations above remain valid and were not changed by the launcher migration.
+Shared-profile live verification confirmed BookWalker login and crawl, coexistence with the Manga ONE session, dedicated login Page cleanup, remote Chrome preservation, and no regression in the adapter-specific capture, navigation, or END behavior.
 
 ## Output naming and packaging
 
