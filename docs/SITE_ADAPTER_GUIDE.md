@@ -1,107 +1,105 @@
 # Site Adapter Guide
 
-## 1. 新規サイトで最初に見るもの
+## 1. 新規サイトで最初に確認するもの
 
-DOMをいきなり書き換える前に、以下を確認する。
+1. 本文は `img` / `canvas` / CSS background / その他のどれか
+2. 1画面に1ページかspreadか
+3. page number / page idがあるか
+4. content / work / episode / chapter IDがURLやDOMにあるか
+5. 次ページ操作はbutton / click area / key / swipeのどれか
+6. loading中に何が変わるか
+7. 広告時に何が変わるか
+8. 最終本文後に何が起きるか
+9. 次コンテンツへ自動遷移するか
+10. 実際に安定して観測できるsignalは何か
 
-1. 本文は `<img>` か
-2. `<canvas>` か
-3. CSS `background-image` か
-4. Viewer全体しか取れないか
-5. ページ番号表示があるか
-6. episode/chapter/content IDがDOMまたはURLにあるか
-7. 次ページ操作はbutton / click area / key / swipeのどれか
-8. 広告時に何が変わるか
-9. 最終ページ後に何が表示されるか
-10. 次話へ自動遷移するか
+## 2. Capture
 
-## 2. 判定優先順位
-
-### CONTENT判定
-
-DOMの意味情報を優先する。
+本文そのものを取得できるtargetを優先する。
 
 ```text
-content id / episode id
-→ page number
-→ known selector
-→ img src
-→ background-image
-→ canvas fingerprint
-→ screenshot fingerprint
+img Locator
+→ canvas Locator / raw canvas PNG
+→ viewer Locator
+→ 明示clip
 ```
 
-背景色だけの判定は最後の手段。
+spreadならAdapterが複数targetを読書順で返してよい。
 
-### ページ変更判定
+## 3. Identityとページ変更
 
-固定sleepだけに依存しない。
+Identity候補:
 
-優先:
+- page number / page id
+- img src
+- content-specific DOM id
+- background-image URL
+- canvas/capture fingerprint
 
-- page number変化
-- src変化
-- background-image変化
-- content/page id変化
-- canvas/capture fingerprint変化
+固定sleepだけに依存せず、bounded waitで安定を確認する。
 
-## 3. 最終ページ
+ただし現行Coreの**保存dedupe**はcapture fingerprint authorityであり、Adapter identityは主にchange detection / manifest / context補助に使われる。
 
-「Next disabled」だけを唯一の条件にしない。
+## 4. 終了判定
 
-サイトによって:
+最終ページ後はサイトごとに異なる。
 
 ```text
-最終本文 → 終了画面
-最終本文 → 広告 → 終了画面
-最終本文 → 広告 → 次話
-最終本文 → 次話
+最終本文 → END screen
+最終本文 → 広告 → END
+最終本文 → 広告 → NEXT_CONTENT
+最終本文 → NEXT_CONTENT
+最終本文 → page images disappear
 ```
 
-があり得る。
+開始時ContentContextを保持し、strong contextが変われば `NEXT_CONTENT` とするのは強いsignal。
 
-開始時 `ContentContext` を保持し、現在contextが変わったら `NEXT_CONTENT` とするのが強い。
+一方、ENDについて「明示DOMが必須」と一般化しない。実サイトで安定して確認済みのbounded heuristicはAdapterに置いてよい。
 
-## 4. READMEに残すこと
+既存AdapterのENDロジックを変更する前に、そのsite READMEのlive observationsを読む。
 
-各Site AdapterのREADMEには最低限以下を書く。
+## 5. READMEに残すこと
 
 - Viewer type
 - Capture target
+- Spread / order
 - Navigation
 - Page change detection
 - Content identity
 - Content context
 - Ad detection
 - End detection
-- 次話遷移
+- NEXT_CONTENT
 - Known limitations
-- Last verified
+- Live verification / Last verified
 
-## 5. config.yamlとPythonの境界
+## 6. config.yamlとPython
 
-YAML向き:
+`config.yaml` は必須ではない。
 
-- selector
+設定ファイル向き:
+
+- 実際にloaderが読み込む単純selector
 - viewport
 - timeout
-- max_pages override
 - 単純な文字列・数値
 
 Python向き:
 
 - 複合条件
 - 状態遷移
-- 特殊クリック
-- 複数selectorの優先順位
+- 特殊click
+- 複数signalの優先順位
 - SPA固有判定
 
-## 6. Patternへ昇格する条件
+**使われていないYAMLをPython実装と並べて二重authorityにしない。** 現行real adaptersではPython実装がauthority。
+
+## 7. Patternへ昇格する条件
 
 以下を満たす場合だけ検討する。
 
 - 2サイト以上でほぼ同じ処理
-- サイト固有selectorを引数化できる
+- site-specific値を素直な引数にできる
 - Coreに入れるほど普遍ではない
 
 1サイトだけの都合ならAdapterに置く。
