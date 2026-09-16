@@ -10,8 +10,11 @@
 4. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
 5. 現在のコードとテスト
 6. Site Adapter固有README / probe出力
+7. `note/` の現行実装ノート
 
-仕様と実装が競合した場合、黙って仕様を変更しない。差分を明示し、最小修正で仕様へ合わせる。
+`note/` は詳細な現行実装スナップショットとして常に更新する。ただし、上位authorityと競合する場合は上位authorityを優先し、note側を修正する。
+
+仕様と実装が競合した場合、黙って仕様を変更しない。差分を明示し、既存の実サイト確認済み挙動を壊さない最小修正を選ぶ。
 
 ## Implementation rules
 
@@ -28,9 +31,31 @@
 - 外部実サイトへの恒常的なCI依存は作らない。
 - fixtureには実サイトの著作物をそのまま保存しない。
 
+## Note synchronization rule
+
+仕様・実装・テスト・運用方法を変更した場合、**同じ変更の中で対応する `note/` も更新することを必須**とする。
+
+更新先:
+
+- Core / Runner / output / packaging / browser / diagnostics / resume等の共通変更 → `note/00_core.md`
+- BookWalker固有変更 → `note/01_bookwalker.md`
+- Manga ONE固有変更 → `note/02_mangaone.md`
+- 新規サイト追加 → 対応する `note/<nn>_<site>.md` を追加
+- 共通変更が実サイト挙動にも影響する場合 → `00_core.md` と影響するsite noteの両方
+
+noteには少なくとも、現在の挙動、主要な判定ロジック、設定/CLI、出力、既知の制約、実サイト確認状況を残す。
+
+履歴だけを追記して古い仕様を残すのではなく、**読めば現行仕様が分かる状態へ本文を更新する**。古い判断を残す必要がある場合は `docs/DECISIONS.md` またはGit履歴を使う。
+
+認証情報、Cookie、storage state、秘密情報はnoteへ書かない。
+
+詳細は `note/README.md` を参照する。
+
 ## Before coding
 
-対象フェーズについて、まず `docs/CODEX_IMPLEMENTATION_GUIDE.md` の目的・変更範囲・受け入れ条件を確認する。
+1. `docs/CODEX_IMPLEMENTATION_GUIDE.md` を読む。
+2. 変更対象に対応する `note/` を読む。
+3. noteとコードが食い違う場合はコード/テストと上位authorityを確認し、作業内でnoteも同期する。
 
 ## After coding
 
@@ -46,9 +71,12 @@ pytest -q
 ruff check src tests
 ```
 
+完了前に、変更内容に対応する `note/` が更新されていることを確認する。note更新が不要な変更なら、その理由を最終報告に書く。
+
 最後に以下を報告する。
 
 - 変更したファイル
+- 更新したnote
 - 仕様上の判断
 - テスト結果
 - 未解決事項・実サイト確認が必要な事項
