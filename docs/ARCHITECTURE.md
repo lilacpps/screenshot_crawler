@@ -331,6 +331,8 @@ Coreはdaily limit、reset時刻、quota scope等を解釈しない。
 
 Site Adapterが必要なsite固有button/entry操作だけを担当する。
 
+Manga ONEのquota entryはCSR mount後に現れるため、Adapter内で最大2秒、100ms間隔のbounded waitを行う。候補数1件かつvisibleのbuttonだけをクリックし、曖昧な状態ではfirst要素を選択しない。
+
 ## 10. Duplicateの考え方
 
 現行Runnerはcapture fingerprintを保存重複判定authorityにする。ContentIdentityはAdapterのchange detection、manifest、debug情報として重要だが、保存dedupeをidentity優先へ変更しない。

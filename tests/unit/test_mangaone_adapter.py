@@ -128,6 +128,37 @@ async def test_mangaone_quota_entry_clicks_observed_button_once(
     assert await browser_page.evaluate("window.entryClicks") == 1
 
 
+async def test_mangaone_quota_entry_waits_for_async_button(
+    browser_page: Page,
+) -> None:
+    await browser_page.set_content(
+        """
+        <div id="quota-entry-host"></div>
+        <div class="viewer-container" hidden>
+          <img alt="page_0" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3C/svg%3E">
+        </div>
+        <script>
+          window.entryClicks = 0;
+          setTimeout(() => {
+            const entry = document.createElement('button');
+            entry.innerHTML = '<span>\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</span> <span>\u95b2\u89a7\u671f\u9650 \u3042\u306824\u6642\u9593</span>';
+            entry.onclick = () => {
+              window.entryClicks++;
+              document.querySelector('.viewer-container').hidden = false;
+            };
+            document.querySelector('#quota-entry-host').append(entry);
+          }, 650);
+        </script>
+        """
+    )
+    adapter = MangaOneAdapter()
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.initialize(browser_page)
+
+    assert await browser_page.evaluate("window.entryClicks") == 1
+    assert await browser_page.locator('.viewer-container img[alt^="page_"]').count() == 1
+
+
 async def test_mangaone_auto_skips_quota_entry(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,
@@ -185,6 +216,24 @@ async def test_mangaone_quota_entry_fails_closed_without_button(
 ) -> None:
     await browser_page.set_content("<div class='viewer-container' hidden></div>")
     adapter = MangaOneAdapter()
+    adapter.quota_entry_wait_timeout_ms = 200
+    await adapter.configure_run(browser_page, "quota")
+
+    with pytest.raises(PageChangeTimeoutError, match="not observed safely"):
+        await adapter.initialize(browser_page)
+
+
+async def test_mangaone_quota_entry_fails_closed_with_multiple_buttons(
+    browser_page: Page,
+) -> None:
+    await browser_page.set_content(
+        """
+        <button>\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</button>
+        <button>\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</button>
+        """
+    )
+    adapter = MangaOneAdapter()
+    adapter.quota_entry_wait_timeout_ms = 200
     await adapter.configure_run(browser_page, "quota")
 
     with pytest.raises(PageChangeTimeoutError, match="not observed safely"):

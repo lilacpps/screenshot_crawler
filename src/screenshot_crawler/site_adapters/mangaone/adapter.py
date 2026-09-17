@@ -87,6 +87,8 @@ class MangaOneAdapter(SiteAdapter):
     render_stable_checks = 3
     advance_retry_count = 2
     end_grace_ms = 2_500
+    quota_entry_wait_timeout_ms = 2_000
+    quota_entry_poll_interval_ms = 100
 
     viewer_selector = ".viewer-container"
     page_selector = '.viewer-container img[alt^="page_"]'
@@ -285,9 +287,18 @@ class MangaOneAdapter(SiteAdapter):
             "button",
             name=re.compile(rf"^{re.escape(self.quota_entry_label)}(?:\s|$)"),
         )
-        if await entry.count() != 1 or not await self._visible(entry):
-            raise PageChangeTimeoutError(
-                "Manga ONE quota entry button was not observed safely"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.quota_entry_wait_timeout_ms / 1000
+        while True:
+            if await entry.count() == 1 and await entry.is_visible():
+                break
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise PageChangeTimeoutError(
+                    "Manga ONE quota entry button was not observed safely"
+                )
+            await page.wait_for_timeout(
+                min(self.quota_entry_poll_interval_ms, max(1, round(remaining * 1000)))
             )
 
         self._quota_entry_clicked = True

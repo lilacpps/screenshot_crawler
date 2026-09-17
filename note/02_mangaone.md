@@ -474,7 +474,9 @@ affirmative button was observed. After that click, the live page exposed
 
 The adapter therefore scopes the quota action to the observed role=`button`
 whose name starts with `無料ライフで読む`. It requires exactly one visible
-match, performs at most one click per run, and bounded-waits for the viewer;
+match. Because the entry is mounted asynchronously after commit, it polls for
+up to 2 seconds at 100ms intervals before failing closed. It performs at most
+one click per run and bounded-waits for the viewer;
 it never falls back to `auto` or clicks an unrelated affirmative button.
 The separate confirmation-dialog flow described as a possible site state was
 not observed in this session and is not guessed in the selector logic.

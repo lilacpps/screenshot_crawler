@@ -250,6 +250,8 @@ Crawlerにはdaily limitやreset ruleそのものを渡さない。
 
 Coreは `access_strategy` をsite固有ruleとして解釈しない。quota button選択等はSite Adapterに置く。
 
+Manga ONEのquota入口はCSRで非同期にmountされるため、Adapterは入口DOMを最大2秒、100ms間隔でbounded waitする。`role=button` の候補がちょうど1件でvisibleになった場合だけ1回クリックし、0件・複数件・timeoutでは安全に停止する。
+
 ## 10. Playwright / Raw CDP policy
 
 通常操作はPlaywrightを標準とする。
