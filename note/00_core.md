@@ -618,10 +618,12 @@ fullはiteratorの正常終了だけを`complete=true`とし、`DiscoveryIncompl
 明示`--cdp-endpoint`の最優先を維持する。Crawler Chromeは自動起動しない。
 
 各targetの結果（observed/new/known/complete/stopped_reason/warnings）とstatusを
-表示し、失敗しても後続targetを続行する。全target後にsummaryを表示し、1件以上の
-失敗は`DiscoveryAllError`からCLI non-zeroへ変換する。全成功とenabled target 0件は
-正常終了する。`--all --keep-open`はtarget単位で接続を閉じるlifecycleのためCLI
-validationで拒否し、従来の`--key --keep-open`だけを維持する。
+表示し、失敗しても後続targetを続行する。例外failureに加えて
+`DiscoveryResult.stopped_reason == "incomplete"`もtarget failureとして扱い、
+`Discovery incomplete`を表示する。全target後にsummaryを表示し、1件以上の失敗は
+`DiscoveryAllError`からCLI non-zeroへ変換する。全成功とenabled target 0件は正常終了
+する。`--all --keep-open`はtarget単位で接続を閉じるlifecycleのためCLI validationで
+拒否し、従来の`--key --keep-open`だけを維持する。
 
 cross-site duplicateはnormalized title（strip、whitespace、casefold）と、取得できる場合のkind/order一致だけで候補をwarningにする。warningはmerge、delete、completed化を行わない。
 

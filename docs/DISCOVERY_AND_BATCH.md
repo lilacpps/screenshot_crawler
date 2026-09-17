@@ -766,8 +766,10 @@ CDP endpointを既存の優先順位で解決し、BrowserSessionをconnect、Pa
 Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コマンドである。
 
 `--all` はtargetの失敗を収集して後続targetを続行し、最後にmode、target数、
-成功数、失敗数と失敗理由を表示する。1件以上失敗した場合はCLI全体がnon-zero
-exitとなり、全成功またはenabled target 0件は正常終了する。`--all --keep-open`
+成功数、失敗数と失敗理由を表示する。例外failureに加えて、DiscoveryResultの
+`stopped_reason=incomplete`もtarget failureとして扱う。後続targetは続行し、
+1件以上失敗した場合はCLI全体がnon-zero exitとなる。全成功またはenabled target
+0件は正常終了する。`--all --keep-open`
 はtarget単位で接続を閉じるlifecycleと両立しないためCLI validationで拒否する。
 
 ## 14. Failure / Safety

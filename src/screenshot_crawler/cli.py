@@ -451,7 +451,13 @@ async def _discover_target(
         await session.close()
 
 
-def _print_discovery_result(result: DiscoveryResult, *, all_targets: bool = False) -> None:
+def _print_discovery_result(
+    result: DiscoveryResult,
+    *,
+    all_targets: bool = False,
+    status: str = "OK",
+    error: str | None = None,
+) -> None:
     if all_targets:
         print(f"  observed: {result.observed_count}")
         print(f"  new: {result.new_count}")
@@ -460,7 +466,9 @@ def _print_discovery_result(result: DiscoveryResult, *, all_targets: bool = Fals
         print(f"  stopped_reason: {result.stopped_reason}")
         for warning in result.warnings:
             print(f"  warning: {warning}")
-        print("  status: OK")
+        print(f"  status: {status}")
+        if error is not None:
+            print(f"  error: {error}")
         return
 
     print("Discovery completed:")
@@ -521,6 +529,17 @@ async def _run_discover(args: argparse.Namespace) -> None:
             failures.append((target.key, error))
             print("  status: FAILED")
             print(f"  error: {error}")
+            continue
+
+        if result.stopped_reason == "incomplete":
+            error = "Discovery incomplete"
+            failures.append((target.key, error))
+            _print_discovery_result(
+                result,
+                all_targets=True,
+                status="FAILED",
+                error=error,
+            )
             continue
 
         succeeded += 1

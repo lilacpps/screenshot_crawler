@@ -273,6 +273,7 @@ class FakeDiscoverySession:
 class FakeDiscoveryService:
     calls: ClassVar[list[tuple[str, str, object]]] = []
     failures: ClassVar[set[str]] = set()
+    result_overrides: ClassVar[dict[str, tuple[str, bool | None]]] = {}
 
     def __init__(self, _catalog: object, _registry: object) -> None:
         pass
@@ -281,14 +282,18 @@ class FakeDiscoveryService:
         self.calls.append((target.key, mode, page))
         if target.key in self.failures:
             raise RuntimeError(f"failure for {target.key}")
+        stopped_reason, complete = self.result_overrides.get(
+            target.key,
+            ("known_streak", None),
+        )
         return DiscoveryResult(
             mode=mode,  # type: ignore[arg-type]
             target_key=target.key,
             observed_count=2,
             new_count=1,
             known_count=1,
-            complete=None,
-            stopped_reason="known_streak",
+            complete=complete,
+            stopped_reason=stopped_reason,
             warnings=(),
         )
 
@@ -322,6 +327,11 @@ async def test_discover_all_uses_enabled_targets_in_file_order_and_propagates_mo
     FakeDiscoverySession.instances = []
     FakeDiscoveryService.calls = []
     FakeDiscoveryService.failures = set()
+    FakeDiscoveryService.result_overrides = (
+        {"A": ("exhausted", True), "C": ("exhausted", True)}
+        if mode == "full"
+        else {}
+    )
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
     monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
@@ -363,6 +373,7 @@ async def test_discover_all_continues_after_failure_and_exits_as_failure(
     FakeDiscoverySession.instances = []
     FakeDiscoveryService.calls = []
     FakeDiscoveryService.failures = {"B"}
+    FakeDiscoveryService.result_overrides = {}
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
     monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
@@ -379,6 +390,54 @@ async def test_discover_all_continues_after_failure_and_exits_as_failure(
     assert "succeeded: 2" in output
     assert "failed: 1" in output
     assert "B: failure for B" in output
+
+
+@pytest.mark.parametrize(
+    ("mode", "incomplete_complete", "success_result"),
+    [
+        ("incremental", None, ("known_streak", None)),
+        ("full", False, ("exhausted", True)),
+    ],
+)
+async def test_discover_all_treats_incomplete_result_as_failure_and_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+    incomplete_complete: bool | None,
+    success_result: tuple[str, bool | None],
+) -> None:
+    watchlist = tmp_path / "watchlist.yaml"
+    _write_discover_watchlist(
+        watchlist,
+        "  - key: A\n    site: mangaone\n    url: https://example.test/a\n"
+        "  - key: B\n    site: mangaone\n    url: https://example.test/b\n",
+    )
+    FakeDiscoverySession.instances = []
+    FakeDiscoveryService.calls = []
+    FakeDiscoveryService.failures = set()
+    FakeDiscoveryService.result_overrides = {
+        "A": ("incomplete", incomplete_complete),
+        "B": success_result,
+    }
+    monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
+    monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
+    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+
+    args = _parser().parse_args(
+        ["discover", "--all", "--mode", mode, "--watchlist", str(watchlist)]
+    )
+    with pytest.raises(cli.DiscoveryAllError):
+        await cli._run_discover(args)
+
+    assert [key for key, _mode, _page in FakeDiscoveryService.calls] == ["A", "B"]
+    output = capsys.readouterr().out
+    assert "stopped_reason: incomplete" in output
+    assert "status: FAILED" in output
+    assert "error: Discovery incomplete" in output
+    assert "status: OK" in output
+    assert "succeeded: 1" in output
+    assert "failed: 1" in output
 
 
 async def test_discover_all_success_is_normal_and_empty_enabled_is_noop(
@@ -419,6 +478,7 @@ async def test_discover_key_still_runs_one_target(
     )
     FakeDiscoveryService.calls = []
     FakeDiscoveryService.failures = set()
+    FakeDiscoveryService.result_overrides = {}
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
     monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
@@ -443,6 +503,7 @@ async def test_discover_key_keep_open_waits_before_closing_session(
     FakeDiscoverySession.instances = []
     FakeDiscoveryService.calls = []
     FakeDiscoveryService.failures = set()
+    FakeDiscoveryService.result_overrides = {}
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
     monkeypatch.setattr(cli, "_discovery_registry", lambda: object())

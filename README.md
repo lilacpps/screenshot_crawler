@@ -25,7 +25,8 @@ python -m screenshot_crawler.cli discover --all --mode full
 `discover` requires exactly one of `--key KEY` and `--all`. Disabled targets
 are skipped without changing their existing Catalog data. Each target uses a
 target-scoped CDP connection and failures do not stop later targets; a
-summary is printed and any failure makes the command exit non-zero. The
+summary is printed and any failure, including a result with
+`stopped_reason=incomplete`, makes the command exit non-zero. The
 single-target `--keep-open` behavior is preserved, while `--all --keep-open`
 is rejected because each target connection is closed before the next target.
 
