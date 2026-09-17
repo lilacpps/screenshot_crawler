@@ -33,6 +33,7 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - manifestをauthorityにしたZIP packagingとlibrary出力
 - Watchlist YAMLの `watch list/add/remove/enable/disable`
 - SQLite Catalog基盤（`items` / `sources`、schema version 1）
+- Catalogの閲覧用CSV export（`catalog export`、SQLiteがauthority）
 - site-neutral Discovery framework（fake/local Adapter向け、full / incremental sync）
 - unit testsとPlaywrightローカルfixture integration tests
 
@@ -186,6 +187,18 @@ DiscoveryはWatchlistに明示した作品だけを対象とし、別siteの同�
 Batchはquota ruleを解決し、Crawlerへは今回の実行意図だけを `access_strategy=direct|quota` として渡します。手動crawlは `auto` がdefaultです。
 
 Catalogでtitle/author/order/genreが分かっていればCrawlerへoptional metadataとして渡し、未指定fieldはSite Adapterの取得値へfallbackする設計です。
+
+### CatalogのCSV export
+
+Catalogの確認用に、`items` と `sources` をJOINした1行1sourceのCSV snapshotを出力できます。CSVは閲覧用であり、SQLite Catalogが唯一のauthorityです。
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli catalog export `
+  --catalog catalog.sqlite `
+  --output catalog-export.csv
+```
+
+既定値は入力 `catalog.sqlite`、出力 `catalog-export.csv` です。UTF-8 BOM、header付きで、sourceを持たないitemも出力します。
 
 ## 共通Crawler Chromeの起動
 

@@ -535,6 +535,8 @@ CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disa
 
 `upsert_item_source()`は新規item + sourceを1 transactionで作成する。既存sourceの場合はURL、access state、availability、external timestamps、discovery scopeと取得できたitem metadataだけを更新し、`items.status`、`local_path`、`completed_at`は更新しない。`quota_started_at` と `access_granted_until` は既存値を保持し、新規sourceではNULLで開始する。`update_source_external_state()`はquota stateを引数に持たないexternal state専用patchで、`mark_item_completed()`はlocal stateを更新する。
 
+Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` がSQLiteをread-onlyで検証・読み込みし、`items LEFT JOIN sources` を `item_id ASC, source_id ASC` で並べたflat CSV snapshotを生成する。1行は1 sourceで、sourceなしitemもsource列を空欄にして残る。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力 `catalog-export.csv` であり、CSVからCatalogへ戻す機能はない。
+
 日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`1`だけをサポートし、未対応versionは明示的に失敗する。Alembic等のmigration frameworkは導入していない。
 
 採用した上位flow:

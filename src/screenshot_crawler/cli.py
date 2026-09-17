@@ -13,7 +13,8 @@ from screenshot_crawler.auth.env import (
     read_env_file,
     require_site_env_value,
 )
-from screenshot_crawler.catalog import CatalogService
+from screenshot_crawler.catalog import CatalogError, CatalogService
+from screenshot_crawler.catalog.export import export_catalog_csv
 from screenshot_crawler.core.browser import (
     DEFAULT_CDP_ENDPOINT,
     BrowserSession,
@@ -168,6 +169,24 @@ def _parser() -> argparse.ArgumentParser:
         action_parser = watch_subparsers.add_parser(action)
         action_parser.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
         action_parser.add_argument("--key", required=True)
+
+    catalog = subparsers.add_parser("catalog", help="Inspect Catalog data")
+    catalog_subparsers = catalog.add_subparsers(dest="catalog_action", required=True)
+    catalog_export = catalog_subparsers.add_parser(
+        "export", help="Export Catalog items and sources as a CSV snapshot"
+    )
+    catalog_export.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    catalog_export.add_argument(
+        "--output",
+        type=Path,
+        default=Path("catalog-export.csv"),
+        help="CSV output path (default: catalog-export.csv)",
+    )
     return parser
 
 
@@ -409,6 +428,14 @@ def _run_watch(args: argparse.Namespace) -> None:
         print(f"Disabled watchlist target '{args.key}'.")
 
 
+def _run_catalog(args: argparse.Namespace) -> None:
+    if args.catalog_action == "export":
+        result = export_catalog_csv(args.catalog, args.output)
+        print("Catalog exported:")
+        print(f"  rows: {result.rows}")
+        print(f"  output: {result.output_path.resolve()}")
+
+
 def main() -> None:
     args = _parser().parse_args()
     try:
@@ -422,7 +449,12 @@ def main() -> None:
             asyncio.run(_run_login(args))
         elif args.command == "watch":
             _run_watch(args)
+        elif args.command == "catalog":
+            _run_catalog(args)
     except WatchlistError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    except CatalogError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 

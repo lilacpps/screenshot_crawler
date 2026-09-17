@@ -114,6 +114,20 @@ def test_watch_parser_accepts_watchlist_override_before_or_after_action() -> Non
     assert after.watchlist == Path("custom.yaml")
 
 
+def test_catalog_export_parser_accepts_defaults_and_overrides() -> None:
+    defaults = _parser().parse_args(["catalog", "export"])
+    custom = _parser().parse_args(
+        ["catalog", "export", "--catalog", "custom.sqlite", "--output", "output/export.csv"]
+    )
+
+    assert defaults.command == "catalog"
+    assert defaults.catalog_action == "export"
+    assert defaults.catalog == Path("catalog.sqlite")
+    assert defaults.output == Path("catalog-export.csv")
+    assert custom.catalog == Path("custom.sqlite")
+    assert custom.output == Path("output/export.csv")
+
+
 class FakeLoginAdapter:
     def __init__(self, *, should_fail: bool) -> None:
         self.should_fail = should_fail
