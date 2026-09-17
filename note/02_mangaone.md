@@ -418,6 +418,29 @@ The planning command is:
   --site mangaone --catalog catalog.sqlite
 ```
 
+## Phase 5B quota reader entry observation (2026-09-17)
+
+The live observation used chapter `358102` with the shared CDP Chrome profile.
+The chapter page initially showed one `button` whose accessible name starts
+with `無料ライフで読む` and whose subtitle was `閲覧期限 あと24時間`.
+There was no open quota dialog at that point. The observed entry button was
+clicked once only to reveal the post-entry DOM; no separate `ライフを使う`
+affirmative button was observed. After that click, the live page exposed
+`.viewer-container` with two `img[alt^="page_"]` elements and no
+`dialog[open]`.
+
+The adapter therefore scopes the quota action to the observed role=`button`
+whose name starts with `無料ライフで読む`. It requires exactly one visible
+match, performs at most one click per run, and bounded-waits for the viewer;
+it never falls back to `auto` or clicks an unrelated affirmative button.
+The separate confirmation-dialog flow described as a possible site state was
+not observed in this session and is not guessed in the selector logic.
+
+The fixture tests reproduce this observed entry-to-viewer transition without
+accessing Manga ONE. The live observation click was not treated as a quota
+consumption test; actual quota consumption and the resulting account state
+were not independently verified.
+
 - 末尾promotion pageがZIPへ残ることがある。
 - 前編/後編統合はCrawlerで行わない。
 - 話数→巻数変換はCrawlerで行わない。

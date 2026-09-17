@@ -15,8 +15,11 @@ from urllib.parse import urlparse
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from screenshot_crawler.core.errors import PageChangeTimeoutError
-from screenshot_crawler.core.models import ContentContext, ContentIdentity
+from screenshot_crawler.core.errors import (
+    PageChangeTimeoutError,
+    UnsupportedAccessStrategyError,
+)
+from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.mangaone.login import login_mangaone
@@ -89,7 +92,11 @@ class MangaOneAdapter(SiteAdapter):
     page_selector = '.viewer-container img[alt^="page_"]'
     fullscreen_label = "全画面"
 
+    quota_entry_label = "\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080"
+
     def __init__(self) -> None:
+        self._access_strategy: AccessStrategy = "auto"
+        self._quota_entry_clicked = False
         self._initial_url: str | None = None
         self._initial_context: ContentContext | None = None
         self._advance_pending = False
@@ -108,6 +115,23 @@ class MangaOneAdapter(SiteAdapter):
         """Run the site-specific login flow on an existing browser page."""
 
         await login_mangaone(page, email=email, password=password, home_url=home_url)
+
+    async def configure_run(
+        self, page: Page, access_strategy: AccessStrategy
+    ) -> None:
+        """Store Manga ONE's access intent before the runner navigates."""
+
+        del page
+        if access_strategy == "direct":
+            raise UnsupportedAccessStrategyError(
+                "MangaOneAdapter does not support access_strategy='direct'"
+            )
+        if access_strategy not in {"auto", "quota"}:
+            raise UnsupportedAccessStrategyError(
+                f"MangaOneAdapter does not support access_strategy={access_strategy!r}"
+            )
+        self._access_strategy = access_strategy
+        self._quota_entry_clicked = False
 
     @staticmethod
     def chapter_parts_from_url(url: str) -> tuple[str | None, str | None]:
@@ -214,10 +238,46 @@ class MangaOneAdapter(SiteAdapter):
             return
         await page.wait_for_timeout(200)
 
+    async def _enter_quota_reader(self, page: Page) -> None:
+        """Enter the observed Manga ONE free-life reader entry point once."""
+
+        if self._quota_entry_clicked:
+            raise PageChangeTimeoutError(
+                "Manga ONE quota entry was already attempted in this run"
+            )
+
+        entry = page.get_by_role(
+            "button",
+            name=re.compile(rf"^{re.escape(self.quota_entry_label)}(?:\s|$)"),
+        )
+        if await entry.count() != 1 or not await self._visible(entry):
+            raise PageChangeTimeoutError(
+                "Manga ONE quota entry button was not observed safely"
+            )
+
+        self._quota_entry_clicked = True
+        try:
+            await entry.click(timeout=1_000, no_wait_after=True)
+        except PlaywrightTimeoutError as exc:
+            raise PageChangeTimeoutError(
+                "Manga ONE quota entry button could not be clicked"
+            ) from exc
+
+        try:
+            await page.locator(self.viewer_selector).wait_for(
+                state="visible", timeout=self.page_change_timeout_ms
+            )
+        except PlaywrightTimeoutError as exc:
+            raise PageChangeTimeoutError(
+                "Manga ONE quota entry did not reveal the viewer"
+            ) from exc
+
     async def initialize(self, page: Page) -> None:
         self._initial_url = page.url
         self._advance_pending = False
         self._ended = False
+        if self._access_strategy == "quota":
+            await self._enter_quota_reader(page)
         # The chapter page mounts the reader controls asynchronously. Wait for
         # the first image before looking for the Full Screen control, then wait
         # again because entering Full Screen changes the image geometry.
