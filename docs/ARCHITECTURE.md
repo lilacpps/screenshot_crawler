@@ -105,7 +105,7 @@ Watchlist targetからitem/source候補を列挙する。
 
 Discovery Adapter自身はSQLiteを直接read/writeしない。
 
-### `catalog/`（planned）
+### `catalog/`（Watchlist + Catalog基盤実装済み）
 
 SQLite Catalogを扱う。
 
@@ -114,6 +114,8 @@ SQLite Catalogを扱う。
 - upsert
 - query
 - completed/local artifact state update
+
+初期schemaとservice/repositoryは実装済みである。Discovery ServiceからのupsertやBatch orchestrationは未実装である。
 
 Catalog itemは、取得可能な範囲でtitle/author/genre/order等のpackaging metadataも保持できる。
 
@@ -412,7 +414,7 @@ Browser Session architectureは採用済みで、共通launcherとshared-profile
 
 BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。
 
-Discovery / Catalog / Batch architectureとCrawl Request拡張は採用仕様として文書化済みだが、2026-09-17時点では未実装である。
+Watchlist loaderとCatalog Service（`items` / `sources`）は実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、Crawl Request拡張は2026-09-17時点で未実装である。
 
 ## 16. Discovery / Catalog / Batch dependency rules
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from pathlib import Path
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -29,6 +30,7 @@ from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
+from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -99,6 +101,29 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep the connected browser open until Enter is pressed",
     )
+
+    watch = subparsers.add_parser("watch", help="Manage Discovery watchlist targets")
+    watch.add_argument(
+        "--watchlist",
+        type=Path,
+        default=Path("watchlist.yaml"),
+        help="Watchlist YAML path (default: watchlist.yaml)",
+    )
+    watch_subparsers = watch.add_subparsers(dest="watch_action", required=True)
+    watch_list = watch_subparsers.add_parser("list", help="List watchlist targets")
+    watch_list.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
+
+    watch_add = watch_subparsers.add_parser("add", help="Add a watchlist target")
+    watch_add.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
+    watch_add.add_argument("--key", required=True)
+    watch_add.add_argument("--site", required=True)
+    watch_add.add_argument("--url", required=True)
+    watch_add.add_argument("--label")
+
+    for action in ("remove", "enable", "disable"):
+        action_parser = watch_subparsers.add_parser(action)
+        action_parser.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
+        action_parser.add_argument("--key", required=True)
     return parser
 
 
@@ -252,14 +277,50 @@ async def _run_login(args: argparse.Namespace) -> None:
         await session.close()
 
 
+def _run_watch(args: argparse.Namespace) -> None:
+    service = WatchlistService(args.watchlist)
+    if args.watch_action == "list":
+        targets = service.list_targets()
+        if not targets:
+            print("No watchlist targets.")
+            return
+        for target in targets:
+            enabled = "enabled" if target.enabled else "disabled"
+            label = f"\t{target.label}" if target.label is not None else ""
+            print(f"{target.key}\t{target.site}\t{enabled}\t{target.url}{label}")
+    elif args.watch_action == "add":
+        target = service.add(
+            key=args.key,
+            site=args.site,
+            url=args.url,
+            label=args.label,
+        )
+        print(f"Added watchlist target '{target.key}'.")
+    elif args.watch_action == "remove":
+        removed = service.remove(args.key)
+        print(f"Removed watchlist target '{removed.key}'.")
+    elif args.watch_action == "enable":
+        service.enable(args.key)
+        print(f"Enabled watchlist target '{args.key}'.")
+    elif args.watch_action == "disable":
+        service.disable(args.key)
+        print(f"Disabled watchlist target '{args.key}'.")
+
+
 def main() -> None:
     args = _parser().parse_args()
-    if args.command == "probe":
-        asyncio.run(_run_probe(args))
-    elif args.command == "crawl":
-        asyncio.run(_run_crawl(args))
-    elif args.command == "login":
-        asyncio.run(_run_login(args))
+    try:
+        if args.command == "probe":
+            asyncio.run(_run_probe(args))
+        elif args.command == "crawl":
+            asyncio.run(_run_crawl(args))
+        elif args.command == "login":
+            asyncio.run(_run_login(args))
+        elif args.command == "watch":
+            _run_watch(args)
+    except WatchlistError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
 
 
 if __name__ == "__main__":

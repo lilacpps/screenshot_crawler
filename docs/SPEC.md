@@ -532,7 +532,7 @@ BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` と
 
 移行後もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
 
-Discovery / Catalog / Batch subsystemとCrawl Request拡張は仕様確定済み・未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
+Watchlist + Catalog基盤は実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、Crawl Request拡張は未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
 
 ## 27. 完了確認
 

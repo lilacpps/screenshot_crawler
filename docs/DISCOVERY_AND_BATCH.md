@@ -4,7 +4,15 @@
 
 この文書は、Discovery / Catalog / Batch Runnerの採用仕様を定める。
 
-2026-09-17時点では、このsubsystemは**未実装**である。既存の `crawl --site --url` と `CrawlerRunner` の挙動は変更しない。
+2026-09-17時点では、Watchlist + Catalog基盤が実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、Crawl Request拡張は未実装である。既存の `crawl --site --url` と `CrawlerRunner` の挙動は変更しない。
+
+実装済みの範囲:
+
+- `watchlist.yaml` のload/validationとatomic write
+- `watch list/add/remove/enable/disable` CLI
+- SQLite Catalogの `items` / `sources` schema version 1
+- `(site, external_id)` によるsource upsertとexternal state update
+- Discovery upsert相当でのlocal completed state保護
 
 実装時は `docs/SPEC.md`、`docs/ARCHITECTURE.md`、`docs/DECISIONS.md` と本書をauthorityとして扱う。
 

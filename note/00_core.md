@@ -496,9 +496,9 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 これらを変更した場合は、このnoteを必ず更新する。
 
-## 22. Discovery / Catalog / Batch（採用仕様・未実装）
+## 22. Discovery / Catalog / Batch（Watchlist + Catalog基盤実装済み）
 
-2026-09-17時点で、Discovery / Catalog / Batch subsystemとCrawl Request拡張は**仕様確定済みだが未実装**である。
+2026-09-17時点では、Watchlist + Catalog基盤が実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、Crawl Request拡張は未実装である。
 
 authority:
 
@@ -506,6 +506,22 @@ authority:
 - `docs/ARCHITECTURE.md`
 - `docs/DISCOVERY_AND_BATCH.md`
 - `docs/DECISIONS.md`
+
+### 22.1 Watchlist（実装済み）
+
+`WatchlistService`（`src/screenshot_crawler/watchlist/`）がhuman-managed `watchlist.yaml`を扱う。既定pathはcurrent directoryの`watchlist.yaml`で、CLIの`watch`配下では`--watchlist`でoverrideできる。schemaは`targets` listとrequired `key` / `site` / `url`、optional `enabled`（default `true`）/ `label`（null可）だけである。keyはlist内で一意で、duplicate・malformed YAML・不正targetは明示エラーにする。
+
+CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disable`を提供する。書き込みは同一directory内のtemporary fileをfsyncして`os.replace`する。Watchlist操作はCatalogを読み書きせず、remove/disableでもCatalog rowを削除しない。
+
+### 22.2 Catalog（実装済み）
+
+`CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、CRUD/upsertを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。
+
+初期schemaはdomain tableを`items`と`sources`の2つだけ持つ。`canonical_title`と`kind`はDiscoveryで取得不能な場合を許容してNULL可、`status`は`pending`/`completed`に限定する。`sources`の`access_mode`は`owned`/`free`/`quota`/`paid`/`unknown`に限定し、`UNIQUE(site, external_id)`と`items.id`へのforeign keyを持つ。URLはidentityに使わず、同じsite/external_idのupsertで更新する。
+
+`upsert_item_source()`は新規item + sourceを1 transactionで作成する。既存sourceの場合はURL、access state、availability、access timestamps、discovery scopeと取得できたitem metadataだけを更新し、`items.status`、`local_path`、`completed_at`は更新しない。`update_source_external_state()`はexternal stateをfield単位でpatchし、`mark_item_completed()`はlocal stateを更新する。
+
+日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`1`だけをサポートし、未対応versionは明示的に失敗する。Alembic等のmigration frameworkは導入していない。
 
 採用した上位flow:
 
@@ -525,8 +541,6 @@ Crawl Request
 
 現行実装には以下はまだ存在しない。
 
-- Watchlist CLI
-- `catalog.sqlite`
 - Discovery Adapter / Service
 - full / incremental sync
 - Batch Runner
@@ -537,7 +551,7 @@ Crawl Request
 - Catalog metadataからのtitle/author/order/genre override
 - field単位の `explicit > adapter > fallback` metadata merge
 
-実装時も、現行CrawlerRunnerへCatalog read/writeを追加せず、1 URL -> 1 run責務を維持する。
+Watchlist CLIとCatalog Serviceは実装済みである。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。
 
 主要仕様:
 
@@ -558,4 +572,4 @@ Crawl Request
 - metadata未指定なら現行Adapter自動取得を維持する
 - crawl + packaging成功時だけcompleted/local_pathを更新
 
-このsubsystemを実装した時点で、本sectionを「未実装」から現行実装説明へ更新すること。
+Discovery Adapter / Service、full / incremental sync、Batch Runner、Site Policy、quota eligibility、cross-site duplicate warning、`access_strategy` input、Catalog metadataからのCrawler overrideは未実装である。Watchlist + Catalogのreal-site連携は未確認であり、現時点の確認はunit testと既存local viewer regressionに限る。

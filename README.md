@@ -16,9 +16,11 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - BookWalker canvas / spread capture
 - Manga ONE img / spread capture
 - manifestをauthorityにしたZIP packagingとlibrary出力
+- Watchlist YAMLの `watch list/add/remove/enable/disable`
+- SQLite Catalog基盤（`items` / `sources`、schema version 1）
 - unit testsとPlaywrightローカルfixture integration tests
 
-Discovery / Catalog / Batch RunnerとCrawl Request拡張は仕様確定済みですが、2026-09-17時点では未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
+Watchlist + Catalog基盤は実装済みです。Discovery Adapter / Service、Batch Runner、Site Policy、Crawl Request拡張は未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
 
 ## 採用するBrowser Session設計
 

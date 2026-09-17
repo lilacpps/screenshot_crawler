@@ -41,6 +41,18 @@ def test_crawl_rejects_non_cdp_browser_options(option: str) -> None:
         )
 
 
+def test_watch_parser_accepts_watchlist_override_before_or_after_action() -> None:
+    before = _parser().parse_args(
+        ["watch", "--watchlist", "custom.yaml", "list"]
+    )
+    after = _parser().parse_args(
+        ["watch", "list", "--watchlist", "custom.yaml"]
+    )
+
+    assert before.watchlist == Path("custom.yaml")
+    assert after.watchlist == Path("custom.yaml")
+
+
 class FakeLoginAdapter:
     def __init__(self, *, should_fail: bool) -> None:
         self.should_fail = should_fail
