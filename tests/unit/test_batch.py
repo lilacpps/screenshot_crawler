@@ -209,6 +209,7 @@ def test_quota_window_counts_only_current_window(tmp_path: Path) -> None:
 
 def test_reset_boundaries_and_active_or_expired_grant(tmp_path: Path) -> None:
     policy = MangaOneSitePolicy()
+    assert policy.access_grant_until(NOW) == datetime(2026, 9, 18, 15, 0, tzinfo=JST)
     morning_start, morning_end = policy.quota_window(
         datetime(2026, 9, 17, 9, 0, tzinfo=JST)
     )

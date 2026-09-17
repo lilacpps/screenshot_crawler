@@ -12,8 +12,9 @@ stable Catalog source identity and supports bounded `次へ` pagination.
   --watchlist watchlist.yaml --catalog catalog.sqlite
 ```
 
-BookWalker Discovery and Policy, actual Batch Crawler execution, quota
-consumption, packaging, and completed updates are not implemented yet.
+BookWalker Discovery and Policy remain unsupported. Manga ONE Batch Crawler
+execution, quota persistence, packaging, and completed updates are available
+through `batch run`.
 
 Python + Playwrightで、Webビューアを1ページずつ進めながら本文だけをPNG保存し、正常終了時にZIPへまとめるクローラです。
 
@@ -36,9 +37,10 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - Catalogの閲覧用CSV export（`catalog export`、SQLiteがauthority）
 - site-neutral Discovery framework（fake/local Adapter向け、full / incremental sync）
 - Phase 5A read-only Batch Planner、Site Policy registry、Manga ONE Policy
+- Phase 5B Manga ONE Batch Executor（direct/quota、quota state、packaging、completed更新）
 - unit testsとPlaywrightローカルfixture integration tests
 
-Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policyは実装済みです。BookWalker Policy、actual Crawler実行、quota消費記録、packaging、completed更新はPhase 5Bで実装予定です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
+Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みです。BookWalker Policy / Batchは未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
 
 ## 採用するBrowser Session設計
 
@@ -201,6 +203,21 @@ CatalogからManga ONEのcrawl候補を確認できます。これはread-only�
 
 Manga ONE PolicyはCatalog-localなquota_started_atを使い、4枠・09:00/21:00 JST reset・active grantのdirect判定を行います。手動で消費した無料ライフはCatalogから把握できないため、結果はlocal eligibility estimateです。
 
+### Batch run
+
+Manga ONEのplan候補を順番に実行し、正常なcrawlとpackagingが完了したitemだけを`completed`へ更新します。quota利用時はCrawler開始直前に`quota_started_at`とPolicyの24時間grantを保存します。失敗時はitemをpendingのままにし、保存済みquota stateや失敗runを保持します。`batch run`はstop-on-first-failureで、`--limit`を指定すると先頭N件だけ実行します。
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli batch run `
+  --site mangaone `
+  --catalog catalog.sqlite `
+  --output-root output\batch `
+  --library-dir output\Books `
+  --limit 1
+```
+
+`batch plan`は引き続きread-onlyです。BookWalkerはPolicy未登録のためBatch実行対象外です。
+
 ### CatalogのCSV export
 
 Catalogの確認用に、`items` と `sources` をJOINした1行1sourceのCSV snapshotを出力できます。CSVは閲覧用であり、SQLite Catalogが唯一のauthorityです。
@@ -241,7 +258,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
   --output-dir output\crawl-mangaone
 ```
 
-`--access-strategy auto|direct|quota` と `--title` / `--author` / `--order` / `--genre` を指定できます。defaultは`auto`で、metadataはfield単位に explicit > Adapter > packaging fallback で解決します。既存Adapterの`direct`/`quota`固有動作は未実装のため、指定時は明示エラーになります。
+`--access-strategy auto|direct|quota` と `--title` / `--author` / `--order` / `--genre` を指定できます。defaultは`auto`で、metadataはfield単位に explicit > Adapter > packaging fallback で解決します。Manga ONEは`auto`/`direct`/`quota`をサポートし、BookWalkerの`direct`/`quota`は未対応です。
 
 ## Outputの安全ルール
 

@@ -141,6 +141,53 @@ def test_batch_plan_parser_accepts_site_and_catalog() -> None:
     assert custom.catalog == Path("custom.sqlite")
 
 
+def test_batch_run_parser_accepts_execution_options() -> None:
+    defaults = _parser().parse_args(["batch", "run", "--site", "mangaone"])
+    args = _parser().parse_args(
+        [
+            "batch",
+            "run",
+            "--site",
+            "mangaone",
+            "--catalog",
+            "custom.sqlite",
+            "--output-root",
+            "runs",
+            "--library-dir",
+            "library",
+            "--env-file",
+            "custom.env",
+            "--cdp-endpoint",
+            "http://127.0.0.1:9333",
+            "--limit",
+            "2",
+            "--keep-open",
+        ]
+    )
+
+    assert defaults.output_root == Path("output/batch")
+    assert defaults.library_dir == Path("output/Books")
+    assert defaults.env_file == Path(".env")
+    assert defaults.limit is None
+    assert not defaults.keep_open
+    assert args.batch_action == "run"
+    assert args.site == "mangaone"
+    assert args.catalog == Path("custom.sqlite")
+    assert args.output_root == Path("runs")
+    assert args.library_dir == Path("library")
+    assert args.env_file == Path("custom.env")
+    assert args.cdp_endpoint == "http://127.0.0.1:9333"
+    assert args.limit == 2
+    assert args.keep_open
+
+
+def test_batch_run_parser_rejects_zero_limit() -> None:
+    with pytest.raises(SystemExit):
+        _parser().parse_args(
+            ["batch", "run", "--site", "mangaone", "--limit", "0"]
+        )
+
+
 class FakeLoginAdapter:
     def __init__(self, *, should_fail: bool) -> None:
         self.should_fail = should_fail

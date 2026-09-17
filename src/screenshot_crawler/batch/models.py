@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 BatchAccessStrategy = Literal["direct", "quota"]
@@ -10,6 +11,10 @@ BatchAccessStrategy = Literal["direct", "quota"]
 
 class BatchPlanningError(RuntimeError):
     """Raised when a Batch Plan cannot be generated safely."""
+
+
+class BatchExecutionError(RuntimeError):
+    """Raised when a Batch candidate cannot be completed safely."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,3 +57,15 @@ class BatchPlan:
     @property
     def quota_count(self) -> int:
         return sum(candidate.access_strategy == "quota" for candidate in self.candidates)
+
+
+@dataclass(frozen=True, slots=True)
+class BatchExecutionResult:
+    """Archive and crawl status corresponding to one executed candidate."""
+
+    item_id: int
+    source_id: int
+    archive_path: Path
+    status_path: Path
+    page_count: int
+    stop_reason: str

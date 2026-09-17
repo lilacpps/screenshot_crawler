@@ -38,6 +38,12 @@ class SitePolicy(ABC):
         del sources, now
         return None
 
+    def access_grant_until(self, started_at: datetime) -> datetime | None:
+        """Return the local access grant expiry for a newly used quota."""
+
+        del started_at
+        return None
+
     @abstractmethod
     def evaluate(
         self,

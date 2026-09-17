@@ -74,19 +74,21 @@ def test_mangaone_identity_supports_single_page_and_spread() -> None:
     assert mangaone_identity_from_pages(("page_0",), chapter_id="214131").page_number == 1
 
 
-async def test_mangaone_configure_run_accepts_auto_and_quota() -> None:
+async def test_mangaone_configure_run_accepts_all_mangaone_strategies() -> None:
     adapter = MangaOneAdapter()
     page = object()
 
     await adapter.configure_run(page, "auto")  # type: ignore[arg-type]
     assert adapter._access_strategy == "auto"
+    await adapter.configure_run(page, "direct")  # type: ignore[arg-type]
+    assert adapter._access_strategy == "direct"
     await adapter.configure_run(page, "quota")  # type: ignore[arg-type]
     assert adapter._access_strategy == "quota"
 
 
-async def test_mangaone_configure_run_rejects_direct() -> None:
-    with pytest.raises(UnsupportedAccessStrategyError, match="access_strategy='direct'"):
-        await MangaOneAdapter().configure_run(object(), "direct")  # type: ignore[arg-type]
+async def test_mangaone_configure_run_rejects_unknown_strategy() -> None:
+    with pytest.raises(UnsupportedAccessStrategyError, match="access_strategy='invalid'"):
+        await MangaOneAdapter().configure_run(object(), "invalid")  # type: ignore[arg-type]
 
 
 async def test_mangaone_quota_entry_clicks_observed_button_once(
@@ -148,6 +150,31 @@ async def test_mangaone_auto_skips_quota_entry(
     monkeypatch.setattr(adapter, "_wait_for_render_ready", no_wait)
     monkeypatch.setattr(adapter, "_enter_fullscreen_reader", no_wait)
     await adapter.configure_run(browser_page, "auto")
+    await adapter.initialize(browser_page)
+
+    assert await browser_page.evaluate("window.entryClicks") == 0
+
+
+async def test_mangaone_direct_skips_quota_entry(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await browser_page.set_content(
+        """
+        <button id="quota-entry">\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</button>
+        <div class="viewer-container">
+          <img alt="page_0" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3C/svg%3E">
+        </div>
+        <script>window.entryClicks = 0; document.querySelector('#quota-entry').onclick = () => window.entryClicks++;</script>
+        """
+    )
+    adapter = MangaOneAdapter()
+
+    async def fail_if_called(_page: Page) -> None:
+        raise AssertionError("direct must not enter the quota reader")
+
+    monkeypatch.setattr(adapter, "_enter_quota_reader", fail_if_called)
+    await adapter.configure_run(browser_page, "direct")
     await adapter.initialize(browser_page)
 
     assert await browser_page.evaluate("window.entryClicks") == 0

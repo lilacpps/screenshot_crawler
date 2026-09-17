@@ -26,6 +26,12 @@ class MangaOneSitePolicy(SitePolicy):
     grant_duration = GRANT_DURATION
     reset_hours = RESET_HOURS
 
+    def access_grant_until(self, started_at: datetime) -> datetime:
+        parsed = _parse_aware(started_at, "started_at")
+        if parsed is None:
+            raise SitePolicyError("started_at must be an aware datetime")
+        return parsed + GRANT_DURATION
+
     def available_quota(self, sources: Collection[Source], now: datetime) -> int:
         window_start, window_end = self.quota_window(now)
         used = 0

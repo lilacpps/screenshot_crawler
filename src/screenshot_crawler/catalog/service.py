@@ -445,6 +445,37 @@ class CatalogService:
             row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
         return self._item_from_row(row)
 
+    def record_quota_access(
+        self,
+        source_id: int,
+        *,
+        quota_started_at: datetime | str,
+        access_granted_until: datetime | str,
+    ) -> Source:
+        """Persist only the local quota state for one existing source."""
+
+        started = format_timestamp(quota_started_at)
+        granted_until = format_timestamp(access_granted_until)
+        if started is None or granted_until is None:
+            raise CatalogValidationError(
+                "quota_started_at and access_granted_until are required"
+            )
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT id FROM sources WHERE id = ?", (source_id,)
+            ).fetchone()
+            if row is None:
+                raise CatalogNotFoundError(f"Catalog source not found: {source_id}")
+            connection.execute(
+                "UPDATE sources SET quota_started_at = ?, access_granted_until = ?, "
+                "updated_at = ? WHERE id = ?",
+                (started, granted_until, format_timestamp(now_jst()), source_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM sources WHERE id = ?", (source_id,)
+            ).fetchone()
+        return self._source_from_row(updated)
+
     @contextmanager
     def _connection(self, *, initialize_schema: bool = True):
         self.path.parent.mkdir(parents=True, exist_ok=True)

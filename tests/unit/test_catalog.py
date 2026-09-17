@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.catalog import (
+    CatalogNotFoundError,
     CatalogService,
     CatalogValidationError,
     ItemInput,
@@ -126,6 +127,60 @@ def test_update_external_state_supports_explicit_null_and_metadata(tmp_path: Pat
     assert updated.quota_started_at == "2026-09-17T10:00:00+09:00"
     assert updated.access_granted_until == "2026-09-18T10:00:00+09:00"
     assert service.get_item(item.id).genre == "drama"
+
+
+def test_record_quota_access_updates_only_local_quota_state(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    item = service.create_item(ItemInput(canonical_title="A", status="pending"))
+    created = service.create_source(
+        source(
+            url="https://example.invalid/chapter",
+            access_mode="quota",
+            available=True,
+        ),
+        item_id=item.id,
+    )
+    before_item = service.get_item(item.id)
+    before_source = service.get_source(created.id)
+
+    updated = service.record_quota_access(
+        created.id,
+        quota_started_at="2026-09-17T15:00:00+09:00",
+        access_granted_until="2026-09-18T15:00:00+09:00",
+    )
+
+    assert updated.quota_started_at == "2026-09-17T15:00:00+09:00"
+    assert updated.access_granted_until == "2026-09-18T15:00:00+09:00"
+    after_source = service.get_source(created.id)
+    assert after_source.id == before_source.id
+    assert after_source.item_id == before_source.item_id
+    assert after_source.site == before_source.site
+    assert after_source.external_id == before_source.external_id
+    assert after_source.url == before_source.url
+    assert after_source.access_mode == before_source.access_mode
+    assert after_source.available == before_source.available
+    assert after_source.free_until == before_source.free_until
+    assert service.get_item(item.id) == before_item
+
+
+def test_record_quota_access_rejects_missing_source_and_naive_timestamp(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+
+    with pytest.raises(CatalogValidationError, match="Naive datetimes"):
+        service.record_quota_access(
+            999,
+            quota_started_at=datetime.fromisoformat("2026-09-17T15:00:00"),
+            access_granted_until="2026-09-18T15:00:00+09:00",
+        )
+
+    with pytest.raises(CatalogNotFoundError, match="source not found"):
+        service.record_quota_access(
+            999,
+            quota_started_at="2026-09-17T15:00:00+09:00",
+            access_granted_until="2026-09-18T15:00:00+09:00",
+        )
 
 
 def test_new_discovery_upsert_starts_with_null_quota_state(tmp_path: Path) -> None:

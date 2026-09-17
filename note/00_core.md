@@ -10,7 +10,8 @@ pagination, and uses the chapter id (not the URL) as source identity.
 adapter remains Catalog-free and does not own BrowserSession lifecycle; the
 minimal `discover` CLI supplies the Page. BookWalker Discovery, Batch Runner,
 Site Policy, quota consumption, and automatic crawl remain unimplemented in
-Phase 4A. Phase 5A adds read-only Batch planning and Manga ONE Policy.
+Phase 4A. Phase 5A adds read-only Batch planning and Manga ONE Policy. Phase
+5B adds sequential Manga ONE Batch execution around the existing Core.
 
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
@@ -513,7 +514,7 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery framework実装済み）
 
-2026-09-17時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policyが実装済みである。BookWalker Policy、actual Crawler実行、quota消費記録、packaging、completed更新は未実装である。
+2026-09-17時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policy、Phase 5BのManga ONE Batch Executorが実装済みである。BookWalker Policy / Batchは未実装である。
 
 authority:
 
@@ -534,7 +535,7 @@ CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disa
 
 初期schemaはdomain tableを`items`と`sources`の2つだけ持つ。`canonical_title`と`kind`はDiscoveryで取得不能な場合を許容してNULL可、`status`は`pending`/`completed`に限定する。`sources`の`access_mode`は`owned`/`free`/`quota`/`paid`/`unknown`に限定し、`UNIQUE(site, external_id)`と`items.id`へのforeign keyを持つ。URLはidentityに使わず、同じsite/external_idのupsertで更新する。
 
-`upsert_item_source()`は新規item + sourceを1 transactionで作成する。既存sourceの場合はURL、access state、availability、external timestamps、discovery scopeと取得できたitem metadataだけを更新し、`items.status`、`local_path`、`completed_at`は更新しない。`quota_started_at` と `access_granted_until` は既存値を保持し、新規sourceではNULLで開始する。`update_source_external_state()`はquota stateを引数に持たないexternal state専用patchで、`mark_item_completed()`はlocal stateを更新する。
+`upsert_item_source()`は新規item + sourceを1 transactionで作成する。既存sourceの場合はURL、access state、availability、external timestamps、discovery scopeと取得できたitem metadataだけを更新し、`items.status`、`local_path`、`completed_at`は更新しない。`quota_started_at` と `access_granted_until` は既存値を保持し、新規sourceではNULLで開始する。`update_source_external_state()`はquota stateを引数に持たないexternal state専用patchで、`record_quota_access()`はsourceのquota local stateと`updated_at`だけを更新し、`mark_item_completed()`はlocal stateを更新する。
 
 Batch Planner用に `read_items_and_sources(site=...)` を追加した。これは既存Catalogをread-only接続で検証し、items全件と指定siteのsourcesを取得する。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
 
@@ -563,9 +564,7 @@ Crawl Request
 - BookWalker Discovery Adapter
 - BookWalker real-site listing traversal
 - BookWalker Batch Policy
-- actual Crawler execution / Batch Runner integration
-- quota consumption persistence
-- ZIP packaging / completed update
+- BookWalker actual Batch execution / Policy
 
 Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framework、Phase 5A Batch Planner / Site Policy registry / Manga ONE Policyは実装済みである。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。Phase 5Aのplannerは`auto`を使わず、`direct`/`quota`の実行意図とmetadataをcandidateへ保持するだけである。
 
@@ -592,9 +591,9 @@ Phase 5AのBatch Plannerは `pending` itemだけを対象にし、completed / un
 
 Manga ONE Policyはsite-wide local quotaを4枠、09:00/21:00 JSTのhalf-open window、24時間grantとして扱う。current window内の`quota_started_at`だけを数え、active grant（`access_granted_until > now`）はdirectでslotを減らさない。quota candidateはplanner内だけで仮予約し、Catalogは変更しない。手動・外部clientの実消費はCatalogから観測できない。
 
-CLIは `batch plan --site mangaone --catalog catalog.sqlite` を提供する。表示はcandidateのitem/source/order/access mode/strategy/URLとskip reason summaryであり、`batch run`やCrawler呼び出しはまだない。
+CLIは `batch plan --site mangaone --catalog catalog.sqlite` と `batch run --site mangaone --catalog catalog.sqlite` を提供する。`batch plan`はread-onlyで、`batch run`はcandidateをsequentialに実行し、quota stateをCrawler開始直前に保存し、crawl + packaging成功後だけcompletedを更新する。`--limit N`は先頭N件に制限し、失敗時は後続を実行しない。
 
-BookWalker Policy、actual Crawler実行、quota eligibilityの永続化、DiscoveryからのCrawler request実行は未実装である。Phase 5A plannerはfake/local unit testとlocal Catalogで確認し、Manga ONEのactual direct/quota entry behaviorは未確認である。
+BookWalker Policy / Batchは未実装である。Manga ONE Batch Executorはfake/local unit testで確認し、real Manga ONEのBatch runは自動実行していない。
 
 ### 22.3 Discovery framework（実装済み）
 
@@ -605,3 +604,41 @@ BookWalker Policy、actual Crawler実行、quota eligibilityの永続化、Disco
 fullはiteratorの正常終了だけを`complete=true`とし、`DiscoveryIncompleteError`または予期しない例外ではmissing sourceのreconciliationを行わない。complete fullだけが同じ`site + discovery_key` scopeの未観測sourceを`available=false`にする。incrementalのknown判定と2件連続streakはServiceが管理し、2件目をrefreshしてから停止する。未観測sourceはunavailableにしない。
 
 cross-site duplicateはnormalized title（strip、whitespace、casefold）と、取得できる場合のkind/order一致だけで候補をwarningにする。warningはmerge、delete、completed化を行わない。
+
+### 22.4 Phase 5B Batch Executor（Manga ONE）
+
+`BatchExecutor`（`src/screenshot_crawler/batch/executor.py`）はPhase 5Aの
+`BatchCandidate`を1件ずつ既存`CrawlerRunner`へ渡す。`CrawlerRunner`はCatalogを
+知らず、Batch側だけが`item_id` / `source_id`とCatalog stateを扱う。
+
+実行前にitemが`pending`であり、sourceのitem/site/url/access_mode/availableが
+candidateと一致することを確認する。Policyのaccess decisionも再確認し、stale
+candidateはCrawlerを呼ばずに停止する。
+
+Candidateから次の`RunConfig`を作る:
+
+```text
+site / source_url / access_strategy / output_metadata
+output_dir = output/batch/<site>/item-<item>-source-<source>-<JST timestamp>-<uuid>
+diagnostics_dir = <run directory>/diagnostics
+```
+
+実行はsequential、stop-on-first-failureである。quota candidateだけはCrawler開始
+直前に`record_quota_access()`を呼び、Manga ONE Policyの`access_grant_until()`で
+計算した24時間後を`access_granted_until`へ保存する。direct candidateはquota stateを
+変更しない。保存後にcrawl、viewer、packagingが失敗してもquota stateは消去しない。
+
+Crawlerが`END`または`NEXT_CONTENT`で正常終了し、既存
+`package_crawl_output()`が成功した後だけ`mark_item_completed()`を呼ぶ。Catalog更新
+失敗時も生成済みarchiveは削除しない。失敗run directoryは上書きせず残す。
+
+実行CLI:
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli batch run `
+  --site mangaone --catalog catalog.sqlite `
+  --output-root output\batch --library-dir output\Books --limit 1
+```
+
+`batch plan`は引き続きCatalog read-onlyであり、`batch run`だけがquota local stateと
+completed/local artifact stateを書き換える。BookWalkerはPolicy未登録である。

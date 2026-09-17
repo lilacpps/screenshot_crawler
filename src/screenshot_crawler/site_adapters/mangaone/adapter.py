@@ -122,11 +122,7 @@ class MangaOneAdapter(SiteAdapter):
         """Store Manga ONE's access intent before the runner navigates."""
 
         del page
-        if access_strategy == "direct":
-            raise UnsupportedAccessStrategyError(
-                "MangaOneAdapter does not support access_strategy='direct'"
-            )
-        if access_strategy not in {"auto", "quota"}:
+        if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
                 f"MangaOneAdapter does not support access_strategy={access_strategy!r}"
             )

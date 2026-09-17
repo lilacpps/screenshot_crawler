@@ -19,11 +19,21 @@ it never runs the Crawler or changes Catalog state. BookWalker Policy, actual
 Crawler execution, quota persistence, packaging, and completed updates remain
 Phase 5B scope.
 
+## Phase 5B status
+
+`batch run` is implemented for Manga ONE. It consumes the Phase 5A plan in
+stable order, creates a site-neutral `RunConfig`, runs the existing crawler,
+packages successful output, and then marks the item completed. It is
+sequential and stops on the first failure. The plan command remains fully
+read-only, while `batch run` may update local quota fields before a quota
+crawl and item completion fields after successful packaging. BookWalker has
+no registered Policy and is not executable by Batch.
+
 ## 1. Status
 
 この文書は、Discovery / Catalog / Batch Runnerの採用仕様を定める。
 
-2026-09-17時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policyが実装済みである。BookWalker Policy、actual Crawler実行、quota消費記録、packaging、completed更新は未実装である。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。
+2026-09-17時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy、Phase 5BのManga ONE Batch Executorが実装済みである。BookWalker Policy / Batchは未実装である。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。
 
 実装済みの範囲:
 
@@ -40,6 +50,7 @@ Phase 5B scope.
 - cross-site duplicate warningの最小heuristic
 - read-only Batch PlannerとSite Policy registry
 - Manga ONEのlocal quota window / active grant判定
+- Manga ONE Batch Executor、quota local state persistence、sequential run、packaging後のcompleted更新
 
 実装時は `docs/SPEC.md`、`docs/ARCHITECTURE.md`、`docs/DECISIONS.md` と本書をauthorityとして扱う。
 
@@ -506,7 +517,8 @@ local estimateを持つ。capacityは4、reset windowは09:00-21:00と
 21:00-翌09:00のJST half-open interval、`quota_started_at` を同じ
 window内で数える。`access_granted_until > now` のsourceはdirectであり、
 quota slotを消費しない。grant durationは24時間として定義するが、
-Phase 5Aではgrantを生成・永続化しない。
+Phase 5Aではgrantを生成・永続化しない。Phase 5Bではquota crawl開始直前に
+Policyのgrant期限を使って`quota_started_at`と`access_granted_until`を保存する。
 
 このlocal estimateはCatalogが記録したquota消費だけを対象とする。利用者の
 手動消費や別clientの実際のfree life残量は観測できない。
@@ -543,13 +555,13 @@ no active grant + quota eligible
 
 Site Policyの `daily_limit` やreset ruleそのものをCrawlerへ渡さない。
 
-`access_strategy` に応じたbutton選択、viewer entry等のsite固有操作はSite Adapterの責務とする。現時点の既存Adapterは`auto`だけを実行でき、未対応の`direct`/`quota`は明示的に停止する。Coreにsite名やquota button selectorの分岐を追加しない。
+`access_strategy` に応じたbutton選択、viewer entry等のsite固有操作はSite Adapterの責務とする。Manga ONE Adapterは`auto`/`direct`/`quota`を実行でき、BookWalker等の未対応Adapterは`direct`/`quota`を明示的に停止する。Coreにsite名やquota button selectorの分岐を追加しない。
 
 ## 11. Batch Runner
 
 ### 11.1 責務
 
-Batch RunnerはCatalogから現在取得可能なsourceを選び、Site Policyを評価して具体的なCrawl Request相当のBatch Planを作る。Phase 5Aでは既存Screenshot Crawlerへ渡さず、read-only結果として返す。
+Batch RunnerはCatalogから現在取得可能なsourceを選び、Site Policyを評価して具体的なCrawl Request相当のBatch Planを作る。Phase 5Aでは既存Screenshot Crawlerへ渡さず、read-only結果として返す。Phase 5BのBatch Executorはcandidateを順番に実行し、crawl + packaging成功後にCatalogを更新する。
 
 CrawlerRunnerへCatalog依存を追加しない。
 
@@ -607,7 +619,7 @@ items.completed_at = now
 
 Batch Runnerは、実行した `item_id` と `source_id` と生成されたarchive pathを対応付けられること。
 
-失敗時は `completed` にしない。
+失敗時は `completed` にしない。quota stateを保存した後のcrawl / packaging失敗でも、そのquota stateは消去しない。Catalog updateが失敗した場合も生成済みarchiveは削除しない。
 
 ### 11.4 Crawl Request
 

@@ -397,8 +397,9 @@ The minimal command is:
 
 The command uses shared CDP Chrome through `BrowserSession`, closes only its
 temporary Page, and leaves remote Chrome running. Phase 5A adds a read-only
-Manga ONE Site Policy and Batch Planner; actual direct/quota entry,
-quota consumption, and automatic crawling remain unimplemented.
+Manga ONE Site Policy and Batch Planner. Phase 5B's `batch run` executes Manga
+ONE candidates through the existing CrawlerRunner, with direct/quota entry,
+quota local-state persistence, packaging, and completed updates.
 
 The planner treats the Discovery mapping as follows: `free` and `owned` are
 eligible with `direct`; `quota` with `access_granted_until > now` is eligible
@@ -417,6 +418,22 @@ The planning command is:
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli batch plan `
   --site mangaone --catalog catalog.sqlite
 ```
+
+The execution command is:
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli batch run `
+  --site mangaone --catalog catalog.sqlite `
+  --output-root output\batch --library-dir output\Books --limit 1
+```
+
+`MangaOneAdapter` accepts `auto`, `direct`, and `quota`. `auto` keeps the
+manual legacy flow. `direct` never clicks the free-life entry button and
+expects the viewer to be available after navigation. `quota` uses the
+observed `無料ライフで読む` entry once and bounded-waits for the viewer; it
+does not fall back to direct or auto when the entry is ambiguous. Batch quota
+state is recorded immediately before the crawl, while completed is recorded
+only after crawl and packaging succeed.
 
 ## Phase 5B quota reader entry observation (2026-09-17)
 

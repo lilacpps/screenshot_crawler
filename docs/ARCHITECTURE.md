@@ -13,7 +13,9 @@ Runner, Site Policy, and quota consumption remain unimplemented for Phase 4A.
 
 The Phase 5A read-only Batch Planner and Manga ONE Site Policy are now
 implemented. They select Catalog sources and create plan candidates only;
-Crawler execution and quota persistence remain Phase 5B.
+Phase 5B adds sequential Manga ONE candidate execution, quota persistence,
+packaging, and completed-item updates. BookWalker Batch execution remains
+unsupported.
 
 ## 1. 設計原則
 
@@ -132,13 +134,13 @@ SQLite Catalogを扱う。
 - query
 - completed/local artifact state update
 
-初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Phase 5Aのread-only Batch Planner / Site Policy orchestrationも実装済みで、actual Crawler executionは未実装である。
+初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Phase 5Aのread-only Batch Planner / Site Policy orchestrationと、Phase 5BのManga ONE Batch Executor（Crawler実行、quota local state、packaging、completed更新）が実装済みである。BookWalker Policy / Batchは未実装である。
 
 Catalog itemは、取得可能な範囲でtitle/author/genre/order等のpackaging metadataも保持できる。
 
 詳細schemaは `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
 
-### `batch/`（planned）
+### `batch/`（implemented）
 
 Catalogから対象sourceを選び、既存Crawlerを呼ぶ。
 
@@ -381,7 +383,7 @@ wait_for_change(page, previous_identity)
 
 実際のdefault method / optional hookは `site_adapters/base.py` をauthorityとする。
 
-Crawl Requestの実装では、既存`RunConfig`へsite-neutralなrun access intentとoptional output metadataを最小限保持し、Adapterへ`configure_run(page, access_strategy)`で渡す。既定hookは`auto`だけを受け付け、未対応の`direct`/`quota`は明示的に停止する。site-specific entry操作はまだ実装しない。
+Crawl Requestの実装では、既存`RunConfig`へsite-neutralなrun access intentとoptional output metadataを最小限保持し、Adapterへ`configure_run(page, access_strategy)`で渡す。既定hookは`auto`だけを受け付け、未対応の`direct`/`quota`は明示的に停止する。Manga ONE Adapterは`auto`/`direct`/`quota`を受け付け、site-specific entry操作を実行する。
 
 Adapterは以下をしない。
 
@@ -433,7 +435,7 @@ Browser Session architectureは採用済みで、共通launcherとshared-profile
 
 BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。
 
-Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policyは実装済みである。BookWalker Policy、actual Crawler実行、quota消費記録、packaging、completed更新は2026-09-17時点で未実装である。
+Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みである。BookWalker Policy / Batchは2026-09-17時点で未実装である。
 
 ## 16. Discovery / Catalog / Batch dependency rules
 
@@ -489,7 +491,10 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 - Catalog metadataをoptional overrideとしてplan candidateへ入れる
 - quota仮予約はmemory内だけで行い、Catalogへ永続化しない
 - `quota_available` は計画前のlocal枠、`quota_remaining` は仮予約後の残枠を表す
-- Crawler実行、新規quota状態の永続化、packaging、completed/local_path更新はPhase 5Bで行う
+- Phase 5Bではcandidateを順番に実行し、quota candidateはCrawler開始直前にlocal stateを保存する
+- crawlとpackagingが成功した後だけ`items.status` / `local_path` / `completed_at`を更新する
+- crawl、viewer、packagingの失敗時はitemをcompletedにせず、quota stateは保持する
+- candidateごとに一意なrun directoryを使い、stop-on-first-failureで後続を実行しない
 
 ### Site Policy
 

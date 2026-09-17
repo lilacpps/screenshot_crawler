@@ -16,6 +16,15 @@ produces site-neutral candidates with `direct` or `quota` intent. It does not
 run the Crawler, record quota consumption, package output, or update Catalog
 local state. Actual crawl integration remains Phase 5B.
 
+## Phase 5B status
+
+`batch run` now executes Manga ONE Batch candidates sequentially through the
+existing CrawlerRunner and manifest-based packaging. A quota candidate records
+its local quota start and Policy-provided grant expiry immediately before the
+crawl. Only successful crawl and packaging update the item to `completed`.
+The plan command remains read-only; BookWalker Batch execution remains
+unsupported.
+
 ## 1. 目的
 
 特定のWebビューアにアクセスし、現在コンテンツを1ページずつ進めながら本文だけをPNGとして保存する。
@@ -548,7 +557,7 @@ BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` と
 
 移行後もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
 
-Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner、Site Policy registry、Manga ONE Policyは実装済みである。BookWalker Policy、actual Crawler実行、quota消費記録、packaging、completed更新は未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
+Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner、Site Policy registry、Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みである。BookWalker Policy / Batchは未実装である。実装後も既存Crawlerの1 URL -> 1 run責務を維持する。
 
 ## 27. 完了確認
 

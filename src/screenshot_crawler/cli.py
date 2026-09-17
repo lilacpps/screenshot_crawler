@@ -14,7 +14,13 @@ from screenshot_crawler.auth.env import (
     read_env_file,
     require_site_env_value,
 )
-from screenshot_crawler.batch import BatchPlanner, BatchPlanningError
+from screenshot_crawler.batch import (
+    BatchExecutionError,
+    BatchExecutor,
+    BatchPlan,
+    BatchPlanner,
+    BatchPlanningError,
+)
 from screenshot_crawler.catalog import CatalogError, CatalogService
 from screenshot_crawler.catalog.export import export_catalog_csv
 from screenshot_crawler.core.browser import (
@@ -37,6 +43,13 @@ from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -191,7 +204,7 @@ def _parser() -> argparse.ArgumentParser:
         help="CSV output path (default: catalog-export.csv)",
     )
 
-    batch = subparsers.add_parser("batch", help="Plan Catalog sources for future crawling")
+    batch = subparsers.add_parser("batch", help="Plan or execute Catalog crawl candidates")
     batch_subparsers = batch.add_subparsers(dest="batch_action", required=True)
     batch_plan = batch_subparsers.add_parser(
         "plan", help="Create a read-only Batch Plan without crawling"
@@ -202,6 +215,42 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("catalog.sqlite"),
         help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    batch_run = batch_subparsers.add_parser(
+        "run", help="Execute the planned candidates sequentially"
+    )
+    batch_run.add_argument("--site", required=True)
+    batch_run.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    batch_run.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path("output/batch"),
+        help="Root directory for candidate crawl runs (default: output/batch)",
+    )
+    batch_run.add_argument(
+        "--library-dir",
+        type=Path,
+        default=Path("output/Books"),
+        help="Root directory for completed ZIP archives (default: output/Books)",
+    )
+    batch_run.add_argument("--env-file", type=Path, default=Path(".env"))
+    batch_run.add_argument("--cdp-endpoint")
+    batch_run.add_argument(
+        "--limit",
+        type=_positive_int,
+        help="Execute only the first N planned candidates (N >= 1)",
+    )
+    batch_run.add_argument("--max-pages", type=int, default=1000)
+    batch_run.add_argument("--max-same-content", type=int, default=3)
+    batch_run.add_argument(
+        "--keep-open",
+        action="store_true",
+        help="Keep the connected browser open until Enter is pressed",
     )
     return parser
 
@@ -458,34 +507,107 @@ def _run_catalog(args: argparse.Namespace) -> None:
         print(f"  output: {result.output_path.resolve()}")
 
 
-def _run_batch(args: argparse.Namespace) -> None:
-    if args.batch_action == "plan":
-        plan = BatchPlanner(
-            CatalogService(args.catalog),
-            _batch_policy_registry(),
-        ).plan(site=args.site)
-        print("Batch plan:")
-        print(f"  site: {args.site}")
-        print(f"  eligible: {len(plan.candidates)}")
-        print(f"  direct: {plan.direct_count}")
-        print(f"  quota: {plan.quota_count}")
-        if plan.quota_remaining is not None:
-            print(f"  quota_available: {plan.quota_available}")
-            print(f"  quota_remaining: {plan.quota_remaining} (after in-memory reservations)")
+def _print_batch_plan(plan: BatchPlan, *, site: str) -> None:
+    """Print the stable, human-readable plan summary."""
+
+    print("Batch plan:")
+    print(f"  site: {site}")
+    print(f"  eligible: {len(plan.candidates)}")
+    print(f"  direct: {plan.direct_count}")
+    print(f"  quota: {plan.quota_count}")
+    if plan.quota_remaining is not None:
+        print(f"  quota_available: {plan.quota_available}")
+        print(f"  quota_remaining: {plan.quota_remaining} (after in-memory reservations)")
+    print(f"  skipped: {len(plan.skipped)}")
+    if plan.candidates:
+        print("Candidates:")
+        for candidate in plan.candidates:
+            order = candidate.metadata.get("order", "-")
+            print(
+                f"  item={candidate.item_id} source={candidate.source_id} "
+                f"{order} {candidate.access_mode} -> "
+                f"{candidate.access_strategy} {candidate.url}"
+            )
+    if plan.skipped:
+        print("Skipped:")
+        for reason, count in sorted(Counter(item.reason for item in plan.skipped).items()):
+            print(f"  {reason}: {count}")
+
+
+def _run_batch_plan(args: argparse.Namespace) -> None:
+    plan = BatchPlanner(
+        CatalogService(args.catalog),
+        _batch_policy_registry(),
+    ).plan(site=args.site)
+    _print_batch_plan(plan, site=args.site)
+
+
+async def _run_batch_run(args: argparse.Namespace) -> None:
+    catalog = CatalogService(args.catalog)
+    policies = _batch_policy_registry()
+    plan = BatchPlanner(catalog, policies).plan(site=args.site)
+    candidates = plan.candidates[: args.limit] if args.limit is not None else plan.candidates
+    print("Batch run:")
+    print(f"  site: {args.site}")
+    print(f"  planned: {len(plan.candidates)}")
+    print(f"  executing: {len(candidates)}")
+    print(f"  direct: {sum(item.access_strategy == 'direct' for item in candidates)}")
+    print(f"  quota: {sum(item.access_strategy == 'quota' for item in candidates)}")
+    if plan.skipped:
         print(f"  skipped: {len(plan.skipped)}")
-        if plan.candidates:
-            print("Candidates:")
-            for candidate in plan.candidates:
-                order = candidate.metadata.get("order", "-")
-                print(
-                    f"  item={candidate.item_id} source={candidate.source_id} "
-                    f"{order} {candidate.access_mode} -> "
-                    f"{candidate.access_strategy} {candidate.url}"
+    if not candidates:
+        return
+
+    values = read_env_file(args.env_file) if args.env_file.is_file() else {}
+    endpoint = resolve_cdp_endpoint(
+        site=args.site,
+        cli_endpoint=args.cdp_endpoint,
+        values=values,
+    )
+    session = await BrowserSession.connect(endpoint)
+    executor = BatchExecutor(catalog, policies, _registry())
+    try:
+        for index, candidate in enumerate(candidates, start=1):
+            order = candidate.metadata.get("order", "-")
+            print(
+                f"[{index}/{len(candidates)}] item={candidate.item_id} "
+                f"source={candidate.source_id} {order} {candidate.access_strategy}"
+            )
+            page = None
+            try:
+                page = await session.new_page()
+                result = await executor.execute_candidate(
+                    page,
+                    candidate,
+                    output_root=args.output_root,
+                    library_dir=args.library_dir,
+                    max_pages=args.max_pages,
+                    max_same_content=args.max_same_content,
                 )
-        if plan.skipped:
-            print("Skipped:")
-            for reason, count in sorted(Counter(item.reason for item in plan.skipped).items()):
-                print(f"  {reason}: {count}")
+                print(f"  completed: {result.archive_path}")
+            except BaseException as exc:
+                print(
+                    "FAILED:",
+                    file=sys.stderr,
+                )
+                print(f"  item={candidate.item_id}", file=sys.stderr)
+                print(f"  source={candidate.source_id}", file=sys.stderr)
+                print(f"  strategy={candidate.access_strategy}", file=sys.stderr)
+                print(f"  error={exc}", file=sys.stderr)
+                if args.keep_open:
+                    print("Browser is open. Press Enter here to disconnect.")
+                    await asyncio.to_thread(input)
+                if isinstance(exc, BatchExecutionError):
+                    raise
+                raise BatchExecutionError(str(exc)) from exc
+            finally:
+                if page is not None:
+                    await session.close_page(page)
+        if args.keep_open:
+            print("Browser is open. Press Enter here to disconnect.")
+            await asyncio.to_thread(input)
+    finally:
+        await session.close()
 
 
 def main() -> None:
@@ -504,7 +626,10 @@ def main() -> None:
         elif args.command == "catalog":
             _run_catalog(args)
         elif args.command == "batch":
-            _run_batch(args)
+            if args.batch_action == "plan":
+                _run_batch_plan(args)
+            elif args.batch_action == "run":
+                asyncio.run(_run_batch_run(args))
     except WatchlistError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
@@ -512,6 +637,9 @@ def main() -> None:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     except BatchPlanningError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    except BatchExecutionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
