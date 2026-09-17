@@ -101,7 +101,6 @@ class BatchExecutor:
             self.catalog.mark_item_completed(
                 candidate.item_id,
                 package.archive_path.as_posix(),
-                completed_at=current,
             )
             return BatchExecutionResult(
                 item_id=candidate.item_id,

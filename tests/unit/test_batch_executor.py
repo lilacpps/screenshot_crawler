@@ -19,6 +19,7 @@ from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
 
 NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
+COMPLETED_NOW = datetime(2026, 9, 17, 15, 30, tzinfo=JST)
 
 
 class FakeAdapter:
@@ -178,6 +179,29 @@ async def test_quota_state_is_persisted_before_crawl_and_granted_for_24_hours(
     assert configs[0].access_strategy == "quota"
     assert service.get_item(candidate.item_id).status == "completed"
     assert result.archive_path.exists() is False
+
+
+async def test_completed_at_uses_completion_time_not_plan_start_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    monkeypatch.setattr(
+        "screenshot_crawler.catalog.service.now_jst", lambda: COMPLETED_NOW
+    )
+    executor = make_executor(service)
+
+    await executor.execute_candidate(
+        object(),
+        candidate,
+        output_root=tmp_path / "batch",
+        library_dir=tmp_path / "Books",
+        now=NOW,
+    )
+
+    item = service.get_item(candidate.item_id)
+    assert item.completed_at == COMPLETED_NOW.isoformat()
+    assert item.completed_at != NOW.isoformat()
 
 
 async def test_active_grant_direct_candidate_does_not_change_quota_state(
