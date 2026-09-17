@@ -34,6 +34,9 @@ Catalog Service -> catalog.sqlite
       ↓
 Batch Runner -> Site Policy
       ↓
+Crawl Request
+  site / URL / access_strategy / optional metadata
+      ↓
 Core Runner / packaging
       ↓
 Site Adapter
@@ -47,7 +50,8 @@ Site Adapter
 - **Discovery Adapter**: site固有listing/discovery logic
 - **Catalog Service**: SQLite read/write
 - **Batch Runner**: Catalogからcrawl対象sourceを選ぶorchestration
-- **Site Policy**: site固有quota/eligibility rule
+- **Site Policy**: site固有quota/eligibility ruleを解決する
+- **Crawl Request**: Batch/CLIから既存Crawlerへ渡すsite-neutralな実行入力
 
 Raw CDP Protocolを通常のsite操作APIにはしない。
 
@@ -70,6 +74,8 @@ CrawlerRunnerとDiscovery AdapterはCatalogを直接知らない。
 - `packaging.py`: manifest基準のZIP/library出力
 - `errors.py`: 独自例外
 
+Crawl Requestの実装位置は実装時に既存`RunConfig`との重複を避けて最小構成で決める。重要なのは、Catalog objectをCoreへ流さず、site-neutralなrun inputだけを渡すことである。
+
 ### `site_adapters/`
 
 サイト固有の**1 content viewer**差分。
@@ -82,6 +88,8 @@ CrawlerRunnerとDiscovery AdapterはCatalogを直接知らない。
 - `<site>/config.yaml`: 実装が明示的に読み込む場合のみ設定として有効
 
 現行real adaptersでは、複雑なselector/state/timeoutはPython Adapter実装がauthorityである。未使用YAMLとPythonを二重authorityにしない。
+
+Site Adapterは、必要なsiteではCrawl Requestの `access_strategy` を参照し、quota用入口かdirect入口か等のsite固有操作を選択できる。quota上限やreset rule自体は知らない。
 
 ### `discovery/`（planned）
 
@@ -107,6 +115,8 @@ SQLite Catalogを扱う。
 - query
 - completed/local artifact state update
 
+Catalog itemは、取得可能な範囲でtitle/author/genre/order等のpackaging metadataも保持できる。
+
 詳細schemaは `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
 
 ### `batch/`（planned）
@@ -117,6 +127,9 @@ Catalogから対象sourceを選び、既存Crawlerを呼ぶ。
 - source priority
 - quota記録
 - Site Policy呼び出し
+- `access_strategy` 解決
+- Crawl Request作成
+- known metadataのoptional override入力
 - crawl success後のCatalog update
 
 CrawlerRunnerへこの責務を移さない。
@@ -228,10 +241,12 @@ CAPTCHA / MFA / validation errorは自動突破しない。
 ## 8. Runnerの概念フロー
 
 ```text
+receive site-neutral Crawl Request
 ensure output directory is new/empty
 Browser SessionからPageを取得
 prepare page
 open URL
+adapter receives run access intent if needed
 adapter.initialize
 initial context
 create manifest/progress
@@ -260,15 +275,42 @@ loop:
 
 normal terminal:
     crawler Pageをclose
+    resolve packaging metadata
     package output
     Crawler Chrome自体は残す
 ```
 
 `max_pages`到達後も、次stateがEND/NEXT_CONTENTなら正常終了できる。
 
-Batch Runnerはこのflowの外側にあり、Catalogから `site + URL` を選んで既存runを開始する。
+Batch Runnerはこのflowの外側にあり、CatalogとSite PolicyからCrawl Requestを作る。
 
-## 9. Duplicateの考え方
+## 9. Access strategy boundary
+
+`source.access_mode` と `Crawl Request.access_strategy` は別概念とする。
+
+```text
+Catalog source state:
+  owned / free / quota / paid / unknown
+
+Crawl execution intent:
+  auto / direct / quota
+```
+
+Batch Runner / Site Policyがsource stateとgrant状態を評価し、今回のaccess strategyを決める。
+
+例:
+
+```text
+quota source + active grant -> direct
+quota source + no active grant + eligible -> quota
+manual crawl -> auto
+```
+
+Coreはdaily limit、reset時刻、quota scope等を解釈しない。
+
+Site Adapterが必要なsite固有button/entry操作だけを担当する。
+
+## 10. Duplicateの考え方
 
 現行Runnerはcapture fingerprintを保存重複判定authorityにする。ContentIdentityはAdapterのchange detection、manifest、debug情報として重要だが、保存dedupeをidentity優先へ変更しない。
 
@@ -276,7 +318,7 @@ Batch Runnerはこのflowの外側にあり、Catalogから `site + URL` を選�
 
 Discovery側のcross-site duplicateは別問題として扱う。別siteの類似itemはwarningを出しても、自動mergeしない。
 
-## 10. Output / packaging
+## 11. Output / packaging
 
 manifestのページ一覧を完成成果物のauthorityとする。packagingでdirectory globをauthorityにしない。
 
@@ -284,9 +326,25 @@ manifestのページ一覧を完成成果物のauthorityとする。packagingで
 
 Batch Runnerはpackaging成功後のarchive pathをCatalog itemへ記録できるが、packaging自体はCatalogを知らない。
 
-## 11. Site Adapterの最小契約
+### 11.1 Output metadata resolution
 
-概念上:
+packaging用metadataはfieldごとに:
+
+```text
+1. Crawl Request explicit metadata
+2. Site Adapter metadata
+3. packaging fallback
+```
+
+の順で解決する。
+
+Crawl Requestでtitleだけ指定し、author/order/genreはAdapterへfallbackするような部分指定を許可する。
+
+metadata overrideはmanifest/source URLのauthorityにはならない。
+
+## 12. Site Adapterの最小契約
+
+現行contractの概念:
 
 ```python
 prepare_page(page)
@@ -303,6 +361,8 @@ wait_for_change(page, previous_identity)
 
 実際のdefault method / optional hookは `site_adapters/base.py` をauthorityとする。
 
+Crawl Request拡張実装時は、既存contractを不必要に広げず、Adapterがsite-neutralなrun access intentを受け取れる最小の方法を追加する。
+
 Adapterは以下をしない。
 
 ```text
@@ -313,9 +373,10 @@ connect_over_cdp
 BrowserContext lifecycle管理
 Discovery listing traversal
 Catalog read/write
+Site Policyによるquota eligibility判定
 ```
 
-## 12. Site固有の終了判定
+## 13. Site固有の終了判定
 
 終了方法は共通化しすぎない。
 
@@ -324,7 +385,7 @@ Catalog read/write
 
 「明示END DOMがなければENDにしない」のような一般ルールで、実サイト確認済み挙動を置換しない。
 
-## 13. Safety
+## 14. Safety
 
 別コンテンツや無関係ファイルを誤処理するより停止を優先する。
 
@@ -340,8 +401,10 @@ Catalog read/write
 - incrementalで未観測過去sourceをunavailableにしない
 - cross-site duplicateを自動mergeしない
 - paid/unknown sourceを自動crawlしない
+- active quota grantを新規quotaとして二重消費扱いしない
+- Site Policy ruleをCrawlerへ持ち込まない
 
-## 14. 移行状態
+## 15. 移行状態
 
 Browser Session architectureは採用済みで、共通launcherとshared-profile live verificationまで完了している。
 
@@ -349,9 +412,9 @@ Browser Session architectureは採用済みで、共通launcherとshared-profile
 
 BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。
 
-Discovery / Catalog / Batch architectureは採用仕様として文書化済みだが、2026-09-17時点では未実装である。
+Discovery / Catalog / Batch architectureとCrawl Request拡張は採用仕様として文書化済みだが、2026-09-17時点では未実装である。
 
-## 15. Discovery / Catalog / Batch dependency rules
+## 16. Discovery / Catalog / Batch dependency rules
 
 上位subsystemの依存方向は次を守る。
 
@@ -363,6 +426,9 @@ Discovery Service ─────→ Catalog Service
 Discovery Adapter              │
                                │
 Batch Runner ───────→ Site Policy
+      │
+      ↓
+Crawl Request
       │
       ↓
 existing crawl orchestration
@@ -391,14 +457,16 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 - SQLiteの `items / sources` をauthorityとしてread/writeする
 - Watchlist `key` を `discovery_key` としてsource scopeに保持する
 - external discovery stateとlocal completed stateを混同しない
+- known output metadataをNULL許容で保持できる
 
 ### Batch Runner
 
 - pending item/sourceをCatalogから読む
 - free/owned/quota等の優先順位を適用する
 - Site Policyでquota eligibilityを判定する
-- 必要なquota消費状態をcrawl開始時に永続化する
-- 既存Crawlerへ `site + URL` を渡す
+- active grantを評価し、`direct / quota` を解決する
+- 新規quota利用時は必要な消費状態をcrawl開始時に永続化する
+- Catalog metadataをoptional overrideとしてCrawl Requestへ入れる
 - packaging成功時だけcompleted/local_pathを更新する
 
 ### Site Policy
@@ -406,3 +474,14 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 site固有のquotaや再閲覧猶予を扱う。
 
 汎用rule DSLは作らず、必要なsiteだけ小さいPython Policyとして実装する。
+
+### Crawl Request
+
+Batchまたは手動CLIからCrawlerへ渡すsite-neutralな実行入力。
+
+- `site`
+- `url`
+- `access_strategy = auto | direct | quota`
+- optional `title / author / order / genre`
+
+Catalog identityやquota ruleそのものは含めない。
