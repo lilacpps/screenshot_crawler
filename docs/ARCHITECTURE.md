@@ -4,7 +4,7 @@
 
 依存方向を単純に保つ。
 
-目標architecture:
+現行Crawlerの目標architecture:
 
 ```text
 Dedicated Crawler Chrome
@@ -21,13 +21,37 @@ Site Adapter
     └─ Playwright Page / Locator
 ```
 
+Discovery / Batchを含む上位architecture:
+
+```text
+watchlist.yaml
+      ↓
+Discovery Service
+      ↓
+Discovery Adapter
+      ↓
+Catalog Service -> catalog.sqlite
+      ↓
+Batch Runner -> Site Policy
+      ↓
+Core Runner / packaging
+      ↓
+Site Adapter
+```
+
 重要な分離:
 
 - **CDP**: Chrome sessionへ接続するためのtransport
 - **Playwright**: navigation / DOM / click / wait / capture等の標準操作API
 - **Site Adapter**: site固有viewer logic
+- **Discovery Adapter**: site固有listing/discovery logic
+- **Catalog Service**: SQLite read/write
+- **Batch Runner**: Catalogからcrawl対象sourceを選ぶorchestration
+- **Site Policy**: site固有quota/eligibility rule
 
 Raw CDP Protocolを通常のsite操作APIにはしない。
+
+CrawlerRunnerとDiscovery AdapterはCatalogを直接知らない。
 
 ## 2. ディレクトリ責務
 
@@ -48,7 +72,7 @@ Raw CDP Protocolを通常のsite操作APIにはしない。
 
 ### `site_adapters/`
 
-サイト固有差分。
+サイト固有の**1 content viewer**差分。
 
 - `base.py`: Adapter contract
 - `registry.py`: site名→Adapter
@@ -58,6 +82,44 @@ Raw CDP Protocolを通常のsite操作APIにはしない。
 - `<site>/config.yaml`: 実装が明示的に読み込む場合のみ設定として有効
 
 現行real adaptersでは、複雑なselector/state/timeoutはPython Adapter実装がauthorityである。未使用YAMLとPythonを二重authorityにしない。
+
+### `discovery/`（planned）
+
+Watchlist targetからitem/source候補を列挙する。
+
+想定責務:
+
+- Discovery Service
+- Discovery Adapter contract / registry
+- site-specific discovery implementation
+- full / incremental traversal orchestration
+- duplicate candidate warningのためのCatalog query coordination
+
+Discovery Adapter自身はSQLiteを直接read/writeしない。
+
+### `catalog/`（planned）
+
+SQLite Catalogを扱う。
+
+- `items`
+- `sources`
+- upsert
+- query
+- completed/local artifact state update
+
+詳細schemaは `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
+
+### `batch/`（planned）
+
+Catalogから対象sourceを選び、既存Crawlerを呼ぶ。
+
+- eligible source selection
+- source priority
+- quota記録
+- Site Policy呼び出し
+- crawl success後のCatalog update
+
+CrawlerRunnerへこの責務を移さない。
 
 ### `patterns/`
 
@@ -81,6 +143,8 @@ Browser Session Layerは、site固有logicの外側で以下を担当する。
 Site Adapterはこのlayerを知らない。
 
 Adapterへ渡る時点では単なるPlaywright `Page` であり、そのPageがlaunch済みbrowser由来かCDP由来かをAdapterは判断しない。
+
+Discovery実装もreal-site browserを必要とする場合は同じBrowser Session Layerを再利用してよいが、browser lifecycleをDiscovery Adapterへ持ち込まない。
 
 ## 4. 共通Crawler Chrome / profile
 
@@ -141,7 +205,7 @@ page.evaluate(...)
 
 Raw CDP ProtocolはPlaywrightに適切なAPIがない場合のみBrowser Session/Coreの小さいhelperへ隔離する。
 
-Site Adapterへ低レベルCDP session操作を広げない。
+Site AdapterやDiscovery Adapterへ低レベルCDP session操作を広げない。
 
 ## 7. Authentication
 
@@ -202,17 +266,23 @@ normal terminal:
 
 `max_pages`到達後も、次stateがEND/NEXT_CONTENTなら正常終了できる。
 
+Batch Runnerはこのflowの外側にあり、Catalogから `site + URL` を選んで既存runを開始する。
+
 ## 9. Duplicateの考え方
 
 現行Runnerはcapture fingerprintを保存重複判定authorityにする。ContentIdentityはAdapterのchange detection、manifest、debug情報として重要だが、保存dedupeをidentity優先へ変更しない。
 
 この判断はBookWalker/Manga ONEの既知挙動維持を優先したもの。変更する場合はreal viewerの連続spread/遷移を先に観測する。
 
+Discovery側のcross-site duplicateは別問題として扱う。別siteの類似itemはwarningを出しても、自動mergeしない。
+
 ## 10. Output / packaging
 
 manifestのページ一覧を完成成果物のauthorityとする。packagingでdirectory globをauthorityにしない。
 
 新規runは非空output directoryを拒否する。正常packaging後も、無関係ファイルが含まれるdirectoryは丸ごと削除しない。
+
+Batch Runnerはpackaging成功後のarchive pathをCatalog itemへ記録できるが、packaging自体はCatalogを知らない。
 
 ## 11. Site Adapterの最小契約
 
@@ -241,6 +311,8 @@ profile選択
 CDP endpoint解決
 connect_over_cdp
 BrowserContext lifecycle管理
+Discovery listing traversal
+Catalog read/write
 ```
 
 ## 12. Site固有の終了判定
@@ -263,11 +335,74 @@ BrowserContext lifecycle管理
 - packagingはmanifestをauthorityにする
 - Coreへsite-specific ifを追加しない
 - Adapterへbrowser/session管理を入れない
+- Watchlist外を無制限Discoveryしない
+- incomplete full syncでmissing sourceをunavailableにしない
+- incrementalで未観測過去sourceをunavailableにしない
+- cross-site duplicateを自動mergeしない
+- paid/unknown sourceを自動crawlしない
 
 ## 14. 移行状態
 
-このarchitectureは採用済みで、共通launcherとshared-profile live verificationまで完了している。
+Browser Session architectureは採用済みで、共通launcherとshared-profile live verificationまで完了している。
 
 標準launcherは `start_crawler_chrome.ps1`、profileは `.chrome-crawler`、global endpointは `CRAWLER_CDP_ENDPOINT` である。site別launcherは削除済みで、site-specific endpoint/profileは例外overrideとしてのみ扱う。BookWalker/Manga ONEのshared-profile login/crawlとsession共存はlive verification済みである。
 
 BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。
+
+Discovery / Catalog / Batch architectureは採用仕様として文書化済みだが、2026-09-17時点では未実装である。
+
+## 15. Discovery / Catalog / Batch dependency rules
+
+上位subsystemの依存方向は次を守る。
+
+```text
+Watchlist loader
+      ↓
+Discovery Service ─────→ Catalog Service
+      ↓                        ↑
+Discovery Adapter              │
+                               │
+Batch Runner ───────→ Site Policy
+      │
+      ↓
+existing crawl orchestration
+      ↓
+CrawlerRunner -> Site Adapter
+```
+
+### Discovery Adapter
+
+site固有の作品一覧・話一覧・access状態の観測だけを担当する。
+
+- DB APIを呼ばない
+- cross-site mergeしない
+- Batch policyを知らない
+
+### Discovery Service
+
+- Watchlist targetを選ぶ
+- `full / incremental` を実行する
+- Adapter結果をCatalogへupsertする
+- `full + complete` の場合だけscope内missing sourceをunavailable化する
+- cross-site duplicate candidateをCatalogから照合しwarningする
+
+### Catalog Service
+
+- SQLiteの `items / sources` をauthorityとしてread/writeする
+- Watchlist `key` を `discovery_key` としてsource scopeに保持する
+- external discovery stateとlocal completed stateを混同しない
+
+### Batch Runner
+
+- pending item/sourceをCatalogから読む
+- free/owned/quota等の優先順位を適用する
+- Site Policyでquota eligibilityを判定する
+- 必要なquota消費状態をcrawl開始時に永続化する
+- 既存Crawlerへ `site + URL` を渡す
+- packaging成功時だけcompleted/local_pathを更新する
+
+### Site Policy
+
+site固有のquotaや再閲覧猶予を扱う。
+
+汎用rule DSLは作らず、必要なsiteだけ小さいPython Policyとして実装する。
