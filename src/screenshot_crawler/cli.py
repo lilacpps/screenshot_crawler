@@ -39,10 +39,23 @@ from screenshot_crawler.core.progress import normalize_path
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
+from screenshot_crawler.discovery.models import DiscoveryResult
 from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
+from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
+
+
+class DiscoveryAllError(RuntimeError):
+    """Raised after an ``discover --all`` run has one or more failures."""
+
+    def __init__(self, failures: list[tuple[str, str]], total: int) -> None:
+        self.failures = tuple(failures)
+        self.total = total
+        super().__init__(
+            f"Discovery failed for {len(self.failures)} of {self.total} targets"
+        )
 
 
 def _positive_int(value: str) -> int:
@@ -120,9 +133,15 @@ def _parser() -> argparse.ArgumentParser:
 
     discover = subparsers.add_parser(
         "discover",
-        help="Synchronize one enabled Watchlist target into the Catalog",
+        help="Synchronize Watchlist targets into the Catalog",
     )
-    discover.add_argument("--key", required=True)
+    target_group = discover.add_mutually_exclusive_group(required=True)
+    target_group.add_argument("--key")
+    target_group.add_argument(
+        "--all",
+        action="store_true",
+        help="Synchronize all enabled Watchlist targets in file order",
+    )
     discover.add_argument("--mode", choices=("full", "incremental"), required=True)
     discover.add_argument(
         "--watchlist",
@@ -400,40 +419,123 @@ async def _run_crawl(args: argparse.Namespace) -> None:
         await session.close()
 
 
-async def _run_discover(args: argparse.Namespace) -> None:
-    target = WatchlistService(args.watchlist).get(args.key)
-    values = read_env_file(args.env_file) if args.env_file.is_file() else {}
+async def _discover_target(
+    *,
+    target: WatchlistTarget,
+    mode: str,
+    catalog: CatalogService,
+    registry: DiscoveryAdapterRegistry,
+    values: dict[str, str],
+    cli_endpoint: str | None,
+    keep_open: bool = False,
+) -> DiscoveryResult:
+    """Run one target with a caller-owned, target-scoped browser session."""
+
     endpoint = resolve_cdp_endpoint(
         site=target.site,
-        cli_endpoint=args.cdp_endpoint,
+        cli_endpoint=cli_endpoint,
         values=values,
     )
-
     session = await BrowserSession.connect(endpoint)
     try:
         page = await session.new_page()
         try:
-            result = await DiscoveryService(
-                CatalogService(args.catalog),
-                _discovery_registry(),
-            ).discover(page, target, args.mode)
-            print("Discovery completed:")
-            print(f"  target: {result.target_key}")
-            print(f"  mode: {result.mode}")
-            print(f"  observed: {result.observed_count}")
-            print(f"  new: {result.new_count}")
-            print(f"  known: {result.known_count}")
-            print(f"  complete: {result.complete}")
-            print(f"  stopped_reason: {result.stopped_reason}")
-            for warning in result.warnings:
-                print(f"Warning: {warning}")
-            if args.keep_open:
+            result = await DiscoveryService(catalog, registry).discover(page, target, mode)
+            if keep_open:
                 print("Browser is open. Press Enter here to disconnect.")
                 await asyncio.to_thread(input)
+            return result
         finally:
             await session.close_page(page)
     finally:
         await session.close()
+
+
+def _print_discovery_result(result: DiscoveryResult, *, all_targets: bool = False) -> None:
+    if all_targets:
+        print(f"  observed: {result.observed_count}")
+        print(f"  new: {result.new_count}")
+        print(f"  known: {result.known_count}")
+        print(f"  complete: {result.complete}")
+        print(f"  stopped_reason: {result.stopped_reason}")
+        for warning in result.warnings:
+            print(f"  warning: {warning}")
+        print("  status: OK")
+        return
+
+    print("Discovery completed:")
+    print(f"  target: {result.target_key}")
+    print(f"  mode: {result.mode}")
+    print(f"  observed: {result.observed_count}")
+    print(f"  new: {result.new_count}")
+    print(f"  known: {result.known_count}")
+    print(f"  complete: {result.complete}")
+    print(f"  stopped_reason: {result.stopped_reason}")
+    for warning in result.warnings:
+        print(f"Warning: {warning}")
+
+
+async def _run_discover(args: argparse.Namespace) -> None:
+    watchlist = WatchlistService(args.watchlist)
+    if args.all:
+        targets = [target for target in watchlist.list_targets() if target.enabled is True]
+        if not targets:
+            print("No enabled watchlist targets.")
+            return
+    else:
+        targets = [watchlist.get(args.key)]
+
+    values = read_env_file(args.env_file) if args.env_file.is_file() else {}
+    catalog = CatalogService(args.catalog)
+    registry = _discovery_registry()
+
+    if not args.all:
+        result = await _discover_target(
+            target=targets[0],
+            mode=args.mode,
+            catalog=catalog,
+            registry=registry,
+            values=values,
+            cli_endpoint=args.cdp_endpoint,
+            keep_open=args.keep_open,
+        )
+        _print_discovery_result(result)
+        return
+
+    failures: list[tuple[str, str]] = []
+    succeeded = 0
+    total = len(targets)
+    for index, target in enumerate(targets, start=1):
+        print(f"[{index}/{total}] {target.key} ({target.site})")
+        try:
+            result = await _discover_target(
+                target=target,
+                mode=args.mode,
+                catalog=catalog,
+                registry=registry,
+                values=values,
+                cli_endpoint=args.cdp_endpoint,
+            )
+        except Exception as exc:  # noqa: BLE001 - one target must not stop the batch
+            error = str(exc) or type(exc).__name__
+            failures.append((target.key, error))
+            print("  status: FAILED")
+            print(f"  error: {error}")
+            continue
+
+        succeeded += 1
+        _print_discovery_result(result, all_targets=True)
+
+    print("Discovery summary:")
+    print(f"  mode: {args.mode}")
+    print(f"  targets: {total}")
+    print(f"  succeeded: {succeeded}")
+    print(f"  failed: {len(failures)}")
+    if failures:
+        print("Failed targets:")
+        for target_key, error in failures:
+            print(f"  {target_key}: {error}")
+        raise DiscoveryAllError(failures, total)
 
 
 async def _run_login(args: argparse.Namespace) -> None:
@@ -611,7 +713,10 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    args = _parser().parse_args()
+    parser = _parser()
+    args = parser.parse_args()
+    if args.command == "discover" and args.all and args.keep_open:
+        parser.error("discover --all cannot be combined with --keep-open")
     try:
         if args.command == "probe":
             asyncio.run(_run_probe(args))
@@ -640,6 +745,9 @@ def main() -> None:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     except BatchExecutionError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    except DiscoveryAllError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 

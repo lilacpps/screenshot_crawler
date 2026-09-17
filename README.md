@@ -12,6 +12,26 @@ stable Catalog source identity and supports bounded `次へ` pagination.
   --watchlist watchlist.yaml --catalog catalog.sqlite
 ```
 
+Discovery can also synchronize every enabled Watchlist target in file order:
+
+```powershell
+# 通常同期
+python -m screenshot_crawler.cli discover --all --mode incremental
+
+# 全件再同期
+python -m screenshot_crawler.cli discover --all --mode full
+```
+
+`discover` requires exactly one of `--key KEY` and `--all`. Disabled targets
+are skipped without changing their existing Catalog data. Each target uses a
+target-scoped CDP connection and failures do not stop later targets; a
+summary is printed and any failure makes the command exit non-zero. The
+single-target `--keep-open` behavior is preserved, while `--all --keep-open`
+is rejected because each target connection is closed before the next target.
+
+Crawler Chrome must be started in advance. Discovery never starts Chrome, and
+Batch remains a separate command.
+
 BookWalker Discovery and Policy remain unsupported. Manga ONE Batch Crawler
 execution, quota persistence, packaging, and completed updates are available
 through `batch run`.

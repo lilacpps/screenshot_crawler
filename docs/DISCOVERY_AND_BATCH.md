@@ -729,8 +729,8 @@ watch remove --key ...
 watch enable --key ...
 watch disable --key ...
 
-discover --mode full [--key ...] [--site ...]
-discover --mode incremental [--key ...] [--site ...]
+discover --key KEY --mode full|incremental
+discover --all --mode full|incremental
 
 catalog list [...filters...]
 
@@ -752,6 +752,23 @@ crawl --site ... --url ...
 defaultは `access_strategy=auto`、metadata未指定とし、既存CLI互換を維持する。
 
 Watchlist全件実行時は `enabled=true` のtargetだけを対象とする。
+
+`discover` のtarget selectorは `--key KEY` と `--all` のmutually exclusive
+required groupである。`--all` は `WatchlistService.list_targets()` のfile
+orderを維持し、`enabled is True` のtargetだけを順番にDiscoveryへ渡す。
+disabled targetはDiscovery Serviceへ渡さず、Catalogにも副作用を与えない。
+
+`--all` は単なるCLI orchestrationであり、各targetについて既存の
+`DiscoveryService.discover(page, target, mode)`を呼び出す。targetごとに
+CDP endpointを既存の優先順位で解決し、BrowserSessionをconnect、Pageを
+作成してDiscovery後にPageをcloseし、BrowserSessionをdisconnectする。
+`--cdp-endpoint`は全targetで優先される。Crawler Chromeの自動起動は行わない。
+Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コマンドである。
+
+`--all` はtargetの失敗を収集して後続targetを続行し、最後にmode、target数、
+成功数、失敗数と失敗理由を表示する。1件以上失敗した場合はCLI全体がnon-zero
+exitとなり、全成功またはenabled target 0件は正常終了する。`--all --keep-open`
+はtarget単位で接続を閉じるlifecycleと両立しないためCLI validationで拒否する。
 
 ## 14. Failure / Safety
 

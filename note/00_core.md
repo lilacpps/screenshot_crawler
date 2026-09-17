@@ -603,9 +603,29 @@ BookWalker Policy / Batchは未実装である。Manga ONE Batch Executorはfake
 
 fullはiteratorの正常終了だけを`complete=true`とし、`DiscoveryIncompleteError`または予期しない例外ではmissing sourceのreconciliationを行わない。complete fullだけが同じ`site + discovery_key` scopeの未観測sourceを`available=false`にする。incrementalのknown判定と2件連続streakはServiceが管理し、2件目をrefreshしてから停止する。未観測sourceはunavailableにしない。
 
+### 22.4 Discovery CLIの複数target同期（実装済み）
+
+`discover` は `--key KEY` と `--all` のmutually exclusive required groupを持つ。
+`--key` は従来どおり1 targetを処理し、`--all` は
+`WatchlistService.list_targets()` のfile orderから `target.enabled is True`
+のtargetだけを選ぶ。disabled targetはDiscoveryServiceへ渡さないため、Catalogの
+既存stateは変更されない。enabled targetが0件なら接続せず、
+`No enabled watchlist targets.`を出して正常終了する。
+
+`--all`ではtargetごとにendpointを解決し、`BrowserSession.connect()`、new Page、
+既存`DiscoveryService.discover(page, target, mode)`、Page close、disconnectを
+順番に行う。site-specific endpoint、global endpoint、defaultの既存優先順位と、
+明示`--cdp-endpoint`の最優先を維持する。Crawler Chromeは自動起動しない。
+
+各targetの結果（observed/new/known/complete/stopped_reason/warnings）とstatusを
+表示し、失敗しても後続targetを続行する。全target後にsummaryを表示し、1件以上の
+失敗は`DiscoveryAllError`からCLI non-zeroへ変換する。全成功とenabled target 0件は
+正常終了する。`--all --keep-open`はtarget単位で接続を閉じるlifecycleのためCLI
+validationで拒否し、従来の`--key --keep-open`だけを維持する。
+
 cross-site duplicateはnormalized title（strip、whitespace、casefold）と、取得できる場合のkind/order一致だけで候補をwarningにする。warningはmerge、delete、completed化を行わない。
 
-### 22.4 Phase 5B Batch Executor（Manga ONE）
+### 22.5 Phase 5B Batch Executor（Manga ONE）
 
 `BatchExecutor`（`src/screenshot_crawler/batch/executor.py`）はPhase 5Aの
 `BatchCandidate`を1件ずつ既存`CrawlerRunner`へ渡す。`CrawlerRunner`はCatalogを
