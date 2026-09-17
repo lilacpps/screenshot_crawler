@@ -318,7 +318,7 @@ CONTENT → AD → NEXT_CONTENT
 例:
 
 - BookWalker: end DOM、next-content DOM、最終page counter後の既知遷移
-- Manga ONE: chapter URL changeは `NEXT_CONTENT`。最終advance後にviewer page imageが一定時間消失する既知挙動を `END` の実用的ヒューリスティックとして利用
+- Manga ONE: chapter URL changeは `NEXT_CONTENT`。最終advance後は、viewport内に表示されたManga ONE固有の終端UI marker、またはviewer page imageの一定時間消失を `END` の実用的ヒューリスティックとして利用する。DOM上に存在するだけでviewport外のmarkerは終端扱いしない。
 
 一般的な「明示END DOMが必須」という要件は置かない。
 

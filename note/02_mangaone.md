@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-09-17
+最終同期: 2026-09-18
 
 ## 1. 目的と現在のscope
 
@@ -19,7 +19,7 @@ Manga ONEのWeb viewerから、指定chapterの本文画像を順番にPNG保存
 - 右→左の読書順
 - page label / geometry / image readyによるchange wait
 - bounded navigation retry
-- final advance後の画像消失をENDとして扱う既知heuristic
+- final advance後の終端UI markerまたは画像消失をENDとして扱う既知heuristic
 - chapter URL changeをNEXT_CONTENTとして停止
 - title / 話数 / 前編後編のZIP naming
 - CDP接続した通常Chrome上でlogin/crawl
@@ -198,7 +198,17 @@ end_grace_ms = 2500
 
 画像なし状態が継続すると `_ended = True`。
 
-これは実サイトで動作していた既知終端heuristic。未確認generic END selectorへ置換しない。
+さらに、Manga ONE固有の終端画面markerをviewport内で検出する。
+
+```text
+img[src*="/assets/viewer/dialog/app-guidance-"]
+[class*="bg-viewer-last-page"]
+```
+
+markerはDOM存在だけでなく、display/visibilityとviewportとの交差を確認する。
+終端markerが `render_stable_checks` 回連続して表示された場合も `_ended = True` とする。
+これは、最終本文の `page_N` imgがDOMに残ったままアプリ案内/最終案内画面へ進む実サイト挙動に対応するためである。
+既存の画像消失によるEND heuristicもfallbackとして残し、identity不変だけではENDにしない。
 
 ## 12. State detection
 
@@ -227,16 +237,18 @@ UNKNOWNをENDへ推測変換しない。
 ## 13. ENDとUNKNOWNの境界
 
 - `go_next()` 後、viewerは残りpage imageだけ消える → grace後ENDになり得る
+- `go_next()` 後、終端UI markerがviewport内に安定表示される → ENDになり得る
+- 終端UI markerがDOMに存在してもviewport外にある → ENDと判定しない
 - viewer自体が消えてUNKNOWNになる → timeout/error
 - chapter URLが変わる → NEXT_CONTENT
 
 「何も見えない = 常にEND」ではない。
 
-## 14. 宣伝ページ
+## 14. 宣伝ページ / 終端案内
 
 chapter末尾の宣伝/告知画像が通常本文と同じ `page_N` imgとして配信されるケースがある。
 
-安定したsemantic DOM markerがないため、Adapterは推測削除しない。
+`page_N` img自体は本文capture対象として推測削除しない。一方、アプリ案内および最終案内画面にはviewer固有assetを利用した終端markerがあり、viewport内に表示された場合だけEND判定に利用する。
 
 固定で「末尾N枚削除」はCrawler本体へ入れない。
 
@@ -346,6 +358,8 @@ Unit testsでは主に:
 Playwright local integration testsでは主に:
 
 - image gapがgrace後END
+- viewport内の終端UI markerが安定表示された場合のEND
+- viewport外にある終端UI markerをEND扱いしない
 - chapter changeがNEXT_CONTENT
 - viewer/pageが不明状態ならtimeout/UNKNOWN
 
@@ -362,6 +376,7 @@ loginは既存tabを再利用せず専用new Pageで実行し、終了後はPage
 - 前編title parse
 - chapter単位ZIP生成
 - final advance後のpage image disappearanceによるEND
+- final advance後の終端UI markerによるEND（2026-09-18にitem=72/source=72、chapter=276852をshared Chrome/CDPのdirect crawlで19ページ保存・END停止・ZIP生成まで確認済み）
 
 capture・navigation・page identity・END / NEXT_CONTENT・metadata behaviorに回帰はなかった。
 

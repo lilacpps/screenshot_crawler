@@ -368,6 +368,80 @@ def mangaone_html() -> str:
     """
 
 
+def mangaone_terminal_html(marker: str) -> str:
+    return f"""
+    <title>Fixture</title>
+    <div class="viewer-container" style="width: 600px; height: 500px; position: relative;">
+      <img alt="page_0" src="{_IMAGE}" style="width: 200px; height: 300px;">
+      {marker}
+    </div>
+    """
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        '<div class="bg-viewer-last-page" style="width: 100px; height: 100px;"></div>',
+        '<img src="/assets/viewer/dialog/app-guidance-pc.png" style="width: 100px; height: 100px;">',
+    ],
+)
+async def test_mangaone_visible_terminal_marker_becomes_end(
+    browser_page: Page,
+    marker: str,
+) -> None:
+    url = "http://manga-one.test/manga/work/chapter/terminal"
+    await install_route(browser_page, url, mangaone_terminal_html(marker))
+    await browser_page.goto(url)
+    adapter = MangaOneAdapter()
+    adapter.page_change_timeout_ms = 1_000
+    await adapter.initialize(browser_page)
+    identity = await adapter.get_content_identity(browser_page)
+    await adapter.go_next(browser_page)
+
+    await adapter.wait_for_change(browser_page, identity)
+
+    assert await adapter.detect_state(browser_page) is PageState.END
+
+
+async def test_mangaone_offscreen_terminal_marker_does_not_become_end(
+    browser_page: Page,
+) -> None:
+    url = "http://manga-one.test/manga/work/chapter/offscreen-terminal"
+    marker = (
+        '<div class="bg-viewer-last-page" '
+        'style="position: absolute; left: 900px; top: 0; width: 100px; height: 100px;"></div>'
+    )
+    await install_route(browser_page, url, mangaone_terminal_html(marker))
+    await browser_page.goto(url)
+    adapter = MangaOneAdapter()
+    adapter.page_change_timeout_ms = 500
+    await adapter.initialize(browser_page)
+    identity = await adapter.get_content_identity(browser_page)
+    await adapter.go_next(browser_page)
+
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.wait_for_change(browser_page, identity)
+
+
+async def test_mangaone_terminal_marker_on_next_chapter_is_not_end(
+    browser_page: Page,
+) -> None:
+    first_url = "http://manga-one.test/manga/work/chapter/first"
+    second_url = "http://manga-one.test/manga/work/chapter/second"
+    marker = '<div class="bg-viewer-last-page" style="width: 100px; height: 100px;"></div>'
+    await install_route(browser_page, first_url, mangaone_html())
+    await install_route(browser_page, second_url, mangaone_terminal_html(marker))
+    await browser_page.goto(first_url)
+    adapter = MangaOneAdapter()
+    await adapter.initialize(browser_page)
+    identity = await adapter.get_content_identity(browser_page)
+
+    await browser_page.goto(second_url)
+    await adapter.wait_for_change(browser_page, identity)
+
+    assert await adapter.detect_state(browser_page) is PageState.NEXT_CONTENT
+
+
 async def test_mangaone_image_gap_becomes_end_after_grace_period(
     browser_page: Page,
 ) -> None:

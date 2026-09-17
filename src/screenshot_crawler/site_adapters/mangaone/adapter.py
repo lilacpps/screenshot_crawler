@@ -90,6 +90,10 @@ class MangaOneAdapter(SiteAdapter):
 
     viewer_selector = ".viewer-container"
     page_selector = '.viewer-container img[alt^="page_"]'
+    terminal_marker_selector = (
+        'img[src*="/assets/viewer/dialog/app-guidance-"], '
+        '[class*="bg-viewer-last-page"]'
+    )
     fullscreen_label = "全画面"
 
     quota_entry_label = "\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080"
@@ -201,6 +205,41 @@ class MangaOneAdapter(SiteAdapter):
                 round(float(row["height"])),
             )
             for row in ordered
+        )
+
+    async def _visible_terminal_marker(self, page: Page) -> bool:
+        """Return whether Manga ONE's terminal viewer UI overlaps the viewport."""
+
+        locator = page.locator(self.terminal_marker_selector)
+        try:
+            return await asyncio.wait_for(
+                locator.evaluate_all(
+                    """
+                    (elements) => elements.some((element) => {
+                      const rect = element.getBoundingClientRect();
+                      const style = getComputedStyle(element);
+                      return style.display !== 'none' &&
+                        style.visibility !== 'hidden' &&
+                        rect.width > 0 && rect.height > 0 &&
+                        rect.right > 0 && rect.left < window.innerWidth &&
+                        rect.bottom > 0 && rect.top < window.innerHeight;
+                    })
+                    """
+                ),
+                timeout=2,
+            )
+        except (PlaywrightTimeoutError, TimeoutError):
+            return False
+
+    def _is_initial_chapter(self, page: Page) -> bool:
+        if self._initial_url is None:
+            return False
+        initial_parts = self.chapter_parts_from_url(self._initial_url)
+        current_parts = self.chapter_parts_from_url(page.url)
+        return (
+            initial_parts[0] is not None
+            and initial_parts[1] is not None
+            and initial_parts == current_parts
         )
 
     async def _wait_for_render_ready(self, page: Page) -> None:
@@ -387,9 +426,19 @@ class MangaOneAdapter(SiteAdapter):
         retry_count = 0
         retry_at_ms = self.page_change_timeout_ms // (self.advance_retry_count + 1)
         no_page_since: int | None = None
+        terminal_marker_checks = 0
         while elapsed_ms < self.page_change_timeout_ms:
             if self._ended:
                 return
+
+            if self._is_initial_chapter(page) and await self._visible_terminal_marker(page):
+                terminal_marker_checks += 1
+                if terminal_marker_checks >= self.render_stable_checks:
+                    self._ended = True
+                    self._advance_pending = False
+                    return
+            else:
+                terminal_marker_checks = 0
 
             rows = await self._page_image_rows(page)
             if rows:
