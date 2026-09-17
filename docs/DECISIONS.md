@@ -355,7 +355,7 @@ quotaは基本的にcrawl開始時に消費記録し、site上で追加quotaな�
 ## D-027 Batch RunnerはCatalogを知り、CrawlerRunnerは知らない
 
 ### 決定
-Batch RunnerがCatalogからsourceを選択し、既存Crawlerへ `site + URL` を渡す。
+Batch RunnerがCatalogからsourceを選択し、既存Crawlerへ実行入力を渡す。
 
 CrawlerRunnerの1 URL -> 1 run責務を維持し、Catalog read/writeを持たせない。
 
@@ -373,3 +373,64 @@ crawl + packaging成功時だけitemをcompletedへ更新し、`item_id / source
 
 ### 理由
 既存Crawlerの単純で検証済みの責務を壊さず、Discovery/Batchを上位orchestrationとして追加するため。
+
+---
+
+## D-028 Source access stateとCrawler access strategyを分離する
+
+### 決定
+Catalogの `source.access_mode` と、今回のcrawlでCrawlerへ渡す `access_strategy` を別概念にする。
+
+Catalog source state:
+
+```text
+owned / free / quota / paid / unknown
+```
+
+Crawler execution intent:
+
+```text
+auto
+  手動crawlのdefault。Adapterがsite状態を観測して入口を選ぶ。
+
+direct
+  新規quotaを消費しない前提でreaderへ入る。
+
+quota
+  今回はquotaを利用してaccessを開始する。
+```
+
+Batch Runner / Site Policyがquota残数、scope、`access_granted_until` 等を評価して `direct` または `quota` を解決する。
+
+例えばquota sourceでもgrant期間内なら `direct` とし、新規quota消費が必要な場合だけ `quota` とする。
+
+Crawlerへdaily limit、reset rule、quota scope等のPolicy自体は渡さない。Site Adapterは受け取ったsite-neutralな実行意図をsite固有button/entry操作へ反映する。
+
+### 理由
+「sourceがquota対象である」ことと「今回新たにquotaを消費する」ことは同じではない。再閲覧猶予中のretry等を二重消費扱いせず、同時にCoreへsite固有quota ruleを持ち込まないため。
+
+---
+
+## D-029 Output metadataは明示入力を優先し不足分をAdapterで補完する
+
+### 決定
+Crawlerはpackaging用の `title / author / order / genre` をoptional inputとして受け取れるようにする。
+
+metadata解決はfield単位で:
+
+```text
+1. Crawl Requestの明示non-empty値
+2. Site Adapterが取得した値
+3. packaging側の既存fallback
+```
+
+の順とする。
+
+Catalog/Discoveryですでに分かっているmetadataはBatchがCrawlerへ渡してよい。一部fieldだけ指定し、残りをAdapterから取得することを許可する。
+
+手動crawlではmetadata未指定をdefaultとし、現在のsite自動取得を維持する。
+
+metadata overrideはsource URLやmanifestの実URLを置換しない。
+
+### 理由
+Batch経由ではDiscovery済みの確定情報を再利用でき、手動crawlでは従来の簡単なURL-only操作を維持できる。CrawlerへCatalog依存を追加せず、サイトDOMのtitle/author取得失敗にも強くするため。
