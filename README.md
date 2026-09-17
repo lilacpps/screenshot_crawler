@@ -18,7 +18,7 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - manifestをauthorityにしたZIP packagingとlibrary出力
 - unit testsとPlaywrightローカルfixture integration tests
 
-Discovery / Catalog / Batch Runnerは仕様確定済みですが、2026-09-17時点では未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
+Discovery / Catalog / Batch RunnerとCrawl Request拡張は仕様確定済みですが、2026-09-17時点では未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
 
 ## 採用するBrowser Session設計
 
@@ -102,7 +102,7 @@ BookWalker login/crawl、Manga ONE login/crawl、同一profileでのsession共�
 
 1. `docs/SPEC.md` — 現在の製品仕様・受け入れ条件
 2. `docs/ARCHITECTURE.md` — 責務分離とBrowser Session / subsystem設計
-3. `docs/DISCOVERY_AND_BATCH.md` — Watchlist / Discovery / Catalog / Batchの採用仕様
+3. `docs/DISCOVERY_AND_BATCH.md` — Watchlist / Discovery / Catalog / Batch / Crawl Requestの採用仕様
 4. `docs/DECISIONS.md` — 重要な設計判断
 5. `docs/CODEX_IMPLEMENTATION_GUIDE.md` — 既存実装を変更するときのルール
 6. `docs/SITE_ADAPTER_GUIDE.md` — 新規サイト対応の作り方
@@ -157,10 +157,17 @@ catalog.sqlite (items / sources)
     ↓
 Batch Runner / Site Policy
     ↓
-既存 crawl(site + URL)
+Crawl Request
+  access_strategy + known metadata
+    ↓
+既存 crawl
 ```
 
 DiscoveryはWatchlistに明示した作品だけを対象とし、別siteの同一作品を自動mergeしません。
+
+Batchはquota ruleを解決し、Crawlerへは今回の実行意図だけを `access_strategy=direct|quota` として渡します。手動crawlは `auto` がdefaultです。
+
+Catalogでtitle/author/order/genreが分かっていればCrawlerへoptional metadataとして渡し、未指定fieldはSite Adapterの取得値へfallbackする設計です。
 
 ## 共通Crawler Chromeの起動
 
@@ -189,6 +196,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
   --url "https://manga-one.com/manga/2379/chapter/214131" `
   --output-dir output\crawl-mangaone
 ```
+
+`--access-strategy` やmetadata overrideは採用仕様ですが、現時点ではまだ未実装です。
 
 ## Outputの安全ルール
 
