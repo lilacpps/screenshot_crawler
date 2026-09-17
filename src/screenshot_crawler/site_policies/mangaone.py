@@ -76,7 +76,7 @@ class MangaOneSitePolicy(SitePolicy):
         morning = _at_jst(today, RESET_HOURS[0])
         evening = _at_jst(today, RESET_HOURS[1])
         if current < morning:
-            start = evening - timedelta(hours=12)
+            start = morning - timedelta(hours=12)
         elif current < evening:
             start = morning
         else:

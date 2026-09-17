@@ -242,6 +242,36 @@ def test_reset_boundaries_and_active_or_expired_grant(tmp_path: Path) -> None:
     assert by_item[expired.id].consumes_quota is True
 
 
+def test_quota_window_before_morning_uses_previous_evening(tmp_path: Path) -> None:
+    policy = MangaOneSitePolicy()
+    now = datetime(2026, 9, 17, 8, 0, tzinfo=JST)
+
+    start, end = policy.quota_window(now)
+
+    assert start == datetime(2026, 9, 16, 21, 0, tzinfo=JST)
+    assert end == datetime(2026, 9, 17, 9, 0, tzinfo=JST)
+
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    for index, started_at in enumerate(
+        (
+            "2026-09-16T20:59:00+09:00",
+            "2026-09-16T21:00:00+09:00",
+            "2026-09-17T07:59:00+09:00",
+            "2026-09-17T09:00:00+09:00",
+        )
+    ):
+        add_source(
+            service,
+            item=ItemInput(canonical_title=f"usage-{index}", status="completed"),
+            external_id=f"usage-{index}",
+            quota_started_at=started_at,
+        )
+
+    _, sources = service.read_items_and_sources(site="mangaone")
+
+    assert policy.available_quota(sources, now) == 2
+
+
 def test_quota_usage_uses_reset_boundaries(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     for index in range(4):
