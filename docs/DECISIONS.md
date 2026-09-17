@@ -243,3 +243,133 @@ shared-profileでのBookWalker/Manga ONE login・crawl・session共存と既存v
 
 ### 理由
 siteごとのprofile競合を避け、BookWalkerとManga ONEのsessionを同じChromeで保持できるようにする。既存viewer behaviorを変更せず、運用入口だけを共通化するため。
+
+---
+
+## D-020 Discovery対象は明示Watchlistに限定する
+
+### 決定
+Discoveryは `watchlist.yaml` に利用者が明示登録したtargetだけを探索する。
+
+各targetはstableな一意 `key`、`site`、Discovery起点 `url`、`enabled` を持つ。Watchlistからtargetをremove/disableしてもCatalogを自動削除しない。
+
+### 理由
+site全体の無制限探索を避け、個人利用で管理可能な対象範囲に限定するため。またstable keyをsourceのDiscovery scopeに残すことで、full sync時のmissing判定を安全に限定できる。
+
+---
+
+## D-021 WatchlistはYAML、CatalogはSQLite 2テーブルとする
+
+### 決定
+人間が管理するDiscovery targetは `watchlist.yaml` に保存する。
+
+program-managed stateはSQLite `catalog.sqlite` の:
+
+```text
+items
+sources
+```
+
+2テーブルを基本とする。
+
+`works`、`crawl_jobs`、汎用history table等は初期実装では追加しない。
+
+### 理由
+設定と状態を分離しつつ、個人利用に対して過剰な正規化やDB構造を避けるため。
+
+---
+
+## D-022 Discovery AdapterはCatalogを知らない
+
+### 決定
+Discovery Adapterはsite固有のlisting/navigation/access-state観測を担当し、SQLiteへ直接read/writeしない。
+
+Discovery ServiceがAdapter結果を受け取り、Catalog Serviceへupsertする。
+
+### 理由
+site固有Web操作と永続化を分離し、Adapter追加時にDB実装を持ち込まないため。既存Site AdapterとBrowser Sessionの責務分離と同じ原則を維持する。
+
+---
+
+## D-023 Discoveryはfull / incremental syncを持つ
+
+### 決定
+Discovery modeを次の2種類とする。
+
+- `full`: target内の現在列挙可能な全sourceを同期する
+- `incremental`: latest側から走査し、known sourceが2件連続したら停止する
+
+full結果は `complete` を持ち、`complete=true` のときだけ同じ `discovery_key` scope内で今回未観測のsourceを `available=false` にできる。
+
+incrementalでは未観測の過去sourceをunavailableにしない。
+
+### 理由
+初回/定期reconciliationでは過去access状態の変化も反映しつつ、通常更新では全件走査コストを避けるため。途中失敗したfull syncで既存sourceを誤って消失扱いすることも防ぐ。
+
+---
+
+## D-024 Discoveryはexternal stateだけを同期する
+
+### 決定
+DiscoveryはURL、access mode、free期限、availability、last seen等のsite側stateを同期する。
+
+`completed`、`local_path`、`completed_at` 等のlocal artifact stateをDiscoveryで変更しない。
+
+### 理由
+site表示の変化によって、既に取得済みのlocal成果物状態が壊れることを防ぐため。
+
+---
+
+## D-025 別siteの同一作品は自動mergeしない
+
+### 決定
+異なるsiteのitem/sourceをtitleやISBN等で自動mergeしない。
+
+Discovery時にnormalized title、kind、order等から別siteの重複候補を検出できる場合はwarningを出すが、warning onlyとする。
+
+### 理由
+site横断identity resolutionは誤mergeの影響が大きく、個人利用では自動統合より利用者への気付きの提供だけで十分だからである。
+
+---
+
+## D-026 Access stateとSite Policyを分離する
+
+### 決定
+sourceの現在状態は:
+
+```text
+owned / free / quota / paid / unknown
+```
+
+で表す。期間限定無料は `free + free_until` とする。
+
+1日N回、作品単位quota、再閲覧猶予等のruleはBatch側のsite-specific Policyへ置き、汎用rule DSLを作らない。
+
+quotaは基本的にcrawl開始時に消費記録し、site上で追加quotaなしに再閲覧可能な猶予がある場合は `access_granted_until` を保存して扱えるようにする。
+
+### 理由
+「そのsourceの現状」と「site全体/作品単位の利用rule」は別概念であり、同じDB fieldや複雑なconfigへ押し込むと保守性が下がるため。
+
+---
+
+## D-027 Batch RunnerはCatalogを知り、CrawlerRunnerは知らない
+
+### 決定
+Batch RunnerがCatalogからsourceを選択し、既存Crawlerへ `site + URL` を渡す。
+
+CrawlerRunnerの1 URL -> 1 run責務を維持し、Catalog read/writeを持たせない。
+
+基本source優先順位は:
+
+```text
+期限が近いfree
+通常free
+owned
+quota
+paid / unknownは対象外
+```
+
+crawl + packaging成功時だけitemをcompletedへ更新し、`item_id / source_id / archive path` を対応付ける。
+
+### 理由
+既存Crawlerの単純で検証済みの責務を壊さず、Discovery/Batchを上位orchestrationとして追加するため。
