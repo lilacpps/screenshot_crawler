@@ -67,6 +67,7 @@ class DiscoveryService:
         new_count = 0
         known_count = 0
         known_streak = 0
+        previous_known_identity: tuple[str, str] | None = None
 
         try:
             async for record in adapter.iter_records(page, target, mode):
@@ -76,9 +77,13 @@ class DiscoveryService:
                 if existing is None:
                     new_count += 1
                     known_streak = 0
+                    previous_known_identity = None
                 else:
                     known_count += 1
-                    known_streak += 1
+                    known_identity = (target.site, record.source.external_id)
+                    if known_identity != previous_known_identity:
+                        known_streak += 1
+                    previous_known_identity = known_identity
 
                 catalog_record = self.catalog.upsert_item_source(
                     ItemInput(

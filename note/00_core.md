@@ -560,7 +560,7 @@ Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framewor
 - Watchlist targetはstable `key` を持つ
 - Catalogは `items / sources` の2テーブル
 - full syncはcomplete時だけmissing sourceをunavailable化
-- incrementalはlatest側からknown 2件連続で停止
+- incrementalはlatest側から異なるknown source 2件連続で停止し、同一stable identityの重複観測はstreakに加算しない
 - 別site同一作品は自動mergeせずwarning only
 - access modeは `owned / free / quota / paid / unknown`
 - quotaは基本crawl開始時に消費記録

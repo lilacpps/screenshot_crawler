@@ -299,6 +299,39 @@ async def test_incremental_streak_is_service_owned_and_stops_after_refreshing_tw
     )
 
 
+async def test_incremental_duplicate_known_source_does_not_advance_streak(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [
+            record("known-a", url="https://example.test/known-a-new"),
+            record("known-a", url="https://example.test/known-a-refresh"),
+            record("new-b"),
+        ]
+    )
+    service, catalog, target = setup_service(tmp_path, adapter)
+    catalog.upsert_item_source(
+        ItemInput(canonical_title="known-a"),
+        {
+            "site": target.site,
+            "external_id": "known-a",
+            "discovery_key": target.key,
+            "url": "https://example.test/known-a",
+        },
+    )
+
+    result = await service.discover(FakePage(), target, "incremental")
+
+    assert result.stopped_reason == "exhausted"
+    assert result.known_count == 2
+    assert result.new_count == 1
+    assert adapter.yielded == ["known-a", "known-a", "new-b"]
+    assert catalog.get_source_by_external_id(target.site, "new-b") is not None
+    assert catalog.get_source_by_external_id(target.site, "known-a").url.endswith(
+        "known-a-refresh"
+    )
+
+
 async def test_incremental_unknown_resets_known_streak(tmp_path: Path) -> None:
     adapter = FakeDiscoveryAdapter(
         [record("known-1"), record("new"), record("known-2")]

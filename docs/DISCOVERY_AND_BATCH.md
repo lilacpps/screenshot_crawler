@@ -361,12 +361,12 @@ sourceは物理削除しない。
 停止条件:
 
 ```text
-既知sourceが2件連続したら正常終了
+異なる既知sourceが2件連続したら正常終了
 ```
 
 既知sourceとは、stable source identityがCatalogに既に存在するものを指す。
 
-途中に未知sourceが現れた場合、連続known countは0へ戻す。
+同一stable source identityの重複観測は連続known countを進めない。途中に未知sourceが現れた場合、連続known countと直前のknown identityは0へ戻す。
 
 例:
 
