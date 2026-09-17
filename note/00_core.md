@@ -440,6 +440,21 @@ CLI
 --keep-open
 ```
 
+2026-09-17時点では、`access_strategy` とoutput metadata override用のCLI/API inputは**未実装**である。
+
+採用済みの将来仕様では、概念上次を追加できる。
+
+```text
+access_strategy = auto / direct / quota
+optional output metadata:
+  title
+  author
+  order
+  genre
+```
+
+手動crawlのdefaultは `auto` + metadata未指定とし、現行挙動を維持する。
+
 ## 20. Tests
 
 Unit testsで主に確認するもの:
@@ -476,12 +491,14 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 - identity/fingerprint dedupe再検討
 - GitHub CI
 - tracked `.egg-info` 整理
+- planned Crawl Request / access strategy実装
+- planned output metadata override / fallback実装
 
 これらを変更した場合は、このnoteを必ず更新する。
 
 ## 22. Discovery / Catalog / Batch（採用仕様・未実装）
 
-2026-09-17時点で、Discovery / Catalog / Batch subsystemは**仕様確定済みだが未実装**である。
+2026-09-17時点で、Discovery / Catalog / Batch subsystemとCrawl Request拡張は**仕様確定済みだが未実装**である。
 
 authority:
 
@@ -501,7 +518,9 @@ catalog.sqlite (items / sources)
     ↓
 Batch Runner / Site Policy
     ↓
-既存CrawlerRunner (site + URL)
+Crawl Request
+    ↓
+既存CrawlerRunner
 ```
 
 現行実装には以下はまだ存在しない。
@@ -514,6 +533,9 @@ Batch Runner / Site Policy
 - Site Policy
 - quota tracking / `access_granted_until`
 - cross-site duplicate warning
+- `access_strategy=auto|direct|quota` input
+- Catalog metadataからのtitle/author/order/genre override
+- field単位の `explicit > adapter > fallback` metadata merge
 
 実装時も、現行CrawlerRunnerへCatalog read/writeを追加せず、1 URL -> 1 run責務を維持する。
 
@@ -528,6 +550,12 @@ Batch Runner / Site Policy
 - access modeは `owned / free / quota / paid / unknown`
 - quotaは基本crawl開始時に消費記録
 - site上の再閲覧猶予は `access_granted_until` で扱える
+- Batch/Site Policyが今回の `access_strategy` を解決する
+- quota sourceでもactive grant中は `direct`、新規枠を使う場合だけ `quota`
+- quota limit/reset ruleそのものをCrawlerへ渡さない
+- Crawlerはtitle/author/order/genreをoptional inputとして受け取れるようにする
+- metadataはfield単位で `explicit request > adapter > packaging fallback`
+- metadata未指定なら現行Adapter自動取得を維持する
 - crawl + packaging成功時だけcompleted/local_pathを更新
 
 このsubsystemを実装した時点で、本sectionを「未実装」から現行実装説明へ更新すること。
