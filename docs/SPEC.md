@@ -1,4 +1,4 @@
-# Screenshot Crawler 仕様書 v1.3
+# Screenshot Crawler 仕様書 v1.4
 
 ## 1. 目的
 
@@ -82,7 +82,7 @@ Crawlerは既存Chromeへ接続し、Crawler用Pageを作成する。
 
 ## 4. 入力
 
-Crawler Core / `CrawlerRunner` 自体はURLを収集しない。1 runの入力は引き続き `site + URL` とする。
+Crawler Core / `CrawlerRunner` 自体はURLを収集しない。1 runの中心入力は引き続き `site + URL` とする。
 
 ```bash
 python -m screenshot_crawler.cli crawl --site <site> --url "https://..."
@@ -90,9 +90,28 @@ python -m screenshot_crawler.cli crawl --site <site> --url "https://..."
 
 人手でURLを渡す経路は維持する。
 
-将来追加するDiscovery subsystemは、利用者が明示登録したWatchlist targetだけを探索し、Catalogへsource URLを保存する。そのURLをBatch Runnerが読み、既存Crawlerへ渡す。CrawlerRunnerへCatalog依存を追加しない。
+将来追加するDiscovery subsystemは、利用者が明示登録したWatchlist targetだけを探索し、Catalogへsource URLを保存する。そのURLをBatch Runnerが読み、実行条件を解決したうえで既存Crawlerへ渡す。CrawlerRunnerへCatalog依存を追加しない。
 
 Discovery / Catalog / Batchの詳細仕様は `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
+
+### 4.1 Crawl Request
+
+Batch統合後のCrawler入力は概念上、次の任意情報を追加できる。
+
+```text
+site
+url
+access_strategy      # auto / direct / quota
+output metadata      # optional
+  title
+  author
+  order
+  genre
+```
+
+`access_strategy` のdefaultは `auto` とする。手動crawlでは既存のURL-only運用を維持し、metadataも未指定でよい。
+
+`item_id` / `source_id` 等のCatalog identityはBatch Runnerが保持し、CrawlerRunnerへ持ち込まない。
 
 新規サイト調査:
 
@@ -139,6 +158,7 @@ CAPTCHA / MFA / validation errorを自動突破しない。
 - BrowserContext / Page lifecycle
 - URLアクセス
 - Site Adapter呼び出し
+- site-neutralなrun inputの保持
 - 状態ループ
 - 保存連番
 - capture / PNG保存
@@ -150,7 +170,7 @@ CAPTCHA / MFA / validation errorを自動突破しない。
 - `max_pages` / same-content guard
 - 正常終了後のpackaging
 
-Coreはサイト固有DOM、next操作、広告、終了、次コンテンツを推測しない。
+Coreはサイト固有DOM、next操作、広告、終了、次コンテンツ、quota ruleを推測しない。
 
 CoreはWatchlist、Catalog、Discovery、Batchの状態を管理しない。
 
@@ -166,8 +186,9 @@ CoreはWatchlist、Catalog、Discovery、Batchの状態を管理しない。
 - `go_next`
 - `wait_for_change`
 - 必要に応じたoutput metadata
+- site-neutralな `access_strategy` を必要なsite固有entry logicへ反映する
 
-詳細は `site_adapters/base.py` をauthorityとする。
+詳細なAPI形状は実装時に最小変更で決めるが、Site Adapterが今回の `access_strategy` を参照できることを要件とする。
 
 Site Adapterは以下を担当しない。
 
@@ -178,10 +199,33 @@ Site Adapterは以下を担当しない。
 - BrowserContext lifecycle
 - Discovery listing traversal
 - Catalog read/write
+- quota残数、reset時刻、daily limit等のBatch Policy判定
 
 AdapterはPlaywright `Page` / `Locator` を操作する。
 
-## 9. Playwright / Raw CDP policy
+## 9. Access strategy
+
+Crawlerへ渡す `access_strategy` は、Catalogの `access_mode` と分離する。
+
+```text
+auto
+  手動crawlのdefault。Adapterが従来どおりsite状態を観測して適切な入口を選ぶ。
+
+direct
+  新規quotaを消費しない前提でreaderへ入る。
+  free / owned / quota消費後のgrant期間中等。
+
+quota
+  今回はquotaを利用してaccessを開始する意図を示す。
+```
+
+Batch Runner / Site Policyが `access_mode`、quota残数、`access_granted_until` 等から今回の `access_strategy` を解決する。
+
+Crawlerにはdaily limitやreset ruleそのものを渡さない。
+
+Coreは `access_strategy` をsite固有ruleとして解釈しない。quota button選択等はSite Adapterに置く。
+
+## 10. Playwright / Raw CDP policy
 
 通常操作はPlaywrightを標準とする。
 
@@ -204,13 +248,13 @@ Raw CDP Protocolを使う場合は:
 
 ことを原則とする。
 
-## 10. Capture
+## 11. Capture
 
 本文DOM Locatorを優先する。Canvasではraw PNG bufferを利用できる。見開きなど1画面に複数ページがある場合、Adapterは複数capture targetを読書順で返してよい。
 
 保存連番とサイト上のページ番号は別物とする。
 
-## 11. ContentIdentity / fingerprint
+## 12. ContentIdentity / fingerprint
 
 `ContentIdentity` はAdapterが取得できるpage id / page number / source id等を保持し、ページ変更待ちや記録に利用する。
 
@@ -220,7 +264,7 @@ Raw CDP Protocolを使う場合は:
 
 fingerprintだけを終了条件にはしない。
 
-## 12. ContentContext
+## 13. ContentContext
 
 開始作品・話・章を識別する。
 
@@ -232,7 +276,7 @@ fingerprintだけを終了条件にはしない。
 
 開始時と現在の同一strong fieldが明確に異なる場合、`NEXT_CONTENT` として正常終了できる。後からoptional fieldが追加されたことだけではcontext changeにしない。
 
-## 13. 広告
+## 14. 広告
 
 `AD` は保存しない。広告表示自体は終了条件ではない。
 
@@ -242,7 +286,7 @@ CONTENT → AD → END
 CONTENT → AD → NEXT_CONTENT
 ```
 
-## 14. 終了条件
+## 15. 終了条件
 
 `END` / `NEXT_CONTENT` の判定ロジックはSite Adapterに置く。サイト固有の実観測挙動を優先する。
 
@@ -263,7 +307,7 @@ CONTENT → AD → NEXT_CONTENT
 
 `保存済みページ数 == max_pages` の状態でも、次stateが `END` / `NEXT_CONTENT` なら正常終了を優先する。
 
-## 15. Run output
+## 16. Run output
 
 新規runのoutput directoryは、存在しないか空でなければならない。非空directoryは拒否し、自動削除・暗黙上書きをしない。
 
@@ -276,7 +320,7 @@ CONTENT → AD → NEXT_CONTENT
 └─ diagnostics/  # 異常時に作られる場合あり
 ```
 
-## 16. Manifest / progress
+## 17. Manifest / progress
 
 manifestは保存ページのauthorityである。
 
@@ -306,7 +350,7 @@ manifestは保存ページのauthorityである。
 
 JSONはtemporary file → replaceで更新する。
 
-## 17. Packaging
+## 18. Packaging / output metadata
 
 正常な `END` / `NEXT_CONTENT` 後、manifestの `pages[].file` をauthorityとしてZIPを作成する。
 
@@ -318,7 +362,32 @@ JSONはtemporary file → replaceで更新する。
 - 中間crawl directoryは、内容がmanifest / progress / manifest記載PNGだけの場合に限り削除する
 - 無関係ファイルや余分なPNGがあればdirectory全体を削除しない
 
-## 18. Resume
+### 18.1 Metadata override / fallback
+
+Crawlerはpackaging用の次のmetadataを任意入力として受け取れるようにする。
+
+```text
+title
+author
+order
+genre
+```
+
+解決は**field単位**で次の順とする。
+
+```text
+1. Crawl Requestで明示されたnon-empty値
+2. Site Adapterが取得した値
+3. packaging側の既存fallback
+```
+
+一部fieldだけ明示してよい。未指定fieldはAdapterから補完する。
+
+metadataが一切渡されなければ従来どおりAdapterから取得する。
+
+metadata overrideはsource URLやmanifestの実URLを置換しない。
+
+## 19. Resume
 
 **自動resumeは未実装。**
 
@@ -326,7 +395,7 @@ JSONはtemporary file → replaceで更新する。
 
 将来resumeを実装する場合は、明示的な `--resume` 等を導入し、新規runと区別する。
 
-## 19. Retry / safety guard
+## 20. Retry / safety guard
 
 一時的なloadingやクリックはbounded retryしてよい。
 
@@ -339,7 +408,7 @@ JSONはtemporary file → replaceで更新する。
 
 `max_pages` とsame-content guardは無限進行防止として必須。
 
-## 20. Diagnostics
+## 21. Diagnostics
 
 失敗時は設定されたdiagnostics directoryへ、可能な範囲で以下を保存する。
 
@@ -352,7 +421,7 @@ metadataは最低限URL / title / viewport / detected state / context / errorを
 
 diagnostics保存失敗で元例外を隠さない。
 
-## 21. Probe
+## 22. Probe
 
 新規サイト調査用。Crawler本体とは分離する。
 
@@ -365,11 +434,11 @@ diagnostics保存失敗で元例外を隠さない。
 
 正しいnext selectorの完全自動探索は要求しない。
 
-## 22. Patterns
+## 23. Patterns
 
 Patternは必須frameworkではなく補助部品。2サイト以上で実際に共通化できる場合だけ利用し、1サイト固有処理はAdapterに置く。
 
-## 23. 非対象
+## 24. 非対象
 
 - OCR
 - PDF化
@@ -384,7 +453,7 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - 全site・全作品の無制限Discovery
 - site横断automatic item merge
 
-## 24. 受け入れ条件
+## 25. 受け入れ条件
 
 ### Browser Session
 
@@ -404,8 +473,9 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - 非空output directoryを安全に拒否
 - `max_pages`境界でEND/NEXT_CONTENTを正常終了
 - bounded retry / timeout
-- Coreにサイト固有selector/URL分岐を入れない
+- Coreにサイト固有selector/URL/quota rule分岐を入れない
 - Core / CrawlerRunnerがCatalogを知らない
+- site-neutralな `access_strategy` をrun inputとして保持できる
 
 ### Site Adapter
 
@@ -417,6 +487,15 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - 最終本文を取りこぼさない
 - 次コンテンツを本文として保存しない
 - UNKNOWNでは停止
+- 必要なsiteでは `auto / direct / quota` の実行意図をsite固有entry logicへ反映できる
+
+### Crawl metadata
+
+- title/author/order/genreをoptional inputとして受け取れる
+- metadata未指定ならAdapter取得を利用できる
+- 一部metadataのみ指定できる
+- `explicit request > adapter > fallback` のfield単位優先順位になる
+- metadata overrideでsource URL/manifest URLを置換しない
 
 ### Discovery / Catalog / Batch
 
@@ -432,9 +511,13 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - 別siteの類似itemはwarningのみで自動mergeしない
 - Batch Runnerはsite policyを使ってfree/owned/quotaを選択する
 - quotaは基本的にcrawl開始時に記録する
+- active grant中は新規quotaを消費せず `access_strategy=direct` を選べる
+- 新規quota利用時は `access_strategy=quota` を選べる
+- Site Policyのquota rule自体をCrawlerへ渡さない
+- Catalog metadataをCrawlerへoptional overrideとして渡せる
 - crawl成功時だけitemをcompletedへ更新する
 
-## 25. 移行状態
+## 26. 移行状態
 
 Browser Session Modelは採用済みで、共通launcherとshared-profile live verificationまで完了している。
 
@@ -449,9 +532,9 @@ BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` と
 
 移行後もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
 
-Discovery / Catalog / Batch subsystemは仕様確定済み・未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
+Discovery / Catalog / Batch subsystemとCrawl Request拡張は仕様確定済み・未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
 
-## 26. 完了確認
+## 27. 完了確認
 
 最低限:
 
@@ -471,7 +554,9 @@ Discovery / Catalog / Batch subsystemは仕様確定済み・未実装である�
 
 Discovery / Catalog / Batch実装時は、`docs/DISCOVERY_AND_BATCH.md` と `docs/TEST_STRATEGY.md` の該当項目も確認する。
 
-## 27. Discovery / Catalog / Batchの概要
+Crawl Request拡張時は、手動crawlのdefaultが既存挙動を維持し、`access_strategy` とmetadata overrideの有無で不要な回帰がないことを確認する。
+
+## 28. Discovery / Catalog / Batchの概要
 
 採用する上位フロー:
 
@@ -484,7 +569,9 @@ catalog.sqlite (items / sources)
     ↓
 Batch Runner / Site Policy
     ↓
-existing Screenshot Crawler (site + URL)
+Crawl Request
+    ↓
+existing Screenshot Crawler
 ```
 
 方針:
@@ -498,5 +585,7 @@ existing Screenshot Crawler (site + URL)
 - 期間限定無料は `free + free_until` で表す
 - quota制約はsite-specific Policyで扱い、基本的にcrawl開始時に消費記録する
 - quota消費後の再閲覧猶予は `access_granted_until` で扱える
+- Batchは今回の実行意図を `access_strategy=auto|direct|quota` としてCrawlerへ渡す
+- title/author/order/genreは既知ならCrawlerへ渡し、なければAdapter取得へfallbackする
 - 別site同一作品を自動mergeせず、Discovery時に重複候補warningだけを出す
 - 詳細schema、sync semantics、failure handlingは `docs/DISCOVERY_AND_BATCH.md` に定める
