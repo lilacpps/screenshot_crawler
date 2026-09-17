@@ -1,0 +1,6 @@
+targets:
+  - key: juou-to-yakusou
+    site: mangaone
+    url: https://manga-one.com/manga/2379/chapter/214131
+    enabled: true
+    label: 獣王と薬草
