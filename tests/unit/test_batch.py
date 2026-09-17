@@ -175,6 +175,76 @@ def test_quota_is_reserved_in_memory_only(tmp_path: Path) -> None:
     assert service.path.read_bytes() == before_bytes
 
 
+def test_new_quota_is_allocated_to_oldest_episode_first(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    for index in range(2):
+        add_source(
+            service,
+            item=ItemInput(canonical_title=f"used-{index}", status="completed"),
+            external_id=f"used-{index}",
+            quota_started_at="2026-09-17T14:00:00+09:00",
+        )
+    inserted_order = ["05", "04", "03", "02", "01"]
+    items = {
+        order: add_source(
+            service,
+            item=ItemInput(canonical_title=f"第{order}話", order_key=order),
+            external_id=f"episode-{order}",
+        )[0]
+        for order in inserted_order
+    }
+
+    plan = plan_for(service)
+
+    assert plan.quota_available == 2
+    assert [plan_item.order_key for plan_item in (service.get_item(c.item_id) for c in plan.candidates)] == [
+        "01",
+        "02",
+    ]
+    assert Counter(skipped.reason for skipped in plan.skipped) == Counter(
+        {"completed": 2, "quota_exhausted": 3}
+    )
+    assert all(items[order].id not in {c.item_id for c in plan.candidates} for order in ["05", "04", "03"])
+
+
+def test_numeric_episode_order_is_not_lexicographic(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    for order in ["11", "1", "10", "9", "2"]:
+        add_source(
+            service,
+            item=ItemInput(canonical_title=f"第{order}話", order_key=order),
+            external_id=f"episode-{order}",
+        )
+
+    plan = plan_for(service)
+
+    assert [service.get_item(candidate.item_id).order_key for candidate in plan.candidates] == [
+        "1",
+        "2",
+        "9",
+        "10",
+    ]
+
+
+def test_episode_parts_are_ordered_before_next_episode(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    for order in ["13", "12-後編", "12-前編", "11"]:
+        add_source(
+            service,
+            item=ItemInput(canonical_title=order, order_key=order),
+            external_id=f"episode-{order}",
+        )
+
+    plan = plan_for(service)
+
+    assert [service.get_item(candidate.item_id).order_key for candidate in plan.candidates] == [
+        "11",
+        "12-前編",
+        "12-後編",
+        "13",
+    ]
+
+
 def test_quota_window_counts_only_current_window(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     for index, started_at in enumerate(
@@ -241,6 +311,103 @@ def test_reset_boundaries_and_active_or_expired_grant(tmp_path: Path) -> None:
     assert by_item[active.id].consumes_quota is False
     assert by_item[expired.id].access_strategy == "quota"
     assert by_item[expired.id].consumes_quota is True
+
+
+def test_active_grant_does_not_consume_slot_before_older_quota(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    for index in range(3):
+        add_source(
+            service,
+            item=ItemInput(canonical_title=f"used-{index}", status="completed"),
+            external_id=f"used-{index}",
+            quota_started_at="2026-09-17T14:00:00+09:00",
+        )
+    active, _ = add_source(
+        service,
+        item=ItemInput(canonical_title="第01話", order_key="01"),
+        external_id="active-old",
+        access_granted_until="2026-09-17T16:00:00+09:00",
+    )
+    next_item, _ = add_source(
+        service,
+        item=ItemInput(canonical_title="第02話", order_key="02"),
+        external_id="next-old",
+    )
+    exhausted, _ = add_source(
+        service,
+        item=ItemInput(canonical_title="第03話", order_key="03"),
+        external_id="later",
+    )
+
+    plan = plan_for(service)
+    by_item = {candidate.item_id: candidate for candidate in plan.candidates}
+
+    assert by_item[active.id].access_strategy == "direct"
+    assert by_item[active.id].consumes_quota is False
+    assert by_item[next_item.id].access_strategy == "quota"
+    assert by_item[next_item.id].consumes_quota is True
+    assert exhausted.id not in by_item
+    assert plan.quota_available == 1
+    assert plan.quota_remaining == 0
+    assert sum(skipped.reason == "quota_exhausted" for skipped in plan.skipped) == 1
+
+
+def test_mixed_access_keeps_direct_behavior_and_allocates_old_quota(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    records = {}
+    for order, access_mode in [
+        ("05", "quota"),
+        ("04", "owned"),
+        ("03", "quota"),
+        ("02", "free"),
+        ("01", "quota"),
+    ]:
+        records[order] = add_source(
+            service,
+            item=ItemInput(canonical_title=f"第{order}話", order_key=order),
+            external_id=f"mixed-{order}",
+            access_mode=access_mode,
+        )[0]
+    for index in range(2):
+        add_source(
+            service,
+            item=ItemInput(canonical_title=f"used-{index}", status="completed"),
+            external_id=f"mixed-used-{index}",
+            quota_started_at="2026-09-17T14:00:00+09:00",
+        )
+
+    plan = plan_for(service)
+    by_item = {candidate.item_id: candidate for candidate in plan.candidates}
+
+    assert by_item[records["02"].id].access_strategy == "direct"
+    assert by_item[records["04"].id].access_strategy == "direct"
+    assert [
+        service.get_item(candidate.item_id).order_key
+        for candidate in plan.candidates
+        if candidate.consumes_quota
+    ] == ["01", "03"]
+    assert records["05"].id not in by_item
+
+
+def test_unknown_order_formats_have_stable_fallback(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    for key, label in [(None, "第?話"), ("mystery", "特別編"), ("02", "第02話")]:
+        add_source(
+            service,
+            item=ItemInput(canonical_title=label, order_key=key, order_label=label),
+            external_id=f"unknown-{key or 'none'}",
+        )
+
+    first = plan_for(service)
+    second = plan_for(service)
+
+    assert [(candidate.item_id, candidate.source_id) for candidate in first.candidates] == [
+        (candidate.item_id, candidate.source_id) for candidate in second.candidates
+    ]
+    assert first.quota_count == 3
+    assert first.quota_remaining == 1
+
+
 
 
 def test_quota_window_before_morning_uses_previous_evening(tmp_path: Path) -> None:

@@ -412,6 +412,17 @@ Catalog `quota_started_at` values in the current window, and defines a
 Manual or external free-life consumption is not observable in Catalog, so this
 is only a local eligibility estimate.
 
+For multiple pending Manga ONE quota items, new quota consumption is allocated
+from the oldest episode order first, independently of Discovery's newest-first
+traversal and Catalog item IDs. Numeric `order_key` values use natural numeric
+ordering; `12-前編` precedes `12-後編`, which precedes `13`. Missing or unknown
+order keys use a stable label fallback and the item ID only as a final
+tie-breaker. `free`, `owned`, and quota sources with an active grant remain
+`direct`; active grants do not consume a new quota slot. After the older items
+are allocated, the remaining quota candidates are skipped as
+`quota_exhausted`. `quota_available` is the plan-start local capacity and
+`quota_remaining` is the capacity after in-memory reservations.
+
 The planning command is:
 
 ```powershell

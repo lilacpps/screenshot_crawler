@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 
 from screenshot_crawler.batch.models import (
@@ -38,9 +40,9 @@ class BatchPlanner:
             sources_by_item[source.item_id].append(source)
         plan = BatchPlan()
         try:
-            quota_remaining = policy.available_quota(sources, current)
-            plan.quota_available = quota_remaining
-            plan.quota_remaining = quota_remaining
+            quota_available = policy.available_quota(sources, current)
+            plan.quota_available = quota_available
+            selections: list[_Selection] = []
             for item in items:
                 if item.status != "pending":
                     plan.skipped.append(BatchSkipped(item.id, None, item.status))
@@ -54,7 +56,7 @@ class BatchPlanner:
                     item_sources,
                     policy=policy,
                     now=current,
-                    quota_remaining=quota_remaining,
+                    quota_remaining=quota_available,
                     skipped=plan.skipped,
                 )
                 if selected is None:
@@ -64,22 +66,41 @@ class BatchPlanner:
                     raise BatchPlanningError(
                         f"Eligible source {source.id} has no access strategy"
                     )
-                if decision.consumes_quota and quota_remaining is not None:
-                    quota_remaining -= 1
-                plan.candidates.append(
-                    BatchCandidate(
-                        item_id=item.id,
-                        source_id=source.id,
-                        site=source.site,
-                        url=source.url,
-                        access_strategy=decision.access_strategy,
-                        metadata=_metadata(item),
-                        access_mode=source.access_mode,
-                        reason=decision.reason,
-                        consumes_quota=decision.consumes_quota,
-                    )
+                selections.append(
+                    _Selection(item=item, source=source, decision=decision)
                 )
-            plan.quota_remaining = quota_remaining
+
+            quota_selections = [
+                selection for selection in selections if selection.decision.consumes_quota
+            ]
+            quota_selections.sort(key=lambda selection: _item_order_key(selection.item))
+            if quota_available is None:
+                accepted_quota = quota_selections
+            else:
+                accepted_quota = quota_selections[: max(0, quota_available)]
+            accepted_quota_ids = {selection.item.id for selection in accepted_quota}
+            for selection in selections:
+                if (
+                    selection.decision.consumes_quota
+                    and selection.item.id not in accepted_quota_ids
+                ):
+                    plan.skipped.append(
+                        BatchSkipped(selection.item.id, selection.source.id, "quota_exhausted")
+                    )
+
+            quota_iter = iter(accepted_quota)
+            for selection in selections:
+                if selection.decision.consumes_quota:
+                    if selection.item.id not in accepted_quota_ids:
+                        continue
+                    selection = next(quota_iter)
+                plan.candidates.append(_candidate_from_selection(selection))
+
+            plan.quota_remaining = (
+                None
+                if quota_available is None
+                else quota_available - len(accepted_quota)
+            )
         except SitePolicyError as exc:
             raise BatchPlanningError(str(exc)) from exc
         return plan
@@ -122,6 +143,32 @@ def _metadata(item: Item) -> dict[str, str]:
     return metadata
 
 
+@dataclass(frozen=True, slots=True)
+class _Selection:
+    item: Item
+    source: Source
+    decision: PolicyDecision
+
+
+def _candidate_from_selection(selection: _Selection) -> BatchCandidate:
+    item = selection.item
+    source = selection.source
+    decision = selection.decision
+    if decision.access_strategy is None:
+        raise BatchPlanningError(f"Eligible source {source.id} has no access strategy")
+    return BatchCandidate(
+        item_id=item.id,
+        source_id=source.id,
+        site=source.site,
+        url=source.url,
+        access_strategy=decision.access_strategy,
+        metadata=_metadata(item),
+        access_mode=source.access_mode,
+        reason=decision.reason,
+        consumes_quota=decision.consumes_quota,
+    )
+
+
 def _normalize_now(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise BatchPlanningError("now must be a timezone-aware datetime")
@@ -139,6 +186,31 @@ def _source_priority_key(source: Source) -> tuple[int, int, datetime, int]:
         "unknown": 4,
     }.get(source.access_mode, 5)
     return (mode_rank, 0, _MIN_DATETIME, source.id)
+
+
+_ORDER_KEY_PATTERN = re.compile(r"(?P<episode>\d+)(?:-(?P<part>前編|後編))?")
+
+
+def _item_order_key(item: Item) -> tuple[int, int, int, str, int]:
+    """Return a stable ascending key without relying on Catalog insertion order."""
+
+    parsed = _parse_episode_order_key(item.order_key)
+    if parsed is not None:
+        episode, part = parsed
+        return (0, episode, part, "", item.id)
+
+    fallback = " ".join((item.order_label or item.canonical_title or "").split()).casefold()
+    return (1, 0, 0, fallback, item.id)
+
+
+def _parse_episode_order_key(value: str | None) -> tuple[int, int] | None:
+    if not isinstance(value, str):
+        return None
+    match = _ORDER_KEY_PATTERN.fullmatch(value.strip())
+    if match is None:
+        return None
+    part = {None: 0, "前編": 0, "後編": 1}[match.group("part")]
+    return int(match.group("episode")), part
 
 
 _MIN_DATETIME = datetime.min.replace(tzinfo=JST)
