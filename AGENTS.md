@@ -6,11 +6,12 @@
 
 1. `docs/SPEC.md`
 2. `docs/ARCHITECTURE.md`
-3. `docs/DECISIONS.md`
-4. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
-5. 現在のコードとテスト
-6. Site Adapter固有README / probe出力
-7. `note/` の現行実装ノート
+3. `docs/DISCOVERY_AND_BATCH.md`（Discovery / Catalog / Batch変更時）
+4. `docs/DECISIONS.md`
+5. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+6. 現在のコードとテスト
+7. Site Adapter固有README / probe出力
+8. `note/` の現行実装ノート
 
 `note/` は詳細な現行実装スナップショットとして常に更新する。ただし、上位authorityと競合する場合は上位authorityを優先し、note側を修正する。
 
@@ -56,6 +57,9 @@ shared profileでBookWalker/Manga ONEのlogin・crawl・session共存と既存vi
 - 実装変更には対応するテストを追加・更新する。
 - 外部実サイトへの恒常的なCI依存は作らない。
 - fixtureには実サイトの著作物をそのまま保存しない。
+- Discovery AdapterからCatalogへ直接writeしない。
+- CrawlerRunnerへCatalog依存を持ち込まない。
+- site横断itemの自動mergeを行わない。
 
 ## Note synchronization rule
 
@@ -64,6 +68,7 @@ shared profileでBookWalker/Manga ONEのlogin・crawl・session共存と既存vi
 更新先:
 
 - Core / Runner / output / packaging / browser / diagnostics / resume等の共通変更 → `note/00_core.md`
+- Discovery / Catalog / Batchの共通変更 → `note/00_core.md`（実装前は未実装であることも明記する）
 - BookWalker固有変更 → `note/01_bookwalker.md`
 - Manga ONE固有変更 → `note/02_mangaone.md`
 - 新規サイト追加 → 対応する `note/<nn>_<site>.md` を追加
@@ -81,8 +86,9 @@ noteには少なくとも、現在の挙動、主要な判定ロジック、設�
 
 1. `docs/CODEX_IMPLEMENTATION_GUIDE.md` を読む。
 2. 変更対象に対応する `note/` を読む。
-3. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
-4. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
+3. Discovery / Catalog / Batchを変更する場合は `docs/DISCOVERY_AND_BATCH.md` を読む。
+4. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
+5. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
 
 ## After coding
 
