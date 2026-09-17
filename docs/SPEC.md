@@ -1,4 +1,4 @@
-# Screenshot Crawler 仕様書 v1.2
+# Screenshot Crawler 仕様書 v1.3
 
 ## 1. 目的
 
@@ -82,11 +82,17 @@ Crawlerは既存Chromeへ接続し、Crawler用Pageを作成する。
 
 ## 4. 入力
 
-Crawler本体はURLを収集しない。URLは人手または別プログラムから渡す。
+Crawler Core / `CrawlerRunner` 自体はURLを収集しない。1 runの入力は引き続き `site + URL` とする。
 
 ```bash
 python -m screenshot_crawler.cli crawl --site <site> --url "https://..."
 ```
+
+人手でURLを渡す経路は維持する。
+
+将来追加するDiscovery subsystemは、利用者が明示登録したWatchlist targetだけを探索し、Catalogへsource URLを保存する。そのURLをBatch Runnerが読み、既存Crawlerへ渡す。CrawlerRunnerへCatalog依存を追加しない。
+
+Discovery / Catalog / Batchの詳細仕様は `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
 
 新規サイト調査:
 
@@ -146,6 +152,8 @@ CAPTCHA / MFA / validation errorを自動突破しない。
 
 Coreはサイト固有DOM、next操作、広告、終了、次コンテンツを推測しない。
 
+CoreはWatchlist、Catalog、Discovery、Batchの状態を管理しない。
+
 ## 8. Site Adapterの責務
 
 - `prepare_page`
@@ -168,6 +176,8 @@ Site Adapterは以下を担当しない。
 - CDP endpoint解決
 - `connect_over_cdp()`
 - BrowserContext lifecycle
+- Discovery listing traversal
+- Catalog read/write
 
 AdapterはPlaywright `Page` / `Locator` を操作する。
 
@@ -371,6 +381,8 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - 独自DSL
 - 複雑なPlugin Framework
 - 自動resume
+- 全site・全作品の無制限Discovery
+- site横断automatic item merge
 
 ## 24. 受け入れ条件
 
@@ -393,6 +405,7 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - `max_pages`境界でEND/NEXT_CONTENTを正常終了
 - bounded retry / timeout
 - Coreにサイト固有selector/URL分岐を入れない
+- Core / CrawlerRunnerがCatalogを知らない
 
 ### Site Adapter
 
@@ -405,9 +418,25 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - 次コンテンツを本文として保存しない
 - UNKNOWNでは停止
 
+### Discovery / Catalog / Batch
+
+詳細な受け入れ条件は `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
+
+最低限:
+
+- Watchlistに明示されたtargetだけをDiscoveryする
+- full / incremental syncを分離する
+- full syncはcomplete時だけmissing sourceをunavailable化する
+- incrementalはknown source 2件連続で停止する
+- Catalogは `items / sources` の2テーブルを基本とする
+- 別siteの類似itemはwarningのみで自動mergeしない
+- Batch Runnerはsite policyを使ってfree/owned/quotaを選択する
+- quotaは基本的にcrawl開始時に記録する
+- crawl成功時だけitemをcompletedへ更新する
+
 ## 25. 移行状態
 
-このv1.2 Browser Session Modelは採用済みで、Phase 2の共通launcher実装まで完了している。
+Browser Session Modelは採用済みで、共通launcherとshared-profile live verificationまで完了している。
 
 標準運用は以下である。
 
@@ -419,6 +448,8 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` とshared `.chrome-crawler/`を標準とする。site-specific launcherは削除済みであり、site-specific endpoint/profileは例外overrideとしてのみ許可する。
 
 移行後もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
+
+Discovery / Catalog / Batch subsystemは仕様確定済み・未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
 
 ## 26. 完了確認
 
@@ -437,3 +468,35 @@ BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` と
 - packagingで余分なPNGが混入しないこと
 - 共通Crawler Chromeで複数site sessionを再利用できること
 - site-specific endpoint overrideがdefaultを壊さないこと
+
+Discovery / Catalog / Batch実装時は、`docs/DISCOVERY_AND_BATCH.md` と `docs/TEST_STRATEGY.md` の該当項目も確認する。
+
+## 27. Discovery / Catalog / Batchの概要
+
+採用する上位フロー:
+
+```text
+watchlist.yaml
+    ↓
+Discovery Service / Discovery Adapter
+    ↓
+catalog.sqlite (items / sources)
+    ↓
+Batch Runner / Site Policy
+    ↓
+existing Screenshot Crawler (site + URL)
+```
+
+方針:
+
+- Watchlistは人間がadd/remove/enable/disableできる設定
+- Watchlist targetは一意なstable `key` を持つ
+- Discovery結果sourceは `discovery_key` を保持し、full syncのscopeを限定する
+- 初回・reconciliationはfull、通常更新はincrementalを利用できる
+- incrementalはlatest側から走査し、known source 2件連続で停止する
+- access stateは `owned / free / quota / paid / unknown`
+- 期間限定無料は `free + free_until` で表す
+- quota制約はsite-specific Policyで扱い、基本的にcrawl開始時に消費記録する
+- quota消費後の再閲覧猶予は `access_granted_until` で扱える
+- 別site同一作品を自動mergeせず、Discovery時に重複候補warningだけを出す
+- 詳細schema、sync semantics、failure handlingは `docs/DISCOVERY_AND_BATCH.md` に定める
