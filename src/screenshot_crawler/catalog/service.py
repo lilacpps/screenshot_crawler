@@ -277,8 +277,8 @@ class CatalogService:
                         1 if source_input.available is None else int(source_input.available),
                         format_timestamp(source_input.access_checked_at),
                         last_seen,
-                        format_timestamp(source_input.quota_started_at),
-                        format_timestamp(source_input.access_granted_until),
+                        None,
+                        None,
                         timestamp,
                         timestamp,
                     ),
@@ -320,8 +320,6 @@ class CatalogService:
         available: bool | object = _UNSET,
         access_checked_at: datetime | str | None | object = _UNSET,
         last_seen_at: datetime | str | None | object = _UNSET,
-        quota_started_at: datetime | str | None | object = _UNSET,
-        access_granted_until: datetime | str | None | object = _UNSET,
         metadata: Mapping[str, Any] | None = None,
     ) -> Source:
         """Patch external source state while preserving the associated item."""
@@ -343,8 +341,6 @@ class CatalogService:
                 ("available", available),
                 ("access_checked_at", access_checked_at),
                 ("last_seen_at", last_seen_at),
-                ("quota_started_at", quota_started_at),
-                ("access_granted_until", access_granted_until),
             ):
                 if value is _UNSET:
                     continue
@@ -539,8 +535,7 @@ class CatalogService:
     ) -> None:
         connection.execute(
             "UPDATE sources SET discovery_key = ?, url = ?, access_mode = ?, free_until = ?, "
-            "available = ?, access_checked_at = ?, last_seen_at = ?, quota_started_at = ?, "
-            "access_granted_until = ?, updated_at = ? WHERE id = ?",
+            "available = ?, access_checked_at = ?, last_seen_at = ?, updated_at = ? WHERE id = ?",
             (
                 source.discovery_key,
                 source.url,
@@ -549,8 +544,6 @@ class CatalogService:
                 int(source.available) if source.available is not None else existing["available"],
                 format_timestamp(source.access_checked_at),
                 default_last_seen,
-                format_timestamp(source.quota_started_at),
-                format_timestamp(source.access_granted_until),
                 timestamp,
                 existing["id"],
             ),

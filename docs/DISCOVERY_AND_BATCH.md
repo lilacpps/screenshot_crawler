@@ -211,6 +211,8 @@ Discoveryが変更してはいけないlocal state:
 - `completed_at`
 - crawl成功/失敗の結果
 
+`quota_started_at` と `access_granted_until` はBatch / Site Policyが管理するquota local stateであり、Discovery upsertやexternal state patchでは変更しない。新規sourceをDiscovery upsertするときは、これらをNULLで開始する。
+
 原則:
 
 ```text

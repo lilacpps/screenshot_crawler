@@ -519,7 +519,7 @@ CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disa
 
 初期schemaはdomain tableを`items`と`sources`の2つだけ持つ。`canonical_title`と`kind`はDiscoveryで取得不能な場合を許容してNULL可、`status`は`pending`/`completed`に限定する。`sources`の`access_mode`は`owned`/`free`/`quota`/`paid`/`unknown`に限定し、`UNIQUE(site, external_id)`と`items.id`へのforeign keyを持つ。URLはidentityに使わず、同じsite/external_idのupsertで更新する。
 
-`upsert_item_source()`は新規item + sourceを1 transactionで作成する。既存sourceの場合はURL、access state、availability、access timestamps、discovery scopeと取得できたitem metadataだけを更新し、`items.status`、`local_path`、`completed_at`は更新しない。`update_source_external_state()`はexternal stateをfield単位でpatchし、`mark_item_completed()`はlocal stateを更新する。
+`upsert_item_source()`は新規item + sourceを1 transactionで作成する。既存sourceの場合はURL、access state、availability、external timestamps、discovery scopeと取得できたitem metadataだけを更新し、`items.status`、`local_path`、`completed_at`は更新しない。`quota_started_at` と `access_granted_until` は既存値を保持し、新規sourceではNULLで開始する。`update_source_external_state()`はquota stateを引数に持たないexternal state専用patchで、`mark_item_completed()`はlocal stateを更新する。
 
 日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`1`だけをサポートし、未対応versionは明示的に失敗する。Alembic等のmigration frameworkは導入していない。
 

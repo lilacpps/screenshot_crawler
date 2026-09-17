@@ -29,6 +29,7 @@ class SourceInput:
     available: bool | None = None
     access_checked_at: datetime | str | None = None
     last_seen_at: datetime | str | None = None
+    # Batch/Site Policy state. Discovery upsert must not write these fields.
     quota_started_at: datetime | str | None = None
     access_granted_until: datetime | str | None = None
 

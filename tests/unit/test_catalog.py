@@ -54,11 +54,16 @@ def test_initialize_creates_only_two_domain_tables_and_enables_foreign_keys(
 
 def test_upsert_updates_source_external_state_and_preserves_local_state(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
-    first = service.upsert_item_source(
-        ItemInput(canonical_title="作品A", author="作者A"),
-        source(),
+    item = service.create_item(ItemInput(canonical_title="作品A", author="作者A"))
+    first_source = service.create_source(
+        source(
+            quota_started_at="2026-09-17T10:00:00+09:00",
+            access_granted_until="2026-09-18T10:00:00+09:00",
+        ),
+        item_id=item.id,
     )
-    service.mark_item_completed(first.item.id, "library/作品A.zip")
+    first = service.get_source(first_source.id)
+    service.mark_item_completed(item.id, "library/作品A.zip")
 
     second = service.upsert_item_source(
         ItemInput(canonical_title="作品A updated", author="作者A updated", genre="fantasy"),
@@ -69,14 +74,18 @@ def test_upsert_updates_source_external_state_and_preserves_local_state(tmp_path
             available=False,
             access_checked_at="2026-09-17T13:00:00+09:00",
             last_seen_at="2026-09-17T13:00:00+09:00",
+            quota_started_at=None,
+            access_granted_until=None,
         ),
     )
 
-    assert second.source.id == first.source.id
+    assert second.source.id == first.id
     assert second.source.url == "https://example.invalid/new"
     assert second.source.access_mode == "owned"
     assert second.source.free_until is None
     assert second.source.available is False
+    assert second.source.quota_started_at == "2026-09-17T10:00:00+09:00"
+    assert second.source.access_granted_until == "2026-09-18T10:00:00+09:00"
     assert second.item.status == "completed"
     assert second.item.local_path == "library/作品A.zip"
     assert second.item.completed_at is not None
@@ -96,7 +105,14 @@ def test_unique_identity_and_association_are_enforced(tmp_path: Path) -> None:
 
 def test_update_external_state_supports_explicit_null_and_metadata(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
-    record = service.upsert_item_source(ItemInput(canonical_title="A"), source())
+    item = service.create_item(ItemInput(canonical_title="A"))
+    service.create_source(
+        source(
+            quota_started_at="2026-09-17T10:00:00+09:00",
+            access_granted_until="2026-09-18T10:00:00+09:00",
+        ),
+        item_id=item.id,
+    )
 
     updated = service.update_source_external_state(
         "mangaone",
@@ -107,7 +123,24 @@ def test_update_external_state_supports_explicit_null_and_metadata(tmp_path: Pat
     )
     assert updated.free_until is None
     assert updated.available is False
-    assert service.get_item(record.item.id).genre == "drama"
+    assert updated.quota_started_at == "2026-09-17T10:00:00+09:00"
+    assert updated.access_granted_until == "2026-09-18T10:00:00+09:00"
+    assert service.get_item(item.id).genre == "drama"
+
+
+def test_new_discovery_upsert_starts_with_null_quota_state(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+
+    record = service.upsert_item_source(
+        ItemInput(canonical_title="A"),
+        source(
+            quota_started_at="2026-09-17T10:00:00+09:00",
+            access_granted_until="2026-09-18T10:00:00+09:00",
+        ),
+    )
+
+    assert record.source.quota_started_at is None
+    assert record.source.access_granted_until is None
 
 
 def test_jst_timestamps_are_aware_and_parseable() -> None:
