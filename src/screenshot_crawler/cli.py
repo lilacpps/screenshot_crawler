@@ -75,6 +75,16 @@ def _parser() -> argparse.ArgumentParser:
     )
     crawl.add_argument("--max-pages", type=int, default=1000)
     crawl.add_argument("--max-same-content", type=int, default=3)
+    crawl.add_argument(
+        "--access-strategy",
+        choices=("auto", "direct", "quota"),
+        default="auto",
+        help="Site access intent (direct/quota require adapter support)",
+    )
+    crawl.add_argument("--title")
+    crawl.add_argument("--author")
+    crawl.add_argument("--order")
+    crawl.add_argument("--genre")
     crawl.add_argument("--env-file", type=Path, default=Path(".env"))
     crawl.add_argument(
         "--cdp-endpoint",
@@ -207,6 +217,17 @@ async def _run_crawl(args: argparse.Namespace) -> None:
         diagnostics_dir=diagnostics_dir,
         max_pages=args.max_pages,
         max_same_content=args.max_same_content,
+        access_strategy=args.access_strategy,
+        output_metadata={
+            field_name: value
+            for field_name, value in (
+                ("title", args.title),
+                ("author", args.author),
+                ("order", args.order),
+                ("genre", args.genre),
+            )
+            if value is not None
+        },
     )
 
     values = read_env_file(args.env_file) if args.env_file.is_file() else {}
@@ -226,6 +247,7 @@ async def _run_crawl(args: argparse.Namespace) -> None:
                     output_dir,
                     adapter.get_output_metadata(),
                     library_dir=library_dir,
+                    explicit_metadata=config.output_metadata,
                 )
                 print(f"Archive saved to {package.archive_path}")
                 print(f"Completion status saved to {package.status_path}")

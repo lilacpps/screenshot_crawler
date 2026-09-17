@@ -15,6 +15,7 @@ from tempfile import NamedTemporaryFile
 from screenshot_crawler.core.progress import atomic_write_json
 
 _WINDOWS_FORBIDDEN = re.compile(r'[\\/:*?"<>|]')
+_OUTPUT_METADATA_FIELDS = ("title", "author", "order", "genre")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,24 @@ def archive_stem(metadata: Mapping[str, str | None]) -> tuple[str, str, str, str
     if author:
         components.append(author)
     return "-".join(components), title, genre, order, author
+
+
+def resolve_output_metadata(
+    explicit_metadata: Mapping[str, str | None],
+    adapter_metadata: Mapping[str, str | None],
+) -> dict[str, str | None]:
+    """Merge output metadata by field while preserving legacy adapter keys.
+
+    Non-empty explicit values take precedence over adapter values. ``volume``
+    remains available only as an adapter-side legacy fallback for packaging.
+    """
+
+    resolved = dict(adapter_metadata)
+    for field_name in _OUTPUT_METADATA_FIELDS:
+        explicit_value = explicit_metadata.get(field_name)
+        if isinstance(explicit_value, str) and explicit_value.strip():
+            resolved[field_name] = explicit_value
+    return resolved
 
 
 def _manifest_page_files(source: Path) -> list[tuple[Path, PurePosixPath]]:
@@ -133,6 +152,7 @@ def package_crawl_output(
     metadata: Mapping[str, str | None],
     *,
     library_dir: str | Path = "output/Books",
+    explicit_metadata: Mapping[str, str | None] | None = None,
 ) -> PackageResult:
     """Zip a completed crawl and move it into the configured library tree.
 
@@ -147,7 +167,8 @@ def package_crawl_output(
         raise FileNotFoundError(f"Crawl output directory not found: {source}")
 
     page_files = _manifest_page_files(source)
-    stem, title, genre, order, author = archive_stem(metadata)
+    resolved_metadata = resolve_output_metadata(explicit_metadata or {}, metadata)
+    stem, title, genre, order, author = archive_stem(resolved_metadata)
     destination_dir = Path(library_dir) / genre / title
     destination_dir.mkdir(parents=True, exist_ok=True)
     destination = destination_dir / f"{stem}.zip"

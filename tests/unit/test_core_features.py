@@ -9,6 +9,7 @@ from screenshot_crawler.core.errors import (
     MaxPagesExceededError,
     PageChangeTimeoutError,
     RunAlreadyExistsError,
+    UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.fingerprint import fingerprint_bytes
 from screenshot_crawler.core.models import ContentContext, ContentIdentity, RunConfig
@@ -59,8 +60,11 @@ async def test_capture_canvas_uses_raw_png_buffer() -> None:
 class FakePage:
     url = "https://example.test/viewer"
 
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
     async def goto(self, *_args: object, **_kwargs: object) -> None:
-        return None
+        self.events.append("goto")
 
     async def wait_for_timeout(self, _milliseconds: int) -> None:
         return None
@@ -97,6 +101,60 @@ class FakeAdapter(SiteAdapter):
         previous_identity: ContentIdentity | None,
     ) -> None:
         return None
+
+
+class TrackingAdapter(FakeAdapter):
+    async def configure_run(self, page: FakePage, access_strategy: str) -> None:
+        page.events.append(f"configure:{access_strategy}")
+
+
+async def test_runner_passes_access_strategy_before_navigation(tmp_path: Path) -> None:
+    page = FakePage()
+    adapter = TrackingAdapter(
+        [PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+            access_strategy="auto",
+        )
+    ).run(page, adapter)
+
+    assert result.stop_state is PageState.END
+    assert page.events == ["configure:auto", "goto"]
+
+
+@pytest.mark.parametrize("strategy", ["direct", "quota"])
+async def test_runner_rejects_unsupported_strategy_without_auto_fallback(
+    tmp_path: Path,
+    strategy: str,
+) -> None:
+    page = FakePage()
+    adapter = FakeAdapter(
+        [PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    with pytest.raises(
+        UnsupportedAccessStrategyError,
+        match=f"access_strategy='{strategy}'",
+    ):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=tmp_path / "run",
+                diagnostics_dir=tmp_path / "diagnostics",
+                access_strategy=strategy,  # type: ignore[arg-type]
+            )
+        ).run(page, adapter)
+
+    assert page.events == []
 
 
 class DelayedContextAdapter(FakeAdapter):

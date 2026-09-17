@@ -104,6 +104,10 @@ class CrawlerRunner:
         ensure_new_run(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         await self._adapter_call(adapter.prepare_page(page), "prepare_page")
+        await self._adapter_call(
+            adapter.configure_run(page, self.config.access_strategy),
+            "configure_run",
+        )
         await page.goto(
             self.config.source_url,
             timeout=self.config.navigation_timeout_ms,

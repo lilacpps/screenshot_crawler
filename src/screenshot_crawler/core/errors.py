@@ -2,6 +2,10 @@ class CrawlerError(RuntimeError):
     """Base crawler exception."""
 
 
+class UnsupportedAccessStrategyError(CrawlerError):
+    """Raised when an adapter cannot execute the requested access strategy."""
+
+
 class UnknownPageStateError(CrawlerError):
     """Raised when an adapter cannot safely classify the current screen."""
 

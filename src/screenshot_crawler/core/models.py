@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+AccessStrategy = Literal["auto", "direct", "quota"]
+VALID_ACCESS_STRATEGIES = frozenset({"auto", "direct", "quota"})
+OUTPUT_METADATA_FIELDS = frozenset({"title", "author", "order", "genre"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,3 +61,26 @@ class RunConfig:
     auth_state: Path | None = None
     auth_required: bool = False
     device_scale_factor: float = 1.0
+    access_strategy: AccessStrategy = "auto"
+    output_metadata: Mapping[str, str | None] | None = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.access_strategy not in VALID_ACCESS_STRATEGIES:
+            raise ValueError("access_strategy must be one of: auto, direct, quota")
+
+        if self.output_metadata is None:
+            self.output_metadata = {}
+            return
+        if not isinstance(self.output_metadata, Mapping):
+            raise TypeError("output_metadata must be a mapping or None")
+
+        unknown_fields = set(self.output_metadata) - OUTPUT_METADATA_FIELDS
+        if unknown_fields:
+            fields = ", ".join(sorted(unknown_fields))
+            raise ValueError(f"unsupported output metadata field(s): {fields}")
+        for field_name, value in self.output_metadata.items():
+            if value is not None and not isinstance(value, str):
+                raise TypeError(
+                    f"output metadata field {field_name!r} must be a string or None"
+                )
+        self.output_metadata = dict(self.output_metadata)

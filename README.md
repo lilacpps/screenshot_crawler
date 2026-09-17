@@ -20,7 +20,7 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - SQLite Catalog基盤（`items` / `sources`、schema version 1）
 - unit testsとPlaywrightローカルfixture integration tests
 
-Watchlist + Catalog基盤は実装済みです。Discovery Adapter / Service、Batch Runner、Site Policy、Crawl Request拡張は未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
+Watchlist + Catalog基盤とCrawl Requestの最小基盤（access strategy、manual metadata input、Adapter hook、packaging merge）は実装済みです。Discovery Adapter / Service、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
 
 ## 採用するBrowser Session設計
 
@@ -199,7 +199,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
   --output-dir output\crawl-mangaone
 ```
 
-`--access-strategy` やmetadata overrideは採用仕様ですが、現時点ではまだ未実装です。
+`--access-strategy auto|direct|quota` と `--title` / `--author` / `--order` / `--genre` を指定できます。defaultは`auto`で、metadataはfield単位に explicit > Adapter > packaging fallback で解決します。既存Adapterの`direct`/`quota`固有動作は未実装のため、指定時は明示エラーになります。
 
 ## Outputの安全ルール
 

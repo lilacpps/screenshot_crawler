@@ -3,7 +3,75 @@ import zipfile
 
 import pytest
 
-from screenshot_crawler.core.packaging import archive_stem, package_crawl_output
+from screenshot_crawler.core.packaging import (
+    archive_stem,
+    package_crawl_output,
+    resolve_output_metadata,
+)
+
+
+def test_resolve_output_metadata_merges_each_field() -> None:
+    resolved = resolve_output_metadata(
+        {
+            "title": "Explicit title",
+            "order": "第12巻",
+            "author": None,
+        },
+        {
+            "title": "Adapter title",
+            "order": "12",
+            "author": "Adapter author",
+            "genre": "漫画",
+            "volume": "legacy volume",
+        },
+    )
+
+    assert resolved == {
+        "title": "Explicit title",
+        "order": "第12巻",
+        "author": "Adapter author",
+        "genre": "漫画",
+        "volume": "legacy volume",
+    }
+
+
+@pytest.mark.parametrize("empty_value", [None, "", "  "])
+def test_resolve_output_metadata_ignores_empty_explicit_values(empty_value: str | None) -> None:
+    resolved = resolve_output_metadata(
+        {"title": empty_value},
+        {"title": "Adapter title"},
+    )
+
+    assert resolved["title"] == "Adapter title"
+
+
+def test_package_metadata_override_does_not_change_manifest_source_url(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "page-0001.png").write_bytes(b"png")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "source_url": "https://actual.test/viewer",
+                "pages": [{"file": "page-0001.png"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+    (crawl_dir / "keep.txt").write_text("unrelated file\n", encoding="utf-8")
+
+    result = package_crawl_output(
+        crawl_dir,
+        {"title": "Adapter title", "genre": "漫画"},
+        explicit_metadata={"title": "Explicit title"},
+        library_dir=tmp_path / "Books",
+    )
+
+    assert result.title == "Explicit title"
+    assert json.loads((crawl_dir / "manifest.json").read_text(encoding="utf-8"))["source_url"] == (
+        "https://actual.test/viewer"
+    )
 
 
 def test_archive_stem_follows_title_rule() -> None:

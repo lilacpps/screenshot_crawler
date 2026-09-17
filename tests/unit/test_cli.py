@@ -20,10 +20,45 @@ def test_crawl_uses_cdp_options() -> None:
     )
 
     assert args.cdp_endpoint == "http://127.0.0.1:9333"
+    assert args.access_strategy == "auto"
+    assert args.title is None
+    assert args.author is None
+    assert args.order is None
+    assert args.genre is None
     assert args.env_file == Path(".env")
     assert not hasattr(args, "auth_state")
     assert not hasattr(args, "auth_required")
     assert not hasattr(args, "headed")
+
+
+def test_crawl_accepts_access_strategy_and_output_metadata() -> None:
+    args = _parser().parse_args(
+        [
+            "crawl",
+            "--site",
+            "bookwalker",
+            "--url",
+            "https://bookwalker.jp/",
+            "--access-strategy",
+            "quota",
+            "--title",
+            "作品A",
+            "--author",
+            "作者A",
+            "--order",
+            "第12巻",
+            "--genre",
+            "漫画",
+        ]
+    )
+
+    assert args.access_strategy == "quota"
+    assert (args.title, args.author, args.order, args.genre) == (
+        "作品A",
+        "作者A",
+        "第12巻",
+        "漫画",
+    )
 
 
 @pytest.mark.parametrize("option", ["--auth-state", "--auth-required", "--headed"])

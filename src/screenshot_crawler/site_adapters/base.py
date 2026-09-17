@@ -3,7 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from screenshot_crawler.core.models import ContentContext, ContentIdentity
+from screenshot_crawler.core.errors import UnsupportedAccessStrategyError
+from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 
 if TYPE_CHECKING:
@@ -20,6 +21,23 @@ class SiteAdapter(ABC):
         """Optionally install page hooks before the first navigation."""
 
         return
+
+    async def configure_run(
+        self, page: Page, access_strategy: AccessStrategy
+    ) -> None:
+        """Validate the requested strategy before navigation.
+
+        Adapters opt into ``direct`` or ``quota`` by overriding this hook.
+        The base implementation deliberately supports only the legacy ``auto``
+        flow so unsupported strategies cannot silently fall back.
+        """
+
+        del page
+        if access_strategy != "auto":
+            raise UnsupportedAccessStrategyError(
+                f"{type(self).__name__} does not support "
+                f"access_strategy={access_strategy!r}"
+            )
 
     @abstractmethod
     async def initialize(self, page: Page) -> None:

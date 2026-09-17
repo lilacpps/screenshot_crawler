@@ -4,7 +4,7 @@
 
 この文書は、Discovery / Catalog / Batch Runnerの採用仕様を定める。
 
-2026-09-17時点では、Watchlist + Catalog基盤が実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、Crawl Request拡張は未実装である。既存の `crawl --site --url` と `CrawlerRunner` の挙動は変更しない。
+2026-09-17時点では、Watchlist + Catalog基盤とCrawl Requestの最小基盤が実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。
 
 実装済みの範囲:
 
@@ -13,6 +13,9 @@
 - SQLite Catalogの `items` / `sources` schema version 1
 - `(site, external_id)` によるsource upsertとexternal state update
 - Discovery upsert相当でのlocal completed state保護
+- `RunConfig`への `access_strategy` / output metadata入力
+- Adapterへのstrategy validation hook
+- packagingのfield単位 `explicit > adapter > fallback` merge
 
 実装時は `docs/SPEC.md`、`docs/ARCHITECTURE.md`、`docs/DECISIONS.md` と本書をauthorityとして扱う。
 
@@ -506,7 +509,7 @@ no active grant + quota eligible
 
 Site Policyの `daily_limit` やreset ruleそのものをCrawlerへ渡さない。
 
-`access_strategy` に応じたbutton選択、viewer entry等のsite固有操作はSite Adapterの責務とする。Coreにsite名やquota button selectorの分岐を追加しない。
+`access_strategy` に応じたbutton選択、viewer entry等のsite固有操作はSite Adapterの責務とする。現時点の既存Adapterは`auto`だけを実行でき、未対応の`direct`/`quota`は明示的に停止する。Coreにsite名やquota button selectorの分岐を追加しない。
 
 ## 11. Batch Runner
 
@@ -614,7 +617,7 @@ Batch Runner knows Catalog
 CrawlerRunner does not know Catalog
 ```
 
-Crawler側はCrawl Requestから `access_strategy` と任意metadataを受け取れるようにする。
+Crawler側は既存`RunConfig`を拡張してCrawl Request相当の `access_strategy` と任意metadataを受け取る。別の巨大なrequest objectはまだ作らない。
 
 ### 12.1 Access strategyの扱い
 

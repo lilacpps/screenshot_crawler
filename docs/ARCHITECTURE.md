@@ -247,8 +247,8 @@ receive site-neutral Crawl Request
 ensure output directory is new/empty
 Browser SessionからPageを取得
 prepare page
+adapter receives run access intent
 open URL
-adapter receives run access intent if needed
 adapter.initialize
 initial context
 create manifest/progress
@@ -350,6 +350,7 @@ metadata overrideはmanifest/source URLのauthorityにはならない。
 
 ```python
 prepare_page(page)
+configure_run(page, access_strategy)
 initialize(page)
 detect_state(page)
 get_capture_target(page)
@@ -363,7 +364,7 @@ wait_for_change(page, previous_identity)
 
 実際のdefault method / optional hookは `site_adapters/base.py` をauthorityとする。
 
-Crawl Request拡張実装時は、既存contractを不必要に広げず、Adapterがsite-neutralなrun access intentを受け取れる最小の方法を追加する。
+Crawl Requestの実装では、既存`RunConfig`へsite-neutralなrun access intentとoptional output metadataを最小限保持し、Adapterへ`configure_run(page, access_strategy)`で渡す。既定hookは`auto`だけを受け付け、未対応の`direct`/`quota`は明示的に停止する。site-specific entry操作はまだ実装しない。
 
 Adapterは以下をしない。
 
@@ -414,7 +415,7 @@ Browser Session architectureは採用済みで、共通launcherとshared-profile
 
 BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。
 
-Watchlist loaderとCatalog Service（`items` / `sources`）は実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、Crawl Request拡張は2026-09-17時点で未実装である。
+Watchlist loaderとCatalog Service（`items` / `sources`）は実装済みである。Crawl Requestの最小基盤（`RunConfig`のaccess strategy/metadata、Adapter hook、manual CLI、packaging merge）も実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、site-specific direct/quota behaviorは2026-09-17時点で未実装である。
 
 ## 16. Discovery / Catalog / Batch dependency rules
 

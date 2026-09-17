@@ -435,14 +435,19 @@ CLI
 --library-dir
 --max-pages
 --max-same-content
+--access-strategy auto|direct|quota
+--title
+--author
+--order
+--genre
 --env-file
 --cdp-endpoint
 --keep-open
 ```
 
-2026-09-17時点では、`access_strategy` とoutput metadata override用のCLI/API inputは**未実装**である。
+2026-09-17時点で、`access_strategy` とoutput metadata override用のCLI/API inputは実装済みである。manual crawlのdefaultは`auto` + metadata未指定で、従来のURL-only挙動を維持する。
 
-採用済みの将来仕様では、概念上次を追加できる。
+現行のRunConfigは、概念上のCrawl Request入力として次を保持する。
 
 ```text
 access_strategy = auto / direct / quota
@@ -491,14 +496,12 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 - identity/fingerprint dedupe再検討
 - GitHub CI
 - tracked `.egg-info` 整理
-- planned Crawl Request / access strategy実装
-- planned output metadata override / fallback実装
 
 これらを変更した場合は、このnoteを必ず更新する。
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog基盤実装済み）
 
-2026-09-17時点では、Watchlist + Catalog基盤が実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、Crawl Request拡張は未実装である。
+2026-09-17時点では、Watchlist + Catalog基盤とCrawl Requestの最小基盤が実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。
 
 authority:
 
@@ -547,11 +550,10 @@ Crawl Request
 - Site Policy
 - quota tracking / `access_granted_until`
 - cross-site duplicate warning
-- `access_strategy=auto|direct|quota` input
-- Catalog metadataからのtitle/author/order/genre override
-- field単位の `explicit > adapter > fallback` metadata merge
+- Discovery ServiceからのCrawl Request生成
+- site-specific `direct` / `quota` entry behavior
 
-Watchlist CLIとCatalog Serviceは実装済みである。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。
+Watchlist CLI、Catalog Service、Crawl Request最小基盤は実装済みである。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。`direct`/`quota`を実装していないAdapterへ指定した場合は、`auto`へフォールバックせず明示エラーにする。
 
 主要仕様:
 
@@ -572,4 +574,4 @@ Watchlist CLIとCatalog Serviceは実装済みである。現行CrawlerRunnerへ
 - metadata未指定なら現行Adapter自動取得を維持する
 - crawl + packaging成功時だけcompleted/local_pathを更新
 
-Discovery Adapter / Service、full / incremental sync、Batch Runner、Site Policy、quota eligibility、cross-site duplicate warning、`access_strategy` input、Catalog metadataからのCrawler overrideは未実装である。Watchlist + Catalogのreal-site連携は未確認であり、現時点の確認はunit testと既存local viewer regressionに限る。
+Discovery Adapter / Service、full / incremental sync、Batch Runner、Site Policy、quota eligibility、cross-site duplicate warning、DiscoveryからのCrawler request生成は未実装である。Watchlist + Catalogのreal-site連携は未確認であり、現時点の確認はunit testと既存local viewer regressionに限る。既存Adapterの`direct`/`quota`固有動作も未実装・未確認である。
