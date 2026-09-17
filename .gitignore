@@ -10,6 +10,8 @@ venv/
 output/
 diagnostics/
 state/
+catalog.sqlite
+catalog-export.csv
 
 # Browser profiles / secrets
 browser-data/
