@@ -60,6 +60,11 @@ shared profileでBookWalker/Manga ONEのlogin・crawl・session共存と既存vi
 - Discovery AdapterからCatalogへ直接writeしない。
 - CrawlerRunnerへCatalog依存を持ち込まない。
 - site横断itemの自動mergeを行わない。
+- `source.access_mode` とCrawlerの `access_strategy` を混同しない。
+- quota limit/reset/scope等のSite Policy ruleをCrawler Coreへ持ち込まない。
+- `access_strategy` に応じたsite固有entry操作はSite Adapterに置く。
+- output metadataはfield単位で `explicit Crawl Request > Adapter > packaging fallback` とする。
+- metadata overrideでsource URLやmanifest URLを置換しない。
 
 ## Note synchronization rule
 
