@@ -18,7 +18,7 @@
 - 作品ごとの公開URL、無料状態、quota状態等を収集する
 - Discovery結果をSQLite Catalogへ保存する
 - Catalogから、現在取得可能なものだけをBatch Runnerが選ぶ
-- Batch Runnerが既存Screenshot Crawlerへ `site + URL` を渡す
+- Batch Runnerが実行条件を解決し、既存Screenshot Crawlerへ具体的なcrawl requestを渡す
 - 同一作品が別siteに存在しても自動統合しない
 - 期間限定無料やquotaを可能な限りsiteから再取得し、手動status管理を主経路にしない
 
@@ -40,10 +40,12 @@ Catalog Service
 catalog.sqlite
   items / sources
         ↓
-Batch Runner
+Batch Runner + Site Policy
+        ↓
+Crawl Request
+  site + URL + access strategy + optional metadata
         ↓
 existing Screenshot Crawler
-  site + URL -> crawl
         ↓
 ZIP / library
         ↓
@@ -58,6 +60,8 @@ Catalog update
 - CrawlerRunnerはDBを知らない
 - Discovery ServiceとBatch RunnerだけがCatalogを利用する
 - Site AdapterとDiscovery Adapterは別責務とする
+- Site Policyはquota ruleを解決するが、Crawlerへquota rule自体は渡さない
+- Crawlerへ渡すのは、今回の実行で必要な具体的な `access_strategy` と既知metadataだけとする
 
 ## 4. Watchlist
 
@@ -132,17 +136,21 @@ sources
 ```text
 id
 canonical_title
-kind              # volume / episode / chapter / book / other
-order_key         # 正規化できる場合の巻数・話数等
-order_label       # 第01巻、第12話など表示用
-status            # pending / completed
-local_path        # completed artifact。未取得ならNULL
+author             # 取得できる場合。NULL可
+genre              # packagingに利用できる場合。NULL可
+kind               # volume / episode / chapter / book / other
+order_key          # 正規化できる場合の巻数・話数等
+order_label        # 第01巻、第12話など表示用
+status             # pending / completed
+local_path         # completed artifact。未取得ならNULL
 completed_at
 created_at
 updated_at
 ```
 
 `order_key` はsite間の完全照合を目的にしない。site内の安定した並び・重複判定に利用できる範囲で使う。
+
+`canonical_title / author / genre / order_label` は、BatchからCrawlerへ既知metadataとして渡せる。NULLのfieldはCrawler側のSite Adapter取得値へfallbackする。
 
 ### 5.3 sources
 
@@ -186,7 +194,7 @@ Discoveryが更新してよいexternal state:
 - `available`
 - `access_checked_at`
 - `last_seen_at`
-- siteから取得したtitle/order等のmetadata
+- siteから取得したtitle/author/genre/order等のmetadata
 
 Discoveryが変更してはいけないlocal state:
 
@@ -243,7 +251,7 @@ Discovery Adapterは、Watchlist targetのsite固有listing pageを読み、Disc
 - 作品/シリーズページの解析
 - item候補の列挙
 - source URL / external ID取得
-- title / kind / order取得
+- title / author / genre / kind / order取得（取得可能な範囲）
 - `access_mode` 判定
 - `free_until` 判定可能なら取得
 - `available` 判定
@@ -456,11 +464,45 @@ Policyは必要に応じて:
 
 初期実装で汎用quota rule engineは作らない。
 
+### 10.3 Access strategy
+
+Catalogの `access_mode` はsourceの状態であり、Crawlerの今回の動作指定とは分ける。
+
+Batch RunnerはSite Policyと `access_granted_until` 等を評価し、Crawlerへ次のsite-neutralな `access_strategy` を渡す。
+
+```text
+auto
+  手動crawl等で利用。Site Adapterが従来どおりsite状態を観測して適切な入口を選ぶ。
+
+direct
+  新規quotaを消費しない前提でreaderへ入る。
+  free / owned / quota消費後のgrant期間中など。
+
+quota
+  今回はquotaを利用してaccessを開始する意図を明示する。
+```
+
+例:
+
+```text
+source.access_mode = quota
+access_granted_until > now
+    -> access_strategy = direct
+
+source.access_mode = quota
+no active grant + quota eligible
+    -> access_strategy = quota
+```
+
+Site Policyの `daily_limit` やreset ruleそのものをCrawlerへ渡さない。
+
+`access_strategy` に応じたbutton選択、viewer entry等のsite固有操作はSite Adapterの責務とする。Coreにsite名やquota button selectorの分岐を追加しない。
+
 ## 11. Batch Runner
 
 ### 11.1 責務
 
-Batch RunnerはCatalogから現在取得可能なsourceを選び、既存Screenshot Crawlerへ渡す。
+Batch RunnerはCatalogから現在取得可能なsourceを選び、Site Policyを評価して具体的なCrawl Requestを作り、既存Screenshot Crawlerへ渡す。
 
 CrawlerRunnerへCatalog依存を追加しない。
 
@@ -475,9 +517,13 @@ Site Policy
   ↓
 choose one source
   ↓
-record quota start/grant if needed
+resolve access_strategy
   ↓
-existing crawl(site, url)
+record quota start/grant if newly consuming quota
+  ↓
+build Crawl Request
+  ↓
+existing crawl
   ↓
 success -> item completed + local_path
 failure -> item remains pending
@@ -515,6 +561,32 @@ Batch Runnerは、実行した `item_id` と `source_id` と生成されたarchi
 
 失敗時は `completed` にしない。
 
+### 11.4 Crawl Request
+
+BatchからCrawlerへ渡す実行入力は、概念上次を持つ。
+
+```text
+site
+url
+access_strategy      # auto / direct / quota
+output metadata      # optional
+  title
+  author
+  order
+  genre
+```
+
+`item_id` / `source_id` はCatalog orchestration上のidentityであり、CrawlerRunnerが理解する必要はない。Batch RunnerがrequestとCatalog rowの対応を保持する。
+
+手動crawlでは:
+
+```text
+access_strategy = auto
+output metadata = 未指定可
+```
+
+をdefaultとし、現在のURL-only運用を維持する。
+
 ## 12. Existing Screenshot Crawlerとの境界
 
 既存CLI:
@@ -532,7 +604,48 @@ Batch Runner knows Catalog
 CrawlerRunner does not know Catalog
 ```
 
-これにより、手動 `crawl --site --url` は引き続き利用できる。
+Crawler側はCrawl Requestから `access_strategy` と任意metadataを受け取れるようにする。
+
+### 12.1 Access strategyの扱い
+
+Crawlerの共通層は `access_strategy` をsite policyとして解釈しない。
+
+- `auto / direct / quota` というsite-neutralな実行意図をrun contextとして保持する
+- Site Adapterが必要なsite固有entry logicへ利用する
+- Coreにsite-specific quota ruleやselectorを入れない
+
+### 12.2 Output metadata override
+
+Crawlerはtitle/author/order/genreを任意入力として受け取れるようにする。
+
+packaging metadataは**field単位**で次の優先順位とする。
+
+```text
+1. Crawl Requestの明示metadata（non-empty）
+2. Site Adapterが `get_output_metadata()` 等で取得した値
+3. packaging側の既存fallback
+```
+
+例:
+
+```text
+request.title = 作品A
+request.order = 第12巻
+request.author = NULL
+
+adapter.title = サイト上の別表記
+adapter.order = 第12巻
+adapter.author = 作者A
+
+resolved:
+  title  = 作品A
+  order  = 第12巻
+  author = 作者A
+```
+
+Crawlerは明示metadataが欠けていても失敗せず、従来どおりsiteから取得を試みる。
+
+source URLやmanifestの実URLはこのmetadata overrideで置換しない。
 
 ## 13. CLI案
 
@@ -553,6 +666,19 @@ catalog list [...filters...]
 batch run [...filters/limit...]
 ```
 
+既存 `crawl` には、実装時に必要最小限のoptional inputを追加できる。
+
+```text
+crawl --site ... --url ...
+      [--access-strategy auto|direct|quota]
+      [--title ...]
+      [--author ...]
+      [--order ...]
+      [--genre ...]
+```
+
+defaultは `access_strategy=auto`、metadata未指定とし、既存CLI互換を維持する。
+
 Watchlist全件実行時は `enabled=true` のtargetだけを対象とする。
 
 ## 14. Failure / Safety
@@ -567,6 +693,9 @@ Watchlist全件実行時は `enabled=true` のtargetだけを対象とする。
 - Discoveryでlocal completed stateを消さない
 - crawl失敗をcompleted扱いしない
 - quota消費記録はcrawl開始前後のcrashでも矛盾しにくい順序で永続化する
+- active grantがあるquota sourceを新規quota消費として二重計上しない
+- Batchがquota ruleそのものをCrawlerへ押し込まない
+- Crawlerのmetadata overrideでmanifest/source URLを偽装しない
 - Watchlist removeでCatalogをcascade deleteしない
 
 ## 15. Acceptance Criteria
@@ -591,6 +720,7 @@ Watchlist全件実行時は `enabled=true` のtargetだけを対象とする。
 - incrementalで新規sourceを取りこぼさず追加できる
 - incrementalは未観測過去sourceをunavailable化しない
 - 別siteの類似itemはwarningし、自動mergeしない
+- title/author/genre/orderを取得できるsiteではCatalog metadataへ反映できる
 
 ### Catalog
 
@@ -598,6 +728,7 @@ Watchlist全件実行時は `enabled=true` のtargetだけを対象とする。
 - sourceはstable site identityでupsertできる
 - Discovery external stateとlocal completed stateを分離できる
 - Watchlist `key` とsourceのDiscovery scopeを対応付けられる
+- packaging用metadataをNULL許容で保持できる
 
 ### Batch
 
@@ -606,9 +737,22 @@ Watchlist全件実行時は `enabled=true` のtargetだけを対象とする。
 - 期限付きfreeを期限の近い順に優先できる
 - quotaをcrawl開始時に記録できる
 - site固有のaccess grant期間中は必要に応じて追加quotaを消費せずretryできる
+- source stateとgrant状態から `access_strategy=direct|quota` を解決できる
+- Site Policyのquota rule自体をCrawlerへ渡さない
 - crawl成功時だけitemをcompletedへ更新する
 - `item_id / source_id / archive path` を対応付けられる
+- Catalogにあるmetadataをoptional overrideとしてCrawlerへ渡せる
 - CrawlerRunner自体はCatalogを知らない
+
+### Crawler integration
+
+- 手動crawlのdefaultは `access_strategy=auto` で既存挙動を維持する
+- `access_strategy` をSite Adapterのsite固有entry logicへ伝えられる
+- Coreにsite-specific quota ruleを追加しない
+- title/author/order/genreをoptional inputとして受け取れる
+- metadataは `explicit request > adapter > fallback` のfield単位優先順位で解決する
+- 一部metadataだけ指定しても残りをAdapterから補完できる
+- metadata未指定なら従来どおりAdapter取得を利用できる
 
 ## 16. 初期実装の非対象
 
