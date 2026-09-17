@@ -378,6 +378,32 @@ def mangaone_terminal_html(marker: str) -> str:
     """
 
 
+def mangaone_terminal_transition_html() -> str:
+    return f"""
+    <style>
+      body {{ margin: 0; }}
+      .viewer-container {{ width: 600px; height: 500px; position: relative; }}
+      .viewer-container img {{ width: 200px; height: 300px; }}
+      #page-1, #terminal {{ display: none; }}
+    </style>
+    <div class="viewer-container">
+      <img id="page-0" alt="page_0" src="{_IMAGE}">
+      <img id="page-1" alt="page_1" src="{_IMAGE_ALT}">
+      <div id="terminal" class="bg-viewer-last-page" style="width: 100px; height: 100px;"></div>
+    </div>
+    <script>
+      document.querySelector('.viewer-container').addEventListener('click', () => {{
+        document.querySelector('#page-0').style.display = 'none';
+        document.querySelector('#page-1').style.display = 'block';
+        document.querySelector('#terminal').style.display = 'block';
+        setTimeout(() => {{
+          document.querySelector('#page-1').style.display = 'none';
+        }}, 150);
+      }}, {{ once: true }});
+    </script>
+    """
+
+
 @pytest.mark.parametrize(
     "marker",
     [
@@ -391,6 +417,23 @@ async def test_mangaone_visible_terminal_marker_becomes_end(
 ) -> None:
     url = "http://manga-one.test/manga/work/chapter/terminal"
     await install_route(browser_page, url, mangaone_terminal_html(marker))
+    await browser_page.goto(url)
+    adapter = MangaOneAdapter()
+    adapter.page_change_timeout_ms = 1_000
+    await adapter.initialize(browser_page)
+    identity = await adapter.get_content_identity(browser_page)
+    await adapter.go_next(browser_page)
+
+    await adapter.wait_for_change(browser_page, identity)
+
+    assert await adapter.detect_state(browser_page) is PageState.END
+
+
+async def test_mangaone_terminal_marker_wins_over_transient_page_identity(
+    browser_page: Page,
+) -> None:
+    url = "http://manga-one.test/manga/work/chapter/transient-terminal"
+    await install_route(browser_page, url, mangaone_terminal_transition_html())
     await browser_page.goto(url)
     adapter = MangaOneAdapter()
     adapter.page_change_timeout_ms = 1_000

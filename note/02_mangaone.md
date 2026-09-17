@@ -198,7 +198,7 @@ end_grace_ms = 2500
 
 画像なし状態が継続すると `_ended = True`。
 
-さらに、Manga ONE固有の終端画面markerをviewport内で検出する。
+さらに、Manga ONE固有の終端画面markerをviewport内で検出する。markerが表示されているpollでは、終端判定が確定するまで一時的な本文imageのidentity変化やimage-gap判定へ進まず、markerの連続表示確認を優先する。
 
 ```text
 img[src*="/assets/viewer/dialog/app-guidance-"]

@@ -437,6 +437,9 @@ class MangaOneAdapter(SiteAdapter):
                     self._ended = True
                     self._advance_pending = False
                     return
+                await page.wait_for_timeout(100)
+                elapsed_ms += 100
+                continue
             else:
                 terminal_marker_checks = 0
 

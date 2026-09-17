@@ -403,7 +403,7 @@ Site Policyによるquota eligibility判定
 終了方法は共通化しすぎない。
 
 - BookWalkerはviewer DOM / page counter / known final transitionを使う
-- Manga ONEはchapter URL changeと、最終advance後にviewport内へ表示される終端UI marker、またはpage imagesが一定時間消失する既知挙動を使う。DOM上に存在するだけのviewport外markerは終端扱いしない
+- Manga ONEはchapter URL changeと、最終advance後にviewport内へ表示される終端UI marker、またはpage imagesが一定時間消失する既知挙動を使う。終端markerの連続表示確認中は、一時的なpage imageのidentity変化より終端判定を優先する。DOM上に存在するだけのviewport外markerは終端扱いしない
 
 「明示END DOMがなければENDにしない」のような一般ルールで、実サイト確認済み挙動を置換しない。
 
