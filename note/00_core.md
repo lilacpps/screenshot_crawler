@@ -499,9 +499,9 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 これらを変更した場合は、このnoteを必ず更新する。
 
-## 22. Discovery / Catalog / Batch（Watchlist + Catalog基盤実装済み）
+## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery framework実装済み）
 
-2026-09-17時点では、Watchlist + Catalog基盤とCrawl Requestの最小基盤が実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。
+2026-09-17時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery frameworkが実装済みである。BookWalker/Manga ONE Discovery Adapter、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。
 
 authority:
 
@@ -544,16 +544,15 @@ Crawl Request
 
 現行実装には以下はまだ存在しない。
 
-- Discovery Adapter / Service
-- full / incremental sync
+- BookWalker / Manga ONE Discovery Adapter
+- real-site listing traversal
 - Batch Runner
 - Site Policy
 - quota tracking / `access_granted_until`
-- cross-site duplicate warning
 - Discovery ServiceからのCrawl Request生成
 - site-specific `direct` / `quota` entry behavior
 
-Watchlist CLI、Catalog Service、Crawl Request最小基盤は実装済みである。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。`direct`/`quota`を実装していないAdapterへ指定した場合は、`auto`へフォールバックせず明示エラーにする。
+Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery frameworkは実装済みである。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。`direct`/`quota`を実装していないAdapterへ指定した場合は、`auto`へフォールバックせず明示エラーにする。
 
 主要仕様:
 
@@ -574,4 +573,14 @@ Watchlist CLI、Catalog Service、Crawl Request最小基盤は実装済みであ
 - metadata未指定なら現行Adapter自動取得を維持する
 - crawl + packaging成功時だけcompleted/local_pathを更新
 
-Discovery Adapter / Service、full / incremental sync、Batch Runner、Site Policy、quota eligibility、cross-site duplicate warning、DiscoveryからのCrawler request生成は未実装である。Watchlist + Catalogのreal-site連携は未確認であり、現時点の確認はunit testと既存local viewer regressionに限る。既存Adapterの`direct`/`quota`固有動作も未実装・未確認である。
+Batch Runner、Site Policy、quota eligibility、DiscoveryからのCrawler request生成、BookWalker/Manga ONE Discovery Adapterは未実装である。Discovery frameworkの確認はfake/local unit testに限り、Watchlist + Catalogのreal-site連携は未確認である。既存Adapterの`direct`/`quota`固有動作も未実装・未確認である。
+
+### 22.3 Discovery framework（実装済み）
+
+`DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。
+
+`DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。real-site用Adapterはまだ登録していない。
+
+fullはiteratorの正常終了だけを`complete=true`とし、`DiscoveryIncompleteError`または予期しない例外ではmissing sourceのreconciliationを行わない。complete fullだけが同じ`site + discovery_key` scopeの未観測sourceを`available=false`にする。incrementalのknown判定と2件連続streakはServiceが管理し、2件目をrefreshしてから停止する。未観測sourceはunavailableにしない。
+
+cross-site duplicateはnormalized title（strip、whitespace、casefold）と、取得できる場合のkind/order一致だけで候補をwarningにする。warningはmerge、delete、completed化を行わない。

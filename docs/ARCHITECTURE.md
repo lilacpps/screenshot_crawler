@@ -74,7 +74,7 @@ CrawlerRunnerとDiscovery AdapterはCatalogを直接知らない。
 - `packaging.py`: manifest基準のZIP/library出力
 - `errors.py`: 独自例外
 
-Crawl Requestの実装位置は実装時に既存`RunConfig`との重複を避けて最小構成で決める。重要なのは、Catalog objectをCoreへ流さず、site-neutralなrun inputだけを渡すことである。
+Crawl Requestは既存`RunConfig`を最小限拡張して保持する。Catalog objectをCoreへ流さず、site-neutralなrun inputだけを渡す。
 
 ### `site_adapters/`
 
@@ -91,19 +91,21 @@ Crawl Requestの実装位置は実装時に既存`RunConfig`との重複を避�
 
 Site Adapterは、必要なsiteではCrawl Requestの `access_strategy` を参照し、quota用入口かdirect入口か等のsite固有操作を選択できる。quota上限やreset rule自体は知らない。
 
-### `discovery/`（planned）
+### `discovery/`（framework実装済み、site adapterはplanned）
 
 Watchlist targetからitem/source候補を列挙する。
 
-想定責務:
+実装済みの責務:
 
 - Discovery Service
 - Discovery Adapter contract / registry
-- site-specific discovery implementation
+- site-specific discovery Adapterを受け入れるcontract
 - full / incremental traversal orchestration
 - duplicate candidate warningのためのCatalog query coordination
 
 Discovery Adapter自身はSQLiteを直接read/writeしない。
+
+現時点ではfake/local Adapterで利用する共通frameworkだけを実装し、BookWalker/Manga ONEのreal-site listing Adapterは追加しない。
 
 ### `catalog/`（Watchlist + Catalog基盤実装済み）
 
@@ -115,7 +117,7 @@ SQLite Catalogを扱う。
 - query
 - completed/local artifact state update
 
-初期schemaとservice/repositoryは実装済みである。Discovery ServiceからのupsertやBatch orchestrationは未実装である。
+初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Batch orchestrationは未実装である。
 
 Catalog itemは、取得可能な範囲でtitle/author/genre/order等のpackaging metadataも保持できる。
 
@@ -415,7 +417,7 @@ Browser Session architectureは採用済みで、共通launcherとshared-profile
 
 BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。
 
-Watchlist loaderとCatalog Service（`items` / `sources`）は実装済みである。Crawl Requestの最小基盤（`RunConfig`のaccess strategy/metadata、Adapter hook、manual CLI、packaging merge）も実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、site-specific direct/quota behaviorは2026-09-17時点で未実装である。
+Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery frameworkは実装済みである。BookWalker/Manga ONE Discovery Adapter、Batch Runner、Site Policy、site-specific direct/quota behaviorは2026-09-17時点で未実装である。
 
 ## 16. Discovery / Catalog / Batch dependency rules
 

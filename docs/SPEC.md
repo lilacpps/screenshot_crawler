@@ -90,13 +90,13 @@ python -m screenshot_crawler.cli crawl --site <site> --url "https://..."
 
 人手でURLを渡す経路は維持する。
 
-将来追加するDiscovery subsystemは、利用者が明示登録したWatchlist targetだけを探索し、Catalogへsource URLを保存する。そのURLをBatch Runnerが読み、実行条件を解決したうえで既存Crawlerへ渡す。CrawlerRunnerへCatalog依存を追加しない。
+Discovery subsystemは、利用者が明示登録したWatchlist targetだけを探索し、Catalogへsource URLを保存する。そのURLを将来のBatch Runnerが読み、実行条件を解決したうえで既存Crawlerへ渡す。CrawlerRunnerへCatalog依存を追加しない。
 
 Discovery / Catalog / Batchの詳細仕様は `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
 
 ### 4.1 Crawl Request
 
-Batch統合後のCrawler入力は概念上、次の任意情報を追加できる。
+現行Crawler入力は既存`RunConfig`を拡張し、次のsite-neutral情報を保持できる。
 
 ```text
 site
@@ -532,7 +532,7 @@ BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` と
 
 移行後もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
 
-Watchlist + Catalog基盤とCrawl Requestの最小基盤（既存`RunConfig`のaccess strategy/metadata、Adapter hook、manual CLI、packaging merge）は実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
+Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery frameworkは実装済みである。BookWalker/Manga ONE Discovery Adapter、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
 
 ## 27. 完了確認
 

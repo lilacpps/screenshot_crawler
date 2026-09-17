@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -203,7 +203,11 @@ class CatalogService:
         return self._source_from_row(row)
 
     def list_sources(
-        self, *, item_id: int | None = None, site: str | None = None
+        self,
+        *,
+        item_id: int | None = None,
+        site: str | None = None,
+        discovery_key: str | None = None,
     ) -> list[Source]:
         conditions: list[str] = []
         values: list[Any] = []
@@ -213,6 +217,9 @@ class CatalogService:
         if site is not None:
             conditions.append("site = ?")
             values.append(site)
+        if discovery_key is not None:
+            conditions.append("discovery_key = ?")
+            values.append(discovery_key)
         query = "SELECT * FROM sources"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -220,6 +227,36 @@ class CatalogService:
         with self._connection() as connection:
             rows = connection.execute(query, values).fetchall()
         return [self._source_from_row(row) for row in rows]
+
+    def mark_sources_unavailable_except(
+        self,
+        *,
+        site: str,
+        discovery_key: str,
+        observed_external_ids: Collection[str],
+    ) -> int:
+        """Mark missing sources unavailable within one discovery scope.
+
+        This is intentionally a narrow reconciliation operation. It never
+        deletes rows or changes local item/quota state.
+        """
+
+        self._validate_nonempty(site, "site")
+        self._validate_nonempty(discovery_key, "discovery_key")
+        observed = tuple(dict.fromkeys(observed_external_ids))
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            where = "site = ? AND discovery_key = ? AND available = 1"
+            values: list[Any] = [site, discovery_key]
+            if observed:
+                placeholders = ", ".join("?" for _ in observed)
+                where += f" AND external_id NOT IN ({placeholders})"
+                values.extend(observed)
+            cursor = connection.execute(
+                f"UPDATE sources SET available = 0, updated_at = ? WHERE {where}",
+                [timestamp, *values],
+            )
+        return cursor.rowcount
 
     def upsert_item_source(
         self,

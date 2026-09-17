@@ -4,7 +4,7 @@
 
 この文書は、Discovery / Catalog / Batch Runnerの採用仕様を定める。
 
-2026-09-17時点では、Watchlist + Catalog基盤とCrawl Requestの最小基盤が実装済みである。Discovery Adapter / Service、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。
+2026-09-17時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery frameworkが実装済みである。BookWalker/Manga ONE Discovery Adapter、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。
 
 実装済みの範囲:
 
@@ -16,6 +16,9 @@
 - `RunConfig`への `access_strategy` / output metadata入力
 - Adapterへのstrategy validation hook
 - packagingのfield単位 `explicit > adapter > fallback` merge
+- site-neutral Discovery model / Adapter contract / registry
+- full / incremental Discovery Serviceとscope reconciliation
+- cross-site duplicate warningの最小heuristic
 
 実装時は `docs/SPEC.md`、`docs/ARCHITECTURE.md`、`docs/DECISIONS.md` と本書をauthorityとして扱う。
 

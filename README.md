@@ -18,9 +18,10 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - manifestをauthorityにしたZIP packagingとlibrary出力
 - Watchlist YAMLの `watch list/add/remove/enable/disable`
 - SQLite Catalog基盤（`items` / `sources`、schema version 1）
+- site-neutral Discovery framework（fake/local Adapter向け、full / incremental sync）
 - unit testsとPlaywrightローカルfixture integration tests
 
-Watchlist + Catalog基盤とCrawl Requestの最小基盤（access strategy、manual metadata input、Adapter hook、packaging merge）は実装済みです。Discovery Adapter / Service、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
+Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery frameworkは実装済みです。BookWalker / Manga ONE Discovery Adapter、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
 
 ## 採用するBrowser Session設計
 
