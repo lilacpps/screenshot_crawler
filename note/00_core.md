@@ -1,5 +1,16 @@
 # 00. Core 現行実装ノート
 
+## Phase 4A Discovery status
+
+`MangaOneDiscoveryAdapter` is now registered for `mangaone`. It reads an
+arbitrary chapter URL's `#chapterList` newest-first, follows bounded 10-item
+pagination, and uses the chapter id (not the URL) as source identity.
+`無料`/`FREE`, `先読`/`先読み`, and unbadged cards map to `free`, `paid`, and
+`quota`. Incomplete traversal is not treated as a complete full scan. The
+adapter remains Catalog-free and does not own BrowserSession lifecycle; the
+minimal `discover` CLI supplies the Page. BookWalker Discovery, Batch Runner,
+Site Policy, quota consumption, and automatic crawl remain unimplemented.
+
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
 最終同期: 2026-09-17

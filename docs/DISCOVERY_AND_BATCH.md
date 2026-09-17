@@ -1,5 +1,15 @@
 # Discovery / Catalog / Batch Design
 
+## Phase 4A status
+
+The Manga ONE Discovery adapter and minimal `discover` CLI are implemented.
+The adapter accepts any chapter URL, reads `#chapterList` newest-first, uses
+`chapter_id` as stable source identity, and follows bounded 10-chapter `次へ`
+pagination. `無料`/`FREE`, `先読`/`先読み`, and unbadged cards map to `free`,
+`paid`, and `quota`. Uncertain traversal raises `DiscoveryIncompleteError`,
+so missing-source reconciliation is not performed. BookWalker Discovery,
+Batch Runner, Site Policy, and quota consumption remain out of scope.
+
 ## 1. Status
 
 この文書は、Discovery / Catalog / Batch Runnerの採用仕様を定める。

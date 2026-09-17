@@ -31,6 +31,32 @@ def test_crawl_uses_cdp_options() -> None:
     assert not hasattr(args, "headed")
 
 
+def test_discover_parser_accepts_watchlist_catalog_and_mode() -> None:
+    args = _parser().parse_args(
+        [
+            "discover",
+            "--key",
+            "juou-to-yakusou",
+            "--mode",
+            "incremental",
+            "--watchlist",
+            "custom.yaml",
+            "--catalog",
+            "custom.sqlite",
+            "--cdp-endpoint",
+            "http://127.0.0.1:9333",
+        ]
+    )
+
+    assert args.key == "juou-to-yakusou"
+    assert args.mode == "incremental"
+    assert args.watchlist == Path("custom.yaml")
+    assert args.catalog == Path("custom.sqlite")
+    assert args.cdp_endpoint == "http://127.0.0.1:9333"
+    assert args.env_file == Path(".env")
+    assert not args.keep_open
+
+
 def test_crawl_accepts_access_strategy_and_output_metadata() -> None:
     args = _parser().parse_args(
         [

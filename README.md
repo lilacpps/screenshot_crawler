@@ -1,5 +1,20 @@
 # Screenshot Crawler
 
+## Manga ONE Discovery (Phase 4A)
+
+Manga ONE Discovery starts from any chapter URL in the Watchlist and scans the
+newest-first `#chapterList` listing. It stores the parsed `chapter_id` as the
+stable Catalog source identity and supports bounded `次へ` pagination.
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `
+  --key juou-to-yakusou --mode full `
+  --watchlist watchlist.yaml --catalog catalog.sqlite
+```
+
+BookWalker Discovery, Batch Runner, Site Policy, and quota consumption are
+not implemented yet.
+
 Python + Playwrightで、Webビューアを1ページずつ進めながら本文だけをPNG保存し、正常終了時にZIPへまとめるクローラです。
 
 万能な自動判定は目的にしていません。共通処理を `core/` に置き、サイト差分は `site_adapters/` に閉じ込めます。新しいサイトは Probe → 調査 → Adapter実装 → テスト → 実サイト確認、の順で追加します。

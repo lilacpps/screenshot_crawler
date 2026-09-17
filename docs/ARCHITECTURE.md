@@ -1,5 +1,16 @@
 # Architecture
 
+## Phase 4A status
+
+The Manga ONE Discovery adapter is implemented in
+`site_adapters/mangaone/discovery.py` and registered separately from the
+viewer `AdapterRegistry`. It reads `#chapterList` newest-first, uses the
+chapter id from a card href or the observed `/chapter/<id>.webp` image URL,
+and follows bounded `次へ` pagination. Uncertain traversal is incomplete;
+only normal exhaustion allows full reconciliation. The adapter does not own
+BrowserSession lifecycle or Catalog access. BookWalker Discovery, Batch
+Runner, Site Policy, and quota consumption remain unimplemented.
+
 ## 1. 設計原則
 
 依存方向を単純に保つ。

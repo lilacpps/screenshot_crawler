@@ -1,5 +1,13 @@
 # Screenshot Crawler 仕様書 v1.4
 
+## Phase 4A status
+
+The Manga ONE Discovery adapter and minimal `discover` command are implemented.
+A target may use any Manga ONE chapter URL; the adapter enumerates newest-first
+`#chapterList` cards and identifies sources by chapter id. This does not
+change the viewer crawl path, Catalog schema, Batch/Site Policy, quota
+consumption, or the existing one-URL-to-one-crawl responsibility.
+
 ## 1. 目的
 
 特定のWebビューアにアクセスし、現在コンテンツを1ページずつ進めながら本文だけをPNGとして保存する。

@@ -367,6 +367,38 @@ capture・navigation・page identity・END / NEXT_CONTENT・metadata behaviorに
 
 ## 21. Known limitations / maintenance
 
+## Phase 4A Discovery (implemented)
+
+The Manga ONE Discovery entry point is any chapter URL, for example
+`https://manga-one.com/manga/2379/chapter/214131`. The adapter opens that
+page and reads the chapter listing in `#chapterList` using the observed card
+selector `div.cursor-pointer.block.border-b-1.border-primary.p-3`.
+
+Cards are newest-first and are paged in batches of 10 by the `次へ` button.
+The adapter waits for a changed card identity after each click. An uncertain
+listing or pagination transition is incomplete rather than a successful full
+scan. A card href is parsed first; the live card fallback is the observed
+`/chapter/<chapter_id>.webp` image URL. The stable source identity is always
+`chapter_id`, and only the target `work_id` is accepted.
+
+`FREE`/`無料` maps to `free`, `先読み`/`先読` to `paid`, and an otherwise
+unbadged card to `quota`. `free_until`, quota counts, reset times, consumption,
+and `access_granted_until` are not inferred. Promotion/PR cards are not
+removed by title heuristics. Records use `kind=episode`, `genre=漫画`, and a
+numeric order key when the visible episode label supports one.
+
+The minimal command is:
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `
+  --key juou-to-yakusou --mode full `
+  --watchlist watchlist.yaml --catalog catalog.sqlite
+```
+
+The command uses shared CDP Chrome through `BrowserSession`, closes only its
+temporary Page, and leaves remote Chrome running. Batch, Site Policy, quota
+consumption, and automatic crawling remain unimplemented.
+
 - 末尾promotion pageがZIPへ残ることがある。
 - 前編/後編統合はCrawlerで行わない。
 - 話数→巻数変換はCrawlerで行わない。

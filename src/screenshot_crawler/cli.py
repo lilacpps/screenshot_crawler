@@ -13,6 +13,7 @@ from screenshot_crawler.auth.env import (
     read_env_file,
     require_site_env_value,
 )
+from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.core.browser import (
     DEFAULT_CDP_ENDPOINT,
     BrowserSession,
@@ -28,6 +29,7 @@ from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.progress import normalize_path
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
 from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
@@ -99,6 +101,38 @@ def _parser() -> argparse.ArgumentParser:
         help="Keep the connected browser open until Enter is pressed",
     )
 
+    discover = subparsers.add_parser(
+        "discover",
+        help="Synchronize one enabled Watchlist target into the Catalog",
+    )
+    discover.add_argument("--key", required=True)
+    discover.add_argument("--mode", choices=("full", "incremental"), required=True)
+    discover.add_argument(
+        "--watchlist",
+        type=Path,
+        default=Path("watchlist.yaml"),
+        help="Watchlist YAML path (default: watchlist.yaml)",
+    )
+    discover.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    discover.add_argument("--env-file", type=Path, default=Path(".env"))
+    discover.add_argument(
+        "--cdp-endpoint",
+        help=(
+            "Attach to an existing Chromium browser "
+            f"(default: site .env, CRAWLER_CDP_ENDPOINT, or {DEFAULT_CDP_ENDPOINT})"
+        ),
+    )
+    discover.add_argument(
+        "--keep-open",
+        action="store_true",
+        help="Keep the connected browser open until Enter is pressed",
+    )
+
     login = subparsers.add_parser(
         "login",
         help="Log in to a site using credentials from a local .env file",
@@ -144,6 +178,16 @@ def _registry() -> AdapterRegistry:
 
     registry.register("bookwalker", BookWalkerAdapter)
     registry.register("mangaone", MangaOneAdapter)
+    return registry
+
+
+def _discovery_registry() -> DiscoveryAdapterRegistry:
+    """Build the Discovery registry separately from viewer adapters."""
+
+    from screenshot_crawler.site_adapters.mangaone import MangaOneDiscoveryAdapter
+
+    registry = DiscoveryAdapterRegistry()
+    registry.register("mangaone", MangaOneDiscoveryAdapter)
     return registry
 
 
@@ -266,6 +310,42 @@ async def _run_crawl(args: argparse.Namespace) -> None:
         await session.close()
 
 
+async def _run_discover(args: argparse.Namespace) -> None:
+    target = WatchlistService(args.watchlist).get(args.key)
+    values = read_env_file(args.env_file) if args.env_file.is_file() else {}
+    endpoint = resolve_cdp_endpoint(
+        site=target.site,
+        cli_endpoint=args.cdp_endpoint,
+        values=values,
+    )
+
+    session = await BrowserSession.connect(endpoint)
+    try:
+        page = await session.new_page()
+        try:
+            result = await DiscoveryService(
+                CatalogService(args.catalog),
+                _discovery_registry(),
+            ).discover(page, target, args.mode)
+            print("Discovery completed:")
+            print(f"  target: {result.target_key}")
+            print(f"  mode: {result.mode}")
+            print(f"  observed: {result.observed_count}")
+            print(f"  new: {result.new_count}")
+            print(f"  known: {result.known_count}")
+            print(f"  complete: {result.complete}")
+            print(f"  stopped_reason: {result.stopped_reason}")
+            for warning in result.warnings:
+                print(f"Warning: {warning}")
+            if args.keep_open:
+                print("Browser is open. Press Enter here to disconnect.")
+                await asyncio.to_thread(input)
+        finally:
+            await session.close_page(page)
+    finally:
+        await session.close()
+
+
 async def _run_login(args: argparse.Namespace) -> None:
     """Connect to the existing CDP browser and perform site login."""
 
@@ -336,6 +416,8 @@ def main() -> None:
             asyncio.run(_run_probe(args))
         elif args.command == "crawl":
             asyncio.run(_run_crawl(args))
+        elif args.command == "discover":
+            asyncio.run(_run_discover(args))
         elif args.command == "login":
             asyncio.run(_run_login(args))
         elif args.command == "watch":

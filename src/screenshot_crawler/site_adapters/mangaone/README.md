@@ -107,3 +107,18 @@ Normal `END` / `NEXT_CONTENT` completion packages manifest-declared PNGs under `
 Shared-profile live verification confirmed Manga ONE login and crawl, coexistence with the BookWalker session, dedicated login Page cleanup, remote Chrome preservation, and no regression in the adapter-specific capture, navigation, or END behavior.
 
 Last verified for the shared-profile workflow: 2026-09-17.
+
+## Discovery adapter
+
+`MangaOneDiscoveryAdapter` is separate from `MangaOneAdapter`. It accepts an
+arbitrary chapter URL, reads `#chapterList`, and follows the observed
+newest-first 10-chapter pagination. Cards are identified by chapter id from a
+href when available, or from the observed `/chapter/<id>.webp` image URL. The
+adapter maps `無料`/`FREE` to `free`, `先読`/`先読み` to `paid`, and other
+ordinary cards to `quota`; it does not guess free expiry or quota state.
+
+The adapter yields site-neutral records and does not import Catalog or manage
+BrowserSession. The `discover` CLI supplies a Page through shared CDP Chrome.
+An incomplete listing is not a complete full scan, so DiscoveryService does
+not reconcile missing sources. Promotion/PR cards are not removed by title
+heuristics.
