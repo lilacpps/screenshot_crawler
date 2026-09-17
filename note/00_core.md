@@ -478,3 +478,56 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 - tracked `.egg-info` 整理
 
 これらを変更した場合は、このnoteを必ず更新する。
+
+## 22. Discovery / Catalog / Batch（採用仕様・未実装）
+
+2026-09-17時点で、Discovery / Catalog / Batch subsystemは**仕様確定済みだが未実装**である。
+
+authority:
+
+- `docs/SPEC.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DISCOVERY_AND_BATCH.md`
+- `docs/DECISIONS.md`
+
+採用した上位flow:
+
+```text
+watchlist.yaml
+    ↓
+Discovery Service / Discovery Adapter
+    ↓
+catalog.sqlite (items / sources)
+    ↓
+Batch Runner / Site Policy
+    ↓
+既存CrawlerRunner (site + URL)
+```
+
+現行実装には以下はまだ存在しない。
+
+- Watchlist CLI
+- `catalog.sqlite`
+- Discovery Adapter / Service
+- full / incremental sync
+- Batch Runner
+- Site Policy
+- quota tracking / `access_granted_until`
+- cross-site duplicate warning
+
+実装時も、現行CrawlerRunnerへCatalog read/writeを追加せず、1 URL -> 1 run責務を維持する。
+
+主要仕様:
+
+- Discovery対象は明示Watchlistだけ
+- Watchlist targetはstable `key` を持つ
+- Catalogは `items / sources` の2テーブル
+- full syncはcomplete時だけmissing sourceをunavailable化
+- incrementalはlatest側からknown 2件連続で停止
+- 別site同一作品は自動mergeせずwarning only
+- access modeは `owned / free / quota / paid / unknown`
+- quotaは基本crawl開始時に消費記録
+- site上の再閲覧猶予は `access_granted_until` で扱える
+- crawl + packaging成功時だけcompleted/local_pathを更新
+
+このsubsystemを実装した時点で、本sectionを「未実装」から現行実装説明へ更新すること。
