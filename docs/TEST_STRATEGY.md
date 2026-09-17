@@ -4,7 +4,7 @@
 
 Core回帰、Browser Session回帰、Site Adapter前提崩壊を分けて検出する。実サイト確認済みの挙動を、根拠なく一般化したロジックで置換しない。
 
-Discovery / Catalog / Batch実装後は、site listing観測、Catalog同期、Batch policy、Crawler実行を分離して検証する。
+Discovery / Catalog / Batch実装後は、site listing観測、Catalog同期、Batch policy、Crawl Request、Crawler実行を分離して検証する。
 
 ## 2. Unit Tests
 
@@ -37,6 +37,12 @@ Discovery / Catalog / Batch実装後:
 - source priority
 - Site Policy quota eligibility
 - access grant window
+- `source.access_mode` と `access_strategy` の分離
+- active grantで `direct`、新規quota利用で `quota` になること
+- 手動crawl defaultが `access_strategy=auto` であること
+- Crawl Request metadata merge
+- metadata priorityが `explicit > adapter > fallback` であること
+- 一部metadataだけoverrideできること
 
 ## 3. Browser Session Tests
 
@@ -63,6 +69,7 @@ Discovery / Catalog / Batch実装後:
 
 - Adapterがendpoint/profile/Chrome launchを要求しない
 - AdapterへPlaywright Pageを渡せば従来どおり動く
+- access strategyのためにAdapterへCatalog/Site Policy依存を持ち込まない
 
 Discovery Adapterがreal browserを必要とする場合も、browser/session lifecycleをAdapter自身に持たせない。
 
@@ -92,6 +99,13 @@ Integration testsはChromiumが利用できない環境ではskipされる。そ
 
 Discovery実装後は、人工listing fixtureを使ったintegration testを追加し、外部実サイトをCI authorityにしない。
 
+Crawl Request拡張後は、人工viewerまたはsite-specific fixtureで次を確認する。
+
+- `auto` が既存entry behaviorを維持する
+- `direct` がquota activation pathを選ばない
+- `quota` がsite-specific quota entry pathへ伝わる
+- Core自体にsite-specific quota selector/ifが入らない
+
 ## 5. Packaging tests
 
 最低限:
@@ -100,6 +114,14 @@ Discovery実装後は、人工listing fixtureを使ったintegration testを追�
 - manifest外の古いPNGはZIPへ入らない
 - manifest記載PNG欠落は失敗
 - 無関係ファイルがあるsource directoryをrmtreeしない
+
+Metadata override実装後:
+
+- explicit titleがAdapter titleより優先される
+- explicit orderだけ指定し、author/genreはAdapter値を利用できる
+- explicit値がNULL/空ならAdapterへfallbackする
+- Adapter値もなければ既存packaging fallbackを使う
+- metadata overrideでmanifest/source URLを変更しない
 
 Batch統合後は、packaging成功時だけCatalog itemをcompletedへ更新し、archive pathを保存することも確認する。
 
@@ -122,12 +144,21 @@ Discovery Adapter追加時は、可能な範囲で以下も確認する。
 
 - target作品だけを列挙する
 - external ID / URL
-- title / kind / order
+- title / author / genre / kind / order（取得可能な範囲）
 - free / owned / quota / paid表示
 - 期間限定無料表示と終了日時
 - latest側の順序
 - fullで最終itemまで到達すること
 - incrementalで既知領域へ到達できること
+
+quota entry behaviorを持つSite Adapterでは、可能な範囲で:
+
+- manual `auto`
+- `direct`
+- `quota`
+- quota消費後grant期間中の再閲覧
+
+を確認する。
 
 実サイトの著作物・DOM snapshotを恒久fixtureへコピーしない。
 
@@ -179,6 +210,10 @@ Browser Session移行のためにsite-specific viewer logicを変更しない。
 - Discoveryでcompleted/local_pathを上書きする
 - paid/unknown sourceを自動crawlする
 - quotaを誤って二重消費扱いする
+- active grantなのに新規 `quota` strategyを選ぶ
+- quota sourceだからという理由だけでCrawlerがquota ruleを再判定する
+- metadata overrideが不足fieldを消してしまう
+- metadata overrideで実source URLを置換する
 - crawl失敗をcompleted扱いする
 
 ## 9. Discovery Sync Tests
@@ -192,6 +227,7 @@ Browser Session移行のためにsite-specific viewer logicを変更しない。
 - 既存sourceのURL変更を更新
 - free -> paid / paid -> freeを更新
 - `free_until`変更を更新
+- title/author/genre/order metadataを更新できる
 - `complete=true` で未観測sourceを `available=false` にする
 - `complete=false` では未観測sourceを変更しない
 - sourceを物理削除しない
@@ -230,7 +266,12 @@ Browser Session移行のためにsite-specific viewer logicを変更しない。
 - quota消費をcrawl開始時に永続化
 - `access_granted_until` 内のretryでPolicyに従い追加quotaを消費しない
 - grant期限後は再度quota eligibilityを評価
+- quota source + active grantで `access_strategy=direct`
+- quota source + no grant + eligibleで `access_strategy=quota`
+- free/owned sourceで `access_strategy=direct`
+- Batchがdaily limit/reset ruleをCrawl Requestへ含めない
+- Catalog metadataをCrawl Requestのoptional output metadataへ入れられる
 - crawl成功 + packaging成功でcompleted/local_path更新
 - crawl失敗でpendingを維持
 - `item_id / source_id / archive path` の対応が維持される
-- Batchが既存Crawlerへ `site + URL` を渡し、CrawlerRunnerへCatalog依存を追加しない
+- Batchが既存Crawlerへsite-neutralなCrawl Requestを渡し、CrawlerRunnerへCatalog依存を追加しない
