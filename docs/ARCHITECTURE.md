@@ -9,7 +9,11 @@ chapter id from a card href or the observed `/chapter/<id>.webp` image URL,
 and follows bounded `次へ` pagination. Uncertain traversal is incomplete;
 only normal exhaustion allows full reconciliation. The adapter does not own
 BrowserSession lifecycle or Catalog access. BookWalker Discovery, Batch
-Runner, Site Policy, and quota consumption remain unimplemented.
+Runner, Site Policy, and quota consumption remain unimplemented for Phase 4A.
+
+The Phase 5A read-only Batch Planner and Manga ONE Site Policy are now
+implemented. They select Catalog sources and create plan candidates only;
+Crawler execution and quota persistence remain Phase 5B.
 
 ## 1. 設計原則
 
@@ -116,7 +120,7 @@ Watchlist targetからitem/source候補を列挙する。
 
 Discovery Adapter自身はSQLiteを直接read/writeしない。
 
-現時点ではfake/local Adapterで利用する共通frameworkだけを実装し、BookWalker/Manga ONEのreal-site listing Adapterは追加しない。
+現時点ではfake/local Adapterで利用する共通frameworkとManga ONEのreal-site listing Adapterを実装している。BookWalkerのreal-site listing Adapterは追加しない。
 
 ### `catalog/`（Watchlist + Catalog基盤実装済み）
 
@@ -128,7 +132,7 @@ SQLite Catalogを扱う。
 - query
 - completed/local artifact state update
 
-初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Batch orchestrationは未実装である。
+初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Phase 5Aのread-only Batch Planner / Site Policy orchestrationも実装済みで、actual Crawler executionは未実装である。
 
 Catalog itemは、取得可能な範囲でtitle/author/genre/order等のpackaging metadataも保持できる。
 
@@ -419,6 +423,7 @@ Site Policyによるquota eligibility判定
 - paid/unknown sourceを自動crawlしない
 - active quota grantを新規quotaとして二重消費扱いしない
 - Site Policy ruleをCrawlerへ持ち込まない
+- `batch plan` はCatalogのstatus/local/quota stateを変更しない
 
 ## 15. 移行状態
 
@@ -428,7 +433,7 @@ Browser Session architectureは採用済みで、共通launcherとshared-profile
 
 BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。
 
-Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery frameworkは実装済みである。BookWalker/Manga ONE Discovery Adapter、Batch Runner、Site Policy、site-specific direct/quota behaviorは2026-09-17時点で未実装である。
+Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policyは実装済みである。BookWalker Policy、actual Crawler実行、quota消費記録、packaging、completed更新は2026-09-17時点で未実装である。
 
 ## 16. Discovery / Catalog / Batch dependency rules
 
@@ -477,19 +482,26 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 
 ### Batch Runner
 
-- pending item/sourceをCatalogから読む
+- Phase 5Aではpending item/sourceをread-onlyでCatalogから読む
 - free/owned/quota等の優先順位を適用する
 - Site Policyでquota eligibilityを判定する
 - active grantを評価し、`direct / quota` を解決する
-- 新規quota利用時は必要な消費状態をcrawl開始時に永続化する
-- Catalog metadataをoptional overrideとしてCrawl Requestへ入れる
-- packaging成功時だけcompleted/local_pathを更新する
+- Catalog metadataをoptional overrideとしてplan candidateへ入れる
+- quota仮予約はmemory内だけで行い、Catalogへ永続化しない
+- `quota_available` は計画前のlocal枠、`quota_remaining` は仮予約後の残枠を表す
+- Crawler実行、新規quota状態の永続化、packaging、completed/local_path更新はPhase 5Bで行う
 
 ### Site Policy
 
 site固有のquotaや再閲覧猶予を扱う。
 
 汎用rule DSLは作らず、必要なsiteだけ小さいPython Policyとして実装する。
+
+Phase 5Aでは `SitePolicyRegistry` にManga ONEだけを登録する。未登録siteは
+明示エラーとして停止する。Manga ONE Policyはsite-wideのlocal quotaを4枠とし、
+09:00/21:00 JSTのhalf-open windowで`quota_started_at`を数える。active grant
+（`access_granted_until > now`）はdirect扱いでslotを消費しない。利用者の手動消費や
+外部clientの残量はCatalogから観測できないため、これはlocal eligibility estimateである。
 
 ### Crawl Request
 

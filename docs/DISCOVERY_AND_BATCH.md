@@ -8,13 +8,22 @@ The adapter accepts any chapter URL, reads `#chapterList` newest-first, uses
 pagination. `無料`/`FREE`, `先読`/`先読み`, and unbadged cards map to `free`,
 `paid`, and `quota`. Uncertain traversal raises `DiscoveryIncompleteError`,
 so missing-source reconciliation is not performed. BookWalker Discovery,
-Batch Runner, Site Policy, and quota consumption remain out of scope.
+Batch Runner, Site Policy, and quota consumption remain out of scope for
+Phase 4A.
+
+## Phase 5A status
+
+The read-only Batch Planner, Site Policy registry, and Manga ONE Policy are
+implemented. `batch plan` reads pending Catalog items and creates candidates;
+it never runs the Crawler or changes Catalog state. BookWalker Policy, actual
+Crawler execution, quota persistence, packaging, and completed updates remain
+Phase 5B scope.
 
 ## 1. Status
 
 この文書は、Discovery / Catalog / Batch Runnerの採用仕様を定める。
 
-2026-09-17時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery frameworkが実装済みである。BookWalker/Manga ONE Discovery Adapter、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。
+2026-09-17時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policyが実装済みである。BookWalker Policy、actual Crawler実行、quota消費記録、packaging、completed更新は未実装である。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。
 
 実装済みの範囲:
 
@@ -29,6 +38,8 @@ Batch Runner, Site Policy, and quota consumption remain out of scope.
 - site-neutral Discovery model / Adapter contract / registry
 - full / incremental Discovery Serviceとscope reconciliation
 - cross-site duplicate warningの最小heuristic
+- read-only Batch PlannerとSite Policy registry
+- Manga ONEのlocal quota window / active grant判定
 
 実装時は `docs/SPEC.md`、`docs/ARCHITECTURE.md`、`docs/DECISIONS.md` と本書をauthorityとして扱う。
 
@@ -490,6 +501,16 @@ Policyは必要に応じて:
 
 初期実装で汎用quota rule engineは作らない。
 
+Phase 5AのManga ONE Policyは、通常話1話を無料ライフ1個として扱う
+local estimateを持つ。capacityは4、reset windowは09:00-21:00と
+21:00-翌09:00のJST half-open interval、`quota_started_at` を同じ
+window内で数える。`access_granted_until > now` のsourceはdirectであり、
+quota slotを消費しない。grant durationは24時間として定義するが、
+Phase 5Aではgrantを生成・永続化しない。
+
+このlocal estimateはCatalogが記録したquota消費だけを対象とする。利用者の
+手動消費や別clientの実際のfree life残量は観測できない。
+
 ### 10.3 Access strategy
 
 Catalogの `access_mode` はsourceの状態であり、Crawlerの今回の動作指定とは分ける。
@@ -528,7 +549,7 @@ Site Policyの `daily_limit` やreset ruleそのものをCrawlerへ渡さない�
 
 ### 11.1 責務
 
-Batch RunnerはCatalogから現在取得可能なsourceを選び、Site Policyを評価して具体的なCrawl Requestを作り、既存Screenshot Crawlerへ渡す。
+Batch RunnerはCatalogから現在取得可能なsourceを選び、Site Policyを評価して具体的なCrawl Request相当のBatch Planを作る。Phase 5Aでは既存Screenshot Crawlerへ渡さず、read-only結果として返す。
 
 CrawlerRunnerへCatalog依存を追加しない。
 
@@ -545,15 +566,16 @@ choose one source
   ↓
 resolve access_strategy
   ↓
-record quota start/grant if newly consuming quota
+reserve quota slot in memory only
   ↓
-build Crawl Request
+build Batch Candidate
   ↓
-existing crawl
-  ↓
-success -> item completed + local_path
-failure -> item remains pending
+Phase 5B: existing crawl / persistence
 ```
+
+`BatchPlan.quota_available` is the local capacity before this plan's
+reservations. `BatchPlan.quota_remaining` is the residual after the plan's
+in-memory reservations; neither value is written to Catalog.
 
 ### 11.2 Source priority
 
@@ -689,7 +711,8 @@ discover --mode incremental [--key ...] [--site ...]
 
 catalog list [...filters...]
 
-batch run [...filters/limit...]
+batch plan --site ... [--catalog ...]
+batch run [...filters/limit...]  # Phase 5B
 ```
 
 既存 `crawl` には、実装時に必要最小限のoptional inputを追加できる。
@@ -723,6 +746,8 @@ Watchlist全件実行時は `enabled=true` のtargetだけを対象とする。
 - Batchがquota ruleそのものをCrawlerへ押し込まない
 - Crawlerのmetadata overrideでmanifest/source URLを偽装しない
 - Watchlist removeでCatalogをcascade deleteしない
+- `batch plan` は `items.status`、`local_path`、`completed_at`、`quota_started_at`、`access_granted_until` を変更しない
+- planner内のquota仮予約をCatalogへ永続化しない
 
 ## 15. Acceptance Criteria
 

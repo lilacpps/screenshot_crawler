@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections import Counter
 from pathlib import Path
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -13,6 +14,7 @@ from screenshot_crawler.auth.env import (
     read_env_file,
     require_site_env_value,
 )
+from screenshot_crawler.batch import BatchPlanner, BatchPlanningError
 from screenshot_crawler.catalog import CatalogError, CatalogService
 from screenshot_crawler.catalog.export import export_catalog_csv
 from screenshot_crawler.core.browser import (
@@ -33,6 +35,7 @@ from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
 from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
+from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
 
 
@@ -187,6 +190,19 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("catalog-export.csv"),
         help="CSV output path (default: catalog-export.csv)",
     )
+
+    batch = subparsers.add_parser("batch", help="Plan Catalog sources for future crawling")
+    batch_subparsers = batch.add_subparsers(dest="batch_action", required=True)
+    batch_plan = batch_subparsers.add_parser(
+        "plan", help="Create a read-only Batch Plan without crawling"
+    )
+    batch_plan.add_argument("--site", required=True)
+    batch_plan.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
+    )
     return parser
 
 
@@ -207,6 +223,12 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
 
     registry = DiscoveryAdapterRegistry()
     registry.register("mangaone", MangaOneDiscoveryAdapter)
+    return registry
+
+
+def _batch_policy_registry() -> SitePolicyRegistry:
+    registry = SitePolicyRegistry()
+    registry.register("mangaone", MangaOneSitePolicy)
     return registry
 
 
@@ -436,6 +458,36 @@ def _run_catalog(args: argparse.Namespace) -> None:
         print(f"  output: {result.output_path.resolve()}")
 
 
+def _run_batch(args: argparse.Namespace) -> None:
+    if args.batch_action == "plan":
+        plan = BatchPlanner(
+            CatalogService(args.catalog),
+            _batch_policy_registry(),
+        ).plan(site=args.site)
+        print("Batch plan:")
+        print(f"  site: {args.site}")
+        print(f"  eligible: {len(plan.candidates)}")
+        print(f"  direct: {plan.direct_count}")
+        print(f"  quota: {plan.quota_count}")
+        if plan.quota_remaining is not None:
+            print(f"  quota_available: {plan.quota_available}")
+            print(f"  quota_remaining: {plan.quota_remaining} (after in-memory reservations)")
+        print(f"  skipped: {len(plan.skipped)}")
+        if plan.candidates:
+            print("Candidates:")
+            for candidate in plan.candidates:
+                order = candidate.metadata.get("order", "-")
+                print(
+                    f"  item={candidate.item_id} source={candidate.source_id} "
+                    f"{order} {candidate.access_mode} -> "
+                    f"{candidate.access_strategy} {candidate.url}"
+                )
+        if plan.skipped:
+            print("Skipped:")
+            for reason, count in sorted(Counter(item.reason for item in plan.skipped).items()):
+                print(f"  {reason}: {count}")
+
+
 def main() -> None:
     args = _parser().parse_args()
     try:
@@ -451,10 +503,15 @@ def main() -> None:
             _run_watch(args)
         elif args.command == "catalog":
             _run_catalog(args)
+        elif args.command == "batch":
+            _run_batch(args)
     except WatchlistError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     except CatalogError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    except BatchPlanningError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 

@@ -8,6 +8,14 @@ A target may use any Manga ONE chapter URL; the adapter enumerates newest-first
 change the viewer crawl path, Catalog schema, Batch/Site Policy, quota
 consumption, or the existing one-URL-to-one-crawl responsibility.
 
+## Phase 5A status
+
+The read-only Batch Planner, Site Policy registry, and Manga ONE local quota
+policy are implemented. `batch plan` selects pending Catalog sources and
+produces site-neutral candidates with `direct` or `quota` intent. It does not
+run the Crawler, record quota consumption, package output, or update Catalog
+local state. Actual crawl integration remains Phase 5B.
+
 ## 1. 目的
 
 特定のWebビューアにアクセスし、現在コンテンツを1ページずつ進めながら本文だけをPNGとして保存する。
@@ -540,7 +548,7 @@ BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` と
 
 移行後もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
 
-Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery frameworkは実装済みである。BookWalker/Manga ONE Discovery Adapter、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
+Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner、Site Policy registry、Manga ONE Policyは実装済みである。BookWalker Policy、actual Crawler実行、quota消費記録、packaging、completed更新は未実装である。実装時も既存Crawlerの1 URL -> 1 run責務を維持する。
 
 ## 27. 完了確認
 
@@ -594,6 +602,8 @@ existing Screenshot Crawler
 - quota制約はsite-specific Policyで扱い、基本的にcrawl開始時に消費記録する
 - quota消費後の再閲覧猶予は `access_granted_until` で扱える
 - Batchは今回の実行意図を `access_strategy=auto|direct|quota` としてCrawlerへ渡す
+- Phase 5Aの `batch plan` は `pending` itemだけを対象に、Catalogを変更せず候補を表示する
+- Manga ONE Policyのlocal quota modelは4枠、09:00/21:00 JST reset、24時間grantである
 - title/author/order/genreは既知ならCrawlerへ渡し、なければAdapter取得へfallbackする
 - 別site同一作品を自動mergeせず、Discovery時に重複候補warningだけを出す
 - 詳細schema、sync semantics、failure handlingは `docs/DISCOVERY_AND_BATCH.md` に定める

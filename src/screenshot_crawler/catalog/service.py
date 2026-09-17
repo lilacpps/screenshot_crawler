@@ -228,6 +228,24 @@ class CatalogService:
             rows = connection.execute(query, values).fetchall()
         return [self._source_from_row(row) for row in rows]
 
+    def read_items_and_sources(self, *, site: str) -> tuple[list[Item], list[Source]]:
+        """Read all items and one site's sources without initializing or writing.
+
+        Batch planning must not create a missing database or initialize an
+        unversioned database as a side effect of inspecting it.
+        """
+
+        self._validate_nonempty(site, "site")
+        with self._read_only_connection() as connection:
+            item_rows = connection.execute("SELECT * FROM items ORDER BY id").fetchall()
+            source_rows = connection.execute(
+                "SELECT * FROM sources WHERE site = ? ORDER BY id", (site,)
+            ).fetchall()
+        return (
+            [self._item_from_row(row) for row in item_rows],
+            [self._source_from_row(row) for row in source_rows],
+        )
+
     def mark_sources_unavailable_except(
         self,
         *,
@@ -445,6 +463,40 @@ class CatalogService:
             except BaseException:
                 connection.rollback()
                 raise
+        finally:
+            connection.close()
+
+    @contextmanager
+    def _read_only_connection(self):
+        if not self.path.exists() or not self.path.is_file():
+            raise CatalogNotFoundError(f"Catalog database not found: {self.path}")
+        try:
+            connection = sqlite3.connect(
+                f"{self.path.resolve().as_uri()}?mode=ro", uri=True
+            )
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+        except sqlite3.Error as exc:
+            raise CatalogError(f"Could not open Catalog database '{self.path}': {exc}") from exc
+        try:
+            version = schema.user_version(connection)
+            if version == 0:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                    )
+                }
+                if not tables:
+                    raise CatalogError("Catalog schema is not initialized")
+            try:
+                schema.initialize(connection)
+            except schema.SchemaError as exc:
+                raise self._schema_error(exc) from exc
+            yield connection
+        except sqlite3.DatabaseError as exc:
+            raise CatalogError(f"Could not read Catalog database '{self.path}': {exc}") from exc
         finally:
             connection.close()
 

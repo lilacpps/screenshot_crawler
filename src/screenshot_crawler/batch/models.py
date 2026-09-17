@@ -1,0 +1,54 @@
+"""Batch planning result models."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Literal
+
+BatchAccessStrategy = Literal["direct", "quota"]
+
+
+class BatchPlanningError(RuntimeError):
+    """Raised when a Batch Plan cannot be generated safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class BatchCandidate:
+    """One source selected for a future site-neutral Crawl Request."""
+
+    item_id: int
+    source_id: int
+    site: str
+    url: str
+    access_strategy: BatchAccessStrategy
+    metadata: dict[str, str] = field(default_factory=dict)
+    access_mode: str = "unknown"
+    reason: str = ""
+    consumes_quota: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class BatchSkipped:
+    """One item or source omitted from a Batch Plan."""
+
+    item_id: int
+    source_id: int | None
+    reason: str
+
+
+@dataclass(slots=True)
+class BatchPlan:
+    """Read-only plan containing selected candidates and skip details."""
+
+    candidates: list[BatchCandidate] = field(default_factory=list)
+    skipped: list[BatchSkipped] = field(default_factory=list)
+    quota_available: int | None = None
+    quota_remaining: int | None = None
+
+    @property
+    def direct_count(self) -> int:
+        return sum(candidate.access_strategy == "direct" for candidate in self.candidates)
+
+    @property
+    def quota_count(self) -> int:
+        return sum(candidate.access_strategy == "quota" for candidate in self.candidates)

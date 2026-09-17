@@ -396,8 +396,27 @@ The minimal command is:
 ```
 
 The command uses shared CDP Chrome through `BrowserSession`, closes only its
-temporary Page, and leaves remote Chrome running. Batch, Site Policy, quota
-consumption, and automatic crawling remain unimplemented.
+temporary Page, and leaves remote Chrome running. Phase 5A adds a read-only
+Manga ONE Site Policy and Batch Planner; actual direct/quota entry,
+quota consumption, and automatic crawling remain unimplemented.
+
+The planner treats the Discovery mapping as follows: `free` and `owned` are
+eligible with `direct`; `quota` with `access_granted_until > now` is eligible
+with `direct` and does not consume a local slot; other eligible quota sources
+use `quota` when a local slot remains. `paid`, `unknown`, and unavailable
+sources are skipped. The policy models four site-wide local quota slots per
+half-open JST window (09:00-21:00 and 21:00-next-day 09:00), counts only
+Catalog `quota_started_at` values in the current window, and defines a
+24-hour grant duration for Phase 5B. Planner reservations are memory-only.
+Manual or external free-life consumption is not observable in Catalog, so this
+is only a local eligibility estimate.
+
+The planning command is:
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli batch plan `
+  --site mangaone --catalog catalog.sqlite
+```
 
 - 末尾promotion pageがZIPへ残ることがある。
 - 前編/後編統合はCrawlerで行わない。

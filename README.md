@@ -12,8 +12,8 @@ stable Catalog source identity and supports bounded `次へ` pagination.
   --watchlist watchlist.yaml --catalog catalog.sqlite
 ```
 
-BookWalker Discovery, Batch Runner, Site Policy, and quota consumption are
-not implemented yet.
+BookWalker Discovery and Policy, actual Batch Crawler execution, quota
+consumption, packaging, and completed updates are not implemented yet.
 
 Python + Playwrightで、Webビューアを1ページずつ進めながら本文だけをPNG保存し、正常終了時にZIPへまとめるクローラです。
 
@@ -35,9 +35,10 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - SQLite Catalog基盤（`items` / `sources`、schema version 1）
 - Catalogの閲覧用CSV export（`catalog export`、SQLiteがauthority）
 - site-neutral Discovery framework（fake/local Adapter向け、full / incremental sync）
+- Phase 5A read-only Batch Planner、Site Policy registry、Manga ONE Policy
 - unit testsとPlaywrightローカルfixture integration tests
 
-Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery frameworkは実装済みです。BookWalker / Manga ONE Discovery Adapter、Batch Runner、Site Policy、site-specific direct/quota behaviorは未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
+Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policyは実装済みです。BookWalker Policy、actual Crawler実行、quota消費記録、packaging、completed更新はPhase 5Bで実装予定です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
 
 ## 採用するBrowser Session設計
 
@@ -187,6 +188,18 @@ DiscoveryはWatchlistに明示した作品だけを対象とし、別siteの同�
 Batchはquota ruleを解決し、Crawlerへは今回の実行意図だけを `access_strategy=direct|quota` として渡します。手動crawlは `auto` がdefaultです。
 
 Catalogでtitle/author/order/genreが分かっていればCrawlerへoptional metadataとして渡し、未指定fieldはSite Adapterの取得値へfallbackする設計です。
+
+### Batch plan
+
+CatalogからManga ONEのcrawl候補を確認できます。これはread-onlyの計画だけを行い、Crawler実行・quota消費記録・completed更新は行いません。
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli batch plan `
+  --site mangaone `
+  --catalog catalog.sqlite
+```
+
+Manga ONE PolicyはCatalog-localなquota_started_atを使い、4枠・09:00/21:00 JST reset・active grantのdirect判定を行います。手動で消費した無料ライフはCatalogから把握できないため、結果はlocal eligibility estimateです。
 
 ### CatalogのCSV export
 

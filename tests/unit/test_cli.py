@@ -128,6 +128,19 @@ def test_catalog_export_parser_accepts_defaults_and_overrides() -> None:
     assert custom.output == Path("output/export.csv")
 
 
+def test_batch_plan_parser_accepts_site_and_catalog() -> None:
+    defaults = _parser().parse_args(["batch", "plan", "--site", "mangaone"])
+    custom = _parser().parse_args(
+        ["batch", "plan", "--site", "mangaone", "--catalog", "custom.sqlite"]
+    )
+
+    assert defaults.command == "batch"
+    assert defaults.batch_action == "plan"
+    assert defaults.site == "mangaone"
+    assert defaults.catalog == Path("catalog.sqlite")
+    assert custom.catalog == Path("custom.sqlite")
+
+
 class FakeLoginAdapter:
     def __init__(self, *, should_fail: bool) -> None:
         self.should_fail = should_fail
