@@ -18,6 +18,8 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - manifestをauthorityにしたZIP packagingとlibrary出力
 - unit testsとPlaywrightローカルfixture integration tests
 
+Discovery / Catalog / Batch Runnerは仕様確定済みですが、2026-09-17時点では未実装です。詳細は `docs/DISCOVERY_AND_BATCH.md` を参照してください。
+
 ## 採用するBrowser Session設計
 
 Real-site automationは、**1つの専用Crawler ChromeへCDP接続し、そのChromeをPlaywrightで操作する**構成へ統一します。
@@ -99,12 +101,13 @@ BookWalker login/crawl、Manga ONE login/crawl、同一profileでのsession共�
 ## 最初に読むもの
 
 1. `docs/SPEC.md` — 現在の製品仕様・受け入れ条件
-2. `docs/ARCHITECTURE.md` — 責務分離とBrowser Session設計
-3. `docs/DECISIONS.md` — 重要な設計判断
-4. `docs/CODEX_IMPLEMENTATION_GUIDE.md` — 既存実装を変更するときのルール
-5. `docs/SITE_ADAPTER_GUIDE.md` — 新規サイト対応の作り方
-6. `docs/TEST_STRATEGY.md` — テスト方針
-7. `note/README.md` — 現行実装ノートの更新ルールとファイル対応
+2. `docs/ARCHITECTURE.md` — 責務分離とBrowser Session / subsystem設計
+3. `docs/DISCOVERY_AND_BATCH.md` — Watchlist / Discovery / Catalog / Batchの採用仕様
+4. `docs/DECISIONS.md` — 重要な設計判断
+5. `docs/CODEX_IMPLEMENTATION_GUIDE.md` — 既存実装を変更するときのルール
+6. `docs/SITE_ADAPTER_GUIDE.md` — 新規サイト対応の作り方
+7. `docs/TEST_STRATEGY.md` — テスト方針
+8. `note/README.md` — 現行実装ノートの更新ルールとファイル対応
 
 `note/` は現在の実装詳細を復元するためのcurrent implementation snapshotです。仕様・実装・運用を変更した場合は、対応するnoteも同じ変更で同期します。
 
@@ -121,7 +124,7 @@ Windows PowerShellを主な実行環境として想定しています。
 
 ## 基本ワークフロー
 
-目標:
+現在実装済みの標準workflow:
 
 ```text
 Crawler Chromeを1回起動
@@ -141,7 +144,23 @@ END / NEXT_CONTENTで正常終了したらZIP化
 Crawler tabだけclose、Chromeは維持
 ```
 
-Crawler本体はURL一覧の収集を担当しません。
+Crawler Core自体はURL一覧の収集を担当しません。
+
+将来実装する上位workflow:
+
+```text
+watchlist.yaml
+    ↓
+Discovery (full / incremental)
+    ↓
+catalog.sqlite (items / sources)
+    ↓
+Batch Runner / Site Policy
+    ↓
+既存 crawl(site + URL)
+```
+
+DiscoveryはWatchlistに明示した作品だけを対象とし、別siteの同一作品を自動mergeしません。
 
 ## 共通Crawler Chromeの起動
 
