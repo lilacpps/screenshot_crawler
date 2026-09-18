@@ -514,7 +514,7 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery framework実装済み）
 
-2026-09-17時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policy、Phase 5BのManga ONE Batch Executorが実装済みである。BookWalker Policy / Batchは未実装である。
+2026-09-18時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policy、Phase 5BのManga ONE Batch Executorが実装済みである。BookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryは採用仕様のみ定義済みで未実装である。
 
 authority:
 
@@ -574,11 +574,12 @@ Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framewor
 - Watchlist targetはstable `key` を持つ
 - Catalogは `items / sources` の2テーブル
 - full syncはcomplete時だけmissing sourceをunavailable化
-- incrementalはlatest側から異なるknown source 2件連続で停止し、同一stable identityの重複観測はstreakに加算しない
+- 現行incremental実装はlatest側から異なるknown source 2件連続で停止し、同一stable identityの重複観測はstreakに加算しない
+- 採用仕様ではdefault known-streakを維持しつつ、site固有access遷移に必要なstable boundary hookを許容する。BookWalker実装時に追加予定
 - 別site同一作品は自動mergeせずwarning only
 - access modeは `owned / free / quota / paid / unknown`
 - quotaは基本crawl開始時に消費記録
-- site上の再閲覧猶予は `access_granted_until` で扱える
+- site上に再閲覧猶予がある場合は `access_granted_until` で扱える。BookWalkerはsource単位grantを仮定しない採用仕様
 - Batch/Site Policyが今回の `access_strategy` を解決する
 - quota sourceでもactive grant中は `direct`、新規枠を使う場合だけ `quota`
 - quota limit/reset ruleそのものをCrawlerへ渡さない
@@ -593,7 +594,7 @@ Manga ONE Policyはsite-wide local quotaを4枠、09:00/21:00 JSTのhalf-open wi
 
 CLIは `batch plan --site mangaone --catalog catalog.sqlite` と `batch run --site mangaone --catalog catalog.sqlite` を提供する。`batch plan`はread-onlyで、`batch run`はcandidateをsequentialに実行し、quota stateをCrawler開始直前に保存し、crawl + packaging成功後だけcompletedを更新する。`--limit N`は先頭N件に制限し、失敗時は後続を実行しない。
 
-BookWalker Policy / Batchは未実装である。Manga ONE Batch Executorはfake/local unit testで確認し、real Manga ONEのBatch runは自動実行していない。
+BookWalker Discovery / Policy / strict direct・quota entryは未実装である。採用仕様のBookWalker固有詳細は `note/01_bookwalker.md` と `docs/DISCOVERY_AND_BATCH.md` を参照する。Manga ONE Batch Executorはfake/local unit testで確認し、real Manga ONEのBatch runは自動実行していない。
 
 ### 22.3 Discovery framework（実装済み）
 
@@ -601,7 +602,9 @@ BookWalker Policy / Batchは未実装である。Manga ONE Batch Executorはfake
 
 `DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。real-site用Adapterはまだ登録していない。
 
-fullはiteratorの正常終了だけを`complete=true`とし、`DiscoveryIncompleteError`または予期しない例外ではmissing sourceのreconciliationを行わない。complete fullだけが同じ`site + discovery_key` scopeの未観測sourceを`available=false`にする。incrementalのknown判定と2件連続streakはServiceが管理し、2件目をrefreshしてから停止する。未観測sourceはunavailableにしない。
+fullはiteratorの正常終了だけを`complete=true`とし、`DiscoveryIncompleteError`または予期しない例外ではmissing sourceのreconciliationを行わない。complete fullだけが同じ`site + discovery_key` scopeの未観測sourceを`available=false`にする。現行incrementalのknown判定と2件連続streakはServiceが管理し、2件目をrefreshしてから停止する。未観測sourceはunavailableにしない。
+
+採用済み次期仕様では、このknown-streakをdefaultとして維持しつつ、BookWalkerのように既知paid/unknownが将来quotaへ変化し得るsite向けにsmall site-specific stop policyを追加する。BookWalkerはrun開始前からquota/ownedだった既知sourceをstable boundaryとして停止する。これはまだ未実装である。
 
 ### 22.4 Discovery CLIの複数target同期（実装済み）
 
