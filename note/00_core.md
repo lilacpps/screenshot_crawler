@@ -9,9 +9,9 @@ pagination, and uses the chapter id (not the URL) as source identity.
 `quota`. Incomplete traversal is not treated as a complete full scan. The
 adapter remains Catalog-free and does not own BrowserSession lifecycle; the
 minimal `discover` CLI supplies the Page. BookWalker series-scoped Discovery
-is now registered. BookWalker Batch Runner, Site Policy, quota consumption, and
-automatic crawl remain unimplemented, while BookWalker strict direct/quota
-product-page entry is implemented in the BookWalker Adapter. Phase 5A adds
+is now registered. BookWalker Site Policy, grant-less quota consumption, and
+automatic Batch execution are implemented, while BookWalker strict
+direct/quota product-page entry remains in the BookWalker Adapter. Phase 5A adds
 read-only Batch planning and Manga ONE Policy. Phase
 5B adds sequential Manga ONE Batch execution around the existing Core.
 
@@ -516,7 +516,7 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery framework実装済み）
 
-2026-09-19時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policy、Phase 5BのManga ONE Batch Executor、BookWalker Adapterのstrict direct・quota product-page entryが実装済みである。BookWalker Site Policy、quota消費、Batch実行は未実装である。
+2026-09-19時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE・BookWalker Policy、Phase 5BのManga ONE・BookWalker Batch Executor、BookWalker Adapterのstrict direct・quota product-page entryが実装済みである。BookWalkerは05:00 JSTのsite-wide 1枠local safety policyを使い、quota開始をreader entry前に永続化する。実サイトquota clickは未確認である。
 
 authority:
 
@@ -561,10 +561,7 @@ Crawl Request
 既存CrawlerRunner
 ```
 
-現行実装には以下はまだ存在しない。
-
-- BookWalker Batch Policy
-- BookWalker actual Batch execution / Policy
+現行実装には、BookWalker quotaの実サイトlive click検証と、quotaのサーバー側実消費をCatalogだけから検証する機能は存在しない。
 
 Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framework、Phase 5A Batch Planner / Site Policy registry / Manga ONE Policyは実装済みである。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。Phase 5Aのplannerは`auto`を使わず、`direct`/`quota`の実行意図とmetadataをcandidateへ保持するだけである。
 
@@ -594,7 +591,7 @@ Manga ONE Policyはsite-wide local quotaを4枠、09:00/21:00 JSTのhalf-open wi
 
 CLIは `batch plan --site mangaone --catalog catalog.sqlite` と `batch run --site mangaone --catalog catalog.sqlite` を提供する。`batch plan`はread-onlyで、`batch run`はcandidateをsequentialに実行し、quota stateをCrawler開始直前に保存し、crawl + packaging成功後だけcompletedを更新する。`--limit N`は先頭N件に制限し、失敗時は後続を実行しない。
 
-BookWalker Discoveryはseries listから商品URLを列挙し、商品ページのreader controlを観測してCatalogへ反映する。BookWalker Site Policy / strict direct・quota entryは未実装である。採用仕様のBookWalker固有詳細は `note/01_bookwalker.md` と `docs/DISCOVERY_AND_BATCH.md` を参照する。Manga ONE Batch Executorはfake/local unit testで確認し、real Manga ONEのBatch runは自動実行していない。
+BookWalker Discoveryはseries listから商品URLを列挙し、商品ページのreader controlを観測してCatalogへ反映する。BookWalker Site Policyはsite-wide 1 quota / 05:00 JST half-open windowを評価し、`access_granted_until`をdirect判定に使わない。Batch Executorはquota candidateの`quota_started_at`をCrawler開始前に保存し、`access_granted_until=NULL`を許容する。同一window内の失敗はrefundせず、Executorの現在Catalog再検証で同一candidateをCrawlerへ再投入しない。Manga ONEの24時間grant挙動は維持する。実サイトquota clickは自動検証していない。
 
 ### 22.3 Discovery framework（実装済み）
 

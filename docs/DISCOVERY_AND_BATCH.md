@@ -8,32 +8,30 @@ The adapter accepts any chapter URL, reads `#chapterList` newest-first, uses
 pagination. `無料`/`FREE`, `先読`/`先読み`, and unbadged cards map to `free`,
 `paid`, and `quota`. Uncertain traversal raises `DiscoveryIncompleteError`,
 so missing-source reconciliation is not performed. BookWalker Discovery is
-not implemented yet; its adopted series-scoped design is specified in 8.4.
+implemented as a series-scoped adapter; its current boundary is the explicit
+series-list target described in 8.4.
 
 ## Phase 5A status
 
-The read-only Batch Planner, Site Policy registry, and Manga ONE Policy are
-implemented. `batch plan` reads pending Catalog items and creates candidates;
-it never runs the Crawler or changes Catalog state. The adopted BookWalker
-Policy / strict entry design is specified in 10.4-10.5 but is not implemented
-yet.
+The read-only Batch Planner, Site Policy registry, Manga ONE Policy, and
+BookWalker Policy are implemented. `batch plan` reads pending Catalog items
+and creates candidates; it never runs the Crawler or changes Catalog state.
+BookWalker uses a site-wide capacity of one quota start per 05:00 JST window.
 
 ## Phase 5B status
 
-`batch run` is implemented for Manga ONE. It consumes the Phase 5A plan in
-stable order, creates a site-neutral `RunConfig`, runs the existing crawler,
-packages successful output, and then marks the item completed. It is
-sequential and stops on the first failure. The plan command remains fully
-read-only, while `batch run` may update local quota fields before a quota
-crawl and item completion fields after successful packaging. BookWalker has
-no registered Policy and is not executable by Batch yet; the target behavior
-is specified below.
+`batch run` is implemented for Manga ONE and BookWalker. It consumes the
+Phase 5A plan in stable order, creates a site-neutral `RunConfig`, runs the
+existing crawler, packages successful output, and then marks the item
+completed. It is sequential and stops on the first failure. The plan command
+remains fully read-only, while `batch run` may update local quota fields before
+a quota crawl and item completion fields after successful packaging.
 
 ## 1. Status
 
 この文書は、Discovery / Catalog / Batch Runnerの採用仕様を定める。
 
-2026-09-18時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy、Phase 5BのManga ONE Batch Executorが実装済みである。BookWalkerのseries-scoped Discovery / Site Policy / strict direct・quota entryは採用仕様を本書に定義済みだが、実装は未着手である。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。
+2026-09-19時点では、Watchlist + Catalog基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy / BookWalker Policy、Phase 5BのManga ONE・BookWalker Batch Executor、BookWalker strict direct・quota entryが実装済みである。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。BookWalker quotaの実サイトlive clickは未確認であり、synthetic/local CatalogでのBatch検証までを完了範囲とする。
 
 実装済みの範囲:
 
@@ -51,6 +49,7 @@ is specified below.
 - read-only Batch PlannerとSite Policy registry
 - Manga ONEのlocal quota window / active grant判定
 - Manga ONE Batch Executor、quota local state persistence、sequential run、packaging後のcompleted更新
+- BookWalker Site Policy（05:00 JST / site-wide capacity 1）、grant-less quota state persistence、strict direct/quota Batch run
 
 実装時は `docs/SPEC.md`、`docs/ARCHITECTURE.md`、`docs/DECISIONS.md` と本書をauthorityとして扱う。
 
@@ -667,7 +666,7 @@ no active grant + quota eligible
 
 Site Policyの `daily_limit` やreset ruleそのものをCrawlerへ渡さない。
 
-`access_strategy` に応じたbutton選択、viewer entry等のsite固有操作はSite Adapterの責務とする。Manga ONE Adapterは`auto`/`direct`/`quota`を実行できる。BookWalkerは10.5のstrict entryを採用するが、実装完了まではbase validationにより`direct`/`quota`を明示的に停止する。Coreにsite名やquota button selectorの分岐を追加しない。
+`access_strategy` に応じたbutton選択、viewer entry等のsite固有操作はSite Adapterの責務とする。Manga ONE Adapterは`auto`/`direct`/`quota`を実行できる。BookWalkerは10.5のstrict entryを実装済みで、Batch Executorから`direct`/`quota`をAdapterへ渡す。Coreにsite名やquota button selectorの分岐を追加しない。
 
 ### 10.4 BookWalker Site Policy
 

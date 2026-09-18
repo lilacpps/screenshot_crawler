@@ -70,10 +70,6 @@ class BatchExecutor:
 
             if candidate.consumes_quota:
                 grant_until = policy.access_grant_until(current)
-                if grant_until is None:
-                    raise BatchExecutionError(
-                        f"Site Policy did not provide a quota grant for {candidate.site}"
-                    )
                 self.catalog.record_quota_access(
                     candidate.source_id,
                     quota_started_at=current,
@@ -144,7 +140,13 @@ class BatchExecutor:
             mismatches.append("source.available=false")
 
         try:
-            decision = policy.evaluate(source, now=now, quota_available=1)
+            site_sources = self.catalog.list_sources(site=candidate.site)
+            actual_quota_available = policy.available_quota(site_sources, now)
+            decision = policy.evaluate(
+                source,
+                now=now,
+                quota_available=actual_quota_available,
+            )
         except SitePolicyError as exc:
             raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
         if (

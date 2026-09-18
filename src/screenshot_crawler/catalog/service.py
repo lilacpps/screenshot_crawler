@@ -450,16 +450,14 @@ class CatalogService:
         source_id: int,
         *,
         quota_started_at: datetime | str,
-        access_granted_until: datetime | str,
+        access_granted_until: datetime | str | None,
     ) -> Source:
         """Persist only the local quota state for one existing source."""
 
         started = format_timestamp(quota_started_at)
         granted_until = format_timestamp(access_granted_until)
-        if started is None or granted_until is None:
-            raise CatalogValidationError(
-                "quota_started_at and access_granted_until are required"
-            )
+        if started is None:
+            raise CatalogValidationError("quota_started_at is required")
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT id FROM sources WHERE id = ?", (source_id,)

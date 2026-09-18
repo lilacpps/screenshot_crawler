@@ -42,7 +42,11 @@ from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryServ
 from screenshot_crawler.discovery.models import DiscoveryResult
 from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
-from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
+from screenshot_crawler.site_policies import (
+    BookWalkerSitePolicy,
+    MangaOneSitePolicy,
+    SitePolicyRegistry,
+)
 from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
 
@@ -298,6 +302,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
 
 def _batch_policy_registry() -> SitePolicyRegistry:
     registry = SitePolicyRegistry()
+    registry.register("bookwalker", BookWalkerSitePolicy)
     registry.register("mangaone", MangaOneSitePolicy)
     return registry
 

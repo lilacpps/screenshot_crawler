@@ -25,8 +25,7 @@ BookWalkerの商品ページまたはviewer URLから、現在コンテンツの
 
 実サイト確認では、対象trial readerで59/59まで本文を保存し、その後のlogo screenを保存せず正常終了した実績がある。
 
-BookWalkerのseries-scoped Discoveryは実装済みである。BookWalker Site PolicyとBatch実行は
-未実装だが、Batchからのstrict `direct` / `quota` entryは実装済みである。Adapterを直接生成
+BookWalkerのseries-scoped Discovery、Site Policy、Batch実行は実装済みである。Batchからのstrict `direct` / `quota` entryも実装済みである。Adapterを直接生成
 した場合のstrategy defaultは`auto`で、`configure_run()`は`auto` / `direct` / `quota`を受け付け、
 run stateへ保存する。
 
@@ -399,8 +398,9 @@ capture・navigation・page counter・END / NEXT_CONTENT・metadata behaviorに�
 - global fingerprint dedupeのためpixel完全一致の別ページは1枚扱いになる。
 - `config.yaml` はruntime authorityではない。
 - diagnosticsのAdapter固有metadata統合は未実装。
-- BookWalker Site Policyは未実装。
-- BookWalker Adapterのstrict `direct` / `quota` entryは未実装。
+- BookWalker Site Policyは05:00 JST window / site-wide capacity 1として実装済み。
+- BookWalker Adapterのstrict `direct` / `quota` entryとBatch Executor連携は実装済み。
+- BookWalker quotaの実サイトlive clickは未確認。synthetic/local Catalogでのpolicy・planner・executor検証までを完了範囲とする。
 - BookWalker series-listのlive DOM smoke testは未実施。Phase 4移行前に実サイトでselectorと全件列挙を確認する必要がある。
 - 現行reader candidate scoringはmanual `auto` 互換経路として維持する。
 
