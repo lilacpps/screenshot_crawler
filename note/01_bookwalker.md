@@ -389,6 +389,80 @@ completion statusは `output/crawl-status/` 配下。
 loginは既存tabを再利用せず専用new Pageで実行し、終了後はPageだけをcloseしてremote Chromeを維持した。
 capture・navigation・page counter・END / NEXT_CONTENT・metadata behaviorに回帰はなかった。
 
+### 18.1 Viewer resolution diagnostic (2026-09-19)
+
+`origin/main` の HEAD `ef8930e9197b4cfd470df47c390b8033aaf08864` を基準に、指定された
+trial viewer URLを同じ初期ページ（`2/33`）で、別profile・別CDP portのheaded Chromeから測定した。
+Chromeは `152.0.7977.83`、screenはCSS `2560x1440` / available `2560x1392`、
+`devicePixelRatio=1.5` だった。4K指定時はこの表示領域のためouter heightが2160まで広がらず、
+実測値は次の通りだった。
+
+| 条件 | outer / inner | Canvas CSS | Canvas backing = PNG | PNG bytes | SHA-256 |
+| --- | --- | --- | --- | ---: | --- |
+| FHD `--window-size=1920,1080` | `1920x1080` / `1906x986` | `1906x986` | `2859x1479` | 1,804,531 | `912fa93489c48e03323c16f3e71248ca0754225e9db07147b127267319260518` |
+| 4K `--window-size=3840,2160` | `3840x1461` / `3826x1367` | `3826x1367` | `5739x2051` | 3,208,380 | `81b1458c08050bf3291983575917600ce156cfd96f15550774d048f91f49a308` |
+| 4K monitor最大化 `--start-maximized` | `2560x1392` / `2560x1305` | `2560x1305` | `3840x1958` | 2,875,423 | `32036d79e493c4d46bcbf7ab1873433ef569b64a1ffee0c97b6acb5f863649b5` |
+
+Canvas `toDataURL('image/png')` のPNG寸法は、3条件ともCanvas backing寸法と一致した。
+FHDに対する4K指定の倍率はwidth `2.007345x`、height `1.386748x`、総pixel `2.783682x`。
+最大化はそれぞれ `1.343127x`、`1.323867x`、`1.778122x` だった。
+
+diagnostic-onlyの `drawImage` traceでは、3条件とも本文ページのsourceが
+`ImageBitmap 960x1280`で一致した。destination rectangleだけがFHDの概ね
+`1110x1479`から4K指定の概ね`1539x2051`へ拡大しており、4Kでsource画像自身が高解像度化した証拠は得られなかった。
+したがって、この1ページの実測に基づく判定は「Canvas/PNG pixel数は増えるが、sourceは同じで単なるupscaleの可能性が高い」
+であり、現行CrawlerのFHD設定を維持する。4K変更は保存PNGのpixel数・bytesを増やすが、実情報量向上の根拠がないため採用しない。
+この測定ではproductionコードとshared `.chrome-crawler/`設定を変更していない。
+
+### 18.2 別trial viewer URLの解像度確認 (2026-09-19)
+
+別のtrial viewer URLでも同じFHD / 4K指定 / 4K最大化の比較を行った。対象は初期ページ
+`1/11`で、前項のURLとは異なり、本文sourceは3条件すべてで`ImageBitmap 1303x2048`だった。
+
+| 条件 | outer / inner | Canvas backing | drawImage destination | capture PNG | PNG bytes |
+| --- | --- | --- | --- | ---: | ---: |
+| FHD `--window-size=1920,1080` | `1920x1080` / `1906x986` | `2859x1479` | `941x1479` | `941x1479` | 2,091,499 |
+| 4K `--window-size=3840,2160` | `3840x1461` / `3826x1367` | `5739x2051` | `1305x2051` | `1305x2051` | 3,667,037 |
+| 4K monitor最大化 `--start-maximized` | `2560x1392` / `2560x1305` | `3840x1958` | `1246x1958` | `1246x1958` | 3,404,443 |
+
+全条件で`devicePixelRatio=1.5`、sourceは同一だった。FHDはsourceに対して縮小、4K指定はほぼ1:1、
+最大化は軽い縮小であり、viewerがwindowサイズに応じてCanvas上のdestinationを変えることを確認した。
+このURLではsourceが`960x1280`ではないため、前項の`960x1280`基準をそのまま適用しない。
+この追加確認でもshared `.chrome-crawler/`、launcher、RunConfig、Adapter、capture.pyは変更していない。
+
+### 18.3 別trial viewer URLで3回左送り後の確認 (2026-09-19)
+
+18.2と同じtrial viewerで、BookWalker Adapterの左端クリックとbounded change waitを3回実行してから測定した。
+viewerのページカウンタは`1/11`から`7/11`へ進み、各左送りが見開き単位で進んだ。最終状態では左右2ページの
+capture targetが得られ、sourceは全条件で`ImageBitmap 1303x2048`だった。
+
+| 条件 | Canvas backing | destination | capture targets | PNG bytes（左右） |
+| --- | --- | --- | --- | ---: |
+| FHD `1920x1080` | `2859x1479` | `941x1479` | `941x1479` × 2 | 1,182,036 / 1,131,786 |
+| 4K `3840x2160` | `5739x2051` | `1305x2051` | `1305x2051` × 2 | 2,177,191 / 2,088,126 |
+| 4K monitor最大化 | `3840x1958` | `1246x1958` | `1246x1958` × 2 | 1,993,944 / 1,907,827 |
+
+3条件とも`devicePixelRatio=1.5`で、sourceの解像度は変わらなかった。今回もproductionコードとshared
+`.chrome-crawler/`設定は変更していない。
+
+### 18.4 3つ目のtrial viewer URLで0 / 3 / 17回左送り後の確認 (2026-09-19)
+
+別のtrial viewerで、FHD / 4K指定 / 4K最大化の各条件について、初期ページ、3回左送り後、
+17回左送り後をfresh profileで測定した。ページカウンタはそれぞれ`1/53`、`4/53`、`29/53`となった。
+
+| 左送り | FHD source → capture | 4K source → capture | 最大化 source → capture |
+| ---: | --- | --- | --- |
+| 0回 | `1443x2048` → `1043x1479` (2,766,512 bytes) | `1443x2048` → `1446x2051` (4,764,465 bytes) | `1443x2048` → `1380x1958` (4,428,270 bytes) |
+| 3回 | `2048x1090` → `2779x1479` (4,272,052 bytes) | `2048x1090` → `3854x2051` (7,027,187 bytes) | `2048x1090` → `3679x1958` (6,551,351 bytes) |
+| 17回 | `960x1280` → `1110x1479` × 2 (693,070 / 694,622 bytes) | `960x1280` → `1539x2051` × 2 (1,211,058 / 1,237,419 bytes) | `960x1280` → `1469x1958` × 2 (1,129,657 / 1,128,289 bytes) |
+
+全条件で`devicePixelRatio=1.5`だった。17回左送り後のページだけはsourceが`960x1280`で、FHDでも拡大描画、
+4K指定ではさらに大きく拡大描画されることを確認した。診断traceは各navigation前にリセットし、最終ページの
+drawImage geometryだけを評価している。この確認でもproductionコードとshared `.chrome-crawler/`設定は変更していない。
+
+今回の3サンプルの目視分類では、0回（1回目）は他社のライトノベルの表紙、3回左送り後（2回目）は漫画、
+17回左送り後（3回目）はKADOKAWA系のライトノベルの表紙・挿絵・通常本文が混在するページだった。
+
 ## 19. Known limitations / maintenance
 
 - BookWalker DOM / Canvas renderer変更時は再調査が必要。
