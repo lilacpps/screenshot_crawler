@@ -118,11 +118,13 @@ Watchlist targetからitem/source候補を列挙する。
 - Discovery Adapter contract / registry
 - site-specific discovery Adapterを受け入れるcontract
 - full / incremental traversal orchestration
+- default known-streak incremental stop
+- site固有のstable boundaryが必要な場合に小さいincremental stop policyを受け入れる拡張点（BookWalker実装時に追加）
 - duplicate candidate warningのためのCatalog query coordination
 
 Discovery Adapter自身はSQLiteを直接read/writeしない。
 
-現時点ではfake/local Adapterで利用する共通frameworkとManga ONEのreal-site listing Adapterを実装している。BookWalkerのreal-site listing Adapterは追加しない。
+現時点ではfake/local Adapterで利用する共通frameworkとManga ONEのreal-site listing Adapterを実装している。BookWalkerのreal-site listing Adapterは未実装で、Watchlistへ手動登録した `/series/<id>/list/` をscope authorityとする採用仕様だけを定義済みである。
 
 ### `catalog/`（Watchlist + Catalog基盤実装済み）
 
@@ -134,7 +136,7 @@ SQLite Catalogを扱う。
 - query
 - completed/local artifact state update
 
-初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Phase 5Aのread-only Batch Planner / Site Policy orchestrationと、Phase 5BのManga ONE Batch Executor（Crawler実行、quota local state、packaging、completed更新）が実装済みである。BookWalker Policy / Batchは未実装である。
+初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Phase 5Aのread-only Batch Planner / Site Policy orchestrationと、Phase 5BのManga ONE Batch Executor（Crawler実行、quota local state、packaging、completed更新）が実装済みである。BookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryは未実装である。
 
 Catalog itemは、取得可能な範囲でtitle/author/genre/order等のpackaging metadataも保持できる。
 
@@ -423,10 +425,14 @@ Site Policyによるquota eligibility判定
 - Watchlist外を無制限Discoveryしない
 - incomplete full syncでmissing sourceをunavailableにしない
 - incrementalで未観測過去sourceをunavailableにしない
+- default known-streakがsite固有access遷移に安全でない場合は、site-specific stable boundary policyを許容する
 - cross-site duplicateを自動mergeしない
 - paid/unknown sourceを自動crawlしない
 - active quota grantを新規quotaとして二重消費扱いしない
 - Site Policy ruleをCrawlerへ持ち込まない
+- BookWalker Discoveryでreaderを開いてまる読みtimerを開始しない
+- BookWalker `quota` strategyからtrial/owned/subscriptionへfallbackしない
+- BookWalker `direct` strategyからtrial/maruyomi/subscriptionへfallbackしない
 - `batch plan` はCatalogのstatus/local/quota stateを変更しない
 
 ## 15. 移行状態
@@ -437,7 +443,7 @@ Browser Session architectureは採用済みで、共通launcherとshared-profile
 
 BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。
 
-Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みである。BookWalker Policy / Batchは2026-09-17時点で未実装である。
+Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みである。2026-09-18時点でBookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryは採用仕様のみ定義済みで未実装である。
 
 ## 16. Discovery / Catalog / Batch dependency rules
 
