@@ -402,6 +402,7 @@ identity / metadata:
 - 通常巻だけ安全に `order_key` を数値化。`#16`、`第16巻`、`16巻`、既存の末尾数字形式を扱う
 - series cardのstructured special marker（実DOM未確認）を優先し、特典商品は`order_key`を付けず識別できる`order_label`を保持
 - title fallbackは先頭の`【購入特典】` / `【特典】` / `〖購入特典〗` / `〖特典〗`だけをspecialとする。途中の「特典」は対象外
+- authorは商品ページの`著者`役割だけを保持し、`イラスト`、`原作`、`作画`、`漫画`、`訳`、`監修`以降の役割は除外する
 - series由来titleをBatch explicit metadataとしてCrawlerへ渡し、同一series folderへ揃える
 
 same `external_id` が別non-null `discovery_key` に既存の場合、scopeを黙って
@@ -447,8 +448,12 @@ recordをyieldする前にincompleteとする。product navigation後は最終UR
 が要求UUIDと一致することも確認し、login redirect・外部domain・別UUIDはincompleteとする。
 
 product titleはreader-control ready signalにしない。title等のmetadata取得後も最大5秒間
-controlをbounded waitし、遅延表示されたcontrolを分類する。timeout後にproduct identity/titleが
+商品自身のmain action scopeを100ms間隔でbounded waitし、最初の`試し読み`だけでは即確定しない。
+`試し読み`観測後は最大500msのsettle期間を置き、その間に遅延表示された強いcontrolを優先する。
+全体のcontrol待ちは最大5秒で、timeout後にproduct identity/titleが
 正常でcontrolがない商品はunknownとしてyieldし、identity/titleが確認できない場合だけincompleteとする。
+series list等の関連商品のtrial controlはproduct access判定から除外する。購入特典・特殊商品は
+商品ページにtrial controlが見えてもunknownとして扱う。
 
 access mode:
 
@@ -511,6 +516,21 @@ BookWalkerではManga ONEのようなsource単位grantを仮定せず、
 このため実装時にはBatch Executorがgrantなしquota policyを許容する必要がある。
 
 manual browserや別clientでの10分消費はCatalogから観測できない。
+
+### 20.4.1 Series-list live smoke and first-volume inference
+
+2026-09-18に`https://bookwalker.jp/series/317089/list/`を実サイトで確認し、
+`mode: full`、`observed: 11`、`new: 11`、`known: 0`、`complete: True`、
+`stopped_reason: exhausted`まで成功した。確認できたのはseries scopeの全件列挙と、
+各product detailの既存metadata/control取得であり、未使用のselectorやpagination方式まで
+live確認済みとは扱わない。
+
+series listingのproduct titleとseries titleを正規化して比較し、同一タイトルの無印normal
+productが一意で、listing内にexplicit order `>= 2` のnormal productが存在する場合だけ、
+無印productを第1巻（`order_key="1"`）へ補正する。後続巻がない単巻series、special product、
+複数の無印候補、listing title欠落時は補正しない。比較にはWatchlistの`target.label`を使わない。
+このseries-level evidenceはproduct detailを全件先読みせず、既存のlisting収集後・detail観測前
+に計算する。full Discoveryの再実行時には既存itemのorder metadataもupsertで更新される。
 
 ### 20.5 strict reader entry
 

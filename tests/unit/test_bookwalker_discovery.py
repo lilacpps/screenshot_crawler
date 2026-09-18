@@ -21,12 +21,17 @@ from screenshot_crawler.site_adapters.bookwalker import discovery as bookwalker_
 from screenshot_crawler.site_adapters.bookwalker.discovery import (
     BookWalkerAccountState,
     BookWalkerDiscoveryAdapter,
+    BookWalkerListedProduct,
     classify_bookwalker_account_state,
+    clean_bookwalker_author,
+    find_bookwalker_first_volume_candidates,
     is_bookwalker_special_title,
     map_bookwalker_access_mode,
+    normalize_bookwalker_series_title,
     parse_bookwalker_order,
     parse_bookwalker_product_url,
     parse_bookwalker_series_url,
+    resolve_bookwalker_order,
 )
 from screenshot_crawler.watchlist import WatchlistTarget
 
@@ -136,6 +141,112 @@ def test_bookwalker_order_keeps_special_products_unparsed() -> None:
         "『作品名 #16 サブタイトル』BOOK☆WALKER限定",
     )
     assert parse_bookwalker_order("作品名 番外編") == (None, "作品名 番外編")
+
+
+def _listed_product(
+    number: int,
+    title: str,
+    *,
+    special: bool = False,
+) -> BookWalkerListedProduct:
+    external_id = f"00000000-0000-0000-0000-{number:012d}"
+    return BookWalkerListedProduct(
+        external_id=external_id,
+        url=f"https://bookwalker.jp/de{external_id}/",
+        title=title,
+        special=special,
+    )
+
+
+def test_bookwalker_first_volume_inference_requires_series_evidence_and_exact_candidate() -> None:
+    products = [
+        _listed_product(1, "作品名"),
+        _listed_product(2, "作品名2"),
+        _listed_product(3, "作品名3"),
+    ]
+
+    assert normalize_bookwalker_series_title("  作品名  ") == "作品名"
+    candidates = find_bookwalker_first_volume_candidates(products, "作品名")
+    assert candidates == frozenset({"00000000-0000-0000-0000-000000000001"})
+    assert resolve_bookwalker_order(
+        "作品名",
+        first_volume_candidate="00000000-0000-0000-0000-000000000001" in candidates,
+    ) == ("1", parse_bookwalker_order("作品名1")[1])
+    assert resolve_bookwalker_order("作品名", first_volume_candidate=False) == (
+        None,
+        "作品名",
+    )
+
+
+@pytest.mark.parametrize(
+    ("products", "series_title", "expected_candidates"),
+    [
+        ([_listed_product(1, "作品名")], "作品名", set()),
+        (
+            [
+                _listed_product(1, "作品名"),
+                _listed_product(2, "作品名2"),
+                _listed_product(3, "番外編", special=True),
+            ],
+            "作品名",
+            {"00000000-0000-0000-0000-000000000001"},
+        ),
+        (
+            [
+                _listed_product(1, "作品名"),
+                _listed_product(2, "作品名"),
+                _listed_product(3, "作品名2"),
+            ],
+            "作品名",
+            set(),
+        ),
+        (
+            [
+                _listed_product(1, "作品名"),
+                _listed_product(2, "作品名2"),
+            ],
+            "独自label",
+            set(),
+        ),
+    ],
+)
+def test_bookwalker_first_volume_inference_is_conservative(
+    products: list[BookWalkerListedProduct],
+    series_title: str,
+    expected_candidates: set[str],
+) -> None:
+    assert find_bookwalker_first_volume_candidates(products, series_title) == frozenset(
+        expected_candidates
+    )
+
+
+def test_bookwalker_first_volume_inference_supports_hash_numbered_later_volumes() -> None:
+    products = [
+        _listed_product(1, "作品名"),
+        _listed_product(2, "作品名 #2"),
+        _listed_product(3, "作品名 #3"),
+    ]
+
+    assert find_bookwalker_first_volume_candidates(products, "作品名") == frozenset(
+        {"00000000-0000-0000-0000-000000000001"}
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw_author", "expected"),
+    [
+        ("著者西 条陽 イラストRe岳", "西 条陽"),
+        ("著者: 西 条陽 原作Re岳", "西 条陽"),
+        ("西 条陽", "西 条陽"),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_bookwalker_author_keeps_author_role_only(
+    raw_author: object,
+    expected: str | None,
+) -> None:
+    assert clean_bookwalker_author(raw_author) == expected
 
 
 def test_bookwalker_hooks_preserve_scope_and_stable_access() -> None:
@@ -307,6 +418,22 @@ def _product_page_html(
     """
 
 
+def _trial_to_maruyomi_product_html(external_id: str) -> str:
+    return f"""
+      <h1 class="t-c-product-main-data__title">作品名 {external_id[-2:]}</h1>
+      <div class="t-c-product-main-data__authors">作者A</div>
+      <div id="js-read-check">
+        <a data-action-label="trial_reading" data-uuid="{external_id}">
+          試し読み
+        </a>
+      </div>
+      <script>
+        setTimeout(() => document.querySelector('#js-read-check').innerHTML =
+          '<button data-action-label="read_maruyomi">まる読み10分</button>', 50);
+      </script>
+    """
+
+
 async def _install_route(
     page,
     products: list[tuple[str, str, bool]],
@@ -388,6 +515,73 @@ def _seed_source(
             "access_mode": access_mode,
         },
     )
+
+
+async def test_bookwalker_full_reconciles_first_volume_after_later_release(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    first = _uuid(1)
+    second = _uuid(2)
+    products = [(first, "作品名", False)]
+    access_modes = {first: "paid", second: "paid"}
+
+    async def fulfill(route) -> None:
+        if "/series/123/list/" in route.request.url:
+            cards = "".join(
+                f'<article><h3>{title}</h3><a href="/de{external_id}/">{title}</a></article>'
+                for external_id, title, _special in products
+            )
+            body = f'<div id="js-series-list"><h1>作品名</h1>{cards}</div>'
+        else:
+            product = parse_bookwalker_product_url(route.request.url)
+            assert product is not None
+            title = next(
+                title
+                for external_id, title, _special in products
+                if external_id == product.external_id
+            )
+            body = _product_page_html(
+                product.external_id,
+                access_modes[product.external_id],
+                title=title,
+            )
+        await route.fulfill(body=body, content_type="text/html; charset=utf-8")
+
+    await browser_page.route("https://bookwalker.jp/**", fulfill)
+    target = WatchlistTarget(
+        key="series-one",
+        site="bookwalker",
+        url="https://bookwalker.jp/series/123/list/",
+        label="独自label",
+    )
+
+    first_result, first_catalog = await _run_service(
+        browser_page, tmp_path, target, "full"
+    )
+    first_source = first_catalog.get_source_by_external_id("bookwalker", first)
+    first_item = first_catalog.get_item(first_source.item_id)
+    assert first_result.complete is True
+    assert first_item.order_key is None
+    assert first_item.canonical_title == "独自label"
+
+    products[:] = [
+        (second, "作品名2", False),
+        (first, "作品名", False),
+    ]
+    second_result, second_catalog = await _run_service(
+        browser_page, tmp_path, target, "full"
+    )
+
+    first_source_after = second_catalog.get_source_by_external_id("bookwalker", first)
+    second_source = second_catalog.get_source_by_external_id("bookwalker", second)
+    first_item_after = second_catalog.get_item(first_source_after.item_id)
+    second_item = second_catalog.get_item(second_source.item_id)
+    assert second_result.complete is True
+    assert first_source_after.item_id == first_source.item_id
+    assert first_item_after.order_key == "1"
+    assert first_item_after.order_label == parse_bookwalker_order("作品名1")[1]
+    assert second_item.order_key == "2"
 
 
 async def test_bookwalker_discovery_scans_series_pages_and_product_controls(
@@ -530,6 +724,30 @@ async def test_bookwalker_delayed_control_is_observed_before_classification(
     assert catalog.get_source_by_external_id("bookwalker", product).access_mode == "quota"
 
 
+async def test_bookwalker_trial_waits_for_later_maruyomi_control(
+    browser_page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bookwalker_discovery, "PRODUCT_CONTROL_WAIT_TIMEOUT_MS", 1_000)
+    product = _uuid(16)
+
+    async def fulfill(route) -> None:
+        if "/series/123/list/" in route.request.url:
+            body = _listing_html([(product, "作品名 #16", False)])
+        else:
+            body = _trial_to_maruyomi_product_html(product)
+        await route.fulfill(body=body, content_type="text/html; charset=utf-8")
+
+    await browser_page.route("https://bookwalker.jp/**", fulfill)
+    result, catalog = await _run_service(
+        browser_page, tmp_path, _series_target(), "full"
+    )
+
+    assert result.complete is True
+    assert catalog.get_source_by_external_id("bookwalker", product).access_mode == "quota"
+
+
 async def test_bookwalker_no_control_product_is_unknown_not_incomplete(
     browser_page,
     tmp_path: Path,
@@ -543,6 +761,38 @@ async def test_bookwalker_no_control_product_is_unknown_not_incomplete(
         {product: "unknown"},
     )
 
+    result, catalog = await _run_service(
+        browser_page, tmp_path, _series_target(), "full"
+    )
+
+    assert result.complete is True
+    assert catalog.get_source_by_external_id("bookwalker", product).access_mode == "unknown"
+
+
+async def test_bookwalker_related_trial_is_not_product_access_control(
+    browser_page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bookwalker_discovery, "PRODUCT_CONTROL_WAIT_TIMEOUT_MS", 200)
+    product = _uuid(16)
+    related = _uuid(17)
+
+    async def fulfill(route) -> None:
+        if "/series/123/list/" in route.request.url:
+            body = _listing_html([(product, "作品名 #16", False)])
+        else:
+            body = f"""
+              <h1 class="t-c-product-main-data__title">作品名16</h1>
+              <div class="t-c-product-main-data__authors">作者A</div>
+              <div id="js-read-check"></div>
+              <div id="js-series-list">
+                <a data-action-label="trial_reading" data-uuid="{related}">試し読み</a>
+              </div>
+            """
+        await route.fulfill(body=body, content_type="text/html; charset=utf-8")
+
+    await browser_page.route("https://bookwalker.jp/**", fulfill)
     result, catalog = await _run_service(
         browser_page, tmp_path, _series_target(), "full"
     )
@@ -599,6 +849,7 @@ async def test_bookwalker_special_card_does_not_use_hash_number_as_order_and_nev
     assert records[0].item.order_label == "第16巻"
     assert records[1].item.order_key is None
     assert "#16" in (records[1].item.order_label or "")
+    assert records[1].source.access_mode == "unknown"
     assert clicks[0] == 0
 
 

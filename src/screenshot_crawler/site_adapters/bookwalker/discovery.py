@@ -40,6 +40,7 @@ PRODUCT_CARD_SELECTOR = 'article, li.m-tile'
 WAIT_TIMEOUT_MS = 10_000
 POLL_INTERVAL_MS = 100
 PRODUCT_CONTROL_WAIT_TIMEOUT_MS = 5_000
+PRODUCT_CONTROL_SETTLE_TIMEOUT_MS = 500
 MAX_LIST_PAGES = 200
 MAX_PRODUCTS = 5_000
 
@@ -185,6 +186,75 @@ def parse_bookwalker_order(
     return None, cleaned_title or None
 
 
+def normalize_bookwalker_series_title(value: str | None) -> str | None:
+    """Normalize a BookWalker series/product title for exact comparison."""
+
+    normalized = clean_bookwalker_title(value)
+    return normalized.casefold() or None
+
+
+def find_bookwalker_first_volume_candidates(
+    products: list[BookWalkerListedProduct],
+    series_title: str | None,
+) -> frozenset[str]:
+    """Find the only safe unnumbered first-volume candidate in a listing."""
+
+    normalized_series_title = normalize_bookwalker_series_title(series_title)
+    if normalized_series_title is None:
+        return frozenset()
+
+    has_later_numbered_volume = any(
+        not product.special
+        and product.title is not None
+        and (
+            parsed_order := parse_bookwalker_order(product.title, special=False)[0]
+        ) is not None
+        and int(parsed_order) >= 2
+        for product in products
+    )
+    if not has_later_numbered_volume:
+        return frozenset()
+
+    candidates = [
+        product.external_id
+        for product in products
+        if not product.special
+        and product.title is not None
+        and parse_bookwalker_order(product.title, special=False)[0] is None
+        and normalize_bookwalker_series_title(product.title)
+        == normalized_series_title
+    ]
+    return frozenset(candidates) if len(candidates) == 1 else frozenset()
+
+
+def resolve_bookwalker_order(
+    raw_title: str | None,
+    *,
+    special: bool = False,
+    first_volume_candidate: bool = False,
+) -> tuple[str | None, str | None]:
+    """Resolve an order while keeping series-context inference explicit."""
+
+    explicit_order = parse_bookwalker_order(raw_title, special=special)
+    if explicit_order[0] is not None or not first_volume_candidate:
+        return explicit_order
+    return "1", _bookwalker_order_label(1)
+
+
+def clean_bookwalker_author(raw_author: object) -> str | None:
+    """Keep the author role and discard later contributor roles."""
+
+    if not isinstance(raw_author, str):
+        return None
+    normalized = " ".join(raw_author.split())
+    if not normalized:
+        return None
+    role_boundary = re.search(r"\s+(?:イラスト|原作|作画|漫画|訳|監修)", normalized)
+    author = normalized[: role_boundary.start()] if role_boundary else normalized
+    author = re.sub(r"^著者\s*:?[ \t]*", "", author).strip()
+    return author or None
+
+
 def map_bookwalker_access_mode(controls: list[dict[str, object]]) -> str:
     """Map observed reader controls to the Catalog access modes."""
 
@@ -223,6 +293,10 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
         canonical_title = (target.label or "").strip() or series_title
         if not canonical_title:
             raise DiscoveryIncompleteError("BookWalker series title was not found")
+        first_volume_candidates = find_bookwalker_first_volume_candidates(
+            products,
+            series_title,
+        )
 
         for product in products:
             try:
@@ -232,14 +306,20 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
                     f"BookWalker product page did not load: {product.external_id}"
                 ) from exc
             product_title = product.title or product_data["title"]
-            order_key, order_label = parse_bookwalker_order(
+            order_key, order_label = resolve_bookwalker_order(
                 product_title,
                 special=product.special,
+                first_volume_candidate=product.external_id in first_volume_candidates,
+            )
+            access_mode = (
+                "unknown"
+                if product.special
+                else map_bookwalker_access_mode(product_data["controls"])
             )
             yield DiscoveredRecord(
                 item=DiscoveredItem(
                     canonical_title=canonical_title,
-                    author=product_data["author"],
+                    author=clean_bookwalker_author(product_data["author"]),
                     genre=product_data["genre"],
                     kind="book",
                     order_key=order_key,
@@ -248,7 +328,7 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
                 source=DiscoveredSource(
                     external_id=product.external_id,
                     url=product.url,
-                    access_mode=map_bookwalker_access_mode(product_data["controls"]),
+                    access_mode=access_mode,
                     available=True,
                 ),
             )
@@ -477,12 +557,22 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
 
         latest_data: dict[str, object] | None = None
         elapsed = 0
+        trial_observed_at: int | None = None
         while elapsed < PRODUCT_CONTROL_WAIT_TIMEOUT_MS:
             await self._assert_account_state(page)
-            data = await page.evaluate(_PRODUCT_METADATA_SCRIPT)
+            data = await page.evaluate(_PRODUCT_METADATA_SCRIPT, product.external_id)
             latest_data = data
-            if data["title"] and data["controls"]:
-                return data
+            if data["title"]:
+                access_mode = map_bookwalker_access_mode(data["controls"])
+                if access_mode in {"owned", "quota"}:
+                    return data
+                if access_mode == "paid":
+                    if trial_observed_at is None:
+                        trial_observed_at = elapsed
+                    elif elapsed - trial_observed_at >= PRODUCT_CONTROL_SETTLE_TIMEOUT_MS:
+                        return data
+                else:
+                    trial_observed_at = None
             await page.wait_for_timeout(POLL_INTERVAL_MS)
             elapsed += POLL_INTERVAL_MS
         if latest_data is None or not latest_data["title"]:
@@ -563,7 +653,7 @@ _ACCOUNT_STATE_SCRIPT = """
 
 
 _PRODUCT_METADATA_SCRIPT = """
-() => {
+(currentId) => {
   const visible = element => {
     const style = window.getComputedStyle(element);
     return style.display !== 'none' && style.visibility !== 'hidden' &&
@@ -571,23 +661,31 @@ _PRODUCT_METADATA_SCRIPT = """
   };
   const textOf = element => (element.innerText || element.getAttribute('aria-label') ||
     element.getAttribute('title') || '').trim();
-  const selectors = [
-    '#js-read-check a, #js-read-check button, #js-read-check [role="button"], #js-read-check [data-action-label]',
-    '#js-subscription-check a, #js-subscription-check button, #js-subscription-check [role="button"], #js-subscription-check [data-action-label]',
-    'a[href*="viewer.bookwalker.jp"]',
-    '[data-action-label="reading"], [data-action-label="read"], [data-action-label="trial_reading"], [data-action-label="read_maruyomi"]'
-  ];
+  const roots = [
+    document.querySelector('#js-read-check-book-cover-main-button'),
+    document.querySelector('#js-read-check'),
+    document.querySelector('#js-subscription-check')
+  ].filter(Boolean);
   const controls = [];
   const seen = new Set();
-  for (const selector of selectors) {
-    for (const element of document.querySelectorAll(selector)) {
+  for (const root of roots) {
+    const elements = [];
+    if (root.matches('a, button, [role="button"], [data-action-label]')) {
+      elements.push(root);
+    }
+    elements.push(...root.querySelectorAll(
+      'a, button, [role="button"], [data-action-label]'
+    ));
+    for (const element of elements) {
       if (!visible(element) || seen.has(element)) continue;
+      const uuid = element.getAttribute('data-uuid');
+      if (uuid && currentId && uuid.toLowerCase() !== currentId.toLowerCase()) continue;
       seen.add(element);
       controls.push({
         text: textOf(element),
         action: element.getAttribute('data-action-label'),
         href: element.href || element.getAttribute('data-href') || element.getAttribute('data-url') || '',
-        uuid: element.getAttribute('data-uuid')
+        uuid
       });
     }
   }
