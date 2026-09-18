@@ -165,8 +165,9 @@ def test_bookwalker_first_volume_inference_requires_series_evidence_and_exact_ca
         _listed_product(3, "作品名3"),
     ]
 
-    assert normalize_bookwalker_series_title("  作品名  ") == "作品名"
-    candidates = find_bookwalker_first_volume_candidates(products, "作品名")
+    series_heading = "『作品名（電撃文庫）(ライトノベル)』の電子書籍一覧"
+    assert normalize_bookwalker_series_title(series_heading) == "作品名"
+    candidates = find_bookwalker_first_volume_candidates(products, series_heading)
     assert candidates == frozenset({"00000000-0000-0000-0000-000000000001"})
     assert resolve_bookwalker_order(
         "作品名",

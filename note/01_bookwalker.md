@@ -529,6 +529,9 @@ series listingのproduct titleとseries titleを正規化して比較し、同�
 productが一意で、listing内にexplicit order `>= 2` のnormal productが存在する場合だけ、
 無印productを第1巻（`order_key="1"`）へ補正する。後続巻がない単巻series、special product、
 複数の無印候補、listing title欠落時は補正しない。比較にはWatchlistの`target.label`を使わない。
+series pageの表示見出しにある`『...』の電子書籍一覧` wrapperと、確認済みのBookWalker表示用suffix
+`（電撃文庫）` / `(ライトノベル)`はseries title側だけから除去する。括弧を一律に除去せず、
+商品title側の意味のある括弧を変更しない。
 このseries-level evidenceはproduct detailを全件先読みせず、既存のlisting収集後・detail観測前
 に計算する。full Discoveryの再実行時には既存itemのorder metadataもupsertで更新される。
 

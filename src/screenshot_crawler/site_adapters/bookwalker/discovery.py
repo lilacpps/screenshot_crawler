@@ -55,6 +55,11 @@ _PAGINATION_SELECTOR = (
     '[aria-label="次へ"], [aria-label="もっと見る"], '
     '[data-testid="pagination-next"]'
 )
+_SERIES_HEADING_TITLE = re.compile(
+    r"^[『「](?P<title>.*?)[』」](?:の電子書籍一覧)?$"
+)
+_PARENTHESIZED_TITLE_SUFFIX = re.compile(r"[（(](?P<value>[^（）()]+)[）)]$")
+_BOOKWALKER_PRESENTATION_SUFFIXES = frozenset({"電撃文庫", "ライトノベル"})
 _SPECIAL_MARKER_SELECTOR = (
     "[data-category], [data-product-type], [data-badge], .badge"
 )
@@ -190,6 +195,17 @@ def normalize_bookwalker_series_title(value: str | None) -> str | None:
     """Normalize a BookWalker series/product title for exact comparison."""
 
     normalized = clean_bookwalker_title(value)
+    heading_match = _SERIES_HEADING_TITLE.fullmatch(normalized)
+    if heading_match:
+        normalized = heading_match.group("title").strip()
+        while True:
+            suffix_match = _PARENTHESIZED_TITLE_SUFFIX.search(normalized)
+            if (
+                suffix_match is None
+                or suffix_match.group("value") not in _BOOKWALKER_PRESENTATION_SUFFIXES
+            ):
+                break
+            normalized = normalized[: suffix_match.start()].rstrip()
     return normalized.casefold() or None
 
 
