@@ -25,7 +25,7 @@ BookWalkerの商品ページまたはviewer URLから、現在コンテンツの
 
 実サイト確認では、対象trial readerで59/59まで本文を保存し、その後のlogo screenを保存せず正常終了した実績がある。
 
-BookWalkerのseries-scoped Discovery、BookWalker Site Policy、Batchからのstrict
+BookWalkerのseries-scoped Discoveryは実装済みである。BookWalker Site Policy、Batchからのstrict
 `direct` / `quota` entryは**採用仕様のみ確定しており未実装**である。現行Adapterは
 manual `auto` flowのみを実行可能で、base `configure_run()` により
 `direct` / `quota` は拒否される。
@@ -65,8 +65,7 @@ reader linkが `target=_blank` の場合は、同じCrawler tabで遷移させ�
 既存manual `auto` flowのselector、wait、navigation、trial fallback、scoreは
 このhelper追加で変更していない。adapterのcandidate判定だけが同値のpure helperへ
 委譲され、reader control metadataの分類を将来Discovery / strict entryから再利用
-できる状態になっている。Discoveryとstrict `direct` / `quota` entry自体は未実装の
-ままである。
+できる状態になっている。series Discoveryはこのhelperを商品ページのcontrol観測で再利用するが、strict `direct` / `quota` entryは未実装のままである。
 
 ## 3. Viewer / capture target
 
@@ -371,12 +370,11 @@ capture・navigation・page counter・END / NEXT_CONTENT・metadata behaviorに�
 - global fingerprint dedupeのためpixel完全一致の別ページは1枚扱いになる。
 - `config.yaml` はruntime authorityではない。
 - diagnosticsのAdapter固有metadata統合は未実装。
-- BookWalker Discovery Adapterは未実装。
 - BookWalker Site Policyは未実装。
 - BookWalker Adapterのstrict `direct` / `quota` entryは未実装。
 - 現行reader candidate scoringはmanual `auto` 互換経路として維持する。
 
-## 20. 採用済み次期仕様（未実装）
+## 20. 採用済み次期仕様と現行Discovery境界
 
 authorityは `docs/DISCOVERY_AND_BATCH.md`。ここではBookWalker固有の要点だけを
 現行実装との境界が分かる形で記録する。
@@ -407,11 +405,17 @@ identity / metadata:
 same `external_id` が別non-null `discovery_key` に既存の場合、scopeを黙って
 移動せずDiscovery incompleteとする。
 
+現行の `BookWalkerDiscoveryAdapter` はこのscopeを検証し、series listの作品一覧領域から
+`/de<uuid>/` product linkを重複排除して列挙する。paginationはboundedに進め、listingが
+曖昧・空・loop・上限到達した場合はcomplete扱いにせずincompleteとする。商品ページの
+reader control観測はreaderを開かずに行う。実サイトDOMのlive verificationはこの実装環境では
+ブラウザセッションが利用できないため、既存Adapterで確認済みのselectorとlocal fixtureで確認している。
+
 ### 20.2 Discovery access classification
 
 Phase 1では、この仕様で使うBookWalker reader-control metadataのpure分類helperを
-実装済みである。ただしDiscovery Adapterによる商品詳細ページ観測やCatalog更新は
-まだ実装していない。
+実装済みであり、Phase 3のDiscovery Adapterが商品詳細ページ観測で再利用する。Catalog更新は
+site-neutralなDiscoveryServiceが行う。
 
 Discoveryはseries listから商品詳細ページを開いてcontrolを観測するが、
 readerは開かない。まる読み10分timerをDiscoveryで開始しない。
