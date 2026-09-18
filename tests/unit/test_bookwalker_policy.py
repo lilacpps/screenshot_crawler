@@ -29,6 +29,7 @@ def add_source(
     access_mode: str = "quota",
     status: str = "pending",
     quota_started_at: str | None = None,
+    access_granted_until: str | None = None,
     available: bool = True,
 ):
     item = service.create_item(ItemInput(canonical_title=f"Volume {order}", order_key=order, status=status))
@@ -40,6 +41,7 @@ def add_source(
             access_mode=access_mode,
             available=available,
             quota_started_at=quota_started_at,
+            access_granted_until=access_granted_until,
         ),
         item_id=item.id,
     )
@@ -128,13 +130,15 @@ def test_policy_decision_mapping(
 
 def test_active_grant_does_not_turn_bookwalker_quota_into_direct(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
-    item, source = add_source(service, order="active")
-    service.record_quota_access(
-        source.id,
-        quota_started_at=NOW,
-        access_granted_until=None,
+    future = "2026-09-20T12:00:00+09:00"
+    item, source = add_source(
+        service,
+        order="active",
+        access_granted_until=future,
     )
-    source = service.get_source(source.id)
+
+    assert source.quota_started_at is None
+    assert source.access_granted_until == future
 
     decision = BookWalkerSitePolicy().evaluate(source, now=NOW, quota_available=1)
     assert decision.access_strategy == "quota"

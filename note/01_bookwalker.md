@@ -401,7 +401,7 @@ capture・navigation・page counter・END / NEXT_CONTENT・metadata behaviorに�
 - BookWalker Site Policyは05:00 JST window / site-wide capacity 1として実装済み。
 - BookWalker Adapterのstrict `direct` / `quota` entryとBatch Executor連携は実装済み。
 - BookWalker quotaの実サイトlive clickは未確認。synthetic/local Catalogでのpolicy・planner・executor検証までを完了範囲とする。
-- BookWalker series-listのlive DOM smoke testは未実施。Phase 4移行前に実サイトでselectorと全件列挙を確認する必要がある。
+- 2026-09-18にseries 317089をshared Crawler Chromeでlive確認済み（`ul.m-tile-list` / `li.m-tile` 11件 / full Discovery成功）。別構造のpagination variantは未確認。
 - 現行reader candidate scoringはmanual `auto` 互換経路として維持する。
 
 ## 20. 採用済み次期仕様と現行Discovery境界
@@ -542,17 +542,18 @@ quota attemptはreader open前に `quota_started_at` を記録し、crawl失敗�
 
 BookWalkerではManga ONEのようなsource単位grantを仮定せず、
 `access_granted_until` をdirect判定へ使わない。初期仕様ではNULLのままとする。
-このため実装時にはBatch Executorがgrantなしquota policyを許容する必要がある。
+Batch Executorはgrantなしquota policyを許容し、`quota_started_at`のみをreader entry前に保存する。
 
 manual browserや別clientでの10分消費はCatalogから観測できない。
 
 ### 20.4.1 Series-list live smoke and first-volume inference
 
-2026-09-18に`https://bookwalker.jp/series/317089/list/`を実サイトで確認し、
+2026-09-18にshared Crawler Chromeで`https://bookwalker.jp/series/317089/list/`を実サイトで確認し、
 `mode: full`、`observed: 11`、`new: 11`、`known: 0`、`complete: True`、
-`stopped_reason: exhausted`まで成功した。確認できたのはseries scopeの全件列挙と、
-各product detailの既存metadata/control取得であり、未使用のselectorやpagination方式まで
-live確認済みとは扱わない。
+`stopped_reason: exhausted`まで成功した。現行DOMでは`ul.m-tile-list`と
+`li.m-tile`が使われ、確認時点でpagination controlは表示されなかった。確認範囲は
+このseriesの現行DOMと各product detailのmetadata/control取得であり、別のpagination
+variantまでlive確認済みとは扱わない。
 
 series listingのproduct titleとseries titleを正規化して比較し、同一タイトルの無印normal
 productが一意で、listing内にexplicit order `>= 2` のnormal productが存在する場合だけ、
