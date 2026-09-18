@@ -18,6 +18,9 @@ from screenshot_crawler.core.models import ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.bookwalker.login import login_bookwalker
+from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
+    is_reader_control_candidate,
+)
 
 _DRAW_TRACE_SCRIPT = """
 (() => {
@@ -198,31 +201,7 @@ class BookWalkerAdapter(SiteAdapter):
     @staticmethod
     def is_read_link_candidate(candidate: dict[str, str | None]) -> bool:
         """Return whether a product-page anchor can enter a reader."""
-
-        text = (candidate.get("text") or "").strip()
-        action = (candidate.get("action") or "").strip().lower()
-        href = (candidate.get("href") or "").lower()
-        if action in {"cover", "check", "more_read", "author"}:
-            return False
-        if any(
-            marker in text
-            for marker in (
-                "\u8aad\u3080",
-                "\u8aad\u307f",
-                "\u307e\u308b\u8aad\u307f",
-                "10\u5206",
-            )
-        ):
-            return True
-        return bool(
-            "viewer" in href
-            or "read" in action
-            or "reading" in action
-            or "読む" in text
-            or "読み" in text
-            or "まる読み" in text
-            or "10分" in text
-        )
+        return is_reader_control_candidate(candidate)
 
     async def _visible(self, locator: Locator) -> bool:
         try:

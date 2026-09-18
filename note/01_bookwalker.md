@@ -53,6 +53,21 @@ DOM順だけには依存せず、reader URL / content ID / action / visible text
 
 reader linkが `target=_blank` の場合は、同じCrawler tabで遷移させるためtarget属性を外してclickする。
 
+### 2.1 Reader control classification
+
+商品ページから取得する `text` / `action` / `href` / `uuid` のmetadataは、
+`site_adapters/bookwalker/reader_controls.py` のpure classifierでも扱える。
+現在の分類は `maruyomi`、`trial`、`owned`、`subscription`、
+`generic_reader`、`unknown` である。`read_maruyomi` またはvisible textの
+「10分」+「まる読み」をmaruyomiとし、`subscription_reading` 単独はsubscription
+として扱う。viewer URLだけの場合はgeneric readerであり、ownedとは断定しない。
+
+既存manual `auto` flowのselector、wait、navigation、trial fallback、scoreは
+このhelper追加で変更していない。adapterのcandidate判定だけが同値のpure helperへ
+委譲され、reader control metadataの分類を将来Discovery / strict entryから再利用
+できる状態になっている。Discoveryとstrict `direct` / `quota` entry自体は未実装の
+ままである。
+
 ## 3. Viewer / capture target
 
 BookWalker本文は主にCanvas renderer。
@@ -393,6 +408,10 @@ same `external_id` が別non-null `discovery_key` に既存の場合、scopeを�
 移動せずDiscovery incompleteとする。
 
 ### 20.2 Discovery access classification
+
+Phase 1では、この仕様で使うBookWalker reader-control metadataのpure分類helperを
+実装済みである。ただしDiscovery Adapterによる商品詳細ページ観測やCatalog更新は
+まだ実装していない。
 
 Discoveryはseries listから商品詳細ページを開いてcontrolを観測するが、
 readerは開かない。まる読み10分timerをDiscoveryで開始しない。
