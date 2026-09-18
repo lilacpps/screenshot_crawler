@@ -9,9 +9,10 @@ pagination, and uses the chapter id (not the URL) as source identity.
 `quota`. Incomplete traversal is not treated as a complete full scan. The
 adapter remains Catalog-free and does not own BrowserSession lifecycle; the
 minimal `discover` CLI supplies the Page. BookWalker series-scoped Discovery
-is now registered, while BookWalker Batch Runner, Site Policy, quota
-consumption, strict direct/quota entry, and automatic crawl remain
-unimplemented. Phase 5A adds read-only Batch planning and Manga ONE Policy. Phase
+is now registered. BookWalker Batch Runner, Site Policy, quota consumption, and
+automatic crawl remain unimplemented, while BookWalker strict direct/quota
+product-page entry is implemented in the BookWalker Adapter. Phase 5A adds
+read-only Batch planning and Manga ONE Policy. Phase
 5B adds sequential Manga ONE Batch execution around the existing Core.
 
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
@@ -515,7 +516,7 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery framework実装済み）
 
-2026-09-18時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policy、Phase 5BのManga ONE Batch Executorが実装済みである。BookWalker Site Policy / strict direct・quota entryは採用仕様のみ定義済みで未実装である。
+2026-09-19時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE Policy、Phase 5BのManga ONE Batch Executor、BookWalker Adapterのstrict direct・quota product-page entryが実装済みである。BookWalker Site Policy、quota消費、Batch実行は未実装である。
 
 authority:
 

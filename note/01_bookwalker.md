@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-09-18
+最終同期: 2026-09-19
 
 ## 1. 目的と現在のscope
 
@@ -25,10 +25,10 @@ BookWalkerの商品ページまたはviewer URLから、現在コンテンツの
 
 実サイト確認では、対象trial readerで59/59まで本文を保存し、その後のlogo screenを保存せず正常終了した実績がある。
 
-BookWalkerのseries-scoped Discoveryは実装済みである。BookWalker Site Policy、Batchからのstrict
-`direct` / `quota` entryは**採用仕様のみ確定しており未実装**である。現行Adapterは
-manual `auto` flowのみを実行可能で、base `configure_run()` により
-`direct` / `quota` は拒否される。
+BookWalkerのseries-scoped Discoveryは実装済みである。BookWalker Site PolicyとBatch実行は
+未実装だが、Batchからのstrict `direct` / `quota` entryは実装済みである。Adapterを直接生成
+した場合のstrategy defaultは`auto`で、`configure_run()`は`auto` / `direct` / `quota`を受け付け、
+run stateへ保存する。
 
 ## 2. Entry flow
 
@@ -62,10 +62,34 @@ reader linkが `target=_blank` の場合は、同じCrawler tabで遷移させ�
 「10分」+「まる読み」をmaruyomiとし、`subscription_reading` 単独はsubscription
 として扱う。viewer URLだけの場合はgeneric readerであり、ownedとは断定しない。
 
-既存manual `auto` flowのselector、wait、navigation、trial fallback、scoreは
-このhelper追加で変更していない。adapterのcandidate判定だけが同値のpure helperへ
-委譲され、reader control metadataの分類を将来Discovery / strict entryから再利用
-できる状態になっている。series Discoveryはこのhelperを商品ページのcontrol観測で再利用するが、strict `direct` / `quota` entryは未実装のままである。
+既存manual `auto` flowのselector、wait、navigation、trial fallback、scoreは変更していない。
+adapterのcandidate判定だけが同値のpure helperへ委譲され、reader control metadataの分類を
+Discovery / strict entryから再利用している。
+
+strict entryはDiscoveryと同じ商品自身のmain action scope
+(`#js-read-check-book-cover-main-button`、`#js-read-check`、`#js-subscription-check`)に限定し、
+各scope内の`a` / `button` / `[role="button"]` / `[data-action-label]`だけを候補にする。
+`text` / `action` / `href` / `uuid` metadataを`classify_reader_control()`へ渡し、
+`data-uuid`がある場合は現在product UUIDと一致するcontrolだけを残す。selector重複で同じDOM
+elementが複数回見える場合はDOM identityで1件にまとめるが、別elementはmergeしない。
+
+```text
+auto   = legacy score / fallback / deferred trial
+direct = ReaderControlKind.OWNED exact only
+quota  = ReaderControlKind.MARUYOMI exact only
+```
+
+strictではtrial、subscription、generic viewer、wrong-kindへのfallbackはない。期待kindが
+0件ならbounded wait後にfail、1件なら`target`属性だけを除去して同じPageからclick、2件以上
+ならambiguityとしてclick前にfailする。strict errorにはstrategy、expected kind、observed kindsを
+含める。product page以外のalready-viewer strict runも、entry条件を検証できないためfailする。
+click後はURL changeを確認し、両方のcontent UUIDを取得できる場合は一致を確認する。
+delayed controlは既存`read_link_wait_timeout_ms`（default 5000ms）のbounded waitで待つ。
+quotaではtrial onlyやsubscription onlyの場合もtrialへfallbackせずfailする。
+
+Phase 4のunit testsではstrict quota/direct成功、wrong strategy、trial/subscription/generic only、
+multiple candidate、scope overlapの同一DOM dedupe、delayed maruyomi、UUID mismatch、target blank、
+already-viewerをsynthetic product pageで確認している。quotaを消費するlive clickは未実施である。
 
 ## 3. Viewer / capture target
 
@@ -539,6 +563,9 @@ series pageの表示見出しにある`『...』の電子書籍一覧` wrapper�
 
 `auto` は現行のreader candidate score/fallbackを維持する。
 
+strict `direct` / `quota` entryは実装済みである。strategyはrun stateに保存され、
+product page上のmain action scopeだけをbounded waitで観測する。
+
 Batch用:
 
 ```text
@@ -554,6 +581,12 @@ direct
 strategyに一致するcontrolが0件、複数で曖昧、状態不明ならclick前にfailする。
 trial readerへfallbackしてpartial contentを正常END / completed扱いする事故を
 防ぐことを最優先とする。
+
+`data-uuid`があるcontrolはcurrent product UUIDに一致するものだけを採用する。strictの
+candidateが1件のときだけ、`target="_blank"`を除去して既存Pageからclickし、URL changeを
+確認する。viewer URLから始まるstrict runはentry条件を確認できないためfailする。
+
+quotaのlive clickによる実quota消費は未実施である。
 
 ### 20.6 初期非対象
 

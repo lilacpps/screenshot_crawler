@@ -13,12 +13,17 @@ from urllib.parse import parse_qs, urlparse
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from screenshot_crawler.core.errors import PageChangeTimeoutError
-from screenshot_crawler.core.models import ContentContext, ContentIdentity
+from screenshot_crawler.core.errors import (
+    PageChangeTimeoutError,
+    UnsupportedAccessStrategyError,
+)
+from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.bookwalker.login import login_bookwalker
 from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
+    ReaderControlKind,
+    classify_reader_control,
     is_reader_control_candidate,
 )
 
@@ -103,6 +108,31 @@ def is_last_page_counter(text: str) -> bool:
     return bool(match and match.group(1) == match.group(2))
 
 
+class BookWalkerStrictEntryError(RuntimeError):
+    """Raised when a strict BookWalker entry cannot be proved safe."""
+
+    def __init__(
+        self,
+        *,
+        strategy: AccessStrategy,
+        expected_kind: ReaderControlKind,
+        observed_kinds: list[ReaderControlKind],
+        reason: str,
+    ) -> None:
+        self.strategy = strategy
+        self.expected_kind = expected_kind
+        self.observed_kinds = tuple(observed_kinds)
+        self.reason = reason
+        observed = ", ".join(
+            dict.fromkeys(kind.value for kind in observed_kinds)
+        ) or "none"
+        super().__init__(
+            "BookWalker strict entry failed: "
+            f"strategy={strategy!r}, expected kind={expected_kind.value!r}, "
+            f"observed kinds={observed}; reason={reason}"
+        )
+
+
 class BookWalkerAdapter(SiteAdapter):
     """Canvas viewer adapter for one BookWalker content ID."""
 
@@ -113,8 +143,17 @@ class BookWalkerAdapter(SiteAdapter):
     advance_retry_count = 2
     end_marker_grace_ms = 1_500
     spread_ratio = 1.25
+    _strict_scope_selectors = (
+        "#js-read-check-book-cover-main-button",
+        "#js-read-check",
+        "#js-subscription-check",
+    )
+    _strict_control_selector = (
+        'a, button, [role="button"], [data-action-label]'
+    )
 
     def __init__(self) -> None:
+        self._access_strategy: AccessStrategy = "auto"
         self._initial_content_id: str | None = None
         self._capture_run = 0
         self._output_title: str | None = None
@@ -123,6 +162,19 @@ class BookWalkerAdapter(SiteAdapter):
         self._output_genre = "小説"
         self._series_count: int | None = None
         self._final_navigation_pending = False
+
+    async def configure_run(
+        self, page: Page, access_strategy: AccessStrategy
+    ) -> None:
+        """Store BookWalker's access intent before the runner navigates."""
+
+        del page
+        if access_strategy not in {"auto", "direct", "quota"}:
+            raise UnsupportedAccessStrategyError(
+                f"BookWalkerAdapter does not support "
+                f"access_strategy={access_strategy!r}"
+            )
+        self._access_strategy = access_strategy
 
     async def login(
         self,
@@ -449,6 +501,162 @@ class BookWalkerAdapter(SiteAdapter):
             elapsed_ms += 100
         return deferred_trial
 
+    async def _reader_control_metadata(
+        self, candidate: Locator
+    ) -> dict[str, str | None]:
+        return await asyncio.wait_for(
+            candidate.evaluate(
+                """
+                element => ({
+                  text: element.innerText ||
+                    element.getAttribute('aria-label') ||
+                    element.getAttribute('title') || '',
+                  action: element.getAttribute('data-action-label'),
+                  href: element.href ||
+                    element.getAttribute('data-href') ||
+                    element.getAttribute('data-url') || '',
+                  uuid: element.getAttribute('data-uuid')
+                })
+                """
+            ),
+            timeout=1,
+        )
+
+    async def _dom_identity(self, candidate: Locator) -> str:
+        """Return a non-mutating identity for one DOM element."""
+
+        return await asyncio.wait_for(
+            candidate.evaluate(
+                """
+                element => {
+                  const parts = [];
+                  let current = element;
+                  while (current && current.nodeType === Node.ELEMENT_NODE) {
+                    let index = 0;
+                    for (let sibling = current; sibling; sibling = sibling.previousElementSibling) {
+                      index += 1;
+                    }
+                    parts.unshift(`${current.tagName}:${index}`);
+                    current = current.parentElement;
+                  }
+                  return parts.join('/');
+                }
+                """
+            ),
+            timeout=1,
+        )
+
+    async def _is_control_element(self, candidate: Locator) -> bool:
+        return await asyncio.wait_for(
+            candidate.evaluate(
+                """
+                element => element.matches(
+                  'a, button, [role="button"], [data-action-label]'
+                )
+                """
+            ),
+            timeout=1,
+        )
+
+    async def _strict_control_candidates(
+        self, page: Page, expected_kind: ReaderControlKind
+    ) -> tuple[list[tuple[Locator, dict[str, str | None]]], list[ReaderControlKind]]:
+        """Collect exact-kind controls from the product's own action scopes."""
+
+        matches: list[tuple[Locator, dict[str, str | None]]] = []
+        observed: list[ReaderControlKind] = []
+        seen_elements: set[str] = set()
+        for scope_selector in self._strict_scope_selectors:
+            scope = page.locator(scope_selector)
+            try:
+                scope_count = await asyncio.wait_for(scope.count(), timeout=1)
+            except (PlaywrightTimeoutError, TimeoutError):
+                continue
+            for scope_index in range(scope_count):
+                scope_element = scope.nth(scope_index)
+                controls = scope_element.locator(self._strict_control_selector)
+                candidates: list[Locator] = []
+                try:
+                    if await self._is_control_element(scope_element):
+                        candidates.append(scope_element)
+                except (PlaywrightTimeoutError, TimeoutError):
+                    pass
+                try:
+                    control_count = await asyncio.wait_for(controls.count(), timeout=1)
+                except (PlaywrightTimeoutError, TimeoutError):
+                    control_count = 0
+                candidates.extend(controls.nth(index) for index in range(control_count))
+                for candidate in candidates:
+                    try:
+                        if not await self._visible(candidate):
+                            continue
+                        identity = await self._dom_identity(candidate)
+                        if identity in seen_elements:
+                            continue
+                        seen_elements.add(identity)
+                        metadata = await self._reader_control_metadata(candidate)
+                    except (PlaywrightTimeoutError, TimeoutError):
+                        continue
+
+                    kind = classify_reader_control(metadata)
+                    observed.append(kind)
+                    uuid = (metadata.get("uuid") or "").strip()
+                    if uuid and uuid != self._initial_content_id:
+                        continue
+                    if kind is expected_kind:
+                        matches.append((candidate, metadata))
+        return matches, observed
+
+    def _strict_entry_error(
+        self,
+        *,
+        expected_kind: ReaderControlKind,
+        observed: list[ReaderControlKind],
+        reason: str,
+    ) -> BookWalkerStrictEntryError:
+        return BookWalkerStrictEntryError(
+            strategy=self._access_strategy,
+            expected_kind=expected_kind,
+            observed_kinds=observed,
+            reason=reason,
+        )
+
+    def _strict_expected_kind(self) -> ReaderControlKind:
+        return (
+            ReaderControlKind.OWNED
+            if self._access_strategy == "direct"
+            else ReaderControlKind.MARUYOMI
+        )
+
+    async def _find_strict_read_link(
+        self, page: Page, expected_kind: ReaderControlKind
+    ) -> Locator:
+        elapsed_ms = 0
+        observed: list[ReaderControlKind] = []
+        while elapsed_ms < self.read_link_wait_timeout_ms:
+            matches, observed = await self._strict_control_candidates(page, expected_kind)
+            if len(matches) == 1:
+                return matches[0][0]
+            if len(matches) > 1:
+                raise self._strict_entry_error(
+                    expected_kind=expected_kind,
+                    observed=observed,
+                    reason="multiple matching controls are visible",
+                )
+            await page.wait_for_timeout(100)
+            elapsed_ms += 100
+
+        reason = "no matching control was observed before timeout"
+        if any(kind is expected_kind for kind in observed):
+            reason = "matching control was not uniquely available"
+        elif observed and all(kind is ReaderControlKind.UNKNOWN for kind in observed):
+            reason = "visible controls are unsupported or unknown"
+        raise self._strict_entry_error(
+            expected_kind=expected_kind,
+            observed=observed,
+            reason=reason,
+        )
+
     async def _wait_for_url_change(self, page: Page, previous_url: str) -> None:
         elapsed_ms = 0
         while elapsed_ms < self.navigation_wait_timeout_ms:
@@ -467,6 +675,9 @@ class BookWalkerAdapter(SiteAdapter):
                 "BookWalker read button was not found on the product page"
             )
 
+        await self._activate_reader_control(page, link)
+
+    async def _activate_reader_control(self, page: Page, link: Locator) -> None:
         previous_url = page.url
         # Product pages may mark the read link target=_blank. Remove only that
         # presentation detail so the existing Runner Page follows the click.
@@ -486,6 +697,25 @@ class BookWalkerAdapter(SiteAdapter):
                 "BookWalker read button could not be activated"
             ) from exc
         await self._wait_for_url_change(page, previous_url)
+
+    async def _open_strict_reader_from_product(self, page: Page) -> None:
+        expected_kind = self._strict_expected_kind()
+        link = await self._find_strict_read_link(page, expected_kind)
+        await self._activate_reader_control(page, link)
+        viewer_content_id = self.content_id_from_url(page.url)
+        if (
+            self._initial_content_id is not None
+            and viewer_content_id is not None
+            and viewer_content_id != self._initial_content_id
+        ):
+            raise self._strict_entry_error(
+                expected_kind=expected_kind,
+                observed=[expected_kind],
+                reason=(
+                    "viewer content id does not match product content id "
+                    f"({viewer_content_id!r})"
+                ),
+            )
 
     async def _collect_product_metadata(self, page: Page) -> None:
         """Read title/author/volume before the product page becomes the viewer."""
@@ -589,16 +819,34 @@ class BookWalkerAdapter(SiteAdapter):
 
     async def initialize(self, page: Page) -> None:
         self._initial_content_id = self.content_id_from_url(page.url)
-        if not await self._has_viewer_shell(page):
-            parsed = urlparse(page.url)
-            is_product_page = parsed.netloc.lower() in {
-                "bookwalker.jp",
-                "www.bookwalker.jp",
-            } and bool(re.match(r"^/de[0-9a-f-]+/?$", parsed.path, re.IGNORECASE))
-            if is_product_page:
-                await self._collect_product_metadata(page)
+        has_viewer_shell = await self._has_viewer_shell(page)
+        parsed = urlparse(page.url)
+        is_product_page = parsed.netloc.lower() in {
+            "bookwalker.jp",
+            "www.bookwalker.jp",
+        } and bool(re.match(r"^/de[0-9a-f-]+/?$", parsed.path, re.IGNORECASE))
+        is_viewer_url = parsed.netloc.lower() == "viewer.bookwalker.jp"
+
+        if self._access_strategy != "auto" and (has_viewer_shell or is_viewer_url):
+            raise self._strict_entry_error(
+                expected_kind=self._strict_expected_kind(),
+                observed=[],
+                reason="strict entry requires a product page, but the run is already in a viewer",
+            )
+
+        if not has_viewer_shell and is_product_page:
+            await self._collect_product_metadata(page)
+            if self._access_strategy == "auto":
                 await self._open_reader_from_product(page)
-                self._initial_content_id = self.content_id_from_url(page.url)
+            else:
+                await self._open_strict_reader_from_product(page)
+            self._initial_content_id = self.content_id_from_url(page.url)
+        elif self._access_strategy != "auto":
+            raise self._strict_entry_error(
+                expected_kind=self._strict_expected_kind(),
+                observed=[],
+                reason="strict entry requires a BookWalker product page",
+            )
 
         await self._wait_for_render_ready(page)
         await self._remember_viewer_title(page)
