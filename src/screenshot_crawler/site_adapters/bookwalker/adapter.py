@@ -601,7 +601,13 @@ class BookWalkerAdapter(SiteAdapter):
                     kind = classify_reader_control(metadata)
                     observed.append(kind)
                     uuid = (metadata.get("uuid") or "").strip()
-                    if uuid and uuid != self._initial_content_id:
+                    if (
+                        uuid
+                        and (
+                            self._initial_content_id is None
+                            or uuid.casefold() != self._initial_content_id.casefold()
+                        )
+                    ):
                         continue
                     if kind is expected_kind:
                         matches.append((candidate, metadata))
@@ -706,7 +712,7 @@ class BookWalkerAdapter(SiteAdapter):
         if (
             self._initial_content_id is not None
             and viewer_content_id is not None
-            and viewer_content_id != self._initial_content_id
+            and viewer_content_id.casefold() != self._initial_content_id.casefold()
         ):
             raise self._strict_entry_error(
                 expected_kind=expected_kind,
@@ -832,6 +838,20 @@ class BookWalkerAdapter(SiteAdapter):
                 expected_kind=self._strict_expected_kind(),
                 observed=[],
                 reason="strict entry requires a product page, but the run is already in a viewer",
+            )
+
+        if (
+            self._access_strategy != "auto"
+            and is_product_page
+            and self._initial_content_id is None
+        ):
+            raise self._strict_entry_error(
+                expected_kind=self._strict_expected_kind(),
+                observed=[],
+                reason=(
+                    "product identity/content UUID could not be determined "
+                    "from the product URL"
+                ),
             )
 
         if not has_viewer_shell and is_product_page:

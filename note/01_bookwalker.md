@@ -72,6 +72,11 @@ strict entryはDiscoveryと同じ商品自身のmain action scope
 `text` / `action` / `href` / `uuid` metadataを`classify_reader_control()`へ渡し、
 `data-uuid`がある場合は現在product UUIDと一致するcontrolだけを残す。selector重複で同じDOM
 elementが複数回見える場合はDOM identityで1件にまとめるが、別elementはmergeしない。
+strict direct / quotaではproduct URLがproduct pageの形でも、既存`content_id_from_url()`で
+exact content UUIDを取得できない場合はcandidate探索前にfailする。これによりproduct identityが
+不明なままcontrol UUID欠落だけを根拠にclickすることを防ぐ。control側`data-uuid`が無い場合は、
+product UUIDが確定していてkind等の他のstrict条件を満たす限り許容する。UUID比較はcase-insensitive
+で行う。
 
 ```text
 auto   = legacy score / fallback / deferred trial

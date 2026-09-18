@@ -57,7 +57,9 @@ def _control_html(
     )
 
 
-async def _goto_product(browser_page: Page, controls: str) -> None:
+async def _goto_product(
+    browser_page: Page, controls: str, *, product_url: str = PRODUCT_URL
+) -> None:
     product_html = f"""
     <h1 class="t-c-product-main-data__title">作品</h1>
     <div id="js-read-check">{controls}</div>
@@ -72,13 +74,18 @@ async def _goto_product(browser_page: Page, controls: str) -> None:
 
     await browser_page.route("https://bookwalker.jp/**", fulfill_product)
     await browser_page.route("https://viewer.bookwalker.jp/**", fulfill_viewer)
-    await browser_page.goto(PRODUCT_URL)
+    await browser_page.goto(product_url)
 
 
 async def _initialize_strict(
-    browser_page: Page, strategy: str, controls: str, *, timeout_ms: int = 300
+    browser_page: Page,
+    strategy: str,
+    controls: str,
+    *,
+    timeout_ms: int = 300,
+    product_url: str = PRODUCT_URL,
 ) -> BookWalkerAdapter:
-    await _goto_product(browser_page, controls)
+    await _goto_product(browser_page, controls, product_url=product_url)
     adapter = BookWalkerAdapter()
     adapter.read_link_wait_timeout_ms = timeout_ms
     await adapter.configure_run(browser_page, strategy)  # type: ignore[arg-type]
@@ -118,6 +125,40 @@ async def test_bookwalker_strict_direct_clicks_only_owned(browser_page: Page) ->
     """ + _control_html(action="reading", text="読む", entry="owned")
     await _initialize_strict(browser_page, "direct", controls)
     assert "entry=owned" in browser_page.url
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_strict_direct_allows_owned_without_control_uuid(
+    browser_page: Page,
+) -> None:
+    controls = _control_html(
+        action="reading", text="読む", entry="owned", uuid=None
+    )
+    await _initialize_strict(browser_page, "direct", controls)
+    assert "entry=owned" in browser_page.url
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_strict_direct_rejects_maruyomi_only(
+    browser_page: Page,
+) -> None:
+    controls = _control_html(action="read_maruyomi", text="10分まる読み", entry="quota")
+    with pytest.raises(BookWalkerStrictEntryError, match="expected kind='owned'"):
+        await _initialize_strict(browser_page, "direct", controls, timeout_ms=150)
+    assert browser_page.url == PRODUCT_URL
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_strict_direct_multiple_owned_controls_fail(
+    browser_page: Page,
+) -> None:
+    controls = (
+        _control_html(action="reading", text="読む", entry="owned-a")
+        + _control_html(action="reading", text="読む", entry="owned-b")
+    )
+    with pytest.raises(BookWalkerStrictEntryError, match="multiple matching"):
+        await _initialize_strict(browser_page, "direct", controls)
+    assert browser_page.url == PRODUCT_URL
 
 
 @pytest.mark.asyncio
@@ -227,6 +268,58 @@ async def test_bookwalker_strict_uuid_mismatch_is_excluded(browser_page: Page) -
     with pytest.raises(BookWalkerStrictEntryError):
         await _initialize_strict(browser_page, "quota", controls, timeout_ms=150)
     assert browser_page.url == PRODUCT_URL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("strategy", "control"),
+    [
+        (
+            "direct",
+            _control_html(action="reading", text="読む", entry="owned", uuid=None),
+        ),
+        (
+            "quota",
+            _control_html(
+                action="read_maruyomi", text="10分まる読み", entry="quota", uuid=None
+            ),
+        ),
+    ],
+)
+async def test_bookwalker_strict_requires_product_identity_before_candidates(
+    browser_page: Page, strategy: str, control: str
+) -> None:
+    invalid_product_url = "https://bookwalker.jp/deabcdef-/"
+    with pytest.raises(BookWalkerStrictEntryError, match="product identity"):
+        await _initialize_strict(
+            browser_page,
+            strategy,
+            control,
+            product_url=invalid_product_url,
+            timeout_ms=150,
+        )
+    assert browser_page.url == invalid_product_url
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_strict_uuid_comparison_is_case_insensitive(
+    browser_page: Page,
+) -> None:
+    uppercase_product_url = f"https://bookwalker.jp/de{PRODUCT_ID.upper()}/"
+    controls = _control_html(
+        action="reading", text="読む", entry="owned", uuid=PRODUCT_ID
+    )
+    await _initialize_strict(
+        browser_page, "direct", controls, product_url=uppercase_product_url
+    )
+    assert "entry=owned" in browser_page.url
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_auto_trial_fallback_still_navigates(browser_page: Page) -> None:
+    controls = _control_html(action="trial_reading", text="試し読み", entry="trial")
+    await _initialize_strict(browser_page, "auto", controls, timeout_ms=300)
+    assert "entry=trial" in browser_page.url
 
 
 @pytest.mark.asyncio
