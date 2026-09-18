@@ -372,6 +372,7 @@ capture・navigation・page counter・END / NEXT_CONTENT・metadata behaviorに�
 - diagnosticsのAdapter固有metadata統合は未実装。
 - BookWalker Site Policyは未実装。
 - BookWalker Adapterのstrict `direct` / `quota` entryは未実装。
+- BookWalker series-listのlive DOM smoke testは未実施。Phase 4移行前に実サイトでselectorと全件列挙を確認する必要がある。
 - 現行reader candidate scoringはmanual `auto` 互換経路として維持する。
 
 ## 20. 採用済み次期仕様と現行Discovery境界
@@ -398,18 +399,28 @@ identity / metadata:
 - `discovery_key` = Watchlist key
 - `external_id` = 商品URL `/de<uuid>/` のUUID
 - `canonical_title` = non-empty Watchlist label、なければseries pageのseries名
-- 通常巻だけ安全に `order_key` を数値化
-- 特殊商品は識別できる `order_label` を保持
+- 通常巻だけ安全に `order_key` を数値化。`#16`、`第16巻`、`16巻`、既存の末尾数字形式を扱う
+- series cardのstructured special marker（実DOM未確認）を優先し、特典商品は`order_key`を付けず識別できる`order_label`を保持
 - series由来titleをBatch explicit metadataとしてCrawlerへ渡し、同一series folderへ揃える
 
 same `external_id` が別non-null `discovery_key` に既存の場合、scopeを黙って
 移動せずDiscovery incompleteとする。
 
-現行の `BookWalkerDiscoveryAdapter` はこのscopeを検証し、series listの作品一覧領域から
-`/de<uuid>/` product linkを重複排除して列挙する。paginationはboundedに進め、listingが
+現行の `BookWalkerDiscoveryAdapter` はこのscopeを検証し、`#js-series-list` 内の
+`article` product cardから`/de<uuid>/` product linkを重複排除して列挙する。これは既存
+BookWalker AdapterのDOM probeとPhase 3 local/synthetic fixtureを根拠にした実装であり、
+series listについてのlive DOM確認済みselectorではない。paginationはboundedに進め、listingが
 曖昧・空・loop・上限到達した場合はcomplete扱いにせずincompleteとする。商品ページの
-reader control観測はreaderを開かずに行う。実サイトDOMのlive verificationはこの実装環境では
-ブラウザセッションが利用できないため、既存Adapterで確認済みのselectorとlocal fixtureで確認している。
+reader control観測はreaderを開かずに行う。live selector verification pendingであり、
+実サイトのproduct card、special marker、pagination/load-moreはPhase 4移行前にsmoke testが必要である。
+
+selectorの確認状態:
+
+- live確認済みのseries Discovery selector: なし
+- local/synthetic fixtureで確認したseries selector: `#js-series-list`、`#js-series-list article`
+- local/synthetic fixtureで確認したspecial marker: `[data-badge]` の「購入特典」
+- Discoveryが既存Adapterから再利用するreader control scope: `#js-read-check`、`#js-subscription-check`、既存のviewer/action fallback
+- Discovery pagination候補（`rel=next`、`aria-label`、`data-testid`、表示テキスト）はlive未確認
 
 ### 20.2 Discovery access classification
 
@@ -420,8 +431,16 @@ site-neutralなDiscoveryServiceが行う。
 Discoveryはseries listから商品詳細ページを開いてcontrolを観測するが、
 readerは開かない。まる読み10分timerをDiscoveryで開始しない。
 
-ログイン済みshared Crawler Chromeを前提とし、account状態を安全に確認できない
-場合はrecordをyieldする前にincompleteとする。
+ログイン済みshared Crawler Chromeを前提とし、series pageと各product pageの
+header/account領域にある明示的なvisible「ログイン」CTA、login form、password input、
+authentication challengeだけを確認する。member.bookwalker.jpへのリンクや本文全体の
+「ログイン」文字列はlogged-out根拠にしない。account状態を安全に確認できない場合は
+recordをyieldする前にincompleteとする。product navigation後は最終URLの`/de<uuid>/`
+が要求UUIDと一致することも確認し、login redirect・外部domain・別UUIDはincompleteとする。
+
+product titleはreader-control ready signalにしない。title等のmetadata取得後も最大5秒間
+controlをbounded waitし、遅延表示されたcontrolを分類する。timeout後にproduct identity/titleが
+正常でcontrolがない商品はunknownとしてyieldし、identity/titleが確認できない場合だけincompleteとする。
 
 access mode:
 

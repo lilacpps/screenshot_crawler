@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from urllib.parse import urljoin, urlparse
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -20,7 +22,10 @@ from screenshot_crawler.discovery.models import (
     IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
-from screenshot_crawler.site_adapters.bookwalker.adapter import split_bookwalker_title
+from screenshot_crawler.site_adapters.bookwalker.adapter import (
+    clean_bookwalker_title,
+    split_bookwalker_title,
+)
 from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     ReaderControlKind,
     classify_reader_control,
@@ -30,6 +35,7 @@ from screenshot_crawler.watchlist.models import WatchlistTarget
 SERIES_LIST_SELECTOR = "#js-series-list"
 WAIT_TIMEOUT_MS = 10_000
 POLL_INTERVAL_MS = 100
+PRODUCT_CONTROL_WAIT_TIMEOUT_MS = 5_000
 MAX_LIST_PAGES = 200
 MAX_PRODUCTS = 5_000
 
@@ -44,6 +50,9 @@ _PAGINATION_SELECTOR = (
     '[aria-label="次へ"], [aria-label="もっと見る"], '
     '[data-testid="pagination-next"]'
 )
+_SPECIAL_MARKER_SELECTOR = (
+    "[data-category], [data-product-type], [data-badge], .badge"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,9 +61,42 @@ class BookWalkerSeriesParts:
 
 
 @dataclass(frozen=True, slots=True)
-class BookWalkerProductParts:
+class BookWalkerListedProduct:
     external_id: str
     url: str
+    title: str | None = None
+    special: bool = False
+
+
+BookWalkerProductParts = BookWalkerListedProduct
+
+
+class BookWalkerAccountState(StrEnum):
+    """Account state observed from explicit BookWalker account UI."""
+
+    READY = "ready"
+    LOGGED_OUT = "logged_out"
+    AMBIGUOUS = "ambiguous"
+
+
+def classify_bookwalker_account_state(
+    metadata: Mapping[str, object],
+) -> BookWalkerAccountState:
+    """Classify only explicit account/header evidence.
+
+    A member-domain link or arbitrary body text is intentionally ignored. The
+    browser-side probe supplies booleans limited to account/header UI and
+    authentication forms/challenges.
+    """
+
+    if any(
+        metadata.get(field) is True
+        for field in ("login_cta", "login_form", "password_input")
+    ):
+        return BookWalkerAccountState.LOGGED_OUT
+    if metadata.get("auth_challenge") is True:
+        return BookWalkerAccountState.AMBIGUOUS
+    return BookWalkerAccountState.READY
 
 
 def _bookwalker_host(url: str) -> bool:
@@ -92,14 +134,43 @@ def parse_bookwalker_product_url(url: str) -> BookWalkerProductParts | None:
     )
 
 
-def parse_bookwalker_order(raw_title: str | None) -> tuple[str | None, str | None]:
+def _bookwalker_order_label(number: int) -> str:
+    width = 3 if number >= 100 else 2
+    return f"第{number:0{width}d}巻"
+
+
+def parse_bookwalker_order(
+    raw_title: str | None,
+    *,
+    special: bool = False,
+) -> tuple[str | None, str | None]:
     """Return a safe numeric order and display label for a product title."""
 
-    cleaned_title, volume_label = split_bookwalker_title(raw_title)
+    cleaned = clean_bookwalker_title(raw_title)
+    if special:
+        return None, cleaned or None
+
+    hash_match = re.search(r"(?:^|\s)#(?P<number>\d+)(?=\s|$)", cleaned)
+    if hash_match:
+        return str(int(hash_match.group("number"))), _bookwalker_order_label(
+            int(hash_match.group("number"))
+        )
+
+    cleaned_title, volume_label = split_bookwalker_title(cleaned)
     if volume_label:
         match = re.search(r"\d+", volume_label)
         if match:
             return str(int(match.group(0))), volume_label
+
+    volume_match = re.search(r"第\s*(?P<number>\d+)\s*巻", cleaned)
+    if volume_match:
+        number = int(volume_match.group("number"))
+        return str(number), _bookwalker_order_label(number)
+
+    volume_match = re.search(r"(?<!\d)(?P<number>\d+)\s*巻", cleaned)
+    if volume_match:
+        number = int(volume_match.group("number"))
+        return str(number), _bookwalker_order_label(number)
     return None, cleaned_title or None
 
 
@@ -133,7 +204,7 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
 
         try:
             products, series_title = await self._collect_series_products(page, target.url)
-        except (PlaywrightTimeoutError, TimeoutError) as exc:
+        except (PlaywrightError, TimeoutError) as exc:
             raise DiscoveryIncompleteError(
                 "BookWalker series listing did not load or advance"
             ) from exc
@@ -145,17 +216,15 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
         for product in products:
             try:
                 product_data = await self._observe_product(page, product)
-            except (PlaywrightTimeoutError, TimeoutError) as exc:
+            except (PlaywrightError, TimeoutError) as exc:
                 raise DiscoveryIncompleteError(
                     f"BookWalker product page did not load: {product.external_id}"
                 ) from exc
-            if product_data["login_required"]:
-                raise DiscoveryIncompleteError(
-                    f"BookWalker account state is unresolved: {product.external_id}"
-                )
-
-            product_title = product_data["title"]
-            order_key, order_label = parse_bookwalker_order(product_title)
+            product_title = product.title or product_data["title"]
+            order_key, order_label = parse_bookwalker_order(
+                product_title,
+                special=product.special,
+            )
             yield DiscoveredRecord(
                 item=DiscoveredItem(
                     canonical_title=canonical_title,
@@ -211,11 +280,12 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
         self,
         page: Page,
         target_url: str,
-    ) -> tuple[list[BookWalkerProductParts], str | None]:
+    ) -> tuple[list[BookWalkerListedProduct], str | None]:
         await page.goto(target_url, wait_until="domcontentloaded", timeout=WAIT_TIMEOUT_MS)
+        await self._assert_account_state(page)
         series_list = await self._series_list(page)
         series_title = await self._series_title(page, series_list)
-        products: list[BookWalkerProductParts] = []
+        products: list[BookWalkerListedProduct] = []
         seen_ids: set[str] = set()
         previous_signature: tuple[str, ...] | None = None
 
@@ -282,17 +352,63 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
         self,
         listing: Locator,
         page_url: str,
-    ) -> list[BookWalkerProductParts]:
-        anchors = listing.locator("a[href]")
-        products: list[BookWalkerProductParts] = []
-        for index in range(await anchors.count()):
-            href = await anchors.nth(index).get_attribute("href")
-            if not href:
-                continue
-            product = parse_bookwalker_product_url(urljoin(page_url, href))
-            if product is not None:
-                products.append(product)
+    ) -> list[BookWalkerListedProduct]:
+        cards = listing.locator("article")
+        if await cards.count() == 0:
+            raise DiscoveryIncompleteError(
+                "BookWalker series product cards are not identifiable"
+            )
+
+        products: list[BookWalkerListedProduct] = []
+        for card_index in range(await cards.count()):
+            card = cards.nth(card_index)
+            anchors = card.locator("a[href]")
+            card_title = await self._card_title(card, anchors)
+            special = await self._card_is_special(card, card_title)
+            for anchor_index in range(await anchors.count()):
+                href = await anchors.nth(anchor_index).get_attribute("href")
+                if not href:
+                    continue
+                product = parse_bookwalker_product_url(urljoin(page_url, href))
+                if product is not None:
+                    products.append(
+                        BookWalkerListedProduct(
+                            external_id=product.external_id,
+                            url=product.url,
+                            title=card_title,
+                            special=special,
+                        )
+                    )
         return products
+
+    @staticmethod
+    async def _card_title(card: Locator, anchors: Locator) -> str | None:
+        for selector in ("h3", "h2", "[data-title]", "[data-product-title]"):
+            candidates = card.locator(selector)
+            for index in range(await candidates.count()):
+                candidate = candidates.nth(index)
+                if await candidate.is_visible():
+                    title = " ".join((await candidate.inner_text()).split())
+                    if title:
+                        return title
+        for index in range(await anchors.count()):
+            anchor = anchors.nth(index)
+            if await anchor.is_visible():
+                title = " ".join((await anchor.inner_text()).split())
+                if title:
+                    return title
+        return None
+
+    @staticmethod
+    async def _card_is_special(card: Locator, card_title: str | None) -> bool:
+        markers = card.locator(_SPECIAL_MARKER_SELECTOR)
+        for index in range(await markers.count()):
+            marker = markers.nth(index)
+            if await marker.is_visible():
+                text = " ".join((await marker.inner_text()).split())
+                if "特典" in text:
+                    return True
+        return bool(card_title and re.search(r"^【(?:購入)?特典】", card_title))
 
     async def _pagination_control(self, listing: Locator) -> Locator | None:
         matches: list[Locator] = []
@@ -338,22 +454,41 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
     async def _observe_product(
         self,
         page: Page,
-        product: BookWalkerProductParts,
+        product: BookWalkerListedProduct,
     ) -> dict[str, object]:
         await page.goto(product.url, wait_until="domcontentloaded", timeout=WAIT_TIMEOUT_MS)
+        final_product = parse_bookwalker_product_url(page.url)
+        if final_product is None or final_product.external_id != product.external_id:
+            raise DiscoveryIncompleteError(
+                f"BookWalker product identity changed: {product.external_id}"
+            )
+        await self._assert_account_state(page)
+
+        latest_data: dict[str, object] | None = None
         elapsed = 0
-        while elapsed < WAIT_TIMEOUT_MS:
+        while elapsed < PRODUCT_CONTROL_WAIT_TIMEOUT_MS:
+            await self._assert_account_state(page)
             data = await page.evaluate(_PRODUCT_METADATA_SCRIPT)
-            if data["login_required"] or data["title"] or data["controls"]:
+            latest_data = data
+            if data["title"] and data["controls"]:
                 return data
             await page.wait_for_timeout(POLL_INTERVAL_MS)
             elapsed += POLL_INTERVAL_MS
-        data = await page.evaluate(_PRODUCT_METADATA_SCRIPT)
-        if not data["title"] and not data["controls"]:
+        if latest_data is None or not latest_data["title"]:
             raise DiscoveryIncompleteError(
                 f"BookWalker product metadata was not observed: {product.external_id}"
             )
-        return data
+        return latest_data
+
+    @staticmethod
+    async def _assert_account_state(page: Page) -> None:
+        state = classify_bookwalker_account_state(
+            await page.evaluate(_ACCOUNT_STATE_SCRIPT)
+        )
+        if state is not BookWalkerAccountState.READY:
+            raise DiscoveryIncompleteError(
+                f"BookWalker account state is {state.value}"
+            )
 
     @staticmethod
     async def _is_disabled(locator: Locator) -> bool:
@@ -377,6 +512,43 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError(
                 "BookWalker source belongs to a different Discovery scope"
             )
+
+
+_ACCOUNT_STATE_SCRIPT = """
+() => {
+  const visible = element => {
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      (element.offsetWidth > 0 || element.offsetHeight > 0 || element.getClientRects().length > 0);
+  };
+  const textOf = element => (element.innerText || element.getAttribute('aria-label') ||
+    element.getAttribute('title') || '').replace(/\\s+/g, ' ').trim();
+  const roots = document.querySelectorAll(
+    'header, [role="banner"], #header, #globalHeader, [data-testid="header"]'
+  );
+  let loginCta = false;
+  for (const root of roots) {
+    for (const element of root.querySelectorAll('a, button, [role="link"], [role="button"]')) {
+      if (visible(element) && textOf(element).includes('ログイン')) {
+        loginCta = true;
+      }
+    }
+  }
+  const passwordInput = [...document.querySelectorAll('input[type="password"]')]
+    .some(visible);
+  const loginForm = [...document.querySelectorAll('form')].some(form => {
+    if (!visible(form)) return false;
+    return [...form.querySelectorAll(
+      'input[type="password"], input[type="email"], input[autocomplete="username"], input[name="j_username"]'
+    )].some(visible);
+  });
+  const authChallenge = [...document.querySelectorAll(
+    '[id*="captcha" i], [class*="captcha" i], iframe[src*="captcha" i], [aria-label*="認証"]'
+  )].some(visible);
+  return {login_cta: loginCta, login_form: loginForm, password_input: passwordInput,
+    auth_challenge: authChallenge};
+}
+"""
 
 
 _PRODUCT_METADATA_SCRIPT = """
@@ -423,8 +595,7 @@ _PRODUCT_METADATA_SCRIPT = """
     title: title && visible(title) ? textOf(title) : '',
     author: author && visible(author) ? textOf(author) : null,
     genre: genre && visible(genre) ? textOf(genre) : null,
-    controls,
-    login_required: [...document.querySelectorAll('input[type="password"]')].some(visible)
+    controls
   };
 }
 """
