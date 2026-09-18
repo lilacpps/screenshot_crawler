@@ -7,6 +7,8 @@ from screenshot_crawler.discovery.models import (
     DiscoveredSource,
     DiscoveryMode,
     DiscoveryResult,
+    DiscoverySourceSnapshot,
+    IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.registry import DiscoveryAdapterRegistry
 from screenshot_crawler.discovery.service import (
@@ -24,4 +26,6 @@ __all__ = [
     "DiscoveryMode",
     "DiscoveryResult",
     "DiscoveryService",
+    "DiscoverySourceSnapshot",
+    "IncrementalStopDecision",
 ]

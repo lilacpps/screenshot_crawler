@@ -10,6 +10,8 @@ from screenshot_crawler.catalog.models import CatalogRecord, Item
 from screenshot_crawler.discovery.models import (
     DiscoveryMode,
     DiscoveryResult,
+    DiscoverySourceSnapshot,
+    IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.registry import DiscoveryAdapterRegistry
 
@@ -60,6 +62,15 @@ class DiscoveryService:
             )
 
         adapter = self.registry.create(target.site)
+        initial_sources = {
+            source.external_id: DiscoverySourceSnapshot(
+                external_id=source.external_id,
+                discovery_key=source.discovery_key,
+                access_mode=source.access_mode,
+                available=source.available,
+            )
+            for source in self.catalog.list_sources(site=target.site)
+        }
         observed_external_ids: set[str] = set()
         warnings: list[str] = []
         warning_keys: set[tuple[int, str]] = set()
@@ -74,6 +85,7 @@ class DiscoveryService:
                 existing = self.catalog.find_source(
                     target.site, record.source.external_id
                 )
+                previous = initial_sources.get(record.source.external_id)
                 if existing is None:
                     new_count += 1
                     known_streak = 0
@@ -85,6 +97,11 @@ class DiscoveryService:
                         known_streak += 1
                     previous_known_identity = known_identity
 
+                access_mode = adapter.reconcile_access_mode(
+                    record.source.access_mode,
+                    previous,
+                    target,
+                )
                 catalog_record = self.catalog.upsert_item_source(
                     ItemInput(
                         canonical_title=record.item.canonical_title,
@@ -99,7 +116,7 @@ class DiscoveryService:
                         external_id=record.source.external_id,
                         discovery_key=target.key,
                         url=record.source.url,
-                        access_mode=record.source.access_mode,
+                        access_mode=access_mode,
                         free_until=record.source.free_until,
                         available=record.source.available,
                         access_checked_at=record.source.access_checked_at,
@@ -115,6 +132,25 @@ class DiscoveryService:
                     warning_keys,
                 )
 
+                if mode == "incremental":
+                    stop_decision = adapter.incremental_stop_decision(
+                        record,
+                        previous,
+                        target,
+                    )
+                    if stop_decision is IncrementalStopDecision.STOP:
+                        return DiscoveryResult(
+                            mode=mode,
+                            target_key=target.key,
+                            observed_count=observed_count,
+                            new_count=new_count,
+                            known_count=known_count,
+                            complete=None,
+                            stopped_reason="stable_boundary",
+                            warnings=tuple(warnings),
+                        )
+                    if stop_decision is IncrementalStopDecision.CONTINUE:
+                        continue
                 if mode == "incremental" and known_streak >= _KNOWN_STREAK_LIMIT:
                     return DiscoveryResult(
                         mode=mode,

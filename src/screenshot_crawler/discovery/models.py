@@ -4,10 +4,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
 DiscoveryMode = Literal["full", "incremental"]
 TimestampValue = datetime | str | None
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoverySourceSnapshot:
+    """Run-start source state exposed to site-specific Discovery hooks."""
+
+    external_id: str
+    discovery_key: str | None
+    access_mode: str
+    available: bool
+
+
+class IncrementalStopDecision(StrEnum):
+    """Whether an adapter overrides the service's generic known-streak rule."""
+
+    DEFAULT = "default"
+    CONTINUE = "continue"
+    STOP = "stop"
 
 
 @dataclass(frozen=True, slots=True)

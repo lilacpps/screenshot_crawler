@@ -602,9 +602,14 @@ BookWalker Discovery / Policy / strict direct・quota entryは未実装である
 
 `DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。real-site用Adapterはまだ登録していない。
 
+Discovery開始時、Serviceは対象siteの既存sourceからCatalog非依存の
+`DiscoverySourceSnapshot`を一度だけ作成し、adapter hookへ渡す。このsnapshotはrun開始時点をauthorityとし、run中に新規upsertされたsourceを既存sourceとして扱わない。
+`DiscoveryAdapter.reconcile_access_mode()`は観測したaccess modeだけをsite-specificに調整でき、defaultは観測値をそのまま返す。`incremental_stop_decision()`は
+`DEFAULT` / `CONTINUE` / `STOP`を返し、defaultでは従来のknown source 2件連続停止を使う。`STOP`はrecordのupsert後に`stable_boundary`で終了し、full modeではstop hookを呼ばない。両hookからの`DiscoveryIncompleteError`は既存のincomplete semanticsに従う。
+
 fullはiteratorの正常終了だけを`complete=true`とし、`DiscoveryIncompleteError`または予期しない例外ではmissing sourceのreconciliationを行わない。complete fullだけが同じ`site + discovery_key` scopeの未観測sourceを`available=false`にする。現行incrementalのknown判定と2件連続streakはServiceが管理し、2件目をrefreshしてから停止する。未観測sourceはunavailableにしない。
 
-採用済み次期仕様では、このknown-streakをdefaultとして維持しつつ、BookWalkerのように既知paid/unknownが将来quotaへ変化し得るsite向けにsmall site-specific stop policyを追加する。BookWalkerはrun開始前からquota/ownedだった既知sourceをstable boundaryとして停止する。これはまだ未実装である。
+採用済み次期仕様では、このknown-streakをdefaultとして維持しつつ、BookWalkerのように既知paid/unknownが将来quotaへ変化し得るsite向けにsmall site-specific stop policyを追加する。今回そのframework extension pointまで実装したが、BookWalkerのaccess-state preservation / stable-boundary override自体はまだ未実装である。Manga ONEはhookをoverrideせず、従来挙動を使う。
 
 ### 22.4 Discovery CLIの複数target同期（実装済み）
 

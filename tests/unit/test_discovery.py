@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from screenshot_crawler.catalog import CatalogService, CatalogValidationError, ItemInput
+from screenshot_crawler.catalog import (
+    CatalogService,
+    CatalogValidationError,
+    ItemInput,
+    Source,
+)
 from screenshot_crawler.discovery import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -12,6 +17,8 @@ from screenshot_crawler.discovery import (
     DiscoveryAdapterRegistry,
     DiscoveryIncompleteError,
     DiscoveryService,
+    DiscoverySourceSnapshot,
+    IncrementalStopDecision,
 )
 from screenshot_crawler.watchlist import WatchlistTarget
 
@@ -81,6 +88,51 @@ class FakeDiscoveryAdapter(DiscoveryAdapter):
                 raise self.failure
 
         return generate()
+
+
+class HookDiscoveryAdapter(FakeDiscoveryAdapter):
+    def __init__(
+        self,
+        records: list[DiscoveredRecord],
+        *,
+        reconciled_access_mode: str | None = None,
+        stop_decision: IncrementalStopDecision = IncrementalStopDecision.DEFAULT,
+        stop_external_ids: set[str] | None = None,
+        reconciliation_failure: Exception | None = None,
+    ) -> None:
+        super().__init__(records)
+        self.reconciled_access_mode = reconciled_access_mode
+        self.stop_decision = stop_decision
+        self.stop_external_ids = stop_external_ids or set()
+        self.reconciliation_failure = reconciliation_failure
+        self.reconciliation_calls: list[
+            tuple[str, DiscoverySourceSnapshot | None, WatchlistTarget]
+        ] = []
+        self.stop_calls: list[
+            tuple[str, DiscoverySourceSnapshot | None, WatchlistTarget]
+        ] = []
+
+    def reconcile_access_mode(
+        self,
+        observed_access_mode: str,
+        previous: DiscoverySourceSnapshot | None,
+        target: WatchlistTarget,
+    ) -> str:
+        self.reconciliation_calls.append((observed_access_mode, previous, target))
+        if self.reconciliation_failure is not None:
+            raise self.reconciliation_failure
+        return self.reconciled_access_mode or observed_access_mode
+
+    def incremental_stop_decision(
+        self,
+        record: DiscoveredRecord,
+        previous: DiscoverySourceSnapshot | None,
+        target: WatchlistTarget,
+    ) -> IncrementalStopDecision:
+        self.stop_calls.append((record.source.external_id, previous, target))
+        if record.source.external_id in self.stop_external_ids:
+            return IncrementalStopDecision.STOP
+        return self.stop_decision
 
 
 def setup_service(
@@ -176,6 +228,170 @@ async def test_full_refresh_updates_external_state_without_overwriting_local_sta
     assert item.local_path == "library/作品A.zip"
     assert item.author == "作者B"
     assert item.genre == "genre"
+
+
+async def test_default_access_reconciliation_persists_observed_mode(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record("source-1", access_mode="paid")])
+    service, catalog, target = setup_service(tmp_path, adapter)
+    catalog.upsert_item_source(
+        ItemInput(canonical_title="source-1"),
+        {
+            "site": target.site,
+            "external_id": "source-1",
+            "discovery_key": target.key,
+            "url": "https://example.test/source-1",
+            "access_mode": "quota",
+        },
+    )
+
+    await service.discover(FakePage(), target, "full")
+
+    assert catalog.get_source_by_external_id(target.site, "source-1").access_mode == "paid"
+
+
+async def test_custom_access_reconciliation_can_preserve_mode_and_get_snapshot(
+    tmp_path: Path,
+) -> None:
+    adapter = HookDiscoveryAdapter(
+        [record("source-1", access_mode="paid")],
+        reconciled_access_mode="quota",
+    )
+    service, catalog, target = setup_service(tmp_path, adapter)
+    catalog.upsert_item_source(
+        ItemInput(canonical_title="source-1"),
+        {
+            "site": target.site,
+            "external_id": "source-1",
+            "discovery_key": "old-target",
+            "url": "https://example.test/source-1",
+            "access_mode": "quota",
+        },
+    )
+
+    await service.discover(FakePage(), target, "full")
+
+    assert catalog.get_source_by_external_id(target.site, "source-1").access_mode == "quota"
+    assert len(adapter.reconciliation_calls) == 1
+    observed, previous, observed_target = adapter.reconciliation_calls[0]
+    assert observed == "paid"
+    assert previous == DiscoverySourceSnapshot(
+        external_id="source-1",
+        discovery_key="old-target",
+        access_mode="quota",
+        available=True,
+    )
+    assert observed_target == target
+    assert not isinstance(previous, Source)
+
+
+async def test_run_start_snapshot_does_not_include_source_inserted_mid_run(
+    tmp_path: Path,
+) -> None:
+    adapter = HookDiscoveryAdapter([record("new-source"), record("new-source")])
+    service, _, target = setup_service(tmp_path, adapter)
+
+    await service.discover(FakePage(), target, "full")
+
+    assert [previous for _, previous, _ in adapter.reconciliation_calls] == [None, None]
+
+
+async def test_incremental_continue_suppresses_generic_known_streak_stop(
+    tmp_path: Path,
+) -> None:
+    adapter = HookDiscoveryAdapter(
+        [record("known-1"), record("known-2"), record("after-boundary")],
+        stop_decision=IncrementalStopDecision.CONTINUE,
+    )
+    service, catalog, target = setup_service(tmp_path, adapter)
+    for external_id in ("known-1", "known-2"):
+        catalog.upsert_item_source(
+            ItemInput(canonical_title=external_id),
+            {
+                "site": target.site,
+                "external_id": external_id,
+                "discovery_key": target.key,
+                "url": f"https://example.test/{external_id}",
+            },
+        )
+
+    result = await service.discover(FakePage(), target, "incremental")
+
+    assert result.stopped_reason == "exhausted"
+    assert adapter.yielded == ["known-1", "known-2", "after-boundary"]
+
+
+async def test_incremental_stop_refreshes_boundary_before_returning(
+    tmp_path: Path,
+) -> None:
+    adapter = HookDiscoveryAdapter(
+        [record("stable", url="https://example.test/new"), record("after")],
+        stop_external_ids={"stable"},
+    )
+    service, catalog, target = setup_service(tmp_path, adapter)
+    catalog.upsert_item_source(
+        ItemInput(canonical_title="stable"),
+        {
+            "site": target.site,
+            "external_id": "stable",
+            "discovery_key": target.key,
+            "url": "https://example.test/old",
+        },
+    )
+
+    result = await service.discover(FakePage(), target, "incremental")
+
+    assert result.stopped_reason == "stable_boundary"
+    assert catalog.get_source_by_external_id(target.site, "stable").url.endswith("/new")
+    assert adapter.yielded == ["stable"]
+
+
+async def test_full_ignores_incremental_stop_hook_but_uses_access_reconciliation(
+    tmp_path: Path,
+) -> None:
+    adapter = HookDiscoveryAdapter(
+        [record("first", access_mode="paid"), record("second", access_mode="paid")],
+        reconciled_access_mode="quota",
+        stop_decision=IncrementalStopDecision.STOP,
+    )
+    service, catalog, target = setup_service(tmp_path, adapter)
+
+    result = await service.discover(FakePage(), target, "full")
+
+    assert result.complete is True
+    assert result.stopped_reason == "exhausted"
+    assert adapter.yielded == ["first", "second"]
+    assert adapter.stop_calls == []
+    assert all(
+        catalog.get_source_by_external_id(target.site, external_id).access_mode == "quota"
+        for external_id in ("first", "second")
+    )
+
+
+async def test_reconciliation_incomplete_preserves_full_missing_state(
+    tmp_path: Path,
+) -> None:
+    adapter = HookDiscoveryAdapter(
+        [record("seen")],
+        reconciliation_failure=DiscoveryIncompleteError("access state uncertain"),
+    )
+    service, catalog, target = setup_service(tmp_path, adapter)
+    catalog.upsert_item_source(
+        ItemInput(canonical_title="missing"),
+        {
+            "site": target.site,
+            "external_id": "missing",
+            "discovery_key": target.key,
+            "url": "https://example.test/missing",
+        },
+    )
+
+    result = await service.discover(FakePage(), target, "full")
+
+    assert result.complete is False
+    assert result.stopped_reason == "incomplete"
+    assert catalog.get_source_by_external_id(target.site, "missing").available is True
 
 
 async def test_full_reconciliation_is_limited_to_complete_target_scope(

@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from screenshot_crawler.discovery.models import (
     DiscoveredRecord,
     DiscoveryMode,
+    DiscoverySourceSnapshot,
+    IncrementalStopDecision,
 )
 
 if TYPE_CHECKING:
@@ -35,3 +37,31 @@ class DiscoveryAdapter(ABC):
         """
 
         raise NotImplementedError
+
+    def reconcile_access_mode(
+        self,
+        observed_access_mode: str,
+        previous: DiscoverySourceSnapshot | None,
+        target: WatchlistTarget,
+    ) -> str:
+        """Return the access mode to persist for an observed source.
+
+        ``previous`` is a read-only snapshot from before this Discovery run,
+        not a Catalog object and not the source state after an earlier record
+        was upserted. The default preserves the existing observed-value
+        behavior.
+        """
+
+        del previous, target
+        return observed_access_mode
+
+    def incremental_stop_decision(
+        self,
+        record: DiscoveredRecord,
+        previous: DiscoverySourceSnapshot | None,
+        target: WatchlistTarget,
+    ) -> IncrementalStopDecision:
+        """Choose whether this record overrides incremental stopping."""
+
+        del record, previous, target
+        return IncrementalStopDecision.DEFAULT
