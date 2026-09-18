@@ -297,14 +297,18 @@ site固有Web操作と永続化を分離し、Adapter追加時にDB実装を持�
 Discovery modeを次の2種類とする。
 
 - `full`: target内の現在列挙可能な全sourceを同期する
-- `incremental`: latest側から走査し、known sourceが2件連続したら停止する
+- `incremental`: latest側から走査し、defaultではknown sourceが2件連続したら停止する
+
+site固有のaccess状態遷移によりknown-source streakが安全な境界にならない場合は、
+Discovery frameworkに小さいsite-specific incremental stop policyを許容する。
+default ruleは維持し、例外をCoreのsite名分岐にはしない。
 
 full結果は `complete` を持ち、`complete=true` のときだけ同じ `discovery_key` scope内で今回未観測のsourceを `available=false` にできる。
 
 incrementalでは未観測の過去sourceをunavailableにしない。
 
 ### 理由
-初回/定期reconciliationでは過去access状態の変化も反映しつつ、通常更新では全件走査コストを避けるため。途中失敗したfull syncで既存sourceを誤って消失扱いすることも防ぐ。
+初回/定期reconciliationでは過去access状態の変化も反映しつつ、通常更新では全件走査コストを避けるため。途中失敗したfull syncで既存sourceを誤って消失扱いすることも防ぐ。また、siteによって「既知であること」と「今後変化しない安定領域」が一致しないため、停止境界だけはsite固有policyで安全側へ調整できるようにする。
 
 ---
 
@@ -434,3 +438,86 @@ metadata overrideはsource URLやmanifestの実URLを置換しない。
 
 ### 理由
 Batch経由ではDiscovery済みの確定情報を再利用でき、手動crawlでは従来の簡単なURL-only操作を維持できる。CrawlerへCatalog依存を追加せず、サイトDOMのtitle/author取得失敗にも強くするため。
+
+
+---
+
+## D-030 BookWalker Discoveryは手動登録series listをscope authorityとする
+
+### 決定
+BookWalker Discoveryは初期実装で、Watchlistへ明示登録された:
+
+```text
+https://bookwalker.jp/series/<series-id>/list/
+```
+
+だけを探索する。BookWalker全体や「まる読み10分」全対象の自動探索は行わない。
+
+同じseries listに列挙された商品は、商品titleの文字列推定ではなく同一Discovery
+group / packaging seriesとして扱う。stable source identityは商品UUID
+`/de<uuid>/` とし、series scopeはWatchlist `discovery_key` で保持する。
+
+Discoveryは各商品詳細ページのaccess controlを観測するがreaderは開かない。
+access modeは強いsignalから `owned / quota / paid / unknown` を分類し、
+`subscription_reading` actionだけを「まる読み10分」と解釈しない。
+
+BookWalkerのincrementalは、既存 `paid / unknown` を再確認し、
+run開始前から `quota / owned` だったsourceをstable boundaryとして停止する。
+generic known-source 2件停止はBookWalkerには使わない。
+
+BookWalker公式では、その日の「まる読み10分」終了後に対象作品でも通常の
+「試し読み」が表示されるため、既知 `quota / owned` をtrial/unknown観測だけで
+downgradeしない。
+
+同じBookWalker external IDが別のnon-null discovery scopeに既存の場合、
+scopeを黙って移動せずincompleteとして停止する。
+
+### 理由
+全作品探索は対象量が大きく個人利用の目的に合わない。series listを利用者が
+明示選択することでscopeを小さく保てる。また同一series listはBookWalker自身の
+groupingなので、title parsingよりseries identityとして信頼できる。
+
+さらに「まる読み10分」終了後のtrial表示をそのままexternal state downgradeとして
+保存すると、実際にはquota対象の既存作品を誤ってpaidへ戻すため、安全側に
+stable-state preservationを採用する。
+
+---
+
+## D-031 BookWalker quota Batchは1日1冊・strict entryを採用する
+
+### 決定
+BookWalker公式の「まる読み10分」は1日合計10分、AM5:00 JST resetだが、
+初期Batchでは残り秒数を最適化せず、Crawler側のlocal safety policyを:
+
+```text
+05:00 JST ～ 翌05:00 JST
+BookWalker site-wide
+quota start = 最大1冊
+```
+
+とする。
+
+quota attemptはreaderを開く前に `quota_started_at` を記録し、crawl / packagingが
+失敗しても同window内ではrefundや自動再試行をしない。
+
+BookWalkerではManga ONEのようなsource単位の再閲覧grantを仮定せず、
+`access_granted_until` をdirect判定へ使わない。
+
+BookWalker Site AdapterのBatch entryはstrictにする。
+
+- `quota`: 「まる読み10分」の強い固有controlだけをclickし、trial / owned /
+  読み放題等へfallbackしない
+- `direct`: 初期実装では購入済みfull reader「読む」だけをclickし、trial /
+  maruyomi / 読み放題等へfallbackしない
+- `auto`: 既存manual crawl互換のcandidate scoring/fallbackを維持する
+
+requested strategyに合うcontrolが安全に一意決定できなければclick前に失敗する。
+
+### 理由
+Resume未実装の状態で10分を複数冊へ最大利用すると、途中でquotaが切れた巻を
+安全に継続する仕組みが必要になり実装範囲が大きくなる。1日1冊なら既存の
+1 URL -> 1 runモデルを維持できる。
+
+また、trial readerは途中までしか読めなくても正常ENDし得るため、quota requestが
+trialへfallbackするとpartial contentをcompleted扱いする危険がある。Batchでは
+効率より誤completed防止を優先する。
