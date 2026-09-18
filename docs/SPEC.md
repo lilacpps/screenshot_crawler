@@ -533,7 +533,8 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - Watchlistに明示されたtargetだけをDiscoveryする
 - full / incremental syncを分離する
 - full syncはcomplete時だけmissing sourceをunavailable化する
-- incrementalはknown source 2件連続で停止する
+- incrementalのdefaultはknown source 2件連続停止とし、site固有のstable boundaryが必要な場合は小さいstop policy overrideを許容する
+- BookWalkerは手動登録した `/series/<id>/list/` をDiscovery scope authorityとし、既存paid/unknownを再確認して既知quota/owned境界でincremental停止する
 - Catalogは `items / sources` の2テーブルを基本とする
 - 別siteの類似itemはwarningのみで自動mergeしない
 - Batch Runnerはsite policyを使ってfree/owned/quotaを選択する
@@ -541,6 +542,7 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - active grant中は新規quotaを消費せず `access_strategy=direct` を選べる
 - 新規quota利用時は `access_strategy=quota` を選べる
 - Site Policyのquota rule自体をCrawlerへ渡さない
+- BookWalker Batchではlocal safety policyを05:00 JST区切り1 quota book/dayとし、`quota`はまる読み10分、`direct`は購入済みreaderへstrict entryする
 - Catalog metadataをCrawlerへoptional overrideとして渡せる
 - crawl成功時だけitemをcompletedへ更新する
 
@@ -559,7 +561,7 @@ BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` と
 
 移行後もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
 
-Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner、Site Policy registry、Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みである。BookWalker Policy / Batchは未実装である。実装後も既存Crawlerの1 URL -> 1 run責務を維持する。
+Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner、Site Policy registry、Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みである。BookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryは採用仕様を定義済みだが未実装である。実装後も既存Crawlerの1 URL -> 1 run責務を維持する。
 
 ## 27. 完了確認
 
@@ -607,14 +609,17 @@ existing Screenshot Crawler
 - Watchlist targetは一意なstable `key` を持つ
 - Discovery結果sourceは `discovery_key` を保持し、full syncのscopeを限定する
 - 初回・reconciliationはfull、通常更新はincrementalを利用できる
-- incrementalはlatest側から走査し、known source 2件連続で停止する
+- incrementalはlatest側から走査し、defaultではknown source 2件連続で停止する。site固有のaccess遷移上それが安全でない場合はstable boundary overrideを許容する
+- BookWalkerはWatchlist登録series listだけを探索し、paid/unknownを再確認してrun開始前からquota/ownedだった既知sourceをstable boundaryとする
 - access stateは `owned / free / quota / paid / unknown`
 - 期間限定無料は `free + free_until` で表す
 - quota制約はsite-specific Policyで扱い、基本的にcrawl開始時に消費記録する
-- quota消費後の再閲覧猶予は `access_granted_until` で扱える
+- site上に再閲覧猶予がある場合は `access_granted_until` で扱える。BookWalkerはsource単位grantを仮定せず、このfieldをdirect判定へ使わない
 - Batchは今回の実行意図を `access_strategy=auto|direct|quota` としてCrawlerへ渡す
 - Phase 5Aの `batch plan` は `pending` itemだけを対象に、Catalogを変更せず候補を表示する
 - Manga ONE Policyのlocal quota modelは4枠、09:00/21:00 JST reset、24時間grantである
+- BookWalkerの採用local quota modelは05:00 JST reset、site-wide 1 quota book/dayである。失敗しても同window内で自動refund/retryしない
+- BookWalkerのstrict `quota` はまる読み10分以外へfallbackせず、strict `direct` は初期実装で購入済みfull reader以外へfallbackしない
 - title/author/order/genreは既知ならCrawlerへ渡し、なければAdapter取得へfallbackする
 - 別site同一作品を自動mergeせず、Discovery時に重複候補warningだけを出す
 - 詳細schema、sync semantics、failure handlingは `docs/DISCOVERY_AND_BATCH.md` に定める
