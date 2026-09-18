@@ -407,21 +407,28 @@ identity / metadata:
 same `external_id` が別non-null `discovery_key` に既存の場合、scopeを黙って
 移動せずDiscovery incompleteとする。
 
-現行の `BookWalkerDiscoveryAdapter` はこのscopeを検証し、`#js-series-list` 内の
-`article` product cardから`/de<uuid>/` product linkを重複排除して列挙する。これは既存
-BookWalker AdapterのDOM probeとPhase 3 local/synthetic fixtureを根拠にした実装であり、
-series listについてのlive DOM確認済みselectorではない。paginationはboundedに進め、listingが
+現行の `BookWalkerDiscoveryAdapter` はこのscopeを検証し、series list内のproduct cardから
+`/de<uuid>/` product linkを重複排除して列挙する。旧fixture/旧DOM互換として
+`#js-series-list` + `article`を保持し、現行のserver-rendered listでは
+`ul.m-tile-list` + `li.m-tile`を使用する。paginationはboundedに進め、listingが
 曖昧・空・loop・上限到達した場合はcomplete扱いにせずincompleteとする。商品ページの
-reader control観測はreaderを開かずに行う。live selector verification pendingであり、
-実サイトのproduct card、special marker、pagination/load-moreはPhase 4移行前にsmoke testが必要である。
+reader control観測はreaderを開かずに行う。
+
+2026-09-18にshared Crawler Chromeで`https://bookwalker.jp/series/317089/list/`
+をlive確認した。現行ページは`ul.m-tile-list` 1件、`li.m-tile` 11件で、
+canonical product linkは`a[href]`の`/de<uuid>/`形式だった。`#js-series-list`と
+`article`は存在しなかったため、旧selectorだけではDiscoveryが最初のrecordをyieldせず
+`incomplete`になっていた。現行対象は一覧内に11件が揃い、確認時点でpagination controlは
+表示されなかった。product pageのtitle/author/genre/reader-control抽出は同じlive確認で
+既存scriptが取得できることを確認した。
 
 selectorの確認状態:
 
-- live確認済みのseries Discovery selector: なし
-- local/synthetic fixtureで確認したseries selector: `#js-series-list`、`#js-series-list article`
+- live確認済みのseries Discovery selector: `ul.m-tile-list`、`ul.m-tile-list > li.m-tile`
+- local/synthetic fixtureで確認した互換selector: `#js-series-list`、`#js-series-list article`
 - local/synthetic fixtureで確認したspecial marker: `[data-badge]` の「購入特典」
 - Discoveryが既存Adapterから再利用するreader control scope: `#js-read-check`、`#js-subscription-check`、既存のviewer/action fallback
-- Discovery pagination候補（`rel=next`、`aria-label`、`data-testid`、表示テキスト）はlive未確認
+- Discovery pagination候補（`rel=next`、`aria-label`、`data-testid`、表示テキスト）は実装済み。今回のlive対象ではpaginationなし
 
 ### 20.2 Discovery access classification
 

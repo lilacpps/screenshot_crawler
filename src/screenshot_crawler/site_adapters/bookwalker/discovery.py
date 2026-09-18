@@ -32,7 +32,11 @@ from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
 )
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
-SERIES_LIST_SELECTOR = "#js-series-list"
+# BookWalker has used both the legacy synthetic-fixture shape and the current
+# server-rendered tile list. Keep the compatibility selector narrow so that a
+# recommendation list elsewhere on the page cannot become Discovery scope.
+SERIES_LIST_SELECTOR = '#js-series-list, ul.m-tile-list'
+PRODUCT_CARD_SELECTOR = 'article, li.m-tile'
 WAIT_TIMEOUT_MS = 10_000
 POLL_INTERVAL_MS = 100
 PRODUCT_CONTROL_WAIT_TIMEOUT_MS = 5_000
@@ -360,7 +364,7 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
         listing: Locator,
         page_url: str,
     ) -> list[BookWalkerListedProduct]:
-        cards = listing.locator("article")
+        cards = listing.locator(PRODUCT_CARD_SELECTOR)
         if await cards.count() == 0:
             raise DiscoveryIncompleteError(
                 "BookWalker series product cards are not identifiable"

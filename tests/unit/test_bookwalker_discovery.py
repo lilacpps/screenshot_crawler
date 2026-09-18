@@ -255,6 +255,20 @@ def _listing_html(
     )
 
 
+def _current_tile_listing_html(
+    products: list[tuple[str, str, bool]],
+) -> str:
+    cards = []
+    for external_id, title, _special in products:
+        cards.append(
+            f'<li class="m-tile"><div class="m-book-item">'
+            f'<a class="m-thumb__image" href="/de{external_id}/"></a>'
+            f'<p class="m-book-item__title"><a href="/de{external_id}/">'
+            f"{title}</a></p></div></li>"
+        )
+    return f'<h1>シリーズ公式タイトル</h1><ul class="m-tile-list">{"".join(cards)}</ul>'
+
+
 def _access_control(access_mode: str, *, click_endpoint: bool = False) -> str:
     onclick = " onclick=\"fetch('/__reader-click')\"" if click_endpoint else ""
     if access_mode == "owned":
@@ -410,6 +424,40 @@ async def test_bookwalker_discovery_scans_series_pages_and_product_controls(
 
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     assert catalog.list_sources() == []
+
+
+async def test_bookwalker_discovery_supports_current_tile_listing_dom(
+    browser_page,
+) -> None:
+    products = [
+        (_uuid(3), "作品名 #3", False),
+        (_uuid(2), "【購入特典】作品名 #2", True),
+        (_uuid(1), "作品名 #1", False),
+    ]
+
+    async def fulfill(route) -> None:
+        if "/series/123/list/" in route.request.url:
+            body = _current_tile_listing_html(products)
+        else:
+            external_id = route.request.url.split("/de", 1)[1].split("/", 1)[0]
+            body = _product_html(external_id)
+        await route.fulfill(body=body, content_type="text/html; charset=utf-8")
+
+    await browser_page.route("https://bookwalker.jp/**", fulfill)
+    records = [
+        record async for record in BookWalkerDiscoveryAdapter().iter_records(
+            browser_page, _series_target(), "full"
+        )
+    ]
+
+    assert [item.source.external_id for item in records] == [
+        _uuid(3),
+        _uuid(2),
+        _uuid(1),
+    ]
+    assert records[0].item.order_key == "3"
+    assert records[1].item.order_key is None
+    assert records[2].item.order_key == "1"
 
 
 def _series_target(key: str = "series-one") -> WatchlistTarget:
