@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-09-17
+最終同期: 2026-09-18
 
 ## 1. 目的と現在のscope
 
@@ -24,6 +24,11 @@ BookWalkerの商品ページまたはviewer URLから、現在コンテンツの
 - CDP接続した通常Chrome上でlogin/crawl
 
 実サイト確認では、対象trial readerで59/59まで本文を保存し、その後のlogo screenを保存せず正常終了した実績がある。
+
+BookWalkerのseries-scoped Discovery、BookWalker Site Policy、Batchからのstrict
+`direct` / `quota` entryは**採用仕様のみ確定しており未実装**である。現行Adapterは
+manual `auto` flowのみを実行可能で、base `configure_run()` により
+`direct` / `quota` は拒否される。
 
 ## 2. Entry flow
 
@@ -351,5 +356,137 @@ capture・navigation・page counter・END / NEXT_CONTENT・metadata behaviorに�
 - global fingerprint dedupeのためpixel完全一致の別ページは1枚扱いになる。
 - `config.yaml` はruntime authorityではない。
 - diagnosticsのAdapter固有metadata統合は未実装。
+- BookWalker Discovery Adapterは未実装。
+- BookWalker Site Policyは未実装。
+- BookWalker Adapterのstrict `direct` / `quota` entryは未実装。
+- 現行reader candidate scoringはmanual `auto` 互換経路として維持する。
+
+## 20. 採用済み次期仕様（未実装）
+
+authorityは `docs/DISCOVERY_AND_BATCH.md`。ここではBookWalker固有の要点だけを
+現行実装との境界が分かる形で記録する。
+
+### 20.1 Watchlist / series scope
+
+BookWalker Discovery targetは初期実装で:
+
+```text
+https://bookwalker.jp/series/<series-id>/list/
+```
+
+だけを扱う。site全体や「まる読み10分」全対象を探索しない。
+
+同じseries listに列挙された商品は、商品titleの文字列推定にかかわらず同じ
+Discovery group / packaging seriesとして扱う。series listには通常巻以外に
+購入特典、DJCD、番外編等が混在し得るため、それらを通常巻と推測しない。
+
+identity / metadata:
+
+- `discovery_key` = Watchlist key
+- `external_id` = 商品URL `/de<uuid>/` のUUID
+- `canonical_title` = non-empty Watchlist label、なければseries pageのseries名
+- 通常巻だけ安全に `order_key` を数値化
+- 特殊商品は識別できる `order_label` を保持
+- series由来titleをBatch explicit metadataとしてCrawlerへ渡し、同一series folderへ揃える
+
+same `external_id` が別non-null `discovery_key` に既存の場合、scopeを黙って
+移動せずDiscovery incompleteとする。
+
+### 20.2 Discovery access classification
+
+Discoveryはseries listから商品詳細ページを開いてcontrolを観測するが、
+readerは開かない。まる読み10分timerをDiscoveryで開始しない。
+
+ログイン済みshared Crawler Chromeを前提とし、account状態を安全に確認できない
+場合はrecordをyieldする前にincompleteとする。
+
+access mode:
+
+```text
+owned   = 購入済みfull reader「読む」
+quota   = 「まる読み10分」の強い固有signal
+paid    = 通常の「試し読み」のみ
+unknown = reader入口なし、特殊商品、unsupported subscription、曖昧状態
+```
+
+優先順位:
+
+```text
+owned > quota > paid > unknown
+```
+
+`subscription_reading` actionだけではquotaとしない。
+`read_maruyomi` またはvisible textの「まる読み」+「10分」等を必要とする。
+
+BOOK☆WALKER公式仕様では、まる読み10分は1日合計10分、AM5:00 JST resetで、
+当日の10分終了後は対象作品でも通常の試し読み表示へ変わる。そのため:
+
+- existing ownedはquota/paid/unknown観測だけでdowngradeしない
+- existing quotaはpaid/unknown観測だけでdowngradeしない
+- paid/unknownからquotaへのupgradeは許可
+- ownedへのupgradeは許可
+
+### 20.3 BookWalker incremental
+
+genericなknown-source 2件停止は使わない。
+
+newest側から:
+
+1. new sourceを確認して継続
+2. existing paid / unknownを再確認して継続
+3. run開始前からquota / ownedだった既知sourceを1件確認したらstable boundaryとして停止
+4. 今回paid -> quotaへupgradeしたsource自身では停止しない
+5. stable boundaryがなければseries末尾まで走査
+
+fullはseries全体と各商品詳細を確認し、clean exhaustion時だけmissing sourceを
+unavailableにできる。
+
+### 20.4 BookWalker local quota policy
+
+実site quotaは1日合計10分だが、初期Batchでは時間残量を最適化しない。
+
+local safety policy:
+
+```text
+window   = 05:00 JST ～ 翌05:00 JST
+capacity = 1 quota book
+scope    = BookWalker site-wide
+```
+
+quota attemptはreader open前に `quota_started_at` を記録し、crawl失敗でも
+同window内ではrefund / automatic retryしない。翌05:00以降に再試行する。
+
+BookWalkerではManga ONEのようなsource単位grantを仮定せず、
+`access_granted_until` をdirect判定へ使わない。初期仕様ではNULLのままとする。
+このため実装時にはBatch Executorがgrantなしquota policyを許容する必要がある。
+
+manual browserや別clientでの10分消費はCatalogから観測できない。
+
+### 20.5 strict reader entry
+
+`auto` は現行のreader candidate score/fallbackを維持する。
+
+Batch用:
+
+```text
+quota
+  まる読み10分の強い固有controlだけclick
+  trial / owned / 読み放題へfallback禁止
+
+direct
+  初期実装では購入済みfull reader「読む」だけclick
+  trial / maruyomi / 読み放題へfallback禁止
+```
+
+strategyに一致するcontrolが0件、複数で曖昧、状態不明ならclick前にfailする。
+trial readerへfallbackしてpartial contentを正常END / completed扱いする事故を
+防ぐことを最優先とする。
+
+### 20.6 初期非対象
+
+- 10分残量を秒単位で計測して複数冊を詰め込む最適化
+- 10分切れで途中停止した巻を翌日に同じrunへresume
+- 読み放題MAX等を自動crawl対象として扱うこと
+- BookWalker全作品・全まる読み対象の自動探索
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。
