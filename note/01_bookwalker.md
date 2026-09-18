@@ -401,6 +401,7 @@ identity / metadata:
 - `canonical_title` = non-empty Watchlist label、なければseries pageのseries名
 - 通常巻だけ安全に `order_key` を数値化。`#16`、`第16巻`、`16巻`、既存の末尾数字形式を扱う
 - series cardのstructured special marker（実DOM未確認）を優先し、特典商品は`order_key`を付けず識別できる`order_label`を保持
+- title fallbackは先頭の`【購入特典】` / `【特典】` / `〖購入特典〗` / `〖特典〗`だけをspecialとする。途中の「特典」は対象外
 - series由来titleをBatch explicit metadataとしてCrawlerへ渡し、同一series folderへ揃える
 
 same `external_id` が別non-null `discovery_key` に既存の場合、scopeを黙って

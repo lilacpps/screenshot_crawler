@@ -99,6 +99,13 @@ def classify_bookwalker_account_state(
     return BookWalkerAccountState.READY
 
 
+def is_bookwalker_special_title(title: str | None) -> bool:
+    """Return whether a title starts with an explicit special-product prefix."""
+
+    normalized = (title or "").strip()
+    return bool(re.match(r"^(?:【(?:購入)?特典】|〖(?:購入)?特典〗)", normalized))
+
+
 def _bookwalker_host(url: str) -> bool:
     parsed = urlparse(url)
     return parsed.scheme.lower() == "https" and parsed.hostname in {
@@ -408,7 +415,7 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
                 text = " ".join((await marker.inner_text()).split())
                 if "特典" in text:
                     return True
-        return bool(card_title and re.search(r"^【(?:購入)?特典】", card_title))
+        return is_bookwalker_special_title(card_title)
 
     async def _pagination_control(self, listing: Locator) -> Locator | None:
         matches: list[Locator] = []

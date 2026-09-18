@@ -22,6 +22,7 @@ from screenshot_crawler.site_adapters.bookwalker.discovery import (
     BookWalkerAccountState,
     BookWalkerDiscoveryAdapter,
     classify_bookwalker_account_state,
+    is_bookwalker_special_title,
     map_bookwalker_access_mode,
     parse_bookwalker_order,
     parse_bookwalker_product_url,
@@ -64,6 +65,30 @@ def test_bookwalker_account_state_requires_explicit_account_evidence(
     expected: BookWalkerAccountState,
 ) -> None:
     assert classify_bookwalker_account_state(metadata) is expected
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "【購入特典】作品",
+        "【特典】作品",
+        "〖購入特典〗作品",
+        "〖特典〗作品",
+    ],
+)
+def test_bookwalker_special_title_prefixes(title: str) -> None:
+    assert is_bookwalker_special_title(title) is True
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "作品名 #16",
+        "作品名 特典について #16",
+    ],
+)
+def test_bookwalker_special_title_requires_prefix(title: str) -> None:
+    assert is_bookwalker_special_title(title) is False
 
 
 @pytest.mark.parametrize(
@@ -509,7 +534,7 @@ async def test_bookwalker_special_card_does_not_use_hash_number_as_order_and_nev
         browser_page,
         [
             (normal, "作品名 #16 サブタイトル", False),
-            (special, "作品名 #16 サブタイトル BOOK☆WALKER限定", True),
+            (special, "〖購入特典〗『作品名 #16 サブタイトル』BOOK☆WALKER限定", False),
         ],
         {normal: "paid", special: "paid"},
         click_endpoint_counter=clicks,
