@@ -73,7 +73,10 @@ class BatchPlanner:
             quota_selections = [
                 selection for selection in selections if selection.decision.consumes_quota
             ]
-            quota_selections.sort(key=lambda selection: _item_order_key(selection.item))
+            group_ranks = _discovery_group_ranks(sources)
+            quota_selections.sort(
+                key=lambda selection: _quota_selection_order_key(selection, group_ranks)
+            )
             if quota_available is None:
                 accepted_quota = quota_selections
             else:
@@ -201,6 +204,35 @@ def _item_order_key(item: Item) -> tuple[int, int, int, str, int]:
 
     fallback = " ".join((item.order_label or item.canonical_title or "").split()).casefold()
     return (1, 0, 0, fallback, item.id)
+
+
+def _discovery_group_ranks(sources: Iterable[Source]) -> dict[str, int]:
+    """Return the first Catalog source id for each explicit discovery group."""
+
+    ranks: dict[str, int] = {}
+    for source in sources:
+        if source.discovery_key is None:
+            continue
+        previous = ranks.get(source.discovery_key)
+        if previous is None or source.id < previous:
+            ranks[source.discovery_key] = source.id
+    return ranks
+
+
+def _quota_selection_order_key(
+    selection: _Selection,
+    group_ranks: dict[str, int],
+) -> tuple[int, int, tuple[int, int, int, str, int]]:
+    """Order new quota consumption by Discovery group, then item order.
+
+    Sources without a discovery key are deliberately placed after all explicit
+    groups and retain the same stable item-order fallback as other candidates.
+    """
+
+    group_rank = group_ranks.get(selection.source.discovery_key)
+    if group_rank is None:
+        return (1, 0, _item_order_key(selection.item))
+    return (0, group_rank, _item_order_key(selection.item))
 
 
 def _parse_episode_order_key(value: str | None) -> tuple[int, int] | None:

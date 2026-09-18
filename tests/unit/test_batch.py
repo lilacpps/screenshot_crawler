@@ -26,6 +26,7 @@ def add_source(
     access_mode: str = "quota",
     free_until: str | None = None,
     available: bool = True,
+    discovery_key: str | None = None,
     quota_started_at: str | None = None,
     access_granted_until: str | None = None,
 ):
@@ -35,6 +36,7 @@ def add_source(
             site="mangaone",
             external_id=external_id,
             url=f"https://manga-one.example/chapter/{external_id}",
+            discovery_key=discovery_key,
             access_mode=access_mode,
             free_until=free_until,
             available=available,
@@ -205,6 +207,85 @@ def test_new_quota_is_allocated_to_oldest_episode_first(tmp_path: Path) -> None:
         {"completed": 2, "quota_exhausted": 3}
     )
     assert all(items[order].id not in {c.item_id for c in plan.candidates} for order in ["05", "04", "03"])
+
+
+def test_new_quota_is_allocated_by_discovery_group_then_item_order(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    for index in range(2):
+        add_source(
+            service,
+            item=ItemInput(canonical_title=f"used-{index}", status="completed"),
+            external_id=f"used-{index}",
+            quota_started_at="2026-09-17T14:00:00+09:00",
+        )
+
+    for group, order in [("A", "03"), ("B", "01"), ("A", "01"), ("B", "02")]:
+        add_source(
+            service,
+            item=ItemInput(canonical_title=f"{group}-{order}", order_key=order),
+            external_id=f"{group}-{order}",
+            discovery_key=group,
+        )
+
+    plan = plan_for(service)
+
+    assert [
+        service.get_item(candidate.item_id).canonical_title
+        for candidate in plan.candidates
+    ] == ["A-01", "A-03"]
+    assert sum(skipped.reason == "quota_exhausted" for skipped in plan.skipped) == 2
+
+
+def test_new_item_is_kept_in_its_existing_discovery_group(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    add_source(
+        service,
+        item=ItemInput(canonical_title="used", status="completed"),
+        external_id="used",
+        quota_started_at="2026-09-17T14:00:00+09:00",
+    )
+    for group, order in [("A", "01"), ("A", "02"), ("B", "01"), ("B", "02"), ("A", "03")]:
+        add_source(
+            service,
+            item=ItemInput(canonical_title=f"{group}-{order}", order_key=order),
+            external_id=f"{group}-{order}",
+            discovery_key=group,
+        )
+
+    plan = plan_for(service)
+
+    assert [
+        service.get_item(candidate.item_id).canonical_title
+        for candidate in plan.candidates
+    ] == ["A-01", "A-02", "A-03"]
+
+
+def test_null_discovery_key_is_after_explicit_groups(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    add_source(
+        service,
+        item=ItemInput(canonical_title="used", status="completed"),
+        external_id="used",
+        quota_started_at="2026-09-17T14:00:00+09:00",
+    )
+    add_source(
+        service,
+        item=ItemInput(canonical_title="null-old", order_key="01"),
+        external_id="null-old",
+    )
+    add_source(
+        service,
+        item=ItemInput(canonical_title="explicit", order_key="99"),
+        external_id="explicit",
+        discovery_key="A",
+    )
+
+    plan = plan_for(service)
+
+    assert [
+        service.get_item(candidate.item_id).canonical_title
+        for candidate in plan.candidates
+    ] == ["explicit", "null-old"]
 
 
 def test_numeric_episode_order_is_not_lexicographic(tmp_path: Path) -> None:

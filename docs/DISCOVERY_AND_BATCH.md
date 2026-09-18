@@ -590,15 +590,19 @@ reservations. `BatchPlan.quota_remaining` is the residual after the plan's
 in-memory reservations; neither value is written to Catalog.
 
 When more than one pending item needs a new quota consumption, the Planner
-reserves available slots from the oldest item order first. It uses the
-Catalog `order_key` as a generic natural-order key: numeric values are sorted
+groups quota-consuming candidates by `source.discovery_key`. Groups are
+processed in the first Catalog-registration order of each Discovery group,
+using the minimum `source.id` in that group. Within a group, the Catalog
+`order_key` is used as a generic natural-order key: numeric values are sorted
 by number, and a recognized `-前編` / `-後編` suffix sorts as part 0 / part 1.
 Unparseable or missing order keys use a stable `order_label` fallback and
-`item.id` only as a final tie-breaker; they do not fail the whole plan. This
-ordering applies only to new quota-consuming candidates. `free`, `owned`,
-and quota sources with `access_granted_until > now` remain `direct` and do
-not enter the quota allocation pool. Items beyond the allocated slots are
-reported as `quota_exhausted`.
+`item.id` only as a final tie-breaker; they do not fail the whole plan.
+Candidates whose source has `discovery_key = NULL` are placed after explicit
+Discovery groups and use the same stable item-order fallback. This ordering
+applies only to new quota-consuming candidates. `free`, `owned`, and quota
+sources with `access_granted_until > now` remain `direct` and do not enter
+the quota allocation pool. Items beyond the allocated slots are reported as
+`quota_exhausted`.
 
 ### 11.2 Source priority
 
