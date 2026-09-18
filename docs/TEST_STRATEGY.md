@@ -33,7 +33,8 @@ Discovery / Catalog / Batch実装後:
 - source identity / URL change
 - cross-site duplicate candidate warning
 - full sync reconciliation
-- incremental known streak
+- incremental default known streak
+- site-specific stable-boundary stop policy（必要なsite）
 - source priority
 - Site Policy quota eligibility
 - access grant window
@@ -156,9 +157,28 @@ quota entry behaviorを持つSite Adapterでは、可能な範囲で:
 - manual `auto`
 - `direct`
 - `quota`
-- quota消費後grant期間中の再閲覧
+- quota消費後grant期間中の再閲覧（grantを持つsiteのみ）
+- requested strategyに合わないreader controlへfallbackしないこと
 
 を確認する。
+
+BookWalker実装時は追加で:
+
+- Watchlistの `/series/<id>/list/` だけをDiscovery scopeにする
+- 同じseries listの商品が同じcanonical series titleを使う
+- Discovery中にreaderをclickせず、まる読みtimerを開始しない
+- owned / quota / paid / unknownのstrong-signal分類
+- `subscription_reading` 単独をquota扱いしない
+- existing quota/ownedをtrial/unknown観測だけでdowngradeしない
+- existing paid/unknownはincrementalで再確認する
+- run開始前からquota/ownedの既知sourceでstable boundary停止する
+- 今回paid -> quotaになったsource自身では停止しない
+- same external_id / different discovery_keyをscope conflictとして停止する
+- local quotaは05:00 JST windowで1 quota book
+- quota attempt失敗後も同windowでslotをrefundしない
+- BookWalkerでは `access_granted_until` をdirect判定に使わない
+- strict `quota` がtrial / owned / subscriptionへfallbackしない
+- strict `direct` がtrial / maruyomi / subscriptionへfallbackしない
 
 実サイトの著作物・DOM snapshotを恒久fixtureへコピーしない。
 
@@ -215,6 +235,10 @@ Browser Session移行のためにsite-specific viewer logicを変更しない。
 - metadata overrideが不足fieldを消してしまう
 - metadata overrideで実source URLを置換する
 - crawl失敗をcompleted扱いする
+- BookWalker quota/ownedをtrial観測だけでdowngradeする
+- BookWalker quota requestがtrial readerへfallbackする
+- BookWalker strict direct requestがmaruyomi/trialへfallbackする
+- BookWalker quota失敗後に同じ05:00 windowで自動再試行する
 
 ## 9. Discovery Sync Tests
 
@@ -240,9 +264,10 @@ Browser Session移行のためにsite-specific viewer logicを変更しない。
 
 - latest側の未知sourceを追加
 - 複数の新規sourceを追加
-- known 1件では継続
-- known 2件連続で停止
-- unknownが途中に入ればknown streakをreset
+- default policyではknown 1件で継続
+- default policyではknown 2件連続で停止
+- default policyではunknownが途中に入ればknown streakをreset
+- site-specific stable-boundary policyを使うsiteではdefault known-streakを適用しない
 - 走査中に見たknown sourceのexternal stateをrefresh
 - 未観測過去sourceをunavailableにしない
 
