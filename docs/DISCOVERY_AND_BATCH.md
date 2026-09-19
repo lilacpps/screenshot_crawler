@@ -31,9 +31,8 @@ a quota crawl and item completion fields after successful packaging.
 
 この文書は、Discovery / Catalog / Batch Runnerの採用仕様を定める。
 
-2026-09-20にCatalog Schema v3の目標仕様を採用した。Commit 0時点の実装はまだSchema v2であり、
-以下のv3記述は後続phaseの実装authorityである。v2 DBはbackup後に破棄し、新規v3 DBを
-full discoveryで再構築する。v2→v3 migrationは実装しない。
+2026-09-20にCatalog Schema v3の目標仕様を採用し、現在のCatalog実装もv3である。
+v2 DBはbackup後に破棄し、新規v3 DBをfull discoveryで再構築する。v2→v3 migrationは実装しない。
 
 2026-09-19時点では、Watchlist + Catalog基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy / BookWalker Policy、Phase 5BのManga ONE・BookWalker Batch Executor、BookWalker strict direct・quota entryが実装済みである。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。BookWalker quotaの実サイトlive clickは未確認であり、synthetic/local CatalogでのBatch検証までを完了範囲とする。
 
@@ -41,7 +40,7 @@ full discoveryで再構築する。v2→v3 migrationは実装しない。
 
 - `watchlist.yaml` のload/validationとatomic write
 - `watch list/add/remove/enable/disable` CLI
-- SQLite Catalogの `items` / `sources` / `source_targets` schema version 2
+- SQLite Catalogの `works` / `items` / `sources` / `source_targets` / `crawl_runs` / `artifacts` schema version 3
 - `(site, external_id)` によるsource upsertとexternal state update
 - Discovery upsert相当でのlocal completed state保護
 - `RunConfig`への `access_strategy` / output metadata入力
@@ -608,8 +607,8 @@ BookWalkerでのmetadata authority:
 - `discovery_key`: Watchlist targetのstable `key`
 - `external_id`: 商品URL `/de<uuid>/` のUUID
 - `url`: 商品詳細ページURL
-- `canonical_title`: non-emptyなWatchlist `label` があればそれを優先し、
-  なければseries listのseries名を使う
+- `canonical_title`（Adapter observed field。CatalogではWork.titleへ反映）:
+  non-emptyなWatchlist `label` があればそれを優先し、なければseries listのseries名を使う
 - `kind`: 初期実装では `book`
 - `order_key`: 通常巻・話として安全に数値化できる場合だけ設定
 - `order_label`: 通常巻は正規化した巻表示。数値化できない特典・番外編等は、
@@ -686,10 +685,10 @@ incrementalでは未観測sourceをunavailableにしない。fullはseries list�
 
 同じBookWalker `external_id` が別のnon-null `discovery_key` にすでに所属する
 場合、後から黙ってscopeを移動してはいけない。BookWalker Discoveryでは
-scope conflictとしてincompleteにし、既存sourceの `discovery_key` /
-`canonical_title` を上書きしない。
+scope conflictとしてincompleteにし、既存sourceの `discovery_key` や既存Work.titleを
+上書きしない。
 
-series list由来の `canonical_title` はBatchからCrawlerへexplicit metadataとして
+series list由来の observed title（CatalogのWork.title）はBatchからCrawlerへexplicit metadataとして
 渡す。これにより、商品ページ側のtitle推定が揺れても、同一series targetの
 通常巻は同じseries directoryへpackageされる。
 
@@ -1248,7 +1247,7 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 
 - Watchlistの `/series/<id>/list/` targetだけをDiscoveryする
 - series list内の商品をtitle推定ではなく同一Discovery groupとして扱う
-- series由来canonical_titleをBatch explicit metadataとして同一series packagingに使う
+- series由来のWork.titleをBatch explicit metadataとして同一series packagingに使う
 - Discoveryは商品詳細のcontrolを観測するだけでreaderを開かない
 - owned / quota / paid / unknownを強いsignalで分類できる
 - `subscription_reading` 単独をquota扱いしない

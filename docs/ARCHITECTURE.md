@@ -17,9 +17,9 @@ Phase 5B adds sequential Manga ONE candidate execution, quota persistence,
 packaging, and completed-item updates. BookWalker Batch execution remains
 unsupported.
 
-2026-09-20にCatalog Schema v3 target architectureを採用した。Commit 0時点のruntimeは
-まだSchema v2であり、v3は後続phaseで実装する。v2 DBはbackup後に新規v3 DBへ作り直し、
-v3以降はmigration + backupを標準とする。
+2026-09-20にCatalog Schema v3 target architectureを採用し、runtimeも
+`works / items / sources / source_targets / crawl_runs / artifacts` の6テーブルを使用する。
+既存v2 DBはbackup後に破棄し、full discoveryから新規v3 DBを再構築する。v2からの自動migrationは行わない。
 
 ## 1. 設計原則
 
@@ -151,7 +151,7 @@ Item completedとArtifact present/missing/deletedを分離し、成果物の移�
 同一SourceにWeb/Androidの複数targetを保持できる。現行runtimeはWebだけを実行可能とし、
 Androidは将来の上位Dispatcher / Android Runnerへ分離する。
 
-Commit 0時点の実装はSchema v2の `items / sources / source_targets` であり、後続phaseでv3へ置換する。
+現在の実装はSchema v3の `works / items / sources / source_targets / crawl_runs / artifacts` である。
 詳細schemaとtransition policyは `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
 
 ### `batch/`（implemented）

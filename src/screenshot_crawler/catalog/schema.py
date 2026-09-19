@@ -159,11 +159,11 @@ def user_version(connection: sqlite3.Connection) -> int:
     return int(connection.execute("PRAGMA user_version").fetchone()[0])
 
 
-def initialize(connection: sqlite3.Connection) -> None:
-    """Create v3 or validate it; never migrate an existing schema."""
+def validate_existing_schema(connection: sqlite3.Connection) -> None:
+    """Validate an existing v3 schema without creating or changing anything."""
 
     version = user_version(connection)
-    if version not in (0, SCHEMA_VERSION):
+    if version != SCHEMA_VERSION:
         raise SchemaError(
             f"Unsupported Catalog schema version {version}; supported version is {SCHEMA_VERSION}"
         )
@@ -174,28 +174,47 @@ def initialize(connection: sqlite3.Connection) -> None:
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
         )
     }
-    if version == SCHEMA_VERSION:
-        missing_tables = set(_REQUIRED_COLUMNS) - tables
-        if missing_tables:
+    missing_tables = set(_REQUIRED_COLUMNS) - tables
+    if missing_tables:
+        raise SchemaError(
+            f"Catalog schema version 3 is missing table(s): {', '.join(sorted(missing_tables))}"
+        )
+
+    for table, required_columns in _REQUIRED_COLUMNS.items():
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        missing_columns = required_columns - columns
+        if missing_columns:
             raise SchemaError(
-                f"Catalog schema version 3 is missing table(s): {', '.join(sorted(missing_tables))}"
+                f"Catalog schema version 3 is missing {table} column(s): "
+                f"{', '.join(sorted(missing_columns))}"
             )
-        for table, required_columns in _REQUIRED_COLUMNS.items():
-            columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-            missing_columns = required_columns - columns
-            if missing_columns:
-                raise SchemaError(
-                    f"Catalog schema version 3 is missing {table} column(s): "
-                    f"{', '.join(sorted(missing_columns))}"
-                )
-            forbidden_columns = _FORBIDDEN_COLUMNS.get(table, set()) & columns
-            if forbidden_columns:
-                raise SchemaError(
-                    f"Catalog schema version 3 has removed {table} column(s): "
-                    f"{', '.join(sorted(forbidden_columns))}"
-                )
+        forbidden_columns = _FORBIDDEN_COLUMNS.get(table, set()) & columns
+        if forbidden_columns:
+            raise SchemaError(
+                f"Catalog schema version 3 has removed {table} column(s): "
+                f"{', '.join(sorted(forbidden_columns))}"
+            )
+
+
+def initialize(connection: sqlite3.Connection) -> None:
+    """Create v3 or validate it; never migrate an existing schema."""
+
+    version = user_version(connection)
+    if version not in (0, SCHEMA_VERSION):
+        raise SchemaError(
+            f"Unsupported Catalog schema version {version}; supported version is {SCHEMA_VERSION}"
+        )
+
+    if version == SCHEMA_VERSION:
+        validate_existing_schema(connection)
         return
 
+    tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
     if tables:
         raise SchemaError("Catalog contains unversioned tables and cannot be initialized safely")
 

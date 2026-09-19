@@ -565,11 +565,11 @@ Schema v3のdomain tableは`works`、`items`、`sources`、`source_targets`、`c
 
 `crawl_runs`はItem/Source/Targetの整合性を検証して作成時snapshotを保存し、`running -> succeeded|failed`だけを許可する。`artifacts`はbinary本体を保存せず、SHA-256、byte size、storage backend、locator、stateを保持する。手動importのためcrawl runなしを許容し、Artifact更新はItem/CrawlRun statusを変更しない。
 
-Phase 1でCatalog packageをv3へ移行し、Phase 2でWatchlist / DiscoveryをWork-aware化し、Phase 3でBatch Planner / ExecutorをCrawlRun / Artifactへ接続した。Catalog Exportは後続Phaseの対象である。
+Phase 1でCatalog packageをv3へ移行し、Phase 2でWatchlist / DiscoveryをWork-aware化し、Phase 3でBatch Planner / ExecutorをCrawlRun / Artifactへ接続した。Phase 4ではCatalog Exportを6 CSVのread-only snapshotとして実装した。
 
 Batch Planner用に `read_works_items_sources_and_targets(site=...)` を提供する。これはread-only接続でWork / Item全件、指定siteのSource、関連するSourceTargetを取得し、Plannerはraw SQLiteへ直接アクセスしない。指定siteのSourceを1件以上持つItemだけをsite-scopedな母集団にし、別site専用Itemとsourceなしのorphan Itemを`no_source` skipに含めない。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
 
-Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` がSQLiteをread-onlyで検証・読み込みし、`items LEFT JOIN sources LEFT JOIN source_targets` を `item_id ASC, source_id ASC, target_id ASC` で並べたflat CSV snapshotを生成する。原則1行は1 targetで、sourceにtargetがない場合とsourceなしitemも情報を残す。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `target_enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力 `catalog-export.csv` であり、CSVからCatalogへ戻す機能はない。旧`url`列は出力しない。
+Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` はSQLiteをread-onlyで検証・読み込みし、`catalog-export/` 配下へ `works.csv`、`items.csv`、`sources.csv`、`source_targets.csv`、`crawl_runs.csv`、`artifacts.csv` の6 CSV snapshotを出力する。各CSVはtable identityとforeign keyを保持し、履歴をflat JOINで直積化しない。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力directory `catalog-export` であり、既存snapshotを上書きせず、CSVからCatalogへ戻す機能はない。
 
 日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`3`だけをサポートし、v1/v2/未知versionはmigrationせず明示的に失敗する。v3では6 tables、required columns、v2 removed columns不存在、`source_targets.target_key`を検証する。Alembic等のmigration frameworkは導入していない。
 
@@ -580,7 +580,7 @@ watchlist.yaml
     ↓
 Discovery Service / Discovery Adapter
     ↓
-catalog.sqlite (works / items / sources / source_targets)
+    catalog.sqlite (works / items / sources / source_targets / crawl_runs / artifacts)
     ↓
 Batch Runner / Site Policy
     ↓
@@ -613,7 +613,7 @@ Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request
 - metadata未指定なら現行Adapter自動取得を維持する
 - crawl + packaging成功時だけArtifact(present)、CrawlRun(succeeded)、Item(completed)を1 transactionで確定
 
-Phase 5AのBatch Plannerは `pending` itemだけを対象にし、completed / unavailable / paid / unknownをskipする。source priorityは期限付きfree、通常free、owned、quota、paid/unknownの順で、同順位はsource.id ASC。複数のquota-consuming candidateが新規枠を必要とする場合、quota仮予約の順序は`source.discovery_key`ごとのDiscovery groupをgroup内最小source.id（Catalog登録順）で並べ、group内を`order_key`のnatural orderで並べる。`order_key`を解釈できない場合は`order_label`、最後にitem.idのstable fallbackを使う。`discovery_key = NULL`のcandidateは明示groupの後ろに置く。free、owned、active grant中のquota sourceはdirectのままでこのquota allocation順序に入らない。Catalog metadataは`canonical_title -> title`、`author -> author`、`order_label -> order`、`genre -> genre`でcandidateへ写し、NULL/空値は省略する。
+Phase 5AのBatch Plannerは `pending` itemだけを対象にし、completed / unavailable / paid / unknownをskipする。source priorityは期限付きfree、通常free、owned、quota、paid/unknownの順で、同順位はsource.id ASC。複数のquota-consuming candidateが新規枠を必要とする場合、quota仮予約の順序は`source.discovery_key`ごとのDiscovery groupをgroup内最小source.id（Catalog登録順）で並べ、group内を`order_key`のnatural orderで並べる。`order_key`を解釈できない場合は`order_label`、最後にitem.idのstable fallbackを使う。`discovery_key = NULL`のcandidateは明示groupの後ろに置く。free、owned、active grant中のquota sourceはdirectのままでこのquota allocation順序に入らない。Catalog metadataは`Work.title -> title`、`Work.author -> author`、`Item.order_label -> order`、`Work.genre -> genre`でcandidateへ写し、NULL/空値は省略する。
 
 Manga ONE Policyはsite-wide local quotaを4枠、09:00/21:00 JSTのhalf-open window、24時間grantとして扱う。current window内の`quota_started_at`だけを数え、active grant（`access_granted_until > now`）はdirectでslotを減らさない。quota candidateはplanner内だけで仮予約し、Catalogは変更しない。手動・外部clientの実消費はCatalogから観測できない。
 

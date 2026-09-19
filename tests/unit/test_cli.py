@@ -164,15 +164,18 @@ def test_watch_parser_accepts_watchlist_override_before_or_after_action() -> Non
 def test_catalog_export_parser_accepts_defaults_and_overrides() -> None:
     defaults = _parser().parse_args(["catalog", "export"])
     custom = _parser().parse_args(
-        ["catalog", "export", "--catalog", "custom.sqlite", "--output", "output/export.csv"]
+        [
+            "catalog", "export", "--catalog", "custom.sqlite",
+            "--output-dir", "output/export",
+        ]
     )
 
     assert defaults.command == "catalog"
     assert defaults.catalog_action == "export"
     assert defaults.catalog == Path("catalog.sqlite")
-    assert defaults.output == Path("catalog-export.csv")
+    assert defaults.output_dir == Path("catalog-export")
     assert custom.catalog == Path("custom.sqlite")
-    assert custom.output == Path("output/export.csv")
+    assert custom.output_dir == Path("output/export")
 
 
 def test_batch_plan_parser_accepts_site_and_catalog() -> None:

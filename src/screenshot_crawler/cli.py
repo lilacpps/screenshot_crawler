@@ -222,10 +222,10 @@ def _parser() -> argparse.ArgumentParser:
         help="Catalog SQLite path (default: catalog.sqlite)",
     )
     catalog_export.add_argument(
-        "--output",
+        "--output-dir",
         type=Path,
-        default=Path("catalog-export.csv"),
-        help="CSV output path (default: catalog-export.csv)",
+        default=Path("catalog-export"),
+        help="Directory for six CSV snapshots (default: catalog-export)",
     )
 
     batch = subparsers.add_parser("batch", help="Plan or execute Catalog crawl candidates")
@@ -633,10 +633,11 @@ def _run_watch(args: argparse.Namespace) -> None:
 
 def _run_catalog(args: argparse.Namespace) -> None:
     if args.catalog_action == "export":
-        result = export_catalog_csv(args.catalog, args.output)
-        print("Catalog exported:")
-        print(f"  rows: {result.rows}")
-        print(f"  output: {result.output_path.resolve()}")
+        result = export_catalog_csv(args.catalog, args.output_dir)
+        print("Catalog export completed:")
+        for table in ("works", "items", "sources", "source_targets", "crawl_runs", "artifacts"):
+            print(f"  {table}: {getattr(result, table)}")
+        print(f"  output: {result.output_dir}")
 
 
 def _print_batch_plan(plan: BatchPlan, *, site: str) -> None:
