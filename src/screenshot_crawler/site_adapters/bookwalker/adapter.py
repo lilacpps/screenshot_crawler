@@ -295,6 +295,9 @@ class BookWalkerAdapter(SiteAdapter):
     page_change_timeout_ms = 10_000
     navigation_wait_timeout_ms = 5_000
     read_link_wait_timeout_ms = 5_000
+    strict_entry_initial_settle_ms = 250
+    strict_candidate_poll_interval_ms = 100
+    strict_candidate_stability_samples = 2
     render_stable_checks = 4
     advance_retry_count = 2
     end_marker_grace_ms = 1_500
@@ -728,10 +731,13 @@ class BookWalkerAdapter(SiteAdapter):
 
     async def _strict_control_candidates(
         self, page: Page, expected_kind: ReaderControlKind
-    ) -> tuple[list[tuple[Locator, dict[str, str | None]]], list[ReaderControlKind]]:
+    ) -> tuple[
+        list[tuple[Locator, dict[str, str | None], str]],
+        list[ReaderControlKind],
+    ]:
         """Collect exact-kind controls from the product's own action scopes."""
 
-        matches: list[tuple[Locator, dict[str, str | None]]] = []
+        matches: list[tuple[Locator, dict[str, str | None], str]] = []
         observed: list[ReaderControlKind] = []
         seen_elements: set[str] = set()
         for scope_selector in self._strict_scope_selectors:
@@ -778,8 +784,22 @@ class BookWalkerAdapter(SiteAdapter):
                     ):
                         continue
                     if kind is expected_kind:
-                        matches.append((candidate, metadata))
+                        matches.append((candidate, metadata, identity))
         return matches, observed
+
+    @staticmethod
+    def _strict_candidate_signature(
+        metadata: dict[str, str | None], identity: str
+    ) -> tuple[str, ...]:
+        """Return the stable, in-browser identity used for strict entry."""
+
+        return (
+            identity,
+            metadata.get("action") or "",
+            metadata.get("text") or "",
+            metadata.get("href") or "",
+            metadata.get("uuid") or "",
+        )
 
     def _strict_entry_error(
         self,
@@ -807,22 +827,55 @@ class BookWalkerAdapter(SiteAdapter):
     ) -> Locator:
         elapsed_ms = 0
         observed: list[ReaderControlKind] = []
+        stable_signature: tuple[str, ...] | None = None
+        stable_samples = 0
+        last_matches: list[tuple[Locator, dict[str, str | None], str]] = []
+
+        # The product page can briefly contain both the old and new control
+        # while its access action scope is being replaced.  Keep this settle
+        # bounded by the existing timeout and leave enough time for at least
+        # one candidate observation in short unit-test timeouts.
+        initial_settle_ms = min(
+            self.strict_entry_initial_settle_ms,
+            max(0, self.read_link_wait_timeout_ms - self.strict_candidate_poll_interval_ms),
+        )
+        if initial_settle_ms:
+            await page.wait_for_timeout(initial_settle_ms)
+            elapsed_ms += initial_settle_ms
+
         while elapsed_ms < self.read_link_wait_timeout_ms:
             matches, observed = await self._strict_control_candidates(page, expected_kind)
             if len(matches) == 1:
-                return matches[0][0]
-            if len(matches) > 1:
-                raise self._strict_entry_error(
-                    expected_kind=expected_kind,
-                    observed=observed,
-                    reason="multiple matching controls are visible",
-                )
-            await page.wait_for_timeout(100)
-            elapsed_ms += 100
+                candidate, metadata, identity = matches[0]
+                signature = self._strict_candidate_signature(metadata, identity)
+                if signature == stable_signature:
+                    stable_samples += 1
+                else:
+                    stable_signature = signature
+                    stable_samples = 1
+                last_matches = matches
+                if stable_samples >= self.strict_candidate_stability_samples:
+                    return candidate
+            else:
+                # Zero candidates and transient ambiguity both invalidate the
+                # previous sample.  A persistent ambiguity therefore remains
+                # fail-safe, but no longer fails on the first DOM snapshot.
+                stable_signature = None
+                stable_samples = 0
+                last_matches = matches
+
+            remaining_ms = self.read_link_wait_timeout_ms - elapsed_ms
+            if remaining_ms <= 0:
+                break
+            wait_ms = min(self.strict_candidate_poll_interval_ms, remaining_ms)
+            await page.wait_for_timeout(wait_ms)
+            elapsed_ms += wait_ms
 
         reason = "no matching control was observed before timeout"
-        if any(kind is expected_kind for kind in observed):
-            reason = "matching control was not uniquely available"
+        if len(last_matches) > 1 or any(
+            kind is expected_kind for kind in observed
+        ):
+            reason = "matching control was not stably unique before timeout"
         elif observed and all(kind is ReaderControlKind.UNKNOWN for kind in observed):
             reason = "visible controls are unsupported or unknown"
         raise self._strict_entry_error(

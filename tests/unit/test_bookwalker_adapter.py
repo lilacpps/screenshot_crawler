@@ -84,7 +84,7 @@ async def _initialize_strict(
     strategy: str,
     controls: str,
     *,
-    timeout_ms: int = 300,
+    timeout_ms: int = 500,
     product_url: str = PRODUCT_URL,
 ) -> BookWalkerAdapter:
     await _goto_product(browser_page, controls, product_url=product_url)
@@ -158,7 +158,9 @@ async def test_bookwalker_strict_direct_multiple_owned_controls_fail(
         _control_html(action="reading", text="読む", entry="owned-a")
         + _control_html(action="reading", text="読む", entry="owned-b")
     )
-    with pytest.raises(BookWalkerStrictEntryError, match="multiple matching"):
+    with pytest.raises(
+        BookWalkerStrictEntryError, match="matching control was not stably unique"
+    ):
         await _initialize_strict(browser_page, "direct", controls)
     assert browser_page.url == PRODUCT_URL
 
@@ -212,9 +214,36 @@ async def test_bookwalker_strict_multiple_matching_controls_fail(browser_page: P
         _control_html(action="read_maruyomi", text="10分まる読み", entry="quota-a")
         + _control_html(action="read_maruyomi", text="10分まる読み", entry="quota-b")
     )
-    with pytest.raises(BookWalkerStrictEntryError, match="multiple matching"):
+    with pytest.raises(
+        BookWalkerStrictEntryError, match="matching control was not stably unique"
+    ):
         await _initialize_strict(browser_page, "quota", controls)
     assert browser_page.url == PRODUCT_URL
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_strict_waits_for_transient_duplicate_to_settle(
+    browser_page: Page,
+) -> None:
+    controls = (
+        _control_html(action="read_maruyomi", text="10分まる読み", entry="old")
+        + _control_html(action="read_maruyomi", text="10分まる読み", entry="new")
+    )
+    await _goto_product(browser_page, controls)
+    stable_control = _control_html(
+        action="read_maruyomi", text="10分まる読み", entry="stable"
+    )
+    await browser_page.locator("#js-read-check").evaluate(
+        """
+        (element, html) => setTimeout(() => { element.innerHTML = html; }, 350)
+        """,
+        stable_control,
+    )
+
+    adapter = BookWalkerAdapter()
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.initialize(browser_page)
+    assert "entry=stable" in browser_page.url
 
 
 @pytest.mark.asyncio

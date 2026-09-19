@@ -84,9 +84,10 @@ quota  = ReaderControlKind.MARUYOMI exact only
 ```
 
 strictではtrial、subscription、generic viewer、wrong-kindへのfallbackはない。期待kindが
-0件ならbounded wait後にfail、1件なら`target`属性だけを除去して同じPageからclick、2件以上
-ならambiguityとしてclick前にfailする。strict errorにはstrategy、expected kind、observed kindsを
-含める。product page以外のalready-viewer strict runも、entry条件を検証できないためfailする。
+0件、または候補が安定しない場合はbounded wait後にfailする。候補が1件でも同じ候補を2回連続で
+観測して一意性を確認するまでclickせず、候補が複数の間も最初の観測だけで即failしない。strict
+errorにはstrategy、expected kind、observed kindsを含める。product page以外のalready-viewer
+strict runも、entry条件を検証できないためfailする。
 click後はURL changeを確認し、両方のcontent UUIDを取得できる場合は一致を確認する。
 delayed controlは既存`read_link_wait_timeout_ms`（default 5000ms）のbounded waitで待つ。
 quotaではtrial onlyやsubscription onlyの場合もtrialへfallbackせずfailする。
@@ -644,6 +645,21 @@ bounded retry interval.  This avoids treating a Playwright-successful but
 viewer-ignored input as a successful page turn, while also avoiding an
 unconditional double action when `ArrowLeft` is merely delayed.  The fallback
 remains bounded by the existing page-change timeout and retry count.
+
+### 18.11 Stable strict reader-control detection (2026-09-20)
+
+BookWalker product pages can transiently expose two matching strict reader
+controls while the access action scope is replaced. Strict `direct` / `quota`
+entry now waits within the existing 5-second bound, applies a short initial
+settle of up to 250 ms, and polls at 100 ms intervals. A matching control is
+accepted only after the same in-browser candidate identity is observed twice
+consecutively. Zero candidates and transient multiple candidates invalidate
+the previous sample and are rechecked instead of failing immediately.
+
+Persistent ambiguity still fails before click with the existing fail-safe
+behavior. The change is limited to BookWalker product-page entry detection;
+quota accounting, reader navigation, Core behavior, and capture behavior are
+unchanged.
 
 ## 19. Known limitations / maintenance
 
