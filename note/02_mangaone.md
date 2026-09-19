@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-09-18
+最終同期: 2026-09-19
 
 ## 1. 目的と現在のscope
 
@@ -485,6 +485,104 @@ The fixture tests reproduce this observed entry-to-viewer transition without
 accessing Manga ONE. The live observation click was not treated as a quota
 consumption test; actual quota consumption and the resulting account state
 were not independently verified.
+
+## Source-native capture feasibility diagnostic (2026-09-19)
+
+これはfeasibility investigationのみであり、production capture behaviorは
+変更していない。BookWalker/Coreにも変更はない。計測対象は
+`https://manga-one.com/manga/2379/chapter/214131`、`lilacpps/screenshot_crawler`
+の `main` HEAD `a118b5cd643a4b3bddc7e4abce0061b7ed406ef4` である。共有Crawler
+ChromeへCDP接続し、direct閲覧だけを使用した。無料ライフ/quota入口はclickせず、
+quota消費は0件だった。
+
+診断script:
+
+```text
+scripts/diagnose_mangaone_source_resolution.py
+```
+
+最終計測はChrome window `outer 1922x1040` / viewport `1907x945`、DPR `1.5`
+（画面 `2560x1441`）で行った。FHD相当のwindow条件は確認したが、4K window条件は
+追加実施していない。
+
+15枚（`page_0`〜`page_14`）を計測した。初回は1枚、以降7回は各2枚のspreadで、
+visible imgは右→左の順に `page_1 -> page_2` のように独立して取得できた。
+atlas/spriteではなく、各 `img` が1ページsourceに対応していた。
+
+各sampleの結果:
+
+```text
+natural source:       720 x 1020 (15/15)
+CSS rendered size:    564.7 x 800 (15/15)
+current screenshot:   848 x 1200 (7), 849 x 1200 (8)
+source-native PNG:    720 x 1020 (15/15)
+currentSrc:           blob: (15/15)
+srcset/sizes:         なし
+picture:              なし
+object-fit:           fill
+transform/clip/filter: none / none / none
+```
+
+`currentSrc`のblob URLに対するページ内 `fetch(blob:)` は15/15で
+`TypeError: Failed to fetch` になった。一方、Playwrightの同一page response
+監視では、blob生成前後のsourceを取得できた。chapter-specific transportは
+redacted query付きの `.../manga_page_low/214131/<n>.webp.enc` XHR
+（`application/octet-stream`）で、viewerに渡ったblob responseはheaderが
+`text/plain`だったが、bytesのmagic bytesは全て `image/webp` だった。
+decoded source bytesは15/15で `720x1020`、`naturalWidth/naturalHeight`と一致した。
+
+容量比較（15枚合計）:
+
+```text
+decoded WebP source bytes: 777,172 bytes
+source-native PNG:       12,780,942 bytes
+current locator PNG:     13,405,683 bytes
+current/native PNG ratio: 1.049
+```
+
+source-native PNGは同一ページ内容を再現し、current screenshotとの目視比較で
+crop、左右反転、回転、欠落領域は確認されなかった。current screenshotは
+`720x1020`をDPR 1.5のbacking pixel相当の `848/849x1200` に拡大している。
+従って、現行captureはsourceより情報量を増やしておらず、source-native化による
+画質の新規情報増加はない。PNG出力の容量は今回のsampleでは約4.9%だけ減少する。
+
+Full Screenについては、計測DOM上に `img[alt="full-screen"]` を含むbutton
+（表示文字列 `全画面`）が存在したが、現行Adapterのexact role-name locatorは
+このsessionではmatchしなかった。安全のため診断ではそのcontrolをclickせず、
+前後計測は同一window条件の比較として保存した。sourceの
+`naturalWidth/naturalHeight`、`currentSrc`、CSS sizeは変化しなかった。
+したがって、この調査だけではFull Screen操作による別source選択は確認できず、
+少なくとも現在観測されたsourceはwindow/reader表示を大きくしても
+`720x1020`のままである。
+
+### Browser fullscreen + viewer fullscreen follow-up (2026-09-19)
+
+Chromeを別diagnostic profileで起動時browser fullscreenにした条件も確認した。
+windowは `outer 2560x1440`、viewportは `2546x1346`、DPRは `1.5` で、指定chapterを
+direct閲覧した。viewerの「全画面」buttonをclickする前は、sourceが
+`natural 720x1020`、CSS表示が `564.7x800`、Locator screenshotが
+`849x1200` であり、通常window条件と同じだった。
+
+button click後はURLとdocument fullscreen stateは変わらなかったが、Manga ONEの
+`viewer-container` と `img[alt^="page_"]` がDOMから消えた。10秒間pollしても
+viewerは戻らず、button表示だけが「画面に戻る」に変化した。従って、このbrowser
+fullscreen + viewer fullscreen条件ではsource-native画像のafter比較まで安全に
+進められず、sourceが高解像度へ切り替わった証拠はない。これはproduction変更を
+行わずに観測した診断結果であり、現行captureのfallback挙動は変更していない。
+
+追加diagnostic artifactは `diagnostics/mangaone-browser-fullscreen/` に保存した。
+
+結論は、Manga ONE側の配信source自体が低解像度であることが主因（Case C）で、
+現行screenshotはそれをupscale保存している。source-native PNGは実装可能だが、
+画質向上ではなく、upscaleを避けたsource pixel保持と小幅なPNG容量削減が効果である。
+production化する場合はMangaOneAdapter内のsite-specific capture descriptorまたは
+temporary native canvasで `naturalWidth x naturalHeight` に描画し、取得不能・
+decode失敗・crop/transform検出時は既存Locator screenshotへfallbackする案が妥当。
+Coreに `if site == mangaone` 分岐は追加しない。
+
+診断artifactは `diagnostics/mangaone-source-native/` に保存するが、実サイト本文画像
+をrepositoryのfixtureとして扱わない。production未採用であり、現行Manga ONEの
+capture behaviorは従来どおりである。
 
 - 末尾promotion pageがZIPへ残ることがある。
 - 前編/後編統合はCrawlerで行わない。
