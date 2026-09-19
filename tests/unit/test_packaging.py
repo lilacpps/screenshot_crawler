@@ -189,6 +189,32 @@ def test_package_supports_mixed_native_webp_and_fallback_png(tmp_path) -> None:
         ]
 
 
+def test_package_supports_original_jpeg_artifact(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "page-0001.jpg").write_bytes(b"jpeg")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {"file": "page-0001.jpg", "mime_type": "image/jpeg"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+
+    result = package_crawl_output(
+        crawl_dir,
+        {"title": "菴懷刀蜷・", "genre": "貍ｫ逕ｻ"},
+        library_dir=tmp_path / "Books",
+    )
+
+    with zipfile.ZipFile(result.archive_path) as archive:
+        assert archive.namelist() == ["菴懷刀蜷・/page-0001.jpg"]
+
+
 def test_package_does_not_rmtree_unrelated_files(tmp_path) -> None:
     crawl_dir = tmp_path / "crawl"
     crawl_dir.mkdir()

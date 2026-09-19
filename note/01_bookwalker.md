@@ -575,6 +575,43 @@ diagnostic JSON、redact済みnetwork log、比較用の一時画像は
 `output/diagnostics/bookwalker-original-source/`配下に保存した。今回の変更では
 `BookWalkerAdapter.capture_page()`、Core、Runner、packaging、launcher、shared profileを変更していない。
 
+### 18.8 original JPEG production capture (2026-09-19)
+
+BookWalker `capture_page()` now evaluates source-native PNG first and, when the
+same displayed source can be identified safely, returns the original JPEG as
+the preferred artifact.  The response listener is installed in
+`prepare_page()` before navigation and is limited to
+`viewer-epubs*.bookwalker.jp`; signed URLs are observed as-is and are never
+reconstructed.  JPEG bodies are held in a deduplicating bounded cache of at
+most 32 entries and 64 MiB, with an individual response body limit of 16 MiB.
+Body-read failures are ignored so the existing fallback remains available.
+
+For each capture call, the existing native PNG is decoded in the browser and
+reduced to a 64x64 canvas.  JPEG candidates use the same browser decode,
+resize, RGBA hashing path.  A JPEG is selected only when magic bytes,
+dimensions, exact signature, and candidate uniqueness all pass.  Matching is
+attempted at most three times with a 150 ms bounded wait between attempts.
+Spread capture is all-or-nothing: if any part is not uniquely matched, every
+part returns source-native PNG and no JPEG/PNG mixture is emitted.
+
+The final Core fallback remains unchanged: if source-native capture itself is
+unavailable, `capture_page()` returns `None` and Core uses the existing Canvas
+crop PNG path.  Production does not perform full-pixel comparison; the
+current native PNG is intentionally retained as the conservative comparison
+basis.  `.jpg` is now accepted by manifest/package/ZIP validation alongside
+`.png` and `.webp`.
+
+The change is limited to the BookWalker adapter/helper, Core artifact
+extension validation, unit tests, and this note.  No token values or real-site
+page images are stored in the repository.  Post-change bounded live smoke on
+the existing trial viewers produced `.jpg` artifacts for the 960x1280,
+1303x2048, and 1443x2048 source-size samples; the two latter runs also
+created temporary ZIP archives successfully.  The observed first-artifact
+sizes were 224,798, 71,069, and 917,642 bytes respectively.  The full
+multi-page/END smoke remains a follow-up check.  Current unit coverage includes JPEG validation,
+browser signatures, cache bounds, retries, spread fallback, response
+filtering, and `.jpg` packaging.
+
 ## 19. Known limitations / maintenance
 
 - BookWalker DOM / Canvas renderer変更時は再調査が必要。

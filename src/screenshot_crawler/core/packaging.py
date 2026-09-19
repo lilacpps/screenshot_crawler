@@ -110,7 +110,7 @@ def _manifest_page_files(source: Path) -> list[tuple[Path, PurePosixPath]]:
             or PureWindowsPath(file_name).root
             or PureWindowsPath(file_name).drive
             or any(part in {"", ".", ".."} for part in relative.parts)
-            or relative.suffix.lower() not in {".png", ".webp"}
+            or relative.suffix.lower() not in {".jpg", ".png", ".webp"}
         ):
             raise ValueError(
                 f"Manifest page {index} has an unsafe page artifact path: {file_name}"

@@ -30,6 +30,13 @@ from screenshot_crawler.site_adapters.bookwalker.login import login_bookwalker
 from screenshot_crawler.site_adapters.bookwalker.native_capture import (
     select_native_draw_calls,
 )
+from screenshot_crawler.site_adapters.bookwalker.original_capture import (
+    MAX_RESPONSE_BODY_BYTES,
+    OriginalJpegCache,
+    candidate_capture,
+    candidate_from_jpeg,
+    image_signature,
+)
 from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     ReaderControlKind,
     classify_reader_control,
@@ -292,6 +299,10 @@ class BookWalkerAdapter(SiteAdapter):
     advance_retry_count = 2
     end_marker_grace_ms = 1_500
     spread_ratio = 1.25
+    original_capture_attempts = 3
+    original_capture_retry_interval_ms = 150
+    original_response_task_limit = 8
+    original_response_route_pattern = "**://viewer-epubs*.bookwalker.jp/**"
     _strict_scope_selectors = (
         "#js-read-check-book-cover-main-button",
         "#js-read-check",
@@ -311,6 +322,14 @@ class BookWalkerAdapter(SiteAdapter):
         self._output_genre = "小説"
         self._series_count: int | None = None
         self._final_navigation_pending = False
+        self._original_candidates = OriginalJpegCache()
+        self._original_response_tasks: set[asyncio.Task[None]] = set()
+        self._original_response_sequence = 0
+        self._original_response_page: Page | None = None
+        self._original_capture_decisions: dict[
+            tuple[tuple[int | None, int | None, str], ...],
+            tuple[str, ...] | None,
+        ] = {}
 
     async def configure_run(
         self, page: Page, access_strategy: AccessStrategy
@@ -1030,6 +1049,217 @@ class BookWalkerAdapter(SiteAdapter):
 
     async def prepare_page(self, page: Page) -> None:
         await page.add_init_script(_DRAW_TRACE_SCRIPT)
+        for task in tuple(self._original_response_tasks):
+            task.cancel()
+        if self._original_response_tasks:
+            await asyncio.gather(
+                *self._original_response_tasks,
+                return_exceptions=True,
+            )
+        self._original_response_tasks.clear()
+        self._original_candidates.clear()
+        self._original_response_sequence = 0
+        self._original_capture_decisions.clear()
+        if self._original_response_page is not None and self._original_response_page is not page:
+            try:
+                self._original_response_page.remove_listener(
+                    "response", self._handle_original_response
+                )
+            except (PlaywrightError, AttributeError):
+                pass
+            try:
+                await self._original_response_page.unroute(
+                    self.original_response_route_pattern,
+                    self._handle_original_route,
+                )
+            except (PlaywrightError, AttributeError):
+                pass
+        if self._original_response_page is not page:
+            page.on("response", self._handle_original_response)
+            await page.route(
+                self.original_response_route_pattern,
+                self._handle_original_route,
+            )
+            self._original_response_page = page
+
+    @staticmethod
+    def _is_original_response(response: object) -> bool:
+        """Limit body observation to BookWalker's page-image response host."""
+
+        url = str(getattr(response, "url", ""))
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if not (
+            host.startswith("viewer-epubs")
+            and host.endswith(".bookwalker.jp")
+        ):
+            return False
+        request = getattr(response, "request", None)
+        resource_type = getattr(request, "resource_type", None)
+        if resource_type not in {None, "", "xhr", "fetch", "image"}:
+            return False
+        try:
+            headers = getattr(response, "headers", {}) or {}
+            content_type = str(headers.get("content-type", "")).split(";", 1)[0].lower()
+        except Exception:  # noqa: BLE001 - a response without headers is ignorable
+            content_type = ""
+        path = parsed.path.lower()
+        return content_type == "image/jpeg" or "jpeg" in path or path.endswith(
+            (".jpg", ".jpe")
+        )
+
+    def _handle_original_response(self, response: object) -> None:
+        if not self._is_original_response(response):
+            return
+        if len(self._original_response_tasks) >= self.original_response_task_limit:
+            return
+        task = asyncio.create_task(self._read_original_response(response))
+        self._original_response_tasks.add(task)
+        task.add_done_callback(self._original_response_tasks.discard)
+
+    async def _handle_original_route(self, route: object) -> None:
+        """Read eligible response bodies while fulfilling the same response."""
+
+        try:
+            response = await route.fetch()  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - allow the browser's normal request path
+            try:
+                await route.continue_()  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                return
+            return
+
+        try:
+            if self._is_original_response(response):
+                body = await response.body()
+                self._store_original_response_body(response, body)
+            await route.fulfill(response=response)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - body capture must not break the viewer
+            try:
+                await route.fulfill(response=response)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                try:
+                    await route.continue_()  # type: ignore[attr-defined]
+                except Exception:  # noqa: BLE001
+                    return
+
+    async def _read_original_response(self, response: object) -> None:
+        try:
+            status = int(getattr(response, "status", 200))
+            if status < 200 or status >= 300:
+                return
+            headers = getattr(response, "headers", {}) or {}
+            content_length = headers.get("content-length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > MAX_RESPONSE_BODY_BYTES:
+                        return
+                except (TypeError, ValueError):
+                    pass
+            body = await response.body()  # type: ignore[attr-defined]
+            self._store_original_response_body(response, body)
+        except Exception:  # noqa: BLE001 - body failure must use native fallback
+            return
+
+    def _store_original_response_body(self, response: object, body: object) -> None:
+        if not isinstance(body, bytes) or len(body) > MAX_RESPONSE_BODY_BYTES:
+            return
+        self._original_response_sequence += 1
+        candidate = candidate_from_jpeg(
+            body,
+            url=str(getattr(response, "url", "")),
+            sequence=self._original_response_sequence,
+        )
+        if candidate is not None:
+            self._original_candidates.add(candidate)
+
+    async def _wait_for_original_retry(self, page: Page) -> None:
+        try:
+            await page.wait_for_timeout(self.original_capture_retry_interval_ms)
+        except Exception:  # noqa: BLE001 - test doubles may not expose wait_for_timeout
+            await asyncio.sleep(self.original_capture_retry_interval_ms / 1000)
+
+    async def _capture_original_jpegs(
+        self,
+        page: Page,
+        native_captures: tuple[CaptureResult, ...],
+    ) -> tuple[CaptureResult, ...] | None:
+        """Return JPEGs only when every visible native part matches uniquely."""
+
+        try:
+            native_signatures = tuple(
+                [
+                    await image_signature(page, capture.data, "image/png")
+                    for capture in native_captures
+                ]
+            )
+            if any(signature is None for signature in native_signatures):
+                return None
+
+            decision_key = tuple(
+                (capture.width, capture.height, signature)
+                for capture, signature in zip(
+                    native_captures, native_signatures, strict=True
+                )
+                if signature is not None
+            )
+            if len(decision_key) != len(native_captures):
+                return None
+            if decision_key in self._original_capture_decisions:
+                selected_hashes = self._original_capture_decisions[decision_key]
+                if selected_hashes is None:
+                    return None
+                by_hash = {
+                    candidate.sha256: candidate
+                    for candidate in self._original_candidates.values()
+                }
+                selected = [by_hash.get(sha256) for sha256 in selected_hashes]
+                if any(candidate is None for candidate in selected):
+                    return None
+                resolved = tuple(
+                    candidate for candidate in selected if candidate is not None
+                )
+                if len(resolved) != len(selected):
+                    return None
+                return tuple(candidate_capture(candidate) for candidate in resolved)
+
+            for attempt in range(self.original_capture_attempts):
+                candidates = self._original_candidates.values()
+                selected = []
+                for capture, native_signature in zip(
+                    native_captures, native_signatures, strict=True
+                ):
+                    matches = []
+                    for candidate in candidates:
+                        if (candidate.width, candidate.height) != (
+                            capture.width,
+                            capture.height,
+                        ):
+                            continue
+                        if candidate.signature is None:
+                            candidate.signature = await image_signature(
+                                page, candidate.data, candidate.mime_type
+                            )
+                        if candidate.signature == native_signature:
+                            matches.append(candidate)
+                    if len(matches) != 1:
+                        selected = []
+                        break
+                    selected.append(matches[0])
+
+                if selected and len({candidate.sha256 for candidate in selected}) == len(
+                    selected
+                ):
+                    self._original_capture_decisions[decision_key] = tuple(
+                        candidate.sha256 for candidate in selected
+                    )
+                    return tuple(candidate_capture(candidate) for candidate in selected)
+                if attempt < self.original_capture_attempts - 1:
+                    await self._wait_for_original_retry(page)
+            self._original_capture_decisions[decision_key] = None
+        except Exception:  # noqa: BLE001 - original capture is an optimization
+            return None
+        return None
 
     async def _clear_native_capture(self, page: Page) -> None:
         try:
@@ -1142,8 +1372,11 @@ class BookWalkerAdapter(SiteAdapter):
                         "BookWalker native PNG dimensions do not match source rectangle"
                     )
                 captures.append(capture)
+            original_captures = await self._capture_original_jpegs(
+                page, tuple(captures)
+            )
             await self._clear_geometry_trace(page)
-            return tuple(captures)
+            return original_captures or tuple(captures)
         except CaptureUnavailableError:
             return None
         except (
