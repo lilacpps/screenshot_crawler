@@ -526,6 +526,55 @@ Unit testではdirect resultのLocator bypass、unavailable fallbackとcleanup�
 composite / filter、複数source / atlas reject、spread right-to-leftを固定した。先行live diagnosticの
 4 sampleではnative copy成功とnavigation failureなしを確認済みであり、実画像はfixture/commitへ保存しない。
 
+### 18.7 Original source bytes feasibility diagnostic (2026-09-19)
+
+GitHub `main` HEAD `727d051db3e847090f46c72f52d5a67a572d27f3`をauthorityとし、過去のlive確認で
+使用したtrial viewerを再利用した。対象は`3e1a3eff...&cty=0`（`2/33`）、`0d110c3b...&cty=1`
+（`1/11`）、`f5b3ae37...&cty=0`（`1/60`）である。queryの`Policy`、`Signature`、`Key-Pair-Id`、
+`pfCd`、`cid`等の値はartifact metadataではredactし、本文画像はcommitしない。
+
+診断script `scripts/diagnose_bookwalker_original_source.py` は、Playwright response監視に加えて、
+本文epub hostだけを限定したroute fetchでresponse bodyを即時取得した。CDP `Network` metadataも
+併記し、URL、method、status、Content-Type、Content-Length、body bytes、magic bytes、拡張子、
+resource typeを記録した。page init scriptでは`Blob`相当、`URL.createObjectURL`、`fetch`、XHR、
+`Response.arrayBuffer` / `Response.blob`、`createImageBitmap`、`drawImage`を限定的にhookした。
+一般のBlobはJavaScript/Cookie用で観測され、本文JPEGはmain-worldの`Response.blob`や
+`createImageBitmap`入力としては直接観測されなかった。一方、本文は次のnetwork responseとして
+直接観測できた。
+
+```text
+viewer-epubs-trial.bookwalker.jp/.../0.jpeg または 0.jpegbvCoverImage?...
+HTTP 200 / Content-Type: image/jpeg / resource type: xhr
+magic: ff d8 ff e0 ... (JPEG)
+```
+
+同一pixel sourceとの対応は、ImageBitmapのsource寸法と、route fetchで保存したJPEGをbrowser decoderで
+比較して確認した。全sampleで差分はmean / RMSとも`0 / 0`だった。
+
+| sample | ImageBitmap | current native PNG | original JPEG | ratio original/native | 判定 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `3e1a3eff...&cty=0`, target 1 | `960x1280` | `1,240,180` | `224,798` | `0.181262` | Case 1 |
+| 同URL、target 2 | `960x1280` | `102,707` | `39,706` | `0.386595` | Case 1 |
+| `0d110c3b...&cty=1` | `1303x2048` | `3,647,962` | `563,803` | `0.154553` | Case 1 |
+| `f5b3ae37...&cty=0` | `1443x2048` | `5,806,803` | `917,642` | `0.158029` | Case 1 |
+
+従って今回のsampleでは、配信response自体が標準JPEG bytesであり、復号後に独自の標準画像bytesを
+生成している経路ではない。分類は全て**Case 1: 配信された画像bytesをそのまま取得できる**である。
+PNG再エンコードに対して容量は約`61.3%`〜`84.5%`削減された。ただし通常のPlaywright
+`response.body()` / CDP `getResponseBody`だけでは、XHR画像が遷移・cache扱いになった場合にbodyを
+取得できないsampleがあり、diagnosticでは本文host限定のroute fetchで補った。token付きsigned URLを
+再生成する必要はないが、response interceptionとsource↔draw対応、body取得失敗時のfallbackが必要になる。
+
+production採用価値は**小規模変更で可能だが、現在のnative PNGを直ちに置き換えるほど単純ではない**。
+容量削減は大きく、PNG encode負荷も減る可能性がある一方、route/CDP body bufferingはmemoryを増やし得る。
+viewerのXHR/cache挙動、signed URL、先読み複数JPEG、ImageBitmapとの対応づけに依存し、response body取得失敗時
+には現在の`ImageBitmap -> PNG`をfallbackにする必要がある。将来候補にはできるが、現時点ではproduction
+capture behaviorを維持し、source-native PNGを安全な基準経路として残す判断とする。
+
+diagnostic JSON、redact済みnetwork log、比較用の一時画像は
+`output/diagnostics/bookwalker-original-source/`配下に保存した。今回の変更では
+`BookWalkerAdapter.capture_page()`、Core、Runner、packaging、launcher、shared profileを変更していない。
+
 ## 19. Known limitations / maintenance
 
 - BookWalker DOM / Canvas renderer変更時は再調査が必要。
