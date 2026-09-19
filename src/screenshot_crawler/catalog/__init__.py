@@ -7,13 +7,18 @@ from screenshot_crawler.catalog.export import (
     export_catalog_csv,
 )
 from screenshot_crawler.catalog.models import (
+    Artifact,
+    ArtifactInput,
     CatalogRecord,
+    CrawlRun,
     Item,
     ItemInput,
     Source,
     SourceInput,
     SourceTarget,
     SourceTargetInput,
+    Work,
+    WorkInput,
 )
 from screenshot_crawler.catalog.service import (
     CatalogError,
@@ -27,12 +32,15 @@ from screenshot_crawler.catalog.service import (
 
 __all__ = [
     "EXPORT_COLUMNS",
+    "Artifact",
+    "ArtifactInput",
     "CatalogError",
     "CatalogExportError",
     "CatalogNotFoundError",
     "CatalogRecord",
     "CatalogService",
     "CatalogValidationError",
+    "CrawlRun",
     "ExportResult",
     "Item",
     "ItemInput",
@@ -41,6 +49,8 @@ __all__ = [
     "SourceTarget",
     "SourceTargetInput",
     "UnsupportedSchemaVersionError",
+    "Work",
+    "WorkInput",
     "export_catalog_csv",
     "format_timestamp",
     "now_jst",

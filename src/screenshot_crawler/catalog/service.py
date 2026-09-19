@@ -1,7 +1,8 @@
-"""Small SQLite repository for Catalog state."""
+"""Catalog v3 SQLite service."""
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Collection, Mapping
 from contextlib import contextmanager
@@ -11,19 +12,22 @@ from typing import Any
 
 from screenshot_crawler.catalog import schema
 from screenshot_crawler.catalog.models import (
-    CatalogRecord,
+    Artifact,
+    ArtifactInput,
+    CrawlRun,
     Item,
     ItemInput,
     Source,
     SourceInput,
     SourceTarget,
     SourceTargetInput,
+    Work,
+    WorkInput,
 )
 
-# A fixed offset is intentional: this tool's persistence policy is JST, not
-# the host machine's timezone database or UTC normalization.
 JST = timezone(timedelta(hours=9), name="JST")
 _UNSET = object()
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class CatalogError(RuntimeError):
@@ -43,13 +47,11 @@ class UnsupportedSchemaVersionError(CatalogError):
 
 
 def now_jst() -> datetime:
-    """Return an aware current timestamp in the fixed JST timezone."""
-
     return datetime.now(JST)
 
 
 def format_timestamp(value: datetime | str | None) -> str | None:
-    """Normalize an aware datetime or ISO timestamp to an offset-bearing JST string."""
+    """Normalize an aware datetime or ISO timestamp to JST."""
 
     if value is None:
         return None
@@ -68,18 +70,12 @@ def format_timestamp(value: datetime | str | None) -> str | None:
 
 
 class CatalogService:
-    """Connection-per-operation SQLite Catalog service.
-
-    The service owns connection setup, including foreign-key enforcement, so
-    callers never need to manage SQLite connection lifecycle themselves.
-    """
+    """Connection-per-operation Catalog service with foreign keys enabled."""
 
     def __init__(self, path: str | Path = "catalog.sqlite") -> None:
         self.path = Path(path)
 
     def initialize(self) -> None:
-        """Create the initial three-table schema or validate the existing one."""
-
         with self._connection(initialize_schema=False) as connection:
             try:
                 schema.initialize(connection)
@@ -87,38 +83,96 @@ class CatalogService:
                 raise self._schema_error(exc) from exc
 
     def schema_version(self) -> int:
-        """Return ``PRAGMA user_version`` without silently migrating it."""
-
         if not self.path.exists():
             return 0
         with self._connection(initialize_schema=False) as connection:
             return schema.user_version(connection)
 
-    def create_item(self, item: ItemInput | None = None, **fields: Any) -> Item:
-        """Create an item independently of a source."""
+    # Work API ---------------------------------------------------------
 
-        item_input = self._coerce_item_input(item, fields)
-        self._validate_status(item_input.status)
+    def create_work(self, work: WorkInput | Mapping[str, Any] | None = None, **fields: Any) -> Work:
+        work_input = self._coerce_work_input(work, fields)
+        self._validate_work_input(work_input)
         timestamp = format_timestamp(now_jst())
         with self._connection() as connection:
-            cursor = connection.execute(
-                "INSERT INTO items (canonical_title, author, genre, kind, order_key, order_label, "
-                "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    item_input.canonical_title,
-                    item_input.author,
-                    item_input.genre,
-                    item_input.kind,
-                    item_input.order_key,
-                    item_input.order_label,
-                    item_input.status,
-                    timestamp,
-                    timestamp,
-                ),
-            )
-            row = connection.execute(
-                "SELECT * FROM items WHERE id = ?", (cursor.lastrowid,)
+            try:
+                cursor = connection.execute(
+                    "INSERT INTO works (work_key, title, author, genre, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (work_input.work_key, work_input.title, work_input.author, work_input.genre,
+                     timestamp, timestamp),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise CatalogValidationError(f"Could not create work: {exc}") from exc
+            row = connection.execute("SELECT * FROM works WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return self._work_from_row(row)
+
+    def upsert_work(self, work: WorkInput | Mapping[str, Any], **fields: Any) -> Work:
+        work_input = self._coerce_work_input(work, fields)
+        self._validate_work_input(work_input)
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            existing = connection.execute(
+                "SELECT id FROM works WHERE work_key = ?", (work_input.work_key,)
             ).fetchone()
+            if existing is None:
+                cursor = connection.execute(
+                    "INSERT INTO works (work_key, title, author, genre, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (work_input.work_key, work_input.title, work_input.author, work_input.genre,
+                     timestamp, timestamp),
+                )
+                work_id = cursor.lastrowid
+            else:
+                work_id = existing["id"]
+                connection.execute(
+                    "UPDATE works SET title = ?, author = ?, genre = ?, updated_at = ? WHERE id = ?",
+                    (work_input.title, work_input.author, work_input.genre, timestamp, work_id),
+                )
+            row = connection.execute("SELECT * FROM works WHERE id = ?", (work_id,)).fetchone()
+        return self._work_from_row(row)
+
+    def get_work(self, work_id: int) -> Work:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM works WHERE id = ?", (work_id,)).fetchone()
+        if row is None:
+            raise CatalogNotFoundError(f"Catalog work not found: {work_id}")
+        return self._work_from_row(row)
+
+    def find_work(self, work_key: str) -> Work | None:
+        self._validate_nonempty(work_key, "work_key")
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM works WHERE work_key = ?", (work_key,)).fetchone()
+        return None if row is None else self._work_from_row(row)
+
+    def list_works(self) -> list[Work]:
+        with self._connection() as connection:
+            rows = connection.execute("SELECT * FROM works ORDER BY id").fetchall()
+        return [self._work_from_row(row) for row in rows]
+
+    # Item API ---------------------------------------------------------
+
+    def create_item(
+        self,
+        item: ItemInput | Mapping[str, Any] | None = None,
+        *,
+        work_id: int | None = None,
+        **fields: Any,
+    ) -> Item:
+        item_input = self._coerce_item_input(item, fields)
+        self._validate_status(item_input.status)
+        if work_id is None:
+            raise CatalogValidationError("work_id is required")
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            self._require_row(connection, "works", work_id, "work")
+            cursor = connection.execute(
+                "INSERT INTO items (work_id, item_title, kind, order_key, order_label, status, "
+                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (work_id, item_input.item_title, item_input.kind, item_input.order_key,
+                 item_input.order_label, item_input.status, timestamp, timestamp),
+            )
+            row = connection.execute("SELECT * FROM items WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return self._item_from_row(row)
 
     def get_item(self, item_id: int) -> Item:
@@ -128,62 +182,74 @@ class CatalogService:
             raise CatalogNotFoundError(f"Catalog item not found: {item_id}")
         return self._item_from_row(row)
 
-    def list_items(self, *, status: str | None = None) -> list[Item]:
+    def list_items(self, *, work_id: int | None = None, status: str | None = None) -> list[Item]:
         if status is not None:
             self._validate_status(status)
+        conditions: list[str] = []
+        values: list[Any] = []
+        if work_id is not None:
+            conditions.append("work_id = ?")
+            values.append(work_id)
+        if status is not None:
+            conditions.append("status = ?")
+            values.append(status)
+        query = "SELECT * FROM items"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id"
         with self._connection() as connection:
-            if status is None:
-                rows = connection.execute("SELECT * FROM items ORDER BY id").fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT * FROM items WHERE status = ? ORDER BY id", (status,)
-                ).fetchall()
+            rows = connection.execute(query, values).fetchall()
         return [self._item_from_row(row) for row in rows]
+
+    def mark_item_completed(
+        self, item_id: int, *, completed_at: datetime | str | None = None
+    ) -> Item:
+        finished = format_timestamp(completed_at) or format_timestamp(now_jst())
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            cursor = connection.execute(
+                "UPDATE items SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
+                (finished, timestamp, item_id),
+            )
+            if cursor.rowcount == 0:
+                raise CatalogNotFoundError(f"Catalog item not found: {item_id}")
+            row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        return self._item_from_row(row)
+
+    # Source API -------------------------------------------------------
 
     def create_source(
         self, source: SourceInput | Mapping[str, Any], *, item_id: int
     ) -> Source:
-        """Create a source for an existing item."""
-
-        source = self._coerce_source_input(source)
-        self._validate_source_input(source)
+        source_input = self._coerce_source_input(source)
+        self._validate_source_input(source_input)
         timestamp = format_timestamp(now_jst())
-        last_seen = format_timestamp(source.last_seen_at) or timestamp
+        last_seen = format_timestamp(source_input.last_seen_at) or timestamp
         with self._connection() as connection:
+            self._require_row(connection, "items", item_id, "item")
             try:
                 cursor = connection.execute(
                     "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
                     "free_until, available, access_checked_at, last_seen_at, quota_started_at, "
-                    "access_granted_until, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        item_id,
-                        source.site,
-                        source.external_id,
-                        source.discovery_key,
-                        source.access_mode,
-                        format_timestamp(source.free_until),
-                        1 if source.available is None else int(source.available),
-                        format_timestamp(source.access_checked_at),
-                        last_seen,
-                        format_timestamp(source.quota_started_at),
-                        format_timestamp(source.access_granted_until),
-                        timestamp,
-                        timestamp,
-                    ),
+                    "access_granted_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (item_id, source_input.site, source_input.external_id, source_input.discovery_key,
+                     source_input.access_mode, format_timestamp(source_input.free_until),
+                     1 if source_input.available is None else int(source_input.available),
+                     format_timestamp(source_input.access_checked_at), last_seen,
+                     format_timestamp(source_input.quota_started_at),
+                     format_timestamp(source_input.access_granted_until), timestamp, timestamp),
                 )
             except sqlite3.IntegrityError as exc:
                 raise CatalogValidationError(f"Could not create source: {exc}") from exc
-            row = connection.execute(
-                "SELECT * FROM sources WHERE id = ?", (cursor.lastrowid,)
-            ).fetchone()
+            row = connection.execute("SELECT * FROM sources WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return self._source_from_row(row)
 
     def find_source(self, site: str, external_id: str) -> Source | None:
+        self._validate_nonempty(site, "site")
+        self._validate_nonempty(external_id, "external_id")
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT * FROM sources WHERE site = ? AND external_id = ?",
-                (site, external_id),
+                "SELECT * FROM sources WHERE site = ? AND external_id = ?", (site, external_id)
             ).fetchone()
         return None if row is None else self._source_from_row(row)
 
@@ -204,10 +270,7 @@ class CatalogService:
         return self._source_from_row(row)
 
     def list_sources(
-        self,
-        *,
-        item_id: int | None = None,
-        site: str | None = None,
+        self, *, item_id: int | None = None, site: str | None = None,
         discovery_key: str | None = None,
     ) -> list[Source]:
         conditions: list[str] = []
@@ -216,6 +279,7 @@ class CatalogService:
             conditions.append("item_id = ?")
             values.append(item_id)
         if site is not None:
+            self._validate_nonempty(site, "site")
             conditions.append("site = ?")
             values.append(site)
         if discovery_key is not None:
@@ -229,60 +293,80 @@ class CatalogService:
             rows = connection.execute(query, values).fetchall()
         return [self._source_from_row(row) for row in rows]
 
-    def read_items_and_sources(self, *, site: str) -> tuple[list[Item], list[Source]]:
-        """Read all items and one site's sources without initializing or writing.
-
-        Batch planning must not create a missing database or initialize an
-        unversioned database as a side effect of inspecting it.
-        """
-
+    def update_source_external_state(
+        self,
+        site: str,
+        external_id: str,
+        *,
+        discovery_key: str | None | object = _UNSET,
+        access_mode: str | object = _UNSET,
+        free_until: datetime | str | None | object = _UNSET,
+        available: bool | object = _UNSET,
+        access_checked_at: datetime | str | None | object = _UNSET,
+        last_seen_at: datetime | str | None | object = _UNSET,
+    ) -> Source:
         self._validate_nonempty(site, "site")
-        with self._read_only_connection() as connection:
-            item_rows = connection.execute("SELECT * FROM items ORDER BY id").fetchall()
-            source_rows = connection.execute(
-                "SELECT * FROM sources WHERE site = ? ORDER BY id", (site,)
-            ).fetchall()
-        return (
-            [self._item_from_row(row) for row in item_rows],
-            [self._source_from_row(row) for row in source_rows],
-        )
+        self._validate_nonempty(external_id, "external_id")
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM sources WHERE site = ? AND external_id = ?", (site, external_id)
+            ).fetchone()
+            if row is None:
+                raise CatalogNotFoundError(f"Catalog source not found: ({site}, {external_id})")
+            assignments: list[str] = []
+            values: list[Any] = []
+            for column, value in (
+                ("discovery_key", discovery_key), ("access_mode", access_mode),
+                ("free_until", free_until), ("available", available),
+                ("access_checked_at", access_checked_at), ("last_seen_at", last_seen_at),
+            ):
+                if value is _UNSET:
+                    continue
+                if column == "access_mode":
+                    self._validate_access_mode(value)
+                elif column == "available":
+                    if not isinstance(value, bool):
+                        raise CatalogValidationError("available must be a boolean")
+                    value = int(value)
+                elif column in {"free_until", "access_checked_at", "last_seen_at"}:
+                    value = format_timestamp(value)
+                assignments.append(f"{column} = ?")
+                values.append(value)
+            if assignments:
+                assignments.append("updated_at = ?")
+                values.extend([format_timestamp(now_jst()), site, external_id])
+                connection.execute(
+                    "UPDATE sources SET " + ", ".join(assignments) +
+                    " WHERE site = ? AND external_id = ?", values
+                )
+            updated = connection.execute(
+                "SELECT * FROM sources WHERE site = ? AND external_id = ?", (site, external_id)
+            ).fetchone()
+        return self._source_from_row(updated)
 
-    def read_items_sources_and_targets(
-        self, *, site: str
-    ) -> tuple[list[Item], list[Source], list[SourceTarget]]:
-        """Read one site's items, sources, and targets without any write side effect."""
-
-        self._validate_nonempty(site, "site")
-        with self._read_only_connection() as connection:
-            item_rows = connection.execute("SELECT * FROM items ORDER BY id").fetchall()
-            source_rows = connection.execute(
-                "SELECT * FROM sources WHERE site = ? ORDER BY id", (site,)
-            ).fetchall()
-            target_rows = connection.execute(
-                "SELECT st.* FROM source_targets AS st "
-                "JOIN sources AS s ON s.id = st.source_id "
-                "WHERE s.site = ? ORDER BY st.id",
-                (site,),
-            ).fetchall()
-        return (
-            [self._item_from_row(row) for row in item_rows],
-            [self._source_from_row(row) for row in source_rows],
-            [self._source_target_from_row(row) for row in target_rows],
-        )
+    def record_quota_access(
+        self,
+        source_id: int,
+        *,
+        quota_started_at: datetime | str,
+        access_granted_until: datetime | str | None,
+    ) -> Source:
+        started = format_timestamp(quota_started_at)
+        if started is None:
+            raise CatalogValidationError("quota_started_at is required")
+        granted_until = format_timestamp(access_granted_until)
+        with self._connection() as connection:
+            self._require_row(connection, "sources", source_id, "source")
+            connection.execute(
+                "UPDATE sources SET quota_started_at = ?, access_granted_until = ?, updated_at = ? "
+                "WHERE id = ?", (started, granted_until, format_timestamp(now_jst()), source_id)
+            )
+            row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+        return self._source_from_row(row)
 
     def mark_sources_unavailable_except(
-        self,
-        *,
-        site: str,
-        discovery_key: str,
-        observed_external_ids: Collection[str],
+        self, *, site: str, discovery_key: str, observed_external_ids: Collection[str]
     ) -> int:
-        """Mark missing sources unavailable within one discovery scope.
-
-        This is intentionally a narrow reconciliation operation. It never
-        deletes rows or changes local item/quota state.
-        """
-
         self._validate_nonempty(site, "site")
         self._validate_nonempty(discovery_key, "discovery_key")
         observed = tuple(dict.fromkeys(observed_external_ids))
@@ -300,225 +384,22 @@ class CatalogService:
             )
         return cursor.rowcount
 
-    def upsert_item_source(
-        self,
-        item: ItemInput | Mapping[str, Any],
-        source: SourceInput | Mapping[str, Any],
-    ) -> CatalogRecord:
-        """Atomically create or refresh an item/source pair.
-
-        Source identity is exclusively ``(site, external_id)``. On an existing
-        source, only external state and observed item metadata are updated;
-        local item state is deliberately left untouched.
-        """
-
-        item_input = self._coerce_item_input(item)
-        source_input = self._coerce_source_input(source)
-        self._validate_source_input(source_input)
-        self._validate_status(item_input.status)
-        timestamp = format_timestamp(now_jst())
-        last_seen = format_timestamp(source_input.last_seen_at) or timestamp
-
-        with self._connection() as connection:
-            existing = connection.execute(
-                "SELECT * FROM sources WHERE site = ? AND external_id = ?",
-                (source_input.site, source_input.external_id),
-            ).fetchone()
-            if existing is None:
-                item_cursor = connection.execute(
-                    "INSERT INTO items (canonical_title, author, genre, kind, order_key, order_label, "
-                    "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        item_input.canonical_title,
-                        item_input.author,
-                        item_input.genre,
-                        item_input.kind,
-                        item_input.order_key,
-                        item_input.order_label,
-                        item_input.status,
-                        timestamp,
-                        timestamp,
-                    ),
-                )
-                item_id = int(item_cursor.lastrowid)
-                connection.execute(
-                    "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
-                    "free_until, available, access_checked_at, last_seen_at, quota_started_at, "
-                    "access_granted_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        item_id,
-                        source_input.site,
-                        source_input.external_id,
-                        source_input.discovery_key,
-                        source_input.access_mode,
-                        format_timestamp(source_input.free_until),
-                        1 if source_input.available is None else int(source_input.available),
-                        format_timestamp(source_input.access_checked_at),
-                        last_seen,
-                        None,
-                        None,
-                        timestamp,
-                        timestamp,
-                    ),
-                )
-                source_row = connection.execute(
-                    "SELECT * FROM sources WHERE site = ? AND external_id = ?",
-                    (source_input.site, source_input.external_id),
-                ).fetchone()
-            else:
-                item_id = int(existing["item_id"])
-                self._update_item_metadata(connection, item_id, item_input, timestamp)
-                self._update_source_external_state(
-                    connection,
-                    existing,
-                    source_input,
-                    timestamp=timestamp,
-                    default_last_seen=last_seen,
-                )
-                source_row = connection.execute(
-                    "SELECT * FROM sources WHERE id = ?", (existing["id"],)
-                ).fetchone()
-            item_row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
-        return CatalogRecord(
-            item=self._item_from_row(item_row), source=self._source_from_row(source_row)
-        )
-
-    upsert = upsert_item_source
-    upsert_item_and_source = upsert_item_source
-
-    def update_source_external_state(
-        self,
-        site: str,
-        external_id: str,
-        *,
-        discovery_key: str | None | object = _UNSET,
-        access_mode: str | object = _UNSET,
-        free_until: datetime | str | None | object = _UNSET,
-        available: bool | object = _UNSET,
-        access_checked_at: datetime | str | None | object = _UNSET,
-        last_seen_at: datetime | str | None | object = _UNSET,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> Source:
-        """Patch external source state while preserving the associated item."""
-
-        with self._connection() as connection:
-            row = connection.execute(
-                "SELECT * FROM sources WHERE site = ? AND external_id = ?",
-                (site, external_id),
-            ).fetchone()
-            if row is None:
-                raise CatalogNotFoundError(f"Catalog source not found: ({site}, {external_id})")
-            assignments: list[str] = []
-            values: list[Any] = []
-            for column, value in (
-                ("discovery_key", discovery_key),
-                ("access_mode", access_mode),
-                ("free_until", free_until),
-                ("available", available),
-                ("access_checked_at", access_checked_at),
-                ("last_seen_at", last_seen_at),
-            ):
-                if value is _UNSET:
-                    continue
-                if column == "available":
-                    if not isinstance(value, bool):
-                        raise CatalogValidationError("available must be a boolean")
-                    value = int(value)
-                elif column == "access_mode":
-                    self._validate_access_mode(value)
-                elif column.endswith("_at") or column == "free_until":
-                    value = format_timestamp(value)
-                assignments.append(f"{column} = ?")
-                values.append(value)
-            if metadata:
-                self._update_item_metadata_mapping(
-                    connection, int(row["item_id"]), metadata, format_timestamp(now_jst())
-                )
-            if assignments:
-                assignments.append("updated_at = ?")
-                values.extend([format_timestamp(now_jst()), site, external_id])
-                connection.execute(
-                    "UPDATE sources SET "
-                    + ", ".join(assignments)
-                    + " WHERE site = ? AND external_id = ?",
-                    values,
-                )
-            updated = connection.execute(
-                "SELECT * FROM sources WHERE site = ? AND external_id = ?", (site, external_id)
-            ).fetchone()
-        return self._source_from_row(updated)
-
-    def mark_item_completed(
-        self, item_id: int, local_path: str, *, completed_at: datetime | str | None = None
-    ) -> Item:
-        self._validate_nonempty(local_path, "local_path")
-        finished = format_timestamp(completed_at) or format_timestamp(now_jst())
-        with self._connection() as connection:
-            cursor = connection.execute(
-                "UPDATE items SET status = 'completed', local_path = ?, completed_at = ?, "
-                "updated_at = ? WHERE id = ?",
-                (local_path, finished, format_timestamp(now_jst()), item_id),
-            )
-            if cursor.rowcount == 0:
-                raise CatalogNotFoundError(f"Catalog item not found: {item_id}")
-            row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
-        return self._item_from_row(row)
-
-    def record_quota_access(
-        self,
-        source_id: int,
-        *,
-        quota_started_at: datetime | str,
-        access_granted_until: datetime | str | None,
-    ) -> Source:
-        """Persist only the local quota state for one existing source."""
-
-        started = format_timestamp(quota_started_at)
-        granted_until = format_timestamp(access_granted_until)
-        if started is None:
-            raise CatalogValidationError("quota_started_at is required")
-        with self._connection() as connection:
-            row = connection.execute(
-                "SELECT id FROM sources WHERE id = ?", (source_id,)
-            ).fetchone()
-            if row is None:
-                raise CatalogNotFoundError(f"Catalog source not found: {source_id}")
-            connection.execute(
-                "UPDATE sources SET quota_started_at = ?, access_granted_until = ?, "
-                "updated_at = ? WHERE id = ?",
-                (started, granted_until, format_timestamp(now_jst()), source_id),
-            )
-            updated = connection.execute(
-                "SELECT * FROM sources WHERE id = ?", (source_id,)
-            ).fetchone()
-        return self._source_from_row(updated)
+    # SourceTarget API -------------------------------------------------
 
     def create_source_target(
-        self,
-        target: SourceTargetInput | Mapping[str, Any],
-        *,
-        source_id: int,
+        self, target: SourceTargetInput | Mapping[str, Any], *, source_id: int
     ) -> SourceTarget:
-        """Create one opaque acquisition target for an existing source."""
-
         target_input = self._coerce_source_target_input(target)
         self._validate_source_target_input(target_input)
         timestamp = format_timestamp(now_jst())
         with self._connection() as connection:
+            self._require_row(connection, "sources", source_id, "source")
             try:
                 cursor = connection.execute(
-                    "INSERT INTO source_targets "
-                    "(source_id, backend, locator, priority, enabled, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        source_id,
-                        target_input.backend,
-                        target_input.locator,
-                        target_input.priority,
-                        int(target_input.enabled),
-                        timestamp,
-                        timestamp,
-                    ),
+                    "INSERT INTO source_targets (source_id, backend, target_key, locator, priority, "
+                    "enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (source_id, target_input.backend, target_input.target_key, target_input.locator,
+                     target_input.priority, int(target_input.enabled), timestamp, timestamp),
                 )
             except sqlite3.IntegrityError as exc:
                 raise CatalogValidationError(f"Could not create source target: {exc}") from exc
@@ -528,82 +409,59 @@ class CatalogService:
         return self._source_target_from_row(row)
 
     def upsert_source_target(
-        self,
-        target: SourceTargetInput | Mapping[str, Any],
-        *,
-        source_id: int,
+        self, target: SourceTargetInput | Mapping[str, Any], *, source_id: int
     ) -> SourceTarget:
-        """Create or refresh a target identified by ``(source_id, backend)``."""
-
         target_input = self._coerce_source_target_input(target)
         self._validate_source_target_input(target_input)
         timestamp = format_timestamp(now_jst())
         with self._connection() as connection:
+            self._require_row(connection, "sources", source_id, "source")
             existing = connection.execute(
-                "SELECT * FROM source_targets WHERE source_id = ? AND backend = ?",
-                (source_id, target_input.backend),
+                "SELECT id FROM source_targets WHERE source_id = ? AND backend = ? AND target_key = ?",
+                (source_id, target_input.backend, target_input.target_key),
             ).fetchone()
-            try:
-                if existing is None:
-                    cursor = connection.execute(
-                        "INSERT INTO source_targets "
-                        "(source_id, backend, locator, priority, enabled, created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            source_id,
-                            target_input.backend,
-                            target_input.locator,
-                            target_input.priority,
-                            int(target_input.enabled),
-                            timestamp,
-                            timestamp,
-                        ),
-                    )
-                    target_id = cursor.lastrowid
-                else:
-                    target_id = existing["id"]
-                    connection.execute(
-                        "UPDATE source_targets SET locator = ?, priority = ?, enabled = ?, "
-                        "updated_at = ? WHERE id = ?",
-                        (
-                            target_input.locator,
-                            target_input.priority,
-                            int(target_input.enabled),
-                            timestamp,
-                            target_id,
-                        ),
-                    )
-            except sqlite3.IntegrityError as exc:
-                raise CatalogValidationError(f"Could not upsert source target: {exc}") from exc
+            if existing is None:
+                cursor = connection.execute(
+                    "INSERT INTO source_targets (source_id, backend, target_key, locator, priority, "
+                    "enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (source_id, target_input.backend, target_input.target_key, target_input.locator,
+                     target_input.priority, int(target_input.enabled), timestamp, timestamp),
+                )
+                target_id = cursor.lastrowid
+            else:
+                target_id = existing["id"]
+                connection.execute(
+                    "UPDATE source_targets SET locator = ?, priority = ?, enabled = ?, updated_at = ? "
+                    "WHERE id = ?", (target_input.locator, target_input.priority,
+                                      int(target_input.enabled), timestamp, target_id)
+                )
             row = connection.execute(
                 "SELECT * FROM source_targets WHERE id = ?", (target_id,)
             ).fetchone()
         return self._source_target_from_row(row)
 
-    def find_source_target(self, source_id: int, backend: str) -> SourceTarget | None:
+    def find_source_target(
+        self, source_id: int, backend: str, target_key: str = "default"
+    ) -> SourceTarget | None:
         self._validate_nonempty(backend, "backend")
+        self._validate_nonempty(target_key, "target_key")
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT * FROM source_targets WHERE source_id = ? AND backend = ?",
-                (source_id, backend),
+                "SELECT * FROM source_targets WHERE source_id = ? AND backend = ? AND target_key = ?",
+                (source_id, backend, target_key),
             ).fetchone()
         return None if row is None else self._source_target_from_row(row)
 
     def get_source_target(self, target_id: int) -> SourceTarget:
         with self._connection() as connection:
-            row = connection.execute(
-                "SELECT * FROM source_targets WHERE id = ?", (target_id,)
-            ).fetchone()
+            row = connection.execute("SELECT * FROM source_targets WHERE id = ?", (target_id,)).fetchone()
         if row is None:
             raise CatalogNotFoundError(f"Catalog source target not found: {target_id}")
         return self._source_target_from_row(row)
 
     def list_source_targets(
-        self,
-        *,
-        source_id: int | None = None,
-        backend: str | None = None,
-        enabled: bool | None = None,
+        self, *, source_id: int | None = None, backend: str | None = None,
+        target_key: str | None = None, enabled: bool | None = None,
     ) -> list[SourceTarget]:
         conditions: list[str] = []
         values: list[Any] = []
@@ -614,6 +472,10 @@ class CatalogService:
             self._validate_nonempty(backend, "backend")
             conditions.append("backend = ?")
             values.append(backend)
+        if target_key is not None:
+            self._validate_nonempty(target_key, "target_key")
+            conditions.append("target_key = ?")
+            values.append(target_key)
         if enabled is not None:
             if not isinstance(enabled, bool):
                 raise CatalogValidationError("enabled must be a boolean")
@@ -622,10 +484,407 @@ class CatalogService:
         query = "SELECT * FROM source_targets"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY id ASC"
+        query += " ORDER BY id"
         with self._connection() as connection:
             rows = connection.execute(query, values).fetchall()
         return [self._source_target_from_row(row) for row in rows]
+
+    # CrawlRun API -----------------------------------------------------
+
+    def create_crawl_run(
+        self,
+        *,
+        item_id: int,
+        source_id: int,
+        target_id: int,
+        access_strategy: str,
+        started_at: datetime | str | None = None,
+    ) -> CrawlRun:
+        self._validate_access_strategy(access_strategy)
+        started = format_timestamp(started_at) or format_timestamp(now_jst())
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            self._require_row(connection, "items", item_id, "item")
+            source = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+            if source is None:
+                raise CatalogNotFoundError(f"Catalog source not found: {source_id}")
+            target = connection.execute(
+                "SELECT * FROM source_targets WHERE id = ?", (target_id,)
+            ).fetchone()
+            if target is None:
+                raise CatalogNotFoundError(f"Catalog source target not found: {target_id}")
+            if source["item_id"] != item_id:
+                raise CatalogValidationError("source.item_id does not match item_id")
+            if target["source_id"] != source_id:
+                raise CatalogValidationError("target.source_id does not match source_id")
+            cursor = connection.execute(
+                "INSERT INTO crawl_runs (item_id, source_id, target_id, site_snapshot, "
+                "external_id_snapshot, backend_snapshot, target_key_snapshot, locator_snapshot, "
+                "access_strategy, status, started_at, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)",
+                (item_id, source_id, target_id, source["site"], source["external_id"],
+                 target["backend"], target["target_key"], target["locator"], access_strategy,
+                 started, timestamp, timestamp),
+            )
+            row = connection.execute("SELECT * FROM crawl_runs WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return self._crawl_run_from_row(row)
+
+    def get_crawl_run(self, run_id: int) -> CrawlRun:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM crawl_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise CatalogNotFoundError(f"Catalog crawl run not found: {run_id}")
+        return self._crawl_run_from_row(row)
+
+    def list_crawl_runs(
+        self, *, item_id: int | None = None, source_id: int | None = None,
+        target_id: int | None = None, status: str | None = None,
+    ) -> list[CrawlRun]:
+        if status is not None:
+            self._validate_run_status(status)
+        conditions: list[str] = []
+        values: list[Any] = []
+        for column, value in (("item_id", item_id), ("source_id", source_id), ("target_id", target_id),
+                              ("status", status)):
+            if value is not None:
+                conditions.append(f"{column} = ?")
+                values.append(value)
+        query = "SELECT * FROM crawl_runs"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id"
+        with self._connection() as connection:
+            rows = connection.execute(query, values).fetchall()
+        return [self._crawl_run_from_row(row) for row in rows]
+
+    def mark_crawl_run_succeeded(
+        self, run_id: int, *, page_count: int, stop_reason: str | None = None,
+        finished_at: datetime | str | None = None,
+    ) -> CrawlRun:
+        self._validate_page_count(page_count, required=True)
+        return self._finish_crawl_run(
+            run_id, status="succeeded", page_count=page_count, stop_reason=stop_reason,
+            finished_at=finished_at,
+        )
+
+    def mark_crawl_run_failed(
+        self, run_id: int, *, error_type: str, error_message: str | None = None,
+        page_count: int | None = None, stop_reason: str | None = None,
+        finished_at: datetime | str | None = None,
+    ) -> CrawlRun:
+        self._validate_nonempty(error_type, "error_type")
+        self._validate_page_count(page_count, required=False)
+        return self._finish_crawl_run(
+            run_id, status="failed", page_count=page_count, stop_reason=stop_reason,
+            finished_at=finished_at, error_type=error_type, error_message=error_message,
+        )
+
+    # Artifact API -----------------------------------------------------
+
+    def create_artifact(
+        self,
+        artifact: ArtifactInput | Mapping[str, Any] | None = None,
+        *,
+        item_id: int | None = None,
+        crawl_run_id: int | None = None,
+        **fields: Any,
+    ) -> Artifact:
+        artifact_input = self._coerce_artifact_input(artifact, fields)
+        normalized_sha = self._validate_artifact_input(artifact_input)
+        if item_id is None:
+            raise CatalogValidationError("item_id is required")
+        verified = format_timestamp(artifact_input.last_verified_at)
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            self._require_row(connection, "items", item_id, "item")
+            if crawl_run_id is not None:
+                run = connection.execute(
+                    "SELECT item_id FROM crawl_runs WHERE id = ?", (crawl_run_id,)
+                ).fetchone()
+                if run is None:
+                    raise CatalogNotFoundError(f"Catalog crawl run not found: {crawl_run_id}")
+                if run["item_id"] != item_id:
+                    raise CatalogValidationError("crawl_run.item_id does not match artifact item_id")
+            cursor = connection.execute(
+                "INSERT INTO artifacts (item_id, crawl_run_id, kind, format, sha256, byte_size, "
+                "storage_backend, locator, state, last_verified_at, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (item_id, crawl_run_id, artifact_input.kind, artifact_input.format, normalized_sha,
+                 artifact_input.byte_size, artifact_input.storage_backend, artifact_input.locator,
+                 artifact_input.state, verified, timestamp, timestamp),
+            )
+            row = connection.execute("SELECT * FROM artifacts WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        return self._artifact_from_row(row)
+
+    def get_artifact(self, artifact_id: int) -> Artifact:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM artifacts WHERE id = ?", (artifact_id,)).fetchone()
+        if row is None:
+            raise CatalogNotFoundError(f"Catalog artifact not found: {artifact_id}")
+        return self._artifact_from_row(row)
+
+    def list_artifacts(
+        self, *, item_id: int | None = None, crawl_run_id: int | None = None,
+        state: str | None = None,
+    ) -> list[Artifact]:
+        if state is not None:
+            self._validate_artifact_state(state)
+        conditions: list[str] = []
+        values: list[Any] = []
+        for column, value in (("item_id", item_id), ("crawl_run_id", crawl_run_id), ("state", state)):
+            if value is not None:
+                conditions.append(f"{column} = ?")
+                values.append(value)
+        query = "SELECT * FROM artifacts"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id"
+        with self._connection() as connection:
+            rows = connection.execute(query, values).fetchall()
+        return [self._artifact_from_row(row) for row in rows]
+
+    def update_artifact_storage(
+        self,
+        artifact_id: int,
+        *,
+        storage_backend: str | object = _UNSET,
+        locator: str | None | object = _UNSET,
+        state: str | object = _UNSET,
+        last_verified_at: datetime | str | None | object = _UNSET,
+    ) -> Artifact:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM artifacts WHERE id = ?", (artifact_id,)).fetchone()
+            if row is None:
+                raise CatalogNotFoundError(f"Catalog artifact not found: {artifact_id}")
+            effective_backend = row["storage_backend"] if storage_backend is _UNSET else storage_backend
+            effective_locator = row["locator"] if locator is _UNSET else locator
+            effective_state = row["state"] if state is _UNSET else state
+            self._validate_nonempty(effective_backend, "storage_backend")
+            self._validate_artifact_state(effective_state)
+            self._validate_locator(effective_locator, required=effective_state == "present")
+            assignments: list[str] = []
+            values: list[Any] = []
+            if storage_backend is not _UNSET:
+                assignments.append("storage_backend = ?")
+                values.append(effective_backend)
+            if locator is not _UNSET:
+                assignments.append("locator = ?")
+                values.append(effective_locator)
+            if state is not _UNSET:
+                assignments.append("state = ?")
+                values.append(effective_state)
+            if last_verified_at is not _UNSET:
+                assignments.append("last_verified_at = ?")
+                values.append(format_timestamp(last_verified_at))
+            if assignments:
+                assignments.append("updated_at = ?")
+                values.extend([format_timestamp(now_jst()), artifact_id])
+                connection.execute(
+                    "UPDATE artifacts SET " + ", ".join(assignments) + " WHERE id = ?", values
+                )
+            updated = connection.execute("SELECT * FROM artifacts WHERE id = ?", (artifact_id,)).fetchone()
+        return self._artifact_from_row(updated)
+
+    # Read helpers retained for callers that only inspect Catalog rows. ----
+
+    def read_items_and_sources(self, *, site: str) -> tuple[list[Item], list[Source]]:
+        self._validate_nonempty(site, "site")
+        with self._read_only_connection() as connection:
+            items = connection.execute("SELECT * FROM items ORDER BY id").fetchall()
+            sources = connection.execute(
+                "SELECT * FROM sources WHERE site = ? ORDER BY id", (site,)
+            ).fetchall()
+        return ([self._item_from_row(row) for row in items],
+                [self._source_from_row(row) for row in sources])
+
+    def read_items_sources_and_targets(
+        self, *, site: str
+    ) -> tuple[list[Item], list[Source], list[SourceTarget]]:
+        self._validate_nonempty(site, "site")
+        with self._read_only_connection() as connection:
+            items = connection.execute("SELECT * FROM items ORDER BY id").fetchall()
+            sources = connection.execute(
+                "SELECT * FROM sources WHERE site = ? ORDER BY id", (site,)
+            ).fetchall()
+            targets = connection.execute(
+                "SELECT st.* FROM source_targets st JOIN sources s ON s.id = st.source_id "
+                "WHERE s.site = ? ORDER BY st.id", (site,)
+            ).fetchall()
+        return ([self._item_from_row(row) for row in items],
+                [self._source_from_row(row) for row in sources],
+                [self._source_target_from_row(row) for row in targets])
+
+    # Validation and conversion ---------------------------------------
+
+    def _finish_crawl_run(self, run_id: int, *, status: str, page_count: int | None,
+                          stop_reason: str | None, finished_at: datetime | str | None,
+                          error_type: str | None = None,
+                          error_message: str | None = None) -> CrawlRun:
+        finished = format_timestamp(finished_at) or format_timestamp(now_jst())
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM crawl_runs WHERE id = ?", (run_id,)).fetchone()
+            if row is None:
+                raise CatalogNotFoundError(f"Catalog crawl run not found: {run_id}")
+            if row["status"] != "running":
+                raise CatalogValidationError(
+                    f"CrawlRun {run_id} is terminal ({row['status']}) and cannot transition"
+                )
+            connection.execute(
+                "UPDATE crawl_runs SET status = ?, finished_at = ?, page_count = ?, stop_reason = ?, "
+                "error_type = ?, error_message = ?, updated_at = ? WHERE id = ?",
+                (status, finished, page_count, stop_reason, error_type, error_message, timestamp, run_id),
+            )
+            updated = connection.execute("SELECT * FROM crawl_runs WHERE id = ?", (run_id,)).fetchone()
+        return self._crawl_run_from_row(updated)
+
+    @staticmethod
+    def _require_row(connection: sqlite3.Connection, table: str, row_id: int, label: str) -> sqlite3.Row:
+        row = connection.execute(f"SELECT * FROM {table} WHERE id = ?", (row_id,)).fetchone()
+        if row is None:
+            raise CatalogNotFoundError(f"Catalog {label} not found: {row_id}")
+        return row
+
+    @staticmethod
+    def _validate_nonempty(value: Any, field: str) -> None:
+        if not isinstance(value, str) or not value.strip():
+            raise CatalogValidationError(f"{field} must be a non-empty string")
+
+    @classmethod
+    def _validate_work_input(cls, work: WorkInput) -> None:
+        cls._validate_nonempty(work.work_key, "work_key")
+        cls._validate_nonempty(work.title, "title")
+        for field, value in (("author", work.author), ("genre", work.genre)):
+            if value is not None and not isinstance(value, str):
+                raise CatalogValidationError(f"{field} must be a string or null")
+
+    @staticmethod
+    def _validate_status(value: Any) -> None:
+        if value not in {"pending", "completed"}:
+            raise CatalogValidationError("status must be 'pending' or 'completed'")
+
+    @staticmethod
+    def _validate_access_mode(value: Any) -> None:
+        if value not in {"owned", "free", "quota", "paid", "unknown"}:
+            raise CatalogValidationError(
+                "access_mode must be one of owned, free, quota, paid, unknown"
+            )
+
+    @classmethod
+    def _validate_source_input(cls, source: SourceInput) -> None:
+        cls._validate_nonempty(source.site, "site")
+        cls._validate_nonempty(source.external_id, "external_id")
+        cls._validate_access_mode(source.access_mode)
+        if source.available is not None and not isinstance(source.available, bool):
+            raise CatalogValidationError("available must be a boolean")
+        for value in (source.free_until, source.access_checked_at, source.last_seen_at,
+                      source.quota_started_at, source.access_granted_until):
+            format_timestamp(value)
+
+    @classmethod
+    def _validate_source_target_input(cls, target: SourceTargetInput) -> None:
+        cls._validate_nonempty(target.backend, "backend")
+        cls._validate_nonempty(target.target_key, "target_key")
+        cls._validate_nonempty(target.locator, "locator")
+        if isinstance(target.priority, bool) or not isinstance(target.priority, int):
+            raise CatalogValidationError("priority must be an integer")
+        if target.priority < 0:
+            raise CatalogValidationError("priority must be >= 0")
+        if not isinstance(target.enabled, bool):
+            raise CatalogValidationError("enabled must be a boolean")
+
+    @classmethod
+    def _validate_artifact_input(cls, artifact: ArtifactInput) -> str:
+        cls._validate_nonempty(artifact.kind, "kind")
+        cls._validate_nonempty(artifact.format, "format")
+        cls._validate_nonempty(artifact.storage_backend, "storage_backend")
+        if not isinstance(artifact.sha256, str) or not _SHA256.fullmatch(artifact.sha256):
+            raise CatalogValidationError("sha256 must be exactly 64 hexadecimal characters")
+        if isinstance(artifact.byte_size, bool) or not isinstance(artifact.byte_size, int):
+            raise CatalogValidationError("byte_size must be an integer")
+        if artifact.byte_size < 0:
+            raise CatalogValidationError("byte_size must be >= 0")
+        cls._validate_artifact_state(artifact.state)
+        cls._validate_locator(artifact.locator, required=artifact.state == "present")
+        return artifact.sha256.lower()
+
+    @classmethod
+    def _validate_locator(cls, locator: Any, *, required: bool) -> None:
+        if locator is None:
+            if required:
+                raise CatalogValidationError("locator is required when state is present")
+            return
+        cls._validate_nonempty(locator, "locator")
+
+    @staticmethod
+    def _validate_artifact_state(value: Any) -> None:
+        if value not in {"present", "missing", "deleted", "unknown"}:
+            raise CatalogValidationError(
+                "state must be one of present, missing, deleted, unknown"
+            )
+
+    @staticmethod
+    def _validate_access_strategy(value: Any) -> None:
+        if value not in {"auto", "direct", "quota"}:
+            raise CatalogValidationError("access_strategy must be one of auto, direct, quota")
+
+    @staticmethod
+    def _validate_run_status(value: Any) -> None:
+        if value not in {"running", "succeeded", "failed"}:
+            raise CatalogValidationError("status must be one of running, succeeded, failed")
+
+    @staticmethod
+    def _validate_page_count(value: Any, *, required: bool) -> None:
+        if value is None and not required:
+            return
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise CatalogValidationError("page_count must be an integer")
+        if value < 0:
+            raise CatalogValidationError("page_count must be >= 0")
+
+    @staticmethod
+    def _coerce_mapping(value: Any, cls: type, label: str, fields: Mapping[str, Any] | None = None):
+        values: dict[str, Any] = {}
+        if value is not None:
+            if isinstance(value, cls):
+                values.update({name: getattr(value, name) for name in cls.__dataclass_fields__})
+            elif isinstance(value, Mapping):
+                values.update(value)
+            else:
+                raise CatalogValidationError(f"{label} must be {cls.__name__} or a mapping")
+        if fields:
+            values.update(fields)
+        allowed = set(cls.__dataclass_fields__)
+        unknown = set(values) - allowed
+        if unknown:
+            raise CatalogValidationError(f"Unknown {label} field(s): {', '.join(sorted(unknown))}")
+        try:
+            return cls(**values)
+        except TypeError as exc:
+            raise CatalogValidationError(str(exc)) from exc
+
+    @classmethod
+    def _coerce_work_input(cls, work: WorkInput | Mapping[str, Any] | None,
+                           fields: Mapping[str, Any] | None = None) -> WorkInput:
+        return cls._coerce_mapping(work, WorkInput, "work", fields)
+
+    @classmethod
+    def _coerce_item_input(cls, item: ItemInput | Mapping[str, Any] | None,
+                           fields: Mapping[str, Any] | None = None) -> ItemInput:
+        return cls._coerce_mapping(item, ItemInput, "item", fields)
+
+    @classmethod
+    def _coerce_source_input(cls, source: SourceInput | Mapping[str, Any]) -> SourceInput:
+        return cls._coerce_mapping(source, SourceInput, "source")
+
+    @classmethod
+    def _coerce_source_target_input(cls, target: SourceTargetInput | Mapping[str, Any]) -> SourceTargetInput:
+        return cls._coerce_mapping(target, SourceTargetInput, "source target")
+
+    @classmethod
+    def _coerce_artifact_input(cls, artifact: ArtifactInput | Mapping[str, Any] | None,
+                               fields: Mapping[str, Any] | None = None) -> ArtifactInput:
+        return cls._coerce_mapping(artifact, ArtifactInput, "artifact", fields)
 
     @contextmanager
     def _connection(self, *, initialize_schema: bool = True):
@@ -653,21 +912,16 @@ class CatalogService:
         if not self.path.exists() or not self.path.is_file():
             raise CatalogNotFoundError(f"Catalog database not found: {self.path}")
         try:
-            connection = sqlite3.connect(
-                f"{self.path.resolve().as_uri()}?mode=ro", uri=True
-            )
+            connection = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
         except sqlite3.Error as exc:
             raise CatalogError(f"Could not open Catalog database '{self.path}': {exc}") from exc
         try:
-            version = schema.user_version(connection)
-            if version == 0:
+            if schema.user_version(connection) == 0:
                 tables = {
-                    row[0]
-                    for row in connection.execute(
-                        "SELECT name FROM sqlite_master "
-                        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                    row[0] for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
                     )
                 }
                 if not tables:
@@ -689,164 +943,8 @@ class CatalogService:
         return CatalogError(str(exc))
 
     @staticmethod
-    def _validate_nonempty(value: Any, field: str) -> None:
-        if not isinstance(value, str) or not value.strip():
-            raise CatalogValidationError(f"{field} must be a non-empty string")
-
-    @classmethod
-    def _validate_status(cls, value: Any) -> None:
-        if value not in {"pending", "completed"}:
-            raise CatalogValidationError("status must be 'pending' or 'completed'")
-
-    @classmethod
-    def _validate_access_mode(cls, value: Any) -> None:
-        if value not in {"owned", "free", "quota", "paid", "unknown"}:
-            raise CatalogValidationError(
-                "access_mode must be one of owned, free, quota, paid, unknown"
-            )
-
-    @classmethod
-    def _validate_source_input(cls, source: SourceInput) -> None:
-        cls._validate_nonempty(source.site, "site")
-        cls._validate_nonempty(source.external_id, "external_id")
-        cls._validate_access_mode(source.access_mode)
-        if source.available is not None and not isinstance(source.available, bool):
-            raise CatalogValidationError("available must be a boolean")
-        for value in (
-            source.free_until,
-            source.access_checked_at,
-            source.last_seen_at,
-            source.quota_started_at,
-            source.access_granted_until,
-        ):
-            format_timestamp(value)
-
-    @staticmethod
-    def _coerce_item_input(
-        item: ItemInput | Mapping[str, Any] | None,
-        fields: Mapping[str, Any] | None = None,
-    ) -> ItemInput:
-        values: dict[str, Any] = {}
-        if item is not None:
-            if isinstance(item, ItemInput):
-                values.update({name: getattr(item, name) for name in ItemInput.__dataclass_fields__})
-            elif isinstance(item, Mapping):
-                values.update(item)
-            else:
-                raise CatalogValidationError("item must be ItemInput or a mapping")
-        if fields:
-            values.update(fields)
-        allowed = set(ItemInput.__dataclass_fields__)
-        unknown = set(values) - allowed
-        if unknown:
-            raise CatalogValidationError(f"Unknown item field(s): {', '.join(sorted(unknown))}")
-        return ItemInput(**values)
-
-    @staticmethod
-    def _coerce_source_input(source: SourceInput | Mapping[str, Any]) -> SourceInput:
-        if isinstance(source, SourceInput):
-            return source
-        if not isinstance(source, Mapping):
-            raise CatalogValidationError("source must be SourceInput or a mapping")
-        allowed = set(SourceInput.__dataclass_fields__)
-        unknown = set(source) - allowed
-        if unknown:
-            raise CatalogValidationError(f"Unknown source field(s): {', '.join(sorted(unknown))}")
-        try:
-            return SourceInput(**source)
-        except TypeError as exc:
-            raise CatalogValidationError(str(exc)) from exc
-
-    @staticmethod
-    def _coerce_source_target_input(
-        target: SourceTargetInput | Mapping[str, Any],
-    ) -> SourceTargetInput:
-        if isinstance(target, SourceTargetInput):
-            return target
-        if not isinstance(target, Mapping):
-            raise CatalogValidationError("target must be SourceTargetInput or a mapping")
-        allowed = set(SourceTargetInput.__dataclass_fields__)
-        unknown = set(target) - allowed
-        if unknown:
-            raise CatalogValidationError(
-                f"Unknown source target field(s): {', '.join(sorted(unknown))}"
-            )
-        try:
-            return SourceTargetInput(**target)
-        except TypeError as exc:
-            raise CatalogValidationError(str(exc)) from exc
-
-    @classmethod
-    def _validate_source_target_input(cls, target: SourceTargetInput) -> None:
-        cls._validate_nonempty(target.backend, "backend")
-        cls._validate_nonempty(target.locator, "locator")
-        if isinstance(target.priority, bool) or not isinstance(target.priority, int):
-            raise CatalogValidationError("priority must be an integer")
-        if target.priority < 0:
-            raise CatalogValidationError("priority must be >= 0")
-        if not isinstance(target.enabled, bool):
-            raise CatalogValidationError("enabled must be a boolean")
-
-    @staticmethod
-    def _update_item_metadata(
-        connection: sqlite3.Connection, item_id: int, item: ItemInput, timestamp: str
-    ) -> None:
-        CatalogService._update_item_metadata_mapping(
-            connection,
-            item_id,
-            {
-                "canonical_title": item.canonical_title,
-                "author": item.author,
-                "genre": item.genre,
-                "kind": item.kind,
-                "order_key": item.order_key,
-                "order_label": item.order_label,
-            },
-            timestamp,
-        )
-
-    @staticmethod
-    def _update_item_metadata_mapping(
-        connection: sqlite3.Connection,
-        item_id: int,
-        metadata: Mapping[str, Any],
-        timestamp: str,
-    ) -> None:
-        allowed = {"canonical_title", "author", "genre", "kind", "order_key", "order_label"}
-        changed = [field for field in metadata if field in allowed and metadata[field] is not None]
-        if not changed:
-            return
-        assignments = [f"{field} = ?" for field in changed]
-        values = [metadata[field] for field in changed]
-        assignments.append("updated_at = ?")
-        values.extend([timestamp, item_id])
-        connection.execute(
-            "UPDATE items SET " + ", ".join(assignments) + " WHERE id = ?", values
-        )
-
-    @staticmethod
-    def _update_source_external_state(
-        connection: sqlite3.Connection,
-        existing: sqlite3.Row,
-        source: SourceInput,
-        *,
-        timestamp: str,
-        default_last_seen: str,
-    ) -> None:
-        connection.execute(
-            "UPDATE sources SET discovery_key = ?, access_mode = ?, free_until = ?, "
-            "available = ?, access_checked_at = ?, last_seen_at = ?, updated_at = ? WHERE id = ?",
-            (
-                source.discovery_key,
-                source.access_mode,
-                format_timestamp(source.free_until),
-                int(source.available) if source.available is not None else existing["available"],
-                format_timestamp(source.access_checked_at),
-                default_last_seen,
-                timestamp,
-                existing["id"],
-            ),
-        )
+    def _work_from_row(row: sqlite3.Row) -> Work:
+        return Work(**dict(row))
 
     @staticmethod
     def _item_from_row(row: sqlite3.Row) -> Item:
@@ -863,3 +961,11 @@ class CatalogService:
         values = dict(row)
         values["enabled"] = bool(values["enabled"])
         return SourceTarget(**values)
+
+    @staticmethod
+    def _crawl_run_from_row(row: sqlite3.Row) -> CrawlRun:
+        return CrawlRun(**dict(row))
+
+    @staticmethod
+    def _artifact_from_row(row: sqlite3.Row) -> Artifact:
+        return Artifact(**dict(row))

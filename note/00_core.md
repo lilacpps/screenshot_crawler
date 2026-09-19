@@ -553,21 +553,25 @@ authority:
 
 CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disable`を提供する。書き込みは同一directory内のtemporary fileをfsyncして`os.replace`する。Watchlist操作はCatalogを読み書きせず、remove/disableでもCatalog rowを削除しない。
 
-### 22.2 Catalog（実装済み）
+### 22.2 Catalog（Schema v3 Phase 1実装済み）
 
-`CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、CRUD/upsertを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。
+`CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、v3 CRUDを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。Schema v2 DB、v1 DB、未知のversionはmigrationせず拒否する。v2からの再構築はbackup後にfull discoveryで行う。
 
-Schema v2のdomain tableは`items`、`sources`、`source_targets`の3つを持つ。`canonical_title`と`kind`はDiscoveryで取得不能な場合を許容してNULL可、`status`は`pending`/`completed`に限定する。`sources`の`access_mode`は`owned`/`free`/`quota`/`paid`/`unknown`に限定し、`UNIQUE(site, external_id)`と`items.id`へのforeign keyを持つ。source identityは引き続き`(site, external_id)`であり、取得経路のURLはSourceに保存しない。
+Schema v3のdomain tableは`works`、`items`、`sources`、`source_targets`、`crawl_runs`、`artifacts`の6つを持つ。Workがstableな`work_key` / title / author / genreを保持し、ItemはWork配下の取得単位として`item_title`、kind、order、statusを保持する。v2の`canonical_title`、Itemのauthor/genre、`local_path`は存在しない。Itemの`completed`は運用上の取得済み状態で、Artifactの移動・missing・deletedではpendingへ戻さない。
 
-`upsert_item_source()`は新規item + sourceを1 transactionで作成する。既存sourceの場合はaccess state、availability、external timestamps、discovery scopeと取得できたitem metadataだけを更新し、`items.status`、`local_path`、`completed_at`は更新しない。`quota_started_at` と `access_granted_until` は既存値を保持し、新規sourceではNULLで開始する。`update_source_external_state()`はquota stateを引数に持たないexternal state専用patchで、`record_quota_access()`はsourceのquota local stateと`updated_at`だけを更新し、`mark_item_completed()`はlocal stateを更新する。
+`Source`のidentityは`(site, external_id)`で、access stateとquota local stateを分離する。`update_source_external_state()`はquota stateを変更せず、`record_quota_access()`はquota stateだけを更新し、`mark_sources_unavailable_except()`は指定Discovery scope内のmissing sourceだけをunavailable化する。
 
-`source_targets`はsourceごとの取得経路をopaqueな`backend` / `locator`として保持する。`(source_id, backend)`がtarget identityで、`priority`（小さい値を優先する意味だけを保持）と`enabled`を保存する。`CatalogService`は`create_source_target()`、`upsert_source_target()`、`find_source_target()`、`get_source_target()`、`list_source_targets()`を提供するが、target selectionやlocatorの解釈は行わない。targetの更新はsourceのaccess/quota/local stateから独立している。
+`source_targets`はopaqueな`backend` / `target_key` / `locator`を保持し、identityは`(source_id, backend, target_key)`である。`CatalogService`はcreate/upsert/find/get/listを提供するが、target selectionやlocatorの解釈は行わない。
+
+`crawl_runs`はItem/Source/Targetの整合性を検証して作成時snapshotを保存し、`running -> succeeded|failed`だけを許可する。`artifacts`はbinary本体を保存せず、SHA-256、byte size、storage backend、locator、stateを保持する。手動importのためcrawl runなしを許容し、Artifact更新はItem/CrawlRun statusを変更しない。
+
+このPhaseではCatalog packageとCatalog単体テストだけをv3へ移行した。Discovery、Batch、Catalog Export、CLIの既存callerはまだv2 API前提であり、後続PhaseでWork-aware / v3対応へ移行する。
 
 Batch Planner用に `read_items_and_sources(site=...)` と `read_items_sources_and_targets(site=...)` を提供する。後者は既存Catalogをread-only接続で検証し、items全件、指定siteのsources、関連するsource_targetsを取得する。Batch Planner側では指定siteのsourceを1件以上持つitemだけをsite-scopedな母集団にし、別site専用itemとsourceなしのorphan itemを`no_source` skipに含めない。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
 
 Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` がSQLiteをread-onlyで検証・読み込みし、`items LEFT JOIN sources LEFT JOIN source_targets` を `item_id ASC, source_id ASC, target_id ASC` で並べたflat CSV snapshotを生成する。原則1行は1 targetで、sourceにtargetがない場合とsourceなしitemも情報を残す。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `target_enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力 `catalog-export.csv` であり、CSVからCatalogへ戻す機能はない。旧`url`列は出力しない。
 
-日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`2`だけをサポートし、v1を含む他versionはmigrationせず明示的に失敗する。v2で`items` / `sources` / `source_targets`または必要columnが欠けるDBも拒否する。Alembic等のmigration frameworkは導入していない。
+日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`3`だけをサポートし、v1/v2/未知versionはmigrationせず明示的に失敗する。v3では6 tables、required columns、v2 removed columns不存在、`source_targets.target_key`を検証する。Alembic等のmigration frameworkは導入していない。
 
 採用した上位flow:
 
@@ -593,7 +597,7 @@ Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framewor
 
 - Discovery対象は明示Watchlistだけ
 - Watchlist targetはstable `key` を持つ
-- Catalog v2は `items / sources / source_targets` の3テーブル
+- Catalog v3 Phase 1は `works / items / sources / source_targets / crawl_runs / artifacts` の6テーブル
 - full syncはcomplete時だけmissing sourceをunavailable化
 - 現行incremental実装はlatest側から異なるknown source 2件連続で停止し、同一stable identityの重複観測はstreakに加算しない
 - 採用仕様ではdefault known-streakを維持しつつ、site固有access遷移に必要なstable boundary hookを許容する。BookWalker Discoveryはこのhookを利用する

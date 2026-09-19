@@ -1,4 +1,4 @@
-"""Catalog input and row models."""
+"""Catalog v3 input and row models."""
 
 from __future__ import annotations
 
@@ -8,14 +8,45 @@ from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
-class ItemInput:
-    canonical_title: str | None = None
+class WorkInput:
+    work_key: str
+    title: str
     author: str | None = None
     genre: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Work:
+    id: int
+    work_key: str
+    title: str
+    author: str | None
+    genre: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ItemInput:
+    item_title: str | None = None
     kind: str | None = None
     order_key: str | None = None
     order_label: str | None = None
     status: str = "pending"
+
+
+@dataclass(frozen=True, slots=True)
+class Item:
+    id: int
+    work_id: int
+    item_title: str | None
+    kind: str | None
+    order_key: str | None
+    order_label: str | None
+    status: str
+    completed_at: str | None
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,25 +59,8 @@ class SourceInput:
     available: bool | None = None
     access_checked_at: datetime | str | None = None
     last_seen_at: datetime | str | None = None
-    # Batch/Site Policy state. Discovery upsert must not write these fields.
     quota_started_at: datetime | str | None = None
     access_granted_until: datetime | str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Item:
-    id: int
-    canonical_title: str | None
-    author: str | None
-    genre: str | None
-    kind: str | None
-    order_key: str | None
-    order_label: str | None
-    status: str
-    local_path: str | None
-    completed_at: str | None
-    created_at: str
-    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +85,7 @@ class Source:
 class SourceTargetInput:
     backend: str
     locator: str
+    target_key: str = "default"
     priority: int = 100
     enabled: bool = True
 
@@ -80,6 +95,7 @@ class SourceTarget:
     id: int
     source_id: int
     backend: str
+    target_key: str
     locator: str
     priority: int
     enabled: bool
@@ -88,7 +104,61 @@ class SourceTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class CrawlRun:
+    id: int
+    item_id: int
+    source_id: int
+    target_id: int
+    site_snapshot: str
+    external_id_snapshot: str
+    backend_snapshot: str
+    target_key_snapshot: str
+    locator_snapshot: str
+    access_strategy: str
+    status: str
+    started_at: str
+    finished_at: str | None
+    page_count: int | None
+    stop_reason: str | None
+    error_type: str | None
+    error_message: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactInput:
+    kind: str
+    format: str
+    sha256: str
+    byte_size: int
+    storage_backend: str
+    locator: str | None = None
+    state: str = "unknown"
+    last_verified_at: datetime | str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Artifact:
+    id: int
+    item_id: int
+    crawl_run_id: int | None
+    kind: str
+    format: str
+    sha256: str
+    byte_size: int
+    storage_backend: str
+    locator: str | None
+    state: str
+    last_verified_at: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class CatalogRecord:
+    """Small legacy-shaped container retained for import stability only."""
+
     item: Item
     source: Source
 

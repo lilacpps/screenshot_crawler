@@ -4,20 +4,28 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
-CREATE TABLE items (
+CREATE TABLE works (
     id INTEGER PRIMARY KEY,
-    canonical_title TEXT,
+    work_key TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
     author TEXT,
     genre TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE items (
+    id INTEGER PRIMARY KEY,
+    work_id INTEGER NOT NULL REFERENCES works(id),
+    item_title TEXT,
     kind TEXT,
     order_key TEXT,
     order_label TEXT,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'completed')),
-    local_path TEXT,
     completed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -40,67 +48,107 @@ CREATE TABLE sources (
     access_granted_until TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    UNIQUE (site, external_id)
+    UNIQUE(site, external_id)
 );
 
 CREATE TABLE source_targets (
     id INTEGER PRIMARY KEY,
     source_id INTEGER NOT NULL REFERENCES sources(id),
     backend TEXT NOT NULL,
+    target_key TEXT NOT NULL DEFAULT 'default',
     locator TEXT NOT NULL,
     priority INTEGER NOT NULL DEFAULT 100
-        CHECK (priority >= 0),
+        CHECK(priority >= 0),
     enabled INTEGER NOT NULL DEFAULT 1
-        CHECK (enabled IN (0, 1)),
+        CHECK(enabled IN (0, 1)),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    UNIQUE (source_id, backend)
+    UNIQUE(source_id, backend, target_key)
 );
+
+CREATE TABLE crawl_runs (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES items(id),
+    source_id INTEGER NOT NULL REFERENCES sources(id),
+    target_id INTEGER NOT NULL REFERENCES source_targets(id),
+    site_snapshot TEXT NOT NULL,
+    external_id_snapshot TEXT NOT NULL,
+    backend_snapshot TEXT NOT NULL,
+    target_key_snapshot TEXT NOT NULL,
+    locator_snapshot TEXT NOT NULL,
+    access_strategy TEXT NOT NULL
+        CHECK(access_strategy IN ('auto', 'direct', 'quota')),
+    status TEXT NOT NULL
+        CHECK(status IN ('running', 'succeeded', 'failed')),
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    page_count INTEGER CHECK(page_count IS NULL OR page_count >= 0),
+    stop_reason TEXT,
+    error_type TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE artifacts (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES items(id),
+    crawl_run_id INTEGER REFERENCES crawl_runs(id),
+    kind TEXT NOT NULL,
+    format TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    byte_size INTEGER NOT NULL CHECK(byte_size >= 0),
+    storage_backend TEXT NOT NULL,
+    locator TEXT,
+    state TEXT NOT NULL
+        CHECK(state IN ('present', 'missing', 'deleted', 'unknown')),
+    last_verified_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_items_work_id ON items(work_id);
+CREATE INDEX idx_sources_item_id ON sources(item_id);
+CREATE INDEX idx_sources_site ON sources(site);
+CREATE INDEX idx_sources_discovery_key ON sources(discovery_key);
+CREATE INDEX idx_source_targets_source_id ON source_targets(source_id);
+CREATE INDEX idx_crawl_runs_item_id ON crawl_runs(item_id);
+CREATE INDEX idx_crawl_runs_source_id ON crawl_runs(source_id);
+CREATE INDEX idx_crawl_runs_target_id ON crawl_runs(target_id);
+CREATE INDEX idx_artifacts_item_id ON artifacts(item_id);
+CREATE INDEX idx_artifacts_crawl_run_id ON artifacts(crawl_run_id);
 """
 
 _REQUIRED_COLUMNS = {
+    "works": {"id", "work_key", "title", "author", "genre", "created_at", "updated_at"},
     "items": {
-        "id",
-        "canonical_title",
-        "author",
-        "genre",
-        "kind",
-        "order_key",
-        "order_label",
-        "status",
-        "local_path",
-        "completed_at",
-        "created_at",
-        "updated_at",
+        "id", "work_id", "item_title", "kind", "order_key", "order_label", "status",
+        "completed_at", "created_at", "updated_at",
     },
     "sources": {
-        "id",
-        "item_id",
-        "site",
-        "external_id",
-        "discovery_key",
-        "access_mode",
-        "free_until",
-        "available",
-        "access_checked_at",
-        "last_seen_at",
-        "quota_started_at",
-        "access_granted_until",
-        "created_at",
-        "updated_at",
+        "id", "item_id", "site", "external_id", "discovery_key", "access_mode",
+        "free_until", "available", "access_checked_at", "last_seen_at", "quota_started_at",
+        "access_granted_until", "created_at", "updated_at",
     },
     "source_targets": {
-        "id",
-        "source_id",
-        "backend",
-        "locator",
-        "priority",
-        "enabled",
-        "created_at",
-        "updated_at",
+        "id", "source_id", "backend", "target_key", "locator", "priority", "enabled",
+        "created_at", "updated_at",
+    },
+    "crawl_runs": {
+        "id", "item_id", "source_id", "target_id", "site_snapshot", "external_id_snapshot",
+        "backend_snapshot", "target_key_snapshot", "locator_snapshot", "access_strategy",
+        "status", "started_at", "finished_at", "page_count", "stop_reason", "error_type",
+        "error_message", "created_at", "updated_at",
+    },
+    "artifacts": {
+        "id", "item_id", "crawl_run_id", "kind", "format", "sha256", "byte_size",
+        "storage_backend", "locator", "state", "last_verified_at", "created_at", "updated_at",
     },
 }
-_FORBIDDEN_COLUMNS = {"sources": {"url"}}
+
+_FORBIDDEN_COLUMNS = {
+    "items": {"canonical_title", "author", "genre", "local_path"},
+}
 
 
 class SchemaError(RuntimeError):
@@ -112,7 +160,7 @@ def user_version(connection: sqlite3.Connection) -> int:
 
 
 def initialize(connection: sqlite3.Connection) -> None:
-    """Create the schema or validate an existing Catalog without migrating it."""
+    """Create v3 or validate it; never migrate an existing schema."""
 
     version = user_version(connection)
     if version not in (0, SCHEMA_VERSION):
@@ -129,25 +177,25 @@ def initialize(connection: sqlite3.Connection) -> None:
     if version == SCHEMA_VERSION:
         missing_tables = set(_REQUIRED_COLUMNS) - tables
         if missing_tables:
-            names = ", ".join(sorted(missing_tables))
-            raise SchemaError(f"Catalog schema version 2 is missing table(s): {names}")
+            raise SchemaError(
+                f"Catalog schema version 3 is missing table(s): {', '.join(sorted(missing_tables))}"
+            )
         for table, required_columns in _REQUIRED_COLUMNS.items():
-            columns = {
-                row[1] for row in connection.execute(f"PRAGMA table_info({table})")
-            }
+            columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
             missing_columns = required_columns - columns
             if missing_columns:
-                names = ", ".join(sorted(missing_columns))
                 raise SchemaError(
-                    f"Catalog schema version 2 is missing {table} column(s): {names}"
+                    f"Catalog schema version 3 is missing {table} column(s): "
+                    f"{', '.join(sorted(missing_columns))}"
                 )
             forbidden_columns = _FORBIDDEN_COLUMNS.get(table, set()) & columns
             if forbidden_columns:
-                names = ", ".join(sorted(forbidden_columns))
                 raise SchemaError(
-                    f"Catalog schema version 2 has removed {table} column(s): {names}"
+                    f"Catalog schema version 3 has removed {table} column(s): "
+                    f"{', '.join(sorted(forbidden_columns))}"
                 )
         return
+
     if tables:
         raise SchemaError("Catalog contains unversioned tables and cannot be initialized safely")
 
