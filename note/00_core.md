@@ -17,7 +17,7 @@ read-only Batch planning and Manga ONE Policy. Phase
 
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
-最終同期: 2026-09-19
+最終同期: 2026-09-20
 
 ## 1. Scope
 
@@ -559,7 +559,7 @@ CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disa
 
 Schema v3のdomain tableは`works`、`items`、`sources`、`source_targets`、`crawl_runs`、`artifacts`の6つを持つ。Workがstableな`work_key` / title / author / genreを保持し、ItemはWork配下の取得単位として`item_title`、kind、order、statusを保持する。v2の`canonical_title`、Itemのauthor/genre、`local_path`は存在しない。Itemの`completed`は運用上の取得済み状態で、Artifactの移動・missing・deletedではpendingへ戻さない。
 
-`Source`のidentityは`(site, external_id)`で、access stateとquota local stateを分離する。`update_source_external_state()`はquota stateを変更せず、`record_quota_access()`はquota stateだけを更新し、`mark_sources_unavailable_except()`は指定Discovery scope内のmissing sourceだけをunavailable化する。
+`Source`のidentityは`(site, external_id)`で、access stateとquota local stateを分離する。`update_source_external_state()`はquota stateを変更せず、`record_quota_access()`はquota stateだけを更新し、`clear_quota_access()`は指定timestampとのcompare-and-setが成功した場合だけquota stateをNULL化する。`mark_sources_unavailable_except()`は指定Discovery scope内のmissing sourceだけをunavailable化する。
 
 `source_targets`はopaqueな`backend` / `target_key` / `locator`を保持し、identityは`(source_id, backend, target_key)`である。`CatalogService`はcreate/upsert/find/get/listを提供するが、target selectionやlocatorの解釈は行わない。
 
@@ -620,6 +620,8 @@ Manga ONE Policyはsite-wide local quotaを4枠、09:00/21:00 JSTのhalf-open wi
 CLIは `batch plan --site mangaone --catalog catalog.sqlite` と `batch run --site mangaone --catalog catalog.sqlite` を提供する。`batch plan`はread-onlyで、`batch run`はcandidateをsequentialに実行し、quota stateをCrawler開始直前に保存し、crawl + packaging成功後だけcompletedを更新する。`--limit N`は先頭N件に制限し、失敗時は後続を実行しない。
 
 BookWalker Discoveryはseries listから商品URLを列挙し、商品ページのreader controlを観測してCatalogへ反映する。BookWalker Site Policyはsite-wide 1 quota / 05:00 JST half-open windowを評価し、`access_granted_until`をdirect判定に使わない。Batch Executorはquota candidateの`quota_started_at`をCrawler開始前に保存し、`access_granted_until=NULL`を許容する。同一window内の失敗はrefundせず、Executorの現在Catalog再検証で同一candidateをCrawlerへ再投入しない。Manga ONEの24時間grant挙動は維持する。実サイトquota clickは自動検証していない。
+
+誤ったlogout状態のBatch実行などで、実際のreader消費ではなくCatalog上の予約だけを戻す必要がある場合は、`scripts/restore_bookwalker_quota.py`を使う。既定はdry-runで、`--crawl-run-id`（failedかつquotaのCrawlRun）または`--source-id` / `--external-id`を指定し、`--apply`時には先にverified SQLite backupを作る。修復対象は`quota_started_at`と`access_granted_until`だけで、`access_mode`、CrawlRun、Item status、Artifactは変更しない。これはBookWalkerサーバー側の10分利用を巻き戻す機能ではない。executor実行中の同時修復は避ける。
 
 ### 22.3 Discovery framework（実装済み）
 

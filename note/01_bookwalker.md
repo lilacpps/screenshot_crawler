@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-09-19
+最終同期: 2026-09-20
 
 ## 1. 目的と現在のscope
 
@@ -824,6 +824,14 @@ BookWalkerではManga ONEのようなsource単位grantを仮定せず、
 Batch Executorはgrantなしquota policyを許容し、`quota_started_at`のみをreader entry前に保存する。
 
 manual browserや別clientでの10分消費はCatalogから観測できない。
+
+Catalog上の誤ったquota予約を明示的に戻す運用には
+`scripts/restore_bookwalker_quota.py`を使う。既定はdry-runで、failedなquota
+`CrawlRun`を`--crawl-run-id`で指定して確認し、`--apply`時だけ自動backup後に
+`quota_started_at` / `access_granted_until`をNULL化する。CrawlRun、Item status、
+access mode、Artifactは変更しない。これはlocal reservationの修復であり、
+BookWalkerサーバー側で既に消費された10分をrefundするものではない。通常のBatch
+Executorは引き続き同一window内のautomatic refund/retryを行わない。
 
 ### 20.4.1 Series-list live smoke and first-volume inference
 

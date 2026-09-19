@@ -433,6 +433,36 @@ class CatalogService:
             row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
         return self._source_from_row(row)
 
+    def clear_quota_access(
+        self,
+        source_id: int,
+        *,
+        expected_quota_started_at: datetime | str,
+    ) -> Source:
+        """Clear one recorded quota reservation after an explicit repair.
+
+        The expected timestamp makes the repair compare-and-set style: a
+        concurrent or newer quota reservation is never silently cleared.
+        ``access_mode`` and all crawl history remain unchanged.
+        """
+
+        expected = format_timestamp(expected_quota_started_at)
+        if expected is None:
+            raise CatalogValidationError("expected_quota_started_at is required")
+        with self._connection() as connection:
+            self._require_row(connection, "sources", source_id, "source")
+            cursor = connection.execute(
+                "UPDATE sources SET quota_started_at = NULL, access_granted_until = NULL, "
+                "updated_at = ? WHERE id = ? AND quota_started_at = ?",
+                (format_timestamp(now_jst()), source_id, expected),
+            )
+            if cursor.rowcount != 1:
+                raise CatalogValidationError(
+                    "Quota reservation changed or is already clear; refusing to overwrite it"
+                )
+            row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+        return self._source_from_row(row)
+
     def mark_sources_unavailable_except(
         self, *, site: str, discovery_key: str, observed_external_ids: Collection[str]
     ) -> int:

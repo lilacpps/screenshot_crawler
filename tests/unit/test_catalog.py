@@ -147,6 +147,40 @@ def test_source_identity_external_state_quota_and_reconciliation(tmp_path: Path)
     assert service.get_source(source.id).available is False
 
 
+def test_clear_quota_access_is_compare_and_set_and_preserves_source_identity(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(work_id=work.id)
+    source = service.create_source(
+        SourceInput(
+            site="bookwalker",
+            external_id="book-1",
+            access_mode="quota",
+            quota_started_at="2026-09-20T08:00:00+09:00",
+            access_granted_until="2026-09-21T08:00:00+09:00",
+        ),
+        item_id=item.id,
+    )
+
+    cleared = service.clear_quota_access(
+        source.id,
+        expected_quota_started_at="2026-09-20T08:00:00+09:00",
+    )
+
+    assert cleared.access_mode == "quota"
+    assert cleared.quota_started_at is None
+    assert cleared.access_granted_until is None
+    assert service.get_source(source.id).item_id == source.item_id
+
+    with pytest.raises(ValueError, match="already clear"):
+        service.clear_quota_access(
+            source.id,
+            expected_quota_started_at="2026-09-20T08:00:00+09:00",
+        )
+
+
 def test_source_unique_identity_and_partial_validation(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     work = service.create_work(WorkInput(work_key="w", title="Work"))
