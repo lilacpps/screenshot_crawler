@@ -94,6 +94,31 @@ def test_pending_only_and_basic_access_modes(tmp_path: Path) -> None:
     assert completed.id == 2
 
 
+def test_site_scoped_plan_ignores_other_site_and_orphan_items(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    mangaone_item, _ = add_source(
+        service,
+        item=ItemInput(canonical_title="mangaone"),
+        external_id="mangaone",
+        access_mode="free",
+    )
+    bookwalker_item = service.create_item(ItemInput(canonical_title="bookwalker"))
+    service.create_source(
+        SourceInput(site="bookwalker", external_id="bookwalker"),
+        item_id=bookwalker_item.id,
+    )
+    orphan_item = service.create_item(ItemInput(canonical_title="orphan"))
+
+    plan = plan_for(service)
+
+    planned_item_ids = {candidate.item_id for candidate in plan.candidates}
+    skipped_item_ids = {skipped.item_id for skipped in plan.skipped}
+    assert planned_item_ids == {mangaone_item.id}
+    assert bookwalker_item.id not in planned_item_ids | skipped_item_ids
+    assert orphan_item.id not in planned_item_ids | skipped_item_ids
+    assert all(skipped.reason != "no_source" for skipped in plan.skipped)
+
+
 def test_source_priority_and_metadata_mapping(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     item = service.create_item(

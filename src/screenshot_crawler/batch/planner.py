@@ -47,12 +47,15 @@ class BatchPlanner:
         targets_by_source: dict[int, list[SourceTarget]] = defaultdict(list)
         for target in targets:
             targets_by_source[target.source_id].append(target)
+        site_item_ids = set(sources_by_item)
         plan = BatchPlan()
         try:
             quota_available = policy.available_quota(sources, current)
             plan.quota_available = quota_available
             selections: list[_Selection] = []
             for item in items:
+                if item.id not in site_item_ids:
+                    continue
                 if item.status != "pending":
                     plan.skipped.append(BatchSkipped(item.id, None, item.status))
                     continue

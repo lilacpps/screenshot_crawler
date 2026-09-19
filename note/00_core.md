@@ -553,7 +553,7 @@ Schema v2のdomain tableは`items`、`sources`、`source_targets`の3つを持�
 
 `source_targets`はsourceごとの取得経路をopaqueな`backend` / `locator`として保持する。`(source_id, backend)`がtarget identityで、`priority`（小さい値を優先する意味だけを保持）と`enabled`を保存する。`CatalogService`は`create_source_target()`、`upsert_source_target()`、`find_source_target()`、`get_source_target()`、`list_source_targets()`を提供するが、target selectionやlocatorの解釈は行わない。targetの更新はsourceのaccess/quota/local stateから独立している。
 
-Batch Planner用に `read_items_and_sources(site=...)` と `read_items_sources_and_targets(site=...)` を提供する。後者は既存Catalogをread-only接続で検証し、items全件、指定siteのsources、関連するsource_targetsを取得する。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
+Batch Planner用に `read_items_and_sources(site=...)` と `read_items_sources_and_targets(site=...)` を提供する。後者は既存Catalogをread-only接続で検証し、items全件、指定siteのsources、関連するsource_targetsを取得する。Batch Planner側では指定siteのsourceを1件以上持つitemだけをsite-scopedな母集団にし、別site専用itemとsourceなしのorphan itemを`no_source` skipに含めない。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
 
 Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` がSQLiteをread-onlyで検証・読み込みし、`items LEFT JOIN sources LEFT JOIN source_targets` を `item_id ASC, source_id ASC, target_id ASC` で並べたflat CSV snapshotを生成する。原則1行は1 targetで、sourceにtargetがない場合とsourceなしitemも情報を残す。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `target_enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力 `catalog-export.csv` であり、CSVからCatalogへ戻す機能はない。旧`url`列は出力しない。
 
