@@ -19,7 +19,12 @@ unsupported.
 
 2026-09-20にCatalog Schema v3 target architectureを採用し、runtimeも
 `works / items / sources / source_targets / crawl_runs / artifacts` の6テーブルを使用する。
-既存v2 DBはbackup後に破棄し、full discoveryから新規v3 DBを再構築する。v2からの自動migrationは行わない。
+既存v2 DBはschema-neutralなSQLite backup後に破棄し、full discoveryから新規v3 DBを再構築する。
+v2からの自動migrationは行わない。v3以降は明示的な`catalog migrate`とmigration前backupを使う。
+
+`catalog backup`はSQLite online backup APIでWALを含むCatalogをstandalone SQLiteへ保存し、
+`PRAGMA quick_check`で検証する。現在のmigration registryは空で、実際のv3→v4 migrationは未実装だが、
+明示migration runnerはtransaction、rollback、final schema validationを提供する。
 
 ## 1. 設計原則
 

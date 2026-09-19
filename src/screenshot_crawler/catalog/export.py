@@ -14,7 +14,6 @@ from typing import Any
 from screenshot_crawler.catalog import schema
 from screenshot_crawler.catalog.service import CatalogError
 
-
 EXPORT_COLUMNS = {
     "works": ("id", "work_key", "title", "author", "genre", "created_at", "updated_at"),
     "items": (

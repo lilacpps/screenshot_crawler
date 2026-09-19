@@ -22,7 +22,9 @@ from screenshot_crawler.batch import (
     BatchPlanningError,
 )
 from screenshot_crawler.catalog import CatalogError, CatalogService
+from screenshot_crawler.catalog.backup import backup_catalog, default_backup_path
 from screenshot_crawler.catalog.export import export_catalog_csv
+from screenshot_crawler.catalog.migrations import migrate_catalog
 from screenshot_crawler.core.browser import (
     DEFAULT_CDP_ENDPOINT,
     BrowserSession,
@@ -226,6 +228,35 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("catalog-export"),
         help="Directory for six CSV snapshots (default: catalog-export)",
+    )
+    catalog_backup = catalog_subparsers.add_parser(
+        "backup", help="Create a schema-neutral SQLite backup"
+    )
+    catalog_backup.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    catalog_backup.add_argument(
+        "--output",
+        type=Path,
+        help="Backup SQLite path (default: backup/<catalog>-backup-<JST timestamp>.sqlite)",
+    )
+    catalog_migrate = catalog_subparsers.add_parser(
+        "migrate", help="Explicitly migrate Catalog to the current schema"
+    )
+    catalog_migrate.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    catalog_migrate.add_argument(
+        "--backup-dir",
+        type=Path,
+        default=Path("backup"),
+        help="Directory for the automatic pre-migration backup (default: backup)",
     )
 
     batch = subparsers.add_parser("batch", help="Plan or execute Catalog crawl candidates")
@@ -638,6 +669,23 @@ def _run_catalog(args: argparse.Namespace) -> None:
         for table in ("works", "items", "sources", "source_targets", "crawl_runs", "artifacts"):
             print(f"  {table}: {getattr(result, table)}")
         print(f"  output: {result.output_dir}")
+    elif args.catalog_action == "backup":
+        output = args.output or default_backup_path(args.catalog)
+        result = backup_catalog(args.catalog, output)
+        print("Catalog backup completed:")
+        print(f"  source: {result.source_path}")
+        print(f"  schema_version: {result.schema_version}")
+        print(f"  backup: {result.backup_path}")
+        print(f"  bytes: {result.byte_size}")
+    elif args.catalog_action == "migrate":
+        result = migrate_catalog(args.catalog, backup_dir=args.backup_dir)
+        status = "migrated" if result.migrated else "already current"
+        print("Catalog migration:")
+        print(f"  current_version: {result.from_version}")
+        print(f"  target_version: {result.to_version}")
+        print(f"  status: {status}")
+        if result.backup_path is not None:
+            print(f"  backup: {result.backup_path}")
 
 
 def _print_batch_plan(plan: BatchPlan, *, site: str) -> None:

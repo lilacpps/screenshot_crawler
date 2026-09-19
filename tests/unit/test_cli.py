@@ -178,6 +178,32 @@ def test_catalog_export_parser_accepts_defaults_and_overrides() -> None:
     assert custom.output_dir == Path("output/export")
 
 
+def test_catalog_backup_parser_accepts_default_and_optional_output() -> None:
+    defaults = _parser().parse_args(["catalog", "backup"])
+    custom = _parser().parse_args(
+        ["catalog", "backup", "--catalog", "custom.sqlite", "--output", "backup.sqlite"]
+    )
+
+    assert defaults.catalog_action == "backup"
+    assert defaults.catalog == Path("catalog.sqlite")
+    assert defaults.output is None
+    assert custom.catalog == Path("custom.sqlite")
+    assert custom.output == Path("backup.sqlite")
+
+
+def test_catalog_migrate_parser_accepts_defaults_and_backup_dir() -> None:
+    defaults = _parser().parse_args(["catalog", "migrate"])
+    custom = _parser().parse_args(
+        ["catalog", "migrate", "--catalog", "custom.sqlite", "--backup-dir", "snapshots"]
+    )
+
+    assert defaults.catalog_action == "migrate"
+    assert defaults.catalog == Path("catalog.sqlite")
+    assert defaults.backup_dir == Path("backup")
+    assert custom.catalog == Path("custom.sqlite")
+    assert custom.backup_dir == Path("snapshots")
+
+
 def test_batch_plan_parser_accepts_site_and_catalog() -> None:
     defaults = _parser().parse_args(["batch", "plan", "--site", "mangaone"])
     custom = _parser().parse_args(

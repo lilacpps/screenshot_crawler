@@ -553,9 +553,9 @@ authority:
 
 CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disable`を提供する。書き込みは同一directory内のtemporary fileをfsyncして`os.replace`する。Watchlist操作はCatalogを読み書きせず、remove/disableでもCatalog rowを削除しない。
 
-### 22.2 Catalog（Schema v3 Phase 1実装済み）
+### 22.2 Catalog（Schema v3 Phase 5 foundation実装済み）
 
-`CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、v3 CRUDを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。Schema v2 DB、v1 DB、未知のversionはmigrationせず拒否する。v2からの再構築はbackup後にfull discoveryで行う。
+`CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、v3 CRUDを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。通常のCatalogService / Discovery / Batch / Exportはunsupported schemaをmigrationせず拒否する。v2からの再構築は`catalog backup`後にfull discoveryで行う。
 
 Schema v3のdomain tableは`works`、`items`、`sources`、`source_targets`、`crawl_runs`、`artifacts`の6つを持つ。Workがstableな`work_key` / title / author / genreを保持し、ItemはWork配下の取得単位として`item_title`、kind、order、statusを保持する。v2の`canonical_title`、Itemのauthor/genre、`local_path`は存在しない。Itemの`completed`は運用上の取得済み状態で、Artifactの移動・missing・deletedではpendingへ戻さない。
 
@@ -571,7 +571,7 @@ Batch Planner用に `read_works_items_sources_and_targets(site=...)` を提供�
 
 Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` はSQLiteをread-onlyで検証・読み込みし、`catalog-export/` 配下へ `works.csv`、`items.csv`、`sources.csv`、`source_targets.csv`、`crawl_runs.csv`、`artifacts.csv` の6 CSV snapshotを出力する。各CSVはtable identityとforeign keyを保持し、履歴をflat JOINで直積化しない。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力directory `catalog-export` であり、既存snapshotを上書きせず、CSVからCatalogへ戻す機能はない。
 
-日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`3`だけをサポートし、v1/v2/未知versionはmigrationせず明示的に失敗する。v3では6 tables、required columns、v2 removed columns不存在、`source_targets.target_key`を検証する。Alembic等のmigration frameworkは導入していない。
+日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`3`だけを通常runtimeでサポートし、v1/v2/未知versionは明示的に失敗する。v3では6 tables、required columns、v2 removed columns不存在、`source_targets.target_key`を検証する。`catalog/backup.py`はschema-neutralなSQLite online backup、WAL-safe standalone化、quick_check、overwrite拒否を提供する。`catalog/migrations.py`は明示`catalog migrate`用のsequential runner、migration前automatic backup、single-transaction rollback、final validationを提供する。現在`MIGRATIONS={}`で実migrationはなく、v3はno-op、v2→v3はunsupportedである。
 
 採用した上位flow:
 

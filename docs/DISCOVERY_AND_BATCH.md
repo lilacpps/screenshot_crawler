@@ -1264,13 +1264,15 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 
 ## 16. Schema v3 transition policy
 
-Schema v3導入時は、現在のSchema v2 DBを日付付きbackupとして保持したうえで破棄し、新しいv3 DBを
-初期化してWatchlist全targetを `full` discoveryする。現段階では既存local stateの移行価値が低いため、
+Schema v3導入時は、現在のSchema v2 DBをschema-neutralなSQLite backupとして保持したうえで破棄し、
+新しいv3 DBを初期化してWatchlist全targetを `full` discoveryする。既存local stateの移行価値が低いため、
 v2→v3 migrationは実装しない。
 
-Schema v3以降はDBを運用データの正本として扱い、原則として破棄再構築しない。将来のschema変更は
-`PRAGMA user_version` を使った順次migration（例: v3→v4→v5）で行う。migration実行前にはSQLiteの
-consistent backupを作成し、成功後にschema/integrityを検証する。
+Schema v3以降はDBを運用データの正本として扱い、原則として破棄再構築しない。`catalog backup`は
+SQLite online backup API、WAL対応、overwrite拒否、quick_check検証を提供する。`catalog migrate`は
+`PRAGMA user_version`を使った順次migration（例: v3→v4→v5）を明示的に実行し、migration実行前に
+automatic backupを作成し、単一transactionのrollbackと成功後のschema/integrity検証を行う。
+現在の`SCHEMA_VERSION=3`ではmigration registryは空で、v3はno-op、v2→v3はunsupportedである。
 
 v3では将来ケースを先取りして過剰なtableを作らない。必要になった時点で以下のような追加tableを
 migrationで足せる境界を維持する。

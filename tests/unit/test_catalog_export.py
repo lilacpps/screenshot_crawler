@@ -110,13 +110,12 @@ def test_full_v3_graph_exports_six_lossless_csvs(tmp_path: Path) -> None:
 
     assert result.total_rows == 1 + 1 + 1 + 3 + 2 + 3
     assert result.output_dir == output_dir
-    assert set(path.name for path in output_dir.iterdir()) == set(EXPORT_FILENAMES)
+    assert {path.name for path in output_dir.iterdir()} == set(EXPORT_FILENAMES)
     for table, columns in EXPORT_COLUMNS.items():
         rows = read_export(output_dir / f"{table}.csv")
         assert list(rows[0]) == list(columns)
     works = read_export(output_dir / "works.csv")
     items = read_export(output_dir / "items.csv")
-    sources = read_export(output_dir / "sources.csv")
     targets = read_export(output_dir / "source_targets.csv")
     runs = read_export(output_dir / "crawl_runs.csv")
     artifacts = read_export(output_dir / "artifacts.csv")
