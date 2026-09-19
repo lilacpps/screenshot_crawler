@@ -319,7 +319,7 @@ incrementalでは未観測の過去sourceをunavailableにしない。
 ### 決定
 DiscoveryはURL、access mode、free期限、availability、last seen等のsite側stateを同期する。
 
-`completed`、`local_path`、`completed_at` 等のlocal artifact stateをDiscoveryで変更しない。
+`items.status`、`artifacts`、`completed_at` 等のlocal artifact stateをDiscoveryで変更しない。
 
 ### 理由
 site表示の変化によって、既に取得済みのlocal成果物状態が壊れることを防ぐため。

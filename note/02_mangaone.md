@@ -396,7 +396,7 @@ scan. A card href is parsed first; the live card fallback is the observed
 `/chapter/<chapter_id>.webp` image URL. The stable source identity is always
 `chapter_id`, and only the target `work_id` is accepted.
 
-Schema v2 integration keeps the observed chapter URL on the Web acquisition
+Schema v3 integration keeps the observed chapter URL on the Web acquisition
 route, not on `Source`: DiscoveryService upserts `source_targets` with
 `backend=web`, the latest URL as `locator`, priority `100`, and enabled state.
 The Batch Planner selects enabled Web targets by `(priority, id)` and the Web

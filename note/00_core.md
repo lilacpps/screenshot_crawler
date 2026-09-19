@@ -571,7 +571,7 @@ Batch Planner用に `read_works_items_sources_and_targets(site=...)` を提供�
 
 Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` はSQLiteをread-onlyで検証・読み込みし、`catalog-export/` 配下へ `works.csv`、`items.csv`、`sources.csv`、`source_targets.csv`、`crawl_runs.csv`、`artifacts.csv` の6 CSV snapshotを出力する。各CSVはtable identityとforeign keyを保持し、履歴をflat JOINで直積化しない。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力directory `catalog-export` であり、既存snapshotを上書きせず、CSVからCatalogへ戻す機能はない。
 
-日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`3`だけを通常runtimeでサポートし、v1/v2/未知versionは明示的に失敗する。v3では6 tables、required columns、v2 removed columns不存在、`source_targets.target_key`を検証する。`catalog/backup.py`はschema-neutralなSQLite online backup、WAL-safe standalone化、quick_check、overwrite拒否を提供する。`catalog/migrations.py`は明示`catalog migrate`用のsequential runner、migration前automatic backup、single-transaction rollback、final validationを提供する。現在`MIGRATIONS={}`で実migrationはなく、v3はno-op、v2→v3はunsupportedである。
+日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`3`だけを通常runtimeでサポートし、v1/v2/未知versionは明示的に失敗する。v3では6 tables、required columns、v2 removed columns不存在、`source_targets.target_key`を検証する。`catalog/backup.py`はschema-neutralなSQLite online backup、WAL-safe standalone化、quick_check、overwrite拒否を提供する。`catalog/migrations.py`は明示`catalog migrate`用のsequential runnerを持ち、path validation後に`BEGIN IMMEDIATE`を取得し、writer lock中にmigration前automatic backupを作成してから、single-transaction rollbackとfinal validationを行う。現在`MIGRATIONS={}`で実migrationはなく、v3はno-op、v2→v3はunsupportedである。
 
 採用した上位flow:
 
@@ -597,7 +597,7 @@ Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request
 
 - Discovery対象は明示Watchlistだけ
 - Watchlist targetはstable `key` と明示的な `work_key` / `label` を持つ
-- Catalog v3 Phase 3は `works / items / sources / source_targets / crawl_runs / artifacts` の6テーブル
+- Catalog v3 Phase 5は `works / items / sources / source_targets / crawl_runs / artifacts` の6テーブルをauthorityとする
 - full syncはcomplete時だけmissing sourceをunavailable化
 - 現行incremental実装はlatest側から異なるknown source 2件連続で停止し、同一stable identityの重複観測はstreakに加算しない
 - 採用仕様ではdefault known-streakを維持しつつ、site固有access遷移に必要なstable boundary hookを許容する。BookWalker Discoveryはこのhookを利用する

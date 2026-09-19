@@ -741,7 +741,7 @@ site-neutralなDiscoveryServiceが行う。
 Discoveryはseries listから商品詳細ページを開いてcontrolを観測するが、
 readerは開かない。まる読み10分timerをDiscoveryで開始しない。
 
-Schema v2では、DiscoveryServiceが商品recordの`DiscoveredSource.url`をWeb取得経路として
+Schema v3では、DiscoveryServiceが商品recordの`DiscoveredSource.url`をWeb取得経路として
 `source_targets`へ`backend=web`、`locator=<最新の商品URL>`、`priority=100`、
 `enabled=true`でupsertする。source identityは引き続き(site, external_id)であり、
 URL再観測では同じWeb targetのlocatorだけが更新される。Batch Plannerはenabledな

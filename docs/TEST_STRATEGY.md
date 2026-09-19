@@ -227,7 +227,7 @@ Browser Session移行のためにsite-specific viewer logicを変更しない。
 - incomplete full syncで既存sourceをunavailableにする
 - incrementalで未観測過去sourceをunavailableにする
 - cross-site duplicateを自動mergeする
-- Discoveryでcompleted/local_pathを上書きする
+- DiscoveryでItem completed statusやArtifact stateを上書きする
 - paid/unknown sourceを自動crawlする
 - quotaを誤って二重消費扱いする
 - active grantなのに新規 `quota` strategyを選ぶ
@@ -255,7 +255,7 @@ Browser Session移行のためにsite-specific viewer logicを変更しない。
 - `complete=true` で未観測sourceを `available=false` にする
 - `complete=false` では未観測sourceを変更しない
 - sourceを物理削除しない
-- completed/local_pathを維持する
+- completed statusとArtifact stateを維持する
 - `discovery_key` が異なるsourceへmissing判定を波及させない
 
 ### Incremental sync
@@ -296,7 +296,7 @@ Browser Session移行のためにsite-specific viewer logicを変更しない。
 - free/owned sourceで `access_strategy=direct`
 - Batchがdaily limit/reset ruleをCrawl Requestへ含めない
 - Catalog metadataをCrawl Requestのoptional output metadataへ入れられる
-- crawl成功 + packaging成功でcompleted/local_path更新
+- crawl成功 + packaging成功でCrawlRun/Artifactを確定し、Itemをcompletedへ更新
 - crawl失敗でpendingを維持
 - `item_id / source_id / archive path` の対応が維持される
 - Batchが既存Crawlerへsite-neutralなCrawl Requestを渡し、CrawlerRunnerへCatalog依存を追加しない

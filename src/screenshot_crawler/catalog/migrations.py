@@ -72,23 +72,19 @@ def _run_migrations(
         return MigrationResult(catalog_path, current_version, target_version, False, None)
 
     _validate_path_exists(current_version, target_version, migrations)
-    backup_path = _automatic_backup_path(
-        catalog_path, backup_dir, current_version, target_version
-    )
-    try:
-        backup_result = backup_catalog(catalog_path, backup_path)
-    except Exception as exc:
-        if isinstance(exc, CatalogMigrationError):
-            raise
-        raise CatalogMigrationError(
-            f"Could not create pre-migration backup for schema {current_version} -> "
-            f"{target_version}: {exc}"
-        ) from exc
-
+    backup_path = _automatic_backup_path(catalog_path, backup_dir, current_version, target_version)
     connection: sqlite3.Connection | None = None
+    backup_result = None
     try:
         connection = sqlite3.connect(catalog_path)
         connection.execute("BEGIN IMMEDIATE")
+        try:
+            backup_result = backup_catalog(catalog_path, backup_path)
+        except Exception as exc:
+            raise CatalogMigrationError(
+                f"Could not create pre-migration backup for schema {current_version} -> "
+                f"{target_version}: {exc}"
+            ) from exc
         version = current_version
         while version < target_version:
             migration = migrations[version]

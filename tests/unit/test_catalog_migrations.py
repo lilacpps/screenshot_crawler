@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.catalog import CatalogService
+from screenshot_crawler.catalog.backup import CatalogBackupError, backup_catalog
 from screenshot_crawler.catalog.migrations import (
     CatalogMigrationError,
     _run_migrations,
@@ -63,6 +64,79 @@ def test_injected_migration_creates_backup_before_update(tmp_path: Path) -> None
     with sqlite3.connect(result.backup_path) as backup:
         assert backup.execute("PRAGMA user_version").fetchone()[0] == 3
         assert backup.execute("SELECT value FROM marker").fetchone()[0] == "before"
+
+
+def test_backup_is_taken_while_migration_writer_lock_is_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "catalog.sqlite"
+    backup_dir = tmp_path / "backup"
+    make_database(path)
+    lock_observations: list[bool] = []
+
+    import screenshot_crawler.catalog.migrations as migration_module
+
+    def locked_backup(source: Path, destination: Path):
+        contender = sqlite3.connect(source, timeout=0.05)
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                contender.execute("BEGIN IMMEDIATE")
+            return backup_catalog(source, destination)
+        finally:
+            contender.close()
+
+    monkeypatch.setattr(migration_module, "backup_catalog", locked_backup)
+
+    def migration(connection: sqlite3.Connection) -> None:
+        lock_observations.append(connection.in_transaction)
+        connection.execute("UPDATE marker SET value = 'after'")
+
+    _run_migrations(
+        path,
+        target_version=4,
+        migrations={3: migration},
+        final_validator=lambda connection: None,
+        backup_dir=backup_dir,
+    )
+
+    assert lock_observations == [True]
+
+
+def test_backup_failure_rolls_back_lock_without_calling_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "catalog.sqlite"
+    backup_dir = tmp_path / "backup"
+    make_database(path)
+    migration_calls = 0
+
+    import screenshot_crawler.catalog.migrations as migration_module
+
+    def fail_backup(source: Path, destination: Path):
+        raise CatalogBackupError("simulated locked backup failure")
+
+    monkeypatch.setattr(migration_module, "backup_catalog", fail_backup)
+
+    def migration(connection: sqlite3.Connection) -> None:
+        nonlocal migration_calls
+        migration_calls += 1
+
+    with pytest.raises(CatalogMigrationError, match="simulated locked backup failure"):
+        _run_migrations(
+            path,
+            target_version=4,
+            migrations={3: migration},
+            final_validator=lambda connection: None,
+            backup_dir=backup_dir,
+        )
+
+    assert migration_calls == 0
+    assert not list(backup_dir.glob("*.sqlite"))
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("SELECT value FROM marker").fetchone()[0] == "before"
+        connection.execute("UPDATE marker SET value = 'after failure'")
+        connection.commit()
 
 
 def test_injected_migration_rolls_back_but_keeps_backup(tmp_path: Path) -> None:

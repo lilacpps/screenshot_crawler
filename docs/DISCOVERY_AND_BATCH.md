@@ -86,7 +86,7 @@ Discovery Adapter
 Catalog Service
         ↓
 catalog.sqlite
-  items / sources / source_targets
+  works / items / sources / source_targets / crawl_runs / artifacts
         ↓
 Batch Runner + Site Policy
         ↓
@@ -1165,7 +1165,7 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 - Batchがquota ruleそのものをCrawlerへ押し込まない
 - Crawlerのmetadata overrideでmanifest/source URLを偽装しない
 - Watchlist removeでCatalogをcascade deleteしない
-- `batch plan` は `items.status`、`local_path`、`completed_at`、`quota_started_at`、`access_granted_until` を変更しない
+- `batch plan` は `items.status`、`artifacts`、`completed_at`、`quota_started_at`、`access_granted_until` を変更しない
 - planner内のquota仮予約をCatalogへ永続化しない
 - BookWalker Discoveryでreaderを開いて10分timerを開始しない
 - BookWalkerの既知quota/ownedをtrial/unknown観測だけでdowngradeしない
@@ -1271,7 +1271,8 @@ v2→v3 migrationは実装しない。
 Schema v3以降はDBを運用データの正本として扱い、原則として破棄再構築しない。`catalog backup`は
 SQLite online backup API、WAL対応、overwrite拒否、quick_check検証を提供する。`catalog migrate`は
 `PRAGMA user_version`を使った順次migration（例: v3→v4→v5）を明示的に実行し、migration実行前に
-automatic backupを作成し、単一transactionのrollbackと成功後のschema/integrity検証を行う。
+complete migration pathを確認してから`BEGIN IMMEDIATE`でwriter lockを取得し、そのlock中に
+automatic backupを作成する。続いて単一transactionのrollbackと成功後のschema/integrity検証を行う。
 現在の`SCHEMA_VERSION=3`ではmigration registryは空で、v3はno-op、v2→v3はunsupportedである。
 
 v3では将来ケースを先取りして過剰なtableを作らない。必要になった時点で以下のような追加tableを
