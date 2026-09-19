@@ -113,6 +113,7 @@ def test_mangaone_native_capture_rejects_undecodable_bytes() -> None:
 class _CaptureLocator:
     def __init__(self, screenshot_bytes: bytes = b"fallback") -> None:
         self.screenshot_bytes = screenshot_bytes
+        self.screenshot_calls = 0
 
     async def evaluate(self, expression: str) -> object:
         if "instanceof HTMLCanvasElement" in expression:
@@ -120,10 +121,204 @@ class _CaptureLocator:
         raise AssertionError(f"unexpected locator evaluation: {expression}")
 
     async def screenshot(self, **_kwargs: object) -> bytes:
+        self.screenshot_calls += 1
         return self.screenshot_bytes
 
     async def bounding_box(self) -> dict[str, float]:
         return {"width": 720.0, "height": 1020.0}
+
+
+class _BodyResponse:
+    def __init__(self, url: str, outcomes: list[object]) -> None:
+        self.url = url
+        self.outcomes = outcomes
+        self.calls = 0
+
+    async def body(self) -> bytes | None:
+        self.calls += 1
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome  # type: ignore[return-value]
+
+
+async def _capture_one_source(
+    adapter: MangaOneAdapter,
+    monkeypatch: pytest.MonkeyPatch,
+    locator: _CaptureLocator,
+    source_url: str,
+) -> tuple[object, ...] | None:
+    async def visible_images(_page: Page) -> list[tuple[object, dict[str, object]]]:
+        return [
+            (
+                locator,
+                {
+                    "src": source_url,
+                    "x": 900.0,
+                    "naturalWidth": 720,
+                    "naturalHeight": 1020,
+                },
+            )
+        ]
+
+    monkeypatch.setattr(adapter, "_visible_page_images", visible_images)
+    return await adapter.capture_page(object())  # type: ignore[arg-type]
+
+
+def _register_body_response(
+    adapter: MangaOneAdapter,
+    response: _BodyResponse,
+) -> None:
+    adapter._source_responses[response.url] = response
+    adapter._source_response_tasks[response.url] = asyncio.create_task(
+        adapter._read_source_response(response)
+    )
+
+
+async def test_mangaone_source_capture_succeeds_on_initial_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _synthetic_webp(720, 1020)
+    locator = _CaptureLocator()
+    adapter = MangaOneAdapter()
+    response = _BodyResponse("blob:initial", [source])
+    _register_body_response(adapter, response)
+
+    captures = await _capture_one_source(adapter, monkeypatch, locator, response.url)
+
+    assert captures is not None
+    assert captures[0].data == source  # type: ignore[union-attr]
+    assert response.calls == 1
+    assert locator.screenshot_calls == 0
+
+
+async def test_mangaone_source_capture_retries_after_one_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _synthetic_webp(720, 1020)
+    locator = _CaptureLocator()
+    adapter = MangaOneAdapter()
+    adapter.source_response_retry_interval_ms = 0
+    response = _BodyResponse("blob:retry-once", [RuntimeError("temporary"), source])
+    _register_body_response(adapter, response)
+
+    captures = await _capture_one_source(adapter, monkeypatch, locator, response.url)
+
+    assert captures is not None
+    assert captures[0].data == source  # type: ignore[union-attr]
+    assert response.calls == 2
+    assert locator.screenshot_calls == 0
+
+
+async def test_mangaone_source_capture_retries_twice_before_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _synthetic_webp(720, 1020)
+    locator = _CaptureLocator()
+    adapter = MangaOneAdapter()
+    adapter.source_response_retry_interval_ms = 0
+    response = _BodyResponse(
+        "blob:retry-twice",
+        [RuntimeError("temporary 1"), None, source],
+    )
+    _register_body_response(adapter, response)
+
+    captures = await _capture_one_source(adapter, monkeypatch, locator, response.url)
+
+    assert captures is not None
+    assert captures[0].data == source  # type: ignore[union-attr]
+    assert response.calls == 3
+    assert locator.screenshot_calls == 0
+
+
+async def test_mangaone_source_capture_falls_back_after_all_attempts_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    locator = _CaptureLocator()
+    adapter = MangaOneAdapter()
+    adapter.source_response_retry_interval_ms = 0
+    response = _BodyResponse(
+        "blob:all-fail",
+        [RuntimeError("temporary 1"), RuntimeError("temporary 2"), None],
+    )
+    _register_body_response(adapter, response)
+
+    captures = await _capture_one_source(adapter, monkeypatch, locator, response.url)
+
+    assert captures is not None
+    assert captures[0].data == b"fallback"  # type: ignore[union-attr]
+    assert response.calls == 3
+    assert locator.screenshot_calls == 1
+
+
+async def test_mangaone_source_capture_retries_when_response_registration_races(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _synthetic_webp(720, 1020)
+    locator = _CaptureLocator()
+    adapter = MangaOneAdapter()
+    adapter.source_response_retry_interval_ms = 0
+    response = _BodyResponse("blob:late-registration", [source])
+
+    async def register_late() -> None:
+        await asyncio.sleep(0)
+        adapter._handle_source_response(response)
+
+    asyncio.create_task(register_late())
+    captures = await _capture_one_source(adapter, monkeypatch, locator, response.url)
+
+    assert captures is not None
+    assert captures[0].data == source  # type: ignore[union-attr]
+    assert response.calls == 1
+    assert locator.screenshot_calls == 0
+
+
+async def test_mangaone_source_timeout_keeps_pending_body_task_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _synthetic_webp(720, 1020)
+    locator = _CaptureLocator()
+    adapter = MangaOneAdapter()
+    adapter.source_response_wait_timeout_ms = 10
+    adapter.source_response_retry_interval_ms = 0
+    body_ready = asyncio.Event()
+
+    class DelayedResponse(_BodyResponse):
+        async def body(self) -> bytes | None:
+            self.calls += 1
+            await body_ready.wait()
+            return source
+
+    response = DelayedResponse("blob:late-body", [])
+    _register_body_response(adapter, response)
+
+    async def finish_body() -> None:
+        await asyncio.sleep(0.015)
+        body_ready.set()
+
+    asyncio.create_task(finish_body())
+    captures = await _capture_one_source(adapter, monkeypatch, locator, response.url)
+
+    assert captures is not None
+    assert captures[0].data == source  # type: ignore[union-attr]
+    assert response.calls == 1
+    assert locator.screenshot_calls == 0
+
+
+async def test_mangaone_invalid_source_bytes_fallback_without_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    locator = _CaptureLocator()
+    adapter = MangaOneAdapter()
+    response = _BodyResponse("blob:invalid", [b"invalid"])
+    _register_body_response(adapter, response)
+
+    captures = await _capture_one_source(adapter, monkeypatch, locator, response.url)
+
+    assert captures is not None
+    assert captures[0].data == b"fallback"  # type: ignore[union-attr]
+    assert response.calls == 1
+    assert locator.screenshot_calls == 1
 
 
 async def test_mangaone_capture_preserves_spread_order_and_falls_back_per_page(
@@ -133,6 +328,7 @@ async def test_mangaone_capture_preserves_spread_order_and_falls_back_per_page(
     right = _CaptureLocator()
     left = _CaptureLocator()
     adapter = MangaOneAdapter()
+    adapter.source_response_retry_interval_ms = 0
 
     async def visible_images(_page: Page) -> list[tuple[object, dict[str, object]]]:
         return [
@@ -156,14 +352,14 @@ async def test_mangaone_capture_preserves_spread_order_and_falls_back_per_page(
             ),
         ]
 
-    async def response_body(data: bytes) -> bytes:
-        return data
-
     monkeypatch.setattr(adapter, "_visible_page_images", visible_images)
-    adapter._source_response_tasks = {
-        "blob:right": asyncio.create_task(response_body(right_source)),
-        "blob:left": asyncio.create_task(response_body(b"invalid")),
-    }
+    right_response = _BodyResponse("blob:right", [right_source])
+    left_response = _BodyResponse(
+        "blob:left",
+        [RuntimeError("temporary 1"), RuntimeError("temporary 2"), None],
+    )
+    _register_body_response(adapter, right_response)
+    _register_body_response(adapter, left_response)
 
     captures = await adapter.capture_page(object())  # type: ignore[arg-type]
 
@@ -173,6 +369,10 @@ async def test_mangaone_capture_preserves_spread_order_and_falls_back_per_page(
         (720, 1020),
         (720, 1020),
     ]
+    assert right_response.calls == 1
+    assert left_response.calls == 3
+    assert right.screenshot_calls == 0
+    assert left.screenshot_calls == 1
 
 
 async def test_mangaone_configure_run_accepts_all_mangaone_strategies() -> None:

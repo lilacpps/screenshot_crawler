@@ -498,20 +498,31 @@ were not independently verified.
 
 The feasibility result is now implemented for Manga ONE only. `prepare_page()`
 registers a Playwright response listener before navigation and keeps bounded
-tasks for `blob:` image response bodies. `capture_page()` matches each visible
-image's `currentSrc` to that response body, validates WebP/PNG magic bytes and
-decoded dimensions, then returns the original bytes unchanged. The existing
-right-to-left visible-image order is preserved for spreads and opening/single
-page views return one artifact.
+response references/tasks for `blob:` image bodies. `capture_page()` matches
+each visible image's `currentSrc` to that response body, validates WebP/PNG
+magic bytes and decoded dimensions, then returns the original bytes unchanged.
+The existing right-to-left visible-image order is preserved for spreads and
+opening/single-page views return one artifact.
+
+Source-native retrieval is bounded to an initial attempt plus two retries (three
+attempts total). Retries are limited to transient retrieval failures: a response
+not yet registered, a body-read timeout, a temporary body-read exception, or a
+body task returning `None`. A timed-out pending task is kept alive during the
+retry window so a later body completion can still succeed; completed failed
+body reads may create a fresh read task. Retry waits are short and bounded
+(`source_response_retry_interval_ms`, currently 100 ms). Invalid image bytes,
+undecodable dimensions, and a mismatch with `naturalWidth/naturalHeight` are
+deterministic validation failures and do not trigger another source retrieval.
 
 The Core change is site-neutral artifact metadata: normal Locator/canvas
 captures remain PNG, while a direct Adapter result may specify MIME type and
 extension. Runner filenames and manifest entries follow that result, and
 packaging accepts only safe manifest-declared `.png` / `.webp` artifacts.
 
-Fallback is per visible image: missing response body, unsupported/undecodable
-bytes, a source URL that is not matched, or a bounded response wait uses the
-existing Locator screenshot for that image. No Core site-name branch was added.
+After the three retrieval attempts are exhausted, fallback remains per visible
+image: that image alone uses the existing Locator PNG screenshot. A spread can
+therefore contain a source-native artifact on one side and a PNG fallback on
+the other. No Core site-name branch was added.
 No quota entry button is clicked by the capture hook.
 
 The fresh direct smoke against chapter `214131` produced `page-0001.webp` at

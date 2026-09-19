@@ -92,6 +92,8 @@ class MangaOneAdapter(SiteAdapter):
     quota_entry_wait_timeout_ms = 2_000
     quota_entry_poll_interval_ms = 100
     source_response_wait_timeout_ms = 2_000
+    source_response_retry_count = 2
+    source_response_retry_interval_ms = 100
 
     viewer_selector = ".viewer-container"
     page_selector = '.viewer-container img[alt^="page_"]'
@@ -112,13 +114,18 @@ class MangaOneAdapter(SiteAdapter):
         self._ended = False
         self._output_title: str | None = None
         self._output_order: str | None = None
+        self._source_responses: dict[str, object] = {}
         self._source_response_tasks: dict[str, asyncio.Task[bytes | None]] = {}
 
     async def prepare_page(self, page: Page) -> None:
         """Record blob response bodies before the chapter navigation starts."""
 
-        for task in self._source_response_tasks.values():
+        tasks = tuple(self._source_response_tasks.values())
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._source_responses.clear()
         self._source_response_tasks.clear()
         page.on("response", self._handle_source_response)
 
@@ -130,6 +137,7 @@ class MangaOneAdapter(SiteAdapter):
         resource_type = getattr(request, "resource_type", None)
         if resource_type not in {None, "", "image"}:
             return
+        self._source_responses[response_url] = response
         self._source_response_tasks[response_url] = asyncio.create_task(
             self._read_source_response(response)
         )
@@ -143,18 +151,67 @@ class MangaOneAdapter(SiteAdapter):
         return body if isinstance(body, bytes) else None
 
     async def _source_bytes_for(self, source_url: str) -> bytes | None:
+        """Get source bytes with bounded retries for transient retrieval failures.
+
+        A response may be registered after capture starts, and a response body
+        task may finish with ``None`` after a temporary body-read error. In both
+        cases the next attempt re-checks the response registry and, when safe,
+        starts a fresh body-read task. A timed-out task remains alive during the
+        retry window so a later completion can still be used.
+        """
+
+        max_attempts = self.source_response_retry_count + 1
+        for attempt in range(max_attempts):
+            task = self._source_response_tasks.get(source_url)
+            if task is None:
+                response = self._source_responses.get(source_url)
+                if response is not None:
+                    task = asyncio.create_task(self._read_source_response(response))
+                    self._source_response_tasks[source_url] = task
+
+            if task is not None:
+                try:
+                    source_bytes = await asyncio.wait_for(
+                        asyncio.shield(task),
+                        timeout=self.source_response_wait_timeout_ms / 1000,
+                    )
+                except TimeoutError:
+                    # Keep the task alive. It may complete before the next
+                    # attempt and is cancelled only after retries are exhausted.
+                    source_bytes = None
+                except Exception:  # noqa: BLE001
+                    source_bytes = None
+                if source_bytes is not None:
+                    return source_bytes
+
+            if attempt >= max_attempts - 1:
+                break
+
+            await asyncio.sleep(self.source_response_retry_interval_ms / 1000)
+
+            # Do not await the same completed failure repeatedly. A fresh
+            # response.body() call can recover from a transient body-read
+            # exception, while a still-pending task must be retained so a
+            # timeout does not destroy its chance to complete successfully.
+            task = self._source_response_tasks.get(source_url)
+            if task is not None and task.done():
+                response = self._source_responses.get(source_url)
+                should_retry_body_read = task.cancelled()
+                if not should_retry_body_read:
+                    try:
+                        should_retry_body_read = task.result() is None
+                    except Exception:  # noqa: BLE001
+                        should_retry_body_read = True
+                if response is not None and should_retry_body_read:
+                    self._source_response_tasks[source_url] = asyncio.create_task(
+                        self._read_source_response(response)
+                    )
+
         task = self._source_response_tasks.get(source_url)
-        if task is None:
-            return None
-        try:
-            return await asyncio.wait_for(
-                asyncio.shield(task),
-                timeout=self.source_response_wait_timeout_ms / 1000,
-            )
-        except TimeoutError:
-            if not task.done():
-                task.cancel()
-            return None
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return None
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
         """Prefer original blob bytes, falling back per image to a screenshot."""

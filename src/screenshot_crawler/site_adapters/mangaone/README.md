@@ -102,9 +102,12 @@ The adapter exposes the chapter title as archive title and the episode label as 
 
 Normal `END` / `NEXT_CONTENT` completion packages manifest-declared PNG/WebP
 artifacts under `output/Books/漫画/<title>/` by default. Manga ONE prefers the
-original blob WebP bytes per visible page and falls back to the existing PNG
-Locator screenshot independently for pages whose source bytes are unavailable
-or invalid. Episode parts remain separate archives.
+original blob WebP bytes per visible page and allows an initial source-body
+attempt plus two short bounded retries for transient retrieval failures. After
+those attempts, it falls back to the existing PNG Locator screenshot
+independently for that visible page if the source bytes remain unavailable or
+invalid. Deterministic validation failures do not trigger extra retrieval.
+Episode parts remain separate archives.
 
 ## Live verification
 
