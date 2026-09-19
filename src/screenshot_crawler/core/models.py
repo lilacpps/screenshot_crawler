@@ -60,6 +60,7 @@ class RunConfig:
     retry_count: int = 3
     navigation_timeout_ms: int = 10_000
     page_change_timeout_ms: int = 10_000
+    adapter_timeout_grace_ms: int = 2_000
     auth_state: Path | None = None
     auth_required: bool = False
     device_scale_factor: float = 1.0

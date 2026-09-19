@@ -276,6 +276,16 @@ loop:
 
 LOADINGはbounded retryし、解消しなければ `PageChangeTimeoutError`。
 
+## Adapter timeout layering
+
+`RunConfig.page_change_timeout_ms` is the adapter-owned operation deadline. The
+Core `CrawlerRunner._adapter_call()` wrapper uses the same deadline plus
+`adapter_timeout_grace_ms` (default 2,000 ms). This keeps the Core guard for a
+hung adapter while allowing an adapter such as BookWalker to raise its own
+`PageChangeTimeoutError` first, instead of being cancelled by an equal outer
+`asyncio.wait_for()` timeout. The grace applies to all adapter calls and does
+not add a site-specific branch.
+
 ## 8. max_pages
 
 `max_pages` は保存ページ数の安全上限。

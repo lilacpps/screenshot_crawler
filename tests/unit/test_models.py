@@ -24,6 +24,7 @@ def test_run_config_defaults_to_auto_with_unspecified_metadata(tmp_path) -> None
 
     assert config.access_strategy == "auto"
     assert config.output_metadata == {}
+    assert config.adapter_timeout_grace_ms == 2_000
 
 
 @pytest.mark.parametrize("strategy", ["auto", "direct", "quota"])

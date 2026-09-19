@@ -172,7 +172,7 @@ profileは `.chrome-crawler` で、Manga ONEとlogin sessionを共存できる�
 優先:
 
 1. viewerへ `ArrowLeft` を送信
-2. `#viewport1` のclickは使用しない
+2. page identityが変わらない場合のみ `#viewport1` の左端clickへfallback
 
 `go_next()` は操作前に `#pageSliderCounter` が最終 `N/N` か確認し、`_final_navigation_pending` を記録する。
 
@@ -256,6 +256,17 @@ terminal/ad/loadingでなくrenderer ready。
 ### UNKNOWN
 
 どれにも安全に分類できない場合。
+
+## Timeout layering
+
+BookWalker keeps its adapter-local `page_change_timeout_ms = 10_000` deadline
+for identity-based page-change detection and raises
+`PageChangeTimeoutError` when the viewer does not advance. The Core runner
+wrapper has a separate 2,000 ms grace period via
+`RunConfig.adapter_timeout_grace_ms`, so the adapter's diagnostic exception is
+normally delivered before the Core cancellation guard. The Core guard still
+stops an adapter that hangs without returning. This change does not alter the
+normal ArrowLeft/click-fallback navigation path.
 
 ## 12. wait_for_change / retry
 

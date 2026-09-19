@@ -82,7 +82,11 @@ class CrawlerRunner:
         try:
             return await asyncio.wait_for(
                 awaitable,
-                timeout=self.config.page_change_timeout_ms / 1000,
+                timeout=(
+                    self.config.page_change_timeout_ms
+                    + self.config.adapter_timeout_grace_ms
+                )
+                / 1000,
             )
         except TimeoutError as exc:
             raise PageChangeTimeoutError(

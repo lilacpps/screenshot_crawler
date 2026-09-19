@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -153,6 +154,70 @@ async def test_base_adapter_capture_page_defaults_to_locator_fallback() -> None:
     )
 
     assert await adapter.capture_page(FakePage()) is None
+
+
+async def test_adapter_call_preserves_inner_page_change_timeout() -> None:
+    async def fail_inside() -> None:
+        try:
+            await asyncio.wait_for(asyncio.sleep(1), timeout=0.02)
+        except TimeoutError as exc:
+            raise PageChangeTimeoutError(
+                "BookWalker page did not change within timeout"
+            ) from exc
+
+    runner = CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=Path("run"),
+            diagnostics_dir=Path("diagnostics"),
+            page_change_timeout_ms=20,
+            adapter_timeout_grace_ms=20,
+        )
+    )
+
+    with pytest.raises(PageChangeTimeoutError, match="BookWalker page"):
+        await runner._adapter_call(fail_inside(), "wait_for_change")
+
+
+async def test_adapter_call_grace_allows_inner_timeout_to_surface() -> None:
+    async def finish_after_inner_deadline() -> str:
+        await asyncio.sleep(0.04)
+        return "completed"
+
+    runner = CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=Path("run"),
+            diagnostics_dir=Path("diagnostics"),
+            page_change_timeout_ms=20,
+            adapter_timeout_grace_ms=80,
+        )
+    )
+
+    assert await runner._adapter_call(
+        finish_after_inner_deadline(), "wait_for_change"
+    ) == "completed"
+
+
+async def test_adapter_call_timeout_still_bounds_hung_adapter() -> None:
+    async def hang() -> None:
+        await asyncio.sleep(1)
+
+    runner = CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=Path("run"),
+            diagnostics_dir=Path("diagnostics"),
+            page_change_timeout_ms=20,
+            adapter_timeout_grace_ms=20,
+        )
+    )
+
+    with pytest.raises(PageChangeTimeoutError, match="Adapter operation timed out"):
+        await runner._adapter_call(hang(), "wait_for_change")
 
 
 class FallbackCaptureAdapter(FakeAdapter):
