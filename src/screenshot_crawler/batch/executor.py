@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from collections.abc import Callable
@@ -15,7 +16,7 @@ from screenshot_crawler.batch.models import (
     BatchExecutionError,
     BatchExecutionResult,
 )
-from screenshot_crawler.catalog import CatalogError, CatalogService
+from screenshot_crawler.catalog import ArtifactInput, CatalogError, CatalogService
 from screenshot_crawler.catalog.service import JST, now_jst
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult, package_crawl_output
@@ -62,6 +63,8 @@ class BatchExecutor:
         """Run, package, and complete one candidate, or raise clearly."""
 
         current = _normalize_now(now_jst() if now is None else now)
+        run_id: int | None = None
+        crawl_result: RunResult | None = None
         try:
             if candidate.backend != "web":
                 raise BatchExecutionError(
@@ -69,6 +72,14 @@ class BatchExecutor:
                 )
             policy = self.policies.create(candidate.site)
             self._validate_candidate(candidate, policy, current)
+            run = self.catalog.create_crawl_run(
+                item_id=candidate.item_id,
+                source_id=candidate.source_id,
+                target_id=candidate.target_id,
+                access_strategy=candidate.access_strategy,
+                started_at=current,
+            )
+            run_id = run.id
             output_dir = _new_output_dir(output_root, candidate, current)
             adapter = self.adapters.create(candidate.site)
 
@@ -98,21 +109,38 @@ class BatchExecutor:
                 library_dir=library_dir,
                 explicit_metadata=candidate.metadata,
             )
-            self.catalog.mark_item_completed(
-                candidate.item_id,
-                package.archive_path.as_posix(),
+            archive_path = Path(package.archive_path)
+            sha256, byte_size = _hash_archive(archive_path)
+            _, artifact, _ = self.catalog.finalize_successful_crawl(
+                run_id,
+                artifact=ArtifactInput(
+                    kind="archive",
+                    format="zip",
+                    sha256=sha256,
+                    byte_size=byte_size,
+                    storage_backend="filesystem",
+                    locator=archive_path.as_posix(),
+                    state="present",
+                ),
+                page_count=len(crawl_result.pages),
+                stop_reason=crawl_result.stop_reason,
             )
             return BatchExecutionResult(
                 item_id=candidate.item_id,
                 source_id=candidate.source_id,
-                archive_path=package.archive_path,
+                target_id=candidate.target_id,
+                crawl_run_id=run_id,
+                artifact_id=artifact.id,
+                archive_path=archive_path,
                 status_path=package.status_path,
                 page_count=len(crawl_result.pages),
                 stop_reason=crawl_result.stop_reason,
             )
-        except BatchExecutionError:
-            raise
         except BaseException as exc:
+            if run_id is not None:
+                _record_failed_run(self.catalog, run_id, exc, crawl_result)
+            if isinstance(exc, BatchExecutionError):
+                raise
             raise BatchExecutionError(
                 f"Batch candidate failed (item={candidate.item_id}, "
                 f"source={candidate.source_id}): {exc}"
@@ -145,6 +173,8 @@ class BatchExecutor:
             mismatches.append("target.source_id")
         if target.backend != candidate.backend:
             mismatches.append("target.backend")
+        if target.target_key != candidate.target_key:
+            mismatches.append("target.target_key")
         if target.locator != candidate.locator:
             mismatches.append("target.locator")
         if not target.enabled:
@@ -178,6 +208,38 @@ def _require_normal_stop(result: RunResult, candidate: BatchCandidate) -> None:
             f"Crawler did not stop normally for item={candidate.item_id}, "
             f"source={candidate.source_id}: {result.stop_reason}"
         )
+
+
+def _hash_archive(path: Path, *, chunk_size: int = 1024 * 1024) -> tuple[str, int]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Packaged archive not found: {path}")
+    digest = hashlib.sha256()
+    byte_size = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(chunk_size):
+            digest.update(chunk)
+            byte_size += len(chunk)
+    return digest.hexdigest(), byte_size
+
+
+def _record_failed_run(
+    catalog: CatalogService,
+    run_id: int,
+    error: BaseException,
+    crawl_result: RunResult | None,
+) -> None:
+    page_count = len(crawl_result.pages) if crawl_result is not None else None
+    stop_reason = crawl_result.stop_reason if crawl_result is not None else None
+    try:
+        catalog.mark_crawl_run_failed(
+            run_id,
+            error_type=type(error).__name__,
+            error_message=str(error)[:4000] or None,
+            page_count=page_count,
+            stop_reason=stop_reason,
+        )
+    except Exception as recording_error:  # noqa: BLE001
+        error.add_note(f"Could not record failed CrawlRun {run_id}: {recording_error}")
 
 
 def _normalize_now(value: datetime) -> datetime:

@@ -314,6 +314,40 @@ def test_artifact_rejects_run_from_other_item_without_partial_row(tmp_path: Path
     assert service.list_artifacts() == []
 
 
+def test_finalize_successful_crawl_is_atomic(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    _, item, source, target = make_graph(service)
+    run = service.create_crawl_run(
+        item_id=item.id, source_id=source.id, target_id=target.id, access_strategy="direct"
+    )
+    with service._connection() as connection:
+        connection.execute(
+            "CREATE TRIGGER fail_finalize_item AFTER INSERT ON artifacts "
+            "BEGIN SELECT RAISE(ABORT, 'forced finalize failure'); END"
+        )
+
+    with pytest.raises(Exception, match="forced finalize failure"):
+        service.finalize_successful_crawl(
+            run.id,
+            artifact=ArtifactInput(
+                kind="archive",
+                format="zip",
+                sha256=SHA,
+                byte_size=10,
+                storage_backend="filesystem",
+                locator="library/archive.zip",
+                state="present",
+            ),
+            page_count=1,
+            stop_reason="end",
+        )
+
+    assert service.list_artifacts() == []
+    assert service.get_crawl_run(run.id).status == "running"
+    assert service.get_item(item.id).status == "pending"
+    service.mark_crawl_run_failed(run.id, error_type="FinalizeError")
+
+
 def test_timestamps_require_aware_datetime_and_normalize_to_jst() -> None:
     generated = now_jst()
     assert generated.utcoffset() == timedelta(hours=9)

@@ -536,7 +536,7 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 これらを変更した場合は、このnoteを必ず更新する。
 
-## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery framework実装済み）
+## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery + Batch v3実装済み）
 
 2026-09-19時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE・BookWalker Policy、Phase 5BのManga ONE・BookWalker Batch Executor、BookWalker Adapterのstrict direct・quota product-page entryが実装済みである。BookWalkerは05:00 JSTのsite-wide 1枠local safety policyを使い、quota開始をreader entry前に永続化する。実サイトquota clickは未確認である。
 
@@ -565,9 +565,9 @@ Schema v3のdomain tableは`works`、`items`、`sources`、`source_targets`、`c
 
 `crawl_runs`はItem/Source/Targetの整合性を検証して作成時snapshotを保存し、`running -> succeeded|failed`だけを許可する。`artifacts`はbinary本体を保存せず、SHA-256、byte size、storage backend、locator、stateを保持する。手動importのためcrawl runなしを許容し、Artifact更新はItem/CrawlRun statusを変更しない。
 
-Phase 1でCatalog packageをv3へ移行し、Phase 2でWatchlist、Discovery、Discovery CLIをWork-awareなv3 APIへ接続した。BatchとCatalog Exportは後続Phaseの対象であり、v2前提の部分が残る。
+Phase 1でCatalog packageをv3へ移行し、Phase 2でWatchlist / DiscoveryをWork-aware化し、Phase 3でBatch Planner / ExecutorをCrawlRun / Artifactへ接続した。Catalog Exportは後続Phaseの対象である。
 
-Batch Planner用に `read_items_and_sources(site=...)` と `read_items_sources_and_targets(site=...)` を提供する。後者は既存Catalogをread-only接続で検証し、items全件、指定siteのsources、関連するsource_targetsを取得する。Batch Planner側では指定siteのsourceを1件以上持つitemだけをsite-scopedな母集団にし、別site専用itemとsourceなしのorphan itemを`no_source` skipに含めない。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
+Batch Planner用に `read_works_items_sources_and_targets(site=...)` を提供する。これはread-only接続でWork / Item全件、指定siteのSource、関連するSourceTargetを取得し、Plannerはraw SQLiteへ直接アクセスしない。指定siteのSourceを1件以上持つItemだけをsite-scopedな母集団にし、別site専用Itemとsourceなしのorphan Itemを`no_source` skipに含めない。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
 
 Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` がSQLiteをread-onlyで検証・読み込みし、`items LEFT JOIN sources LEFT JOIN source_targets` を `item_id ASC, source_id ASC, target_id ASC` で並べたflat CSV snapshotを生成する。原則1行は1 targetで、sourceにtargetがない場合とsourceなしitemも情報を残す。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `target_enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力 `catalog-export.csv` であり、CSVからCatalogへ戻す機能はない。旧`url`列は出力しない。
 
@@ -591,13 +591,13 @@ Crawl Request
 
 現行実装には、BookWalker quotaの実サイトlive click検証と、quotaのサーバー側実消費をCatalogだけから検証する機能は存在しない。
 
-Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request最小基盤、Phase 5A Batch Planner / Site Policy registry / Manga ONE Policyは実装済みである。Discoveryはtargetの`work_key`でWorkをfind/createし、`label`は新規Workのtitle初期値にだけ使う。新規recordはWork配下にItem、Source、web/default targetを原子的に作成し、既存recordはItemを再利用する。観測したURLを同一sourceの`backend=web` / `target_key=default` targetへupsertし、別backend targetとsourceのlocal/access stateを変更しない。Batch Plannerはenabled web targetを`priority ASC, target.id ASC`で選び、targetがないsourceやAndroid-only sourceをskipする。Batch Executorはweb targetのlocatorを既存`RunConfig.source_url`へ変換し、実行直前にtarget identity/stateを再検証する。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。Phase 5Aのplannerは`auto`を使わず、`direct`/`quota`の実行意図とmetadataをcandidateへ保持するだけである。
+Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request最小基盤、Schema v3 Batch Planner / Executor、Site Policy registry / Manga ONE・BookWalker Policyは実装済みである。Discoveryはtargetの`work_key`でWorkをfind/createし、`label`は新規Workのtitle初期値にだけ使う。新規recordはWork配下にItem、Source、web/default targetを原子的に作成し、既存recordはItemを再利用する。Batch PlannerはWork metadataとItem order metadataからcandidateを生成し、enabledなweb targetを`priority ASC, target.id ASC`で選ぶ。Batch Executorはstale validation後にCrawlRunを作成し、quota記録、Crawler、packaging、Artifact / Run / Itemの成功確定を順序づける。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。
 
 主要仕様:
 
 - Discovery対象は明示Watchlistだけ
 - Watchlist targetはstable `key` と明示的な `work_key` / `label` を持つ
-- Catalog v3 Phase 1は `works / items / sources / source_targets / crawl_runs / artifacts` の6テーブル
+- Catalog v3 Phase 3は `works / items / sources / source_targets / crawl_runs / artifacts` の6テーブル
 - full syncはcomplete時だけmissing sourceをunavailable化
 - 現行incremental実装はlatest側から異なるknown source 2件連続で停止し、同一stable identityの重複観測はstreakに加算しない
 - 採用仕様ではdefault known-streakを維持しつつ、site固有access遷移に必要なstable boundary hookを許容する。BookWalker Discoveryはこのhookを利用する
@@ -611,7 +611,7 @@ Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request
 - Crawlerはtitle/author/order/genreをoptional inputとして受け取れるようにする
 - metadataはfield単位で `explicit request > adapter > packaging fallback`
 - metadata未指定なら現行Adapter自動取得を維持する
-- crawl + packaging成功時だけcompleted/local_pathを更新
+- crawl + packaging成功時だけArtifact(present)、CrawlRun(succeeded)、Item(completed)を1 transactionで確定
 
 Phase 5AのBatch Plannerは `pending` itemだけを対象にし、completed / unavailable / paid / unknownをskipする。source priorityは期限付きfree、通常free、owned、quota、paid/unknownの順で、同順位はsource.id ASC。複数のquota-consuming candidateが新規枠を必要とする場合、quota仮予約の順序は`source.discovery_key`ごとのDiscovery groupをgroup内最小source.id（Catalog登録順）で並べ、group内を`order_key`のnatural orderで並べる。`order_key`を解釈できない場合は`order_label`、最後にitem.idのstable fallbackを使う。`discovery_key = NULL`のcandidateは明示groupの後ろに置く。free、owned、active grant中のquota sourceはdirectのままでこのquota allocation順序に入らない。Catalog metadataは`canonical_title -> title`、`author -> author`、`order_label -> order`、`genre -> genre`でcandidateへ写し、NULL/空値は省略する。
 
@@ -662,14 +662,20 @@ BookWalkerはこのextension pointを実装し、run開始時点でowned/quota�
 
 cross-site duplicateは同じWork内の別Itemについて、kind/orderが一致する場合だけ候補をwarningにする。warningはmerge、reparent、delete、completed化を行わない。
 
-### 22.5 Phase 5B Batch Executor（Manga ONE）
+### 22.5 Batch Planner / Executor（Schema v3 Phase 3実装済み）
 
-`BatchExecutor`（`src/screenshot_crawler/batch/executor.py`）はPhase 5Aの
-`BatchCandidate`を1件ずつ既存`CrawlerRunner`へ渡す。`CrawlerRunner`はCatalogを
-知らず、Batch側だけが`item_id` / `source_id` / `target_id`とCatalog stateを扱う。
+`BatchPlanner`（`src/screenshot_crawler/batch/planner.py`）はWork-aware read snapshotから
+candidateを生成する。metadataは`Work.title` / `Work.author` / `Work.genre` / `Item.order_label`
+から作り、Itemのorder fallbackは`order_key`、`order_label`、`item_title`、`item.id`の順である。
+指定siteのSourceを持つItemだけを対象にし、Web targetだけを`priority ASC, target.id ASC`
+で選ぶ。`BatchCandidate`には`backend` / `target_key` / `locator`をsnapshotする。
+
+`BatchExecutor`（`src/screenshot_crawler/batch/executor.py`）はcandidateを1件ずつ既存
+`CrawlerRunner`へ渡す。`CrawlerRunner`はCatalogを知らず、Batch側だけが`item_id` /
+`source_id` / `target_id`とCatalog stateを扱う。
 
 実行前にitemが`pending`であり、sourceのitem/site/access_mode/availableとtargetの
-source/backend/locator/enabledがcandidateと一致することを確認する。backendはwebだけを
+source/backend/target_key/locator/enabledがcandidateと一致することを確認する。backendはwebだけを
 受け付ける。Policyのaccess decisionも再確認し、stale candidateはCrawlerを呼ばずに停止する。
 
 Candidateから次の`RunConfig`を作る:
@@ -680,14 +686,16 @@ output_dir = output/batch/<site>/item-<item>-source-<source>-<JST timestamp>-<uu
 diagnostics_dir = <run directory>/diagnostics
 ```
 
-実行はsequential、stop-on-first-failureである。quota candidateだけはCrawler開始
-直前に`record_quota_access()`を呼び、Manga ONE Policyの`access_grant_until()`で
-計算した24時間後を`access_granted_until`へ保存する。direct candidateはquota stateを
-変更しない。保存後にcrawl、viewer、packagingが失敗してもquota stateは消去しない。
+実行はsequential、stop-on-first-failureである。candidate validation後、Crawler開始前に
+`CrawlRun(running)`を作成する。quota candidateだけはその後に`record_quota_access()`を呼び、
+Policyの`access_grant_until()`で計算したgrantを保存する。direct candidateはquota stateを
+変更しない。保存後にcrawl、viewer、packagingが失敗してもquota stateはrefundしない。
 
-Crawlerが`END`または`NEXT_CONTENT`で正常終了し、既存
-`package_crawl_output()`が成功した後だけ`mark_item_completed()`を呼ぶ。Catalog更新
-失敗時も生成済みarchiveは削除しない。失敗run directoryは上書きせず残す。
+Crawlerが`END`または`NEXT_CONTENT`で正常終了し、既存`package_crawl_output()`が成功した後、
+archiveの存在を確認してSHA-256 / byte sizeを計算する。Catalogのnarrow helperがArtifact(present)、
+CrawlRun(succeeded)、Item(completed)を1 transactionで確定する。Catalog更新失敗時も生成済みarchiveと
+status sidecarは削除しない。Crawler、異常停止、packaging、archive検証、finalizeの失敗は
+CrawlRun(failed)へ記録し、Itemはpending、Artifactは作成しない。
 
 実行CLI:
 
@@ -698,4 +706,5 @@ Crawlerが`END`または`NEXT_CONTENT`で正常終了し、既存
 ```
 
 `batch plan`は引き続きCatalog read-onlyであり、`batch run`だけがquota local stateと
-completed/local artifact stateを書き換える。BookWalkerはPolicy未登録である。
+CrawlRun / Artifact / Item statusを書き換える。Manga ONEとBookWalkerのquota policyは既存挙動を
+維持し、Android targetはCatalogへ保持できるがPhase 3 Executorでは実行しない。

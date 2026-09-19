@@ -1,10 +1,17 @@
 from datetime import datetime
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
 from screenshot_crawler.batch import BatchCandidate, BatchExecutionError, BatchExecutor
-from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, SourceTargetInput
+from screenshot_crawler.catalog import (
+    CatalogService,
+    ItemInput,
+    SourceInput,
+    SourceTargetInput,
+    WorkInput,
+)
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult
@@ -36,7 +43,8 @@ class FakeRunner:
 
 
 def make_candidate(service: CatalogService, *, order: str = "01") -> BatchCandidate:
-    item = service.create_item(ItemInput(canonical_title="BookWalker volume", order_key=order))
+    work = service.create_work(WorkInput(work_key=f"bookwalker-{order}", title="BookWalker volume"))
+    item = service.create_item(ItemInput(order_key=order), work_id=work.id)
     source = service.create_source(
         SourceInput(
             site="bookwalker",
@@ -56,6 +64,7 @@ def make_candidate(service: CatalogService, *, order: str = "01") -> BatchCandid
         target_id=target.id,
         site="bookwalker",
         backend=target.backend,
+        target_key=target.target_key,
         locator=target.locator,
         access_strategy="quota",
         metadata={"title": "BookWalker volume", "order": order},
@@ -79,8 +88,12 @@ def make_executor(service: CatalogService, *, fail: bool = False) -> BatchExecut
         library_dir: str | Path,
         explicit_metadata: dict[str, str],
     ) -> PackageResult:
+        archive_path = Path(library_dir) / "archive.zip"
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(archive_path, "w") as archive:
+            archive.writestr("archive.txt", "test archive")
         return PackageResult(
-            archive_path=Path(library_dir) / "archive.zip",
+            archive_path=archive_path,
             title=explicit_metadata["title"],
             genre=None,
             volume=explicit_metadata["order"],

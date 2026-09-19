@@ -798,6 +798,73 @@ class CatalogService:
             finished_at=finished_at, error_type=error_type, error_message=error_message,
         )
 
+    def finalize_successful_crawl(
+        self,
+        run_id: int,
+        *,
+        artifact: ArtifactInput | Mapping[str, Any],
+        page_count: int,
+        stop_reason: str | None = None,
+        finished_at: datetime | str | None = None,
+    ) -> tuple[CrawlRun, Artifact, Item]:
+        """Atomically persist the artifact, successful run, and completed item."""
+
+        artifact_input = self._coerce_artifact_input(artifact)
+        normalized_sha = self._validate_artifact_input(artifact_input)
+        self._validate_page_count(page_count, required=True)
+        completion = format_timestamp(finished_at) or format_timestamp(now_jst())
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            run = self._require_row(connection, "crawl_runs", run_id, "crawl run")
+            if run["status"] != "running":
+                raise CatalogValidationError(
+                    f"CrawlRun {run_id} is terminal ({run['status']}) and cannot finalize"
+                )
+            self._require_row(connection, "items", run["item_id"], "item")
+            cursor = connection.execute(
+                "INSERT INTO artifacts (item_id, crawl_run_id, kind, format, sha256, byte_size, "
+                "storage_backend, locator, state, last_verified_at, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run["item_id"],
+                    run_id,
+                    artifact_input.kind,
+                    artifact_input.format,
+                    normalized_sha,
+                    artifact_input.byte_size,
+                    artifact_input.storage_backend,
+                    artifact_input.locator,
+                    artifact_input.state,
+                    completion,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            artifact_row = connection.execute(
+                "SELECT * FROM artifacts WHERE id = ?", (cursor.lastrowid,)
+            ).fetchone()
+            connection.execute(
+                "UPDATE crawl_runs SET status = 'succeeded', finished_at = ?, page_count = ?, "
+                "stop_reason = ?, updated_at = ? WHERE id = ?",
+                (completion, page_count, stop_reason, timestamp, run_id),
+            )
+            connection.execute(
+                "UPDATE items SET status = 'completed', completed_at = ?, updated_at = ? "
+                "WHERE id = ?",
+                (completion, timestamp, run["item_id"]),
+            )
+            run_row = connection.execute(
+                "SELECT * FROM crawl_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            item_row = connection.execute(
+                "SELECT * FROM items WHERE id = ?", (run["item_id"],)
+            ).fetchone()
+        return (
+            self._crawl_run_from_row(run_row),
+            self._artifact_from_row(artifact_row),
+            self._item_from_row(item_row),
+        )
+
     # Artifact API -----------------------------------------------------
 
     def create_artifact(
@@ -932,6 +999,29 @@ class CatalogService:
         return ([self._item_from_row(row) for row in items],
                 [self._source_from_row(row) for row in sources],
                 [self._source_target_from_row(row) for row in targets])
+
+    def read_works_items_sources_and_targets(
+        self, *, site: str
+    ) -> tuple[list[Work], list[Item], list[Source], list[SourceTarget]]:
+        """Read the Work-aware site snapshot used by the Batch Planner."""
+
+        self._validate_nonempty(site, "site")
+        with self._read_only_connection() as connection:
+            works = connection.execute("SELECT * FROM works ORDER BY id").fetchall()
+            items = connection.execute("SELECT * FROM items ORDER BY id").fetchall()
+            sources = connection.execute(
+                "SELECT * FROM sources WHERE site = ? ORDER BY id", (site,)
+            ).fetchall()
+            targets = connection.execute(
+                "SELECT st.* FROM source_targets st JOIN sources s ON s.id = st.source_id "
+                "WHERE s.site = ? ORDER BY st.id", (site,)
+            ).fetchall()
+        return (
+            [self._work_from_row(row) for row in works],
+            [self._item_from_row(row) for row in items],
+            [self._source_from_row(row) for row in sources],
+            [self._source_target_from_row(row) for row in targets],
+        )
 
     # Validation and conversion ---------------------------------------
 

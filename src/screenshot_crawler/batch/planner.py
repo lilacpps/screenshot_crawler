@@ -20,6 +20,7 @@ from screenshot_crawler.catalog import (
     Item,
     Source,
     SourceTarget,
+    Work,
 )
 from screenshot_crawler.catalog.service import JST, now_jst
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
@@ -37,7 +38,9 @@ class BatchPlanner:
         current = _normalize_now(now_jst() if now is None else now)
         try:
             policy = self.policies.create(site)
-            items, sources, targets = self.catalog.read_items_sources_and_targets(site=site)
+            works, items, sources, targets = (
+                self.catalog.read_works_items_sources_and_targets(site=site)
+            )
         except (CatalogError, SitePolicyError, ValueError) as exc:
             raise BatchPlanningError(str(exc)) from exc
 
@@ -47,6 +50,7 @@ class BatchPlanner:
         targets_by_source: dict[int, list[SourceTarget]] = defaultdict(list)
         for target in targets:
             targets_by_source[target.source_id].append(target)
+        works_by_id = {work.id: work for work in works}
         # A site-scoped plan only considers items with at least one source for that site.
         site_item_ids = set(sources_by_item)
         plan = BatchPlan()
@@ -81,7 +85,13 @@ class BatchPlanner:
                         f"Eligible source {source.id} has no access strategy"
                     )
                 selections.append(
-                    _Selection(item=item, source=source, target=target, decision=decision)
+                    _Selection(
+                        work=works_by_id[item.work_id],
+                        item=item,
+                        source=source,
+                        target=target,
+                        decision=decision,
+                    )
                 )
 
             quota_selections = [
@@ -157,13 +167,13 @@ class BatchPlanner:
         return None
 
 
-def _metadata(item: Item) -> dict[str, str]:
+def _metadata(work: Work, item: Item) -> dict[str, str]:
     metadata: dict[str, str] = {}
     for target, value in (
-        ("title", item.canonical_title),
-        ("author", item.author),
+        ("title", work.title),
+        ("author", work.author),
         ("order", item.order_label),
-        ("genre", item.genre),
+        ("genre", work.genre),
     ):
         if value is not None and value.strip():
             metadata[target] = value
@@ -172,6 +182,7 @@ def _metadata(item: Item) -> dict[str, str]:
 
 @dataclass(frozen=True, slots=True)
 class _Selection:
+    work: Work
     item: Item
     source: Source
     target: SourceTarget
@@ -190,9 +201,10 @@ def _candidate_from_selection(selection: _Selection) -> BatchCandidate:
         target_id=selection.target.id,
         site=source.site,
         backend=selection.target.backend,
+        target_key=selection.target.target_key,
         locator=selection.target.locator,
         access_strategy=decision.access_strategy,
-        metadata=_metadata(item),
+        metadata=_metadata(selection.work, item),
         access_mode=source.access_mode,
         reason=decision.reason,
         consumes_quota=decision.consumes_quota,
@@ -229,7 +241,9 @@ def _item_order_key(item: Item) -> tuple[int, int, int, str, int]:
         episode, part = parsed
         return (0, episode, part, "", item.id)
 
-    fallback = " ".join((item.order_label or item.canonical_title or "").split()).casefold()
+    fallback = " ".join(
+        (item.order_label or item.item_title or "").split()
+    ).casefold()
     return (1, 0, 0, fallback, item.id)
 
 

@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.batch import BatchPlanner
-from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, SourceTargetInput
+from screenshot_crawler.catalog import (
+    CatalogService,
+    ItemInput,
+    SourceInput,
+    SourceTargetInput,
+    WorkInput,
+)
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
@@ -32,7 +38,12 @@ def add_source(
     access_granted_until: str | None = None,
     available: bool = True,
 ):
-    item = service.create_item(ItemInput(canonical_title=f"Volume {order}", order_key=order, status=status))
+    work = service.create_work(
+        WorkInput(work_key=f"bookwalker-work-{order}", title=f"Volume {order}")
+    )
+    item = service.create_item(
+        ItemInput(order_key=order, status=status), work_id=work.id
+    )
     source = service.create_source(
         SourceInput(
             site="bookwalker",

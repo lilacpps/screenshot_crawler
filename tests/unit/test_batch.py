@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.batch import BatchPlanner, BatchPlanningError
-from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, SourceTargetInput
+from screenshot_crawler.catalog import (
+    CatalogService,
+    ItemInput,
+    SourceInput,
+    SourceTargetInput,
+    WorkInput,
+)
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
 
@@ -29,8 +35,16 @@ def add_source(
     discovery_key: str | None = None,
     quota_started_at: str | None = None,
     access_granted_until: str | None = None,
+    work: WorkInput | None = None,
 ):
-    catalog_item = service.create_item(item)
+    catalog_item = add_item(
+        service,
+        item,
+        work=work or WorkInput(
+            work_key=f"work-{external_id}",
+            title=item.item_title or external_id,
+        ),
+    )
     source = service.create_source(
         SourceInput(
             site="mangaone",
@@ -54,30 +68,44 @@ def add_source(
     return catalog_item, source
 
 
+def add_item(
+    service: CatalogService,
+    item: ItemInput,
+    *,
+    work: WorkInput | None = None,
+):
+    work = work or WorkInput(
+        work_key=f"work-item-{item.item_title or 'default'}",
+        title=item.item_title or "Test work",
+    )
+    catalog_work = service.create_work(work)
+    return service.create_item(item, work_id=catalog_work.id)
+
+
 def plan_for(service: CatalogService, *, now: datetime = NOW):
     return BatchPlanner(service, make_registry()).plan(site="mangaone", now=now)
 
 
 def test_pending_only_and_basic_access_modes(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
-    add_source(service, item=ItemInput(canonical_title="free"), external_id="free", access_mode="free")
+    add_source(service, item=ItemInput(item_title="free"), external_id="free", access_mode="free")
     completed, _ = add_source(
         service,
-        item=ItemInput(canonical_title="completed", status="completed"),
+        item=ItemInput(item_title="completed", status="completed"),
         external_id="completed",
         access_mode="free",
     )
     add_source(
         service,
-        item=ItemInput(canonical_title="unavailable"),
+        item=ItemInput(item_title="unavailable"),
         external_id="unavailable",
         access_mode="owned",
         available=False,
     )
-    add_source(service, item=ItemInput(canonical_title="paid"), external_id="paid", access_mode="paid")
+    add_source(service, item=ItemInput(item_title="paid"), external_id="paid", access_mode="paid")
     add_source(
         service,
-        item=ItemInput(canonical_title="unknown"),
+        item=ItemInput(item_title="unknown"),
         external_id="unknown",
         access_mode="unknown",
     )
@@ -98,16 +126,16 @@ def test_site_scoped_plan_ignores_other_site_and_orphan_items(tmp_path: Path) ->
     service = CatalogService(tmp_path / "catalog.sqlite")
     mangaone_item, _ = add_source(
         service,
-        item=ItemInput(canonical_title="mangaone"),
+        item=ItemInput(item_title="mangaone"),
         external_id="mangaone",
         access_mode="free",
     )
-    bookwalker_item = service.create_item(ItemInput(canonical_title="bookwalker"))
+    bookwalker_item = add_item(service, ItemInput(item_title="bookwalker"))
     service.create_source(
         SourceInput(site="bookwalker", external_id="bookwalker"),
         item_id=bookwalker_item.id,
     )
-    orphan_item = service.create_item(ItemInput(canonical_title="orphan"))
+    orphan_item = add_item(service, ItemInput(item_title="orphan"))
 
     plan = plan_for(service)
 
@@ -121,14 +149,18 @@ def test_site_scoped_plan_ignores_other_site_and_orphan_items(tmp_path: Path) ->
 
 def test_source_priority_and_metadata_mapping(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
-    item = service.create_item(
+    item = add_item(
+        service,
         ItemInput(
-            canonical_title="作品A",
-            author="作者A",
             order_key="80",
             order_label="第80話-後編",
+        ),
+        work=WorkInput(
+            work_key="work-a",
+            title="作品A",
+            author="作者A",
             genre="漫画",
-        )
+        ),
     )
     quota = service.create_source(
         SourceInput(
@@ -202,12 +234,12 @@ def test_planner_selects_enabled_web_target_and_skips_other_backends(
 ) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
 
-    no_target_item = service.create_item(ItemInput(canonical_title="no target"))
+    no_target_item = add_item(service, ItemInput(item_title="no target"))
     no_target_source = service.create_source(
         SourceInput(site="mangaone", external_id="no-target", access_mode="free"),
         item_id=no_target_item.id,
     )
-    disabled_item = service.create_item(ItemInput(canonical_title="disabled"))
+    disabled_item = add_item(service, ItemInput(item_title="disabled"))
     disabled_source = service.create_source(
         SourceInput(site="mangaone", external_id="disabled", access_mode="free"),
         item_id=disabled_item.id,
@@ -216,7 +248,7 @@ def test_planner_selects_enabled_web_target_and_skips_other_backends(
         SourceTargetInput(backend="web", locator="https://example.invalid/disabled", enabled=False),
         source_id=disabled_source.id,
     )
-    android_item = service.create_item(ItemInput(canonical_title="android only"))
+    android_item = add_item(service, ItemInput(item_title="android only"))
     android_source = service.create_source(
         SourceInput(site="mangaone", external_id="android", access_mode="free"),
         item_id=android_item.id,
@@ -227,21 +259,31 @@ def test_planner_selects_enabled_web_target_and_skips_other_backends(
     )
     selected_item, selected_source = add_source(
         service,
-        item=ItemInput(canonical_title="selected"),
+        item=ItemInput(item_title="selected"),
         external_id="selected",
         access_mode="free",
     )
     selected_target = service.find_source_target(selected_source.id, "web")
     assert selected_target is not None
+    direct_target = service.create_source_target(
+        SourceTargetInput(
+            backend="web",
+            target_key="direct",
+            locator="https://example.invalid/direct",
+            priority=50,
+        ),
+        source_id=selected_source.id,
+    )
 
     plan = plan_for(service)
 
     assert len(plan.candidates) == 1
     candidate = plan.candidates[0]
     assert (candidate.item_id, candidate.source_id) == (selected_item.id, selected_source.id)
-    assert candidate.target_id == selected_target.id
+    assert candidate.target_id == direct_target.id
     assert candidate.backend == "web"
-    assert candidate.locator.endswith("/selected")
+    assert candidate.target_key == "direct"
+    assert candidate.locator.endswith("/direct")
     assert Counter(skipped.reason for skipped in plan.skipped) == Counter(
         {"no enabled web target": 3}
     )
@@ -257,7 +299,7 @@ def test_quota_is_reserved_in_memory_only(tmp_path: Path) -> None:
     for index in range(5):
         add_source(
             service,
-            item=ItemInput(canonical_title=f"quota-{index}"),
+            item=ItemInput(item_title=f"quota-{index}"),
             external_id=f"quota-{index}",
         )
 
@@ -280,7 +322,7 @@ def test_new_quota_is_allocated_to_oldest_episode_first(tmp_path: Path) -> None:
     for index in range(2):
         add_source(
             service,
-            item=ItemInput(canonical_title=f"used-{index}", status="completed"),
+            item=ItemInput(item_title=f"used-{index}", status="completed"),
             external_id=f"used-{index}",
             quota_started_at="2026-09-17T14:00:00+09:00",
         )
@@ -288,7 +330,7 @@ def test_new_quota_is_allocated_to_oldest_episode_first(tmp_path: Path) -> None:
     items = {
         order: add_source(
             service,
-            item=ItemInput(canonical_title=f"第{order}話", order_key=order),
+            item=ItemInput(item_title=f"第{order}話", order_key=order),
             external_id=f"episode-{order}",
         )[0]
         for order in inserted_order
@@ -312,7 +354,7 @@ def test_new_quota_is_allocated_by_discovery_group_then_item_order(tmp_path: Pat
     for index in range(2):
         add_source(
             service,
-            item=ItemInput(canonical_title=f"used-{index}", status="completed"),
+            item=ItemInput(item_title=f"used-{index}", status="completed"),
             external_id=f"used-{index}",
             quota_started_at="2026-09-17T14:00:00+09:00",
         )
@@ -320,7 +362,7 @@ def test_new_quota_is_allocated_by_discovery_group_then_item_order(tmp_path: Pat
     for group, order in [("A", "03"), ("B", "01"), ("A", "01"), ("B", "02")]:
         add_source(
             service,
-            item=ItemInput(canonical_title=f"{group}-{order}", order_key=order),
+            item=ItemInput(item_title=f"{group}-{order}", order_key=order),
             external_id=f"{group}-{order}",
             discovery_key=group,
         )
@@ -328,7 +370,7 @@ def test_new_quota_is_allocated_by_discovery_group_then_item_order(tmp_path: Pat
     plan = plan_for(service)
 
     assert [
-        service.get_item(candidate.item_id).canonical_title
+        service.get_item(candidate.item_id).item_title
         for candidate in plan.candidates
     ] == ["A-01", "A-03"]
     assert sum(skipped.reason == "quota_exhausted" for skipped in plan.skipped) == 2
@@ -338,14 +380,14 @@ def test_new_item_is_kept_in_its_existing_discovery_group(tmp_path: Path) -> Non
     service = CatalogService(tmp_path / "catalog.sqlite")
     add_source(
         service,
-        item=ItemInput(canonical_title="used", status="completed"),
+        item=ItemInput(item_title="used", status="completed"),
         external_id="used",
         quota_started_at="2026-09-17T14:00:00+09:00",
     )
     for group, order in [("A", "01"), ("A", "02"), ("B", "01"), ("B", "02"), ("A", "03")]:
         add_source(
             service,
-            item=ItemInput(canonical_title=f"{group}-{order}", order_key=order),
+            item=ItemInput(item_title=f"{group}-{order}", order_key=order),
             external_id=f"{group}-{order}",
             discovery_key=group,
         )
@@ -353,7 +395,7 @@ def test_new_item_is_kept_in_its_existing_discovery_group(tmp_path: Path) -> Non
     plan = plan_for(service)
 
     assert [
-        service.get_item(candidate.item_id).canonical_title
+        service.get_item(candidate.item_id).item_title
         for candidate in plan.candidates
     ] == ["A-01", "A-02", "A-03"]
 
@@ -362,18 +404,18 @@ def test_null_discovery_key_is_after_explicit_groups(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     add_source(
         service,
-        item=ItemInput(canonical_title="used", status="completed"),
+        item=ItemInput(item_title="used", status="completed"),
         external_id="used",
         quota_started_at="2026-09-17T14:00:00+09:00",
     )
     add_source(
         service,
-        item=ItemInput(canonical_title="null-old", order_key="01"),
+        item=ItemInput(item_title="null-old", order_key="01"),
         external_id="null-old",
     )
     add_source(
         service,
-        item=ItemInput(canonical_title="explicit", order_key="99"),
+        item=ItemInput(item_title="explicit", order_key="99"),
         external_id="explicit",
         discovery_key="A",
     )
@@ -381,7 +423,7 @@ def test_null_discovery_key_is_after_explicit_groups(tmp_path: Path) -> None:
     plan = plan_for(service)
 
     assert [
-        service.get_item(candidate.item_id).canonical_title
+        service.get_item(candidate.item_id).item_title
         for candidate in plan.candidates
     ] == ["explicit", "null-old"]
 
@@ -391,7 +433,7 @@ def test_numeric_episode_order_is_not_lexicographic(tmp_path: Path) -> None:
     for order in ["11", "1", "10", "9", "2"]:
         add_source(
             service,
-            item=ItemInput(canonical_title=f"第{order}話", order_key=order),
+            item=ItemInput(item_title=f"第{order}話", order_key=order),
             external_id=f"episode-{order}",
         )
 
@@ -410,7 +452,7 @@ def test_episode_parts_are_ordered_before_next_episode(tmp_path: Path) -> None:
     for order in ["13", "12-後編", "12-前編", "11"]:
         add_source(
             service,
-            item=ItemInput(canonical_title=order, order_key=order),
+            item=ItemInput(item_title=order, order_key=order),
             external_id=f"episode-{order}",
         )
 
@@ -431,20 +473,20 @@ def test_quota_window_counts_only_current_window(tmp_path: Path) -> None:
     ):
         add_source(
             service,
-            item=ItemInput(canonical_title=f"used-{index}", status="completed"),
+            item=ItemInput(item_title=f"used-{index}", status="completed"),
             external_id=f"used-{index}",
             quota_started_at=started_at,
         )
     add_source(
         service,
-        item=ItemInput(canonical_title="previous-window", status="completed"),
+        item=ItemInput(item_title="previous-window", status="completed"),
         external_id="previous-window",
         quota_started_at="2026-09-17T08:59:00+09:00",
     )
     for index in range(3):
         add_source(
             service,
-            item=ItemInput(canonical_title=f"candidate-{index}"),
+            item=ItemInput(item_title=f"candidate-{index}"),
             external_id=f"candidate-{index}",
         )
 
@@ -472,13 +514,13 @@ def test_reset_boundaries_and_active_or_expired_grant(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     active, _ = add_source(
         service,
-        item=ItemInput(canonical_title="active"),
+        item=ItemInput(item_title="active"),
         external_id="active",
         access_granted_until="2026-09-17T16:00:00+09:00",
     )
     expired, _ = add_source(
         service,
-        item=ItemInput(canonical_title="expired"),
+        item=ItemInput(item_title="expired"),
         external_id="expired",
         access_granted_until="2026-09-17T15:00:00+09:00",
     )
@@ -497,24 +539,24 @@ def test_active_grant_does_not_consume_slot_before_older_quota(tmp_path: Path) -
     for index in range(3):
         add_source(
             service,
-            item=ItemInput(canonical_title=f"used-{index}", status="completed"),
+            item=ItemInput(item_title=f"used-{index}", status="completed"),
             external_id=f"used-{index}",
             quota_started_at="2026-09-17T14:00:00+09:00",
         )
     active, _ = add_source(
         service,
-        item=ItemInput(canonical_title="第01話", order_key="01"),
+        item=ItemInput(item_title="第01話", order_key="01"),
         external_id="active-old",
         access_granted_until="2026-09-17T16:00:00+09:00",
     )
     next_item, _ = add_source(
         service,
-        item=ItemInput(canonical_title="第02話", order_key="02"),
+        item=ItemInput(item_title="第02話", order_key="02"),
         external_id="next-old",
     )
     exhausted, _ = add_source(
         service,
-        item=ItemInput(canonical_title="第03話", order_key="03"),
+        item=ItemInput(item_title="第03話", order_key="03"),
         external_id="later",
     )
 
@@ -543,14 +585,14 @@ def test_mixed_access_keeps_direct_behavior_and_allocates_old_quota(tmp_path: Pa
     ]:
         records[order] = add_source(
             service,
-            item=ItemInput(canonical_title=f"第{order}話", order_key=order),
+            item=ItemInput(item_title=f"第{order}話", order_key=order),
             external_id=f"mixed-{order}",
             access_mode=access_mode,
         )[0]
     for index in range(2):
         add_source(
             service,
-            item=ItemInput(canonical_title=f"used-{index}", status="completed"),
+            item=ItemInput(item_title=f"used-{index}", status="completed"),
             external_id=f"mixed-used-{index}",
             quota_started_at="2026-09-17T14:00:00+09:00",
         )
@@ -573,7 +615,7 @@ def test_unknown_order_formats_have_stable_fallback(tmp_path: Path) -> None:
     for key, label in [(None, "第?話"), ("mystery", "特別編"), ("02", "第02話")]:
         add_source(
             service,
-            item=ItemInput(canonical_title=label, order_key=key, order_label=label),
+            item=ItemInput(item_title=label, order_key=key, order_label=label),
             external_id=f"unknown-{key or 'none'}",
         )
 
@@ -609,7 +651,7 @@ def test_quota_window_before_morning_uses_previous_evening(tmp_path: Path) -> No
     ):
         add_source(
             service,
-            item=ItemInput(canonical_title=f"usage-{index}", status="completed"),
+            item=ItemInput(item_title=f"usage-{index}", status="completed"),
             external_id=f"usage-{index}",
             quota_started_at=started_at,
         )
@@ -624,7 +666,7 @@ def test_quota_usage_uses_reset_boundaries(tmp_path: Path) -> None:
     for index in range(4):
         add_source(
             service,
-            item=ItemInput(canonical_title=f"morning-{index}", status="completed"),
+            item=ItemInput(item_title=f"morning-{index}", status="completed"),
             external_id=f"morning-{index}",
             quota_started_at="2026-09-17T09:00:00+09:00",
         )
@@ -637,7 +679,7 @@ def test_quota_usage_uses_reset_boundaries(tmp_path: Path) -> None:
 
 def test_naive_now_and_unknown_policy_fail_safely(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
-    add_source(service, item=ItemInput(canonical_title="A"), external_id="a")
+    add_source(service, item=ItemInput(item_title="A"), external_id="a")
 
     with pytest.raises(BatchPlanningError, match="timezone-aware"):
         plan_for(service, now=datetime.fromisoformat("2026-09-17T15:00:00"))

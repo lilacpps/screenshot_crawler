@@ -26,6 +26,7 @@ class BatchCandidate:
     target_id: int
     site: str
     backend: str
+    target_key: str
     locator: str
     access_strategy: BatchAccessStrategy
     metadata: dict[str, str] = field(default_factory=dict)
@@ -67,6 +68,9 @@ class BatchExecutionResult:
 
     item_id: int
     source_id: int
+    target_id: int
+    crawl_run_id: int
+    artifact_id: int
     archive_path: Path
     status_path: Path
     page_count: int

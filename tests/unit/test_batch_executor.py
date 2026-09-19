@@ -2,6 +2,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -15,6 +16,7 @@ from screenshot_crawler.catalog import (
     ItemInput,
     SourceInput,
     SourceTargetInput,
+    WorkInput,
 )
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.models import RunConfig
@@ -50,6 +52,7 @@ def make_executor(
     *,
     fail_crawl: bool = False,
     fail_package: bool = False,
+    missing_archive: bool = False,
     configs: list[RunConfig] | None = None,
     before_run: Callable[[RunConfig], None] | None = None,
 ) -> BatchExecutor:
@@ -75,6 +78,10 @@ def make_executor(
         if fail_package:
             raise RuntimeError("packaging failed")
         archive_path = Path(library_dir) / "漫画" / "作品A" / "archive.zip"
+        if not missing_archive:
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            with ZipFile(archive_path, "w") as archive:
+                archive.writestr("archive.txt", "test archive")
         return PackageResult(
             archive_path=archive_path,
             title=explicit_metadata["title"],
@@ -100,8 +107,9 @@ def add_candidate(
     consumes_quota: bool = False,
     access_granted_until: str | None = None,
 ) -> BatchCandidate:
+    work = service.create_work(WorkInput(work_key=f"work-{access_mode}", title="作品A"))
     item = service.create_item(
-        ItemInput(canonical_title="作品A", order_label="第01話")
+        ItemInput(order_label="第01話"), work_id=work.id
     )
     source = service.create_source(
         SourceInput(
@@ -125,6 +133,7 @@ def add_candidate(
         target_id=target.id,
         site=source.site,
         backend=target.backend,
+        target_key=target.target_key,
         locator=target.locator,
         access_strategy="quota" if consumes_quota else "direct",
         metadata={"title": "作品A", "order": "第01話"},
@@ -156,7 +165,28 @@ async def test_direct_candidate_runs_and_completes_without_quota_state(
     assert result.archive_path == tmp_path / "Books" / "漫画" / "作品A" / "archive.zip"
     item = service.get_item(candidate.item_id)
     assert item.status == "completed"
-    assert item.local_path == result.archive_path.as_posix()
+    artifact = service.list_artifacts(crawl_run_id=result.crawl_run_id)[0]
+    assert artifact.id == result.artifact_id
+    assert artifact.locator == result.archive_path.as_posix()
+    assert artifact.state == "present"
+    run = service.get_crawl_run(result.crawl_run_id)
+    assert run.status == "succeeded"
+    assert (run.item_id, run.source_id, run.target_id) == (
+        candidate.item_id,
+        candidate.source_id,
+        candidate.target_id,
+    )
+    assert (run.site_snapshot, run.external_id_snapshot) == (
+        candidate.site,
+        f"chapter-{candidate.item_id}",
+    )
+    assert (run.backend_snapshot, run.target_key_snapshot, run.locator_snapshot) == (
+        candidate.backend,
+        candidate.target_key,
+        candidate.locator,
+    )
+    assert artifact.sha256
+    assert artifact.byte_size == result.archive_path.stat().st_size
     source = service.get_source(candidate.source_id)
     assert source.quota_started_at is None
     assert source.access_granted_until is None
@@ -192,7 +222,7 @@ async def test_quota_state_is_persisted_before_crawl_and_granted_for_24_hours(
     assert observed_sources[0].access_granted_until == "2026-09-18T15:00:00+09:00"
     assert configs[0].access_strategy == "quota"
     assert service.get_item(candidate.item_id).status == "completed"
-    assert result.archive_path.exists() is False
+    assert result.archive_path.exists() is True
 
 
 async def test_completed_at_uses_completion_time_not_plan_start_time(
@@ -268,6 +298,98 @@ async def test_packaging_failure_does_not_complete_item(tmp_path: Path) -> None:
     assert service.get_source(candidate.source_id).quota_started_at == NOW.isoformat()
 
 
+async def test_abnormal_stop_fails_run_without_artifact(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+
+    class AbnormalRunner(FakeRunner):
+        def __init__(self, config: RunConfig) -> None:
+            super().__init__(config, catalog=service)
+
+        async def run(self, page: object, adapter: FakeAdapter) -> RunResult:
+            del page, adapter
+            return RunResult(pages=(), stop_state=PageState.UNKNOWN, stop_reason="unknown")
+
+    executor = make_executor(service)
+    executor.runner_factory = AbnormalRunner
+    with pytest.raises(BatchExecutionError, match="did not stop normally"):
+        await executor.execute_candidate(object(), candidate, now=NOW)
+
+    run = service.list_crawl_runs()[0]
+    assert run.status == "failed"
+    assert run.page_count == 0
+    assert run.stop_reason == "unknown"
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+
+
+async def test_missing_archive_fails_run_without_artifact(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    executor = make_executor(service, missing_archive=True)
+
+    with pytest.raises(BatchExecutionError, match="archive"):
+        await executor.execute_candidate(object(), candidate, now=NOW)
+
+    assert service.list_crawl_runs()[0].status == "failed"
+    assert service.list_artifacts() == []
+    assert service.get_item(candidate.item_id).status == "pending"
+
+
+async def test_archive_hash_failure_fails_run_without_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    executor = make_executor(service)
+
+    def fail_hash(path: Path) -> tuple[str, int]:
+        raise OSError(f"hash failed: {path}")
+
+    monkeypatch.setattr("screenshot_crawler.batch.executor._hash_archive", fail_hash)
+    with pytest.raises(BatchExecutionError, match="hash failed"):
+        await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "Books",
+            now=NOW,
+        )
+
+    assert service.list_crawl_runs()[0].status == "failed"
+    assert service.list_artifacts() == []
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert (tmp_path / "Books" / "漫画" / "作品A" / "archive.zip").exists()
+
+
+async def test_success_finalize_failure_keeps_archive_and_fails_run(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    executor = make_executor(service)
+
+    def fail_finalize(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("finalize failed")
+
+    executor.catalog.finalize_successful_crawl = fail_finalize  # type: ignore[method-assign]
+    with pytest.raises(BatchExecutionError, match="finalize failed"):
+        await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "Books",
+            now=NOW,
+        )
+
+    run = service.list_crawl_runs()[0]
+    assert run.status == "failed"
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+    assert (tmp_path / "Books" / "漫画" / "作品A" / "archive.zip").exists()
+
+
 async def test_direct_failure_does_not_complete_item_or_write_quota_state(
     tmp_path: Path,
 ) -> None:
@@ -285,7 +407,8 @@ async def test_direct_failure_does_not_complete_item_or_write_quota_state(
 
 
 @pytest.mark.parametrize(
-    "stale_state", ["completed", "unavailable", "locator", "disabled_target", "access_mode"]
+    "stale_state",
+    ["completed", "unavailable", "locator", "disabled_target", "target_key", "access_mode"],
 )
 async def test_stale_candidate_does_not_start_crawler(
     tmp_path: Path, stale_state: str
@@ -294,7 +417,7 @@ async def test_stale_candidate_does_not_start_crawler(
     candidate = add_candidate(service, access_mode="free")
     expected_status = "pending"
     if stale_state == "completed":
-        service.mark_item_completed(candidate.item_id, "library/archive.zip")
+        service.mark_item_completed(candidate.item_id)
         expected_status = "completed"
     elif stale_state == "unavailable":
         service.update_source_external_state(
@@ -310,6 +433,12 @@ async def test_stale_candidate_does_not_start_crawler(
             SourceTargetInput(backend="web", locator=candidate.locator, enabled=False),
             source_id=candidate.source_id,
         )
+    elif stale_state == "target_key":
+        with service._connection() as connection:
+            connection.execute(
+                "UPDATE source_targets SET target_key = 'direct' WHERE id = ?",
+                (candidate.target_id,),
+            )
     else:
         service.update_source_external_state(
             "mangaone",
@@ -324,6 +453,8 @@ async def test_stale_candidate_does_not_start_crawler(
 
     assert configs == []
     assert service.get_item(candidate.item_id).status == expected_status
+    assert service.list_crawl_runs() == []
+    assert service.list_artifacts() == []
 
 
 async def test_wrong_backend_is_rejected_before_web_runner(tmp_path: Path) -> None:
@@ -337,6 +468,7 @@ async def test_wrong_backend_is_rejected_before_web_runner(tmp_path: Path) -> No
         )
 
     assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_crawl_runs() == []
 
 
 def test_batch_output_directory_is_unique_and_windows_safe(tmp_path: Path) -> None:
