@@ -518,7 +518,7 @@ were written before that guard. No BookWalker file, test, or note was changed.
 その後のproduction capture behavior実装は、このnoteの「Production source-native capture implementation」節に記録している。
 変更していない。BookWalker/Coreにも変更はない。計測対象は
 `https://manga-one.com/manga/2379/chapter/214131`、`lilacpps/screenshot_crawler`
-の `main` HEAD `a118b5cd643a4b3bddc7e4abce0061b7ed406ef4` である。共有Crawler
+の `main` HEAD `19fb8b71e1d1eb66e1b82085bf5d1cd0b766c39d` である。共有Crawler
 ChromeへCDP接続し、direct閲覧だけを使用した。無料ライフ/quota入口はclickせず、
 quota消費は0件だった。
 
