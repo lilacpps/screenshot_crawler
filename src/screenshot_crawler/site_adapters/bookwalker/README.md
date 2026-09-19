@@ -8,7 +8,17 @@ The crawler accepts a direct viewer URL or a BookWalker product URL such as `/de
 
 BookWalker uses a canvas renderer. The observed current screen is `#renderer .currentScreen canvas:not(.dummy)`. Core reads the canvas PNG buffer so viewer toolbar/browser UI is not included.
 
-The adapter traces renderer `drawImage` geometry and creates temporary page-sized canvases. This handles centered single pages, landscape pages, and true spreads. When geometry is unavailable, a bounded center-split fallback remains.
+The adapter first traces renderer `drawImage` geometry and source metadata. When one visible page
+rectangle maps safely to one source rectangle, it copies that source rectangle synchronously to a
+temporary canvas during the intercepted draw and returns the source-native PNG. The native path
+requires valid source dimensions, matching PNG dimensions, identity transform, `source-over`, and
+`filter: none`; it rejects ambiguous multiple draws, atlas/composition cases, and invalid copies.
+Native capture is cleared after every attempt and does not retain `ImageBitmap` references.
+
+If native capture is unavailable or fails any safety check, the adapter uses the existing geometry
+crop path with temporary page-sized canvases. This handles centered single pages, landscape pages,
+and true spreads. When geometry is unavailable, the bounded center-split fallback remains. Spread
+parts stay in right-to-left reading order in both paths.
 
 ## Spread and order
 
@@ -81,6 +91,11 @@ Live headed-CDP checks confirmed:
 - final `59/59` transition where the BookWalker logo appears in the canvas while `#endOfBook` becomes visible
 
 These observations remain the basis for the site-specific logic and should not be changed merely as part of Browser Session unification.
+
+Source-native live verification on 2026-09-19 used the four trial samples recorded in
+`note/01_bookwalker.md`: 960x1280, 1443x2048 portrait, 2048x1090 landscape, and a two-page
+1303x2048 spread. All produced native source crops; unsupported or ambiguous pages remain covered
+by the existing Canvas crop fallback.
 
 Shared-profile live verification confirmed BookWalker login and crawl, coexistence with the Manga ONE session, dedicated login Page cleanup, remote Chrome preservation, and no regression in the adapter-specific capture, navigation, or END behavior.
 

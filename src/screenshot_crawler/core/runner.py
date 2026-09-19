@@ -11,6 +11,7 @@ from playwright.async_api import Page
 from screenshot_crawler.core.capture import capture_locator, save_capture
 from screenshot_crawler.core.diagnostics import write_diagnostics
 from screenshot_crawler.core.errors import (
+    CaptureUnavailableError,
     MaxPagesExceededError,
     PageChangeTimeoutError,
     UnknownPageStateError,
@@ -163,19 +164,28 @@ class CrawlerRunner:
                     adapter.get_content_identity(page), "get_content_identity"
                 )
                 identity_key = _identity_key(identity)
-                targets = await self._adapter_call(
-                    adapter.get_capture_targets(page), "get_capture_targets"
-                )
                 try:
-                    captures = [
-                        await capture_locator(target)
-                        for target in targets
-                    ]
-                finally:
-                    await self._adapter_call(
-                        adapter.cleanup_capture_targets(page),
-                        "cleanup_capture_targets",
+                    captures = await self._adapter_call(
+                        adapter.capture_page(page), "capture_page"
                     )
+                except (CaptureUnavailableError, PageChangeTimeoutError):
+                    captures = None
+                if captures is None:
+                    targets = await self._adapter_call(
+                        adapter.get_capture_targets(page), "get_capture_targets"
+                    )
+                    try:
+                        captures = [
+                            await capture_locator(target)
+                            for target in targets
+                        ]
+                    finally:
+                        await self._adapter_call(
+                            adapter.cleanup_capture_targets(page),
+                            "cleanup_capture_targets",
+                        )
+                if not captures:
+                    raise LookupError("Adapter returned no capture results")
                 fingerprints = [fingerprint_bytes(capture.data) for capture in captures]
                 new_captures = [
                     (index, capture, fingerprints[index])

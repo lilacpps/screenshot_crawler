@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import UnsupportedAccessStrategyError
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
@@ -68,6 +69,12 @@ class SiteAdapter(ABC):
         """Remove temporary targets created by :meth:`get_capture_targets`."""
 
         return
+
+    async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        """Optionally capture CONTENT directly; ``None`` selects Locator fallback."""
+
+        del page
+        return None
 
     @abstractmethod
     async def get_content_identity(self, page: Page) -> ContentIdentity:

@@ -6,6 +6,7 @@ import pytest
 
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import (
+    CaptureUnavailableError,
     MaxPagesExceededError,
     PageChangeTimeoutError,
     RunAlreadyExistsError,
@@ -101,6 +102,63 @@ class FakeAdapter(SiteAdapter):
         previous_identity: ContentIdentity | None,
     ) -> None:
         return None
+
+
+class NativeCaptureAdapter(FakeAdapter):
+    def __init__(self, states: list[PageState], identities: list[ContentIdentity]) -> None:
+        super().__init__(states, identities)
+        self.native_calls = 0
+        self.target_calls = 0
+        self.cleanup_calls = 0
+
+    async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...] | None:
+        self.native_calls += 1
+        return (CaptureResult(data=b"native", width=960, height=1280),)
+
+    async def get_capture_targets(self, page: FakePage) -> tuple[object, ...]:
+        self.target_calls += 1
+        raise AssertionError("native capture should bypass locator targets")
+
+    async def cleanup_capture_targets(self, page: FakePage) -> None:
+        self.cleanup_calls += 1
+
+
+class NativeSpreadAdapter(NativeCaptureAdapter):
+    async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...] | None:
+        self.native_calls += 1
+        return (
+            CaptureResult(data=b"right", width=1303, height=2048),
+            CaptureResult(data=b"left", width=1303, height=2048),
+        )
+
+
+async def test_base_adapter_capture_page_defaults_to_locator_fallback() -> None:
+    adapter = FakeAdapter(
+        [PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    assert await adapter.capture_page(FakePage()) is None
+
+
+class FallbackCaptureAdapter(FakeAdapter):
+    def __init__(
+        self,
+        states: list[PageState],
+        identities: list[ContentIdentity],
+        error: Exception | None = None,
+    ) -> None:
+        super().__init__(states, identities)
+        self.native_calls = 0
+        self.cleanup_calls = 0
+        self.error = error or CaptureUnavailableError("test native capture unavailable")
+
+    async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...] | None:
+        self.native_calls += 1
+        raise self.error
+
+    async def cleanup_capture_targets(self, page: FakePage) -> None:
+        self.cleanup_calls += 1
 
 
 class TrackingAdapter(FakeAdapter):
@@ -211,6 +269,112 @@ async def test_runner_captures_content_and_stops_at_end(
     assert len(result.pages) == 1
     manifest = json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["pages"][0]["sequence"] == 1
+
+
+async def test_runner_prefers_native_capture_over_locator_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unexpected_capture(_target: object) -> CaptureResult:
+        raise AssertionError("locator capture should not run for native results")
+
+    monkeypatch.setattr("screenshot_crawler.core.runner.capture_locator", unexpected_capture)
+    adapter = NativeCaptureAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+        )
+    ).run(FakePage(), adapter)
+
+    assert result.pages[0].width == 960
+    assert result.pages[0].height == 1280
+    assert adapter.native_calls == 1
+    assert adapter.target_calls == 0
+    assert adapter.cleanup_calls == 0
+
+
+async def test_runner_preserves_native_spread_order_and_metadata(
+    tmp_path: Path,
+) -> None:
+    adapter = NativeSpreadAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+        )
+    ).run(FakePage(), adapter)
+
+    assert [(page.width, page.height) for page in result.pages] == [
+        (1303, 2048),
+        (1303, 2048),
+    ]
+    assert [page.metadata for page in result.pages] == [
+        {"part": 1, "parts": 2},
+        {"part": 2, "parts": 2},
+    ]
+    assert [
+        (tmp_path / "run" / page.file).read_bytes() for page in result.pages
+    ] == [b"right", b"left"]
+
+
+async def test_runner_falls_back_and_cleans_up_after_native_unavailable(
+    tmp_path: Path,
+    fake_capture: None,
+) -> None:
+    adapter = FallbackCaptureAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+        )
+    ).run(FakePage(), adapter)
+
+    assert result.pages[0].width == 100
+    assert result.pages[0].height == 200
+    assert adapter.native_calls == 1
+    assert adapter.cleanup_calls == 1
+
+
+async def test_runner_falls_back_after_bounded_native_capture_timeout(
+    tmp_path: Path,
+    fake_capture: None,
+) -> None:
+    adapter = FallbackCaptureAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+        PageChangeTimeoutError("test capture timeout"),
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+        )
+    ).run(FakePage(), adapter)
+
+    assert len(result.pages) == 1
+    assert adapter.cleanup_calls == 1
 
 
 async def test_runner_skips_ad_and_does_not_capture_next_content(

@@ -14,6 +14,10 @@ class PageChangeTimeoutError(CrawlerError):
     """Raised when a requested page change cannot be confirmed."""
 
 
+class CaptureUnavailableError(CrawlerError):
+    """Raised when an adapter's direct capture cannot safely produce a page."""
+
+
 class MaxPagesExceededError(CrawlerError):
     """Raised by the infinite-loop guard."""
 

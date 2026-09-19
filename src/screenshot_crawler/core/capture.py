@@ -25,6 +25,15 @@ def _png_dimensions(data: bytes) -> tuple[int, int] | None:
     return struct.unpack(">II", data[16:24])
 
 
+def capture_png_bytes(data: bytes) -> CaptureResult:
+    """Create a capture result from validated PNG bytes."""
+
+    dimensions = _png_dimensions(data)
+    if dimensions is None:
+        raise ValueError("capture data is not a valid PNG")
+    return CaptureResult(data=data, width=dimensions[0], height=dimensions[1])
+
+
 async def capture_locator(locator: Locator) -> CaptureResult:
     """Capture only the supplied Locator, never the full page."""
 

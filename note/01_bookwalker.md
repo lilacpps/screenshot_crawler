@@ -463,6 +463,64 @@ drawImage geometryだけを評価している。この確認でもproductionコ�
 今回の3サンプルの目視分類では、0回（1回目）は他社のライトノベルの表紙、3回左送り後（2回目）は漫画、
 17回左送り後（3回目）はKADOKAWA系のライトノベルの表紙・挿絵・通常本文が混在するページだった。
 
+### 18.5 source-native PNG feasibility diagnostic (2026-09-19)
+
+最新`main`のHEAD `a118b5cd643a4b3bddc7e4abce0061b7ed406ef4`を基準に、既存のtrial viewer URLを
+fresh profile・専用CDP portで再利用し、`drawImage()`のsourceを呼び出し時に一時Canvasへ即時copyした。
+productionの`BookWalkerAdapter`、Core capture、CrawlerRunner、launcher、RunConfigは変更していない。
+
+source-native PNGは、source全体を`source.width`×`source.height`のtemporary canvasへ描画したPNGと、
+`source rectangle`だけを同じnative寸法で描画したPNGの両方を保存した。current PNGは既存の
+`get_capture_targets()`経由で取得し、native cropをcurrent target寸法へ一時resizeした補助比較も行った。
+補助比較の差分値は小さいほど視覚内容が近いことを示す。Pillowを使ったdiagnostic-onlyの比較であり、
+productionでresizeする処理ではない。
+
+| sample / viewer state | source / draw | source rectangle | destination | current PNG → native PNG | 補助比較 (mean / RMS) |
+| --- | --- | --- | --- | --- | ---: |
+| A: `3e1a3eff...&cty=0`, `2/33` | `ImageBitmap 960x1280`, 9引数 | full `0,0,960,1280` | 2 target: `1110x1479` | `1110x1479` → `960x1280` × 2; native `1,240,180 / 102,707` bytes | `1.0979 / 3.6257`; `0.3337 / 5.8903` |
+| B: `afea11c1...&cty=0`, `1/53` | `ImageBitmap 1443x2048`, 9引数 | full `0,0,1443,2048` | `1043x1479` | `1043x1479` → `1443x2048`; native `4,624,465` bytes | `1.1041 / 2.6574` |
+| C: 同URL、3回左送り後 `4/53` | `ImageBitmap 2048x1090`, 9引数 | full `0,0,2048,1090` | `2779x1479` | `2779x1479` → `2048x1090`; native `2,576,173` bytes | `0.7008 / 2.4888` |
+| D: `0d110c3b...&cty=1`, 3回左送り後 `7/11` | `ImageBitmap 1303x2048` × 2, 9引数 | 各sourceともfull | 右 `941x1479` / 左 `941x1479` | 各`941x1479` → `1303x2048`; native `2,174,727 / 2,092,990` bytes | `3.1219 / 6.1734`; `2.8404 / 5.7048` |
+
+全sampleで`devicePixelRatio=1.5`、Canvas transformはidentity (`a=1,b=0,c=0,d=1,e=0,f=0`)、
+`globalCompositeOperation=source-over`、filterは`none`だった。source rectangleは全sampleでsource全体と一致し、
+atlasの一部cropや複数sourceの合成は今回観測されなかった。current/nativeを目視比較した結果、表紙・本文・
+漫画のページ内容、上下左右の余白、回転、反転に明らかな差はなく、spread Dも右ページ→左ページのreading orderを
+維持して個別PNG化できた。
+
+ImageBitmapのreferenceを長時間保持せず、`drawImage` interception中にnative copyを完了させる方式で、4種類とも
+PNG生成に成功した。sourceを保存したreferenceの寿命問題は避けられる一方、diagnosticでは該当drawごとにPNG化する
+ため、同じ方式をproductionへ入れる場合はcapture latencyとmemoryを別途測定する必要がある。各viewer navigationは
+既存Adapterのrender-ready / page-counter change waitを通過し、今回の範囲ではnavigation failureは発生しなかった。
+
+この調査範囲ではsource-native captureの feasibility は高い。ただし未観測の複数draw、transform、atlas、transition中の
+一時sourceを安全に分類できることまでは証明していないため、実装は「source-native優先 + 失敗時は既存Canvas
+cropへfallback」とする。上記のdiagnostic結果を基に、今回の実装でBookWalker Adapterへこのcapture pathを組み込んだ。
+
+再現用scriptは`scripts/diagnose_bookwalker_native_source.py`、生成したdiagnostic PNG/JSONは
+`output/diagnostics/bookwalker-source-native/`配下に保存した。実サイトの画像はfixtureやcommitには含めない。
+
+### 18.6 source-native production capture (2026-09-19)
+
+BookWalkerの`capture_page()`は、初回navigation前と`go_next()`クリック前にnative traceをarmし、
+`drawImage()` interception中にsource rectangleをtemporary canvasへ即時copyする。`ImageBitmap`等の
+source referenceは保持しない。CONTENT capture時にvisible canvasのgeometry traceとnative traceを対応付け、
+source rectangle cropのPNGがsource rectangle寸法と一致し、transformがidentity、compositeが
+`source-over`、filterが`none`の場合だけnative resultを返す。
+
+source trace欠落、PNG生成/検証失敗、寸法不一致、複数sourceによる同一rectangleの合成、atlas rectangleの
+変化、transform / composite / filter、またはspread片側の失敗ではページ全体をnative採用せず、Coreの既存
+Canvas crop経路へfallbackする。spreadは右ページ→左ページ順を維持する。native hookの成否はCoreの
+fingerprint、manifest sequence、`part` / `parts` metadata、page dimensions処理を変更しない。
+
+Coreにはsite-specificな判定を追加せず、base `SiteAdapter.capture_page()`は`None`を返す。native hookが
+`None`または`CaptureUnavailableError`を返した場合、Coreは`get_capture_targets()` / `capture_locator()`へ
+戻る。direct hookのtemporary stateはhook自身がclearし、fallback時もtraceをdisable・clearする。
+
+Unit testではdirect resultのLocator bypass、unavailable fallbackとcleanup、PNG寸法、transform /
+composite / filter、複数source / atlas reject、spread right-to-leftを固定した。先行live diagnosticの
+4 sampleではnative copy成功とnavigation failureなしを確認済みであり、実画像はfixture/commitへ保存しない。
+
 ## 19. Known limitations / maintenance
 
 - BookWalker DOM / Canvas renderer変更時は再調査が必要。

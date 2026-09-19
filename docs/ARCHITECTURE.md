@@ -290,7 +290,8 @@ loop:
         enforce max_pages before additional capture
         validate context
         get identity
-        get one or more capture targets
+        optional adapter direct capture
+        if unavailable, get one or more capture targets
         capture
         SHA-256 fingerprint dedupe
         save PNG + manifest/progress
@@ -379,6 +380,7 @@ detect_state(page)
 get_capture_target(page)
 get_capture_targets(page)
 cleanup_capture_targets(page)
+capture_page(page) -> tuple[CaptureResult, ...] | None
 get_content_identity(page)
 get_content_context(page)
 go_next(page)
@@ -386,6 +388,11 @@ wait_for_change(page, previous_identity)
 ```
 
 実際のdefault method / optional hookは `site_adapters/base.py` をauthorityとする。
+
+`capture_page()`は任意の直接capture hookである。非`None`の非空tupleを返した場合、Coreは
+Locator captureを行わない。`None`、`CaptureUnavailableError`、bounded timeoutでは既存の
+target captureへfallbackする。temporary resourceのcleanupは直接capture hook側が担当する。
+このhookのsite-specificな実装はAdapter内に置き、CoreはBookWalker等のsite名を判定しない。
 
 Crawl Requestの実装では、既存`RunConfig`へsite-neutralなrun access intentとoptional output metadataを最小限保持し、Adapterへ`configure_run(page, access_strategy)`で渡す。既定hookは`auto`だけを受け付け、未対応の`direct`/`quota`は明示的に停止する。Manga ONE Adapterは`auto`/`direct`/`quota`を受け付け、site-specific entry操作を実行する。
 
@@ -441,7 +448,9 @@ Browser Session architectureは採用済みで、共通launcherとshared-profile
 
 標準launcherは `start_crawler_chrome.ps1`、profileは `.chrome-crawler`、global endpointは `CRAWLER_CDP_ENDPOINT` である。site別launcherは削除済みで、site-specific endpoint/profileは例外overrideとしてのみ扱う。BookWalker/Manga ONEのshared-profile login/crawlとsession共存はlive verification済みである。
 
-BookWalker/Manga ONEのviewer/capture/END判定は変更せず、Browser Session Layerと運用launcherだけを共通化した。
+BookWalker/Manga ONEのviewer/navigation/END判定は維持する。BookWalkerだけはAdapter内で
+source-native captureを先に試し、必要時に既存Canvas cropへfallbackする。Browser Session Layerと
+運用launcherはsite-neutralなままとする。
 
 Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みである。2026-09-18時点でBookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryは採用仕様のみ定義済みで未実装である。
 

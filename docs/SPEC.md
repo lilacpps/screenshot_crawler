@@ -204,6 +204,7 @@ CoreはWatchlist、Catalog、Discovery、Batchの状態を管理しない。
 - `prepare_page`
 - `initialize`
 - `detect_state`
+- optional `capture_page`
 - `get_capture_target` / `get_capture_targets`
 - `cleanup_capture_targets`
 - `get_content_identity`
@@ -277,7 +278,19 @@ Raw CDP Protocolを使う場合は:
 
 ## 11. Capture
 
-本文DOM Locatorを優先する。Canvasではraw PNG bufferを利用できる。見開きなど1画面に複数ページがある場合、Adapterは複数capture targetを読書順で返してよい。
+通常はLocator単位でcaptureする。Adapterは必要な場合だけ`capture_page(page)`を実装し、
+直接取得済みの`tuple[CaptureResult, ...]`を返してLocator captureを省略できる。
+`None`は直接capture不能を表し、Coreは既存の`get_capture_targets()` → `capture_locator()`へ
+fallbackする。空tupleは有効なcapture結果ではなく異常として扱う。
+直接captureが作成したtemporary resourceのcleanupは、そのAdapterのhook自身が責任を持つ。
+
+直接capture hookの`CaptureUnavailableError`またはCoreのbounded timeoutはfallback扱いとし、
+fallback後の通常capture失敗は通常どおりrun errorにする。BookWalkerはsource-native PNGを
+優先し、source rectangle、geometry、transform、composite、filterを安全に検証できない場合は
+従来のCanvas cropへ戻る。Manga ONEなどhookをoverrideしないAdapterの挙動は変わらない。
+
+Canvasではraw PNG bufferを利用できる。見開きなど1画面に複数ページがある場合、Adapterは複数capture
+resultまたはcapture targetを読書順で返してよい。
 
 保存連番とサイト上のページ番号は別物とする。
 

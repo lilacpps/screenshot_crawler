@@ -7,13 +7,19 @@ stable DOM signals exposed by the viewer shell and stops on ambiguous states.
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
+from binascii import Error as BinasciiError
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from screenshot_crawler.core.capture import CaptureResult, capture_png_bytes
 from screenshot_crawler.core.errors import (
+    CaptureUnavailableError,
     PageChangeTimeoutError,
     UnsupportedAccessStrategyError,
 )
@@ -21,6 +27,9 @@ from screenshot_crawler.core.models import AccessStrategy, ContentContext, Conte
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.bookwalker.login import login_bookwalker
+from screenshot_crawler.site_adapters.bookwalker.native_capture import (
+    select_native_draw_calls,
+)
 from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     ReaderControlKind,
     classify_reader_control,
@@ -32,9 +41,13 @@ _DRAW_TRACE_SCRIPT = """
   if (window.__bookwalkerDrawTraceInstalled) return;
   window.__bookwalkerDrawTraceInstalled = true;
   window.__bookwalkerDrawCalls = [];
+  window.__bookwalkerNativeCaptureEnabled = true;
+  window.__bookwalkerNativeDrawCalls = [];
   const original = CanvasRenderingContext2D.prototype.drawImage;
   let nextCanvasId = 1;
+  let nextSourceId = 1;
   const canvasIds = new WeakMap();
+  const sourceIds = new WeakMap();
   const getCanvasId = canvas => {
     let id = canvasIds.get(canvas);
     if (!id) {
@@ -44,15 +57,78 @@ _DRAW_TRACE_SCRIPT = """
     }
     return id;
   };
+  const getSourceId = source => {
+    let id = sourceIds.get(source);
+    if (!id) {
+      id = String(nextSourceId++);
+      sourceIds.set(source, id);
+    }
+    return id;
+  };
+  const sourceRectAndDestination = (source, values) => {
+    const width = Number.isFinite(source?.width) ? Number(source.width) : null;
+    const height = Number.isFinite(source?.height) ? Number(source.height) : null;
+    if (values.length === 2 && width !== null && height !== null) {
+      return {
+        sourceRect: {x: 0, y: 0, width, height},
+        destination: {x: values[0], y: values[1], width, height},
+      };
+    }
+    if (values.length === 4) {
+      return {
+        sourceRect: width === null || height === null
+          ? null : {x: 0, y: 0, width, height},
+        destination: {
+          x: values[0], y: values[1], width: values[2], height: values[3],
+        },
+      };
+    }
+    if (values.length === 8) {
+      return {
+        sourceRect: {
+          x: values[0], y: values[1], width: values[2], height: values[3],
+        },
+        destination: {
+          x: values[4], y: values[5], width: values[6], height: values[7],
+        },
+      };
+    }
+    return {sourceRect: null, destination: null};
+  };
+  const copySourceCrop = (source, sourceRect) => {
+    if (!sourceRect || sourceRect.width <= 0 || sourceRect.height <= 0) {
+      return {dataUrl: null, error: 'invalid source rectangle'};
+    }
+    const target = document.createElement('canvas');
+    target.width = Math.round(sourceRect.width);
+    target.height = Math.round(sourceRect.height);
+    const context = target.getContext('2d');
+    if (!context) return {dataUrl: null, error: '2d context unavailable'};
+    try {
+      original.call(
+        context,
+        source,
+        sourceRect.x, sourceRect.y, sourceRect.width, sourceRect.height,
+        0, 0, sourceRect.width, sourceRect.height,
+      );
+      return {dataUrl: target.toDataURL('image/png'), error: null};
+    } catch (error) {
+      return {dataUrl: null, error: String(error)};
+    }
+  };
   CanvasRenderingContext2D.prototype.drawImage = function(...args) {
     try {
       const canvas = this.canvas;
       const values = args.slice(1).map(value => Number(value));
+      const geometry = sourceRectAndDestination(args[0], values);
       if (canvas && canvas.width > 1000 && canvas.height > 500) {
         const destination = values.length >= 8
           ? values.slice(4, 8)
-          : values.length === 4
-            ? values.slice(0, 4)
+          : geometry.destination
+            ? [
+                geometry.destination.x, geometry.destination.y,
+                geometry.destination.width, geometry.destination.height,
+              ]
             : null;
         if (destination) {
           window.__bookwalkerDrawCalls.push({
@@ -63,6 +139,41 @@ _DRAW_TRACE_SCRIPT = """
           });
           if (window.__bookwalkerDrawCalls.length > 500) {
             window.__bookwalkerDrawCalls.shift();
+          }
+        }
+        if (window.__bookwalkerNativeCaptureEnabled && args[0] && geometry.destination) {
+          const source = args[0];
+          const copy = copySourceCrop(source, geometry.sourceRect);
+          let transform = null;
+          try {
+            const matrix = this.getTransform();
+            transform = {
+              a: matrix.a, b: matrix.b, c: matrix.c,
+              d: matrix.d, e: matrix.e, f: matrix.f,
+            };
+          } catch (error) {}
+          window.__bookwalkerNativeDrawCalls.push({
+            timestamp: performance.now(),
+            canvasId: getCanvasId(canvas),
+            canvasWidth: canvas.width,
+            canvasHeight: canvas.height,
+            sourceId: getSourceId(source),
+            source: {
+              constructor: source?.constructor?.name || null,
+              width: Number.isFinite(source?.width) ? Number(source.width) : null,
+              height: Number.isFinite(source?.height) ? Number(source.height) : null,
+            },
+            sourceRect: geometry.sourceRect,
+            destination: geometry.destination,
+            argumentForm: values.length + 1,
+            transform,
+            globalCompositeOperation: this.globalCompositeOperation,
+            filter: this.filter,
+            sourceCropPng: copy.dataUrl,
+            sourceCropPngError: copy.error,
+          });
+          if (window.__bookwalkerNativeDrawCalls.length > 100) {
+            window.__bookwalkerNativeDrawCalls.shift();
           }
         }
       }
@@ -106,6 +217,41 @@ def is_last_page_counter(text: str) -> bool:
 
     match = re.search(r"(\d+)\s*/\s*(\d+)", " ".join(text.split()))
     return bool(match and match.group(1) == match.group(2))
+
+
+def _capture_from_data_url(value: object) -> CaptureResult:
+    if not isinstance(value, str) or not value.startswith("data:image/png;base64,"):
+        raise CaptureUnavailableError("BookWalker native source PNG is unavailable")
+    try:
+        data = base64.b64decode(value.split(",", 1)[1], validate=True)
+        return capture_png_bytes(data)
+    except (ValueError, TypeError, BinasciiError) as exc:
+        raise CaptureUnavailableError(
+            "BookWalker native source PNG could not be decoded"
+        ) from exc
+
+
+def _native_call_is_safe(call: dict[str, Any]) -> bool:
+    transform = call.get("transform")
+    if not isinstance(transform, dict):
+        return False
+    if any(
+        transform.get(key) != expected
+        for key, expected in {
+            "a": 1,
+            "b": 0,
+            "c": 0,
+            "d": 1,
+            "e": 0,
+            "f": 0,
+        }.items()
+    ):
+        return False
+    return (
+        call.get("globalCompositeOperation") == "source-over"
+        and call.get("filter") == "none"
+        and call.get("sourceCropPngError") in (None, "")
+    )
 
 
 class BookWalkerStrictEntryError(RuntimeError):
@@ -882,6 +1028,128 @@ class BookWalkerAdapter(SiteAdapter):
     async def prepare_page(self, page: Page) -> None:
         await page.add_init_script(_DRAW_TRACE_SCRIPT)
 
+    async def _clear_native_capture(self, page: Page) -> None:
+        try:
+            await page.evaluate(
+                """
+                () => {
+                  window.__bookwalkerNativeCaptureEnabled = false;
+                  window.__bookwalkerNativeDrawCalls = [];
+                }
+                """
+            )
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+            return
+
+    async def _arm_native_capture(self, page: Page) -> None:
+        try:
+            await page.evaluate(
+                """
+                () => {
+                  window.__bookwalkerNativeDrawCalls = [];
+                  window.__bookwalkerNativeCaptureEnabled = true;
+                }
+                """
+            )
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+            return
+
+    async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        """Prefer native source crops and return None for the legacy fallback."""
+
+        try:
+            canvas = await self.get_capture_target(page)
+            trace_id = await canvas.get_attribute("data-bookwalker-trace-id")
+            if not trace_id:
+                raise CaptureUnavailableError("BookWalker canvas trace id is missing")
+            size = await canvas.evaluate(
+                "element => ({width: element.width, height: element.height})"
+            )
+            width = int(size["width"])
+            height = int(size["height"])
+            boxes = await self._page_draw_rectangles(page, canvas)
+            if not boxes:
+                raise CaptureUnavailableError(
+                    "BookWalker native capture requires draw geometry"
+                )
+            draw_calls = await page.evaluate(
+                """
+                traceId => (window.__bookwalkerNativeDrawCalls || [])
+                  .filter(call => call.canvasId === traceId)
+                """,
+                trace_id,
+            )
+            selected = select_native_draw_calls(
+                draw_calls,
+                canvas_id=trace_id,
+                canvas_width=width,
+                canvas_height=height,
+                boxes=boxes,
+            )
+            if selected is None or len(selected) != len(boxes):
+                raise CaptureUnavailableError(
+                    "BookWalker native source calls did not match page geometry"
+                )
+
+            captures: list[CaptureResult] = []
+            for call in selected:
+                if not _native_call_is_safe(call):
+                    raise CaptureUnavailableError(
+                        "BookWalker native source uses unsupported composition"
+                    )
+                source_rect = call.get("sourceRect")
+                if not isinstance(source_rect, dict):
+                    raise CaptureUnavailableError(
+                        "BookWalker native source rectangle is missing"
+                    )
+                try:
+                    source = call["source"]
+                    source_width = float(source["width"])
+                    source_height = float(source["height"])
+                    source_x = float(source_rect["x"])
+                    source_y = float(source_rect["y"])
+                    expected_width = round(float(source_rect["width"]))
+                    expected_height = round(float(source_rect["height"]))
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise CaptureUnavailableError(
+                        "BookWalker native source rectangle is invalid"
+                    ) from exc
+                if (
+                    source_width <= 0
+                    or source_height <= 0
+                    or source_x < 0
+                    or source_y < 0
+                    or expected_width <= 0
+                    or expected_height <= 0
+                    or source_x + expected_width > source_width
+                    or source_y + expected_height > source_height
+                ):
+                    raise CaptureUnavailableError(
+                        "BookWalker native source rectangle is out of bounds"
+                    )
+                capture = _capture_from_data_url(call.get("sourceCropPng"))
+                if (capture.width, capture.height) != (expected_width, expected_height):
+                    raise CaptureUnavailableError(
+                        "BookWalker native PNG dimensions do not match source rectangle"
+                    )
+                captures.append(capture)
+            return tuple(captures)
+        except CaptureUnavailableError:
+            return None
+        except (
+            BinasciiError,
+            KeyError,
+            LookupError,
+            PlaywrightError,
+            PlaywrightTimeoutError,
+            TimeoutError,
+            TypeError,
+            ValueError,
+        ):
+            return None
+        finally:
+            await self._clear_native_capture(page)
+
     async def detect_state(self, page: Page) -> PageState:
         current_content_id = self.content_id_from_url(page.url)
         if (
@@ -1094,6 +1362,7 @@ class BookWalkerAdapter(SiteAdapter):
 
     async def go_next(self, page: Page) -> None:
         self._final_navigation_pending = await self._is_last_page_counter(page)
+        await self._arm_native_capture(page)
         # BookWalker advances on the left side of the viewer. The dedicated
         # tap-area div is normally hidden on desktop, so click the viewer's
         # left edge instead of relying on browser scroll behavior from a bare

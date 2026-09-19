@@ -335,6 +335,13 @@ Adapterは `get_capture_targets()` で複数targetを返せる。保存順はAda
 
 一時targetは `cleanup_capture_targets()` で後始末する。
 
+Adapterは必要な場合だけ `capture_page(page)` をoverrideできる。非`None`の非空
+`tuple[CaptureResult, ...]`を返した場合、CoreはLocator captureを行わず、その結果を同じ
+fingerprint / manifest / page dimension処理へ渡す。`None`、`CaptureUnavailableError`、Coreの
+bounded timeoutでは従来の `get_capture_targets()` → `capture_locator()`へfallbackする。
+fallback後のcapture失敗は通常のrun errorとし、直接capture hookが作ったtemporary resourceの
+cleanupはhook側の責任とする。Base Adapterは`None`を返すため、overrideしないsiteの挙動は維持する。
+
 ## 13. Run output safety
 
 新規runの `output_dir` は、存在しないか完全に空でなければならない。
