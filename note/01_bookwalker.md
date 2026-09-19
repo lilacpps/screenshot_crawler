@@ -504,13 +504,18 @@ cropへfallback」とする。上記のdiagnostic結果を基に、今回の実�
 
 BookWalkerの`capture_page()`は、初回navigation前と`go_next()`クリック前にnative traceをarmし、
 `drawImage()` interception中にsource rectangleをtemporary canvasへ即時copyする。`ImageBitmap`等の
-source referenceは保持しない。CONTENT capture時にvisible canvasのgeometry traceとnative traceを対応付け、
+source referenceは保持しない。production native採用対象のsource typeは当面`ImageBitmap`だけに限定し、
+HTMLImageElement、HTMLCanvasElement、OffscreenCanvas、HTMLVideoElement、unknownはfallbackする。
+CONTENT capture時にvisible canvasのgeometry traceとnative traceを対応付け、
 source rectangle cropのPNGがsource rectangle寸法と一致し、transformがidentity、compositeが
 `source-over`、filterが`none`の場合だけnative resultを返す。
 
 source trace欠落、PNG生成/検証失敗、寸法不一致、複数sourceによる同一rectangleの合成、atlas rectangleの
 変化、transform / composite / filter、またはspread片側の失敗ではページ全体をnative採用せず、Coreの既存
-Canvas crop経路へfallbackする。spreadは右ページ→左ページ順を維持する。native hookの成否はCoreの
+Canvas crop経路へfallbackする。native成功時はnative traceとgeometry traceの両方をclearし、次ページへ
+進む前に前ページgeometryを持ち越さない。native失敗時はnative traceだけをclearしてgeometry traceを
+残し、fallbackの`get_capture_targets()`が使った後に`cleanup_capture_targets()`でgeometry traceをclearする。
+spreadは右ページ→左ページ順を維持する。native hookの成否はCoreの
 fingerprint、manifest sequence、`part` / `parts` metadata、page dimensions処理を変更しない。
 
 Coreにはsite-specificな判定を追加せず、base `SiteAdapter.capture_page()`は`None`を返す。native hookが

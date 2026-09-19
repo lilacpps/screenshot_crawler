@@ -572,9 +572,13 @@ Browser Session Modelは採用済みで、共通launcherとshared-profile live v
 
 BookWalker/Manga ONEを含むreal-site運用は、`start_crawler_chrome.ps1` とshared `.chrome-crawler/`を標準とする。site-specific launcherは削除済みであり、site-specific endpoint/profileは例外overrideとしてのみ許可する。
 
-移行後もBookWalker/Manga ONEのviewer/capture/END挙動を変更しない。
+移行後もBookWalker/Manga ONEのviewer/navigation/END挙動を維持する。BookWalkerのcaptureは
+source-nativeを先に試し、安全性を確認できない場合は従来Canvas cropへfallbackする。
 
-Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner、Site Policy registry、Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みである。BookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryは採用仕様を定義済みだが未実装である。実装後も既存Crawlerの1 URL -> 1 run責務を維持する。
+Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5Aのread-only Batch Planner、
+Site Policy registry、Manga ONE Policy、Phase 5BのManga ONE Batch Executor、BookWalkerのseries-scoped
+Discovery / Policy / Batch integration / strict direct・quota entry / source-native captureは実装済みである。
+実装後も既存Crawlerの1 URL -> 1 run責務を維持する。
 
 ## 27. 完了確認
 

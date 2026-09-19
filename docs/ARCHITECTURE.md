@@ -119,12 +119,14 @@ Watchlist targetからitem/source候補を列挙する。
 - site-specific discovery Adapterを受け入れるcontract
 - full / incremental traversal orchestration
 - default known-streak incremental stop
-- site固有のstable boundaryが必要な場合に小さいincremental stop policyを受け入れる拡張点（BookWalker実装時に追加）
+- site固有のstable boundaryが必要な場合に小さいincremental stop policyを受け入れる拡張点（BookWalkerが利用）
 - duplicate candidate warningのためのCatalog query coordination
 
 Discovery Adapter自身はSQLiteを直接read/writeしない。
 
-現時点ではfake/local Adapterで利用する共通frameworkとManga ONEのreal-site listing Adapterを実装している。BookWalkerのreal-site listing Adapterは未実装で、Watchlistへ手動登録した `/series/<id>/list/` をscope authorityとする採用仕様だけを定義済みである。
+共通framework、Manga ONEのreal-site listing Adapter、BookWalkerのseries-scoped real-site
+listing Adapterを実装している。BookWalkerはWatchlistへ手動登録した `/series/<id>/list/` を
+scope authorityとしてDiscoveryする。
 
 ### `catalog/`（Watchlist + Catalog基盤実装済み）
 
@@ -136,7 +138,7 @@ SQLite Catalogを扱う。
 - query
 - completed/local artifact state update
 
-初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Phase 5Aのread-only Batch Planner / Site Policy orchestrationと、Phase 5BのManga ONE Batch Executor（Crawler実行、quota local state、packaging、completed更新）が実装済みである。BookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryは未実装である。
+初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Phase 5Aのread-only Batch Planner / Site Policy orchestration、Phase 5BのManga ONE Batch Executor（Crawler実行、quota local state、packaging、completed更新）、BookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryも実装済みである。
 
 Catalog itemは、取得可能な範囲でtitle/author/genre/order等のpackaging metadataも保持できる。
 
@@ -452,7 +454,10 @@ BookWalker/Manga ONEのviewer/navigation/END判定は維持する。BookWalker�
 source-native captureを先に試し、必要時に既存Canvas cropへfallbackする。Browser Session Layerと
 運用launcherはsite-neutralなままとする。
 
-Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery framework、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy、Phase 5BのManga ONE Batch Executorは実装済みである。2026-09-18時点でBookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryは採用仕様のみ定義済みで未実装である。
+Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery framework、
+Phase 5AのBatch Planner / Site Policy基盤、Manga ONE Policy、Phase 5BのManga ONE Batch Executor、
+BookWalkerのseries-scoped Discovery / Policy / Batch integration / strict direct・quota entry、
+およびsource-native captureを実装済みとする。
 
 ## 16. Discovery / Catalog / Batch dependency rules
 

@@ -232,6 +232,9 @@ def _capture_from_data_url(value: object) -> CaptureResult:
 
 
 def _native_call_is_safe(call: dict[str, Any]) -> bool:
+    source = call.get("source")
+    if not isinstance(source, dict) or source.get("constructor") != "ImageBitmap":
+        return False
     transform = call.get("transform")
     if not isinstance(transform, dict):
         return False
@@ -1041,6 +1044,12 @@ class BookWalkerAdapter(SiteAdapter):
         except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
             return
 
+    async def _clear_geometry_trace(self, page: Page) -> None:
+        try:
+            await page.evaluate("window.__bookwalkerDrawCalls = []")
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+            return
+
     async def _arm_native_capture(self, page: Page) -> None:
         try:
             await page.evaluate(
@@ -1133,6 +1142,7 @@ class BookWalkerAdapter(SiteAdapter):
                         "BookWalker native PNG dimensions do not match source rectangle"
                     )
                 captures.append(capture)
+            await self._clear_geometry_trace(page)
             return tuple(captures)
         except CaptureUnavailableError:
             return None
