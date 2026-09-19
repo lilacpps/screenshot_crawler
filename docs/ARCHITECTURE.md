@@ -47,7 +47,7 @@ Discovery Service
       ↓
 Discovery Adapter
       ↓
-Catalog Service -> catalog.sqlite
+Catalog Service -> catalog.sqlite (items / sources / source_targets)
       ↓
 Batch Runner -> Site Policy
       ↓
@@ -134,9 +134,11 @@ SQLite Catalogを扱う。
 
 - `items`
 - `sources`
+- `source_targets`
 - upsert
 - query
 - completed/local artifact state update
+- sourceごとのopaqueな取得経路（`backend` / `locator`）
 
 初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Phase 5Aのread-only Batch Planner / Site Policy orchestration、Phase 5BのManga ONE Batch Executor（Crawler実行、quota local state、packaging、completed更新）、BookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryも実装済みである。
 
@@ -146,7 +148,7 @@ Catalog itemは、取得可能な範囲でtitle/author/genre/order等のpackagin
 
 ### `batch/`（implemented）
 
-Catalogから対象sourceを選び、既存Crawlerを呼ぶ。
+Catalogから対象sourceのenabled web targetを選び、既存Crawlerを呼ぶ。
 
 - eligible source selection
 - source priority
@@ -461,7 +463,7 @@ BookWalker/Manga ONEのviewer/navigation/END判定は維持する。BookWalker�
 source-native captureを先に試し、必要時に既存Canvas cropへfallbackする。Browser Session Layerと
 運用launcherはsite-neutralなままとする。
 
-Watchlist loader、Catalog Service（`items` / `sources`）、Crawl Requestの最小基盤、site-neutral Discovery framework、
+Watchlist loader、Catalog Service（`items` / `sources` / `source_targets`）、Crawl Requestの最小基盤、site-neutral Discovery framework、
 Phase 5AのBatch Planner / Site Policy基盤、Manga ONE Policy、Phase 5BのManga ONE Batch Executor、
 BookWalkerのseries-scoped Discovery / Policy / Batch integration / strict direct・quota entry、
 およびsource-native captureを実装済みとする。
@@ -506,10 +508,11 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 
 ### Catalog Service
 
-- SQLiteの `items / sources` をauthorityとしてread/writeする
+- SQLiteの `items / sources / source_targets` をauthorityとしてread/writeする
 - Watchlist `key` を `discovery_key` としてsource scopeに保持する
 - external discovery stateとlocal completed stateを混同しない
 - known output metadataをNULL許容で保持できる
+- Web Discoveryが`source_targets`の`backend=web` targetを最新locatorでupsertする
 
 ### Batch Runner
 
@@ -524,6 +527,8 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 - crawlとpackagingが成功した後だけ`items.status` / `local_path` / `completed_at`を更新する
 - crawl、viewer、packagingの失敗時はitemをcompletedにせず、quota stateは保持する
 - candidateごとに一意なrun directoryを使い、stop-on-first-failureで後続を実行しない
+- `backend=web` のtargetだけを選び、`target_id / backend / locator`をcandidateへ渡す
+- `locator`を既存`RunConfig.source_url`へ変換し、実行直前にtarget identity/stateを再検証する
 
 ### Site Policy
 

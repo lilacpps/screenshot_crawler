@@ -14,7 +14,13 @@ from screenshot_crawler.batch.models import (
     BatchPlanningError,
     BatchSkipped,
 )
-from screenshot_crawler.catalog import CatalogError, CatalogService, Item, Source
+from screenshot_crawler.catalog import (
+    CatalogError,
+    CatalogService,
+    Item,
+    Source,
+    SourceTarget,
+)
 from screenshot_crawler.catalog.service import JST, now_jst
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
@@ -31,13 +37,16 @@ class BatchPlanner:
         current = _normalize_now(now_jst() if now is None else now)
         try:
             policy = self.policies.create(site)
-            items, sources = self.catalog.read_items_and_sources(site=site)
+            items, sources, targets = self.catalog.read_items_sources_and_targets(site=site)
         except (CatalogError, SitePolicyError, ValueError) as exc:
             raise BatchPlanningError(str(exc)) from exc
 
         sources_by_item: dict[int, list[Source]] = defaultdict(list)
         for source in sources:
             sources_by_item[source.item_id].append(source)
+        targets_by_source: dict[int, list[SourceTarget]] = defaultdict(list)
+        for target in targets:
+            targets_by_source[target.source_id].append(target)
         plan = BatchPlan()
         try:
             quota_available = policy.available_quota(sources, current)
@@ -58,16 +67,17 @@ class BatchPlanner:
                     now=current,
                     quota_remaining=quota_available,
                     skipped=plan.skipped,
+                    targets_by_source=targets_by_source,
                 )
                 if selected is None:
                     continue
-                source, decision = selected
+                source, target, decision = selected
                 if decision.access_strategy is None:
                     raise BatchPlanningError(
                         f"Eligible source {source.id} has no access strategy"
                     )
                 selections.append(
-                    _Selection(item=item, source=source, decision=decision)
+                    _Selection(item=item, source=source, target=target, decision=decision)
                 )
 
             quota_selections = [
@@ -116,7 +126,8 @@ class BatchPlanner:
         now: datetime,
         quota_remaining: int | None,
         skipped: list[BatchSkipped],
-    ) -> tuple[Source, PolicyDecision] | None:
+        targets_by_source: dict[int, list[SourceTarget]],
+    ) -> tuple[Source, SourceTarget, PolicyDecision] | None:
         for source in sorted(sources, key=_source_priority_key):
             decision = policy.evaluate(
                 source,
@@ -129,7 +140,16 @@ class BatchPlanner:
             if decision.consumes_quota and quota_remaining is not None and quota_remaining <= 0:
                 skipped.append(BatchSkipped(source.item_id, source.id, "quota_exhausted"))
                 continue
-            return source, decision
+            web_targets = [
+                target
+                for target in targets_by_source.get(source.id, [])
+                if target.backend == "web" and target.enabled
+            ]
+            if not web_targets:
+                skipped.append(BatchSkipped(source.item_id, source.id, "no enabled web target"))
+                continue
+            target = min(web_targets, key=lambda candidate: (candidate.priority, candidate.id))
+            return source, target, decision
         return None
 
 
@@ -150,6 +170,7 @@ def _metadata(item: Item) -> dict[str, str]:
 class _Selection:
     item: Item
     source: Source
+    target: SourceTarget
     decision: PolicyDecision
 
 
@@ -162,8 +183,10 @@ def _candidate_from_selection(selection: _Selection) -> BatchCandidate:
     return BatchCandidate(
         item_id=item.id,
         source_id=source.id,
+        target_id=selection.target.id,
         site=source.site,
-        url=source.url,
+        backend=selection.target.backend,
+        locator=selection.target.locator,
         access_strategy=decision.access_strategy,
         metadata=_metadata(item),
         access_mode=source.access_mode,

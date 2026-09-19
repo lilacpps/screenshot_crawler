@@ -63,6 +63,10 @@ class BatchExecutor:
 
         current = _normalize_now(now_jst() if now is None else now)
         try:
+            if candidate.backend != "web":
+                raise BatchExecutionError(
+                    f"unsupported batch backend: {candidate.backend!r}"
+                )
             policy = self.policies.create(candidate.site)
             self._validate_candidate(candidate, policy, current)
             output_dir = _new_output_dir(output_root, candidate, current)
@@ -78,7 +82,7 @@ class BatchExecutor:
 
             config = RunConfig(
                 site=candidate.site,
-                source_url=candidate.url,
+                source_url=candidate.locator,
                 output_dir=output_dir,
                 diagnostics_dir=output_dir / "diagnostics",
                 max_pages=max_pages,
@@ -122,6 +126,7 @@ class BatchExecutor:
         try:
             item = self.catalog.get_item(candidate.item_id)
             source = self.catalog.get_source(candidate.source_id)
+            target = self.catalog.get_source_target(candidate.target_id)
         except CatalogError as exc:
             raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
 
@@ -132,12 +137,18 @@ class BatchExecutor:
             mismatches.append("source.item_id")
         if source.site != candidate.site:
             mismatches.append("source.site")
-        if source.url != candidate.url:
-            mismatches.append("source.url")
         if source.access_mode != candidate.access_mode:
             mismatches.append("source.access_mode")
         if not source.available:
             mismatches.append("source.available=false")
+        if target.source_id != candidate.source_id:
+            mismatches.append("target.source_id")
+        if target.backend != candidate.backend:
+            mismatches.append("target.backend")
+        if target.locator != candidate.locator:
+            mismatches.append("target.locator")
+        if not target.enabled:
+            mismatches.append("target.enabled=false")
 
         try:
             site_sources = self.catalog.list_sources(site=candidate.site)

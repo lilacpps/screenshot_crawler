@@ -553,9 +553,9 @@ Schema v2のdomain tableは`items`、`sources`、`source_targets`の3つを持�
 
 `source_targets`はsourceごとの取得経路をopaqueな`backend` / `locator`として保持する。`(source_id, backend)`がtarget identityで、`priority`（小さい値を優先する意味だけを保持）と`enabled`を保存する。`CatalogService`は`create_source_target()`、`upsert_source_target()`、`find_source_target()`、`get_source_target()`、`list_source_targets()`を提供するが、target selectionやlocatorの解釈は行わない。targetの更新はsourceのaccess/quota/local stateから独立している。
 
-Batch Planner用に `read_items_and_sources(site=...)` を追加した。これは既存Catalogをread-only接続で検証し、items全件と指定siteのsourcesを取得する。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
+Batch Planner用に `read_items_and_sources(site=...)` と `read_items_sources_and_targets(site=...)` を提供する。後者は既存Catalogをread-only接続で検証し、items全件、指定siteのsources、関連するsource_targetsを取得する。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
 
-Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` がSQLiteをread-onlyで検証・読み込みし、`items LEFT JOIN sources` を `item_id ASC, source_id ASC` で並べたflat CSV snapshotを生成する。1行は1 sourceで、sourceなしitemもsource列を空欄にして残る。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力 `catalog-export.csv` であり、CSVからCatalogへ戻す機能はない。なお、Schema v2導入commitではExportのURL列・v1検証は対象外として残しており、v2対応は次のDiscovery / Batch / Export統合commitで行う。
+Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` がSQLiteをread-onlyで検証・読み込みし、`items LEFT JOIN sources LEFT JOIN source_targets` を `item_id ASC, source_id ASC, target_id ASC` で並べたflat CSV snapshotを生成する。原則1行は1 targetで、sourceにtargetがない場合とsourceなしitemも情報を残す。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `target_enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力 `catalog-export.csv` であり、CSVからCatalogへ戻す機能はない。旧`url`列は出力しない。
 
 日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`2`だけをサポートし、v1を含む他versionはmigrationせず明示的に失敗する。v2で`items` / `sources` / `source_targets`または必要columnが欠けるDBも拒否する。Alembic等のmigration frameworkは導入していない。
 
@@ -566,7 +566,7 @@ watchlist.yaml
     ↓
 Discovery Service / Discovery Adapter
     ↓
-catalog.sqlite (items / sources)
+catalog.sqlite (items / sources / source_targets)
     ↓
 Batch Runner / Site Policy
     ↓
@@ -577,7 +577,7 @@ Crawl Request
 
 現行実装には、BookWalker quotaの実サイトlive click検証と、quotaのサーバー側実消費をCatalogだけから検証する機能は存在しない。
 
-Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framework、Phase 5A Batch Planner / Site Policy registry / Manga ONE Policyは実装済みである。今回のCatalog v2境界変更後、Discovery / Batch / Export側のSource URL・Catalog CSV統合は未対応であり、次commitの対象である。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。Phase 5Aのplannerは`auto`を使わず、`direct`/`quota`の実行意図とmetadataをcandidateへ保持するだけである。
+Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framework、Phase 5A Batch Planner / Site Policy registry / Manga ONE Policyは実装済みである。Discoveryは観測したURLを同一sourceの`backend=web` targetへupsertし、別backend targetとsourceのlocal/access stateを変更しない。Batch Plannerはenabled web targetを`priority ASC, target.id ASC`で選び、targetがないsourceやAndroid-only sourceをskipする。Batch Executorはweb targetのlocatorを既存`RunConfig.source_url`へ変換し、実行直前にtarget identity/stateを再検証する。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。Phase 5Aのplannerは`auto`を使わず、`direct`/`quota`の実行意図とmetadataをcandidateへ保持するだけである。
 
 主要仕様:
 
@@ -612,6 +612,12 @@ BookWalker Discoveryはseries listから商品URLを列挙し、商品ページ�
 `DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。
 
 `DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。現行のreal-site用AdapterはManga ONEとBookWalkerである。BookWalkerはWatchlistのseries list targetだけを対象にする。
+
+Discovery Serviceは各recordのitem/source upsert後に、観測した`DiscoveredSource.url`を
+`SourceTargetInput(backend="web", locator=...)`として同じsourceへupsertする。URL変更は同じ
+`(source_id, web)` targetのlocator更新になり、既存android等の別backend targetは変更しない。
+sourceのfull-sync missing reconciliationは`available=false`だけを更新し、targetの削除や
+自動disableは行わない。
 
 Discovery開始時、Serviceは対象siteの既存sourceからCatalog非依存の
 `DiscoverySourceSnapshot`を一度だけ作成し、adapter hookへ渡す。このsnapshotはrun開始時点をauthorityとし、run中に新規upsertされたsourceを既存sourceとして扱わない。
@@ -650,11 +656,11 @@ cross-site duplicateはnormalized title（strip、whitespace、casefold）と、
 
 `BatchExecutor`（`src/screenshot_crawler/batch/executor.py`）はPhase 5Aの
 `BatchCandidate`を1件ずつ既存`CrawlerRunner`へ渡す。`CrawlerRunner`はCatalogを
-知らず、Batch側だけが`item_id` / `source_id`とCatalog stateを扱う。
+知らず、Batch側だけが`item_id` / `source_id` / `target_id`とCatalog stateを扱う。
 
-実行前にitemが`pending`であり、sourceのitem/site/url/access_mode/availableが
-candidateと一致することを確認する。Policyのaccess decisionも再確認し、stale
-candidateはCrawlerを呼ばずに停止する。
+実行前にitemが`pending`であり、sourceのitem/site/access_mode/availableとtargetの
+source/backend/locator/enabledがcandidateと一致することを確認する。backendはwebだけを
+受け付ける。Policyのaccess decisionも再確認し、stale candidateはCrawlerを呼ばずに停止する。
 
 Candidateから次の`RunConfig`を作る:
 

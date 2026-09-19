@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.batch import BatchCandidate, BatchExecutionError, BatchExecutor
-from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput
+from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, SourceTargetInput
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult
@@ -41,17 +41,22 @@ def make_candidate(service: CatalogService, *, order: str = "01") -> BatchCandid
         SourceInput(
             site="bookwalker",
             external_id=f"book-{order}",
-            url=f"https://bookwalker.example/de{order}/",
             access_mode="quota",
             available=True,
         ),
         item_id=item.id,
     )
+    target = service.create_source_target(
+        SourceTargetInput(backend="web", locator=f"https://bookwalker.example/de{order}/"),
+        source_id=source.id,
+    )
     return BatchCandidate(
         item_id=item.id,
         source_id=source.id,
+        target_id=target.id,
         site="bookwalker",
-        url=source.url,
+        backend=target.backend,
+        locator=target.locator,
         access_strategy="quota",
         metadata={"title": "BookWalker volume", "order": order},
         access_mode="quota",

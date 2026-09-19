@@ -654,7 +654,7 @@ def _print_batch_plan(plan: BatchPlan, *, site: str) -> None:
             print(
                 f"  item={candidate.item_id} source={candidate.source_id} "
                 f"{order} {candidate.access_mode} -> "
-                f"{candidate.access_strategy} {candidate.url}"
+                f"{candidate.access_strategy} {candidate.locator}"
             )
     if plan.skipped:
         print("Skipped:")

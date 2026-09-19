@@ -23,8 +23,10 @@ class BatchCandidate:
 
     item_id: int
     source_id: int
+    target_id: int
     site: str
-    url: str
+    backend: str
+    locator: str
     access_strategy: BatchAccessStrategy
     metadata: dict[str, str] = field(default_factory=dict)
     access_mode: str = "unknown"

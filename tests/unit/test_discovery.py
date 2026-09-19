@@ -8,6 +8,7 @@ from screenshot_crawler.catalog import (
     CatalogValidationError,
     ItemInput,
     Source,
+    SourceTargetInput,
 )
 from screenshot_crawler.discovery import (
     DiscoveredItem,
@@ -202,7 +203,6 @@ async def test_full_refresh_updates_external_state_without_overwriting_local_sta
             "site": target.site,
             "external_id": "chapter-1",
             "discovery_key": target.key,
-            "url": "https://example.test/old",
             "access_mode": "free",
             "quota_started_at": "2026-09-17T10:00:00+09:00",
             "access_granted_until": "2026-09-18T10:00:00+09:00",
@@ -216,7 +216,9 @@ async def test_full_refresh_updates_external_state_without_overwriting_local_sta
     refreshed = catalog.get_source_by_external_id(target.site, "chapter-1")
     item = catalog.get_item(first_item.id)
     assert result.complete is True
-    assert refreshed.url == "https://example.test/new"
+    refreshed_target = catalog.find_source_target(refreshed.id, "web")
+    assert refreshed_target is not None
+    assert refreshed_target.locator == "https://example.test/new"
     assert refreshed.access_mode == "owned"
     assert refreshed.available is False
     assert refreshed.free_until == "2026-09-20T12:00:00+09:00"
@@ -230,6 +232,38 @@ async def test_full_refresh_updates_external_state_without_overwriting_local_sta
     assert item.genre == "genre"
 
 
+async def test_discovery_updates_web_target_without_touching_android_target(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record("chapter-1", url="https://example.test/old")])
+    service, catalog, target = setup_service(tmp_path, adapter)
+
+    await service.discover(FakePage(), target, "full")
+    source = catalog.get_source_by_external_id(target.site, "chapter-1")
+    web = catalog.find_source_target(source.id, "web")
+    assert web is not None
+    android = catalog.create_source_target(
+        SourceTargetInput(
+            backend="android", locator="episode_123", priority=50, enabled=False
+        ),
+        source_id=source.id,
+    )
+
+    adapter.records = [record("chapter-1", url="https://example.test/new")]
+    await service.discover(FakePage(), target, "full")
+
+    refreshed_source = catalog.get_source_by_external_id(target.site, "chapter-1")
+    refreshed_web = catalog.find_source_target(refreshed_source.id, "web")
+    refreshed_android = catalog.get_source_target(android.id)
+    assert refreshed_source.id == source.id
+    assert refreshed_web is not None
+    assert refreshed_web.id == web.id
+    assert refreshed_web.locator == "https://example.test/new"
+    assert refreshed_web.enabled is True
+    assert refreshed_android == android
+    assert len(catalog.list_source_targets(source_id=source.id)) == 2
+
+
 async def test_default_access_reconciliation_persists_observed_mode(
     tmp_path: Path,
 ) -> None:
@@ -241,7 +275,6 @@ async def test_default_access_reconciliation_persists_observed_mode(
             "site": target.site,
             "external_id": "source-1",
             "discovery_key": target.key,
-            "url": "https://example.test/source-1",
             "access_mode": "quota",
         },
     )
@@ -265,7 +298,6 @@ async def test_custom_access_reconciliation_can_preserve_mode_and_get_snapshot(
             "site": target.site,
             "external_id": "source-1",
             "discovery_key": "old-target",
-            "url": "https://example.test/source-1",
             "access_mode": "quota",
         },
     )
@@ -312,7 +344,6 @@ async def test_incremental_continue_suppresses_generic_known_streak_stop(
                 "site": target.site,
                 "external_id": external_id,
                 "discovery_key": target.key,
-                "url": f"https://example.test/{external_id}",
             },
         )
 
@@ -336,14 +367,15 @@ async def test_incremental_stop_refreshes_boundary_before_returning(
             "site": target.site,
             "external_id": "stable",
             "discovery_key": target.key,
-            "url": "https://example.test/old",
         },
     )
 
     result = await service.discover(FakePage(), target, "incremental")
 
     assert result.stopped_reason == "stable_boundary"
-    assert catalog.get_source_by_external_id(target.site, "stable").url.endswith("/new")
+    stable = catalog.get_source_by_external_id(target.site, "stable")
+    stable_target = catalog.find_source_target(stable.id, "web")
+    assert stable_target is not None and stable_target.locator.endswith("/new")
     assert adapter.yielded == ["stable"]
 
 
@@ -383,7 +415,6 @@ async def test_reconciliation_incomplete_preserves_full_missing_state(
             "site": target.site,
             "external_id": "missing",
             "discovery_key": target.key,
-            "url": "https://example.test/missing",
         },
     )
 
@@ -405,7 +436,6 @@ async def test_full_reconciliation_is_limited_to_complete_target_scope(
             "site": target.site,
             "external_id": "missing",
             "discovery_key": target.key,
-            "url": "https://example.test/missing",
         },
     )
     other_scope = catalog.upsert_item_source(
@@ -414,7 +444,6 @@ async def test_full_reconciliation_is_limited_to_complete_target_scope(
             "site": target.site,
             "external_id": "other-scope",
             "discovery_key": "other-target",
-            "url": "https://example.test/other-scope",
         },
     )
     other_site = catalog.upsert_item_source(
@@ -423,7 +452,6 @@ async def test_full_reconciliation_is_limited_to_complete_target_scope(
             "site": "bookwalker",
             "external_id": "other-site",
             "discovery_key": target.key,
-            "url": "https://example.test/other-site",
         },
     )
 
@@ -446,7 +474,6 @@ async def test_incomplete_full_does_not_reconcile_missing_sources(tmp_path: Path
             "site": target.site,
             "external_id": "missing",
             "discovery_key": target.key,
-            "url": "https://example.test/missing",
         },
     )
 
@@ -468,7 +495,6 @@ async def test_unexpected_full_failure_does_not_reconcile_missing_sources(
             "site": target.site,
             "external_id": "missing",
             "discovery_key": target.key,
-            "url": "https://example.test/missing",
         },
     )
 
@@ -497,7 +523,6 @@ async def test_incremental_streak_is_service_owned_and_stops_after_refreshing_tw
                 "site": target.site,
                 "external_id": external_id,
                 "discovery_key": target.key,
-                "url": f"https://example.test/{external_id}",
             },
         )
 
@@ -507,12 +532,12 @@ async def test_incremental_streak_is_service_owned_and_stops_after_refreshing_tw
     assert result.stopped_reason == "known_streak"
     assert (result.observed_count, result.new_count, result.known_count) == (3, 1, 2)
     assert adapter.yielded == ["new", "known-1", "known-2"]
-    assert catalog.get_source_by_external_id(target.site, "known-1").url.endswith(
-        "known-1-new"
-    )
-    assert catalog.get_source_by_external_id(target.site, "known-2").url.endswith(
-        "known-2-new"
-    )
+    known_1 = catalog.get_source_by_external_id(target.site, "known-1")
+    known_2 = catalog.get_source_by_external_id(target.site, "known-2")
+    known_1_target = catalog.find_source_target(known_1.id, "web")
+    known_2_target = catalog.find_source_target(known_2.id, "web")
+    assert known_1_target is not None and known_1_target.locator.endswith("known-1-new")
+    assert known_2_target is not None and known_2_target.locator.endswith("known-2-new")
 
 
 async def test_incremental_duplicate_known_source_does_not_advance_streak(
@@ -532,7 +557,6 @@ async def test_incremental_duplicate_known_source_does_not_advance_streak(
             "site": target.site,
             "external_id": "known-a",
             "discovery_key": target.key,
-            "url": "https://example.test/known-a",
         },
     )
 
@@ -543,9 +567,9 @@ async def test_incremental_duplicate_known_source_does_not_advance_streak(
     assert result.new_count == 1
     assert adapter.yielded == ["known-a", "known-a", "new-b"]
     assert catalog.get_source_by_external_id(target.site, "new-b") is not None
-    assert catalog.get_source_by_external_id(target.site, "known-a").url.endswith(
-        "known-a-refresh"
-    )
+    known_a = catalog.get_source_by_external_id(target.site, "known-a")
+    known_a_target = catalog.find_source_target(known_a.id, "web")
+    assert known_a_target is not None and known_a_target.locator.endswith("known-a-refresh")
 
 
 async def test_incremental_unknown_resets_known_streak(tmp_path: Path) -> None:
@@ -560,7 +584,6 @@ async def test_incremental_unknown_resets_known_streak(tmp_path: Path) -> None:
                 "site": target.site,
                 "external_id": external_id,
                 "discovery_key": target.key,
-                "url": f"https://example.test/{external_id}",
             },
         )
 
@@ -610,7 +633,6 @@ async def test_cross_site_duplicate_is_warning_only(tmp_path: Path) -> None:
             "site": "mangaone",
             "external_id": "site-a-1",
             "discovery_key": "mangaone-target",
-            "url": "https://example.test/site-a-1",
         },
     )
 
@@ -631,7 +653,6 @@ async def test_same_site_or_mismatched_candidate_does_not_warn(tmp_path: Path) -
             "site": target.site,
             "external_id": "existing",
             "discovery_key": "other-target",
-            "url": "https://example.test/existing",
         },
     )
 
@@ -673,7 +694,6 @@ def test_catalog_reconciliation_rolls_back_all_rows_on_failure(tmp_path: Path) -
                 "site": "mangaone",
                 "external_id": external_id,
                 "discovery_key": "target-one",
-                "url": f"https://example.test/{external_id}",
             },
         )
     with catalog._connection() as connection:

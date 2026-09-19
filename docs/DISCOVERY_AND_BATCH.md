@@ -37,7 +37,7 @@ a quota crawl and item completion fields after successful packaging.
 
 - `watchlist.yaml` のload/validationとatomic write
 - `watch list/add/remove/enable/disable` CLI
-- SQLite Catalogの `items` / `sources` schema version 1
+- SQLite Catalogの `items` / `sources` / `source_targets` schema version 2
 - `(site, external_id)` によるsource upsertとexternal state update
 - Discovery upsert相当でのlocal completed state保護
 - `RunConfig`への `access_strategy` / output metadata入力
@@ -83,7 +83,7 @@ Discovery Adapter
 Catalog Service
         ↓
 catalog.sqlite
-  items / sources
+  items / sources / source_targets
         ↓
 Batch Runner + Site Policy
         ↓
@@ -163,11 +163,12 @@ Watchlistからtargetをremove/disableしても、既存Catalog item/sourceは�
 
 ### 5.1 方針
 
-個人利用を前提として、SQLiteの**2テーブル**に限定する。
+個人利用を前提として、SQLiteの**3テーブル**に限定する。
 
 ```text
 items
 sources
+source_targets
 ```
 
 `works`、`crawl_jobs`、汎用event history等は初期実装では作らない。
@@ -209,7 +210,6 @@ item_id
 site
 external_id
 discovery_key
-url
 access_mode        # owned / free / quota / paid / unknown
 free_until
 available
@@ -229,17 +229,36 @@ UNIQUE(site, external_id)
 
 stable external IDが取れないsiteでは、Discovery Adapterがsite固有のstable source keyを生成する。URLそのものを恒久identityにはしない。
 
+取得経路は`source_targets`で表す。`source`はsite上のcontent identityとaccess/local stateを持ち、
+`source_target`はそのsourceへのopaqueな取得経路を持つ。
+
+```text
+source_targets
+id
+source_id
+backend
+locator
+priority
+enabled
+created_at
+updated_at
+```
+
+`(source_id, backend)`がtarget identityである。Catalogは`backend`や`locator`を解釈せず、
+Web Discoveryは`backend=web` targetをupsertする。Android targetは保存できるが、現時点の
+Batch実行対象ではない。
+
 ### 5.4 local stateとexternal state
 
 Discoveryが更新してよいexternal state:
 
-- `url`
 - `access_mode`
 - `free_until`
 - `available`
 - `access_checked_at`
 - `last_seen_at`
 - siteから取得したtitle/author/genre/order等のmetadata
+- Web targetの`locator`を最新URLへ更新し、`enabled=true`にする
 
 Discoveryが変更してはいけないlocal state:
 
@@ -249,6 +268,9 @@ Discoveryが変更してはいけないlocal state:
 - crawl成功/失敗の結果
 
 `quota_started_at` と `access_granted_until` はBatch / Site Policyが管理するquota local stateであり、Discovery upsertやexternal state patchでは変更しない。新規sourceをDiscovery upsertするときは、これらをNULLで開始する。
+
+Web targetのupsertはsourceのlocal/access stateと独立している。別backend targetは変更せず、
+sourceがmissingで`available=false`になってもtargetを自動disable・削除しない。
 
 原則:
 
@@ -562,6 +584,7 @@ upsert時:
 3. 新規ならitem/sourceを作成
 4. 別siteの類似itemがあればwarningを出すがmergeしない
 5. full + completeの場合のみmissing sourceをunavailable化
+6. 観測したWeb URLを同じsourceの`backend=web` targetへupsertする
 
 ## 10. Site Policy
 
@@ -752,6 +775,8 @@ pending item
   ↓
 eligible sources
   ↓
+enabled web source target（priority ASC, id ASC）
+  ↓
 Site Policy
   ↓
 choose one source
@@ -798,6 +823,10 @@ the quota allocation pool. Items beyond the allocated slots are reported as
 
 同順位では安定した順序を使う。必要になった場合のみsite priorityを追加する。
 
+sourceが`available=true`でPolicy上eligibleでも、`backend=web`かつ`enabled=true`のtargetが
+存在しない場合は、そのsourceを`no enabled web target`としてskipする。Android targetだけの
+sourceも現時点ではskipする。
+
 異なるsite間のitemを自動で同一itemへmergeしないため、このpriorityは自動cross-site identity resolutionを意味しない。
 
 ### 11.3 Crawl success
@@ -822,7 +851,7 @@ BatchからCrawlerへ渡す実行入力は、概念上次を持つ。
 
 ```text
 site
-url
+source target locator -> existing RunConfig.source_url
 access_strategy      # auto / direct / quota
 output metadata      # optional
   title
@@ -832,6 +861,10 @@ output metadata      # optional
 ```
 
 `item_id` / `source_id` はCatalog orchestration上のidentityであり、CrawlerRunnerが理解する必要はない。Batch RunnerがrequestとCatalog rowの対応を保持する。
+
+BatchCandidateはCatalog identityとして`item_id`、`source_id`、`target_id`を持ち、取得経路として
+`backend`と`locator`を持つ。現時点でExecutorが受け付けるbackendは`web`だけであり、
+`locator`を既存Crawlerの`RunConfig.source_url`へ変換する。
 
 手動crawlでは:
 
@@ -963,7 +996,8 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 - `unknown` / `paid` は自動crawlしない
 - full syncがincompleteならmissing sourceをunavailable化しない
 - incrementalで未観測sourceをunavailable化しない
-- source URLが変わってもstable external IDが同じなら同一sourceとして更新する
+- source URLが変わってもstable external IDが同じなら同一sourceとWeb targetを更新する
+- sourceがunavailableになってもsource targetを自動disable・削除しない
 - cross-site duplicate heuristicはwarning only
 - Discoveryでlocal completed stateを消さない
 - crawl失敗をcompleted扱いしない
@@ -1005,11 +1039,14 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 - incrementalは未観測過去sourceをunavailable化しない
 - 別siteの類似itemはwarningし、自動mergeしない
 - title/author/genre/orderを取得できるsiteではCatalog metadataへ反映できる
+- Discoveryは同一sourceのWeb targetを最新locatorでupsertできる
+- Web Discoveryが別backend targetを変更しない
 
 ### Catalog
 
-- `items / sources` の2テーブルで運用できる
+- `items / sources / source_targets` の3テーブルで運用できる
 - sourceはstable site identityでupsertできる
+- source targetは`(source_id, backend)`でupsertできる
 - Discovery external stateとlocal completed stateを分離できる
 - Watchlist `key` とsourceのDiscovery scopeを対応付けられる
 - packaging用metadataをNULL許容で保持できる
@@ -1025,6 +1062,9 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 - Site Policyのquota rule自体をCrawlerへ渡さない
 - crawl成功時だけitemをcompletedへ更新する
 - `item_id / source_id / archive path` を対応付けられる
+- `target_id / backend / locator` をcandidateへ保持できる
+- enabled web targetのlocatorを既存`RunConfig.source_url`へ渡せる
+- disabled web targetやAndroid-only sourceを安全にskipできる
 - Catalogにあるmetadataをoptional overrideとしてCrawlerへ渡せる
 - CrawlerRunner自体はCatalogを知らない
 

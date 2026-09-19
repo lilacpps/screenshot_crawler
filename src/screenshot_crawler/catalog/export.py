@@ -14,6 +14,7 @@ from screenshot_crawler.catalog.service import CatalogError
 EXPORT_COLUMNS = (
     "item_id",
     "source_id",
+    "target_id",
     "canonical_title",
     "author",
     "genre",
@@ -26,7 +27,10 @@ EXPORT_COLUMNS = (
     "site",
     "external_id",
     "discovery_key",
-    "url",
+    "backend",
+    "locator",
+    "priority",
+    "target_enabled",
     "access_mode",
     "free_until",
     "available",
@@ -60,7 +64,6 @@ _SOURCE_COLUMNS = {
     "site",
     "external_id",
     "discovery_key",
-    "url",
     "access_mode",
     "free_until",
     "available",
@@ -68,6 +71,16 @@ _SOURCE_COLUMNS = {
     "last_seen_at",
     "quota_started_at",
     "access_granted_until",
+    "created_at",
+    "updated_at",
+}
+_TARGET_COLUMNS = {
+    "id",
+    "source_id",
+    "backend",
+    "locator",
+    "priority",
+    "enabled",
     "created_at",
     "updated_at",
 }
@@ -101,7 +114,11 @@ SELECT
     s.site AS site,
     s.external_id AS external_id,
     s.discovery_key AS discovery_key,
-    s.url AS url,
+    st.id AS target_id,
+    st.backend AS backend,
+    st.locator AS locator,
+    st.priority AS priority,
+    st.enabled AS target_enabled,
     s.access_mode AS access_mode,
     s.free_until AS free_until,
     s.available AS available,
@@ -116,7 +133,9 @@ SELECT
 FROM items AS i
 LEFT JOIN sources AS s
     ON s.item_id = i.id
-ORDER BY i.id ASC, s.id ASC
+LEFT JOIN source_targets AS st
+    ON st.source_id = s.id
+ORDER BY i.id ASC, s.id ASC, st.id ASC
 """
 
 
@@ -184,12 +203,15 @@ def _validate_schema(connection: sqlite3.Connection) -> None:
                 "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             )
         }
-        if not {"items", "sources"}.issubset(tables):
-            raise CatalogExportError("Catalog schema is missing items or sources table")
+        if not {"items", "sources", "source_targets"}.issubset(tables):
+            raise CatalogExportError(
+                "Catalog schema is missing items, sources, or source_targets table"
+            )
 
         for table, required_columns in (
             ("items", _ITEM_COLUMNS),
             ("sources", _SOURCE_COLUMNS),
+            ("source_targets", _TARGET_COLUMNS),
         ):
             columns = {
                 row[1] for row in connection.execute(f"PRAGMA table_info({table})")
@@ -209,7 +231,7 @@ def _validate_schema(connection: sqlite3.Connection) -> None:
 def _csv_value(column: str, value: Any) -> str:
     if value is None:
         return ""
-    if column == "available":
+    if column in {"available", "target_enabled"}:
         if value in (0, False):
             return "false"
         if value in (1, True):

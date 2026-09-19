@@ -606,6 +606,13 @@ site-neutralなDiscoveryServiceが行う。
 Discoveryはseries listから商品詳細ページを開いてcontrolを観測するが、
 readerは開かない。まる読み10分timerをDiscoveryで開始しない。
 
+Schema v2では、DiscoveryServiceが商品recordの`DiscoveredSource.url`をWeb取得経路として
+`source_targets`へ`backend=web`、`locator=<最新の商品URL>`、`priority=100`、
+`enabled=true`でupsertする。source identityは引き続き(site, external_id)であり、
+URL再観測では同じWeb targetのlocatorだけが更新される。Batch Plannerはenabledな
+Web targetをpriority、target ID順で選び、既存Web Executorがlocatorを
+`RunConfig.source_url`へ渡す。別backendのtargetは保存されても現在のWeb flowでは変更・実行しない。
+
 ログイン済みshared Crawler Chromeを前提とし、series pageと各product pageの
 header/account領域にある明示的なvisible「ログイン」CTA、login form、password input、
 authentication challengeだけを確認する。member.bookwalker.jpへのリンクや本文全体の

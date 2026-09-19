@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.batch import BatchPlanner
-from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput
+from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, SourceTargetInput
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
@@ -37,13 +37,16 @@ def add_source(
         SourceInput(
             site="bookwalker",
             external_id=f"book-{order}-{item.id}",
-            url=f"https://bookwalker.example/de{order}/",
             access_mode=access_mode,
             available=available,
             quota_started_at=quota_started_at,
             access_granted_until=access_granted_until,
         ),
         item_id=item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(backend="web", locator=f"https://bookwalker.example/de{order}/"),
+        source_id=source.id,
     )
     return item, source
 

@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -9,7 +10,12 @@ from screenshot_crawler.batch import (
     BatchExecutionError,
     BatchExecutor,
 )
-from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput
+from screenshot_crawler.catalog import (
+    CatalogService,
+    ItemInput,
+    SourceInput,
+    SourceTargetInput,
+)
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult
@@ -101,18 +107,25 @@ def add_candidate(
         SourceInput(
             site="mangaone",
             external_id=f"chapter-{item.id}",
-            url=f"https://example.invalid/chapter/{item.id}",
             access_mode=access_mode,
             available=True,
             access_granted_until=access_granted_until,
         ),
         item_id=item.id,
     )
+    target = service.create_source_target(
+        SourceTargetInput(
+            backend="web", locator=f"https://example.invalid/chapter/{item.id}"
+        ),
+        source_id=source.id,
+    )
     return BatchCandidate(
         item_id=item.id,
         source_id=source.id,
+        target_id=target.id,
         site=source.site,
-        url=source.url,
+        backend=target.backend,
+        locator=target.locator,
         access_strategy="quota" if consumes_quota else "direct",
         metadata={"title": "作品A", "order": "第01話"},
         access_mode=access_mode,
@@ -138,6 +151,7 @@ async def test_direct_candidate_runs_and_completes_without_quota_state(
     )
 
     assert configs[0].access_strategy == "direct"
+    assert configs[0].source_url == candidate.locator
     assert configs[0].output_metadata == candidate.metadata
     assert result.archive_path == tmp_path / "Books" / "漫画" / "作品A" / "archive.zip"
     item = service.get_item(candidate.item_id)
@@ -270,7 +284,9 @@ async def test_direct_failure_does_not_complete_item_or_write_quota_state(
     assert source.access_granted_until is None
 
 
-@pytest.mark.parametrize("stale_state", ["completed", "unavailable", "url", "access_mode"])
+@pytest.mark.parametrize(
+    "stale_state", ["completed", "unavailable", "locator", "disabled_target", "access_mode"]
+)
 async def test_stale_candidate_does_not_start_crawler(
     tmp_path: Path, stale_state: str
 ) -> None:
@@ -284,11 +300,15 @@ async def test_stale_candidate_does_not_start_crawler(
         service.update_source_external_state(
             "mangaone", f"chapter-{candidate.item_id}", available=False
         )
-    elif stale_state == "url":
-        service.update_source_external_state(
-            "mangaone",
-            f"chapter-{candidate.item_id}",
-            url="https://example.invalid/changed",
+    elif stale_state == "locator":
+        service.upsert_source_target(
+            SourceTargetInput(backend="web", locator="https://example.invalid/changed"),
+            source_id=candidate.source_id,
+        )
+    elif stale_state == "disabled_target":
+        service.upsert_source_target(
+            SourceTargetInput(backend="web", locator=candidate.locator, enabled=False),
+            source_id=candidate.source_id,
         )
     else:
         service.update_source_external_state(
@@ -304,6 +324,19 @@ async def test_stale_candidate_does_not_start_crawler(
 
     assert configs == []
     assert service.get_item(candidate.item_id).status == expected_status
+
+
+async def test_wrong_backend_is_rejected_before_web_runner(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    executor = make_executor(service)
+
+    with pytest.raises(BatchExecutionError, match="unsupported batch backend"):
+        await executor.execute_candidate(
+            object(), replace(candidate, backend="android"), now=NOW
+        )
+
+    assert service.get_item(candidate.item_id).status == "pending"
 
 
 def test_batch_output_directory_is_unique_and_windows_safe(tmp_path: Path) -> None:

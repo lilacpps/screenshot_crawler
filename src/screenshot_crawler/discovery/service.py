@@ -5,7 +5,12 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput
+from screenshot_crawler.catalog import (
+    CatalogService,
+    ItemInput,
+    SourceInput,
+    SourceTargetInput,
+)
 from screenshot_crawler.catalog.models import CatalogRecord, Item
 from screenshot_crawler.discovery.models import (
     DiscoveryMode,
@@ -115,13 +120,21 @@ class DiscoveryService:
                         site=target.site,
                         external_id=record.source.external_id,
                         discovery_key=target.key,
-                        url=record.source.url,
                         access_mode=access_mode,
                         free_until=record.source.free_until,
                         available=record.source.available,
                         access_checked_at=record.source.access_checked_at,
                         last_seen_at=record.source.last_seen_at,
                     ),
+                )
+                self.catalog.upsert_source_target(
+                    SourceTargetInput(
+                        backend="web",
+                        locator=record.source.url,
+                        priority=100,
+                        enabled=True,
+                    ),
+                    source_id=catalog_record.source.id,
                 )
                 observed_external_ids.add(record.source.external_id)
                 observed_count += 1

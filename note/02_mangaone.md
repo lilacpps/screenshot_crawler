@@ -396,6 +396,14 @@ scan. A card href is parsed first; the live card fallback is the observed
 `/chapter/<chapter_id>.webp` image URL. The stable source identity is always
 `chapter_id`, and only the target `work_id` is accepted.
 
+Schema v2 integration keeps the observed chapter URL on the Web acquisition
+route, not on `Source`: DiscoveryService upserts `source_targets` with
+`backend=web`, the latest URL as `locator`, priority `100`, and enabled state.
+The Batch Planner selects enabled Web targets by `(priority, id)` and the Web
+Executor passes the selected locator to the existing `RunConfig.source_url`.
+Other backend targets remain untouched and are not executable until an Android
+backend is implemented.
+
 `FREE`/`無料` maps to `free`, `先読み`/`先読` to `paid`, and an otherwise
 unbadged card to `quota`. `free_until`, quota counts, reset times, consumption,
 and `access_granted_until` are not inferred. Promotion/PR cards are not

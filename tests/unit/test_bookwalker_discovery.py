@@ -512,7 +512,6 @@ def _seed_source(
             "site": target.site,
             "external_id": external_id,
             "discovery_key": target.key,
-            "url": _product_url(external_id),
             "access_mode": access_mode,
         },
     )
@@ -910,7 +909,6 @@ async def test_bookwalker_scope_conflict_is_incomplete_without_catalog_mutation(
             "site": "bookwalker",
             "external_id": product,
             "discovery_key": "old-series",
-            "url": _product_url(product),
             "access_mode": "quota",
         },
     )

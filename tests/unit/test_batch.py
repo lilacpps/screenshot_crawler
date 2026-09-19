@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.batch import BatchPlanner, BatchPlanningError
-from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput
+from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, SourceTargetInput
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
 
@@ -35,7 +35,6 @@ def add_source(
         SourceInput(
             site="mangaone",
             external_id=external_id,
-            url=f"https://manga-one.example/chapter/{external_id}",
             discovery_key=discovery_key,
             access_mode=access_mode,
             free_until=free_until,
@@ -44,6 +43,13 @@ def add_source(
             access_granted_until=access_granted_until,
         ),
         item_id=catalog_item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(
+            backend="web",
+            locator=f"https://manga-one.example/chapter/{external_id}",
+        ),
+        source_id=source.id,
     )
     return catalog_item, source
 
@@ -99,43 +105,55 @@ def test_source_priority_and_metadata_mapping(tmp_path: Path) -> None:
             genre="漫画",
         )
     )
-    service.create_source(
+    quota = service.create_source(
         SourceInput(
             site="mangaone",
             external_id="quota",
-            url="https://example.invalid/quota",
             access_mode="quota",
         ),
         item_id=item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/quota"),
+        source_id=quota.id,
     )
     owned = service.create_source(
         SourceInput(
             site="mangaone",
             external_id="owned",
-            url="https://example.invalid/owned",
             access_mode="owned",
         ),
         item_id=item.id,
     )
-    service.create_source(
+    service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/owned"),
+        source_id=owned.id,
+    )
+    free_late = service.create_source(
         SourceInput(
             site="mangaone",
             external_id="free-late",
-            url="https://example.invalid/free-late",
             access_mode="free",
             free_until="2026-09-17T20:00:00+09:00",
         ),
         item_id=item.id,
     )
+    service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/free-late"),
+        source_id=free_late.id,
+    )
     nearest = service.create_source(
         SourceInput(
             site="mangaone",
             external_id="free-nearest",
-            url="https://example.invalid/free-nearest",
             access_mode="free",
             free_until="2026-09-17T16:00:00+09:00",
         ),
         item_id=item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/free-nearest"),
+        source_id=nearest.id,
     )
 
     plan = plan_for(service)
@@ -151,6 +169,61 @@ def test_source_priority_and_metadata_mapping(tmp_path: Path) -> None:
         "author": "作者A",
         "order": "第80話-後編",
         "genre": "漫画",
+    }
+
+
+def test_planner_selects_enabled_web_target_and_skips_other_backends(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+
+    no_target_item = service.create_item(ItemInput(canonical_title="no target"))
+    no_target_source = service.create_source(
+        SourceInput(site="mangaone", external_id="no-target", access_mode="free"),
+        item_id=no_target_item.id,
+    )
+    disabled_item = service.create_item(ItemInput(canonical_title="disabled"))
+    disabled_source = service.create_source(
+        SourceInput(site="mangaone", external_id="disabled", access_mode="free"),
+        item_id=disabled_item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/disabled", enabled=False),
+        source_id=disabled_source.id,
+    )
+    android_item = service.create_item(ItemInput(canonical_title="android only"))
+    android_source = service.create_source(
+        SourceInput(site="mangaone", external_id="android", access_mode="free"),
+        item_id=android_item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(backend="android", locator="episode_android"),
+        source_id=android_source.id,
+    )
+    selected_item, selected_source = add_source(
+        service,
+        item=ItemInput(canonical_title="selected"),
+        external_id="selected",
+        access_mode="free",
+    )
+    selected_target = service.find_source_target(selected_source.id, "web")
+    assert selected_target is not None
+
+    plan = plan_for(service)
+
+    assert len(plan.candidates) == 1
+    candidate = plan.candidates[0]
+    assert (candidate.item_id, candidate.source_id) == (selected_item.id, selected_source.id)
+    assert candidate.target_id == selected_target.id
+    assert candidate.backend == "web"
+    assert candidate.locator.endswith("/selected")
+    assert Counter(skipped.reason for skipped in plan.skipped) == Counter(
+        {"no enabled web target": 3}
+    )
+    assert {skipped.source_id for skipped in plan.skipped} == {
+        no_target_source.id,
+        disabled_source.id,
+        android_source.id,
     }
 
 

@@ -247,6 +247,29 @@ class CatalogService:
             [self._source_from_row(row) for row in source_rows],
         )
 
+    def read_items_sources_and_targets(
+        self, *, site: str
+    ) -> tuple[list[Item], list[Source], list[SourceTarget]]:
+        """Read one site's items, sources, and targets without any write side effect."""
+
+        self._validate_nonempty(site, "site")
+        with self._read_only_connection() as connection:
+            item_rows = connection.execute("SELECT * FROM items ORDER BY id").fetchall()
+            source_rows = connection.execute(
+                "SELECT * FROM sources WHERE site = ? ORDER BY id", (site,)
+            ).fetchall()
+            target_rows = connection.execute(
+                "SELECT st.* FROM source_targets AS st "
+                "JOIN sources AS s ON s.id = st.source_id "
+                "WHERE s.site = ? ORDER BY st.id",
+                (site,),
+            ).fetchall()
+        return (
+            [self._item_from_row(row) for row in item_rows],
+            [self._source_from_row(row) for row in source_rows],
+            [self._source_target_from_row(row) for row in target_rows],
+        )
+
     def mark_sources_unavailable_except(
         self,
         *,
