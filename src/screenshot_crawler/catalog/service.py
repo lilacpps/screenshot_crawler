@@ -538,7 +538,8 @@ class CatalogService:
                 raise CatalogValidationError("existing source belongs to a different work")
             if existing_source["site"] != source.site or existing_source["external_id"] != source.external_id:
                 raise CatalogValidationError("source identity cannot be changed")
-            if existing_source["discovery_key"] != source.discovery_key:
+            existing_key = existing_source["discovery_key"]
+            if existing_key is not None and existing_key != source.discovery_key:
                 raise CatalogValidationError("source belongs to a different Discovery scope")
             assignments = [
                 "discovery_key = ?",

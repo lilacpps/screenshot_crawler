@@ -265,6 +265,59 @@ async def test_scope_conflict_is_incomplete_without_external_mutation(tmp_path: 
     assert unchanged.access_mode == "free"
 
 
+async def test_unscoped_source_is_adopted_by_matching_work_scope(tmp_path: Path) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [record("one", access_mode="owned", url="https://example.test/adopted")]
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="作品A"))
+    item = catalog.create_item(work_id=work.id)
+    source = catalog.create_source(
+        SourceInput(site="site-a", external_id="one", access_mode="free"),
+        item_id=item.id,
+    )
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is True
+    assert catalog.get_item(item.id).id == item.id
+    adopted = catalog.get_source(source.id)
+    assert adopted.id == source.id
+    assert adopted.item_id == item.id
+    assert adopted.discovery_key == "scope-a"
+    assert adopted.access_mode == "owned"
+    web = catalog.find_source_target(source.id, "web", "default")
+    assert web is not None
+    assert web.locator == "https://example.test/adopted"
+    assert len(catalog.list_items()) == 1
+    assert len(catalog.list_sources()) == 1
+
+
+async def test_unscoped_source_with_different_work_is_rejected_without_mutation(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record("one", access_mode="owned")])
+    service, catalog, watch_target = setup_service(
+        tmp_path, adapter, watch_target=target(work_key="work-b", label="作品B")
+    )
+    work_a = catalog.create_work(WorkInput(work_key="work-a", title="作品A"))
+    item = catalog.create_item(work_id=work_a.id)
+    source = catalog.create_source(
+        SourceInput(site="site-a", external_id="one", access_mode="free"),
+        item_id=item.id,
+    )
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.stopped_reason == "incomplete"
+    unchanged = catalog.get_source(source.id)
+    assert unchanged.discovery_key is None
+    assert unchanged.access_mode == "free"
+    assert unchanged.item_id == item.id
+    assert catalog.get_item(item.id).work_id == work_a.id
+    assert catalog.find_source_target(source.id, "web", "default") is None
+
+
 async def test_work_association_conflict_is_incomplete_without_reparenting(tmp_path: Path) -> None:
     adapter = FakeDiscoveryAdapter([record("one")])
     service, catalog, watch_target = setup_service(tmp_path, adapter)
@@ -333,6 +386,38 @@ async def test_incremental_known_streak_and_run_start_snapshot_are_preserved(tmp
     assert result.stopped_reason == "known_streak"
     assert result.observed_count == 2
     assert catalog.find_source("site-a", "three") is None
+
+
+async def test_incremental_duplicate_known_source_does_not_increase_streak(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [
+            record("known-a", url="https://example.test/first"),
+            record("known-a", url="https://example.test/latest"),
+            record("new-b"),
+        ]
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="作品A"))
+    item = catalog.create_item(work_id=work.id)
+    known = catalog.create_source(
+        SourceInput(
+            site="site-a",
+            external_id="known-a",
+            discovery_key=watch_target.key,
+        ),
+        item_id=item.id,
+    )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.stopped_reason == "exhausted"
+    assert result.observed_count == 3
+    assert catalog.find_source("site-a", "new-b") is not None
+    web = catalog.find_source_target(known.id, "web", "default")
+    assert web is not None
+    assert web.locator == "https://example.test/latest"
 
 
 async def test_disabled_target_does_not_create_work(tmp_path: Path) -> None:

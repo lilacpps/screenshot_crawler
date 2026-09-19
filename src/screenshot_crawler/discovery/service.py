@@ -222,7 +222,7 @@ class DiscoveryService:
 
     @staticmethod
     def _ensure_existing_source_is_safe(source, target: WatchlistTarget) -> None:
-        if source.discovery_key != target.key:
+        if source.discovery_key is not None and source.discovery_key != target.key:
             raise DiscoveryIncompleteError(
                 "Existing source belongs to a different Discovery scope"
             )
