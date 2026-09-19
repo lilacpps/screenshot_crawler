@@ -47,6 +47,7 @@ class BatchPlanner:
         targets_by_source: dict[int, list[SourceTarget]] = defaultdict(list)
         for target in targets:
             targets_by_source[target.source_id].append(target)
+        # A site-scoped plan only considers items with at least one source for that site.
         site_item_ids = set(sources_by_item)
         plan = BatchPlan()
         try:
