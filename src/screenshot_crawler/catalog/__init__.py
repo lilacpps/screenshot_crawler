@@ -12,6 +12,8 @@ from screenshot_crawler.catalog.models import (
     ItemInput,
     Source,
     SourceInput,
+    SourceTarget,
+    SourceTargetInput,
 )
 from screenshot_crawler.catalog.service import (
     CatalogError,
@@ -36,6 +38,8 @@ __all__ = [
     "ItemInput",
     "Source",
     "SourceInput",
+    "SourceTarget",
+    "SourceTargetInput",
     "UnsupportedSchemaVersionError",
     "export_catalog_csv",
     "format_timestamp",

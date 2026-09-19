@@ -22,7 +22,6 @@ class ItemInput:
 class SourceInput:
     site: str
     external_id: str
-    url: str
     discovery_key: str | None = None
     access_mode: str = "unknown"
     free_until: datetime | str | None = None
@@ -57,7 +56,6 @@ class Source:
     site: str
     external_id: str
     discovery_key: str | None
-    url: str
     access_mode: str
     free_until: str | None
     available: bool
@@ -65,6 +63,26 @@ class Source:
     last_seen_at: str | None
     quota_started_at: str | None
     access_granted_until: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTargetInput:
+    backend: str
+    locator: str
+    priority: int = 100
+    enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTarget:
+    id: int
+    source_id: int
+    backend: str
+    locator: str
+    priority: int
+    enabled: bool
     created_at: str
     updated_at: str
 

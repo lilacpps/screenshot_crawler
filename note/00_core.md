@@ -547,15 +547,17 @@ CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disa
 
 `CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、CRUD/upsertを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。
 
-初期schemaはdomain tableを`items`と`sources`の2つだけ持つ。`canonical_title`と`kind`はDiscoveryで取得不能な場合を許容してNULL可、`status`は`pending`/`completed`に限定する。`sources`の`access_mode`は`owned`/`free`/`quota`/`paid`/`unknown`に限定し、`UNIQUE(site, external_id)`と`items.id`へのforeign keyを持つ。URLはidentityに使わず、同じsite/external_idのupsertで更新する。
+Schema v2のdomain tableは`items`、`sources`、`source_targets`の3つを持つ。`canonical_title`と`kind`はDiscoveryで取得不能な場合を許容してNULL可、`status`は`pending`/`completed`に限定する。`sources`の`access_mode`は`owned`/`free`/`quota`/`paid`/`unknown`に限定し、`UNIQUE(site, external_id)`と`items.id`へのforeign keyを持つ。source identityは引き続き`(site, external_id)`であり、取得経路のURLはSourceに保存しない。
 
-`upsert_item_source()`は新規item + sourceを1 transactionで作成する。既存sourceの場合はURL、access state、availability、external timestamps、discovery scopeと取得できたitem metadataだけを更新し、`items.status`、`local_path`、`completed_at`は更新しない。`quota_started_at` と `access_granted_until` は既存値を保持し、新規sourceではNULLで開始する。`update_source_external_state()`はquota stateを引数に持たないexternal state専用patchで、`record_quota_access()`はsourceのquota local stateと`updated_at`だけを更新し、`mark_item_completed()`はlocal stateを更新する。
+`upsert_item_source()`は新規item + sourceを1 transactionで作成する。既存sourceの場合はaccess state、availability、external timestamps、discovery scopeと取得できたitem metadataだけを更新し、`items.status`、`local_path`、`completed_at`は更新しない。`quota_started_at` と `access_granted_until` は既存値を保持し、新規sourceではNULLで開始する。`update_source_external_state()`はquota stateを引数に持たないexternal state専用patchで、`record_quota_access()`はsourceのquota local stateと`updated_at`だけを更新し、`mark_item_completed()`はlocal stateを更新する。
+
+`source_targets`はsourceごとの取得経路をopaqueな`backend` / `locator`として保持する。`(source_id, backend)`がtarget identityで、`priority`（小さい値を優先する意味だけを保持）と`enabled`を保存する。`CatalogService`は`create_source_target()`、`upsert_source_target()`、`find_source_target()`、`get_source_target()`、`list_source_targets()`を提供するが、target selectionやlocatorの解釈は行わない。targetの更新はsourceのaccess/quota/local stateから独立している。
 
 Batch Planner用に `read_items_and_sources(site=...)` を追加した。これは既存Catalogをread-only接続で検証し、items全件と指定siteのsourcesを取得する。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
 
-Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` がSQLiteをread-onlyで検証・読み込みし、`items LEFT JOIN sources` を `item_id ASC, source_id ASC` で並べたflat CSV snapshotを生成する。1行は1 sourceで、sourceなしitemもsource列を空欄にして残る。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力 `catalog-export.csv` であり、CSVからCatalogへ戻す機能はない。
+Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` がSQLiteをread-onlyで検証・読み込みし、`items LEFT JOIN sources` を `item_id ASC, source_id ASC` で並べたflat CSV snapshotを生成する。1行は1 sourceで、sourceなしitemもsource列を空欄にして残る。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力 `catalog-export.csv` であり、CSVからCatalogへ戻す機能はない。なお、Schema v2導入commitではExportのURL列・v1検証は対象外として残しており、v2対応は次のDiscovery / Batch / Export統合commitで行う。
 
-日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`1`だけをサポートし、未対応versionは明示的に失敗する。Alembic等のmigration frameworkは導入していない。
+日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。schema versionはSQLite `PRAGMA user_version`の`2`だけをサポートし、v1を含む他versionはmigrationせず明示的に失敗する。v2で`items` / `sources` / `source_targets`または必要columnが欠けるDBも拒否する。Alembic等のmigration frameworkは導入していない。
 
 採用した上位flow:
 
@@ -575,13 +577,13 @@ Crawl Request
 
 現行実装には、BookWalker quotaの実サイトlive click検証と、quotaのサーバー側実消費をCatalogだけから検証する機能は存在しない。
 
-Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framework、Phase 5A Batch Planner / Site Policy registry / Manga ONE Policyは実装済みである。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。Phase 5Aのplannerは`auto`を使わず、`direct`/`quota`の実行意図とmetadataをcandidateへ保持するだけである。
+Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framework、Phase 5A Batch Planner / Site Policy registry / Manga ONE Policyは実装済みである。今回のCatalog v2境界変更後、Discovery / Batch / Export側のSource URL・Catalog CSV統合は未対応であり、次commitの対象である。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。Phase 5Aのplannerは`auto`を使わず、`direct`/`quota`の実行意図とmetadataをcandidateへ保持するだけである。
 
 主要仕様:
 
 - Discovery対象は明示Watchlistだけ
 - Watchlist targetはstable `key` を持つ
-- Catalogは `items / sources` の2テーブル
+- Catalog v2は `items / sources / source_targets` の3テーブル
 - full syncはcomplete時だけmissing sourceをunavailable化
 - 現行incremental実装はlatest側から異なるknown source 2件連続で停止し、同一stable identityの重複観測はstreakに加算しない
 - 採用仕様ではdefault known-streakを維持しつつ、site固有access遷移に必要なstable boundary hookを許容する。BookWalker Discoveryはこのhookを利用する

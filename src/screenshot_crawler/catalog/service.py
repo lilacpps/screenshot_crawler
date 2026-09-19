@@ -16,6 +16,8 @@ from screenshot_crawler.catalog.models import (
     ItemInput,
     Source,
     SourceInput,
+    SourceTarget,
+    SourceTargetInput,
 )
 
 # A fixed offset is intentional: this tool's persistence policy is JST, not
@@ -76,7 +78,7 @@ class CatalogService:
         self.path = Path(path)
 
     def initialize(self) -> None:
-        """Create the initial two-table schema or validate the existing one."""
+        """Create the initial three-table schema or validate the existing one."""
 
         with self._connection(initialize_schema=False) as connection:
             try:
@@ -150,16 +152,15 @@ class CatalogService:
         with self._connection() as connection:
             try:
                 cursor = connection.execute(
-                    "INSERT INTO sources (item_id, site, external_id, discovery_key, url, access_mode, "
+                    "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
                     "free_until, available, access_checked_at, last_seen_at, quota_started_at, "
                     "access_granted_until, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         item_id,
                         source.site,
                         source.external_id,
                         source.discovery_key,
-                        source.url,
                         source.access_mode,
                         format_timestamp(source.free_until),
                         1 if source.available is None else int(source.available),
@@ -318,15 +319,14 @@ class CatalogService:
                 )
                 item_id = int(item_cursor.lastrowid)
                 connection.execute(
-                    "INSERT INTO sources (item_id, site, external_id, discovery_key, url, access_mode, "
+                    "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
                     "free_until, available, access_checked_at, last_seen_at, quota_started_at, "
-                    "access_granted_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "access_granted_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         item_id,
                         source_input.site,
                         source_input.external_id,
                         source_input.discovery_key,
-                        source_input.url,
                         source_input.access_mode,
                         format_timestamp(source_input.free_until),
                         1 if source_input.available is None else int(source_input.available),
@@ -368,7 +368,6 @@ class CatalogService:
         site: str,
         external_id: str,
         *,
-        url: str | object = _UNSET,
         discovery_key: str | None | object = _UNSET,
         access_mode: str | object = _UNSET,
         free_until: datetime | str | None | object = _UNSET,
@@ -389,7 +388,6 @@ class CatalogService:
             assignments: list[str] = []
             values: list[Any] = []
             for column, value in (
-                ("url", url),
                 ("discovery_key", discovery_key),
                 ("access_mode", access_mode),
                 ("free_until", free_until),
@@ -405,8 +403,6 @@ class CatalogService:
                     value = int(value)
                 elif column == "access_mode":
                     self._validate_access_mode(value)
-                elif column == "url":
-                    self._validate_nonempty(value, "url")
                 elif column.endswith("_at") or column == "free_until":
                     value = format_timestamp(value)
                 assignments.append(f"{column} = ?")
@@ -473,6 +469,140 @@ class CatalogService:
                 "SELECT * FROM sources WHERE id = ?", (source_id,)
             ).fetchone()
         return self._source_from_row(updated)
+
+    def create_source_target(
+        self,
+        target: SourceTargetInput | Mapping[str, Any],
+        *,
+        source_id: int,
+    ) -> SourceTarget:
+        """Create one opaque acquisition target for an existing source."""
+
+        target_input = self._coerce_source_target_input(target)
+        self._validate_source_target_input(target_input)
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            try:
+                cursor = connection.execute(
+                    "INSERT INTO source_targets "
+                    "(source_id, backend, locator, priority, enabled, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        source_id,
+                        target_input.backend,
+                        target_input.locator,
+                        target_input.priority,
+                        int(target_input.enabled),
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise CatalogValidationError(f"Could not create source target: {exc}") from exc
+            row = connection.execute(
+                "SELECT * FROM source_targets WHERE id = ?", (cursor.lastrowid,)
+            ).fetchone()
+        return self._source_target_from_row(row)
+
+    def upsert_source_target(
+        self,
+        target: SourceTargetInput | Mapping[str, Any],
+        *,
+        source_id: int,
+    ) -> SourceTarget:
+        """Create or refresh a target identified by ``(source_id, backend)``."""
+
+        target_input = self._coerce_source_target_input(target)
+        self._validate_source_target_input(target_input)
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            existing = connection.execute(
+                "SELECT * FROM source_targets WHERE source_id = ? AND backend = ?",
+                (source_id, target_input.backend),
+            ).fetchone()
+            try:
+                if existing is None:
+                    cursor = connection.execute(
+                        "INSERT INTO source_targets "
+                        "(source_id, backend, locator, priority, enabled, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            source_id,
+                            target_input.backend,
+                            target_input.locator,
+                            target_input.priority,
+                            int(target_input.enabled),
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+                    target_id = cursor.lastrowid
+                else:
+                    target_id = existing["id"]
+                    connection.execute(
+                        "UPDATE source_targets SET locator = ?, priority = ?, enabled = ?, "
+                        "updated_at = ? WHERE id = ?",
+                        (
+                            target_input.locator,
+                            target_input.priority,
+                            int(target_input.enabled),
+                            timestamp,
+                            target_id,
+                        ),
+                    )
+            except sqlite3.IntegrityError as exc:
+                raise CatalogValidationError(f"Could not upsert source target: {exc}") from exc
+            row = connection.execute(
+                "SELECT * FROM source_targets WHERE id = ?", (target_id,)
+            ).fetchone()
+        return self._source_target_from_row(row)
+
+    def find_source_target(self, source_id: int, backend: str) -> SourceTarget | None:
+        self._validate_nonempty(backend, "backend")
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM source_targets WHERE source_id = ? AND backend = ?",
+                (source_id, backend),
+            ).fetchone()
+        return None if row is None else self._source_target_from_row(row)
+
+    def get_source_target(self, target_id: int) -> SourceTarget:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM source_targets WHERE id = ?", (target_id,)
+            ).fetchone()
+        if row is None:
+            raise CatalogNotFoundError(f"Catalog source target not found: {target_id}")
+        return self._source_target_from_row(row)
+
+    def list_source_targets(
+        self,
+        *,
+        source_id: int | None = None,
+        backend: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[SourceTarget]:
+        conditions: list[str] = []
+        values: list[Any] = []
+        if source_id is not None:
+            conditions.append("source_id = ?")
+            values.append(source_id)
+        if backend is not None:
+            self._validate_nonempty(backend, "backend")
+            conditions.append("backend = ?")
+            values.append(backend)
+        if enabled is not None:
+            if not isinstance(enabled, bool):
+                raise CatalogValidationError("enabled must be a boolean")
+            conditions.append("enabled = ?")
+            values.append(int(enabled))
+        query = "SELECT * FROM source_targets"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id ASC"
+        with self._connection() as connection:
+            rows = connection.execute(query, values).fetchall()
+        return [self._source_target_from_row(row) for row in rows]
 
     @contextmanager
     def _connection(self, *, initialize_schema: bool = True):
@@ -556,7 +686,6 @@ class CatalogService:
     def _validate_source_input(cls, source: SourceInput) -> None:
         cls._validate_nonempty(source.site, "site")
         cls._validate_nonempty(source.external_id, "external_id")
-        cls._validate_nonempty(source.url, "url")
         cls._validate_access_mode(source.access_mode)
         if source.available is not None and not isinstance(source.available, bool):
             raise CatalogValidationError("available must be a boolean")
@@ -606,6 +735,36 @@ class CatalogService:
             raise CatalogValidationError(str(exc)) from exc
 
     @staticmethod
+    def _coerce_source_target_input(
+        target: SourceTargetInput | Mapping[str, Any],
+    ) -> SourceTargetInput:
+        if isinstance(target, SourceTargetInput):
+            return target
+        if not isinstance(target, Mapping):
+            raise CatalogValidationError("target must be SourceTargetInput or a mapping")
+        allowed = set(SourceTargetInput.__dataclass_fields__)
+        unknown = set(target) - allowed
+        if unknown:
+            raise CatalogValidationError(
+                f"Unknown source target field(s): {', '.join(sorted(unknown))}"
+            )
+        try:
+            return SourceTargetInput(**target)
+        except TypeError as exc:
+            raise CatalogValidationError(str(exc)) from exc
+
+    @classmethod
+    def _validate_source_target_input(cls, target: SourceTargetInput) -> None:
+        cls._validate_nonempty(target.backend, "backend")
+        cls._validate_nonempty(target.locator, "locator")
+        if isinstance(target.priority, bool) or not isinstance(target.priority, int):
+            raise CatalogValidationError("priority must be an integer")
+        if target.priority < 0:
+            raise CatalogValidationError("priority must be >= 0")
+        if not isinstance(target.enabled, bool):
+            raise CatalogValidationError("enabled must be a boolean")
+
+    @staticmethod
     def _update_item_metadata(
         connection: sqlite3.Connection, item_id: int, item: ItemInput, timestamp: str
     ) -> None:
@@ -652,11 +811,10 @@ class CatalogService:
         default_last_seen: str,
     ) -> None:
         connection.execute(
-            "UPDATE sources SET discovery_key = ?, url = ?, access_mode = ?, free_until = ?, "
+            "UPDATE sources SET discovery_key = ?, access_mode = ?, free_until = ?, "
             "available = ?, access_checked_at = ?, last_seen_at = ?, updated_at = ? WHERE id = ?",
             (
                 source.discovery_key,
-                source.url,
                 source.access_mode,
                 format_timestamp(source.free_until),
                 int(source.available) if source.available is not None else existing["available"],
@@ -676,3 +834,9 @@ class CatalogService:
         values = dict(row)
         values["available"] = bool(values["available"])
         return Source(**values)
+
+    @staticmethod
+    def _source_target_from_row(row: sqlite3.Row) -> SourceTarget:
+        values = dict(row)
+        values["enabled"] = bool(values["enabled"])
+        return SourceTarget(**values)
