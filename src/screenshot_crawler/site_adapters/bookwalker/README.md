@@ -26,7 +26,7 @@ BookWalker can render a spread in a wide Chrome window. The adapter saves the ri
 
 ## Navigation and page change
 
-The adapter advances by clicking the left side of `#viewport1`. `#loaderStatusDialog` must disappear and the canvas signature must stabilize before capture. `#pageSliderCounter` is the primary page identity signal, with viewer `cid` as a secondary signal.
+The adapter advances with the viewer's `ArrowLeft` keyboard handler. `#loaderStatusDialog` must disappear and the canvas signature must stabilize before capture. `#pageSliderCounter` is the primary page identity signal, with viewer `cid` as a secondary signal.
 
 Some transitions consume the first action, so `wait_for_change()` performs bounded retry and never waits indefinitely.
 

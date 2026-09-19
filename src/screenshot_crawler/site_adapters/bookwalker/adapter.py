@@ -1606,27 +1606,30 @@ class BookWalkerAdapter(SiteAdapter):
     async def go_next(self, page: Page) -> None:
         self._final_navigation_pending = await self._is_last_page_counter(page)
         await self._arm_native_capture(page)
-        # BookWalker advances on the left side of the viewer. The dedicated
-        # tap-area div is normally hidden on desktop, so click the viewer's
-        # left edge instead of relying on browser scroll behavior from a bare
-        # ArrowLeft key event when a spread is wider than the viewport.
+        # The viewer's keyboard handler advances reliably even when a
+        # viewport click is accepted by Playwright but ignored by the viewer.
+        await page.keyboard.press("ArrowLeft")
+
+    async def _click_left_edge(self, page: Page) -> None:
+        """Use the viewer click area only after keyboard navigation stalls."""
+
+        await self._arm_native_capture(page)
         viewport = page.locator("#viewport1")
         box = await viewport.bounding_box()
-        if box and box["width"] > 0 and box["height"] > 0:
-            try:
-                await viewport.click(
-                    position={
-                        "x": min(50, box["width"] / 10),
-                        "y": box["height"] / 2,
-                    },
-                    force=True,
-                    timeout=1_000,
-                    no_wait_after=True,
-                )
-                return
-            except PlaywrightTimeoutError:
-                pass
-        await page.keyboard.press("ArrowLeft")
+        if not box or box["width"] <= 0 or box["height"] <= 0:
+            return
+        try:
+            await viewport.click(
+                position={
+                    "x": min(50, box["width"] / 10),
+                    "y": box["height"] / 2,
+                },
+                force=True,
+                timeout=1_000,
+                no_wait_after=True,
+            )
+        except PlaywrightTimeoutError:
+            return
 
     async def wait_for_change(
         self,
@@ -1662,10 +1665,11 @@ class BookWalkerAdapter(SiteAdapter):
                 and retry_count < self.advance_retry_count
                 and elapsed_ms >= retry_at_ms
             ):
-                # Some initial image/cover transitions consume the first
-                # input without changing the page counter. Retry the same
-                # bounded left-side action instead of waiting forever.
-                await self.go_next(page)
+                # Playwright can report a successful key/click dispatch even
+                # when the viewer ignores that action. The page identity is
+                # authoritative, so use the alternate click path only after
+                # the primary ArrowLeft action produced no change.
+                await self._click_left_edge(page)
                 retry_count += 1
                 retry_at_ms = deadline_ms * (retry_count + 1) // (
                     self.advance_retry_count + 1

@@ -171,8 +171,8 @@ profileは `.chrome-crawler` で、Manga ONEとlogin sessionを共存できる�
 
 優先:
 
-1. `#viewport1` の左端付近をclick
-2. clickできない場合 `ArrowLeft`
+1. viewerへ `ArrowLeft` を送信
+2. `#viewport1` のclickは使用しない
 
 `go_next()` は操作前に `#pageSliderCounter` が最終 `N/N` か確認し、`_final_navigation_pending` を記録する。
 
@@ -611,6 +611,28 @@ sizes were 224,798, 71,069, and 917,642 bytes respectively.  The full
 multi-page/END smoke remains a follow-up check.  Current unit coverage includes JPEG validation,
 browser signatures, cache bounds, retries, spread fallback, response
 filtering, and `.jpg` packaging.
+
+### 18.9 ArrowLeft navigation fix (2026-09-19)
+
+The BookWalker production navigation now sends `ArrowLeft` directly after
+arming the native capture trace.  The previous `#viewport1` left-edge click
+could be accepted by Playwright without being handled as a page-turn by the
+viewer; `wait_for_change()` then retried the same ineffective click until its
+bounded timeout.  A process-local live smoke using the existing trial product
+URL, with JPEG capture and packaging otherwise unchanged, completed at END
+with 59 `.jpg` artifacts and a ZIP archive.  The change is limited to
+`BookWalkerAdapter.go_next()`; capture priority, network interception,
+fallbacks, Core, and packaging behavior are unchanged.
+
+### 18.10 Identity-based navigation fallback (2026-09-20)
+
+Navigation keeps `ArrowLeft` as the primary action.  `wait_for_change()` now
+uses the page identity as the success condition and sends the legacy
+`#viewport1` left-edge click only when the identity remains unchanged after a
+bounded retry interval.  This avoids treating a Playwright-successful but
+viewer-ignored input as a successful page turn, while also avoiding an
+unconditional double action when `ArrowLeft` is merely delayed.  The fallback
+remains bounded by the existing page-change timeout and retry count.
 
 ## 19. Known limitations / maintenance
 
