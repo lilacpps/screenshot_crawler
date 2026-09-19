@@ -8,7 +8,7 @@
 
 ## 1. 目的と現在のscope
 
-Manga ONEのWeb viewerから、指定chapterの本文画像を順番にPNG保存し、話単位ZIPとして残す。
+Manga ONEのWeb viewerから、指定chapterの本文画像を順番にsource-native WebPまたはfallback PNGとして保存し、話単位ZIPとして残す。
 
 現在対応している主な挙動:
 
@@ -108,9 +108,9 @@ profileは `.chrome-crawler` で、BookWalkerとlogin sessionを共存できる�
 
 表示中のpage imgを毎回列挙し、viewportに見えているtargetだけを使う。
 
-- visible target 1枚 → 1 PNG
-- visible target 2枚 → 2 PNG
-- opening/finalで片側だけ → 1 PNG
+- visible target 1枚 → 1 artifact
+- visible target 2枚 → 2 artifacts
+- opening/finalで片側だけ → 1 artifact
 
 固定中央splitや背景色推測は使わない。
 
@@ -337,13 +337,13 @@ endpoint優先順位:
 
 ## 18. Output / ZIP
 
-正常 `END` / `NEXT_CONTENT` 後、Coreがmanifest記載PNGだけをZIP化する。
+正常 `END` / `NEXT_CONTENT` 後、Coreがmanifest記載のPNG/WebP artifactだけをZIP化する。
 
 ```text
 output/Books/漫画/<title>/<title>-<order>.zip
 ```
 
-source crawl directoryは、manifest / progress / manifest記載PNG以外を含まない場合に限りcleanupされる。
+source crawl directoryは、manifest / progress / manifest記載artifact以外を含まない場合に限りcleanupされる。
 
 ## 19. Tests
 
@@ -486,9 +486,36 @@ accessing Manga ONE. The live observation click was not treated as a quota
 consumption test; actual quota consumption and the resulting account state
 were not independently verified.
 
+## Production source-native capture implementation (2026-09-19)
+
+The feasibility result is now implemented for Manga ONE only. `prepare_page()`
+registers a Playwright response listener before navigation and keeps bounded
+tasks for `blob:` image response bodies. `capture_page()` matches each visible
+image's `currentSrc` to that response body, validates WebP/PNG magic bytes and
+decoded dimensions, then returns the original bytes unchanged. The existing
+right-to-left visible-image order is preserved for spreads and opening/single
+page views return one artifact.
+
+The Core change is site-neutral artifact metadata: normal Locator/canvas
+captures remain PNG, while a direct Adapter result may specify MIME type and
+extension. Runner filenames and manifest entries follow that result, and
+packaging accepts only safe manifest-declared `.png` / `.webp` artifacts.
+
+Fallback is per visible image: missing response body, unsupported/undecodable
+bytes, a source URL that is not matched, or a bounded response wait uses the
+existing Locator screenshot for that image. No Core site-name branch was added.
+No quota entry button is clicked by the capture hook.
+
+The fresh direct smoke against chapter `214131` produced `page-0001.webp` at
+`720x1020`; the manifest recorded `image/webp` and `.webp`. The smoke command
+was intentionally limited to one page and the existing runner then raised its
+normal `max_pages` guard while trying to continue; the artifact and manifest
+were written before that guard. No BookWalker file, test, or note was changed.
+
 ## Source-native capture feasibility diagnostic (2026-09-19)
 
-これはfeasibility investigationのみであり、production capture behaviorは
+以下の診断部分はfeasibility investigationとしてproduction behaviorを変更せずに実施した。
+その後のproduction capture behavior実装は、このnoteの「Production source-native capture implementation」節に記録している。
 変更していない。BookWalker/Coreにも変更はない。計測対象は
 `https://manga-one.com/manga/2379/chapter/214131`、`lilacpps/screenshot_crawler`
 の `main` HEAD `a118b5cd643a4b3bddc7e4abce0061b7ed406ef4` である。共有Crawler
@@ -581,8 +608,8 @@ decode失敗・crop/transform検出時は既存Locator screenshotへfallbackす�
 Coreに `if site == mangaone` 分岐は追加しない。
 
 診断artifactは `diagnostics/mangaone-source-native/` に保存するが、実サイト本文画像
-をrepositoryのfixtureとして扱わない。production未採用であり、現行Manga ONEの
-capture behaviorは従来どおりである。
+をrepositoryのfixtureとして扱わない。production captureはこの調査後にManga ONEへ実装済みであり、現行Manga ONEの
+capture behaviorはsource-native WebP優先、ページ単位PNG fallbackである。
 
 - 末尾promotion pageがZIPへ残ることがある。
 - 前編/後編統合はCrawlerで行わない。

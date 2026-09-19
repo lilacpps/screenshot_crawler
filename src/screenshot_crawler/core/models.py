@@ -42,6 +42,8 @@ class CapturedPage:
     identity: ContentIdentity
     width: int | None = None
     height: int | None = None
+    mime_type: str = "image/png"
+    file_extension: str = ".png"
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

@@ -348,6 +348,13 @@ Discovery側のcross-site duplicateは別問題として扱う。別siteの類�
 
 ## 11. Output / packaging
 
+Page artifacts are format metadata driven. Locator/canvas capture keeps the
+default PNG behavior; Adapter direct capture may return original source bytes
+with MIME type and extension. Runner and manifest persistence follow that
+metadata, while packaging validates and includes only manifest-declared safe
+PNG/WebP artifacts. This remains site-neutral; source-byte selection belongs
+inside the Site Adapter.
+
 manifestのページ一覧を完成成果物のauthorityとする。packagingでdirectory globをauthorityにしない。
 
 新規runは非空output directoryを拒否する。正常packaging後も、無関係ファイルが含まれるdirectoryは丸ごと削除しない。

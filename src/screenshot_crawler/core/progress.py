@@ -69,7 +69,7 @@ def ensure_new_run(output_dir: str | Path) -> Path:
     """Reject a directory that is not empty before starting a new run.
 
     Resume is deliberately not implemented yet. Refusing these directories
-    keeps a new manifest/progress pair from being associated with old PNGs.
+    keeps a new manifest/progress pair from being associated with old artifacts.
     An empty, pre-created directory remains usable.
     """
 
@@ -140,6 +140,8 @@ class ProgressStore:
                 "file": relative_file,
                 "width": page.width,
                 "height": page.height,
+                "mime_type": page.mime_type,
+                "file_extension": page.file_extension,
                 "fingerprint": fingerprint,
                 "identity": _identity_dict(page.identity),
                 "metadata": page.metadata,

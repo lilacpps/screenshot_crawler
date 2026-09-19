@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import (
     PageChangeTimeoutError,
     UnsupportedAccessStrategyError,
@@ -23,6 +24,7 @@ from screenshot_crawler.core.models import AccessStrategy, ContentContext, Conte
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.mangaone.login import login_mangaone
+from screenshot_crawler.site_adapters.mangaone.native_capture import capture_source_bytes
 
 _PAGE_LABEL = re.compile(r"^page_(?P<number>\d+)$")
 _CHAPTER_URL = re.compile(r"/manga/(?P<work_id>[^/]+)/chapter/(?P<chapter_id>[^/?#]+)")
@@ -89,6 +91,7 @@ class MangaOneAdapter(SiteAdapter):
     end_grace_ms = 2_500
     quota_entry_wait_timeout_ms = 2_000
     quota_entry_poll_interval_ms = 100
+    source_response_wait_timeout_ms = 2_000
 
     viewer_selector = ".viewer-container"
     page_selector = '.viewer-container img[alt^="page_"]'
@@ -109,6 +112,71 @@ class MangaOneAdapter(SiteAdapter):
         self._ended = False
         self._output_title: str | None = None
         self._output_order: str | None = None
+        self._source_response_tasks: dict[str, asyncio.Task[bytes | None]] = {}
+
+    async def prepare_page(self, page: Page) -> None:
+        """Record blob response bodies before the chapter navigation starts."""
+
+        for task in self._source_response_tasks.values():
+            task.cancel()
+        self._source_response_tasks.clear()
+        page.on("response", self._handle_source_response)
+
+    def _handle_source_response(self, response: object) -> None:
+        response_url = str(getattr(response, "url", ""))
+        if not response_url.startswith("blob:"):
+            return
+        request = getattr(response, "request", None)
+        resource_type = getattr(request, "resource_type", None)
+        if resource_type not in {None, "", "image"}:
+            return
+        self._source_response_tasks[response_url] = asyncio.create_task(
+            self._read_source_response(response)
+        )
+
+    @staticmethod
+    async def _read_source_response(response: object) -> bytes | None:
+        try:
+            body = await response.body()  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return None
+        return body if isinstance(body, bytes) else None
+
+    async def _source_bytes_for(self, source_url: str) -> bytes | None:
+        task = self._source_response_tasks.get(source_url)
+        if task is None:
+            return None
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task),
+                timeout=self.source_response_wait_timeout_ms / 1000,
+            )
+        except TimeoutError:
+            if not task.done():
+                task.cancel()
+            return None
+
+    async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        """Prefer original blob bytes, falling back per image to a screenshot."""
+
+        targets = await self._visible_page_images(page)
+        if not targets:
+            return None
+
+        captures = []
+        for locator, row in targets:
+            source_url = str(row.get("src") or "")
+            source_bytes = await self._source_bytes_for(source_url)
+            native_capture = (
+                capture_source_bytes(source_bytes) if source_bytes is not None else None
+            )
+            if native_capture is not None and (
+                native_capture.width != int(row.get("naturalWidth", 0))
+                or native_capture.height != int(row.get("naturalHeight", 0))
+            ):
+                native_capture = None
+            captures.append(native_capture or await capture_locator(locator))
+        return tuple(captures)
 
     async def login(
         self,
@@ -174,6 +242,8 @@ class MangaOneAdapter(SiteAdapter):
                         y: rect.y,
                         width: rect.width,
                         height: rect.height,
+                        naturalWidth: element.naturalWidth,
+                        naturalHeight: element.naturalHeight,
                         visible,
                       };
                     }).filter(item => item.visible)

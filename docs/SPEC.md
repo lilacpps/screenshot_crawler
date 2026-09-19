@@ -278,6 +278,13 @@ Raw CDP Protocolを使う場合は:
 
 ## 11. Capture
 
+Capture output is artifact metadata driven. The default Locator/canvas path
+continues to produce PNG, while an Adapter direct-capture hook may return
+source-native bytes with `mime_type` and `file_extension` (currently `.webp`
+and `.png` are supported by packaging). Runner filenames, dimensions, and
+manifest entries follow the returned artifact; Core does not branch on site
+name.
+
 通常はLocator単位でcaptureする。Adapterは必要な場合だけ`capture_page(page)`を実装し、
 直接取得済みの`tuple[CaptureResult, ...]`を返してLocator captureを省略できる。
 `None`は直接capture不能を表し、Coreは既存の`get_capture_targets()` → `capture_locator()`へ
@@ -391,6 +398,11 @@ manifestは保存ページのauthorityである。
 JSONはtemporary file → replaceで更新する。
 
 ## 18. Packaging / output metadata
+
+Packaging uses manifest `pages[].file` as the authority for page artifacts.
+It accepts safe generated PNG/WebP paths, rejects missing or unsafe entries,
+and does not include unlisted files. A run may therefore contain mixed
+source-native WebP and screenshot PNG artifacts.
 
 正常な `END` / `NEXT_CONTENT` 後、manifestの `pages[].file` をauthorityとしてZIPを作成する。
 

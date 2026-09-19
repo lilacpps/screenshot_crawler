@@ -82,7 +82,7 @@ def resolve_output_metadata(
 
 
 def _manifest_page_files(source: Path) -> list[tuple[Path, PurePosixPath]]:
-    """Resolve and validate the PNG files declared by ``manifest.json``."""
+    """Resolve and validate the page artifacts declared by ``manifest.json``."""
 
     manifest_path = source / "manifest.json"
     if not manifest_path.is_file():
@@ -110,9 +110,11 @@ def _manifest_page_files(source: Path) -> list[tuple[Path, PurePosixPath]]:
             or PureWindowsPath(file_name).root
             or PureWindowsPath(file_name).drive
             or any(part in {"", ".", ".."} for part in relative.parts)
-            or relative.suffix.lower() != ".png"
+            or relative.suffix.lower() not in {".png", ".webp"}
         ):
-            raise ValueError(f"Manifest page {index} has an unsafe PNG path: {file_name}")
+            raise ValueError(
+                f"Manifest page {index} has an unsafe page artifact path: {file_name}"
+            )
         normalized_name = relative.as_posix()
         if normalized_name in seen:
             raise ValueError(f"Manifest contains duplicate page file: {file_name}")
@@ -156,7 +158,7 @@ def package_crawl_output(
 ) -> PackageResult:
     """Zip a completed crawl and move it into the configured library tree.
 
-    The ZIP contains only captured PNG pages under a top-level folder whose
+    The ZIP contains only manifest-declared page artifacts under a top-level folder whose
     name matches the archive stem. The source crawl directory is removed only
     when it contains generated run files and the archive and completion
     status have been written successfully.

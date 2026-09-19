@@ -158,6 +158,37 @@ def test_package_uses_manifest_files_and_ignores_extra_png(tmp_path) -> None:
     assert (crawl_dir / "page-9999.png").exists()
 
 
+def test_package_supports_mixed_native_webp_and_fallback_png(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "page-0001.webp").write_bytes(b"native")
+    (crawl_dir / "page-0002.png").write_bytes(b"fallback")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {"file": "page-0001.webp", "mime_type": "image/webp"},
+                    {"file": "page-0002.png", "mime_type": "image/png"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+
+    result = package_crawl_output(
+        crawl_dir,
+        {"title": "作品名", "genre": "漫画"},
+        library_dir=tmp_path / "Books",
+    )
+
+    with zipfile.ZipFile(result.archive_path) as archive:
+        assert archive.namelist() == [
+            "作品名/page-0001.webp",
+            "作品名/page-0002.png",
+        ]
+
+
 def test_package_does_not_rmtree_unrelated_files(tmp_path) -> None:
     crawl_dir = tmp_path / "crawl"
     crawl_dir.mkdir()

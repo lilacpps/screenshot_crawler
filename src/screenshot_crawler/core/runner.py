@@ -211,7 +211,12 @@ class CrawlerRunner:
                             f"max_pages exceeded: {self.config.max_pages}"
                         )
                     sequence = len(saved_pages) + 1
-                    filename = Path(f"page-{sequence:04d}.png")
+                    extension = capture.file_extension.lower()
+                    if not extension.startswith(".") or "/" in extension or "\\" in extension:
+                        raise ValueError(
+                            f"Capture returned an unsafe file extension: {capture.file_extension!r}"
+                        )
+                    filename = Path(f"page-{sequence:04d}{extension}")
                     save_capture(capture, output_dir / filename)
                     captured = CapturedPage(
                         sequence=sequence,
@@ -219,6 +224,8 @@ class CrawlerRunner:
                         identity=identity,
                         width=capture.width,
                         height=capture.height,
+                        mime_type=capture.mime_type,
+                        file_extension=extension,
                         metadata=(
                             {"part": part_index + 1, "parts": part_count}
                             if part_count > 1

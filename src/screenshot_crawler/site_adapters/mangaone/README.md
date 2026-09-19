@@ -100,7 +100,11 @@ The adapter exposes the chapter title as archive title and the episode label as 
 獣王と薬草-第80話-後編.zip
 ```
 
-Normal `END` / `NEXT_CONTENT` completion packages manifest-declared PNGs under `output/Books/漫画/<title>/` by default. Episode parts remain separate archives.
+Normal `END` / `NEXT_CONTENT` completion packages manifest-declared PNG/WebP
+artifacts under `output/Books/漫画/<title>/` by default. Manga ONE prefers the
+original blob WebP bytes per visible page and falls back to the existing PNG
+Locator screenshot independently for pages whose source bytes are unavailable
+or invalid. Episode parts remain separate archives.
 
 ## Live verification
 

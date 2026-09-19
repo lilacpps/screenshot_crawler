@@ -12,11 +12,13 @@ from playwright.async_api import Locator
 
 @dataclass(frozen=True, slots=True)
 class CaptureResult:
-    """PNG bytes and the rendered pixel dimensions of a capture target."""
+    """Captured bytes and their decoded pixel dimensions."""
 
     data: bytes
     width: int | None
     height: int | None
+    mime_type: str = "image/png"
+    file_extension: str = ".png"
 
 
 def _png_dimensions(data: bytes) -> tuple[int, int] | None:

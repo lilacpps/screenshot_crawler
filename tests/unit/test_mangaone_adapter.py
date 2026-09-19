@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from playwright.async_api import Error, Page, async_playwright
 
@@ -12,6 +14,9 @@ from screenshot_crawler.site_adapters.mangaone.adapter import (
     order_mangaone_pages,
     parse_mangaone_page_number,
     split_mangaone_episode_title,
+)
+from screenshot_crawler.site_adapters.mangaone.native_capture import (
+    capture_source_bytes,
 )
 
 
@@ -72,6 +77,102 @@ def test_mangaone_identity_supports_single_page_and_spread() -> None:
         page_id="page_1|page_2", page_number=3, source_id="214131"
     )
     assert mangaone_identity_from_pages(("page_0",), chapter_id="214131").page_number == 1
+
+
+def _synthetic_webp(width: int, height: int) -> bytes:
+    payload = (
+        b"\x00\x00\x00\x00"
+        + (width - 1).to_bytes(3, "little")
+        + (height - 1).to_bytes(3, "little")
+    )
+    return (
+        b"RIFF"
+        + (4 + 8 + len(payload)).to_bytes(4, "little")
+        + b"WEBPVP8X"
+        + len(payload).to_bytes(4, "little")
+        + payload
+    )
+
+
+def test_mangaone_native_capture_preserves_webp_bytes_and_dimensions() -> None:
+    source = _synthetic_webp(720, 1020)
+
+    result = capture_source_bytes(source)
+
+    assert result is not None
+    assert result.data == source
+    assert (result.width, result.height) == (720, 1020)
+    assert result.mime_type == "image/webp"
+    assert result.file_extension == ".webp"
+
+
+def test_mangaone_native_capture_rejects_undecodable_bytes() -> None:
+    assert capture_source_bytes(b"not-an-image") is None
+
+
+class _CaptureLocator:
+    def __init__(self, screenshot_bytes: bytes = b"fallback") -> None:
+        self.screenshot_bytes = screenshot_bytes
+
+    async def evaluate(self, expression: str) -> object:
+        if "instanceof HTMLCanvasElement" in expression:
+            return False
+        raise AssertionError(f"unexpected locator evaluation: {expression}")
+
+    async def screenshot(self, **_kwargs: object) -> bytes:
+        return self.screenshot_bytes
+
+    async def bounding_box(self) -> dict[str, float]:
+        return {"width": 720.0, "height": 1020.0}
+
+
+async def test_mangaone_capture_preserves_spread_order_and_falls_back_per_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    right_source = _synthetic_webp(720, 1020)
+    right = _CaptureLocator()
+    left = _CaptureLocator()
+    adapter = MangaOneAdapter()
+
+    async def visible_images(_page: Page) -> list[tuple[object, dict[str, object]]]:
+        return [
+            (
+                right,
+                {
+                    "src": "blob:right",
+                    "x": 900.0,
+                    "naturalWidth": 720,
+                    "naturalHeight": 1020,
+                },
+            ),
+            (
+                left,
+                {
+                    "src": "blob:left",
+                    "x": 200.0,
+                    "naturalWidth": 720,
+                    "naturalHeight": 1020,
+                },
+            ),
+        ]
+
+    async def response_body(data: bytes) -> bytes:
+        return data
+
+    monkeypatch.setattr(adapter, "_visible_page_images", visible_images)
+    adapter._source_response_tasks = {
+        "blob:right": asyncio.create_task(response_body(right_source)),
+        "blob:left": asyncio.create_task(response_body(b"invalid")),
+    }
+
+    captures = await adapter.capture_page(object())  # type: ignore[arg-type]
+
+    assert captures is not None
+    assert [capture.data for capture in captures] == [right_source, b"fallback"]
+    assert [(capture.width, capture.height) for capture in captures] == [
+        (720, 1020),
+        (720, 1020),
+    ]
 
 
 async def test_mangaone_configure_run_accepts_all_mangaone_strategies() -> None:

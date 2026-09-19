@@ -132,6 +132,20 @@ class NativeSpreadAdapter(NativeCaptureAdapter):
         )
 
 
+class NativeWebPAdapter(NativeCaptureAdapter):
+    async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...] | None:
+        self.native_calls += 1
+        return (
+            CaptureResult(
+                data=b"native-webp",
+                width=720,
+                height=1020,
+                mime_type="image/webp",
+                file_extension=".webp",
+            ),
+        )
+
+
 async def test_base_adapter_capture_page_defaults_to_locator_fallback() -> None:
     adapter = FakeAdapter(
         [PageState.END],
@@ -298,6 +312,30 @@ async def test_runner_prefers_native_capture_over_locator_targets(
     assert adapter.native_calls == 1
     assert adapter.target_calls == 0
     assert adapter.cleanup_calls == 0
+
+
+async def test_runner_uses_native_artifact_extension_and_manifest_metadata(
+    tmp_path: Path,
+) -> None:
+    adapter = NativeWebPAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+        )
+    ).run(FakePage(), adapter)
+
+    assert result.pages[0].file.name == "page-0001.webp"
+    assert (tmp_path / "run" / "page-0001.webp").read_bytes() == b"native-webp"
+    manifest = json.loads((tmp_path / "run" / "manifest.json").read_text())
+    assert manifest["pages"][0]["mime_type"] == "image/webp"
+    assert manifest["pages"][0]["file_extension"] == ".webp"
 
 
 async def test_runner_preserves_native_spread_order_and_metadata(

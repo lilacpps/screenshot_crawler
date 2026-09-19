@@ -17,7 +17,7 @@ read-only Batch planning and Manga ONE Policy. Phase
 
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
-最終同期: 2026-09-17
+最終同期: 2026-09-19
 
 ## 1. Scope
 
@@ -29,7 +29,7 @@ Coreはサイト固有DOMやページ送りを判断しない。共通処理を�
 - URL navigation
 - Site Adapter呼び出し
 - PageState loop
-- capture / PNG保存
+- capture / artifact保存（default PNG、Adapter direct captureではformat metadataを保持）
 - SHA-256 fingerprint
 - duplicate / same-content guard
 - manifest / progress
@@ -44,7 +44,7 @@ Site固有selector、END判定、NEXT操作は `site_adapters/<site>/` の責務
 ```text
 src/screenshot_crawler/core/
 ├─ browser.py       browser launch / CDP endpoint / CDP connection / session
-├─ capture.py       Locator / canvas capture, PNG save
+├─ capture.py       Locator / canvas capture, artifact save
 ├─ diagnostics.py   screenshot / HTML / metadata / error
 ├─ errors.py        crawler errors
 ├─ fingerprint.py   SHA-256
@@ -270,7 +270,7 @@ loop:
         -> one/multiple capture targets取得
         -> capture
         -> fingerprint dedupe
-        -> PNG + manifest/progress保存
+        -> artifact bytes + manifest/progress保存
         -> go_next + wait_for_change
 ```
 
@@ -350,7 +350,7 @@ cleanupはhook側の責任とする。Base Adapterは`None`を返すため、ove
 
 目的:
 
-- 前runのPNG混入防止
+- 前runのcapture artifact混入防止
 - manifest/progress上書き防止
 - user file削除防止
 
@@ -362,14 +362,19 @@ cleanupはhook側の責任とする。Base Adapterは`None`を返すため、ove
 
 ```text
 <output_dir>/
-├─ page-0001.png
-├─ page-0002.png
+├─ page-0001.png  # default Locator capture
+├─ page-0002.webp # source-native Adapter captureの例
 ├─ manifest.json
 ├─ progress.json
 └─ diagnostics/  # failure時に作られる場合あり
 ```
 
 manifestは保存ページ一覧のauthority。
+
+各page entryは `mime_type` と `file_extension` を持つ。Locator / canvas captureの
+defaultは `image/png` / `.png` で、Adapterのdirect captureはsource-native artifactの
+formatをそのまま記録できる。Runnerはこのextensionで連番ファイル名を生成し、
+packagingはmanifest記載の安全なPNG/WebP artifactだけを対象にする。
 
 `progress.json` はlast sequence / identity / fingerprint / contextを持つが、**自動resume機能ではない**。
 
@@ -393,8 +398,8 @@ ZIP対象はdirectory globではなく `manifest.json` の `pages[].file` がaut
 
 安全ルール:
 
-- manifest外PNGをZIPへ入れない
-- manifest記載PNG欠落はfail
+- manifest外artifactをZIPへ入れない
+- manifest記載artifact欠落はfail
 - unsafe path拒否
 - manifest file重複指定拒否
 - 既存同名ZIPは上書きしない
@@ -407,9 +412,9 @@ ZIP作成後、source crawl directoryを削除するのは、directory内容が�
 
 - `manifest.json`
 - `progress.json`
-- manifest記載page PNG
+- manifest記載page artifact
 
-余分なPNG、diagnostics、user file、その他directoryがあればsource全体を `rmtree` しない。
+余分なartifact、diagnostics、user file、その他directoryがあればsource全体を `rmtree` しない。
 
 失敗runは残す。
 
