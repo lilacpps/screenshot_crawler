@@ -17,6 +17,10 @@ Phase 5B adds sequential Manga ONE candidate execution, quota persistence,
 packaging, and completed-item updates. BookWalker Batch execution remains
 unsupported.
 
+2026-09-20にCatalog Schema v3 target architectureを採用した。Commit 0時点のruntimeは
+まだSchema v2であり、v3は後続phaseで実装する。v2 DBはbackup後に新規v3 DBへ作り直し、
+v3以降はmigration + backupを標準とする。
+
 ## 1. 設計原則
 
 依存方向を単純に保つ。
@@ -47,7 +51,7 @@ Discovery Service
       ↓
 Discovery Adapter
       ↓
-Catalog Service -> catalog.sqlite (items / sources / source_targets)
+Catalog Service -> catalog.sqlite (works / items / sources / source_targets / crawl_runs / artifacts)
       ↓
 Batch Runner -> Site Policy
       ↓
@@ -128,23 +132,27 @@ Discovery Adapter自身はSQLiteを直接read/writeしない。
 listing Adapterを実装している。BookWalkerはWatchlistへ手動登録した `/series/<id>/list/` を
 scope authorityとしてDiscoveryする。
 
-### `catalog/`（Watchlist + Catalog基盤実装済み）
+### `catalog/`（Schema v3 target adopted）
 
-SQLite Catalogを扱う。
+SQLite Catalogを扱う。Schema v3のtargetは:
 
-- `items`
-- `sources`
-- `source_targets`
-- upsert
-- query
-- completed/local artifact state update
-- sourceごとのopaqueな取得経路（`backend` / `locator`）
+- `works`: 管理上の作品・刊行系列
+- `items`: 巻・話・章・特典等の取得単位
+- `sources`: site上のcontent identity / access / quota state
+- `source_targets`: backend固有のopaqueな取得経路
+- `crawl_runs`: 成功・失敗を含む実行履歴
+- `artifacts`: ZIP等の成果物metadata / current physical state
 
-初期schemaとservice/repository、Discovery Serviceから利用するscope query/reconciliation APIは実装済みである。Phase 5Aのread-only Batch Planner / Site Policy orchestration、Phase 5BのManga ONE Batch Executor（Crawler実行、quota local state、packaging、completed更新）、BookWalkerのseries-scoped Discovery / Policy / strict direct・quota entryも実装済みである。
+DBはidentity、状態、履歴の正本とするが、画像・ZIP binary自体は保持しない。
+Item completedとArtifact present/missing/deletedを分離し、成果物の移動・削除で過去のcrawl成功履歴を
+失わない。
 
-Catalog itemは、取得可能な範囲でtitle/author/genre/order等のpackaging metadataも保持できる。
+`source_targets` は `backend + target_key + locator` を持ち、backendはopaque stringとする。
+同一SourceにWeb/Androidの複数targetを保持できる。現行runtimeはWebだけを実行可能とし、
+Androidは将来の上位Dispatcher / Android Runnerへ分離する。
 
-詳細schemaは `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
+Commit 0時点の実装はSchema v2の `items / sources / source_targets` であり、後続phaseでv3へ置換する。
+詳細schemaとtransition policyは `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
 
 ### `batch/`（implemented）
 
@@ -361,7 +369,7 @@ manifestのページ一覧を完成成果物のauthorityとする。packagingで
 
 新規runは非空output directoryを拒否する。正常packaging後も、無関係ファイルが含まれるdirectoryは丸ごと削除しない。
 
-Batch Runnerはpackaging成功後のarchive pathをCatalog itemへ記録できるが、packaging自体はCatalogを知らない。
+packaging自体はCatalogを知らない。Schema v3では上位Batch Executorがpackaging成功後にarchiveのSHA-256/sizeを計算し、ArtifactとCrawlRunをCatalogへ記録する。
 
 ### 11.1 Output metadata resolution
 
@@ -508,11 +516,12 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 
 ### Catalog Service
 
-- SQLiteの `items / sources / source_targets` をauthorityとしてread/writeする
-- Watchlist `key` を `discovery_key` としてsource scopeに保持する
-- external discovery stateとlocal completed stateを混同しない
-- known output metadataをNULL許容で保持できる
-- Web Discoveryが`source_targets`の`backend=web` targetを最新locatorでupsertする
+- Schema v3では `works / items / sources / source_targets / crawl_runs / artifacts` をauthorityとしてread/writeする
+- Watchlist `work_key` をstable Work identityへ、`key` をsource `discovery_key`へ対応させる
+- external discovery state、Item completed、CrawlRun history、Artifact physical stateを混同しない
+- Work / Itemのknown output metadataをNULL許容で保持できる
+- Web Discoveryが`source_targets`の`backend=web,target_key=default` targetを最新locatorでupsertする
+- backendはopaque stringとし、Android等のtargetをWeb実行可否とは独立して保存できる
 
 ### Batch Runner
 
@@ -524,11 +533,14 @@ site固有の作品一覧・話一覧・access状態の観測だけを担当す�
 - quota仮予約はmemory内だけで行い、Catalogへ永続化しない
 - `quota_available` は計画前のlocal枠、`quota_remaining` は仮予約後の残枠を表す
 - Phase 5Bではcandidateを順番に実行し、quota candidateはCrawler開始直前にlocal stateを保存する
-- crawlとpackagingが成功した後だけ`items.status` / `local_path` / `completed_at`を更新する
-- crawl、viewer、packagingの失敗時はitemをcompletedにせず、quota stateは保持する
+- Schema v3では実行開始時にCrawlRun(running)を作り、成功/失敗を履歴として保持する
+- crawl + packaging + Artifact persistence成功後だけItemをcompletedにする
+- archive pathはItemへ置かずArtifact locatorへ保存する
+- crawl、viewer、packaging、Catalog persistenceの失敗時はitemをcompletedにせず、quota stateは保持する
 - candidateごとに一意なrun directoryを使い、stop-on-first-failureで後続を実行しない
-- `backend=web` のtargetだけを選び、`target_id / backend / locator`をcandidateへ渡す
+- 現行Web Executorは`backend=web` targetだけを実行し、`target_id / backend / target_key / locator`を保持する
 - `locator`を既存`RunConfig.source_url`へ変換し、実行直前にtarget identity/stateを再検証する
+- 将来Android対応は上位dispatcherでbackend別Runnerへ振り分け、CrawlerRunner/Pageを無理に共通化しない
 
 ### Site Policy
 

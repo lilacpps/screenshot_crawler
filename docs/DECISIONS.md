@@ -251,14 +251,14 @@ siteごとのprofile競合を避け、BookWalkerとManga ONEのsessionを同じC
 ### 決定
 Discoveryは `watchlist.yaml` に利用者が明示登録したtargetだけを探索する。
 
-各targetはstableな一意 `key`、`site`、Discovery起点 `url`、`enabled` を持つ。Watchlistからtargetをremove/disableしてもCatalogを自動削除しない。
+Schema v3では各targetはstableな一意 `key`、stableな `work_key`、`site`、Discovery起点 `url`、`enabled`、必須 `label` を持つ。`key` はDiscovery scope、`work_key` はWork identityを表す。Watchlistからtargetをremove/disableしてもCatalogを自動削除しない。
 
 ### 理由
 site全体の無制限探索を避け、個人利用で管理可能な対象範囲に限定するため。またstable keyをsourceのDiscovery scopeに残すことで、full sync時のmissing判定を安全に限定できる。
 
 ---
 
-## D-021 WatchlistはYAML、CatalogはSQLite 2テーブルとする
+## D-021 WatchlistはYAML、CatalogはSQLite 2テーブルとする（D-032でsuperseded）
 
 ### 決定
 人間が管理するDiscovery targetは `watchlist.yaml` に保存する。
@@ -273,6 +273,8 @@ sources
 2テーブルを基本とする。
 
 `works`、`crawl_jobs`、汎用history table等は初期実装では追加しない。
+
+このCatalog構造に関する決定はD-032でsupersedeされる。Watchlistをhuman-managed YAMLとして分離する方針は維持する。
 
 ### 理由
 設定と状態を分離しつつ、個人利用に対して過剰な正規化やDB構造を避けるため。
@@ -521,3 +523,104 @@ Resume未実装の状態で10分を複数冊へ最大利用すると、途中で
 また、trial readerは途中までしか読めなくても正常ENDし得るため、quota requestが
 trialへfallbackするとpartial contentをcompleted扱いする危険がある。Batchでは
 効率より誤completed防止を優先する。
+
+---
+
+## D-032 Catalog Schema v3は6テーブルを基本とする
+
+### 決定
+Schema v3のCatalogは次を基本構造とする。
+
+```text
+works
+  └─ items
+       └─ sources
+            └─ source_targets
+
+items
+  ├─ crawl_runs
+  └─ artifacts
+```
+
+画像・ZIP等のbinary本体はDBへ格納しない。SQLiteはidentity、external/local state、crawl履歴、
+artifact metadataの正本とする。
+
+### 理由
+GUI、複数site、将来Android backend、実行履歴、成果物の移動・削除を、ItemやSourceの意味を
+混ぜずに扱うため。DB容量はmetadata中心で小さく、binaryを分離することでbackupとstorage運用も分けられる。
+
+---
+
+## D-033 Workは管理上の刊行・配信系列とし、variantを先回りして正規化しない
+
+### 決定
+Workはユーザーが1作品として管理したい刊行・配信系列とする。Watchlistはstable `work_key` でWorkを参照し、
+`label` は必須の人間向け表示名兼、新規Workの初期titleとする。
+
+通常版、カラー版、合本版等はv3では別Workで扱ってよい。厳密な関連が必要になった時点で
+`work_relations` / `item_relations` を追加する。
+
+同じWorkで話ごとにsiteが違ってよい。同一Itemへのcross-site Source統合は自動で行わない。
+
+### 理由
+将来ケースを予測してEdition/Bundle等の階層を固定すると、未確認のsite要件にDBが引っ張られるため。
+Work→Item→Sourceの境界を保てば、variant relationは追加tableで後から表現できる。
+
+---
+
+## D-034 CrawlRunとArtifactを分離し、DBを履歴の正本とする
+
+### 決定
+1回の取得試行は `crawl_runs` に成功・失敗とも記録する。実行時のItem/Source/Target参照に加え、
+site/external_id/backend/target_key/locator等をsnapshotとして残す。
+
+ZIP等の物理成果物は `artifacts` に分離し、SHA-256、byte size、storage backend、locator、
+`present / missing / deleted / unknown` stateを保持する。Artifactは手動importを許容するため
+`crawl_run_id=NULL` を許す。
+
+Itemの `completed` は過去に正常取得済みという運用状態であり、Artifactの移動・missing・削除では
+自動的にpendingへ戻さない。
+
+### 理由
+成果物は容量都合で移動・削除され得るが、「いつ何を取得し成功/失敗したか」は失いたくないため。
+pathをidentityにせず、DBとpayload lifecycleを分離する。
+
+---
+
+## D-035 SourceTargetはbackendとtarget_keyで複数経路を表す
+
+### 決定
+SourceTarget identityは:
+
+```text
+UNIQUE(source_id, backend, target_key)
+```
+
+とする。通常Web Discoveryは `backend=web,target_key=default` をupsertする。
+`backend` と `target_key` はCatalogではopaque stringとして扱い、enum固定しない。
+
+同一SourceへWeb/Android等の複数targetを持てる。WebとAndroidでsite identityを共通化できない場合は、
+同一Item配下の別Sourceとして保持してよい。
+
+現行ExecutorはWebだけを実行し、Android対応時は上位dispatcherからWeb Runner / Android Runnerへ分岐する。
+CrawlerRunnerやPlaywright PageをAndroid向け共通抽象へ無理に一般化しない。
+
+### 理由
+取得経路とcontent identityを分離し、将来backendや同backend内の複数routeが増えてもSource/Item schemaを
+壊さないため。
+
+---
+
+## D-036 Schema v3は新規再構築し、v3以降はmigration + backupを標準とする
+
+### 決定
+v2→v3はmigrationを作らない。既存v2 DBをbackupした後に新規v3 DBを作り、Watchlistからfull discoveryで
+再構築する。
+
+v3以降のschema変更は `PRAGMA user_version` に基づく順次migrationを用意する。migration前にはSQLiteの
+consistent backupを作成し、成功後にschema/integrityを検証する。
+
+### 理由
+現段階ではv2 local stateを移行する価値が低く、新規構築の方が実装と検証が単純である。一方v3では
+CrawlRun/Artifact等の長期履歴を正本として持つため、それ以降はDB破棄を通常運用にできない。
+

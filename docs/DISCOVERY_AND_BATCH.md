@@ -31,6 +31,10 @@ a quota crawl and item completion fields after successful packaging.
 
 この文書は、Discovery / Catalog / Batch Runnerの採用仕様を定める。
 
+2026-09-20にCatalog Schema v3の目標仕様を採用した。Commit 0時点の実装はまだSchema v2であり、
+以下のv3記述は後続phaseの実装authorityである。v2 DBはbackup後に破棄し、新規v3 DBを
+full discoveryで再構築する。v2→v3 migrationは実装しない。
+
 2026-09-19時点では、Watchlist + Catalog基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5AのBatch Planner / Site Policy基盤 / Manga ONE Policy / BookWalker Policy、Phase 5BのManga ONE・BookWalker Batch Executor、BookWalker strict direct・quota entryが実装済みである。既存の `crawl --site --url` と `CrawlerRunner` のauto挙動は変更しない。BookWalker quotaの実サイトlive clickは未確認であり、synthetic/local CatalogでのBatch検証までを完了範囲とする。
 
 実装済みの範囲:
@@ -118,15 +122,19 @@ Watchlistはhuman-managed configurationであり、Catalogの代替にはしな�
 
 ### 4.2 最小schema
 
+Schema v3では、Watchlist targetをDiscovery scopeとWork identityへ明示的に結び付ける。
+
 ```yaml
 targets:
-  - key: mangaone-example
+  - key: juou-mangaone
+    work_key: juou-to-yakusou
     site: mangaone
-    url: https://example.invalid/manga/1234
+    url: https://manga-one.com/manga/2379/chapter/214131
     enabled: true
-    label: 作品A
+    label: 獣王と薬草
 
-  - key: bookwalker-example
+  - key: example-bookwalker
+    work_key: example-work
     site: bookwalker
     url: https://bookwalker.jp/series/5678/list/
     enabled: false
@@ -135,13 +143,15 @@ targets:
 
 fields:
 
-- `key`: Watchlist内で一意なstable key。Discovery結果のscope識別にも使う
+- `key`: Watchlist内で一意なstable key。Discovery scope識別に使い、sourceの`discovery_key`へ保存する
+- `work_key`: Workのstable identity。DB内部idとは別で、同じWorkの複数site target間で共有する
 - `site`: Discovery Adapter名
 - `url`: 作品ページ、シリーズページ等のDiscovery起点URL
 - `enabled`: Discovery対象に含めるか。defaultは `true`
-- `label`: 人間向け任意ラベル。identity authorityにはしない
+- `label`: 人間向けの必須表示名。新規Work作成時の初期titleにも使うが、identity authorityにはしない
 
-`key` はURL変更後も維持する。full sync時のscopeを安全に特定するため、Catalogのsourceにも `discovery_key` として保存する。
+`key` と `work_key` はURLやlabel変更後も維持する。1つのWorkにMangaOneとBookWalker等の
+複数targetを登録してよい。カラー版・合本版等を別Workとして管理する場合は別`work_key`を使う。
 
 ### 4.3 操作
 
@@ -157,50 +167,89 @@ watch disable
 
 YAMLの直接編集も許可する。
 
-Watchlistからtargetをremove/disableしても、既存Catalog item/sourceは自動削除しない。
+Watchlistからtargetをremove/disableしても、既存Catalog dataは自動削除しない。
 
 ## 5. Catalog
 
 ### 5.1 方針
 
-個人利用を前提として、SQLiteの**3テーブル**に限定する。
+Schema v3のCatalogはSQLiteの次の**6テーブル**を基本とする。
 
 ```text
+works
+  └─ items
+       └─ sources
+            └─ source_targets
+
 items
-sources
-source_targets
+  ├─ crawl_runs
+  └─ artifacts
 ```
 
-`works`、`crawl_jobs`、汎用event history等は初期実装では作らない。
+役割:
 
-### 5.2 items
+- `works`: ユーザーが1作品として管理する刊行・配信系列
+- `items`: 巻・話・章・特典等の取得単位
+- `sources`: site上のcontent identityとaccess/quota state
+- `source_targets`: Web / Android等の具体的な取得経路
+- `crawl_runs`: 実際に取得を試みた履歴
+- `artifacts`: 生成・保有したZIP等の成果物metadata
 
-`item` は実際に取得したい単位を表す。巻、話、章等を同じtableで扱う。
+画像・ZIP等のbinary本体はSQLiteへ格納しない。DBはidentity、状態、履歴、成果物metadataの正本とし、
+大容量payloadはfilesystem/NAS等の外部storageへ置く。
+
+### 5.2 works
+
+`work` は「抽象的な原作作品」ではなく、ユーザーが一まとまりとして管理したい刊行・配信系列を表す。
 
 概念fields:
 
 ```text
 id
-canonical_title
-author             # 取得できる場合。NULL可
-genre              # packagingに利用できる場合。NULL可
-kind               # volume / episode / chapter / book / other
-order_key          # 正規化できる場合の巻数・話数等
-order_label        # 第01巻、第12話など表示用
+work_key           # stable, UNIQUE
+title              # 表示・packaging用
+author             # NULL可
+genre              # NULL可
+created_at
+updated_at
+```
+
+`work_key` はDB内部idとは別のstable identityで、Watchlistから参照する。同じWorkで話ごとに取得siteが
+異なってもよい。同じItemへ複数Sourceを明示的に紐付けることもできる。
+
+通常版、フルカラー版、合本版等はv3では無理に正規化せず、必要なら別Workとして扱う。将来厳密な関係が
+必要になった時点で `work_relations` を追加できる。既存6テーブルをそのために作り直さない。
+
+### 5.3 items
+
+`item` は実際に取得したい単位を表す。巻、話、章、特典等を同じtableで扱う。
+
+概念fields:
+
+```text
+id
+work_id
+item_title         # 個別タイトルがある場合。NULL可
+kind               # volume / episode / chapter / book / bonus / other等
+order_key
+order_label
 status             # pending / completed
-local_path         # completed artifact。未取得ならNULL
 completed_at
 created_at
 updated_at
 ```
 
-`order_key` はsite間の完全照合を目的にしない。site内の安定した並び・重複判定に利用できる範囲で使う。
+`local_path` はItemに置かない。物理成果物の場所は `artifacts.locator` が担当する。
 
-`canonical_title / author / genre / order_label` は、BatchからCrawlerへ既知metadataとして渡せる。NULLのfieldはCrawler側のSite Adapter取得値へfallbackする。
+`status=completed` は「過去に正常取得済みで、通常Batchでは再取得不要」という運用状態を意味する。
+Artifactが移動・missing・deletedになってもItemを自動でpendingへ戻さない。再取得は明示的な操作とする。
 
-### 5.3 sources
+`order_key` はsite間の完全照合authorityではない。同一Work内の並び、duplicate候補、quota allocation等に
+利用できる範囲で使う。
 
-`source` は1つのitemへアクセスできるsite上の場所と、その現在状態を表す。
+### 5.4 sources
+
+`source` は1つのItemへアクセスできるsite上のcontent identityと、その現在状態を表す。
 
 概念fields:
 
@@ -221,62 +270,152 @@ created_at
 updated_at
 ```
 
-基本unique keyは、site側にstable IDがある場合:
+基本unique key:
 
 ```text
 UNIQUE(site, external_id)
 ```
 
-stable external IDが取れないsiteでは、Discovery Adapterがsite固有のstable source keyを生成する。URLそのものを恒久identityにはしない。
+stable external IDが取れないsiteでは、Discovery Adapterがsite固有のstable source keyを生成する。
+URLやAndroid locatorそのものをSource identityにはしない。
 
-取得経路は`source_targets`で表す。`source`はsite上のcontent identityとaccess/local stateを持ち、
-`source_target`はそのsourceへのopaqueな取得経路を持つ。
+同じWorkで第1話はsite A、第2話はsite BのようにSource siteがItemごとに異なってよい。
+同一Itemが複数siteから取得可能で、人間または安全な処理で同一Itemと判断した場合は複数Sourceを紐付けてよい。
+Discoveryがcross-site Itemを自動mergeすることは禁止する。
+
+### 5.5 source_targets
+
+`source_target` はSourceへのopaqueな取得経路を表す。
+
+概念fields:
 
 ```text
-source_targets
 id
 source_id
-backend
-locator
-priority
+backend            # opaque string: web / android / future backend
+target_key         # source + backend内のstable route key
+locator            # backend固有opaque locator
+priority           # 小さい値を優先
 enabled
 created_at
 updated_at
 ```
 
-`(source_id, backend)`がtarget identityである。Catalogは`backend`や`locator`を解釈せず、
-Web Discoveryは`backend=web` targetをupsertする。Android targetは保存できるが、現時点の
-Batch実行対象ではない。
+target identity:
 
-### 5.4 local stateとexternal state
+```text
+UNIQUE(source_id, backend, target_key)
+```
+
+通常のWeb Discoveryは:
+
+```text
+backend = web
+target_key = default
+locator = observed URL
+```
+
+をupsertする。
+
+同一SourceがWebとAndroidの両方で取得可能なら、同じSource配下に `web/default` と
+`android/default` を持てる。WebとAndroidでsite側identityを安全に共通化できない場合は、
+同じItem配下へ別Sourceとして保持してよい。
+
+`backend` と `target_key` はCatalog側でenum固定・site固有解釈しない。将来 `api` 等が増えても
+Schema変更なしで追加できる。現行ExecutorはWebだけを実行可能とし、Android実行は将来のDispatcher /
+Android Runnerへ分離する。
+
+### 5.6 crawl_runs
+
+`crawl_run` はCatalog管理下で実際に1回の取得を試みた履歴である。成功・失敗とも原則として保持する。
+
+概念fields:
+
+```text
+id
+item_id
+source_id
+target_id
+site_snapshot
+external_id_snapshot
+backend_snapshot
+target_key_snapshot
+locator_snapshot
+access_strategy
+status              # running / succeeded / failed
+started_at
+finished_at
+page_count
+stop_reason
+error_type
+error_message
+created_at
+updated_at
+```
+
+run開始時にItem/Source/Target identityと実行時locator等をsnapshotとして保存する。後からTarget locatorが
+変わっても過去runの入力を失わない。
+
+terminalになったrunを削除して「現在状態だけ」に畳み込まない。再実行は新しいCrawlRunを作る。
+巨大なHTML、screenshot、console log等はDBへ埋め込まず、`error_type` / 短い
+`error_message` と必要に応じた外部diagnosticsで扱う。
+
+### 5.7 artifacts
+
+`artifact` は生成または手動登録された物理成果物のmetadataを表す。
+
+概念fields:
+
+```text
+id
+item_id
+crawl_run_id        # NULL可。手動import等を許容
+kind                # archive等
+format              # zip等
+sha256
+byte_size
+storage_backend     # filesystem等。将来拡張可能
+locator             # 現在または最後に分かっている場所
+state               # present / missing / deleted / unknown
+last_verified_at
+created_at
+updated_at
+```
+
+Artifact identityをpathだけに依存させない。少なくともSHA-256とbyte sizeを保持できるようにし、ZIPを
+別disk/NASへ移動した場合はArtifact locatorだけを更新する。削除した場合もrowは消さず、
+`state=deleted` 等で履歴を保持する。
+
+Artifactの移動・削除は、過去CrawlRunの `succeeded` やItemの `completed` を書き換えない。
+
+将来同じArtifactの複数物理copyを同時管理する必要が出た場合は `artifact_locations` を追加する。
+v3では1 Artifactにつき最大1 current locatorで十分とする。
+
+### 5.8 external state / local state / history
 
 Discoveryが更新してよいexternal state:
 
-- `access_mode`
+- sourceの `access_mode`
 - `free_until`
 - `available`
 - `access_checked_at`
 - `last_seen_at`
-- siteから取得したtitle/author/genre/order等のmetadata
-- Web targetの`locator`を最新URLへ更新し、`enabled=true`にする
+- Work / Itemの観測metadata
+- Web `source_target` の `locator` と `enabled=true`
 
-Discoveryが変更してはいけないlocal state:
+Discoveryが変更してはいけないlocal/history state:
 
-- `items.status = completed`
-- `local_path`
-- `completed_at`
-- crawl成功/失敗の結果
-
-`quota_started_at` と `access_granted_until` はBatch / Site Policyが管理するquota local stateであり、Discovery upsertやexternal state patchでは変更しない。新規sourceをDiscovery upsertするときは、これらをNULLで開始する。
-
-Web targetのupsertはsourceのlocal/access stateと独立している。別backend targetは変更せず、
-sourceがmissingで`available=false`になってもtargetを自動disable・削除しない。
+- Itemの `status=completed` / `completed_at`
+- Sourceの `quota_started_at` / `access_granted_until`
+- 過去 `crawl_runs`
+- 過去/現在 `artifacts`
 
 原則:
 
 ```text
 Discovery = external state synchronization
-Batch/Crawl = local state update
+Batch/Crawl = local execution/history state update
+Artifact management = physical payload state update
 ```
 
 ## 6. 別siteの同一作品
@@ -775,7 +914,7 @@ pending item
   ↓
 eligible sources
   ↓
-enabled web source target（priority ASC, id ASC）
+enabled executable source target（現行はwebのみ。priority ASC, id ASC）
   ↓
 Site Policy
   ↓
@@ -829,21 +968,42 @@ sourceも現時点ではskipする。
 
 異なるsite間のitemを自動で同一itemへmergeしないため、このpriorityは自動cross-site identity resolutionを意味しない。
 
-### 11.3 Crawl success
+### 11.3 Crawl execution history / success
 
-正常なcrawl + packaging完了後に:
+Schema v3のBatch Executorはcandidate実行開始時に `crawl_runs.status=running` を作成し、
+Item/Source/Target identityと実行時のsite/backend/locator等をsnapshotとして保存する。
+
+概念フロー:
 
 ```text
-items.status = completed
-items.local_path = archive path
-items.completed_at = now
+validate candidate
+  ↓
+CrawlRun(running)
+  ↓
+必要ならquota local stateを記録
+  ↓
+Crawler
+  ↓
+normal stop
+  ↓
+package archive
+  ↓
+archive SHA-256 / byte size
+  ↓
+Artifact(state=present)
+  ↓
+CrawlRun(succeeded)
+  ↓
+Item(status=completed, completed_at=now)
 ```
 
-を更新する。
+crawl / viewer / packaging / Artifact persistence等が失敗した場合はCrawlRunを `failed` とし、
+`finished_at`、`error_type`、短い `error_message` を記録する。Itemはcompletedにしない。
 
-Batch Runnerは、実行した `item_id` と `source_id` と生成されたarchive pathを対応付けられること。
+quota stateを保存した後に失敗してもquota stateは消去しない。site上ですでに消費されている可能性が
+あるためである。生成済みarchiveがある状態でCatalog persistenceに失敗してもarchiveを自動削除しない。
 
-失敗時は `completed` にしない。quota stateを保存した後のcrawl / packaging失敗でも、そのquota stateは消去しない。Catalog updateが失敗した場合も生成済みarchiveは削除しない。
+Artifactの後日の移動・missing・削除はCrawlRun succeededやItem completedを取り消さない。
 
 ### 11.4 Crawl Request
 
@@ -1044,12 +1204,16 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 
 ### Catalog
 
-- `items / sources / source_targets` の3テーブルで運用できる
+- `works / items / sources / source_targets / crawl_runs / artifacts` の6テーブルで運用できる
+- Watchlist `work_key` からstable Workをfind/createできる
 - sourceはstable site identityでupsertできる
-- source targetは`(source_id, backend)`でupsertできる
-- Discovery external stateとlocal completed stateを分離できる
+- source targetは`(source_id, backend, target_key)`でupsertできる
+- 同一SourceにWeb/Android等の複数backend targetを保持できる
+- Discovery external stateとItem completed / CrawlRun / Artifact stateを分離できる
 - Watchlist `key` とsourceのDiscovery scopeを対応付けられる
-- packaging用metadataをNULL許容で保持できる
+- Work/Item metadataをNULL許容で保持し、packaging metadataへ利用できる
+- Artifact locatorを変更してもItem/CrawlRun identityが変わらない
+- Artifactがmissing/deletedでも過去のcrawl成功履歴を保持できる
 
 ### Batch
 
@@ -1060,11 +1224,13 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 - site固有のaccess grant期間中は必要に応じて追加quotaを消費せずretryできる
 - source stateとgrant状態から `access_strategy=direct|quota` を解決できる
 - Site Policyのquota rule自体をCrawlerへ渡さない
-- crawl成功時だけitemをcompletedへ更新する
-- `item_id / source_id / archive path` を対応付けられる
-- `target_id / backend / locator` をcandidateへ保持できる
-- enabled web targetのlocatorを既存`RunConfig.source_url`へ渡せる
-- disabled web targetやAndroid-only sourceを安全にskipできる
+- candidate実行開始時にCrawlRunを作り、成功/失敗を履歴として残せる
+- crawl + packaging + Artifact persistence成功時だけitemをcompletedへ更新する
+- `item_id / source_id / target_id / crawl_run_id / artifact_id` を対応付けられる
+- `target_id / backend / target_key / locator` をcandidateまたはrun snapshotへ保持できる
+- 現行Web Executorではenabled web targetのlocatorを既存`RunConfig.source_url`へ渡せる
+- Android targetをCatalogに保存でき、Android-only sourceは現行Web Executorでは安全にskipできる
+- 将来backend dispatcherを追加してもCrawlerRunnerをWeb/Android共通抽象へ無理に一般化しなくてよい
 - Catalogにあるmetadataをoptional overrideとしてCrawlerへ渡せる
 - CrawlerRunner自体はCatalogを知らない
 
@@ -1097,7 +1263,28 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 - `direct` strategyは初期実装で購入済みfull reader以外をclickしない
 - strict entry失敗時にitemをcompletedにしない
 
-## 16. 初期実装の非対象
+## 16. Schema v3 transition policy
+
+Schema v3導入時は、現在のSchema v2 DBを日付付きbackupとして保持したうえで破棄し、新しいv3 DBを
+初期化してWatchlist全targetを `full` discoveryする。現段階では既存local stateの移行価値が低いため、
+v2→v3 migrationは実装しない。
+
+Schema v3以降はDBを運用データの正本として扱い、原則として破棄再構築しない。将来のschema変更は
+`PRAGMA user_version` を使った順次migration（例: v3→v4→v5）で行う。migration実行前にはSQLiteの
+consistent backupを作成し、成功後にschema/integrityを検証する。
+
+v3では将来ケースを先取りして過剰なtableを作らない。必要になった時点で以下のような追加tableを
+migrationで足せる境界を維持する。
+
+```text
+work_relations       # 通常版 / カラー版等
+item_relations       # 合本のcontains関係等
+artifact_locations   # 同一Artifactの複数copy
+schedules            # app内schedulerを採用する場合
+crawl_pages          # page単位履歴が本当に必要になった場合
+```
+
+## 17. 初期実装の非対象
 
 - 全site・全作品の無制限Discovery
 - site横断automatic item merge

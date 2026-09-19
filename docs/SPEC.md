@@ -115,7 +115,7 @@ python -m screenshot_crawler.cli crawl --site <site> --url "https://..."
 
 人手でURLを渡す経路は維持する。
 
-Discovery subsystemは、利用者が明示登録したWatchlist targetだけを探索し、Catalogへsource URLを保存する。そのURLを将来のBatch Runnerが読み、実行条件を解決したうえで既存Crawlerへ渡す。CrawlerRunnerへCatalog依存を追加しない。
+Discovery subsystemは、利用者が明示登録したWatchlist targetだけを探索し、CatalogへWork/Item/Sourceとsource target locatorを保存する。そのlocatorをBatch Runnerが読み、実行条件を解決したうえで既存Crawlerへ渡す。CrawlerRunnerへCatalog依存を追加しない。
 
 Discovery / Catalog / Batchの詳細仕様は `docs/DISCOVERY_AND_BATCH.md` をauthorityとする。
 
@@ -560,7 +560,7 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - full syncはcomplete時だけmissing sourceをunavailable化する
 - incrementalのdefaultはknown source 2件連続停止とし、site固有のstable boundaryが必要な場合は小さいstop policy overrideを許容する
 - BookWalkerは手動登録した `/series/<id>/list/` をDiscovery scope authorityとし、既存paid/unknownを再確認して既知quota/owned境界でincremental停止する
-- Catalogは `items / sources` の2テーブルを基本とする
+- Schema v3 Catalogは `works / items / sources / source_targets / crawl_runs / artifacts` の6テーブルを基本とする
 - 別siteの類似itemはwarningのみで自動mergeしない
 - Batch Runnerはsite policyを使ってfree/owned/quotaを選択する
 - quotaは基本的にcrawl開始時に記録する
@@ -569,7 +569,7 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - Site Policyのquota rule自体をCrawlerへ渡さない
 - BookWalker Batchではlocal safety policyを05:00 JST区切り1 quota book/dayとし、`quota`はまる読み10分、`direct`は購入済みreaderへstrict entryする
 - Catalog metadataをCrawlerへoptional overrideとして渡せる
-- crawl成功時だけitemをcompletedへ更新する
+- Catalog管理runはCrawlRunへ成功/失敗履歴を残し、crawl + packaging + Artifact persistence成功時だけitemをcompletedへ更新する
 
 ## 26. 移行状態
 
@@ -623,7 +623,7 @@ watchlist.yaml
     ↓
 Discovery Service / Discovery Adapter
     ↓
-catalog.sqlite (items / sources)
+catalog.sqlite (works / items / sources / source_targets / crawl_runs / artifacts)
     ↓
 Batch Runner / Site Policy
     ↓
@@ -635,7 +635,7 @@ existing Screenshot Crawler
 方針:
 
 - Watchlistは人間がadd/remove/enable/disableできる設定
-- Watchlist targetは一意なstable `key` を持つ
+- Watchlist targetは一意なstable `key`、stable `work_key`、必須 `label` を持つ
 - Discovery結果sourceは `discovery_key` を保持し、full syncのscopeを限定する
 - 初回・reconciliationはfull、通常更新はincrementalを利用できる
 - incrementalはlatest側から走査し、defaultではknown source 2件連続で停止する。site固有のaccess遷移上それが安全でない場合はstable boundary overrideを許容する
@@ -650,5 +650,5 @@ existing Screenshot Crawler
 - BookWalkerの採用local quota modelは05:00 JST reset、site-wide 1 quota book/dayである。失敗しても同window内で自動refund/retryしない
 - BookWalkerのstrict `quota` はまる読み10分以外へfallbackせず、strict `direct` は初期実装で購入済みfull reader以外へfallbackしない
 - title/author/order/genreは既知ならCrawlerへ渡し、なければAdapter取得へfallbackする
-- 別site同一作品を自動mergeせず、Discovery時に重複候補warningだけを出す
+- 同じWorkで話ごとにsiteが異なることを許容し、cross-site Itemを自動mergeせずDiscovery時に重複候補warningだけを出す
 - 詳細schema、sync semantics、failure handlingは `docs/DISCOVERY_AND_BATCH.md` に定める
