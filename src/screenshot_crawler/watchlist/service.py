@@ -58,15 +58,18 @@ class WatchlistService:
         self,
         *,
         key: str,
+        work_key: str,
         site: str,
         url: str,
+        label: str,
         enabled: bool = True,
-        label: str | None = None,
     ) -> WatchlistTarget:
         """Add a target, rejecting an already-used stable key."""
 
         target = self._validate_target(
-            WatchlistTarget(key=key, site=site, url=url, enabled=enabled, label=label),
+            WatchlistTarget(
+                key=key, work_key=work_key, site=site, url=url, label=label, enabled=enabled
+            ),
             source="new target",
         )
         targets = self._load()
@@ -95,10 +98,11 @@ class WatchlistService:
             if target.key == key:
                 updated = WatchlistTarget(
                     key=target.key,
+                    work_key=target.work_key,
                     site=target.site,
                     url=target.url,
-                    enabled=enabled,
                     label=target.label,
+                    enabled=enabled,
                 )
                 targets[index] = updated
                 self._write(targets)
@@ -149,7 +153,7 @@ class WatchlistService:
     def _parse_target(self, raw_target: Any, index: int) -> WatchlistTarget:
         if not isinstance(raw_target, dict):
             raise InvalidWatchlistError(f"targets[{index}] must be a mapping")
-        required = ("key", "site", "url")
+        required = ("key", "work_key", "site", "url", "label")
         missing = [field for field in required if field not in raw_target]
         if missing:
             raise InvalidWatchlistError(
@@ -159,29 +163,28 @@ class WatchlistService:
         label = raw_target.get("label")
         if not isinstance(enabled, bool):
             raise InvalidWatchlistError(f"targets[{index}].enabled must be a boolean")
-        if label is not None and not isinstance(label, str):
-            raise InvalidWatchlistError(f"targets[{index}].label must be a string or null")
+        if not isinstance(label, str):
+            raise InvalidWatchlistError(f"targets[{index}].label must be a string")
         return self._validate_target(
             WatchlistTarget(
+                work_key=raw_target["work_key"],
                 key=raw_target["key"],
                 site=raw_target["site"],
                 url=raw_target["url"],
-                enabled=enabled,
                 label=label,
+                enabled=enabled,
             ),
             source=f"targets[{index}]",
         )
 
     @staticmethod
     def _validate_target(target: WatchlistTarget, *, source: str) -> WatchlistTarget:
-        for name in ("key", "site", "url"):
+        for name in ("key", "work_key", "site", "url", "label"):
             value = getattr(target, name)
             if not isinstance(value, str) or not value.strip():
                 raise InvalidWatchlistError(f"{source}.{name} must be a non-empty string")
         if not isinstance(target.enabled, bool):
             raise InvalidWatchlistError(f"{source}.enabled must be a boolean")
-        if target.label is not None and not isinstance(target.label, str):
-            raise InvalidWatchlistError(f"{source}.label must be a string or null")
         return target
 
     def _write(self, targets: list[WatchlistTarget]) -> None:
@@ -190,6 +193,7 @@ class WatchlistService:
             "targets": [
                 {
                     "key": target.key,
+                    "work_key": target.work_key,
                     "site": target.site,
                     "url": target.url,
                     "enabled": target.enabled,

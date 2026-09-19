@@ -14,6 +14,7 @@ from screenshot_crawler.catalog import schema
 from screenshot_crawler.catalog.models import (
     Artifact,
     ArtifactInput,
+    CatalogRecord,
     CrawlRun,
     Item,
     ItemInput,
@@ -150,6 +151,34 @@ class CatalogService:
             rows = connection.execute("SELECT * FROM works ORDER BY id").fetchall()
         return [self._work_from_row(row) for row in rows]
 
+    def fill_work_metadata(
+        self,
+        work_id: int,
+        *,
+        author: str | None = None,
+        genre: str | None = None,
+    ) -> Work:
+        """Fill only currently-null Work metadata from non-null observations."""
+
+        self._validate_optional_text(author, "author")
+        self._validate_optional_text(genre, "genre")
+        with self._connection() as connection:
+            row = self._require_row(connection, "works", work_id, "work")
+            assignments: list[str] = []
+            values: list[Any] = []
+            for column, incoming in (("author", author), ("genre", genre)):
+                if incoming is not None and row[column] is None:
+                    assignments.append(f"{column} = ?")
+                    values.append(incoming)
+            if assignments:
+                assignments.append("updated_at = ?")
+                values.extend([format_timestamp(now_jst()), work_id])
+                connection.execute(
+                    "UPDATE works SET " + ", ".join(assignments) + " WHERE id = ?", values
+                )
+            updated = connection.execute("SELECT * FROM works WHERE id = ?", (work_id,)).fetchone()
+        return self._work_from_row(updated)
+
     # Item API ---------------------------------------------------------
 
     def create_item(
@@ -215,6 +244,46 @@ class CatalogService:
                 raise CatalogNotFoundError(f"Catalog item not found: {item_id}")
             row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
         return self._item_from_row(row)
+
+    def update_item_metadata(
+        self,
+        item_id: int,
+        *,
+        item_title: str | None = None,
+        kind: str | None = None,
+        order_key: str | None = None,
+        order_label: str | None = None,
+    ) -> Item:
+        """Patch observed Item metadata without clearing values with NULL."""
+
+        for field, value in (
+            ("item_title", item_title),
+            ("kind", kind),
+            ("order_key", order_key),
+            ("order_label", order_label),
+        ):
+            self._validate_optional_text(value, field)
+        with self._connection() as connection:
+            self._require_row(connection, "items", item_id, "item")
+            assignments: list[str] = []
+            values: list[Any] = []
+            for column, incoming in (
+                ("item_title", item_title),
+                ("kind", kind),
+                ("order_key", order_key),
+                ("order_label", order_label),
+            ):
+                if incoming is not None:
+                    assignments.append(f"{column} = ?")
+                    values.append(incoming)
+            if assignments:
+                assignments.append("updated_at = ?")
+                values.extend([format_timestamp(now_jst()), item_id])
+                connection.execute(
+                    "UPDATE items SET " + ", ".join(assignments) + " WHERE id = ?", values
+                )
+            updated = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        return self._item_from_row(updated)
 
     # Source API -------------------------------------------------------
 
@@ -383,6 +452,155 @@ class CatalogService:
                 [timestamp, *values],
             )
         return cursor.rowcount
+
+    def create_discovered_item_source_target(
+        self,
+        *,
+        work_id: int,
+        item_input: ItemInput | Mapping[str, Any],
+        source_input: SourceInput | Mapping[str, Any],
+        web_target_input: SourceTargetInput | Mapping[str, Any],
+    ) -> CatalogRecord:
+        """Atomically create a new Discovery Item, Source, and Target graph."""
+
+        item = self._coerce_item_input(item_input)
+        source = self._coerce_source_input(source_input)
+        target = self._coerce_source_target_input(web_target_input)
+        self._validate_status(item.status)
+        self._validate_source_input(source)
+        self._validate_source_target_input(target)
+        timestamp = format_timestamp(now_jst())
+        last_seen = format_timestamp(source.last_seen_at) or timestamp
+        with self._connection() as connection:
+            self._require_row(connection, "works", work_id, "work")
+            try:
+                item_cursor = connection.execute(
+                    "INSERT INTO items (work_id, item_title, kind, order_key, order_label, status, "
+                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (work_id, item.item_title, item.kind, item.order_key, item.order_label,
+                     item.status, timestamp, timestamp),
+                )
+                item_id = item_cursor.lastrowid
+                source_cursor = connection.execute(
+                    "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
+                    "free_until, available, access_checked_at, last_seen_at, quota_started_at, "
+                    "access_granted_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (item_id, source.site, source.external_id, source.discovery_key,
+                     source.access_mode, format_timestamp(source.free_until),
+                     1 if source.available is None else int(source.available),
+                     format_timestamp(source.access_checked_at), last_seen, None, None,
+                     timestamp, timestamp),
+                )
+                source_id = source_cursor.lastrowid
+                target_cursor = connection.execute(
+                    "INSERT INTO source_targets (source_id, backend, target_key, locator, priority, "
+                    "enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (source_id, target.backend, target.target_key, target.locator, target.priority,
+                     int(target.enabled), timestamp, timestamp),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise CatalogValidationError(
+                    f"Could not create discovered item/source/target: {exc}"
+                ) from exc
+            item_row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+            source_row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+            target_row = connection.execute(
+                "SELECT * FROM source_targets WHERE id = ?", (target_cursor.lastrowid,)
+            ).fetchone()
+        return CatalogRecord(
+            item=self._item_from_row(item_row),
+            source=self._source_from_row(source_row),
+            target=self._source_target_from_row(target_row),
+        )
+
+    def refresh_discovered_source(
+        self,
+        *,
+        work_id: int,
+        source_id: int,
+        item_input: ItemInput | Mapping[str, Any],
+        source_input: SourceInput | Mapping[str, Any],
+        web_target_input: SourceTargetInput | Mapping[str, Any],
+    ) -> CatalogRecord:
+        """Atomically refresh an existing Discovery graph without local-state writes."""
+
+        item = self._coerce_item_input(item_input)
+        source = self._coerce_source_input(source_input)
+        target = self._coerce_source_target_input(web_target_input)
+        self._validate_status(item.status)
+        self._validate_source_input(source)
+        self._validate_source_target_input(target)
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            existing_source = self._require_row(connection, "sources", source_id, "source")
+            existing_item = self._require_row(connection, "items", existing_source["item_id"], "item")
+            if existing_item["work_id"] != work_id:
+                raise CatalogValidationError("existing source belongs to a different work")
+            if existing_source["site"] != source.site or existing_source["external_id"] != source.external_id:
+                raise CatalogValidationError("source identity cannot be changed")
+            if existing_source["discovery_key"] != source.discovery_key:
+                raise CatalogValidationError("source belongs to a different Discovery scope")
+            assignments = [
+                "discovery_key = ?",
+                "access_mode = ?",
+                "free_until = ?",
+                "access_checked_at = ?",
+                "last_seen_at = ?",
+                "updated_at = ?",
+            ]
+            values: list[Any] = [
+                source.discovery_key,
+                source.access_mode,
+                format_timestamp(source.free_until),
+                format_timestamp(source.access_checked_at),
+                format_timestamp(source.last_seen_at) or timestamp,
+                timestamp,
+                source_id,
+            ]
+            if source.available is not None:
+                assignments.insert(3, "available = ?")
+                values.insert(3, int(source.available))
+            connection.execute(
+                "UPDATE sources SET " + ", ".join(assignments) + " WHERE id = ?", values
+            )
+            for column, incoming in (
+                ("item_title", item.item_title),
+                ("kind", item.kind),
+                ("order_key", item.order_key),
+                ("order_label", item.order_label),
+            ):
+                if incoming is not None:
+                    connection.execute(
+                        f"UPDATE items SET {column} = ?, updated_at = ? WHERE id = ?",
+                        (incoming, timestamp, existing_item["id"]),
+                    )
+            existing_target = connection.execute(
+                "SELECT id FROM source_targets WHERE source_id = ? AND backend = ? AND target_key = ?",
+                (source_id, target.backend, target.target_key),
+            ).fetchone()
+            if existing_target is None:
+                target_cursor = connection.execute(
+                    "INSERT INTO source_targets (source_id, backend, target_key, locator, priority, "
+                    "enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (source_id, target.backend, target.target_key, target.locator, target.priority,
+                     int(target.enabled), timestamp, timestamp),
+                )
+                target_id = target_cursor.lastrowid
+            else:
+                target_id = existing_target["id"]
+                connection.execute(
+                    "UPDATE source_targets SET locator = ?, priority = ?, enabled = ?, updated_at = ? "
+                    "WHERE id = ?",
+                    (target.locator, target.priority, int(target.enabled), timestamp, target_id),
+                )
+            item_row = connection.execute("SELECT * FROM items WHERE id = ?", (existing_item["id"],)).fetchone()
+            source_row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+            target_row = connection.execute("SELECT * FROM source_targets WHERE id = ?", (target_id,)).fetchone()
+        return CatalogRecord(
+            item=self._item_from_row(item_row),
+            source=self._source_from_row(source_row),
+            target=self._source_target_from_row(target_row),
+        )
 
     # SourceTarget API -------------------------------------------------
 
@@ -749,6 +967,11 @@ class CatalogService:
     def _validate_nonempty(value: Any, field: str) -> None:
         if not isinstance(value, str) or not value.strip():
             raise CatalogValidationError(f"{field} must be a non-empty string")
+
+    @staticmethod
+    def _validate_optional_text(value: Any, field: str) -> None:
+        if value is not None and not isinstance(value, str):
+            raise CatalogValidationError(f"{field} must be a string or null")
 
     @classmethod
     def _validate_work_input(cls, work: WorkInput) -> None:

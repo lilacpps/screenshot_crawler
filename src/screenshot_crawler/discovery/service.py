@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING
 
 from screenshot_crawler.catalog import (
     CatalogService,
+    CatalogValidationError,
     ItemInput,
     SourceInput,
     SourceTargetInput,
+    WorkInput,
 )
 from screenshot_crawler.catalog.models import CatalogRecord, Item
 from screenshot_crawler.discovery.models import (
@@ -31,17 +33,13 @@ _WHITESPACE = re.compile(r"\s+")
 
 
 class DiscoveryIncompleteError(RuntimeError):
-    """Raised by an adapter when a full traversal cannot be trusted complete."""
+    """Raised by an adapter or Catalog safety boundary when a run is incomplete."""
 
 
 class DiscoveryService:
-    """Run a Discovery adapter and synchronize its results into Catalog."""
+    """Run a Discovery adapter and synchronize its results into Catalog v3."""
 
-    def __init__(
-        self,
-        catalog: CatalogService,
-        registry: DiscoveryAdapterRegistry,
-    ) -> None:
+    def __init__(self, catalog: CatalogService, registry: DiscoveryAdapterRegistry) -> None:
         self.catalog = catalog
         self.registry = registry
 
@@ -51,8 +49,6 @@ class DiscoveryService:
         target: WatchlistTarget,
         mode: DiscoveryMode | str,
     ) -> DiscoveryResult:
-        """Discover one enabled Watchlist target using a caller-owned Page."""
-
         mode = self._validate_mode(mode)
         if not target.enabled:
             return DiscoveryResult(
@@ -64,6 +60,13 @@ class DiscoveryService:
                 complete=None,
                 stopped_reason="disabled",
                 warnings=(),
+            )
+
+        # The Watchlist label is only the initial title for a new Work.
+        work = self.catalog.find_work(target.work_key)
+        if work is None:
+            work = self.catalog.create_work(
+                WorkInput(work_key=target.work_key, title=target.label)
             )
 
         adapter = self.registry.create(target.site)
@@ -87,15 +90,20 @@ class DiscoveryService:
 
         try:
             async for record in adapter.iter_records(page, target, mode):
-                existing = self.catalog.find_source(
-                    target.site, record.source.external_id
-                )
+                existing = self.catalog.find_source(target.site, record.source.external_id)
                 previous = initial_sources.get(record.source.external_id)
                 if existing is None:
                     new_count += 1
                     known_streak = 0
                     previous_known_identity = None
                 else:
+                    self._ensure_existing_source_is_safe(existing, target)
+                    existing_item = self.catalog.get_item(existing.item_id)
+                    existing_work = self.catalog.get_work(existing_item.work_id)
+                    if existing_work.work_key != target.work_key:
+                        raise DiscoveryIncompleteError(
+                            "Existing source belongs to a different Work"
+                        )
                     known_count += 1
                     known_identity = (target.site, record.source.external_id)
                     if known_identity != previous_known_identity:
@@ -107,50 +115,55 @@ class DiscoveryService:
                     previous,
                     target,
                 )
-                catalog_record = self.catalog.upsert_item_source(
-                    ItemInput(
-                        canonical_title=record.item.canonical_title,
-                        author=record.item.author,
-                        genre=record.item.genre,
-                        kind=record.item.kind,
-                        order_key=record.item.order_key,
-                        order_label=record.item.order_label,
-                    ),
-                    SourceInput(
-                        site=target.site,
-                        external_id=record.source.external_id,
-                        discovery_key=target.key,
-                        access_mode=access_mode,
-                        free_until=record.source.free_until,
-                        available=record.source.available,
-                        access_checked_at=record.source.access_checked_at,
-                        last_seen_at=record.source.last_seen_at,
-                    ),
+                self._validate_observed_work_metadata(record.item.author, record.item.genre)
+                item_input = ItemInput(
+                    kind=record.item.kind,
+                    order_key=record.item.order_key,
+                    order_label=record.item.order_label,
                 )
-                self.catalog.upsert_source_target(
-                    SourceTargetInput(
-                        backend="web",
-                        locator=record.source.url,
-                        priority=100,
-                        enabled=True,
-                    ),
-                    source_id=catalog_record.source.id,
+                source_input = SourceInput(
+                    site=target.site,
+                    external_id=record.source.external_id,
+                    discovery_key=target.key,
+                    access_mode=access_mode,
+                    free_until=record.source.free_until,
+                    available=record.source.available,
+                    access_checked_at=record.source.access_checked_at,
+                    last_seen_at=record.source.last_seen_at,
+                )
+                web_target_input = SourceTargetInput(
+                    backend="web",
+                    target_key="default",
+                    locator=record.source.url,
+                    priority=100,
+                    enabled=True,
+                )
+                if existing is None:
+                    catalog_record = self.catalog.create_discovered_item_source_target(
+                        work_id=work.id,
+                        item_input=item_input,
+                        source_input=source_input,
+                        web_target_input=web_target_input,
+                    )
+                else:
+                    catalog_record = self.catalog.refresh_discovered_source(
+                        work_id=work.id,
+                        source_id=existing.id,
+                        item_input=item_input,
+                        source_input=source_input,
+                        web_target_input=web_target_input,
+                    )
+                self.catalog.fill_work_metadata(
+                    work.id,
+                    author=record.item.author,
+                    genre=record.item.genre,
                 )
                 observed_external_ids.add(record.source.external_id)
                 observed_count += 1
-                self._append_duplicate_warnings(
-                    target,
-                    catalog_record,
-                    warnings,
-                    warning_keys,
-                )
+                self._append_duplicate_warnings(target, catalog_record, warnings, warning_keys)
 
                 if mode == "incremental":
-                    stop_decision = adapter.incremental_stop_decision(
-                        record,
-                        previous,
-                        target,
-                    )
+                    stop_decision = adapter.incremental_stop_decision(record, previous, target)
                     if stop_decision is IncrementalStopDecision.STOP:
                         return DiscoveryResult(
                             mode=mode,
@@ -208,6 +221,19 @@ class DiscoveryService:
         )
 
     @staticmethod
+    def _ensure_existing_source_is_safe(source, target: WatchlistTarget) -> None:
+        if source.discovery_key != target.key:
+            raise DiscoveryIncompleteError(
+                "Existing source belongs to a different Discovery scope"
+            )
+
+    @staticmethod
+    def _validate_observed_work_metadata(author: str | None, genre: str | None) -> None:
+        for field, value in (("author", author), ("genre", genre)):
+            if value is not None and not isinstance(value, str):
+                raise CatalogValidationError(f"{field} must be a string or null")
+
+    @staticmethod
     def _validate_mode(mode: DiscoveryMode | str) -> DiscoveryMode:
         if mode not in _VALID_MODES:
             raise ValueError("Discovery mode must be one of: full, incremental")
@@ -221,14 +247,10 @@ class DiscoveryService:
         warning_keys: set[tuple[int, str]],
     ) -> None:
         current_item = current.item
-        current_title = self._normalize(current_item.canonical_title)
-        if current_title is None:
-            return
         current_order = self._item_order(current_item)
-        for candidate in self.catalog.list_items():
+        work = self.catalog.get_work(current_item.work_id)
+        for candidate in self.catalog.list_items(work_id=current_item.work_id):
             if candidate.id == current_item.id:
-                continue
-            if self._normalize(candidate.canonical_title) != current_title:
                 continue
             if not self._optional_equal(current_item.kind, candidate.kind):
                 continue
@@ -245,10 +267,8 @@ class DiscoveryService:
                 candidate_label = candidate.order_label or self._item_order(candidate) or ""
                 warnings.append(
                     "Possible duplicate on another site:\n"
-                    f"  current:  {target.site} / "
-                    f"{current_item.canonical_title} / {current_label}\n"
-                    f"  existing: {candidate_source.site} / "
-                    f"{candidate.canonical_title} / {candidate_label}"
+                    f"  current:  {target.site} / {work.title} / {current_label}\n"
+                    f"  existing: {candidate_source.site} / {work.title} / {candidate_label}"
                 )
 
     @staticmethod

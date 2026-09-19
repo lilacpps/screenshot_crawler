@@ -549,7 +549,7 @@ authority:
 
 ### 22.1 Watchlist（実装済み）
 
-`WatchlistService`（`src/screenshot_crawler/watchlist/`）がhuman-managed `watchlist.yaml`を扱う。既定pathはcurrent directoryの`watchlist.yaml`で、CLIの`watch`配下では`--watchlist`でoverrideできる。schemaは`targets` listとrequired `key` / `site` / `url`、optional `enabled`（default `true`）/ `label`（null可）だけである。keyはlist内で一意で、duplicate・malformed YAML・不正targetは明示エラーにする。
+`WatchlistService`（`src/screenshot_crawler/watchlist/`）がhuman-managed `watchlist.yaml`を扱う。既定pathはcurrent directoryの`watchlist.yaml`で、CLIの`watch`配下では`--watchlist`でoverrideできる。schemaは`targets` listとrequired `key` / `work_key` / `site` / `url` / `label`、optional `enabled`（default `true`）である。required textは空文字を許さず、keyはlist内で一意で、duplicate・malformed YAML・不正targetは明示エラーにする。
 
 CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disable`を提供する。書き込みは同一directory内のtemporary fileをfsyncして`os.replace`する。Watchlist操作はCatalogを読み書きせず、remove/disableでもCatalog rowを削除しない。
 
@@ -565,7 +565,7 @@ Schema v3のdomain tableは`works`、`items`、`sources`、`source_targets`、`c
 
 `crawl_runs`はItem/Source/Targetの整合性を検証して作成時snapshotを保存し、`running -> succeeded|failed`だけを許可する。`artifacts`はbinary本体を保存せず、SHA-256、byte size、storage backend、locator、stateを保持する。手動importのためcrawl runなしを許容し、Artifact更新はItem/CrawlRun statusを変更しない。
 
-このPhaseではCatalog packageとCatalog単体テストだけをv3へ移行した。Discovery、Batch、Catalog Export、CLIの既存callerはまだv2 API前提であり、後続PhaseでWork-aware / v3対応へ移行する。
+Phase 1でCatalog packageをv3へ移行し、Phase 2でWatchlist、Discovery、Discovery CLIをWork-awareなv3 APIへ接続した。BatchとCatalog Exportは後続Phaseの対象であり、v2前提の部分が残る。
 
 Batch Planner用に `read_items_and_sources(site=...)` と `read_items_sources_and_targets(site=...)` を提供する。後者は既存Catalogをread-only接続で検証し、items全件、指定siteのsources、関連するsource_targetsを取得する。Batch Planner側では指定siteのsourceを1件以上持つitemだけをsite-scopedな母集団にし、別site専用itemとsourceなしのorphan itemを`no_source` skipに含めない。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
 
@@ -580,7 +580,7 @@ watchlist.yaml
     ↓
 Discovery Service / Discovery Adapter
     ↓
-catalog.sqlite (items / sources / source_targets)
+catalog.sqlite (works / items / sources / source_targets)
     ↓
 Batch Runner / Site Policy
     ↓
@@ -591,12 +591,12 @@ Crawl Request
 
 現行実装には、BookWalker quotaの実サイトlive click検証と、quotaのサーバー側実消費をCatalogだけから検証する機能は存在しない。
 
-Watchlist CLI、Catalog Service、Crawl Request最小基盤、Discovery framework、Phase 5A Batch Planner / Site Policy registry / Manga ONE Policyは実装済みである。Discoveryは観測したURLを同一sourceの`backend=web` targetへupsertし、別backend targetとsourceのlocal/access stateを変更しない。Batch Plannerはenabled web targetを`priority ASC, target.id ASC`で選び、targetがないsourceやAndroid-only sourceをskipする。Batch Executorはweb targetのlocatorを既存`RunConfig.source_url`へ変換し、実行直前にtarget identity/stateを再検証する。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。Phase 5Aのplannerは`auto`を使わず、`direct`/`quota`の実行意図とmetadataをcandidateへ保持するだけである。
+Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request最小基盤、Phase 5A Batch Planner / Site Policy registry / Manga ONE Policyは実装済みである。Discoveryはtargetの`work_key`でWorkをfind/createし、`label`は新規Workのtitle初期値にだけ使う。新規recordはWork配下にItem、Source、web/default targetを原子的に作成し、既存recordはItemを再利用する。観測したURLを同一sourceの`backend=web` / `target_key=default` targetへupsertし、別backend targetとsourceのlocal/access stateを変更しない。Batch Plannerはenabled web targetを`priority ASC, target.id ASC`で選び、targetがないsourceやAndroid-only sourceをskipする。Batch Executorはweb targetのlocatorを既存`RunConfig.source_url`へ変換し、実行直前にtarget identity/stateを再検証する。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。Phase 5Aのplannerは`auto`を使わず、`direct`/`quota`の実行意図とmetadataをcandidateへ保持するだけである。
 
 主要仕様:
 
 - Discovery対象は明示Watchlistだけ
-- Watchlist targetはstable `key` を持つ
+- Watchlist targetはstable `key` と明示的な `work_key` / `label` を持つ
 - Catalog v3 Phase 1は `works / items / sources / source_targets / crawl_runs / artifacts` の6テーブル
 - full syncはcomplete時だけmissing sourceをunavailable化
 - 現行incremental実装はlatest側から異なるknown source 2件連続で停止し、同一stable identityの重複観測はstreakに加算しない
@@ -623,15 +623,11 @@ BookWalker Discoveryはseries listから商品URLを列挙し、商品ページ�
 
 ### 22.3 Discovery framework（実装済み）
 
-`DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。
+`DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。targetの`work_key`でWorkをfind/createし、Work titleは新規作成時だけ`label`から初期化する。author/genreは観測値が非NULLでWork側がNULLの場合だけ補完し、既存値を上書きしない。
 
 `DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。現行のreal-site用AdapterはManga ONEとBookWalkerである。BookWalkerはWatchlistのseries list targetだけを対象にする。
 
-Discovery Serviceは各recordのitem/source upsert後に、観測した`DiscoveredSource.url`を
-`SourceTargetInput(backend="web", locator=...)`として同じsourceへupsertする。URL変更は同じ
-`(source_id, web)` targetのlocator更新になり、既存android等の別backend targetは変更しない。
-sourceのfull-sync missing reconciliationは`available=false`だけを更新し、targetの削除や
-自動disableは行わない。
+Discovery Serviceは各recordについて、canonical titleをItemへ保存せず、kind/orderをItemへ、title/author/genreをWorkへ反映する。新規recordではItem/Source/web-default targetを一つのtransactionで作成し、既存sourceでは既存Itemを再利用して外部状態と非NULL Item metadataだけを更新する。観測した`DiscoveredSource.url`は`SourceTargetInput(backend="web", target_key="default", locator=...)`として同じsourceへupsertする。URL変更は同じ`(source_id, web, default)` targetのlocator更新になり、既存androidやweb/direct等の別targetは変更しない。sourceのfull-sync missing reconciliationは`available=false`だけを更新し、targetの削除や自動disableは行わない。既存sourceの`discovery_key` scope不一致、または既存Itemが別Workに属する場合はincompleteとして扱い、reparentや部分的な新規graph作成を行わない。
 
 Discovery開始時、Serviceは対象siteの既存sourceからCatalog非依存の
 `DiscoverySourceSnapshot`を一度だけ作成し、adapter hookへ渡す。このsnapshotはrun開始時点をauthorityとし、run中に新規upsertされたsourceを既存sourceとして扱わない。
@@ -664,7 +660,7 @@ BookWalkerはこのextension pointを実装し、run開始時点でowned/quota�
 する。`--all --keep-open`はtarget単位で接続を閉じるlifecycleのためCLI validationで
 拒否し、従来の`--key --keep-open`だけを維持する。
 
-cross-site duplicateはnormalized title（strip、whitespace、casefold）と、取得できる場合のkind/order一致だけで候補をwarningにする。warningはmerge、delete、completed化を行わない。
+cross-site duplicateは同じWork内の別Itemについて、kind/orderが一致する場合だけ候補をwarningにする。warningはmerge、reparent、delete、completed化を行わない。
 
 ### 22.5 Phase 5B Batch Executor（Manga ONE）
 

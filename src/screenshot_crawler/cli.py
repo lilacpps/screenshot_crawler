@@ -200,9 +200,10 @@ def _parser() -> argparse.ArgumentParser:
     watch_add = watch_subparsers.add_parser("add", help="Add a watchlist target")
     watch_add.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
     watch_add.add_argument("--key", required=True)
+    watch_add.add_argument("--work-key", required=True)
     watch_add.add_argument("--site", required=True)
     watch_add.add_argument("--url", required=True)
-    watch_add.add_argument("--label")
+    watch_add.add_argument("--label", required=True)
 
     for action in ("remove", "enable", "disable"):
         action_parser = watch_subparsers.add_parser(action)
@@ -606,11 +607,14 @@ def _run_watch(args: argparse.Namespace) -> None:
             return
         for target in targets:
             enabled = "enabled" if target.enabled else "disabled"
-            label = f"\t{target.label}" if target.label is not None else ""
-            print(f"{target.key}\t{target.site}\t{enabled}\t{target.url}{label}")
+            print(
+                f"{target.key}\t{target.work_key}\t{target.site}\t{enabled}\t"
+                f"{target.url}\t{target.label}"
+            )
     elif args.watch_action == "add":
         target = service.add(
             key=args.key,
+            work_key=args.work_key,
             site=args.site,
             url=args.url,
             label=args.label,

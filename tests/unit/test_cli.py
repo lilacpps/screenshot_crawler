@@ -303,7 +303,43 @@ class FakeDiscoveryService:
 
 
 def _write_discover_watchlist(path: Path, targets: str) -> None:
-    path.write_text(f"targets:\n{targets}", encoding="utf-8")
+    lines: list[str] = []
+    for line in targets.splitlines():
+        lines.append(line)
+        if line.lstrip().startswith("- key:"):
+            key = line.split(":", 1)[1].strip()
+            indent = line[: len(line) - len(line.lstrip())] + "  "
+            lines.append(f"{indent}work_key: work-{key}")
+            lines.append(f"{indent}label: Label {key}")
+    path.write_text("targets:\n" + "\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_watch_add_requires_work_key_and_label_and_watch_list_displays_them(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    watchlist = tmp_path / "watchlist.yaml"
+    args = _parser().parse_args(
+        [
+            "watch", "add", "--watchlist", str(watchlist), "--key", "scope",
+            "--work-key", "work", "--site", "mangaone", "--url", "https://example.test",
+            "--label", "作品",
+        ]
+    )
+    cli._run_watch(args)
+    output = capsys.readouterr().out
+    assert "Added watchlist target 'scope'." in output
+
+    cli._run_watch(_parser().parse_args(["watch", "list", "--watchlist", str(watchlist)]))
+    listed = capsys.readouterr().out
+    assert "scope\twork\tmangaone\tenabled\thttps://example.test\t作品" in listed
+
+
+def test_watch_add_requires_work_key_and_label() -> None:
+    with pytest.raises(SystemExit):
+        _parser().parse_args(
+            ["watch", "add", "--key", "scope", "--site", "mangaone", "--url", "https://example.test"]
+        )
 
 
 @pytest.mark.parametrize("mode", ["incremental", "full"])

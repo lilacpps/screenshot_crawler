@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import pytest
 from playwright.async_api import Error, async_playwright
 
-from screenshot_crawler.catalog import CatalogService, ItemInput
+from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, WorkInput
 from screenshot_crawler.discovery import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -254,8 +254,10 @@ def test_bookwalker_hooks_preserve_scope_and_stable_access() -> None:
     adapter = BookWalkerDiscoveryAdapter()
     target = WatchlistTarget(
         key="series-one",
+        work_key="series-work",
         site="bookwalker",
         url="https://bookwalker.jp/series/123/list/",
+        label="表示用シリーズ名",
     )
     previous = DiscoverySourceSnapshot(
         external_id="product-one",
@@ -506,14 +508,21 @@ def _seed_source(
     *,
     title: str | None = None,
 ) -> None:
-    catalog.upsert_item_source(
-        ItemInput(canonical_title=title or external_id),
-        {
-            "site": target.site,
-            "external_id": external_id,
-            "discovery_key": target.key,
-            "access_mode": access_mode,
-        },
+    work = catalog.find_work(target.work_key)
+    if work is None:
+        work = catalog.create_work(WorkInput(work_key=target.work_key, title=target.label))
+    item = catalog.create_item(
+        ItemInput(item_title=title or external_id),
+        work_id=work.id,
+    )
+    catalog.create_source(
+        SourceInput(
+            site=target.site,
+            external_id=external_id,
+            discovery_key=target.key,
+            access_mode=access_mode,
+        ),
+        item_id=item.id,
     )
 
 
@@ -551,6 +560,7 @@ async def test_bookwalker_full_reconciles_first_volume_after_later_release(
     await browser_page.route("https://bookwalker.jp/**", fulfill)
     target = WatchlistTarget(
         key="series-one",
+        work_key="series-work",
         site="bookwalker",
         url="https://bookwalker.jp/series/123/list/",
         label="独自label",
@@ -563,7 +573,7 @@ async def test_bookwalker_full_reconciles_first_volume_after_later_release(
     first_item = first_catalog.get_item(first_source.item_id)
     assert first_result.complete is True
     assert first_item.order_key is None
-    assert first_item.canonical_title == "独自label"
+    assert first_catalog.get_work(first_item.work_id).title == "独自label"
 
     products[:] = [
         (second, "作品名2", False),
@@ -600,6 +610,7 @@ async def test_bookwalker_discovery_scans_series_pages_and_product_controls(
     await browser_page.route("https://bookwalker.jp/**", fulfill)
     target = WatchlistTarget(
         key="series-one",
+        work_key="series-work",
         site="bookwalker",
         url="https://bookwalker.jp/series/123/list/",
         label="表示用シリーズ名",
@@ -657,8 +668,10 @@ async def test_bookwalker_discovery_supports_current_tile_listing_dom(
 def _series_target(key: str = "series-one") -> WatchlistTarget:
     return WatchlistTarget(
         key=key,
+        work_key="series-work",
         site="bookwalker",
         url="https://bookwalker.jp/series/123/list/",
+        label="表示用シリーズ名",
     )
 
 
@@ -903,14 +916,16 @@ async def test_bookwalker_scope_conflict_is_incomplete_without_catalog_mutation(
     )
     target = _series_target("new-series")
     catalog = CatalogService(tmp_path / "catalog.sqlite")
-    existing = catalog.upsert_item_source(
-        ItemInput(canonical_title="旧タイトル"),
-        {
-            "site": "bookwalker",
-            "external_id": product,
-            "discovery_key": "old-series",
-            "access_mode": "quota",
-        },
+    work = catalog.create_work(WorkInput(work_key="series-work", title="旧タイトル"))
+    old_item = catalog.create_item(ItemInput(item_title="旧タイトル"), work_id=work.id)
+    old_source = catalog.create_source(
+        SourceInput(
+            site="bookwalker",
+            external_id=product,
+            discovery_key="old-series",
+            access_mode="quota",
+        ),
+        item_id=old_item.id,
     )
     registry = DiscoveryAdapterRegistry()
     registry.register("bookwalker", BookWalkerDiscoveryAdapter)
@@ -919,12 +934,12 @@ async def test_bookwalker_scope_conflict_is_incomplete_without_catalog_mutation(
         browser_page, target, "full"
     )
 
-    source = catalog.get_source(existing.source.id)
-    item = catalog.get_item(existing.item.id)
+    source = catalog.get_source(old_source.id)
+    item = catalog.get_item(old_item.id)
     assert result.stopped_reason == "incomplete"
     assert source.discovery_key == "old-series"
     assert source.access_mode == "quota"
-    assert item.canonical_title == "旧タイトル"
+    assert catalog.get_work(item.work_id).title == "旧タイトル"
 
 
 async def test_bookwalker_full_clean_exhaustion_reconciles_missing_source(

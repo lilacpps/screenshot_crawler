@@ -125,7 +125,13 @@ async def test_mangaone_discovery_scans_pages_and_maps_cards(browser_page, tmp_p
         await route.fulfill(body=_listing_html(), content_type="text/html; charset=utf-8")
 
     await browser_page.route("https://manga-one.com/**", fulfill)
-    target = WatchlistTarget(key="juou", site="mangaone", url=target_url)
+    target = WatchlistTarget(
+        key="juou",
+        work_key="juou-work",
+        site="mangaone",
+        url=target_url,
+        label="獣王と薬草",
+    )
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     registry = DiscoveryAdapterRegistry()
     registry.register("mangaone", MangaOneDiscoveryAdapter)
@@ -144,5 +150,5 @@ async def test_mangaone_discovery_scans_pages_and_maps_cards(browser_page, tmp_p
         "quota",
     ]
     assert all(source.discovery_key == "juou" for source in catalog.list_sources())
-    assert catalog.list_items()[0].canonical_title == "獣王と薬草"
+    assert catalog.list_works()[0].title == "獣王と薬草"
     assert catalog.list_items()[0].order_key == "80-後編"

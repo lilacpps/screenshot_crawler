@@ -1,6 +1,14 @@
 targets:
   - key: juou-to-yakusou
+    work_key: juou-to-yakusou
     site: mangaone
     url: https://manga-one.com/manga/2379/chapter/214131
     enabled: true
     label: 獣王と薬草
+
+  - key: nibanmekanojo
+    work_key: nibanmekanojo
+    site: bookwalker
+    url: https://bookwalker.jp/series/317089/list/
+    enabled: true
+    label: わたし、二番目の彼女でいいから。

@@ -10,7 +10,8 @@ class WatchlistTarget:
     """One human-managed Discovery starting point."""
 
     key: str
+    work_key: str
     site: str
     url: str
+    label: str
     enabled: bool = True
-    label: str | None = None

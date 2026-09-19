@@ -157,10 +157,11 @@ class Artifact:
 
 @dataclass(frozen=True, slots=True)
 class CatalogRecord:
-    """Small legacy-shaped container retained for import stability only."""
+    """Catalog graph returned by discovery-oriented service helpers."""
 
     item: Item
     source: Source
+    target: SourceTarget | None = None
 
 
 TimestampValue = datetime | str | None

@@ -10,34 +10,79 @@ from screenshot_crawler.watchlist import (
 )
 
 
-def test_new_watchlist_is_empty_and_adds_optional_label(tmp_path: Path) -> None:
-    service = WatchlistService(tmp_path / "watchlist.yaml")
+def add_target(service: WatchlistService, **overrides: object):
+    values = {
+        "key": "one",
+        "work_key": "work-one",
+        "site": "mangaone",
+        "url": "https://example.invalid/one",
+        "label": "作品A",
+    }
+    values.update(overrides)
+    return service.add(**values)
 
+
+def test_missing_watchlist_is_empty_and_add_roundtrips_v3_fields(tmp_path: Path) -> None:
+    service = WatchlistService(tmp_path / "watchlist.yaml")
     assert service.list_targets() == []
-    added = service.add(key="one", site="mangaone", url="https://example.invalid/one")
+    added = add_target(service)
+    assert added.work_key == "work-one"
+    assert added.label == "作品A"
+    assert service.get("one") == added
+    written = (tmp_path / "watchlist.yaml").read_text(encoding="utf-8")
+    assert "work_key: work-one" in written
+    assert "label: 作品A" in written
 
-    assert added.enabled is True
-    assert added.label is None
-    assert service.list_targets() == [added]
-    assert "targets:" in (tmp_path / "watchlist.yaml").read_text(encoding="utf-8")
 
-
-def test_watchlist_crud_and_duplicate_key(tmp_path: Path) -> None:
+def test_same_work_key_can_be_shared_but_key_must_be_unique(tmp_path: Path) -> None:
     service = WatchlistService(tmp_path / "watchlist.yaml")
-    service.add(key="one", site="bookwalker", url="https://example.invalid/one", label="作品A")
-
+    first = add_target(service)
+    second = add_target(
+        service,
+        key="two",
+        site="bookwalker",
+        url="https://example.invalid/two",
+    )
+    assert [target.work_key for target in service.list_targets()] == ["work-one", "work-one"]
+    assert second.site != first.site
     with pytest.raises(DuplicateWatchlistKeyError):
-        service.add(key="one", site="bookwalker", url="https://example.invalid/two")
+        add_target(service)
 
-    disabled = service.disable("one")
-    assert disabled.enabled is False
-    assert service.get("one").enabled is False
-    assert service.enable("one").enabled is True
-    assert service.remove("one").label == "作品A"
-    assert service.list_targets() == []
 
+def test_enable_disable_preserves_identity_fields(tmp_path: Path) -> None:
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    original = add_target(service)
+    disabled = service.disable(original.key)
+    assert disabled == original.__class__(
+        key=original.key,
+        work_key=original.work_key,
+        site=original.site,
+        url=original.url,
+        label=original.label,
+        enabled=False,
+    )
+    enabled = service.enable(original.key)
+    assert enabled == original
     with pytest.raises(WatchlistTargetNotFoundError):
         service.remove("missing")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("key", ""),
+        ("work_key", " "),
+        ("site", ""),
+        ("url", " \t"),
+        ("label", ""),
+    ],
+)
+def test_add_rejects_empty_required_fields(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    with pytest.raises(InvalidWatchlistError, match=field):
+        add_target(service, **{field: value})
 
 
 @pytest.mark.parametrize(
@@ -46,14 +91,14 @@ def test_watchlist_crud_and_duplicate_key(tmp_path: Path) -> None:
         "targets: [",
         "{}",
         "targets: {}",
-        "targets:\n  - site: mangaone\n    url: https://example.invalid/one\n",
-        "targets:\n  - key: one\n    site: mangaone\n    url: https://example.invalid/one\n    enabled: 1\n",
+        "targets:\n  - key: one\n    site: mangaone\n    url: https://example.invalid/one\n",
+        "targets:\n  - key: one\n    work_key: work\n    site: mangaone\n    url: https://example.invalid/one\n    label: null\n",
+        "targets:\n  - key: one\n    work_key: work\n    site: mangaone\n    url: https://example.invalid/one\n    label: 作品\n    enabled: 1\n",
     ],
 )
 def test_invalid_watchlist_is_rejected(tmp_path: Path, content: str) -> None:
     path = tmp_path / "watchlist.yaml"
     path.write_text(content, encoding="utf-8")
-
     with pytest.raises(InvalidWatchlistError):
         WatchlistService(path).list_targets()
 
@@ -62,10 +107,9 @@ def test_duplicate_keys_in_yaml_are_rejected(tmp_path: Path) -> None:
     path = tmp_path / "watchlist.yaml"
     path.write_text(
         "targets:\n"
-        "  - {key: one, site: mangaone, url: https://example.invalid/one}\n"
-        "  - {key: one, site: mangaone, url: https://example.invalid/two}\n",
+        "  - {key: one, work_key: work, site: mangaone, url: https://example.invalid/one, label: A}\n"
+        "  - {key: one, work_key: work, site: mangaone, url: https://example.invalid/two, label: B}\n",
         encoding="utf-8",
     )
-
     with pytest.raises(DuplicateWatchlistKeyError):
         WatchlistService(path).list_targets()
