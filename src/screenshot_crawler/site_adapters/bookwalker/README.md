@@ -46,8 +46,9 @@ BookWalker can render a spread in a wide Chrome window. The adapter saves the
 right page first and the left page second. Split files record
 `metadata.part` / `metadata.parts`. The first numbered page is an exception:
 when it is a spread, the cover's draw-geometry union is saved as one artifact.
-If the viewer exposes no draw geometry, the adapter keeps the conservative
-full-canvas fallback because an arbitrary crop could cut cover artwork.
+If the viewer exposes no draw geometry, the adapter scans the rendered pixels
+for the non-white cover bounds and crops that area. The full-canvas fallback is
+kept only when neither geometry nor a usable pixel bound is available.
 
 ## Navigation and page change
 

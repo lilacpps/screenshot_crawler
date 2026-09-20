@@ -503,6 +503,36 @@ async def test_bookwalker_crops_first_page_cover_to_draw_geometry(
 
 
 @pytest.mark.asyncio
+async def test_bookwalker_crops_cover_from_pixels_when_geometry_is_missing(
+    browser_page: Page,
+) -> None:
+    await browser_page.set_content(
+        """
+        <span id="pageSliderCounter">1 / 10</span>
+        <div id="renderer">
+          <div class="currentScreen">
+            <canvas width="2000" height="1000" style="width:2000px;height:1000px"></canvas>
+          </div>
+        </div>
+        """
+    )
+    await browser_page.locator("canvas").evaluate(
+        "element => {"
+        " const context = element.getContext('2d');"
+        " context.fillStyle = 'rgb(20, 20, 20)';"
+        " context.fillRect(700, 0, 600, 1000);"
+        "}"
+    )
+
+    targets = await BookWalkerAdapter().get_capture_targets(browser_page)
+
+    assert len(targets) == 1
+    assert await targets[0].evaluate(
+        "element => ({width: element.width, height: element.height})"
+    ) == {"width": 600, "height": 1000}
+
+
+@pytest.mark.asyncio
 async def test_bookwalker_wait_for_change_uses_click_after_arrow_stalls() -> None:
     class FakePage:
         async def wait_for_timeout(self, _milliseconds: int) -> None:

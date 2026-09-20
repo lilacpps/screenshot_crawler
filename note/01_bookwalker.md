@@ -138,9 +138,10 @@ manifestには複数target時に `part` / `parts` を記録する。
 見開きのように `page-0001` / `page-0002` へ分割せず、draw geometryの
 外接範囲を1つのcapture targetとしてPNG保存する。複数のdraw rectangleが
 ある場合も外側のviewer余白だけを除いた1枚に結合する。draw geometry自体が
-取れない場合は、表紙artworkを推測で切らないため、保守的にviewer canvas全体
-へfallbackする。2ページ目以降の見開きは従来どおり右ページ→左ページの
-個別artifactとする。
+取れない場合は、表紙のrendered pixelから非白色領域を検出して切り出す。
+geometryとpixel boundsのどちらも取れない場合だけ、表紙artworkを推測で
+切らないためviewer canvas全体へfallbackする。2ページ目以降の見開きは
+従来どおり右ページ→左ページの個別artifactとする。
 
 ## 6. Browser Session / CDP
 
@@ -838,10 +839,12 @@ Shared-profile CDP comparison of a purchased viewer and a trial viewer showed
 that both render the actual page into a centered destination rectangle inside a
 larger white canvas. The previous first-page special case deliberately kept
 that full canvas, which explains the cover-only outer margins. The adapter now
-uses the normal draw-geometry crop for a single cover rectangle and combines
-multiple cover rectangles into one union crop, preserving one cover artifact.
-This is unrelated to PNG/JPEG conversion; native PNG/JPEG selection remains
-unchanged.
+uses the normal draw-geometry crop for a single cover rectangle, combines
+multiple cover rectangles into one union crop, and uses a rendered non-white
+pixel-bound crop if the first frame arrives before geometry tracing records a
+draw. This preserves one cover artifact even in the initial-frame race observed
+in `bookwalker-rerun-130`. This is unrelated to PNG/JPEG conversion; native
+PNG/JPEG selection remains unchanged.
 
 ## 19. Known limitations / maintenance
 

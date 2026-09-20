@@ -1688,6 +1688,75 @@ class BookWalkerAdapter(SiteAdapter):
             "height": bottom - top,
         }
 
+    async def _non_white_capture_box(
+        self,
+        canvas: Locator,
+    ) -> dict[str, int] | None:
+        """Find the visible cover bounds when draw tracing missed a frame."""
+
+        try:
+            result = await canvas.evaluate(
+                """
+                element => {
+                  const width = element.width;
+                  const height = element.height;
+                  const context = element.getContext('2d', {
+                    willReadFrequently: true,
+                  });
+                  if (!context || width <= 0 || height <= 0) return null;
+                  let pixels;
+                  try {
+                    pixels = context.getImageData(0, 0, width, height).data;
+                  } catch (error) {
+                    return null;
+                  }
+                  let left = width;
+                  let top = height;
+                  let right = 0;
+                  let bottom = 0;
+                  for (let y = 0; y < height; y += 1) {
+                    for (let x = 0; x < width; x += 1) {
+                      const offset = (y * width + x) * 4;
+                      const alpha = pixels[offset + 3];
+                      const nonWhite = alpha > 0 && (
+                        pixels[offset] < 250 ||
+                        pixels[offset + 1] < 250 ||
+                        pixels[offset + 2] < 250
+                      );
+                      if (!nonWhite) continue;
+                      left = Math.min(left, x);
+                      top = Math.min(top, y);
+                      right = Math.max(right, x + 1);
+                      bottom = Math.max(bottom, y + 1);
+                    }
+                  }
+                  if (left >= right || top >= bottom) return null;
+                  return {
+                    x: left,
+                    y: top,
+                    width: right - left,
+                    height: bottom - top,
+                  };
+                }
+                """
+            )
+        except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
+            return None
+        if not isinstance(result, dict):
+            return None
+        try:
+            box = {
+                "x": int(result["x"]),
+                "y": int(result["y"]),
+                "width": int(result["width"]),
+                "height": int(result["height"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+        if box["width"] <= 0 or box["height"] <= 0:
+            return None
+        return box
+
     async def get_capture_targets(self, page: Page) -> tuple[Locator, ...]:
         """Return one page target, or a right-to-left split of a spread.
 
@@ -1714,19 +1783,23 @@ class BookWalkerAdapter(SiteAdapter):
             if height <= 0 or width <= height * self.spread_ratio:
                 return (canvas,)
             if first_page:
-                # Without draw geometry there is no reliable page boundary.
-                # Keep the conservative legacy fallback instead of inventing a
-                # crop that could cut cover artwork.
-                return (canvas,)
-            boxes = [
-                {"x": 0, "y": 0, "width": width // 2, "height": height},
-                {
-                    "x": width // 2,
-                    "y": 0,
-                    "width": width - width // 2,
-                    "height": height,
-                },
-            ]
+                # The initial cover frame can be painted before the draw hook
+                # records its geometry. Use the rendered pixel bounds as a
+                # last-resort crop instead of preserving the viewer margins.
+                cover_box = await self._non_white_capture_box(canvas)
+                if cover_box is None:
+                    return (canvas,)
+                boxes = [cover_box]
+            else:
+                boxes = [
+                    {"x": 0, "y": 0, "width": width // 2, "height": height},
+                    {
+                        "x": width // 2,
+                        "y": 0,
+                        "width": width - width // 2,
+                        "height": height,
+                    },
+                ]
 
         if len(boxes) == 1 and boxes[0] == {
             "x": 0,
