@@ -96,7 +96,11 @@ def select_native_draw_calls(
             None in source_ids
             or (
                 len(set(source_ids)) != len(source_ids)
-                and any("sourceCropPng" not in call for call in selected)
+                and any(
+                    "sourceCropPng" not in call
+                    and not call.get("snapshotId")
+                    for call in selected
+                )
             )
         ):
             return None

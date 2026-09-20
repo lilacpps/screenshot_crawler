@@ -126,13 +126,13 @@ async def test_original_jpeg_capture_is_enabled_for_production_runs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_native_eager_init_script_preserves_order_and_host_defaults(
+async def test_native_capture_mode_init_script_controls_trace(
     browser_page: Page,
 ) -> None:
     adapter = BookWalkerAdapter()
     prepared = _PreparePage()
     await adapter.prepare_page(prepared)  # type: ignore[arg-type]
-    eager_script = prepared.init_scripts[1]
+    mode_script = prepared.init_scripts[0]
 
     async def evaluate_scripts(url: str, scripts: tuple[str, ...]) -> dict[str, object]:
         browser = browser_page.context.browser
@@ -149,30 +149,111 @@ async def test_native_eager_init_script_preserves_order_and_host_defaults(
                 await page.add_init_script(script)
             await page.goto(url)
             return await page.evaluate(
-                "() => ({ eager: window.__bookwalkerNativeEagerCapture, "
+                "() => ({ mode: window.__bookwalkerCaptureMode, "
+                "enabled: window.__bookwalkerNativeCaptureEnabled, "
                 "installed: window.__bookwalkerDrawTraceInstalled })"
             )
         finally:
             await context.close()
 
     draw_script = adapter_module._DRAW_TRACE_SCRIPT
-    configured_true = "window.__bookwalkerNativeEagerCapture = true;"
     assert await evaluate_scripts(
         "https://viewer.bookwalker.jp/order-a",
-        (configured_true, draw_script),
-    ) == {"eager": True, "installed": True}
-    assert await evaluate_scripts(
-        "https://viewer.bookwalker.jp/order-b",
-        (draw_script, configured_true),
-    ) == {"eager": True, "installed": True}
+        ("window.__bookwalkerCaptureMode = 'native';", draw_script),
+    ) == {"mode": "native", "enabled": True, "installed": True}
     assert await evaluate_scripts(
         "https://viewer.bookwalker.jp/production",
-        (draw_script, eager_script),
-    ) == {"eager": True, "installed": True}
+        (mode_script, draw_script),
+    ) == {"mode": "native", "enabled": True, "installed": True}
     assert await evaluate_scripts(
         "https://trial.bookwalker.jp/production",
-        (draw_script, eager_script),
-    ) == {"eager": False, "installed": True}
+        ("window.__bookwalkerCaptureMode = 'canvas';", draw_script),
+    ) == {"mode": "canvas", "enabled": False, "installed": True}
+
+
+@pytest.mark.asyncio
+async def test_canvas_mode_does_not_install_original_jpeg_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOOKWALKER_CAPTURE_MODE", "canvas")
+    adapter = BookWalkerAdapter()
+    page = _PreparePage()
+
+    await adapter.prepare_page(page)  # type: ignore[arg-type]
+
+    assert adapter.capture_mode == "canvas"
+    assert page.listener_count == 0
+    assert page.route_count == 0
+
+
+@pytest.mark.asyncio
+async def test_html_canvas_snapshot_is_pixel_stable_until_materialize(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+
+    result = await browser_page.evaluate(
+        """
+        async () => {
+          const source = document.createElement('canvas');
+          source.width = 2;
+          source.height = 2;
+          document.body.appendChild(source);
+          const sourceContext = source.getContext('2d');
+          sourceContext.fillStyle = 'black';
+          sourceContext.fillRect(0, 0, 2, 2);
+
+          const renderer = document.createElement('canvas');
+          renderer.width = 1200;
+          renderer.height = 600;
+          document.body.appendChild(renderer);
+          const rendererContext = renderer.getContext('2d');
+          const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+          let toDataURLCalls = 0;
+          HTMLCanvasElement.prototype.toDataURL = function(...args) {
+            toDataURLCalls += 1;
+            return originalToDataURL.apply(this, args);
+          };
+
+          rendererContext.drawImage(source, 0, 0, 2, 2, 0, 0, 2, 2);
+          const drawCalls = window.__bookwalkerNativeDrawCalls;
+          const drawTimeToDataURLCalls = toDataURLCalls;
+          sourceContext.fillStyle = 'white';
+          sourceContext.fillRect(0, 0, 2, 2);
+          const call = drawCalls[drawCalls.length - 1];
+          const materialized = window.__bookwalkerMaterializeNativeSourceCrop({
+            sourceId: call.sourceId,
+            snapshotId: call.snapshotId,
+            sourceConstructor: call.source.constructor,
+            sourceRect: call.sourceRect,
+          });
+          const image = new Image();
+          image.src = materialized.dataUrl;
+          await image.decode();
+          const probe = document.createElement('canvas');
+          probe.width = 2;
+          probe.height = 2;
+          probe.getContext('2d').drawImage(image, 0, 0);
+          const pixel = [...probe.getContext('2d').getImageData(0, 0, 1, 1).data];
+          return {
+            constructor: call.source.constructor,
+            snapshotId: call.snapshotId,
+            drawTimeToDataURLCalls,
+            materializeToDataURLCalls: toDataURLCalls,
+            error: materialized.error,
+            pixel,
+          };
+        }
+        """
+    )
+
+    assert result["constructor"] == "HTMLCanvasElement"
+    assert result["snapshotId"]
+    assert result["drawTimeToDataURLCalls"] == 0
+    assert result["materializeToDataURLCalls"] == 1
+    assert result["error"] is None
+    assert result["pixel"][:3] == [0, 0, 0]
 
 
 @pytest.mark.asyncio

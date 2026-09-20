@@ -698,11 +698,12 @@ itself prove that source-native PNG is the only cause of the earlier stop.
 
 The source-native PNG path no longer calls `toDataURL("image/png")` inside
 every `drawImage()` hook invocation.  The hook records geometry, sourceId,
-source rectangle, transform, and composition metadata, while retaining the
-current source objects for the bounded capture window.  Once the final visible
-draw calls are selected, only those one or two source rectangles are copied to
-temporary canvases and encoded as PNG.  Cleanup clears both the draw-call list
-and retained source objects.
+source rectangle, transform, and composition metadata.  `ImageBitmap` keeps
+the existing deferred source-reference path; mutable `HTMLCanvasElement`
+sources are copied into bounded snapshot canvases during the draw hook.  Once
+the final visible draw calls are selected, only those one or two sources are
+encoded as PNG.  Cleanup clears draw calls, retained source objects, and
+snapshot canvases.
 
 This is intended to keep the source-native dimensions and lossless PNG
 artifact while reducing initial/preload work.  The pre-fix live verification
@@ -790,16 +791,13 @@ and a unique candidate for every visible spread part; otherwise the complete
 page remains PNG. The purchased viewer decodes its JPEG tiles into an
 `HTMLCanvasElement` before drawing; this source type is accepted only with the
 same identity-transform/source-over geometry checks used for `ImageBitmap`.
-Because that source canvas is mutable during a spread render, purchased
-viewer documents enable bounded eager source-crop materialization before the
-draw call is cleared. Repeated source IDs are accepted for a spread only when
-each draw call retained its own crop; deferred repeated sources remain
-rejected. An `HTMLCanvasElement` call without an eager `sourceCropPng` is
-rejected before deferred materialization, so it cannot make a mutable source
-look stable after the draw. If the raw tile JPEG does not uniquely match, the
-verified source-native PNG is returned as-is; no PNG-to-JPEG re-encoding is
-performed. A spread still falls back as a complete unit when its native
-capture is unavailable.
+Because that source canvas is mutable during a spread render, the draw hook
+keeps a bounded pixel snapshot, and materialization encodes that snapshot
+rather than rereading the mutable source. Repeated source IDs are accepted
+for a spread only when each draw call retained its own snapshot. If the raw
+tile JPEG does not uniquely match, the verified source-native PNG is returned
+as-is; no PNG-to-JPEG re-encoding is performed. A spread still falls back as a
+complete unit when its native capture is unavailable.
 
 ### 18.18 Purchased viewer live verification (2026-09-20)
 
@@ -817,18 +815,13 @@ otherwise preserves the source-native PNG.
 
 ### 18.19 Purchased capture safety correction (2026-09-20)
 
-The draw-trace initialization now preserves an eager-capture value already
-configured by an earlier init script. Consequently both init-script orders are
-safe: `viewer.bookwalker.jp` enables eager capture, while other hosts retain
-the default disabled value unless the explicit test/override switch is true.
-
-`ImageBitmap` may still use bounded deferred source-crop materialization.
-`HTMLCanvasElement` requires a non-empty eager crop recorded by the draw hook;
-without it the native route returns unavailable and Core captures the canvas as
-PNG. Native output priority is now verified original JPEG, verified
-source-native PNG, then the existing Core canvas PNG fallback. The old
-quality-0.92 rendered JPEG fallback is not used, so failed original matching
-cannot inflate PNG artifacts or introduce a JPEG/PNG mixture in a spread.
+`ImageBitmap` uses bounded deferred source-crop materialization.
+`HTMLCanvasElement` uses a bounded draw-time pixel snapshot and is encoded only
+after native draw-call selection. Native output priority is verified original
+JPEG, verified source-native PNG, then the existing Core canvas PNG fallback.
+The old quality-0.92 rendered JPEG fallback is not used, so failed original
+matching cannot inflate PNG artifacts or introduce a JPEG/PNG mixture in a
+spread.
 
 The runner also applies the adapter-specific page-change timeout to the
 duplicate-fingerprint wait branch, matching the normal navigation branch.
@@ -845,6 +838,46 @@ pixel-bound crop if the first frame arrives before geometry tracing records a
 draw. This preserves one cover artifact even in the initial-frame race observed
 in `bookwalker-rerun-130`. This is unrelated to PNG/JPEG conversion; native
 PNG/JPEG selection remains unchanged.
+
+### 18.21 Capture-mode A/B switch (2026-09-21)
+
+BookWalker capture mode is selected inside the adapter by
+`BOOKWALKER_CAPTURE_MODE`; the default is `native`, and the only accepted
+values are `native` and `canvas`. `native` enables source-native capture,
+original-JPEG matching, and the Core canvas fallback. `canvas` does not arm
+native capture, does not retain source objects or draw-time snapshots, does
+not observe original JPEG responses, and returns `None` from `capture_page()`
+so the existing rendered-canvas path is used.
+
+For an A/B live run, use the same shared Crawler Chrome/profile, source URL,
+and bounded page count in separate empty output directories:
+
+```powershell
+$env:BOOKWALKER_CAPTURE_MODE = "native"
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli crawl --site bookwalker --url "https://bookwalker.jp/de<uuid>/" --output-dir output\bookwalker-native --max-pages 10
+
+$env:BOOKWALKER_CAPTURE_MODE = "canvas"
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli crawl --site bookwalker --url "https://bookwalker.jp/de<uuid>/" --output-dir output\bookwalker-canvas --max-pages 10
+```
+
+Compare completion state, timeout count, saved page count, skipped pages,
+duplicate fingerprints, and observed transition speed. This note records the
+mode behavior and test procedure; a live result is added only after that exact
+run has been executed.
+
+The requested product URL was live-tested on 2026-09-21 with the shared
+Crawler Chrome/profile. A `native` run saved five artifacts (`1/349` through
+`5/349`) before the intentional `max_pages=5` guard stopped the run; the first
+artifact was original JPEG and the remaining four were PNG. A `canvas` run
+from the viewer's remembered position first started at `5/349`, so that run
+was retained only as a state-persistence observation. After bounded
+ArrowRight navigation returned the viewer to `1/349`, a second `canvas` run
+saved five PNG artifacts (`2/349` through `6/349`) before the same guard. Both
+runs had no navigation timeout; their process exit was the expected
+`MaxPagesExceededError`. Because the canvas fallback advanced past the initial
+cover frame during this short run, these outputs are not a page-for-page visual
+equivalence result; they do confirm the mode switch and the absence of native
+JPEG artifacts in `canvas` mode.
 
 ## 19. Known limitations / maintenance
 

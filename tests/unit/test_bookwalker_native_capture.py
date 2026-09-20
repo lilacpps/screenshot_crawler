@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import base64
 
+import pytest
+
 from screenshot_crawler.core.capture import capture_png_bytes
 from screenshot_crawler.core.errors import CaptureUnavailableError
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
+    _DRAW_TRACE_SCRIPT,
     _MATERIALIZE_NATIVE_SOURCE_SCRIPT,
     BookWalkerAdapter,
     _capture_from_data_url,
@@ -28,7 +31,7 @@ def _safe_call() -> dict:
         "transform": {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
         "globalCompositeOperation": "source-over",
         "filter": "none",
-        "sourceCropPngError": None,
+        "snapshotError": None,
     }
 
 
@@ -61,7 +64,7 @@ def test_native_safety_rejects_transform_composite_filter_and_copy_error() -> No
         ("transform", {"a": 1, "b": 0, "c": 1, "d": 1, "e": 0, "f": 0}),
         ("globalCompositeOperation", "multiply"),
         ("filter", "blur(1px)"),
-        ("sourceCropPngError", "copy failed"),
+        ("snapshotError", "copy failed"),
     ):
         call = _safe_call()
         call[field] = value
@@ -75,7 +78,7 @@ def test_native_safety_accepts_identity_source_over_without_filter() -> None:
 def test_native_safety_accepts_purchased_viewer_canvas_sources() -> None:
     call = _safe_call()
     call["source"]["constructor"] = "HTMLCanvasElement"
-    call["sourceCropPng"] = "data:image/png;base64," + base64.b64encode(PNG_1X1).decode()
+    call["snapshotId"] = "snapshot-1"
     assert _native_call_is_safe(call)
 
 
@@ -86,25 +89,21 @@ def test_native_safety_rejects_other_non_image_sources() -> None:
         assert not _native_call_is_safe(call)
 
 
-def test_native_safety_rejects_canvas_without_eager_crop() -> None:
+def test_native_safety_rejects_canvas_without_snapshot() -> None:
     call = _safe_call()
     call["source"]["constructor"] = "HTMLCanvasElement"
     assert _native_call_is_safe(call) is False
 
 
-def test_deferred_materialization_preserves_null_copy_error() -> None:
-    assert "error: copy ? copy.error : 'native source crop unavailable'" in (
-        _MATERIALIZE_NATIVE_SOURCE_SCRIPT
-    )
+def test_deferred_materialization_materializes_snapshot_or_source_reference() -> None:
+    assert "__bookwalkerMaterializeNativeSourceCrop" in _MATERIALIZE_NATIVE_SOURCE_SCRIPT
+    assert "snapshotId" in _DRAW_TRACE_SCRIPT
+    assert "sourceConstructor" in _DRAW_TRACE_SCRIPT
 
 
 def test_native_selection_rejects_one_source_for_two_spread_parts() -> None:
     first = _native_call_fixture()
     second = _native_call_fixture()
-    first.pop("sourceCropPng")
-    first.pop("sourceCropPngError")
-    second.pop("sourceCropPng")
-    second.pop("sourceCropPngError")
     second["destination"] = {"x": 100, "y": 0, "width": 100, "height": 100}
     assert (
         select_native_draw_calls(
@@ -121,11 +120,14 @@ def test_native_selection_rejects_one_source_for_two_spread_parts() -> None:
     )
 
 
-def test_native_selection_allows_repeated_source_when_crops_were_eagerly_saved() -> None:
+def test_native_selection_allows_repeated_source_when_snapshots_were_saved() -> None:
     first = _native_call_fixture()
     second = _native_call_fixture()
+    first["source"]["constructor"] = "HTMLCanvasElement"
+    second["source"]["constructor"] = "HTMLCanvasElement"
+    first["snapshotId"] = "snapshot-1"
     second["destination"] = {"x": 100, "y": 0, "width": 100, "height": 100}
-    second["sourceCropPng"] = first["sourceCropPng"] + "different"
+    second["snapshotId"] = "snapshot-2"
     selected = select_native_draw_calls(
         [first, second],
         canvas_id="content",
@@ -206,8 +208,8 @@ def _native_call_fixture(*, constructor: str | None = "ImageBitmap") -> dict:
         "transform": {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
         "globalCompositeOperation": "source-over",
         "filter": "none",
-        "sourceCropPng": "data:image/png;base64," + base64.b64encode(PNG_1X1).decode(),
-        "sourceCropPngError": None,
+        "snapshotId": None,
+        "snapshotError": None,
     }
 
 
@@ -237,8 +239,6 @@ async def test_native_success_clears_geometry_but_failure_keeps_fallback_trace()
 
 async def test_native_source_png_is_materialized_only_for_selected_calls() -> None:
     call = _native_call_fixture()
-    call.pop("sourceCropPng")
-    call.pop("sourceCropPngError")
     page = _FakePage([call])
     adapter = _TestBookWalkerAdapter()
 
@@ -248,14 +248,33 @@ async def test_native_source_png_is_materialized_only_for_selected_calls() -> No
     assert page.materialize_count == 1
 
 
-async def test_canvas_source_without_eager_crop_skips_materialization() -> None:
+async def test_canvas_source_snapshot_is_materialized_after_selection() -> None:
     call = _native_call_fixture(constructor="HTMLCanvasElement")
-    call.pop("sourceCropPng")
-    call.pop("sourceCropPngError")
+    call["snapshotId"] = "snapshot-1"
     page = _FakePage([call])
+    adapter = _TestBookWalkerAdapter()
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert page.materialize_count == 1
+
+
+async def test_canvas_mode_returns_none_without_touching_native_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOOKWALKER_CAPTURE_MODE", "canvas")
+    page = _FakePage([])
     adapter = _TestBookWalkerAdapter()
 
     result = await adapter.capture_page(page)  # type: ignore[arg-type]
 
     assert result is None
     assert page.materialize_count == 0
+
+
+def test_invalid_capture_mode_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOOKWALKER_CAPTURE_MODE", "unexpected")
+
+    with pytest.raises(ValueError, match="BOOKWALKER_CAPTURE_MODE"):
+        BookWalkerAdapter()

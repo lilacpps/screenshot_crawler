@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import re
 from binascii import Error as BinasciiError
 from typing import Any
@@ -48,12 +49,12 @@ _DRAW_TRACE_SCRIPT = """
   if (window.__bookwalkerDrawTraceInstalled) return;
   window.__bookwalkerDrawTraceInstalled = true;
   window.__bookwalkerDrawCalls = [];
-  window.__bookwalkerNativeCaptureEnabled = true;
+  window.__bookwalkerCaptureMode = window.__bookwalkerCaptureMode || 'native';
+  window.__bookwalkerNativeCaptureEnabled =
+    window.__bookwalkerCaptureMode === 'native';
   window.__bookwalkerNativeDrawCalls = [];
   window.__bookwalkerNativeSourceObjects = new Map();
-  if (window.__bookwalkerNativeEagerCapture === undefined) {
-    window.__bookwalkerNativeEagerCapture = false;
-  }
+  window.__bookwalkerNativeSnapshots = new Map();
   const original = CanvasRenderingContext2D.prototype.drawImage;
   let nextCanvasId = 1;
   let nextSourceId = 1;
@@ -75,6 +76,10 @@ _DRAW_TRACE_SCRIPT = """
       sourceIds.set(source, id);
     }
     window.__bookwalkerNativeSourceObjects.set(id, source);
+    while (window.__bookwalkerNativeSourceObjects.size > 120) {
+      const oldest = window.__bookwalkerNativeSourceObjects.keys().next().value;
+      window.__bookwalkerNativeSourceObjects.delete(oldest);
+    }
     return id;
   };
   const sourceRectAndDestination = (source, values) => {
@@ -107,9 +112,46 @@ _DRAW_TRACE_SCRIPT = """
     }
     return {sourceRect: null, destination: null};
   };
-  const copySourceCrop = (source, sourceRect) => {
+  const snapshotSourceCrop = (source, sourceRect) => {
     if (!sourceRect || sourceRect.width <= 0 || sourceRect.height <= 0) {
-      return {dataUrl: null, error: 'invalid source rectangle'};
+      return {snapshotId: null, error: 'invalid source rectangle'};
+    }
+    const target = document.createElement('canvas');
+    target.width = Math.round(sourceRect.width);
+    target.height = Math.round(sourceRect.height);
+    const context = target.getContext('2d');
+    if (!context) return {snapshotId: null, error: '2d context unavailable'};
+    try {
+      original.call(
+        context,
+        source,
+        sourceRect.x, sourceRect.y, sourceRect.width, sourceRect.height,
+        0, 0, sourceRect.width, sourceRect.height,
+      );
+      const snapshotId = String(nextSourceId++);
+      window.__bookwalkerNativeSnapshots.set(snapshotId, target);
+      while (window.__bookwalkerNativeSnapshots.size > 100) {
+        const oldest = window.__bookwalkerNativeSnapshots.keys().next().value;
+        window.__bookwalkerNativeSnapshots.delete(oldest);
+      }
+      return {snapshotId, error: null};
+    } catch (error) {
+      return {snapshotId: null, error: String(error)};
+    }
+  };
+  const materializeNativeCrop = ({sourceId, snapshotId, sourceConstructor, sourceRect}) => {
+    if (sourceConstructor === 'HTMLCanvasElement') {
+      const snapshot = window.__bookwalkerNativeSnapshots.get(String(snapshotId));
+      if (!snapshot) return {dataUrl: null, error: 'native canvas snapshot unavailable'};
+      try {
+        return {dataUrl: snapshot.toDataURL('image/png'), error: null};
+      } catch (error) {
+        return {dataUrl: null, error: String(error)};
+      }
+    }
+    const source = window.__bookwalkerNativeSourceObjects.get(String(sourceId));
+    if (!source || !sourceRect || sourceRect.width <= 0 || sourceRect.height <= 0) {
+      return {dataUrl: null, error: 'native source crop unavailable'};
     }
     const target = document.createElement('canvas');
     target.width = Math.round(sourceRect.width);
@@ -128,12 +170,7 @@ _DRAW_TRACE_SCRIPT = """
       return {dataUrl: null, error: String(error)};
     }
   };
-  window.__bookwalkerMaterializeNativeSourceCrop = ({sourceId, sourceRect}) => (
-    copySourceCrop(
-      window.__bookwalkerNativeSourceObjects.get(String(sourceId)),
-      sourceRect,
-    )
-  );
+  window.__bookwalkerMaterializeNativeSourceCrop = materializeNativeCrop;
   CanvasRenderingContext2D.prototype.drawImage = function(...args) {
     try {
       const canvas = this.canvas;
@@ -187,10 +224,10 @@ _DRAW_TRACE_SCRIPT = """
             globalCompositeOperation: this.globalCompositeOperation,
             filter: this.filter,
           };
-          if (window.__bookwalkerNativeEagerCapture) {
-            const copy = copySourceCrop(source, geometry.sourceRect);
-            nativeCall.sourceCropPng = copy.dataUrl;
-            nativeCall.sourceCropPngError = copy.error;
+          if (source?.constructor?.name === 'HTMLCanvasElement') {
+            const snapshot = snapshotSourceCrop(source, geometry.sourceRect);
+            nativeCall.snapshotId = snapshot.snapshotId;
+            nativeCall.snapshotError = snapshot.error;
           }
           window.__bookwalkerNativeDrawCalls.push(nativeCall);
           if (window.__bookwalkerNativeDrawCalls.length > 100) {
@@ -278,7 +315,7 @@ def _native_call_is_safe(call: dict[str, Any]) -> bool:
         return False
     if (
         source.get("constructor") == "HTMLCanvasElement"
-        and "sourceCropPng" not in call
+        and not call.get("snapshotId")
     ):
         return False
     transform = call.get("transform")
@@ -299,7 +336,7 @@ def _native_call_is_safe(call: dict[str, Any]) -> bool:
     return (
         call.get("globalCompositeOperation") == "source-over"
         and call.get("filter") == "none"
-        and call.get("sourceCropPngError") in (None, "")
+        and call.get("snapshotError") in (None, "")
     )
 
 
@@ -334,9 +371,6 @@ class BookWalkerAdapter(SiteAdapter):
     # Use deferred source-native PNG capture followed by conservative JPEG
     # matching in production. A failed match still returns the native PNG.
     enable_original_jpeg_capture = True
-    # Test-only compatibility switch for reproducing the pre-optimization
-    # behavior. Production keeps deferred source-native PNG materialization.
-    eager_native_source_capture = False
     page_change_timeout_ms = 14_000
     navigation_wait_timeout_ms = 5_000
     read_link_wait_timeout_ms = 5_000
@@ -365,6 +399,12 @@ class BookWalkerAdapter(SiteAdapter):
     )
 
     def __init__(self) -> None:
+        self.capture_mode = os.environ.get("BOOKWALKER_CAPTURE_MODE", "native").strip().lower()
+        if self.capture_mode not in {"native", "canvas"}:
+            raise ValueError(
+                "BOOKWALKER_CAPTURE_MODE must be 'native' or 'canvas', "
+                f"got {self.capture_mode!r}"
+            )
         self._access_strategy: AccessStrategy = "auto"
         self._initial_content_id: str | None = None
         self._capture_run = 0
@@ -1150,13 +1190,13 @@ class BookWalkerAdapter(SiteAdapter):
         }
 
     async def prepare_page(self, page: Page) -> None:
-        await page.add_init_script(_DRAW_TRACE_SCRIPT)
-        await page.add_init_script(
-            "window.__bookwalkerNativeEagerCapture = "
-            f"{str(self.eager_native_source_capture).lower()} || "
-            "location.hostname === 'viewer.bookwalker.jp';"
+        native_mode_script = (
+            "window.__bookwalkerCaptureMode = "
+            f"{self.capture_mode!r};"
         )
-        if not self.enable_original_jpeg_capture:
+        await page.add_init_script(native_mode_script)
+        await page.add_init_script(_DRAW_TRACE_SCRIPT)
+        if self.capture_mode != "native" or not self.enable_original_jpeg_capture:
             return
         for task in tuple(self._original_response_tasks):
             task.cancel()
@@ -1378,6 +1418,7 @@ class BookWalkerAdapter(SiteAdapter):
                   window.__bookwalkerNativeCaptureEnabled = false;
                   window.__bookwalkerNativeDrawCalls = [];
                   window.__bookwalkerNativeSourceObjects?.clear();
+                  window.__bookwalkerNativeSnapshots?.clear();
                 }
                 """
             )
@@ -1391,12 +1432,15 @@ class BookWalkerAdapter(SiteAdapter):
             return
 
     async def _arm_native_capture(self, page: Page) -> None:
+        if self.capture_mode != "native":
+            return
         try:
             await page.evaluate(
                 """
                 () => {
                   window.__bookwalkerNativeDrawCalls = [];
                   window.__bookwalkerNativeSourceObjects?.clear();
+                  window.__bookwalkerNativeSnapshots?.clear();
                   window.__bookwalkerNativeCaptureEnabled = true;
                 }
                 """
@@ -1412,6 +1456,12 @@ class BookWalkerAdapter(SiteAdapter):
         payload = [
             {
                 "sourceId": call.get("sourceId"),
+                "snapshotId": call.get("snapshotId"),
+                "sourceConstructor": (
+                    call.get("source", {}).get("constructor")
+                    if isinstance(call.get("source"), dict)
+                    else None
+                ),
                 "sourceRect": call.get("sourceRect"),
             }
             for call in selected
@@ -1439,6 +1489,8 @@ class BookWalkerAdapter(SiteAdapter):
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
         """Prefer native source crops and return None for the legacy fallback."""
 
+        if self.capture_mode == "canvas":
+            return None
         try:
             canvas = await self.get_capture_target(page)
             trace_id = await canvas.get_attribute("data-bookwalker-trace-id")
@@ -1476,16 +1528,7 @@ class BookWalkerAdapter(SiteAdapter):
                 raise CaptureUnavailableError(
                     "BookWalker native source calls did not match page geometry"
                 )
-            if any("sourceCropPng" not in call for call in selected):
-                if any(
-                    isinstance(call.get("source"), dict)
-                    and call["source"].get("constructor") == "HTMLCanvasElement"
-                    for call in selected
-                ):
-                    raise CaptureUnavailableError(
-                        "BookWalker mutable canvas source requires eager crops"
-                    )
-                selected = await self._materialize_native_source_crops(page, selected)
+            selected = await self._materialize_native_source_crops(page, selected)
 
             captures: list[CaptureResult] = []
             for call in selected:
@@ -1529,7 +1572,7 @@ class BookWalkerAdapter(SiteAdapter):
                         "BookWalker native PNG dimensions do not match source rectangle"
                     )
                 captures.append(capture)
-            if not self.enable_original_jpeg_capture:
+            if self.capture_mode != "native" or not self.enable_original_jpeg_capture:
                 await self._clear_geometry_trace(page)
                 return tuple(captures)
             native_captures = tuple(captures)
