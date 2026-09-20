@@ -643,14 +643,16 @@ BookWalkerはこのextension pointを実装し、run開始時点でowned/quota�
 
 ### 22.4 Discovery CLIの複数target同期（実装済み）
 
-`discover` は `--key KEY` と `--all` のmutually exclusive required groupを持つ。
-`--key` は従来どおり1 targetを処理し、`--all` は
-`WatchlistService.list_targets()` のfile orderから `target.enabled is True`
-のtargetだけを選ぶ。disabled targetはDiscoveryServiceへ渡さないため、Catalogの
-既存stateは変更されない。enabled targetが0件なら接続せず、
-`No enabled watchlist targets.`を出して正常終了する。
+`discover` は `--key KEY`、`--site SITE`、`--all` のmutually exclusive required
+groupを持つ。`--key` は従来どおり1 targetを処理する。`--site SITE` は
+`WatchlistService.list_targets()` のfile orderから `target.enabled is True` かつ
+`target.site == SITE` のtargetだけを選び、site名のalias変換は行わない。`--all` は
+enabled target全件を同じ順番で選ぶ。disabled targetはDiscoveryServiceへ渡さない
+ため、Catalogの既存stateは変更されない。`--all` の0件は
+`No enabled watchlist targets.`、`--site` の0件は site名を含むメッセージを出して、
+どちらも接続・Catalog初期化なしで正常終了する。
 
-`--all`ではtargetごとにendpointを解決し、`BrowserSession.connect()`、new Page、
+`--site` と `--all` ではtargetごとにendpointを解決し、`BrowserSession.connect()`、new Page、
 既存`DiscoveryService.discover(page, target, mode)`、Page close、disconnectを
 順番に行う。site-specific endpoint、global endpoint、defaultの既存優先順位と、
 明示`--cdp-endpoint`の最優先を維持する。Crawler Chromeは自動起動しない。
@@ -658,10 +660,11 @@ BookWalkerはこのextension pointを実装し、run開始時点でowned/quota�
 各targetの結果（observed/new/known/complete/stopped_reason/warnings）とstatusを
 表示し、失敗しても後続targetを続行する。例外failureに加えて
 `DiscoveryResult.stopped_reason == "incomplete"`もtarget failureとして扱い、
-`Discovery incomplete`を表示する。全target後にsummaryを表示し、1件以上の失敗は
-`DiscoveryAllError`からCLI non-zeroへ変換する。全成功とenabled target 0件は正常終了
-する。`--all --keep-open`はtarget単位で接続を閉じるlifecycleのためCLI validationで
-拒否し、従来の`--key --keep-open`だけを維持する。
+`Discovery incomplete`を表示する。全target後にsummaryを表示し、`--site` ではsiteも
+表示する。1件以上の失敗は`DiscoveryAllError`からCLI non-zeroへ変換する。全成功と
+enabled target 0件は正常終了する。`--site --keep-open` と `--all --keep-open`は
+target単位で接続を閉じるlifecycleのためCLI validationで拒否し、従来の
+`--key --keep-open`だけを維持する。
 
 cross-site duplicateは同じWork内の別Itemについて、kind/orderが一致する場合だけ候補をwarningにする。warningはmerge、reparent、delete、completed化を行わない。
 

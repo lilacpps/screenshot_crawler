@@ -54,7 +54,7 @@ from screenshot_crawler.watchlist.service import WatchlistError, WatchlistServic
 
 
 class DiscoveryAllError(RuntimeError):
-    """Raised after an ``discover --all`` run has one or more failures."""
+    """Raised after a multi-target Discovery run has one or more failures."""
 
     def __init__(self, failures: list[tuple[str, str]], total: int) -> None:
         self.failures = tuple(failures)
@@ -143,6 +143,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     target_group = discover.add_mutually_exclusive_group(required=True)
     target_group.add_argument("--key")
+    target_group.add_argument(
+        "--site",
+        help="Synchronize all enabled Watchlist targets for this site",
+    )
     target_group.add_argument(
         "--all",
         action="store_true",
@@ -524,10 +528,20 @@ def _print_discovery_result(
 
 async def _run_discover(args: argparse.Namespace) -> None:
     watchlist = WatchlistService(args.watchlist)
+    is_multi_target = args.all or args.site is not None
     if args.all:
         targets = [target for target in watchlist.list_targets() if target.enabled is True]
         if not targets:
             print("No enabled watchlist targets.")
+            return
+    elif args.site is not None:
+        targets = [
+            target
+            for target in watchlist.list_targets()
+            if target.enabled is True and target.site == args.site
+        ]
+        if not targets:
+            print(f"No enabled watchlist targets for site '{args.site}'.")
             return
     else:
         targets = [watchlist.get(args.key)]
@@ -536,7 +550,7 @@ async def _run_discover(args: argparse.Namespace) -> None:
     catalog = CatalogService(args.catalog)
     registry = _discovery_registry()
 
-    if not args.all:
+    if not is_multi_target:
         result = await _discover_target(
             target=targets[0],
             mode=args.mode,
@@ -586,6 +600,8 @@ async def _run_discover(args: argparse.Namespace) -> None:
 
     print("Discovery summary:")
     print(f"  mode: {args.mode}")
+    if args.site is not None:
+        print(f"  site: {args.site}")
     print(f"  targets: {total}")
     print(f"  succeeded: {succeeded}")
     print(f"  failed: {len(failures)}")
@@ -794,8 +810,8 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = _parser()
     args = parser.parse_args()
-    if args.command == "discover" and args.all and args.keep_open:
-        parser.error("discover --all cannot be combined with --keep-open")
+    if args.command == "discover" and (args.all or args.site is not None) and args.keep_open:
+        parser.error("discover --all/--site cannot be combined with --keep-open")
     try:
         if args.command == "probe":
             asyncio.run(_run_probe(args))

@@ -62,6 +62,17 @@ def test_discover_parser_accepts_watchlist_catalog_and_mode() -> None:
     assert not args.keep_open
 
 
+def test_discover_parser_accepts_site() -> None:
+    args = _parser().parse_args(
+        ["discover", "--site", "mangaone", "--mode", "incremental"]
+    )
+
+    assert args.site == "mangaone"
+    assert args.key is None
+    assert not args.all
+    assert args.mode == "incremental"
+
+
 @pytest.mark.parametrize("mode", ["incremental", "full"])
 def test_discover_parser_accepts_all(mode: str) -> None:
     args = _parser().parse_args(["discover", "--all", "--mode", mode])
@@ -76,6 +87,8 @@ def test_discover_parser_accepts_all(mode: str) -> None:
     [
         ["discover", "--mode", "incremental"],
         ["discover", "--key", "foo", "--all", "--mode", "incremental"],
+        ["discover", "--site", "mangaone", "--all", "--mode", "incremental"],
+        ["discover", "--key", "foo", "--site", "mangaone", "--mode", "incremental"],
     ],
 )
 def test_discover_parser_requires_one_target_selector(argv: list[str]) -> None:
@@ -102,6 +115,23 @@ def test_main_returns_nonzero_for_discover_all_failure(
 
     assert exc_info.value.code == 2
     assert "Error: Discovery failed for 1 of 3 targets" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("selector", [["--all"], ["--site", "mangaone"]])
+def test_main_rejects_multi_target_discover_keep_open(
+    monkeypatch: pytest.MonkeyPatch,
+    selector: list[str],
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "discover", *selector, "--mode", "incremental", "--keep-open"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code == 2
 
 
 def test_crawl_accepts_access_strategy_and_output_metadata() -> None:
@@ -425,6 +455,130 @@ async def test_discover_all_uses_enabled_targets_in_file_order_and_propagates_mo
     ]
     assert all(session.closed for session in FakeDiscoverySession.instances)
     assert all(session.closed_pages == [session.page] for session in FakeDiscoverySession.instances)
+
+
+@pytest.mark.parametrize("mode", ["incremental", "full"])
+async def test_discover_site_uses_enabled_matching_targets_in_file_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+) -> None:
+    watchlist = tmp_path / "watchlist.yaml"
+    _write_discover_watchlist(
+        watchlist,
+        "  - key: A\n"
+        "    site: mangaone\n"
+        "    url: https://example.test/a\n"
+        "    enabled: true\n"
+        "  - key: B\n"
+        "    site: mangaone\n"
+        "    url: https://example.test/b\n"
+        "    enabled: false\n"
+        "  - key: C\n"
+        "    site: bookwalker\n"
+        "    url: https://example.test/c\n"
+        "    enabled: true\n"
+        "  - key: D\n"
+        "    site: mangaone\n"
+        "    url: https://example.test/d\n"
+        "    enabled: true\n",
+    )
+    FakeDiscoverySession.instances = []
+    FakeDiscoveryService.calls = []
+    FakeDiscoveryService.failures = set()
+    FakeDiscoveryService.result_overrides = {}
+    monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
+    monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
+    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+    monkeypatch.setattr(
+        cli,
+        "resolve_cdp_endpoint",
+        lambda **kwargs: f"endpoint:{kwargs['site']}",
+    )
+
+    args = _parser().parse_args(
+        ["discover", "--site", "mangaone", "--mode", mode, "--watchlist", str(watchlist)]
+    )
+    await cli._run_discover(args)
+
+    assert [(key, target_mode) for key, target_mode, _ in FakeDiscoveryService.calls] == [
+        ("A", mode),
+        ("D", mode),
+    ]
+    assert [session.endpoint for session in FakeDiscoverySession.instances] == [
+        "endpoint:mangaone",
+        "endpoint:mangaone",
+    ]
+    assert all(session.closed for session in FakeDiscoverySession.instances)
+    output = capsys.readouterr().out
+    assert "  site: mangaone" in output
+    assert "  targets: 2" in output
+
+
+async def test_discover_site_continues_after_failure_and_exits_as_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    watchlist = tmp_path / "watchlist.yaml"
+    _write_discover_watchlist(
+        watchlist,
+        "  - key: A\n    site: mangaone\n    url: https://example.test/a\n"
+        "  - key: B\n    site: bookwalker\n    url: https://example.test/b\n"
+        "  - key: C\n    site: mangaone\n    url: https://example.test/c\n",
+    )
+    FakeDiscoverySession.instances = []
+    FakeDiscoveryService.calls = []
+    FakeDiscoveryService.failures = {"A"}
+    FakeDiscoveryService.result_overrides = {}
+    monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
+    monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
+    monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
+
+    args = _parser().parse_args(
+        ["discover", "--site", "mangaone", "--mode", "incremental", "--watchlist", str(watchlist)]
+    )
+    with pytest.raises(cli.DiscoveryAllError):
+        await cli._run_discover(args)
+
+    assert [key for key, _mode, _page in FakeDiscoveryService.calls] == ["A", "C"]
+    output = capsys.readouterr().out
+    assert "[2/2] C (mangaone)" in output
+    assert "  site: mangaone" in output
+    assert "succeeded: 1" in output
+    assert "failed: 1" in output
+    assert "A: failure for A" in output
+
+
+async def test_discover_site_with_no_enabled_targets_is_noop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    watchlist = tmp_path / "watchlist.yaml"
+    _write_discover_watchlist(
+        watchlist,
+        "  - key: disabled\n    site: mangaone\n    url: https://example.test/disabled\n"
+        "    enabled: false\n"
+        "  - key: other\n    site: bookwalker\n    url: https://example.test/other\n",
+    )
+    monkeypatch.setattr(
+        cli,
+        "BrowserSession",
+        type("UnexpectedSession", (), {"connect": classmethod(lambda *_args: pytest.fail("connected"))}),
+    )
+    monkeypatch.setattr(cli, "DiscoveryService", lambda *_args: pytest.fail("discovered"))
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: pytest.fail("catalog opened"))
+
+    args = _parser().parse_args(
+        ["discover", "--site", "mangaone", "--mode", "full", "--watchlist", str(watchlist)]
+    )
+    await cli._run_discover(args)
+
+    assert capsys.readouterr().out.strip() == (
+        "No enabled watchlist targets for site 'mangaone'."
+    )
 
 
 async def test_discover_all_continues_after_failure_and_exits_as_failure(

@@ -1106,6 +1106,7 @@ watch enable --key ...
 watch disable --key ...
 
 discover --key KEY --mode full|incremental
+discover --site SITE --mode full|incremental
 discover --all --mode full|incremental
 
 catalog list [...filters...]
@@ -1129,23 +1130,27 @@ defaultは `access_strategy=auto`、metadata未指定とし、既存CLI互換を
 
 Watchlist全件実行時は `enabled=true` のtargetだけを対象とする。
 
-`discover` のtarget selectorは `--key KEY` と `--all` のmutually exclusive
-required groupである。`--all` は `WatchlistService.list_targets()` のfile
-orderを維持し、`enabled is True` のtargetだけを順番にDiscoveryへ渡す。
-disabled targetはDiscovery Serviceへ渡さず、Catalogにも副作用を与えない。
+`discover` のtarget selectorは `--key KEY`、`--site SITE`、`--all` の
+mutually exclusive required groupである。`--site SITE` は
+`WatchlistService.list_targets()` のfile orderを維持し、`enabled is True` かつ
+`target.site == SITE` のtargetだけを順番にDiscoveryへ渡す。site名のalias変換は
+行わない。`--all` はenabled target全件を同じ順番で対象にする。disabled targetは
+Discovery Serviceへ渡さず、Catalogにも副作用を与えない。
 
-`--all` は単なるCLI orchestrationであり、各targetについて既存の
+`--site` と `--all` は単なるCLI orchestrationであり、各targetについて既存の
 `DiscoveryService.discover(page, target, mode)`を呼び出す。targetごとに
 CDP endpointを既存の優先順位で解決し、BrowserSessionをconnect、Pageを
 作成してDiscovery後にPageをcloseし、BrowserSessionをdisconnectする。
 `--cdp-endpoint`は全targetで優先される。Crawler Chromeの自動起動は行わない。
 Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コマンドである。
 
-`--all` はtargetの失敗を収集して後続targetを続行し、最後にmode、target数、
+`--site` と `--all` はtargetの失敗を収集して後続targetを続行し、最後にmode、
+（`--site` ではsiteも）、target数、
 成功数、失敗数と失敗理由を表示する。例外failureに加えて、DiscoveryResultの
 `stopped_reason=incomplete`もtarget failureとして扱う。後続targetは続行し、
 1件以上失敗した場合はCLI全体がnon-zero exitとなる。全成功またはenabled target
-0件は正常終了する。`--all --keep-open`
+0件は正常終了する。`--site` の0件時は site名を含むメッセージを表示する。
+`--site --keep-open` と `--all --keep-open`
 はtarget単位で接続を閉じるlifecycleと両立しないためCLI validationで拒否する。
 
 ## 14. Failure / Safety
