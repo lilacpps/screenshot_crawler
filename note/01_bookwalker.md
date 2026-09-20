@@ -783,20 +783,44 @@ Because that source canvas is mutable during a spread render, purchased
 viewer documents enable bounded eager source-crop materialization before the
 draw call is cleared. Repeated source IDs are accepted for a spread only when
 each draw call retained its own crop; deferred repeated sources remain
-rejected. If the raw tile JPEG does not uniquely match, the verified native
-crop is encoded as a JPEG in the browser. A spread still falls back as a
-complete unit when its native capture is unavailable.
+rejected. An `HTMLCanvasElement` call without an eager `sourceCropPng` is
+rejected before deferred materialization, so it cannot make a mutable source
+look stable after the draw. If the raw tile JPEG does not uniquely match, the
+verified source-native PNG is returned as-is; no PNG-to-JPEG re-encoding is
+performed. A spread still falls back as a complete unit when its native
+capture is unavailable.
 
 ### 18.18 Purchased viewer live verification (2026-09-20)
 
-Shared-profile CDP live verification used the purchased product URL
+An earlier shared-profile CDP live verification used the purchased product URL
 `de5a10a196-9a63-4157-974e-e60359518638` with strict `direct` entry. The
 product control was `read_purchased`, the resulting viewer was
 `viewer.bookwalker.jp`, and a bounded run saved four JPEG artifacts for two
 spread transitions (`page-0001.jpg` through `page-0004.jpg`). Each artifact
 was 960x1280 and the two parts of each spread had different fingerprints; no
 duplicate-source spread was emitted. The bounded run intentionally reached
-the `max_pages` guard after collecting those four pages.
+the `max_pages` guard after collecting those four pages. Those JPEGs depended on
+the rendered PNG-to-JPEG fallback that has since been removed; the current
+implementation keeps JPEG only when an original response matches exactly and
+otherwise preserves the source-native PNG.
+
+### 18.19 Purchased capture safety correction (2026-09-20)
+
+The draw-trace initialization now preserves an eager-capture value already
+configured by an earlier init script. Consequently both init-script orders are
+safe: `viewer.bookwalker.jp` enables eager capture, while other hosts retain
+the default disabled value unless the explicit test/override switch is true.
+
+`ImageBitmap` may still use bounded deferred source-crop materialization.
+`HTMLCanvasElement` requires a non-empty eager crop recorded by the draw hook;
+without it the native route returns unavailable and Core captures the canvas as
+PNG. Native output priority is now verified original JPEG, verified
+source-native PNG, then the existing Core canvas PNG fallback. The old
+quality-0.92 rendered JPEG fallback is not used, so failed original matching
+cannot inflate PNG artifacts or introduce a JPEG/PNG mixture in a spread.
+
+The runner also applies the adapter-specific page-change timeout to the
+duplicate-fingerprint wait branch, matching the normal navigation branch.
 
 ## 19. Known limitations / maintenance
 

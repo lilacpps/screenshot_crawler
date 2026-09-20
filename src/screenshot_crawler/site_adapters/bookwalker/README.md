@@ -28,8 +28,10 @@ strict-direct entry. The purchased viewer's page JPEGs are fetched as XHR respon
 all-parts-or-PNG fallback rules. The purchased viewer's intermediate
 `HTMLCanvasElement` source is accepted only with the existing identity-transform and
 composition checks, and its mutable source canvas uses eager per-draw crop capture.
-When a raw tile cannot be uniquely matched, the verified native crop is encoded as a
-JPEG; unavailable spread-native capture still falls back to the complete PNG path.
+An `HTMLCanvasElement` without an eager crop is rejected before deferred materialization.
+When a raw tile cannot be uniquely matched, the verified source-native PNG is returned as-is;
+the adapter does not re-encode it as JPEG. Unavailable spread-native capture still falls back
+to the complete Core PNG path.
 
 ## Spread and order
 

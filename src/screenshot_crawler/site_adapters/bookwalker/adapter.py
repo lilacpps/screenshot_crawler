@@ -36,7 +36,6 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     candidate_capture,
     candidate_from_jpeg,
     image_signature,
-    jpeg_dimensions,
 )
 from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     ReaderControlKind,
@@ -52,7 +51,9 @@ _DRAW_TRACE_SCRIPT = """
   window.__bookwalkerNativeCaptureEnabled = true;
   window.__bookwalkerNativeDrawCalls = [];
   window.__bookwalkerNativeSourceObjects = new Map();
-  window.__bookwalkerNativeEagerCapture = false;
+  if (window.__bookwalkerNativeEagerCapture === undefined) {
+    window.__bookwalkerNativeEagerCapture = false;
+  }
   const original = CanvasRenderingContext2D.prototype.drawImage;
   let nextCanvasId = 1;
   let nextSourceId = 1;
@@ -217,25 +218,6 @@ items => items.map(item => {
 })
 """
 
-_RENDER_JPEG_FROM_PNG_SCRIPT = """
-async ({encoded, quality}) => {
-  const binary = atob(encoded);
-  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
-  const bitmap = await createImageBitmap(new Blob([bytes], {type: 'image/png'}));
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const context = canvas.getContext('2d');
-    if (!context) return null;
-    context.drawImage(bitmap, 0, 0);
-    return canvas.toDataURL('image/jpeg', quality);
-  } finally {
-    bitmap.close();
-  }
-}
-"""
-
 _CAMPAIGN_TAG = re.compile(r"【[^】]*】")
 _TRAILING_VOLUME = re.compile(r"^(?P<title>.+?)(?:\s*第\s*)?(?P<number>\d+)\s*巻?$")
 _SERIES_COUNT = re.compile(r"[（(]\s*(\d+)\s*冊[）)]")
@@ -284,27 +266,6 @@ def _capture_from_data_url(value: object) -> CaptureResult:
         ) from exc
 
 
-def _capture_jpeg_from_data_url(value: object) -> CaptureResult:
-    if not isinstance(value, str) or not value.startswith("data:image/jpeg;base64,"):
-        raise CaptureUnavailableError("BookWalker rendered JPEG is unavailable")
-    try:
-        data = base64.b64decode(value.split(",", 1)[1], validate=True)
-    except (ValueError, TypeError, BinasciiError) as exc:
-        raise CaptureUnavailableError(
-            "BookWalker rendered JPEG could not be decoded"
-        ) from exc
-    dimensions = jpeg_dimensions(data)
-    if dimensions is None:
-        raise CaptureUnavailableError("BookWalker rendered JPEG is invalid")
-    return CaptureResult(
-        data=data,
-        width=dimensions[0],
-        height=dimensions[1],
-        mime_type="image/jpeg",
-        file_extension=".jpg",
-    )
-
-
 def _native_call_is_safe(call: dict[str, Any]) -> bool:
     source = call.get("source")
     if not isinstance(source, dict) or source.get("constructor") not in {
@@ -314,6 +275,11 @@ def _native_call_is_safe(call: dict[str, Any]) -> bool:
         # transform, composition, and exact JPEG signature checks still apply.
         "HTMLCanvasElement",
     }:
+        return False
+    if (
+        source.get("constructor") == "HTMLCanvasElement"
+        and "sourceCropPng" not in call
+    ):
         return False
     transform = call.get("transform")
     if not isinstance(transform, dict):
@@ -1404,40 +1370,6 @@ class BookWalkerAdapter(SiteAdapter):
             return None
         return None
 
-    async def _capture_rendered_jpegs(
-        self,
-        page: Page,
-        native_captures: tuple[CaptureResult, ...],
-    ) -> tuple[CaptureResult, ...] | None:
-        """Encode purchased-viewer native crops as bounded JPEG fallbacks."""
-
-        captures: list[CaptureResult] = []
-        try:
-            for capture in native_captures:
-                encoded = base64.b64encode(capture.data).decode("ascii")
-                data_url = await page.evaluate(
-                    _RENDER_JPEG_FROM_PNG_SCRIPT,
-                    {"encoded": encoded, "quality": 0.92},
-                )
-                captures.append(_capture_jpeg_from_data_url(data_url))
-        except (
-            BinasciiError,
-            CaptureUnavailableError,
-            PlaywrightError,
-            PlaywrightTimeoutError,
-            TimeoutError,
-            TypeError,
-            ValueError,
-        ):
-            return None
-        return tuple(captures)
-
-    @staticmethod
-    def _is_purchased_viewer_page(page: Page) -> bool:
-        return (urlparse(str(getattr(page, "url", ""))).hostname or "").lower() == (
-            "viewer.bookwalker.jp"
-        )
-
     async def _clear_native_capture(self, page: Page) -> None:
         try:
             await page.evaluate(
@@ -1541,6 +1473,14 @@ class BookWalkerAdapter(SiteAdapter):
                     "BookWalker native source calls did not match page geometry"
                 )
             if any("sourceCropPng" not in call for call in selected):
+                if any(
+                    isinstance(call.get("source"), dict)
+                    and call["source"].get("constructor") == "HTMLCanvasElement"
+                    for call in selected
+                ):
+                    raise CaptureUnavailableError(
+                        "BookWalker mutable canvas source requires eager crops"
+                    )
                 selected = await self._materialize_native_source_crops(page, selected)
 
             captures: list[CaptureResult] = []
@@ -1593,15 +1533,7 @@ class BookWalkerAdapter(SiteAdapter):
                 page, native_captures
             )
             await self._clear_geometry_trace(page)
-            if original_captures is not None:
-                return original_captures
-            if self._is_purchased_viewer_page(page):
-                rendered_captures = await self._capture_rendered_jpegs(
-                    page, native_captures
-                )
-                if rendered_captures is not None:
-                    return rendered_captures
-            return native_captures
+            return original_captures or native_captures
         except CaptureUnavailableError:
             return None
         except (

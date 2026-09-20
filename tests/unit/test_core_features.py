@@ -105,6 +105,20 @@ class FakeAdapter(SiteAdapter):
         return None
 
 
+class DuplicateFingerprintTimeoutAdapter(FakeAdapter):
+    page_change_timeout_ms = 200
+
+    async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...]:
+        return (CaptureResult(data=b"same", width=1, height=1),)
+
+    async def wait_for_change(
+        self,
+        page: FakePage,
+        previous_identity: ContentIdentity | None,
+    ) -> None:
+        await asyncio.sleep(0.05)
+
+
 class NativeCaptureAdapter(FakeAdapter):
     def __init__(self, states: list[PageState], identities: list[ContentIdentity]) -> None:
         super().__init__(states, identities)
@@ -515,6 +529,28 @@ async def test_runner_stops_repeated_identity_without_duplicate_capture(
                 source_url="https://example.test/viewer",
                 output_dir=tmp_path / "run",
                 diagnostics_dir=tmp_path / "diagnostics",
+            )
+        ).run(FakePage(), adapter)
+
+
+async def test_duplicate_fingerprint_wait_uses_adapter_timeout_override(
+    tmp_path: Path,
+) -> None:
+    adapter = DuplicateFingerprintTimeoutAdapter(
+        [PageState.CONTENT],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    with pytest.raises(PageChangeTimeoutError, match="same content"):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=tmp_path / "run",
+                diagnostics_dir=tmp_path / "diagnostics",
+                page_change_timeout_ms=20,
+                adapter_timeout_grace_ms=0,
+                max_same_content=2,
             )
         ).run(FakePage(), adapter)
 

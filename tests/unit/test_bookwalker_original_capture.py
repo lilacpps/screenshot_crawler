@@ -8,10 +8,7 @@ from playwright.async_api import Error, Page, async_playwright
 
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
-from screenshot_crawler.site_adapters.bookwalker.adapter import (
-    BookWalkerAdapter,
-    _capture_jpeg_from_data_url,
-)
+from screenshot_crawler.site_adapters.bookwalker.adapter import BookWalkerAdapter
 from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     OriginalJpegCache,
     candidate_capture,
@@ -56,14 +53,6 @@ def test_jpeg_magic_dimensions_and_capture_result() -> None:
     assert (result.width, result.height) == (1, 1)
     assert result.mime_type == "image/jpeg"
     assert result.file_extension == ".jpg"
-
-
-def test_rendered_jpeg_data_url_is_decoded_to_capture_result() -> None:
-    value = "data:image/jpeg;base64," + base64.b64encode(JPEG_1X1).decode("ascii")
-    result = _capture_jpeg_from_data_url(value)
-    assert result.data == JPEG_1X1
-    assert (result.width, result.height) == (1, 1)
-    assert result.mime_type == "image/jpeg"
 
 
 def test_invalid_jpeg_magic_or_dimensions_is_rejected() -> None:
@@ -112,9 +101,10 @@ class _PreparePage:
     def __init__(self) -> None:
         self.listener_count = 0
         self.route_count = 0
+        self.init_scripts: list[str] = []
 
-    async def add_init_script(self, _script: str) -> None:
-        return None
+    async def add_init_script(self, script: str) -> None:
+        self.init_scripts.append(script)
 
     def on(self, _event: str, _handler: object) -> None:
         self.listener_count += 1
@@ -133,6 +123,56 @@ async def test_original_jpeg_capture_is_enabled_for_production_runs() -> None:
     assert adapter.enable_original_jpeg_capture
     assert page.listener_count == 1
     assert page.route_count == 2
+
+
+@pytest.mark.asyncio
+async def test_native_eager_init_script_preserves_order_and_host_defaults(
+    browser_page: Page,
+) -> None:
+    adapter = BookWalkerAdapter()
+    prepared = _PreparePage()
+    await adapter.prepare_page(prepared)  # type: ignore[arg-type]
+    eager_script = prepared.init_scripts[1]
+
+    async def evaluate_scripts(url: str, scripts: tuple[str, ...]) -> dict[str, object]:
+        browser = browser_page.context.browser
+        assert browser is not None
+        context = await browser.new_context()
+        page = await context.new_page()
+
+        async def fulfill(route: object) -> None:
+            await route.fulfill(status=200, body="<html></html>")  # type: ignore[attr-defined]
+
+        await page.route(f"{url}**", fulfill)  # type: ignore[arg-type]
+        try:
+            for script in scripts:
+                await page.add_init_script(script)
+            await page.goto(url)
+            return await page.evaluate(
+                "() => ({ eager: window.__bookwalkerNativeEagerCapture, "
+                "installed: window.__bookwalkerDrawTraceInstalled })"
+            )
+        finally:
+            await context.close()
+
+    draw_script = adapter_module._DRAW_TRACE_SCRIPT
+    configured_true = "window.__bookwalkerNativeEagerCapture = true;"
+    assert await evaluate_scripts(
+        "https://viewer.bookwalker.jp/order-a",
+        (configured_true, draw_script),
+    ) == {"eager": True, "installed": True}
+    assert await evaluate_scripts(
+        "https://viewer.bookwalker.jp/order-b",
+        (draw_script, configured_true),
+    ) == {"eager": True, "installed": True}
+    assert await evaluate_scripts(
+        "https://viewer.bookwalker.jp/production",
+        (draw_script, eager_script),
+    ) == {"eager": True, "installed": True}
+    assert await evaluate_scripts(
+        "https://trial.bookwalker.jp/production",
+        (draw_script, eager_script),
+    ) == {"eager": False, "installed": True}
 
 
 @pytest.mark.asyncio
@@ -265,6 +305,7 @@ async def test_unique_signature_match_returns_jpeg_and_ambiguous_match_falls_bac
     assert result is not None
     assert result[0].mime_type == "image/jpeg"
     assert result[0].file_extension == ".jpg"
+    assert result[0].data == matching.data
 
     ambiguous = BookWalkerAdapter()
     ambiguous._original_candidates.add(matching)

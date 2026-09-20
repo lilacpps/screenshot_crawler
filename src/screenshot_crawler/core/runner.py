@@ -214,7 +214,11 @@ class CrawlerRunner:
                             "The same content/capture fingerprint repeated after the retry limit"
                         )
                     await self._adapter_call(
-                        adapter.wait_for_change(page, identity), "wait_for_change"
+                        adapter.wait_for_change(page, identity),
+                        "wait_for_change",
+                        timeout_ms=adapter.get_page_change_timeout_ms(
+                            self.config.page_change_timeout_ms
+                        ),
                     )
                     continue
 

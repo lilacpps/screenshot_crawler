@@ -75,6 +75,7 @@ def test_native_safety_accepts_identity_source_over_without_filter() -> None:
 def test_native_safety_accepts_purchased_viewer_canvas_sources() -> None:
     call = _safe_call()
     call["source"]["constructor"] = "HTMLCanvasElement"
+    call["sourceCropPng"] = "data:image/png;base64," + base64.b64encode(PNG_1X1).decode()
     assert _native_call_is_safe(call)
 
 
@@ -83,6 +84,12 @@ def test_native_safety_rejects_other_non_image_sources() -> None:
         call = _safe_call()
         call["source"]["constructor"] = constructor
         assert not _native_call_is_safe(call)
+
+
+def test_native_safety_rejects_canvas_without_eager_crop() -> None:
+    call = _safe_call()
+    call["source"]["constructor"] = "HTMLCanvasElement"
+    assert _native_call_is_safe(call) is False
 
 
 def test_deferred_materialization_preserves_null_copy_error() -> None:
@@ -211,6 +218,9 @@ async def test_native_success_clears_geometry_but_failure_keeps_fallback_trace()
     result = await adapter.capture_page(success_page)  # type: ignore[arg-type]
 
     assert result is not None
+    assert result[0].data == PNG_1X1
+    assert result[0].mime_type == "image/png"
+    assert result[0].file_extension == ".png"
     assert success_page.native_cleared
     assert success_page.geometry_cleared
 
@@ -236,3 +246,16 @@ async def test_native_source_png_is_materialized_only_for_selected_calls() -> No
 
     assert result is not None
     assert page.materialize_count == 1
+
+
+async def test_canvas_source_without_eager_crop_skips_materialization() -> None:
+    call = _native_call_fixture(constructor="HTMLCanvasElement")
+    call.pop("sourceCropPng")
+    call.pop("sourceCropPngError")
+    page = _FakePage([call])
+    adapter = _TestBookWalkerAdapter()
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is None
+    assert page.materialize_count == 0
