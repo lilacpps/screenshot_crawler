@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
 from playwright.async_api import Error, async_playwright
 
+from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, WorkInput
+from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.discovery import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -33,6 +36,7 @@ from screenshot_crawler.site_adapters.bookwalker.discovery import (
     parse_bookwalker_series_url,
     resolve_bookwalker_order,
 )
+from screenshot_crawler.site_policies import BookWalkerSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist import WatchlistTarget
 
 
@@ -105,6 +109,7 @@ def test_bookwalker_special_title_requires_prefix(title: str) -> None:
         ([{"text": "", "action": None, "href": "https://viewer.bookwalker.jp/viewer"}], "unknown"),
         ([], "unknown"),
         ([{"text": "読む", "action": "reading", "href": ""}], "owned"),
+        ([{"text": "読む", "action": "read_purchased", "href": ""}], "owned"),
         (
             [
                 {"text": "試し読み", "action": "trial_reading", "href": ""},
@@ -331,7 +336,7 @@ def _series_listing_html() -> str:
 
 def _product_html(external_id: str) -> str:
     controls = {
-        "00000000-0000-0000-0000-000000000003": '<a data-action-label="reading" href="/viewer/3">読む</a>',
+        "00000000-0000-0000-0000-000000000003": '<div id="js-read-check-book-cover-main-button"><a data-action-label="read_purchased" href="/viewer/3">読む</a></div>',
         "00000000-0000-0000-0000-000000000002": '<button data-action-label="subscription_reading">10分まる読み</button>',
         "00000000-0000-0000-0000-000000000001": '<a data-action-label="trial_reading" href="?sample=1">試し読み</a>',
     }
@@ -386,7 +391,7 @@ def _current_tile_listing_html(
 def _access_control(access_mode: str, *, click_endpoint: bool = False) -> str:
     onclick = " onclick=\"fetch('/__reader-click')\"" if click_endpoint else ""
     if access_mode == "owned":
-        return f'<a data-action-label="reading" href="/viewer"{onclick}>読む</a>'
+        return f'<div id="js-read-check-book-cover-main-button"><a data-action-label="read_purchased" href="/viewer"{onclick}>読む</a></div>'
     if access_mode == "quota":
         return f'<button data-action-label="read_maruyomi"{onclick}>10分まる読み</button>'
     if access_mode == "paid":
@@ -498,6 +503,42 @@ async def _run_service(page, tmp_path: Path, target: WatchlistTarget, mode: str)
     registry.register("bookwalker", BookWalkerDiscoveryAdapter)
     result = await DiscoveryService(catalog, registry).discover(page, target, mode)
     return result, catalog
+
+
+async def test_bookwalker_full_discovery_read_purchased_reaches_direct_batch_candidate(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    product = _uuid(16)
+    target = _series_target()
+    await _install_route(
+        browser_page,
+        [(product, "菴懷刀蜷・#16", False)],
+        {product: "owned"},
+    )
+
+    result, catalog = await _run_service(browser_page, tmp_path, target, "full")
+
+    assert result.complete is True
+    source = catalog.get_source_by_external_id("bookwalker", product)
+    assert source.access_mode == "owned"
+    source_target = catalog.find_source_target(source.id, "web", "default")
+    assert source_target is not None
+    assert source_target.locator == _product_url(product)
+
+    policies = SitePolicyRegistry()
+    policies.register("bookwalker", BookWalkerSitePolicy)
+    plan = BatchPlanner(catalog, policies).plan(
+        site="bookwalker",
+        now=datetime(2026, 9, 20, 12, 0, tzinfo=JST),
+    )
+
+    assert len(plan.candidates) == 1
+    candidate = plan.candidates[0]
+    assert candidate.access_mode == "owned"
+    assert candidate.access_strategy == "direct"
+    assert candidate.consumes_quota is False
+    assert candidate.locator == _product_url(product)
 
 
 def _seed_source(

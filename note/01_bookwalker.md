@@ -890,7 +890,7 @@ selectorの確認状態:
 - live確認済みのseries Discovery selector: `ul.m-tile-list`、`ul.m-tile-list > li.m-tile`
 - local/synthetic fixtureで確認した互換selector: `#js-series-list`、`#js-series-list article`
 - local/synthetic fixtureで確認したspecial marker: `[data-badge]` の「購入特典」
-- Discoveryが既存Adapterから再利用するreader control scope: `#js-read-check`、`#js-subscription-check`、既存のviewer/action fallback
+- Discoveryが既存Adapterから再利用するreader control scope: `#js-read-check-book-cover-main-button`、`#js-read-check`、`#js-subscription-check`
 - Discovery pagination候補（`rel=next`、`aria-label`、`data-testid`、表示テキスト）は実装済み。今回のlive対象ではpaginationなし
 
 ### 20.2 Discovery access classification
@@ -932,6 +932,10 @@ quota   = 「まる読み10分」の強い固有signal
 paid    = 通常の「試し読み」のみ
 unknown = reader入口なし、特殊商品、unsupported subscription、曖昧状態
 ```
+
+購入済み商品の実サイトcontrol `data-action-label="read_purchased"` も
+`owned` として分類する。初回full Discoveryでは商品URLをWeb targetへ保存し、
+BookWalker Policyはそのsourceを `direct` candidateとして選び、quotaを消費しない。
 
 優先順位:
 
