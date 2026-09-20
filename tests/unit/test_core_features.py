@@ -105,6 +105,13 @@ class FakeAdapter(SiteAdapter):
         return None
 
 
+class SlowInitializeAdapter(FakeAdapter):
+    page_change_timeout_ms = 80
+
+    async def initialize(self, page: FakePage) -> None:
+        await asyncio.sleep(0.04)
+
+
 class DuplicateFingerprintTimeoutAdapter(FakeAdapter):
     page_change_timeout_ms = 200
 
@@ -278,6 +285,26 @@ async def test_runner_passes_access_strategy_before_navigation(tmp_path: Path) -
 
     assert result.stop_state is PageState.END
     assert page.events == ["configure:auto", "goto"]
+
+
+async def test_runner_uses_adapter_timeout_for_initialize(tmp_path: Path) -> None:
+    adapter = SlowInitializeAdapter(
+        [PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+            page_change_timeout_ms=20,
+            adapter_timeout_grace_ms=0,
+        )
+    ).run(FakePage(), adapter)
+
+    assert result.stop_state is PageState.END
 
 
 @pytest.mark.parametrize("strategy", ["direct", "quota"])

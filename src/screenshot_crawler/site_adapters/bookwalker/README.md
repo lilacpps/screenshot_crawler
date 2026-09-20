@@ -20,6 +20,13 @@ crop path with temporary page-sized canvases. This handles centered single pages
 and true spreads. When geometry is unavailable, the bounded center-split fallback remains. Spread
 parts stay in right-to-left reading order in both paths.
 
+The first numbered viewer page is treated specially when it is a spread: it is
+the visual cover and is saved as one artifact cropped to the draw geometry. If
+the cover has multiple visible draw rectangles, they are combined into one
+outer content rectangle before capture. Other spreads remain separate
+right-to-left page artifacts. This prevents a two-part cover from becoming
+`page-0001` / `page-0002` while removing the viewer's outer margins.
+
 For a purchased product, the product control may expose
 `data-action-label="read_purchased"` while displaying `読む`; this is treated as the owned
 strict-direct entry. The purchased viewer's page JPEGs are fetched as XHR responses from
@@ -35,7 +42,12 @@ to the complete Core PNG path.
 
 ## Spread and order
 
-BookWalker can render a spread in a wide Chrome window. The adapter saves the right page first and the left page second. Split files record `metadata.part` / `metadata.parts`.
+BookWalker can render a spread in a wide Chrome window. The adapter saves the
+right page first and the left page second. Split files record
+`metadata.part` / `metadata.parts`. The first numbered page is an exception:
+when it is a spread, the cover's draw-geometry union is saved as one artifact.
+If the viewer exposes no draw geometry, the adapter keeps the conservative
+full-canvas fallback because an arbitrary crop could cut cover artwork.
 
 ## Navigation and page change
 

@@ -1454,6 +1454,10 @@ class BookWalkerAdapter(SiteAdapter):
                 raise CaptureUnavailableError(
                     "BookWalker native capture requires draw geometry"
                 )
+            if len(boxes) > 1 and await self._is_first_page(page):
+                raise CaptureUnavailableError(
+                    "BookWalker cover spread needs one fallback union crop"
+                )
             draw_calls = await page.evaluate(
                 """
                 traceId => (window.__bookwalkerNativeDrawCalls || [])
@@ -1654,13 +1658,43 @@ class BookWalkerAdapter(SiteAdapter):
                 filtered.append(candidate)
         return sorted(filtered, key=lambda box: box["x"], reverse=True)
 
+    async def _is_first_page(self, page: Page) -> bool:
+        """Return whether the viewer is showing the first numbered page."""
+
+        counter = page.locator("#pageSliderCounter")
+        try:
+            if not await counter.count():
+                return False
+            raw_counter = await asyncio.wait_for(
+                counter.inner_text(timeout=1000), timeout=1
+            )
+        except (PlaywrightTimeoutError, TimeoutError):
+            return False
+        page_number, _page_id = self.parse_page_counter(raw_counter)
+        return page_number == 1
+
+    @staticmethod
+    def _union_capture_box(boxes: list[dict[str, int]]) -> dict[str, int]:
+        """Return one box covering multiple visual parts of the cover."""
+
+        left = min(box["x"] for box in boxes)
+        top = min(box["y"] for box in boxes)
+        right = max(box["x"] + box["width"] for box in boxes)
+        bottom = max(box["y"] + box["height"] for box in boxes)
+        return {
+            "x": left,
+            "y": top,
+            "width": right - left,
+            "height": bottom - top,
+        }
+
     async def get_capture_targets(self, page: Page) -> tuple[Locator, ...]:
         """Return one page target, or a right-to-left split of a spread.
 
         BookWalker renders a novel spread into one canvas when the browser
         window is wide enough. The viewer's reading order is right page then
-        left page, so temporary canvases are created in that order. Raw
-        canvas capture in Core then excludes the viewer toolbar and margins.
+        left page, so temporary canvases are created in that order. Draw
+        geometry is used to remove the viewer margins before Core captures.
         """
 
         canvas = await self.get_capture_target(page)
@@ -1670,8 +1704,19 @@ class BookWalkerAdapter(SiteAdapter):
         width = int(size["width"])
         height = int(size["height"])
         boxes = await self._page_draw_rectangles(page, canvas)
+        first_page = await self._is_first_page(page)
+        if len(boxes) > 1 and first_page:
+            # A cover spread is one visual cover. Keep it as one artifact while
+            # removing the outer viewer margins; regular spreads remain
+            # separate right-to-left page captures.
+            boxes = [self._union_capture_box(boxes)]
         if not boxes:
             if height <= 0 or width <= height * self.spread_ratio:
+                return (canvas,)
+            if first_page:
+                # Without draw geometry there is no reliable page boundary.
+                # Keep the conservative legacy fallback instead of inventing a
+                # crop that could cut cover artwork.
                 return (canvas,)
             boxes = [
                 {"x": 0, "y": 0, "width": width // 2, "height": height},

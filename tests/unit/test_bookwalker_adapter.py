@@ -434,6 +434,75 @@ async def test_bookwalker_go_next_uses_arrow_left() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bookwalker_keeps_first_page_cover_spread_as_one_target(
+    browser_page: Page,
+) -> None:
+    await browser_page.set_content(
+        """
+        <span id="pageSliderCounter">1 / 10</span>
+        <div id="renderer">
+          <div class="currentScreen">
+            <canvas width="2000" height="1000" style="width:2000px;height:1000px"></canvas>
+          </div>
+        </div>
+        """
+    )
+    await browser_page.evaluate(
+        """
+        () => {
+          const canvas = document.querySelector('canvas');
+          canvas.dataset.bookwalkerTraceId = 'cover';
+          window.__bookwalkerDrawCalls = [
+            {canvasId: 'cover', destination: [200, 0, 600, 1000]},
+            {canvasId: 'cover', destination: [1200, 0, 600, 1000]},
+          ];
+        }
+        """
+    )
+
+    targets = await BookWalkerAdapter().get_capture_targets(browser_page)
+
+    assert len(targets) == 1
+    assert await targets[0].evaluate(
+        "element => ({width: element.width, height: element.height})"
+    ) == {"width": 1600, "height": 1000}
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_crops_first_page_cover_to_draw_geometry(
+    browser_page: Page,
+) -> None:
+    await browser_page.set_content(
+        """
+        <span id="pageSliderCounter">1 / 10</span>
+        <div id="renderer">
+          <div class="currentScreen">
+            <canvas width="2000" height="1000" style="width:2000px;height:1000px"></canvas>
+          </div>
+        </div>
+        """
+    )
+    await browser_page.evaluate(
+        """
+        () => {
+          const canvas = document.querySelector('canvas');
+          canvas.dataset.bookwalkerTraceId = 'cover';
+          window.__bookwalkerDrawCalls = [
+            {canvasId: 'cover', destination: [700, 0, 600, 1000]},
+          ];
+        }
+        """
+    )
+
+    targets = await BookWalkerAdapter().get_capture_targets(browser_page)
+
+    assert len(targets) == 1
+    assert await targets[0].evaluate(
+        "element => ({width: element.width, height: element.height})"
+    ) == {"width": 600, "height": 1000}
+
+
+@pytest.mark.asyncio
 async def test_bookwalker_wait_for_change_uses_click_after_arrow_stalls() -> None:
     class FakePage:
         async def wait_for_timeout(self, _milliseconds: int) -> None:

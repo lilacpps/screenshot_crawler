@@ -134,6 +134,14 @@ BookWalkerは右開きとして、capture targetを**右ページ → 左ペー�
 
 manifestには複数target時に `part` / `parts` を記録する。
 
+最初の番号付きページが見開きの場合は表紙見開きとして扱い、通常の本文
+見開きのように `page-0001` / `page-0002` へ分割せず、draw geometryの
+外接範囲を1つのcapture targetとしてPNG保存する。複数のdraw rectangleが
+ある場合も外側のviewer余白だけを除いた1枚に結合する。draw geometry自体が
+取れない場合は、表紙artworkを推測で切らないため、保守的にviewer canvas全体
+へfallbackする。2ページ目以降の見開きは従来どおり右ページ→左ページの
+個別artifactとする。
+
 ## 6. Browser Session / CDP
 
 ### 採用済みの目標仕様
@@ -266,8 +274,10 @@ for identity-based page-change detection and raises
 wrapper has a separate 2,000 ms grace period via
 `RunConfig.adapter_timeout_grace_ms`, so the adapter's diagnostic exception is
 normally delivered before the Core cancellation guard. The Core guard still
-stops an adapter that hangs without returning. This change does not alter the
-normal ArrowLeft/click-fallback navigation path.
+stops an adapter that hangs without returning. The adapter-local budget is used
+for both `initialize()` and `wait_for_change()`, so BookWalker initialization
+is not cancelled by the Core's shorter generic default. This change does not
+alter the normal ArrowLeft/click-fallback navigation path.
 
 ## 12. wait_for_change / retry
 
@@ -821,6 +831,17 @@ cannot inflate PNG artifacts or introduce a JPEG/PNG mixture in a spread.
 
 The runner also applies the adapter-specific page-change timeout to the
 duplicate-fingerprint wait branch, matching the normal navigation branch.
+
+### 18.20 Cover geometry correction (2026-09-20)
+
+Shared-profile CDP comparison of a purchased viewer and a trial viewer showed
+that both render the actual page into a centered destination rectangle inside a
+larger white canvas. The previous first-page special case deliberately kept
+that full canvas, which explains the cover-only outer margins. The adapter now
+uses the normal draw-geometry crop for a single cover rectangle and combines
+multiple cover rectangles into one union crop, preserving one cover artifact.
+This is unrelated to PNG/JPEG conversion; native PNG/JPEG selection remains
+unchanged.
 
 ## 19. Known limitations / maintenance
 

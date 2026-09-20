@@ -125,7 +125,13 @@ class CrawlerRunner:
             timeout=self.config.navigation_timeout_ms,
             wait_until="commit",
         )
-        await self._adapter_call(adapter.initialize(page), "initialize")
+        await self._adapter_call(
+            adapter.initialize(page),
+            "initialize",
+            timeout_ms=adapter.get_page_change_timeout_ms(
+                self.config.page_change_timeout_ms
+            ),
+        )
         initial_context = await self._adapter_call(
             adapter.get_content_context(page), "get_content_context"
         )
