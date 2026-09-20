@@ -8,7 +8,10 @@ from playwright.async_api import Error, Page, async_playwright
 
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
-from screenshot_crawler.site_adapters.bookwalker.adapter import BookWalkerAdapter
+from screenshot_crawler.site_adapters.bookwalker.adapter import (
+    BookWalkerAdapter,
+    _capture_jpeg_from_data_url,
+)
 from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     OriginalJpegCache,
     candidate_capture,
@@ -53,6 +56,14 @@ def test_jpeg_magic_dimensions_and_capture_result() -> None:
     assert (result.width, result.height) == (1, 1)
     assert result.mime_type == "image/jpeg"
     assert result.file_extension == ".jpg"
+
+
+def test_rendered_jpeg_data_url_is_decoded_to_capture_result() -> None:
+    value = "data:image/jpeg;base64," + base64.b64encode(JPEG_1X1).decode("ascii")
+    result = _capture_jpeg_from_data_url(value)
+    assert result.data == JPEG_1X1
+    assert (result.width, result.height) == (1, 1)
+    assert result.mime_type == "image/jpeg"
 
 
 def test_invalid_jpeg_magic_or_dimensions_is_rejected() -> None:
@@ -121,7 +132,7 @@ async def test_original_jpeg_capture_is_enabled_for_production_runs() -> None:
 
     assert adapter.enable_original_jpeg_capture
     assert page.listener_count == 1
-    assert page.route_count == 1
+    assert page.route_count == 2
 
 
 @pytest.mark.asyncio
@@ -136,6 +147,13 @@ async def test_response_body_listener_is_host_limited_and_redacts_url() -> None:
     assert candidate.redacted_url.endswith("/path/0.jpegbvCoverImage")
 
     assert adapter._is_original_response(_FakeResponse())
+    assert adapter._is_original_response(
+        SimpleNamespace(
+            url="https://bw-bv-epubs.bookwalker.jp/03/30/normal_default/page.jpeg",
+            request=SimpleNamespace(resource_type="xhr"),
+            headers={"content-type": "image/jpeg"},
+        )
+    )
     assert not adapter._is_original_response(
         SimpleNamespace(
             url="https://viewer.bookwalker.jp/path/page.jpeg",

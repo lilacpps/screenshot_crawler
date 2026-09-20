@@ -1,10 +1,10 @@
 """BookWalker original JPEG capture and matching helpers.
 
-BookWalker viewer responses on the ``viewer-epubs*.bookwalker.jp`` hosts are
-already complete JPEG images in the currently observed viewer.  This module
-keeps that optimization deliberately conservative: bytes must be valid JPEG,
-their dimensions must match the native source PNG, and a browser-side 64x64
-RGBA signature must match exactly.
+BookWalker viewer responses on the ``viewer-epubs*.bookwalker.jp`` and
+``bw-bv-epubs.bookwalker.jp`` hosts are already complete JPEG images in the
+currently observed viewer. This module keeps that optimization deliberately
+conservative: bytes must be valid JPEG, their dimensions must match the native
+source PNG, and a browser-side 64x64 RGBA signature must match exactly.
 """
 
 from __future__ import annotations

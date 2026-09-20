@@ -47,6 +47,16 @@ def test_owned_read_action_is_owned() -> None:
     ) is ReaderControlKind.OWNED
 
 
+def test_purchased_read_action_is_owned() -> None:
+    assert classify_reader_control(
+        {
+            "text": "隱ｭ繧",
+            "action": "read_purchased",
+            "href": "https://member.bookwalker.jp/app/03/webstore/cooperation",
+        }
+    ) is ReaderControlKind.OWNED
+
+
 def test_viewer_href_is_generic_reader_not_owned() -> None:
     metadata = {
         "text": "",

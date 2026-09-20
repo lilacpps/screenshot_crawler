@@ -517,7 +517,9 @@ cropへfallback」とする。上記のdiagnostic結果を基に、今回の実�
 BookWalkerの`capture_page()`は、初回navigation前と`go_next()`クリック前にnative traceをarmし、
 `drawImage()` interception中にsource rectangleをtemporary canvasへ即時copyする。`ImageBitmap`等の
 source referenceは保持しない。production native採用対象のsource typeは当面`ImageBitmap`だけに限定し、
-HTMLImageElement、HTMLCanvasElement、OffscreenCanvas、HTMLVideoElement、unknownはfallbackする。
+HTMLImageElement、OffscreenCanvas、HTMLVideoElement、unknownはfallbackする。
+購入ビューアーで使われるHTMLCanvasElementは、eager source cropが各draw callに保存されている
+場合に限り、同じ安全条件でnative capture対象とする。
 CONTENT capture時にvisible canvasのgeometry traceとnative traceを対応付け、
 source rectangle cropのPNGがsource rectangle寸法と一致し、transformがidentity、compositeが
 `source-over`、filterが`none`の場合だけnative resultを返す。
@@ -600,9 +602,11 @@ deferred path and navigation retry budget have since been corrected and
 reverified in 18.16.
 
 When explicitly enabled in code, the response listener is limited to
-`viewer-epubs*.bookwalker.jp`; signed URLs are observed as-is and are never
-reconstructed.  JPEG bodies are held in a deduplicating bounded cache of at
-most 32 entries and 64 MiB, with an individual response body limit of 16 MiB.
+`viewer-epubs*.bookwalker.jp` for trial/free viewers and
+`bw-bv-epubs.bookwalker.jp` for the purchased full viewer; signed URLs are
+observed as-is and are never reconstructed. JPEG bodies are held in a
+deduplicating bounded cache of at most 32 entries and 64 MiB, with an
+individual response body limit of 16 MiB.
 Body-read failures are ignored so the PNG fallback remains available.
 
 The draw hook records lightweight source metadata and retains the source
@@ -758,6 +762,41 @@ and 12 seconds: `click`, `ArrowLeft`, `click`, `ArrowLeft`, `click`,
 identity change, and the final `N/N` counter return without retrying. The Core
 runner uses the adapter's page-change budget plus its 2,000 ms grace and does
 not independently retry navigation.
+
+### 18.17 Purchased full-reader entry and JPEG host (2026-09-20)
+
+The purchased product-page control uses `data-action-label="read_purchased"`
+while its visible label remains `読む`. The strict `direct` entry classifier
+now treats this action as `owned`, so it follows the purchased cooperation
+link and does not fall back to trial, maruyomi, or subscription controls.
+
+The purchased viewer uses `viewer.bookwalker.jp` as its shell and fetches page
+JPEGs through `bw-bv-epubs.bookwalker.jp` as XHR responses. The original-JPEG
+capture route and host filter now include that exact host. Trial/free
+`viewer-epubs*.bookwalker.jp` capture remains unchanged. JPEG acceptance still
+requires valid bytes, matching dimensions, an exact browser-side signature,
+and a unique candidate for every visible spread part; otherwise the complete
+page remains PNG. The purchased viewer decodes its JPEG tiles into an
+`HTMLCanvasElement` before drawing; this source type is accepted only with the
+same identity-transform/source-over geometry checks used for `ImageBitmap`.
+Because that source canvas is mutable during a spread render, purchased
+viewer documents enable bounded eager source-crop materialization before the
+draw call is cleared. Repeated source IDs are accepted for a spread only when
+each draw call retained its own crop; deferred repeated sources remain
+rejected. If the raw tile JPEG does not uniquely match, the verified native
+crop is encoded as a JPEG in the browser. A spread still falls back as a
+complete unit when its native capture is unavailable.
+
+### 18.18 Purchased viewer live verification (2026-09-20)
+
+Shared-profile CDP live verification used the purchased product URL
+`de5a10a196-9a63-4157-974e-e60359518638` with strict `direct` entry. The
+product control was `read_purchased`, the resulting viewer was
+`viewer.bookwalker.jp`, and a bounded run saved four JPEG artifacts for two
+spread transitions (`page-0001.jpg` through `page-0004.jpg`). Each artifact
+was 960x1280 and the two parts of each spread had different fingerprints; no
+duplicate-source spread was emitted. The bounded run intentionally reached
+the `max_pages` guard after collecting those four pages.
 
 ## 19. Known limitations / maintenance
 

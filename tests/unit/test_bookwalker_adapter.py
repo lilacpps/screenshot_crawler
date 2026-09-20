@@ -130,6 +130,17 @@ async def test_bookwalker_strict_direct_clicks_only_owned(browser_page: Page) ->
 
 
 @pytest.mark.asyncio
+async def test_bookwalker_strict_direct_clicks_purchased_owned_control(
+    browser_page: Page,
+) -> None:
+    controls = _control_html(
+        action="read_purchased", text="読む", entry="owned-purchased"
+    )
+    await _initialize_strict(browser_page, "direct", controls)
+    assert "entry=owned-purchased" in browser_page.url
+
+
+@pytest.mark.asyncio
 async def test_bookwalker_strict_direct_allows_owned_without_control_uuid(
     browser_page: Page,
 ) -> None:

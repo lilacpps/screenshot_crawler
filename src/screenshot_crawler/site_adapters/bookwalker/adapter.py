@@ -36,6 +36,7 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     candidate_capture,
     candidate_from_jpeg,
     image_signature,
+    jpeg_dimensions,
 )
 from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     ReaderControlKind,
@@ -216,6 +217,25 @@ items => items.map(item => {
 })
 """
 
+_RENDER_JPEG_FROM_PNG_SCRIPT = """
+async ({encoded, quality}) => {
+  const binary = atob(encoded);
+  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+  const bitmap = await createImageBitmap(new Blob([bytes], {type: 'image/png'}));
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+    context.drawImage(bitmap, 0, 0);
+    return canvas.toDataURL('image/jpeg', quality);
+  } finally {
+    bitmap.close();
+  }
+}
+"""
+
 _CAMPAIGN_TAG = re.compile(r"【[^】]*】")
 _TRAILING_VOLUME = re.compile(r"^(?P<title>.+?)(?:\s*第\s*)?(?P<number>\d+)\s*巻?$")
 _SERIES_COUNT = re.compile(r"[（(]\s*(\d+)\s*冊[）)]")
@@ -264,9 +284,36 @@ def _capture_from_data_url(value: object) -> CaptureResult:
         ) from exc
 
 
+def _capture_jpeg_from_data_url(value: object) -> CaptureResult:
+    if not isinstance(value, str) or not value.startswith("data:image/jpeg;base64,"):
+        raise CaptureUnavailableError("BookWalker rendered JPEG is unavailable")
+    try:
+        data = base64.b64decode(value.split(",", 1)[1], validate=True)
+    except (ValueError, TypeError, BinasciiError) as exc:
+        raise CaptureUnavailableError(
+            "BookWalker rendered JPEG could not be decoded"
+        ) from exc
+    dimensions = jpeg_dimensions(data)
+    if dimensions is None:
+        raise CaptureUnavailableError("BookWalker rendered JPEG is invalid")
+    return CaptureResult(
+        data=data,
+        width=dimensions[0],
+        height=dimensions[1],
+        mime_type="image/jpeg",
+        file_extension=".jpg",
+    )
+
+
 def _native_call_is_safe(call: dict[str, Any]) -> bool:
     source = call.get("source")
-    if not isinstance(source, dict) or source.get("constructor") != "ImageBitmap":
+    if not isinstance(source, dict) or source.get("constructor") not in {
+        "ImageBitmap",
+        # The purchased full viewer decodes its JPEG tiles into a canvas
+        # before drawing them to the renderer canvas. The same geometry,
+        # transform, composition, and exact JPEG signature checks still apply.
+        "HTMLCanvasElement",
+    }:
         return False
     transform = call.get("transform")
     if not isinstance(transform, dict):
@@ -338,7 +385,10 @@ class BookWalkerAdapter(SiteAdapter):
     original_capture_attempts = 3
     original_capture_retry_interval_ms = 150
     original_response_task_limit = 8
-    original_response_route_pattern = "**://viewer-epubs*.bookwalker.jp/**"
+    original_response_route_patterns = (
+        "**://viewer-epubs*.bookwalker.jp/**",
+        "**://bw-bv-epubs.bookwalker.jp/**",
+    )
     _strict_scope_selectors = (
         "#js-read-check-book-cover-main-button",
         "#js-read-check",
@@ -1137,7 +1187,8 @@ class BookWalkerAdapter(SiteAdapter):
         await page.add_init_script(_DRAW_TRACE_SCRIPT)
         await page.add_init_script(
             "window.__bookwalkerNativeEagerCapture = "
-            f"{str(self.eager_native_source_capture).lower()};"
+            f"{str(self.eager_native_source_capture).lower()} || "
+            "location.hostname === 'viewer.bookwalker.jp';"
         )
         if not self.enable_original_jpeg_capture:
             return
@@ -1160,18 +1211,17 @@ class BookWalkerAdapter(SiteAdapter):
             except (PlaywrightError, AttributeError):
                 pass
             try:
-                await self._original_response_page.unroute(
-                    self.original_response_route_pattern,
-                    self._handle_original_route,
-                )
+                for pattern in self.original_response_route_patterns:
+                    await self._original_response_page.unroute(
+                        pattern,
+                        self._handle_original_route,
+                    )
             except (PlaywrightError, AttributeError):
                 pass
         if self._original_response_page is not page:
             page.on("response", self._handle_original_response)
-            await page.route(
-                self.original_response_route_pattern,
-                self._handle_original_route,
-            )
+            for pattern in self.original_response_route_patterns:
+                await page.route(pattern, self._handle_original_route)
             self._original_response_page = page
 
     @staticmethod
@@ -1181,10 +1231,11 @@ class BookWalkerAdapter(SiteAdapter):
         url = str(getattr(response, "url", ""))
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
-        if not (
-            host.startswith("viewer-epubs")
-            and host.endswith(".bookwalker.jp")
-        ):
+        is_trial_or_free_epub = (
+            host.startswith("viewer-epubs") and host.endswith(".bookwalker.jp")
+        )
+        is_purchased_epub = host == "bw-bv-epubs.bookwalker.jp"
+        if not (is_trial_or_free_epub or is_purchased_epub):
             return False
         request = getattr(response, "request", None)
         resource_type = getattr(request, "resource_type", None)
@@ -1353,6 +1404,40 @@ class BookWalkerAdapter(SiteAdapter):
             return None
         return None
 
+    async def _capture_rendered_jpegs(
+        self,
+        page: Page,
+        native_captures: tuple[CaptureResult, ...],
+    ) -> tuple[CaptureResult, ...] | None:
+        """Encode purchased-viewer native crops as bounded JPEG fallbacks."""
+
+        captures: list[CaptureResult] = []
+        try:
+            for capture in native_captures:
+                encoded = base64.b64encode(capture.data).decode("ascii")
+                data_url = await page.evaluate(
+                    _RENDER_JPEG_FROM_PNG_SCRIPT,
+                    {"encoded": encoded, "quality": 0.92},
+                )
+                captures.append(_capture_jpeg_from_data_url(data_url))
+        except (
+            BinasciiError,
+            CaptureUnavailableError,
+            PlaywrightError,
+            PlaywrightTimeoutError,
+            TimeoutError,
+            TypeError,
+            ValueError,
+        ):
+            return None
+        return tuple(captures)
+
+    @staticmethod
+    def _is_purchased_viewer_page(page: Page) -> bool:
+        return (urlparse(str(getattr(page, "url", ""))).hostname or "").lower() == (
+            "viewer.bookwalker.jp"
+        )
+
     async def _clear_native_capture(self, page: Page) -> None:
         try:
             await page.evaluate(
@@ -1503,9 +1588,20 @@ class BookWalkerAdapter(SiteAdapter):
             if not self.enable_original_jpeg_capture:
                 await self._clear_geometry_trace(page)
                 return tuple(captures)
-            original_captures = await self._capture_original_jpegs(page, tuple(captures))
+            native_captures = tuple(captures)
+            original_captures = await self._capture_original_jpegs(
+                page, native_captures
+            )
             await self._clear_geometry_trace(page)
-            return original_captures or tuple(captures)
+            if original_captures is not None:
+                return original_captures
+            if self._is_purchased_viewer_page(page):
+                rendered_captures = await self._capture_rendered_jpegs(
+                    page, native_captures
+                )
+                if rendered_captures is not None:
+                    return rendered_captures
+            return native_captures
         except CaptureUnavailableError:
             return None
         except (

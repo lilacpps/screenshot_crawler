@@ -10,6 +10,9 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _capture_from_data_url,
     _native_call_is_safe,
 )
+from screenshot_crawler.site_adapters.bookwalker.native_capture import (
+    select_native_draw_calls,
+)
 
 PNG_1X1 = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
@@ -69,8 +72,14 @@ def test_native_safety_accepts_identity_source_over_without_filter() -> None:
     assert _native_call_is_safe(_safe_call())
 
 
-def test_native_safety_rejects_non_image_bitmap_sources() -> None:
-    for constructor in ("HTMLImageElement", "HTMLCanvasElement", "OffscreenCanvas", None):
+def test_native_safety_accepts_purchased_viewer_canvas_sources() -> None:
+    call = _safe_call()
+    call["source"]["constructor"] = "HTMLCanvasElement"
+    assert _native_call_is_safe(call)
+
+
+def test_native_safety_rejects_other_non_image_sources() -> None:
+    for constructor in ("HTMLImageElement", "OffscreenCanvas", None):
         call = _safe_call()
         call["source"]["constructor"] = constructor
         assert not _native_call_is_safe(call)
@@ -80,6 +89,47 @@ def test_deferred_materialization_preserves_null_copy_error() -> None:
     assert "error: copy ? copy.error : 'native source crop unavailable'" in (
         _MATERIALIZE_NATIVE_SOURCE_SCRIPT
     )
+
+
+def test_native_selection_rejects_one_source_for_two_spread_parts() -> None:
+    first = _native_call_fixture()
+    second = _native_call_fixture()
+    first.pop("sourceCropPng")
+    first.pop("sourceCropPngError")
+    second.pop("sourceCropPng")
+    second.pop("sourceCropPngError")
+    second["destination"] = {"x": 100, "y": 0, "width": 100, "height": 100}
+    assert (
+        select_native_draw_calls(
+            [first, second],
+            canvas_id="content",
+            canvas_width=200,
+            canvas_height=100,
+            boxes=[
+                {"x": 0, "y": 0, "width": 100, "height": 100},
+                {"x": 100, "y": 0, "width": 100, "height": 100},
+            ],
+        )
+        is None
+    )
+
+
+def test_native_selection_allows_repeated_source_when_crops_were_eagerly_saved() -> None:
+    first = _native_call_fixture()
+    second = _native_call_fixture()
+    second["destination"] = {"x": 100, "y": 0, "width": 100, "height": 100}
+    second["sourceCropPng"] = first["sourceCropPng"] + "different"
+    selected = select_native_draw_calls(
+        [first, second],
+        canvas_id="content",
+        canvas_width=200,
+        canvas_height=100,
+        boxes=[
+            {"x": 0, "y": 0, "width": 100, "height": 100},
+            {"x": 100, "y": 0, "width": 100, "height": 100},
+        ],
+    )
+    assert selected is not None
 
 
 class _FakeCanvas:

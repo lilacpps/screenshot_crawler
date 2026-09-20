@@ -30,7 +30,7 @@ class ReaderControlKind(StrEnum):
 ReaderControlClassification = ReaderControlKind
 
 _EXCLUDED_ACTIONS = {"cover", "check", "more_read", "author"}
-_OWNED_ACTIONS = {"read", "reading"}
+_OWNED_ACTIONS = {"read", "reading", "read_purchased"}
 
 
 def _value(metadata: Mapping[str, object], key: str) -> str:

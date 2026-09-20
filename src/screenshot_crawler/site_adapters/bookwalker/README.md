@@ -20,6 +20,17 @@ crop path with temporary page-sized canvases. This handles centered single pages
 and true spreads. When geometry is unavailable, the bounded center-split fallback remains. Spread
 parts stay in right-to-left reading order in both paths.
 
+For a purchased product, the product control may expose
+`data-action-label="read_purchased"` while displaying `読む`; this is treated as the owned
+strict-direct entry. The purchased viewer's page JPEGs are fetched as XHR responses from
+`bw-bv-epubs.bookwalker.jp`. Trial/free viewer JPEGs continue to use the
+`viewer-epubs*.bookwalker.jp` family. Both are subject to the same conservative matching and
+all-parts-or-PNG fallback rules. The purchased viewer's intermediate
+`HTMLCanvasElement` source is accepted only with the existing identity-transform and
+composition checks, and its mutable source canvas uses eager per-draw crop capture.
+When a raw tile cannot be uniquely matched, the verified native crop is encoded as a
+JPEG; unavailable spread-native capture still falls back to the complete PNG path.
+
 ## Spread and order
 
 BookWalker can render a spread in a wide Chrome window. The adapter saves the right page first and the left page second. Split files record `metadata.part` / `metadata.parts`.

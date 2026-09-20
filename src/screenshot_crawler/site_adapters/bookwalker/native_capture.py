@@ -90,4 +90,14 @@ def select_native_draw_calls(
         if len(matching) > 1 and len(source_rects) != 1:
             return None
         selected.append(matching[-1])
+    if len(selected) > 1:
+        source_ids = [call.get("sourceId") for call in selected]
+        if (
+            None in source_ids
+            or (
+                len(set(source_ids)) != len(source_ids)
+                and any("sourceCropPng" not in call for call in selected)
+            )
+        ):
+            return None
     return selected
