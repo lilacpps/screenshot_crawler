@@ -191,7 +191,7 @@ profileは `.chrome-crawler` で、Manga ONEとlogin sessionを共存できる�
 
 `render_stable_checks = 4`。
 
-`page_change_timeout_ms = 10_000` 内に安定しなければ `PageChangeTimeoutError`。
+`page_change_timeout_ms = 14_000` 内に安定しなければ `PageChangeTimeoutError`。
 
 ## 9. Page identity
 
@@ -260,7 +260,7 @@ terminal/ad/loadingでなくrenderer ready。
 
 ## Timeout layering
 
-BookWalker keeps its adapter-local `page_change_timeout_ms = 10_000` deadline
+BookWalker keeps its adapter-local `page_change_timeout_ms = 14_000` deadline
 for identity-based page-change detection and raises
 `PageChangeTimeoutError` when the viewer does not advance. The Core runner
 wrapper has a separate 2,000 ms grace period via
@@ -276,7 +276,7 @@ normal ArrowLeft/click-fallback navigation path.
 - CONTENTでidentity同一かつ最終counter → 最終ページ後の既知挙動としてreturn
 - CONTENTでidentity同一 → bounded retry
 
-冒頭cover等で最初のclickが消費されるケースに備え、最大2回追加retryする。
+冒頭cover等で最初のclickが消費されるケースに備え、最大6回追加retryする。2秒ごとにclickとArrowLeftを交互に実行する。
 
 ## 13. Duplicate / safety
 
@@ -587,22 +587,32 @@ diagnostic JSON、redact済みnetwork log、比較用の一時画像は
 `output/diagnostics/bookwalker-original-source/`配下に保存した。今回の変更では
 `BookWalkerAdapter.capture_page()`、Core、Runner、packaging、launcher、shared profileを変更していない。
 
-### 18.8 original JPEG production capture (2026-09-19)
+### 18.8 original JPEG capture (implemented, enabled by default)
 
-BookWalker `capture_page()` now evaluates source-native PNG first and, when the
-same displayed source can be identified safely, returns the original JPEG as
-the preferred artifact.  The response listener is installed in
-`prepare_page()` before navigation and is limited to
+The original-JPEG path remains implemented and
+`BookWalkerAdapter.enable_original_jpeg_capture` is currently `True`.
+Production runs install the bounded JPEG response listener/route and perform
+conservative JPEG candidate matching after deferred source-native capture.
+The earlier JPEG-disabled default was introduced after a long-run trial smoke
+saved only one JPEG and then stopped in `wait_for_change` after 140 pages; the
+failure itself was a page-change timeout rather than a JPEG body error.  The
+deferred path and navigation retry budget have since been corrected and
+reverified in 18.16.
+
+When explicitly enabled in code, the response listener is limited to
 `viewer-epubs*.bookwalker.jp`; signed URLs are observed as-is and are never
 reconstructed.  JPEG bodies are held in a deduplicating bounded cache of at
 most 32 entries and 64 MiB, with an individual response body limit of 16 MiB.
-Body-read failures are ignored so the existing fallback remains available.
+Body-read failures are ignored so the PNG fallback remains available.
 
-For each capture call, the existing native PNG is decoded in the browser and
-reduced to a 64x64 canvas.  JPEG candidates use the same browser decode,
-resize, RGBA hashing path.  A JPEG is selected only when magic bytes,
-dimensions, exact signature, and candidate uniqueness all pass.  Matching is
-attempted at most three times with a 150 ms bounded wait between attempts.
+The draw hook records lightweight source metadata and retains the source
+objects without PNG-encoding every `drawImage()` call.  After the final draw
+calls are selected by geometry, only the selected source rectangles are
+materialized as PNG.  When explicitly enabled, JPEG candidates use the same
+browser decode, resize, RGBA hashing path.  A JPEG is selected only when magic
+bytes, dimensions, exact signature, and candidate uniqueness all pass.
+Matching is attempted at most three times with a 150 ms bounded wait between
+attempts.
 Spread capture is all-or-nothing: if any part is not uniquely matched, every
 part returns source-native PNG and no JPEG/PNG mixture is emitted.
 
@@ -613,16 +623,13 @@ current native PNG is intentionally retained as the conservative comparison
 basis.  `.jpg` is now accepted by manifest/package/ZIP validation alongside
 `.png` and `.webp`.
 
-The change is limited to the BookWalker adapter/helper, Core artifact
-extension validation, unit tests, and this note.  No token values or real-site
-page images are stored in the repository.  Post-change bounded live smoke on
-the existing trial viewers produced `.jpg` artifacts for the 960x1280,
-1303x2048, and 1443x2048 source-size samples; the two latter runs also
-created temporary ZIP archives successfully.  The observed first-artifact
-sizes were 224,798, 71,069, and 917,642 bytes respectively.  The full
-multi-page/END smoke remains a follow-up check.  Current unit coverage includes JPEG validation,
-browser signatures, cache bounds, retries, spread fallback, response
-filtering, and `.jpg` packaging.
+No token values or real-site page images are stored in the repository.  Earlier
+bounded live smoke on the existing trial viewers produced `.jpg` artifacts for
+the 960x1280, 1303x2048, and 1443x2048 source-size samples, but the full
+multi-page/END behavior was not established for the JPEG path.  Current unit
+coverage includes the enabled production default, JPEG validation, browser
+signatures, cache bounds, retries, spread fallback, response filtering, and
+`.jpg` packaging.
 
 ### 18.9 ArrowLeft navigation fix (2026-09-19)
 
@@ -660,6 +667,97 @@ Persistent ambiguity still fails before click with the existing fail-safe
 behavior. The change is limited to BookWalker product-page entry detection;
 quota accounting, reader navigation, Core behavior, and capture behavior are
 unchanged.
+
+### 18.12 PNG-only live verification (2026-09-20)
+
+For the trial viewer URL with content ID
+`f5b3ae37-360c-45e2-adcf-f2ddfac1251f`, an earlier JPEG-disabled verification
+bypassed the original-JPEG response listener, route interception, and JPEG
+matching. The run used source-native PNG capture and completed all 60 pages at `end`,
+including pages 3 and later.  The resulting archive contained 60 PNG files
+and no JPEG files.  This is a live verification that the same URL's earlier
+page-3 stop does not reproduce when the JPEG path is disabled; it does not by
+itself prove that source-native PNG is the only cause of the earlier stop.
+
+### 18.13 Deferred source-native PNG materialization (2026-09-20)
+
+The source-native PNG path no longer calls `toDataURL("image/png")` inside
+every `drawImage()` hook invocation.  The hook records geometry, sourceId,
+source rectangle, transform, and composition metadata, while retaining the
+current source objects for the bounded capture window.  Once the final visible
+draw calls are selected, only those one or two source rectangles are copied to
+temporary canvases and encoded as PNG.  Cleanup clears both the draw-call list
+and retained source objects.
+
+This is intended to keep the source-native dimensions and lossless PNG
+artifact while reducing initial/preload work.  The pre-fix live verification
+with the same 60-page trial viewer completed at `end` with 60 PNG pages, but
+the deferred error-field defect described in 18.15 meant that run could use
+the Core canvas fallback.  Observed page-processing
+intervals were about 2.5--3.0 seconds for the first large spread pages and
+about 1.0--1.3 seconds for later regular pages; these intervals include page
+capture as well as navigation wait, so they are operational timings rather
+than an isolated viewer-animation measurement.
+
+### 18.14 JPEG comparison and fallback verification before the fix (2026-09-20)
+
+The same 60-page trial URL was run in three process-local live variants:
+
+| variant | source-native PNG timing | JPEG capture | result |
+| --- | ---: | --- | --- |
+| pre-optimization equivalent (eager crop on every draw) | 41.0 s | disabled | 60 PNG, `end` |
+| pre-optimization equivalent (eager crop on every draw) | 55.0 s | enabled | 60 JPEG, `end` |
+| current deferred crop | 44.7 s | disabled | 60 PNG, `end` |
+| current deferred crop | 44.7 s | enabled | 60 PNG, 0 JPEG, `end` |
+
+These wall-clock totals are single live runs and include the viewer's network
+and navigation timing, so they are directional rather than a benchmark.  They
+show that the old eager-plus-JPEG combination can complete but pays the largest
+cost, while deferred-plus-JPEG produced no JPEG artifact for this URL.  In that
+deferred live run, the PNG files were produced by the Core canvas fallback, not
+by a successfully accepted source-native capture; the cause is recorded below.
+
+JPEG is an optimization after source-native PNG capture, not a required path.
+The adapter first creates the source-native PNG, then uses browser-image
+signatures to accept JPEG only when every visible part has exactly one matching
+candidate.  If any part is missing, ambiguous, or fails validation, the
+complete visible capture falls back to the source-native PNG.  If source-native
+capture itself is unavailable, `capture_page()` returns `None` and the Core
+capture fallback may produce a canvas PNG instead.  Production now enables
+deferred source-native plus JPEG matching; failed matching still falls back to
+source-native PNG.
+
+### 18.15 Deferred materialization error-handling defect and fix (2026-09-20)
+
+The live comparison identified why the deferred-plus-JPEG variant produced
+zero JPEG files.  The browser-side materialization wrapper returned a valid
+`dataUrl` but converted a normal `copySourceCrop()` result of `error: null`
+into the string `"native source crop unavailable"` by using a truthiness
+fallback.  The Python safety check then rejected the call because
+`sourceCropPngError` was non-empty.  `capture_page()` returned `None` before
+JPEG signature matching, so Core captured the visible canvas as PNG.
+
+The eager path does not pass through this error-field conversion and therefore
+reached JPEG matching, yielding 60 JPEG files in the same live run.  This
+defect was corrected by preserving a normal `null` error value.  Production
+now enables deferred source-native plus JPEG matching; failed matching still
+falls back to source-native PNG.
+
+### 18.16 Deferred source-native plus JPEG live verification (2026-09-20)
+
+After the error-field fix and retry change, the same 60-page trial viewer
+completed at `end` in 54.837 seconds with 60 JPEG artifacts and no timeout.
+The run used deferred source-native capture and JPEG matching. One fallback
+click occurred, with the remaining navigation actions using ArrowLeft.
+
+The navigation retry behavior is intentionally bounded. `go_next()` sends one
+`ArrowLeft`; if identity remains unchanged while the page is still CONTENT,
+`wait_for_change()` performs up to six additional actions at 2, 4, 6, 8, 10,
+and 12 seconds: `click`, `ArrowLeft`, `click`, `ArrowLeft`, `click`,
+`ArrowLeft`. The adapter stops at 14 seconds. AD, END, NEXT_CONTENT, an
+identity change, and the final `N/N` counter return without retrying. The Core
+runner uses the adapter's page-change budget plus its 2,000 ms grace and does
+not independently retry navigation.
 
 ## 19. Known limitations / maintenance
 

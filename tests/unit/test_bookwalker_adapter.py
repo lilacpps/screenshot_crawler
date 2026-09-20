@@ -431,6 +431,7 @@ async def test_bookwalker_wait_for_change_uses_click_after_arrow_stalls() -> Non
     adapter = BookWalkerAdapter()
     adapter.page_change_timeout_ms = 400
     adapter.advance_retry_count = 1
+    adapter.advance_retry_interval_ms = 200
     page = FakePage()
     previous = ContentIdentity(page_id="1/60", page_number=1, source_id="source")
     current = previous
@@ -476,6 +477,7 @@ async def test_bookwalker_wait_for_change_times_out_after_fallback() -> None:
     adapter = BookWalkerAdapter()
     adapter.page_change_timeout_ms = 200
     adapter.advance_retry_count = 1
+    adapter.advance_retry_interval_ms = 100
     page = FakePage()
     identity = ContentIdentity(page_id="1/60", page_number=1, source_id="source")
     click_count = 0
@@ -502,6 +504,47 @@ async def test_bookwalker_wait_for_change_times_out_after_fallback() -> None:
         await adapter.wait_for_change(page, identity)  # type: ignore[arg-type]
 
     assert click_count == 1
+
+
+@pytest.mark.asyncio
+async def test_bookwalker_wait_for_change_alternates_click_and_arrow_retries() -> None:
+    class FakePage:
+        async def wait_for_timeout(self, _milliseconds: int) -> None:
+            return
+
+    adapter = BookWalkerAdapter()
+    adapter.page_change_timeout_ms = 700
+    adapter.advance_retry_count = 3
+    adapter.advance_retry_interval_ms = 100
+    page = FakePage()
+    identity = ContentIdentity(page_id="1/60", page_number=1, source_id="source")
+    actions: list[str] = []
+
+    async def detect_state(_page: object) -> PageState:
+        return PageState.CONTENT
+
+    async def get_identity(_page: object) -> ContentIdentity:
+        return identity
+
+    async def is_last_page(_page: object) -> bool:
+        return False
+
+    async def click_fallback(_page: object) -> None:
+        actions.append("click")
+
+    async def press_arrow(_page: object) -> None:
+        actions.append("arrow")
+
+    adapter.detect_state = detect_state  # type: ignore[method-assign]
+    adapter.get_content_identity = get_identity  # type: ignore[method-assign]
+    adapter._is_last_page_counter = is_last_page  # type: ignore[method-assign]
+    adapter._click_left_edge = click_fallback  # type: ignore[method-assign]
+    adapter._press_left_arrow = press_arrow  # type: ignore[method-assign]
+
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.wait_for_change(page, identity)  # type: ignore[arg-type]
+
+    assert actions == ["click", "arrow", "click"]
 
 
 def test_bookwalker_read_link_score_prefers_owned_reader_over_trial() -> None:

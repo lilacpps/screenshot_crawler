@@ -97,6 +97,33 @@ class _FakeResponse:
         return JPEG_1X1
 
 
+class _PreparePage:
+    def __init__(self) -> None:
+        self.listener_count = 0
+        self.route_count = 0
+
+    async def add_init_script(self, _script: str) -> None:
+        return None
+
+    def on(self, _event: str, _handler: object) -> None:
+        self.listener_count += 1
+
+    async def route(self, _pattern: str, _handler: object) -> None:
+        self.route_count += 1
+
+
+@pytest.mark.asyncio
+async def test_original_jpeg_capture_is_enabled_for_production_runs() -> None:
+    adapter = adapter_module.BookWalkerAdapter()
+    page = _PreparePage()
+
+    await adapter.prepare_page(page)  # type: ignore[arg-type]
+
+    assert adapter.enable_original_jpeg_capture
+    assert page.listener_count == 1
+    assert page.route_count == 1
+
+
 @pytest.mark.asyncio
 async def test_response_body_listener_is_host_limited_and_redacts_url() -> None:
     adapter = BookWalkerAdapter()

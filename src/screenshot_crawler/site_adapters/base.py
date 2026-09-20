@@ -96,6 +96,11 @@ class SiteAdapter(ABC):
     ) -> None:
         """Wait until the previous screen has changed and rendering is stable enough."""
 
+    def get_page_change_timeout_ms(self, default_ms: int) -> int:
+        """Return the adapter's bounded page-change wait budget."""
+
+        return int(getattr(self, "page_change_timeout_ms", default_ms))
+
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
         """Optional site-specific data appended to generic diagnostics."""
         return {}

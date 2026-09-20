@@ -78,15 +78,22 @@ class CrawlerRunner:
     def __init__(self, config: RunConfig) -> None:
         self.config = config
 
-    async def _adapter_call(self, awaitable: object, operation: str):
+    async def _adapter_call(
+        self,
+        awaitable: object,
+        operation: str,
+        *,
+        timeout_ms: int | None = None,
+    ):
+        budget_ms = (
+            self.config.page_change_timeout_ms
+            if timeout_ms is None
+            else timeout_ms
+        )
         try:
             return await asyncio.wait_for(
                 awaitable,
-                timeout=(
-                    self.config.page_change_timeout_ms
-                    + self.config.adapter_timeout_grace_ms
-                )
-                / 1000,
+                timeout=(budget_ms + self.config.adapter_timeout_grace_ms) / 1000,
             )
         except TimeoutError as exc:
             raise PageChangeTimeoutError(
@@ -146,7 +153,11 @@ class CrawlerRunner:
                 if state is PageState.AD:
                     await self._adapter_call(adapter.go_next(page), "go_next")
                     await self._adapter_call(
-                        adapter.wait_for_change(page, previous_identity), "wait_for_change"
+                        adapter.wait_for_change(page, previous_identity),
+                        "wait_for_change",
+                        timeout_ms=adapter.get_page_change_timeout_ms(
+                            self.config.page_change_timeout_ms
+                        ),
                     )
                     continue
                 if state is not PageState.CONTENT:
@@ -244,7 +255,11 @@ class CrawlerRunner:
 
                 await self._adapter_call(adapter.go_next(page), "go_next")
                 await self._adapter_call(
-                    adapter.wait_for_change(page, previous_identity), "wait_for_change"
+                    adapter.wait_for_change(page, previous_identity),
+                    "wait_for_change",
+                    timeout_ms=adapter.get_page_change_timeout_ms(
+                        self.config.page_change_timeout_ms
+                    ),
                 )
         except MaxPagesExceededError:
             raise

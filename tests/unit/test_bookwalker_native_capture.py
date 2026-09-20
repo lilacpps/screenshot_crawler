@@ -5,6 +5,7 @@ import base64
 from screenshot_crawler.core.capture import capture_png_bytes
 from screenshot_crawler.core.errors import CaptureUnavailableError
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
+    _MATERIALIZE_NATIVE_SOURCE_SCRIPT,
     BookWalkerAdapter,
     _capture_from_data_url,
     _native_call_is_safe,
@@ -75,6 +76,12 @@ def test_native_safety_rejects_non_image_bitmap_sources() -> None:
         assert not _native_call_is_safe(call)
 
 
+def test_deferred_materialization_preserves_null_copy_error() -> None:
+    assert "error: copy ? copy.error : 'native source crop unavailable'" in (
+        _MATERIALIZE_NATIVE_SOURCE_SCRIPT
+    )
+
+
 class _FakeCanvas:
     async def get_attribute(self, name: str) -> str | None:
         assert name == "data-bookwalker-trace-id"
@@ -94,10 +101,24 @@ class _FakePage:
         self.calls = calls
         self.geometry_cleared = False
         self.native_cleared = False
+        self.materialize_count = 0
 
     async def evaluate(self, expression: str, *_args: object) -> object:
         if "__bookwalkerNativeDrawCalls" in expression and ".filter" in expression:
             return self.calls
+        if "__bookwalkerMaterializeNativeSourceCrop" in expression:
+            self.materialize_count += 1
+            payload = _args[0]
+            return [
+                {
+                    "dataUrl": (
+                        "data:image/png;base64,"
+                        + base64.b64encode(PNG_1X1).decode()
+                    ),
+                    "error": None,
+                }
+                for _item in payload  # type: ignore[union-attr]
+            ]
         if "__bookwalkerNativeCaptureEnabled = false" in expression:
             self.native_cleared = True
         if "__bookwalkerDrawCalls = []" in expression:
@@ -152,3 +173,16 @@ async def test_native_success_clears_geometry_but_failure_keeps_fallback_trace()
 
     await adapter.cleanup_capture_targets(failure_page)  # type: ignore[arg-type]
     assert failure_page.geometry_cleared
+
+
+async def test_native_source_png_is_materialized_only_for_selected_calls() -> None:
+    call = _native_call_fixture()
+    call.pop("sourceCropPng")
+    call.pop("sourceCropPngError")
+    page = _FakePage([call])
+    adapter = _TestBookWalkerAdapter()
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert page.materialize_count == 1

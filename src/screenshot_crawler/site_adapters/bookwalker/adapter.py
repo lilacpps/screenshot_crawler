@@ -50,6 +50,8 @@ _DRAW_TRACE_SCRIPT = """
   window.__bookwalkerDrawCalls = [];
   window.__bookwalkerNativeCaptureEnabled = true;
   window.__bookwalkerNativeDrawCalls = [];
+  window.__bookwalkerNativeSourceObjects = new Map();
+  window.__bookwalkerNativeEagerCapture = false;
   const original = CanvasRenderingContext2D.prototype.drawImage;
   let nextCanvasId = 1;
   let nextSourceId = 1;
@@ -70,6 +72,7 @@ _DRAW_TRACE_SCRIPT = """
       id = String(nextSourceId++);
       sourceIds.set(source, id);
     }
+    window.__bookwalkerNativeSourceObjects.set(id, source);
     return id;
   };
   const sourceRectAndDestination = (source, values) => {
@@ -123,6 +126,12 @@ _DRAW_TRACE_SCRIPT = """
       return {dataUrl: null, error: String(error)};
     }
   };
+  window.__bookwalkerMaterializeNativeSourceCrop = ({sourceId, sourceRect}) => (
+    copySourceCrop(
+      window.__bookwalkerNativeSourceObjects.get(String(sourceId)),
+      sourceRect,
+    )
+  );
   CanvasRenderingContext2D.prototype.drawImage = function(...args) {
     try {
       const canvas = this.canvas;
@@ -150,7 +159,6 @@ _DRAW_TRACE_SCRIPT = """
         }
         if (window.__bookwalkerNativeCaptureEnabled && args[0] && geometry.destination) {
           const source = args[0];
-          const copy = copySourceCrop(source, geometry.sourceRect);
           let transform = null;
           try {
             const matrix = this.getTransform();
@@ -159,7 +167,7 @@ _DRAW_TRACE_SCRIPT = """
               d: matrix.d, e: matrix.e, f: matrix.f,
             };
           } catch (error) {}
-          window.__bookwalkerNativeDrawCalls.push({
+          const nativeCall = {
             timestamp: performance.now(),
             canvasId: getCanvasId(canvas),
             canvasWidth: canvas.width,
@@ -176,9 +184,13 @@ _DRAW_TRACE_SCRIPT = """
             transform,
             globalCompositeOperation: this.globalCompositeOperation,
             filter: this.filter,
-            sourceCropPng: copy.dataUrl,
-            sourceCropPngError: copy.error,
-          });
+          };
+          if (window.__bookwalkerNativeEagerCapture) {
+            const copy = copySourceCrop(source, geometry.sourceRect);
+            nativeCall.sourceCropPng = copy.dataUrl;
+            nativeCall.sourceCropPngError = copy.error;
+          }
+          window.__bookwalkerNativeDrawCalls.push(nativeCall);
           if (window.__bookwalkerNativeDrawCalls.length > 100) {
             window.__bookwalkerNativeDrawCalls.shift();
           }
@@ -188,6 +200,20 @@ _DRAW_TRACE_SCRIPT = """
     return original.apply(this, args);
   };
 })();
+"""
+
+_MATERIALIZE_NATIVE_SOURCE_SCRIPT = """
+items => items.map(item => {
+  try {
+    const copy = window.__bookwalkerMaterializeNativeSourceCrop?.(item);
+    return {
+      dataUrl: copy?.dataUrl || null,
+      error: copy ? copy.error : 'native source crop unavailable',
+    };
+  } catch (error) {
+    return {dataUrl: null, error: String(error)};
+  }
+})
 """
 
 _CAMPAIGN_TAG = re.compile(r"【[^】]*】")
@@ -292,14 +318,21 @@ class BookWalkerStrictEntryError(RuntimeError):
 class BookWalkerAdapter(SiteAdapter):
     """Canvas viewer adapter for one BookWalker content ID."""
 
-    page_change_timeout_ms = 10_000
+    # Use deferred source-native PNG capture followed by conservative JPEG
+    # matching in production. A failed match still returns the native PNG.
+    enable_original_jpeg_capture = True
+    # Test-only compatibility switch for reproducing the pre-optimization
+    # behavior. Production keeps deferred source-native PNG materialization.
+    eager_native_source_capture = False
+    page_change_timeout_ms = 14_000
     navigation_wait_timeout_ms = 5_000
     read_link_wait_timeout_ms = 5_000
     strict_entry_initial_settle_ms = 250
     strict_candidate_poll_interval_ms = 100
     strict_candidate_stability_samples = 2
     render_stable_checks = 4
-    advance_retry_count = 2
+    advance_retry_count = 6
+    advance_retry_interval_ms = 2_000
     end_marker_grace_ms = 1_500
     spread_ratio = 1.25
     original_capture_attempts = 3
@@ -1102,6 +1135,12 @@ class BookWalkerAdapter(SiteAdapter):
 
     async def prepare_page(self, page: Page) -> None:
         await page.add_init_script(_DRAW_TRACE_SCRIPT)
+        await page.add_init_script(
+            "window.__bookwalkerNativeEagerCapture = "
+            f"{str(self.eager_native_source_capture).lower()};"
+        )
+        if not self.enable_original_jpeg_capture:
+            return
         for task in tuple(self._original_response_tasks):
             task.cancel()
         if self._original_response_tasks:
@@ -1321,6 +1360,7 @@ class BookWalkerAdapter(SiteAdapter):
                 () => {
                   window.__bookwalkerNativeCaptureEnabled = false;
                   window.__bookwalkerNativeDrawCalls = [];
+                  window.__bookwalkerNativeSourceObjects?.clear();
                 }
                 """
             )
@@ -1339,12 +1379,45 @@ class BookWalkerAdapter(SiteAdapter):
                 """
                 () => {
                   window.__bookwalkerNativeDrawCalls = [];
+                  window.__bookwalkerNativeSourceObjects?.clear();
                   window.__bookwalkerNativeCaptureEnabled = true;
                 }
                 """
             )
         except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
             return
+
+    async def _materialize_native_source_crops(
+        self,
+        page: Page,
+        selected: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        payload = [
+            {
+                "sourceId": call.get("sourceId"),
+                "sourceRect": call.get("sourceRect"),
+            }
+            for call in selected
+        ]
+        results = await page.evaluate(
+            _MATERIALIZE_NATIVE_SOURCE_SCRIPT,
+            payload,
+        )
+        if not isinstance(results, list) or len(results) != len(selected):
+            raise CaptureUnavailableError(
+                "BookWalker native source crop materialization failed"
+            )
+        materialized: list[dict[str, Any]] = []
+        for call, result in zip(selected, results, strict=True):
+            if not isinstance(result, dict):
+                raise CaptureUnavailableError(
+                    "BookWalker native source crop result is invalid"
+                )
+            enriched = dict(call)
+            enriched["sourceCropPng"] = result.get("dataUrl")
+            enriched["sourceCropPngError"] = result.get("error")
+            materialized.append(enriched)
+        return materialized
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
         """Prefer native source crops and return None for the legacy fallback."""
@@ -1382,6 +1455,8 @@ class BookWalkerAdapter(SiteAdapter):
                 raise CaptureUnavailableError(
                     "BookWalker native source calls did not match page geometry"
                 )
+            if any("sourceCropPng" not in call for call in selected):
+                selected = await self._materialize_native_source_crops(page, selected)
 
             captures: list[CaptureResult] = []
             for call in selected:
@@ -1425,9 +1500,10 @@ class BookWalkerAdapter(SiteAdapter):
                         "BookWalker native PNG dimensions do not match source rectangle"
                     )
                 captures.append(capture)
-            original_captures = await self._capture_original_jpegs(
-                page, tuple(captures)
-            )
+            if not self.enable_original_jpeg_capture:
+                await self._clear_geometry_trace(page)
+                return tuple(captures)
+            original_captures = await self._capture_original_jpegs(page, tuple(captures))
             await self._clear_geometry_trace(page)
             return original_captures or tuple(captures)
         except CaptureUnavailableError:
@@ -1658,9 +1734,12 @@ class BookWalkerAdapter(SiteAdapter):
 
     async def go_next(self, page: Page) -> None:
         self._final_navigation_pending = await self._is_last_page_counter(page)
-        await self._arm_native_capture(page)
         # The viewer's keyboard handler advances reliably even when a
         # viewport click is accepted by Playwright but ignored by the viewer.
+        await self._press_left_arrow(page)
+
+    async def _press_left_arrow(self, page: Page) -> None:
+        await self._arm_native_capture(page)
         await page.keyboard.press("ArrowLeft")
 
     async def _click_left_edge(self, page: Page) -> None:
@@ -1691,7 +1770,7 @@ class BookWalkerAdapter(SiteAdapter):
     ) -> None:
         deadline_ms = self.page_change_timeout_ms
         elapsed_ms = 0
-        retry_at_ms = deadline_ms // (self.advance_retry_count + 1)
+        retry_at_ms = self.advance_retry_interval_ms
         retry_count = 0
         while elapsed_ms < deadline_ms:
             state = await self.detect_state(page)
@@ -1718,15 +1797,15 @@ class BookWalkerAdapter(SiteAdapter):
                 and retry_count < self.advance_retry_count
                 and elapsed_ms >= retry_at_ms
             ):
-                # Playwright can report a successful key/click dispatch even
-                # when the viewer ignores that action. The page identity is
-                # authoritative, so use the alternate click path only after
-                # the primary ArrowLeft action produced no change.
-                await self._click_left_edge(page)
+                # Playwright can report a successful dispatch even when the
+                # viewer ignores that action. Alternate the two known input
+                # paths while the page identity remains authoritative.
+                if retry_count % 2 == 0:
+                    await self._click_left_edge(page)
+                else:
+                    await self._press_left_arrow(page)
                 retry_count += 1
-                retry_at_ms = deadline_ms * (retry_count + 1) // (
-                    self.advance_retry_count + 1
-                )
+                retry_at_ms = self.advance_retry_interval_ms * (retry_count + 1)
             await page.wait_for_timeout(100)
             elapsed_ms += 100
         raise PageChangeTimeoutError("BookWalker page did not change within timeout")
