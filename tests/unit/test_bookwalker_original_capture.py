@@ -128,10 +128,12 @@ async def test_original_jpeg_capture_is_enabled_for_production_runs() -> None:
 @pytest.mark.asyncio
 async def test_native_capture_mode_init_script_controls_trace(
     browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = BookWalkerAdapter()
     prepared = _PreparePage()
     await adapter.prepare_page(prepared)  # type: ignore[arg-type]
+    assert len(prepared.init_scripts) == 1
     mode_script = prepared.init_scripts[0]
 
     async def evaluate_scripts(url: str, scripts: tuple[str, ...]) -> dict[str, object]:
@@ -163,11 +165,17 @@ async def test_native_capture_mode_init_script_controls_trace(
     ) == {"mode": "native", "enabled": True, "installed": True}
     assert await evaluate_scripts(
         "https://viewer.bookwalker.jp/production",
-        (mode_script, draw_script),
+        (mode_script,),
     ) == {"mode": "native", "enabled": True, "installed": True}
+
+    monkeypatch.setenv("BOOKWALKER_CAPTURE_MODE", "canvas")
+    canvas_adapter = BookWalkerAdapter()
+    canvas_prepared = _PreparePage()
+    await canvas_adapter.prepare_page(canvas_prepared)  # type: ignore[arg-type]
+    assert len(canvas_prepared.init_scripts) == 1
     assert await evaluate_scripts(
         "https://trial.bookwalker.jp/production",
-        ("window.__bookwalkerCaptureMode = 'canvas';", draw_script),
+        (canvas_prepared.init_scripts[0],),
     ) == {"mode": "canvas", "enabled": False, "installed": True}
 
 

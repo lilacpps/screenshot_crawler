@@ -1194,8 +1194,7 @@ class BookWalkerAdapter(SiteAdapter):
             "window.__bookwalkerCaptureMode = "
             f"{self.capture_mode!r};"
         )
-        await page.add_init_script(native_mode_script)
-        await page.add_init_script(_DRAW_TRACE_SCRIPT)
+        await page.add_init_script(native_mode_script + "\n" + _DRAW_TRACE_SCRIPT)
         if self.capture_mode != "native" or not self.enable_original_jpeg_capture:
             return
         for task in tuple(self._original_response_tasks):

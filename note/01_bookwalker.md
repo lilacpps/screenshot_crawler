@@ -849,6 +849,10 @@ native capture, does not retain source objects or draw-time snapshots, does
 not observe original JPEG responses, and returns `None` from `capture_page()`
 so the existing rendered-canvas path is used.
 
+The mode assignment and draw-trace installation are registered as one init
+script, so `canvas` cannot be changed to `native` by init-script execution
+order.
+
 For an A/B live run, use the same shared Crawler Chrome/profile, source URL,
 and bounded page count in separate empty output directories:
 
