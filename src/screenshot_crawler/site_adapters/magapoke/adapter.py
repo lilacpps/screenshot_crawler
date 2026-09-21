@@ -15,6 +15,7 @@ from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.magapoke.native_capture import (
     MagapokeUrlParts,
     is_magapoke_jpeg_response,
+    jpeg_dimensions,
     normalize_source_path,
     parse_magapoke_url,
     reconstruct_jpeg_lossless,
@@ -199,6 +200,8 @@ class MagapokeAdapter(SiteAdapter):
     source_response_wait_timeout_ms = 2_000
     source_response_retry_count = 2
     source_response_retry_interval_ms = 100
+    capture_retry_count = 2
+    capture_retry_interval_ms = 100
     max_source_responses = 128
     rewind_max_steps = 32
 
@@ -439,105 +442,127 @@ class MagapokeAdapter(SiteAdapter):
         rows = await self._canvas_rows(page)
         if not rows:
             raise LookupError("Magapoke content canvas is not visible")
+        return self._targets_for_rows(page, rows)
+
+    def _targets_for_rows(self, page: Page, rows: list[dict[str, object]]) -> tuple[Locator, ...]:
         locator = page.locator(self.content_canvas_selector)
         return tuple(locator.nth(int(row["index"])) for row in rows)
 
-    async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
-        rows = await self._canvas_rows(page)
-        if not rows:
-            return None
-        targets = await self.get_capture_targets(page)
-        paths_to_release: set[str] = set()
+    async def _capture_native_attempt(
+        self,
+        page: Page,
+        rows: list[dict[str, object]],
+        paths_to_release: set[str],
+    ) -> tuple[tuple[CaptureResult, ...] | None, tuple[Locator, ...], bool]:
+        targets = self._targets_for_rows(page, rows)
         records: list[dict[str, object]] = []
-        try:
-            for row in rows:
-                path = str(row.get("sourcePath") or "")
-                paths_to_release.add(path)
-                mappings = row.get("mapping")
-                base = row.get("base")
-                visible_draw = row.get("visibleDraw")
-                width = int(row.get("canvasWidth") or 0)
-                height = int(row.get("canvasHeight") or 0)
-                body = None
+        observation_retryable = False
+        deterministic_source_failure = False
+        for row in rows:
+            path = str(row.get("sourcePath") or "")
+            paths_to_release.add(path)
+            mappings = row.get("mapping")
+            base = row.get("base")
+            visible_draw = row.get("visibleDraw")
+            width = int(row.get("canvasWidth") or 0)
+            height = int(row.get("canvasHeight") or 0)
+            body = None
+            if not path or self._source_episode is None:
+                observation_retryable = True
+            elif not source_matches_episode(path, self._source_episode):
+                deterministic_source_failure = True
+            elif not (
+                isinstance(mappings, list)
+                and mappings
+                and isinstance(base, dict)
+                and isinstance(visible_draw, dict)
+                and width > 0
+                and height > 0
+            ):
+                observation_retryable = True
+            else:
+                body = await self._source_bytes_for(path)
                 if (
-                    path
-                    and self._source_episode is not None
-                    and source_matches_episode(path, self._source_episode)
-                    and isinstance(mappings, list)
-                    and isinstance(base, dict)
-                    and isinstance(visible_draw, dict)
-                    and width > 0
-                    and height > 0
+                    body is None
+                    or body[:3] != b"\xff\xd8\xff"
+                    or jpeg_dimensions(body) is None
                 ):
-                    body = await self._source_bytes_for(path)
-                records.append(
-                    {
-                        "path": path,
-                        "body": body,
-                        "base": base,
-                        "mappings": mappings,
-                        "visible_draw": visible_draw,
-                        "canvas_size": (width, height),
-                    }
-                )
+                    observation_retryable = True
+            records.append(
+                {
+                    "path": path,
+                    "body": body,
+                    "base": base,
+                    "mappings": mappings,
+                    "visible_draw": visible_draw,
+                    "canvas_size": (width, height),
+                }
+            )
 
-            lossless_captures: list[CaptureResult] = []
-            lossless_ok = True
-            for record in records:
-                body = record["body"]
-                result = (
-                    reconstruct_jpeg_lossless(
-                        body,
-                        base=record["base"],
-                        mappings=record["mappings"],
-                        visible_draw=record["visible_draw"],
-                        source_path=str(record["path"]),
-                        canvas_size=record["canvas_size"],
-                    )
-                    if isinstance(body, bytes)
-                    and isinstance(record["base"], dict)
-                    and isinstance(record["mappings"], list)
-                    and isinstance(record["visible_draw"], dict)
-                    else None
-                )
-                if result is None:
-                    lossless_ok = False
-                else:
-                    lossless_captures.append(result)
-            if lossless_ok:
-                return tuple(lossless_captures)
+        if deterministic_source_failure:
+            return None, targets, False
+        if observation_retryable:
+            return None, targets, True
 
-            png_captures: list[CaptureResult] = []
-            png_ok = True
-            for record in records:
-                body = record["body"]
-                result = (
-                    reconstruct_jpeg_png(
-                        body,
-                        base=record["base"],
-                        mappings=record["mappings"],
-                        visible_draw=record["visible_draw"],
-                        source_path=str(record["path"]),
-                        canvas_size=record["canvas_size"],
+        lossless_captures: list[CaptureResult] = []
+        for record in records:
+            body = record["body"]
+            result = reconstruct_jpeg_lossless(
+                body,
+                base=record["base"],
+                mappings=record["mappings"],
+                visible_draw=record["visible_draw"],
+                source_path=str(record["path"]),
+                canvas_size=record["canvas_size"],
+            )
+            if result is None:
+                break
+            lossless_captures.append(result)
+        else:
+            return tuple(lossless_captures), targets, False
+
+        png_captures: list[CaptureResult] = []
+        for record in records:
+            body = record["body"]
+            result = reconstruct_jpeg_png(
+                body,
+                base=record["base"],
+                mappings=record["mappings"],
+                visible_draw=record["visible_draw"],
+                source_path=str(record["path"]),
+                canvas_size=record["canvas_size"],
+            )
+            if result is None:
+                return None, targets, False
+            png_captures.append(result)
+        return tuple(png_captures), targets, False
+
+    async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        paths_to_release: set[str] = set()
+        fallback_targets: tuple[Locator, ...] = ()
+        try:
+            for attempt in range(self.capture_retry_count + 1):
+                rows = await self._canvas_rows(page)
+                if rows:
+                    captures, targets, retryable = await self._capture_native_attempt(
+                        page, rows, paths_to_release
                     )
-                    if isinstance(body, bytes)
-                    and isinstance(record["base"], dict)
-                    and isinstance(record["mappings"], list)
-                    and isinstance(record["visible_draw"], dict)
-                    else None
-                )
-                if result is None:
-                    png_ok = False
+                    fallback_targets = targets
+                    if captures is not None:
+                        return captures
                 else:
-                    png_captures.append(result)
-            if png_ok:
-                return tuple(png_captures)
+                    retryable = True
+                if not retryable or attempt >= self.capture_retry_count:
+                    break
+                await page.wait_for_timeout(self.capture_retry_interval_ms)
         finally:
             for path in paths_to_release:
                 if path:
                     await self._discard_source(path)
+        if not fallback_targets:
+            return None
         # A visible spread is all-native or all-fallback; never mix provenance.
-        return tuple([await capture_locator(target) for target in targets])
+        return tuple([await capture_locator(target) for target in fallback_targets])
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:
         rows = await self._canvas_rows(page)

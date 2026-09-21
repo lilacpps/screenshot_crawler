@@ -416,6 +416,15 @@ edge. Any failure falls back to the existing PNG reconstruction and then the
 Locator screenshot path. 4:2:2 and 4:2:0 remain rejected because equivalent
 chroma upsampling at tile seams has not been proven.
 
+Magapoke also has a bounded Adapter-level capture retry. In addition to the
+existing two retries for source response body acquisition, the Adapter may
+make two additional attempts for the current visible spread when rows,
+mapping/base/final draw metadata, canvas dimensions, or source JPEG bytes are
+transiently incomplete. Each attempt re-observes the whole spread and never
+mixes provenance between canvases. Deterministic unsafe mapping and a
+successful PNG reconstruction are not retried; after the bounded attempts the
+existing PNG and Locator fallback levels remain authoritative.
+
 Native reconstruction is accepted only for integer, equal-size rectangles with
 identity transform, normal source-over composition, complete non-overlapping
 coverage, and a uniquely attributable current-episode source. Unknown or

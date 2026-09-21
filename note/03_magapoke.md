@@ -69,6 +69,15 @@ coefficient/header/edge validation succeeds. The mapping is calculated from
 the observed rectangles; no fixed tile count or permutation is assumed.
 4:2:2 and 4:2:0 are rejected rather than assumed safe.
 
+The Adapter keeps the existing source-body retry of two additional attempts.
+It also allows two additional capture attempts for the current visible spread
+when observation is transiently incomplete: rows, mapping/base/final draw
+metadata, canvas dimensions, or source JPEG bytes are not ready. Each attempt
+re-observes all visible rows and keeps the spread all-or-none. A deterministic
+unsafe mapping or a successful PNG reconstruction is not retried; the latter
+returns PNG immediately. After the bounded attempts, the existing PNG then
+Locator fallback remains unchanged.
+
 The artificial 70x48 fixture verified forward and inverse coefficient
 permutation, including a 72px coded width with the rightmost coded block left
 untouched, and matched the existing PNG reconstruction at every decoded RGB
@@ -122,8 +131,9 @@ tile permutation, missing/overlap/gap and unsafe mapping rejection. The local
 Playwright fixtures cover the complete Adapter-level hierarchy: an aligned
 fixture returns coefficient-domain JPEG, while the existing non-aligned and
 bad-header fixture exercises PNG reconstruction and Locator screenshot
-fallback. They also cover tainted canvas screenshot behavior through Core and
-episode URL change.
+fallback. Unit tests also cover retrying a transient spread observation once
+and avoiding retry for deterministic failure. They also cover tainted canvas
+screenshot behavior through Core and episode URL change.
 
 The real-site CDP smoke on 2026-09-21 captured 25 artifacts from episode
 244815, all as JPEG at 685x1024 through the coefficient path, and packaged them

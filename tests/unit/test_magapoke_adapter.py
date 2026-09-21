@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
+from screenshot_crawler.core.capture import CaptureResult
+from screenshot_crawler.site_adapters.magapoke.adapter import MagapokeAdapter
 from screenshot_crawler.site_adapters.magapoke.native_capture import (
     is_magapoke_jpeg_response,
     jpeg_dimensions,
@@ -258,6 +260,99 @@ def test_visible_final_draw_and_source_canvas_size_are_safety_gates() -> None:
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_adapter_retries_current_spread_after_retryable_observation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.waits: list[int] = []
+
+        async def wait_for_timeout(self, timeout: int) -> None:
+            self.waits.append(timeout)
+
+    adapter = MagapokeAdapter()
+    page = FakePage()
+    row_calls = 0
+    attempt_calls = 0
+    capture = CaptureResult(b"jpeg", 1, 1, "image/jpeg", ".jpg")
+
+    async def fake_rows(_page: object) -> list[dict[str, object]]:
+        nonlocal row_calls
+        row_calls += 1
+        return [{"index": 0}]
+
+    async def fake_attempt(
+        _page: object,
+        _rows: list[dict[str, object]],
+        _paths: set[str],
+    ) -> tuple[tuple[CaptureResult, ...] | None, tuple[object, ...], bool]:
+        nonlocal attempt_calls
+        attempt_calls += 1
+        if attempt_calls == 1:
+            return None, (object(),), True
+        return (capture,), (object(),), False
+
+    monkeypatch.setattr(adapter, "_canvas_rows", fake_rows)
+    monkeypatch.setattr(adapter, "_capture_native_attempt", fake_attempt)
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result == (capture,)
+    assert row_calls == 2
+    assert attempt_calls == 2
+    assert page.waits == [adapter.capture_retry_interval_ms]
+
+
+@pytest.mark.asyncio
+async def test_adapter_does_not_retry_deterministic_spread_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.waits: list[int] = []
+
+        async def wait_for_timeout(self, timeout: int) -> None:
+            self.waits.append(timeout)
+
+    adapter = MagapokeAdapter()
+    page = FakePage()
+    row_calls = 0
+    attempt_calls = 0
+    fallback = CaptureResult(b"png", 1, 1)
+
+    async def fake_rows(_page: object) -> list[dict[str, object]]:
+        nonlocal row_calls
+        row_calls += 1
+        return [{"index": 0}]
+
+    async def fake_attempt(
+        _page: object,
+        _rows: list[dict[str, object]],
+        _paths: set[str],
+    ) -> tuple[tuple[CaptureResult, ...] | None, tuple[object, ...], bool]:
+        nonlocal attempt_calls
+        attempt_calls += 1
+        return None, (object(),), False
+
+    async def fake_capture_locator(_target: object) -> CaptureResult:
+        return fallback
+
+    monkeypatch.setattr(adapter, "_canvas_rows", fake_rows)
+    monkeypatch.setattr(adapter, "_capture_native_attempt", fake_attempt)
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.magapoke.adapter.capture_locator",
+        fake_capture_locator,
+    )
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result == (fallback,)
+    assert row_calls == 1
+    assert attempt_calls == 1
+    assert page.waits == []
 
 
 @pytest.mark.parametrize(
