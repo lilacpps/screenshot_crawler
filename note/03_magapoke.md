@@ -123,6 +123,88 @@ The CLI closes the crawl Page and disconnects the Playwright/CDP session before
 filesystem-only ZIP packaging. This prevents late viewer/CDP events from
 writing to a transport that is already being torn down.
 
+## Discovery investigation (M0)
+
+### Target
+
+- URL: `https://pocket.shonenmagazine.com/title/00695/episode/244815`
+- Investigation date: 2026-09-22.
+- Latest `main` checked before the investigation: `63dc2d8` (`Retry transient Magapoke capture observations`).
+- The shared Crawler Chrome was reached through CDP at the standard local endpoint `http://127.0.0.1:9222`; an existing account session was visible through the page header (`マイページ` and account counters). Cookies and storage were not inspected.
+- The requested precondition said that episode `244815` was already in ticket-rental state. The live DOM contradicts that mapping: `244815` currently displays `【第１話】「一眼一足」（１）` with the free signal. The live row matching the requested title `【第７話】「鋼人攻略戦準備」（１）` is episode `244841`, and that row is the one displaying `レンタル中`. This ID/title discrepancy must be resolved before production Discovery is implemented.
+- Only navigation/reload of the supplied episode page and the visible `もっと見る` list expansion were used. No episode row, ticket, point, purchase, subscription, or other paid/quota control was clicked.
+
+### Episode list structure
+
+- The work title is `h1.p-episode__comic-ttl` (`虚構推理`). The observed `data-v-*` attributes are Vue build output and are not suitable as primary selectors.
+- The episode-list section is the `div.p-episode__sec` containing `.p-episode__list` and `ul.c-episode-items`. In the observed build it also had `data-v-d2021e79`, but the class/structure is the stronger signal.
+- A row is `ul.c-episode-items > li.c-episode-items__item > a.c-episode-item`.
+- The canonical row fields are:
+  - episode link: `a.c-episode-item[href]`; observed hrefs are `/title/00695/episode/{episode_id}` and resolve to the same-site absolute URL;
+  - title: `h2.c-episode-item__ttl`;
+  - date: `p.c-episode-item__date`;
+  - access indicator: `.c-episode-item__ico` and its state suffix class;
+  - optional rental remaining time: `.c-episode-item__label02-txt` / `.c-episode-item__txt--renting`.
+- After expansion, 259 visible rows were observed. The episode IDs were unique; no duplicate row identity was found. `title_id` is safely preserved as the string `00695`, and `episode_id` is safely obtained from the href path without using the displayed title.
+- The list is newest-to-oldest. The first rows were episodes 103, 102, 101, and the final rows were episode 1. Episode 7 appeared as IDs `244844` through `244841`, with part 4 first and part 1 last.
+- Raw titles are not a simple integer order domain. The observed list contains `(1)` through `(5)`, full-width and ASCII digit variants, `前編`/`後編` in the title, and `【特別編】TVアニメBD1巻 特典漫画`. Keep the raw title as `order_label` input; do not assume that a single integer is a safe `order_key`.
+
+### Expand behavior
+
+- The episode-list control is a visible `button.p-episode__more-btn` inside the same `.p-episode__sec` / `.p-episode__more` scope. It had text `もっと見る`, `disabled=false`, and no href. There were hidden buttons with the same class in other page sections, so visibility and episode-list scoping are required.
+- In this live observation the initial visible row count was 10. One click changed it from 10 to 160; a second click changed it from 160 to 259. The existing first row and the `ul.c-episode-items` node remained connected, while 150 rows were added as child-list mutations on the first expansion. No pagination navigation or scroll was required.
+- The safe traversal shape is therefore: collect the current identity signature; find exactly one visible episode-list `もっと見る`; click it; bounded-wait until the identity signature changes; reject no-progress; repeat. The control should be re-selected after every mutation rather than reused.
+- Full expansion was observed when the identity count reached 259 and no visible episode-list `button.p-episode__more-btn` remained. Hidden same-class buttons elsewhere in the page must not be treated as evidence that the episode list is incomplete.
+- A future implementation needs bounded `max_expand_attempts`, a bounded per-click wait, and a no-progress guard. The live observation supports progress by identity-count/signature change, not a fixed click count.
+
+### Access-state observations
+
+The following counts are account/time-dependent observations from the fully expanded page, not fixed site constants: 3 `--point`, 225 `--ticket-free`, 30 `--free`, and 1 `--renting` row.
+
+| Observed state | DOM signal | Example | Investigation result |
+| --- | --- | --- | --- |
+| free | `.c-episode-item__ico.c-episode-item__ico--free` containing `<img src="/img/txt_free01.svg" alt="無料">` | `244815` | Strong list-level signal; no point/ticket text. |
+| quota/ticket candidate | `.c-episode-item__ico.c-episode-item__ico--ticket-free` containing the same `alt="無料"` asset | `244842` | The class distinguishes it from `--free`, but the page does not say `ポイント` or `チケット`; the exact quota semantics were not verified by clicking. |
+| active rental | `.c-episode-item__ico.c-episode-item__ico--renting` with `<img src="/img/txt_renting01.svg" alt="レンタル中">`, plus `.c-episode-item__txt--renting` | `244841`, `【第７話】…（１）` | Confirmed at DOM level. The visible row text contained `あと71時間`; `レンタル中` was in the image `alt`, not `innerText`. No expiry timestamp or data attribute was found. |
+| paid/point required | `.c-episode-item__ico.c-episode-item__ico--point` with visible text `90` | `443536` | Strong class/text signal; the row did not contain the literal word `ポイント`. No paid control was clicked. |
+| owned/purchased | No verified list signal | — | Not verified. `is-read` / `is-last-read` only indicate reading/current-row history and must not be treated as ownership. |
+
+Color was not used as a state contract. The useful signals were the state-specific class and the semantic image `alt`; however, no `data-*`, `aria-label`, or `data-testid` state attribute was observed. The `--ticket-free` versus `--free` distinction remains a site-specific class contract that should be treated as a monitored observation, not silently generalized.
+
+### Proposed Discovery mapping
+
+- Work identity: `title_id` from the target/list URL, preserving leading zeroes (`00695`).
+- Source `external_id`: the `episode_id` path segment, for example `244841`; do not derive it from the title string.
+- Source target URL: the canonical absolute episode URL, for example `https://pocket.shonenmagazine.com/title/00695/episode/244841`.
+- Item metadata: work title from `h1.p-episode__comic-ttl`; raw episode title from `h2.c-episode-item__ttl`; raw date from `p.c-episode-item__date`; order normalization is intentionally not implemented by M0.
+- Tentative access-mode candidates for a future adapter are `--free` → free, `--ticket-free` → quota/ticket candidate, `--renting` → active rental, and `--point` → paid/points. These are observations for a future Site Policy mapping, not an implementation decision in M0. They must not be confused with the crawler `access_strategy`.
+
+### Full traversal completion
+
+`complete=true` is safe only when all of the following hold:
+
+- the episode-list section and work title are found unambiguously;
+- every emitted row has a same-work episode href and a non-empty `episode_id`;
+- every expansion click has a bounded wait and increases the identity signature/count;
+- the visible episode-list expand control is absent after the final progress check;
+- no navigation, timeout, selector ambiguity, or DOM observation error occurred;
+- optional sanity checks, such as the observed row count matching the page's `全259話` count, do not conflict.
+
+The future adapter should return an incomplete result rather than claim completion if the selector is missing/ambiguous, a row lacks identity, a click produces no progress, a control remains visible after the attempt bound, or the page/navigation state is otherwise unclear. A hidden button in an unrelated section is not a failure.
+
+### Incremental outlook
+
+Generic known-streak is usable as the incremental stop mechanism, with one adapter-level traversal requirement: yield the newest-to-oldest episode-list order and treat the initial newest block as the traversal prefix. The page initially renders a newest block plus an older tail, then inserts the middle/older rows when `もっと見る` is expanded; an iterator must not mistake that presentation detail for a normal contiguous page boundary. No Magapoke-specific stop hook is indicated by the observed ordering. The generic known-streak limit and Catalog safety behavior remain framework responsibilities.
+
+### Open questions
+
+- The requested URL/ID and the requested title do not match live data (`244815` is episode 1; `244841` is episode 7 part 1 and is the active rental row). Confirm the intended watchlist target before implementation.
+- `--ticket-free` is a strong DOM candidate for the work-ticket/quota state, but the exact resource semantics were deliberately not verified by clicking.
+- Owned/purchased state was not verified and should remain unknown until a non-consuming, explicit signal is found.
+- Rental expiry was observed only as human-readable `あと71時間`; no absolute expiry or hidden dataset value was found.
+- The class names and image paths are site/build-specific and may change. No stable `data-testid` or state data attribute was observed.
+- M0 did not implement `MagapokeDiscoveryAdapter`, registry changes, Site Policy, Batch, access strategies, or any Catalog/Core change.
+
 ## Tests and live verification
 
 Unit tests cover URL/context, response filtering, JPEG magic/dimensions/MCU
