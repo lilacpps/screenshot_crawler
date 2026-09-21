@@ -6,9 +6,226 @@ targets:
     enabled: true
     label: 獣王と薬草
 
+  - key: kumotu-no-vante
+    work_key: kumotu-no-vante
+    site: mangaone
+    url: https://manga-one.com/manga/28339/chapter/357214
+    enabled: true
+    label: 供物のヴァンテ
+
+  - key: momijitomomomiji
+    work_key: momijitomomomiji
+    site: mangaone
+    url: https://manga-one.com/manga/28342/chapter/356710
+    enabled: true
+    label: 紅葉と紅葉
+
+  - key: kakushite-kisetsu-wa-ao-wo-shiru
+    work_key: kakushite-kisetsu-wa-ao-wo-shiru
+    site: mangaone
+    url: https://manga-one.com/manga/28345/chapter/357205
+    enabled: true
+    label: かくして季節はアオを知る
+
+  - key: greenboy
+    work_key: greenboy
+    site: mangaone
+    url: https://manga-one.com/manga/27930/chapter/353362
+    enabled: true
+    label: GREENBOY
+
+  - key: tukiatte-agetemo-ii-kana
+    work_key: tukiatte-agetemo-ii-kana
+    site: mangaone
+    url: https://manga-one.com/manga/603/chapter/60189
+    enabled: true
+    label: 付き合ってあげてもいいかな
+
+  - key: isshou-senkin
+    work_key: isshou-senkin
+    site: mangaone
+    url: https://manga-one.com/manga/2275/chapter/207556
+    enabled: true
+    label: 一勝千金
+
+  - key: pawahara-genkai-yuusha
+    work_key: pawahara-genkai-yuusha
+    site: mangaone
+    url: https://manga-one.com/manga/2692/chapter/231613
+    enabled: true
+    label: パワハラ限界勇者、魔王軍から好待遇でスカウトされる
+
+  - key: ao-no-orchestra
+    work_key: ao-no-orchestra
+    site: mangaone
+    url: https://manga-one.com/manga/288/chapter/29310
+    enabled: true
+    label: 青のオーケストラ
+
+  - key: yomiya-nagi-ga-mane-ni-yashoku-wo-tsukuru-riyuu
+    work_key: yomiya-nagi-ga-mane-ni-yashoku-wo-tsukuru-riyuu
+    site: mangaone
+    url: https://manga-one.com/manga/28498/chapter/359137
+    enabled: true
+    label: 宵宮凪がマネに夜食を作る理由
+
+  - key: tengoku20
+    work_key: tengoku20
+    site: mangaone
+    url: https://manga-one.com/manga/27124/chapter/300271
+    enabled: true
+    label: 天国2.0
+
+  - key: moukyouminashi
+    work_key: moukyouminashi
+    site: mangaone
+    url: https://manga-one.com/manga/2245/chapter/204898
+    enabled: true
+    label: もう興味がないと離婚された令嬢の意外と楽しい新生活
+
+  - key: taikichu
+    work_key: taikichu
+    site: mangaone
+    url: https://manga-one.com/manga/27457/chapter/328129
+    enabled: true
+    label: ただいま待機中につき
+
+  - key: hoshikuzu-no-oujisama
+    work_key: hoshikuzu-no-oujisama
+    site: mangaone
+    url: https://manga-one.com/manga/2166/chapter/200721
+    enabled: true
+    label: 星屑の王子様
+
+  - key: saikyo-onnnashisho-shuraba
+    work_key: saikyo-onnnashisho-shuraba
+    site: mangaone
+    url: https://manga-one.com/manga/1749/chapter/157056
+    enabled: true
+    label: 最強女師匠たちが育成方針を巡って修羅場
+
+  - key: kusuriya-no-hitorigoto
+    work_key: kusuriya-no-hitorigoto 
+    site: mangaone
+    url: https://manga-one.com/manga/741/chapter/72537
+    enabled: true
+    label: 薬屋のひとりごと
+
+  - key: ryuurou-no-mahoro
+    work_key: ryuurou-no-mahoro
+    site: mangaone
+    url: https://manga-one.com/manga/28438/chapter/357829
+    enabled: true
+    label: 流狼のまほろ
+
+  - key: makein
+    work_key: makein
+    site: mangaone
+    url: https://manga-one.com/manga/1993/chapter/181855
+    enabled: true
+    label: 負けヒロインが多すぎる
+
+  - key: rairairai
+    work_key: rairairai
+    site: mangaone
+    url: https://manga-one.com/manga/2341/chapter/212119
+    enabled: true
+    label: 雷雷雷
+
+  - key: bllue-wolusus
+    work_key: blue-wolusus
+    site: mangaone
+    url: https://manga-one.com/manga/26821/chapter/286378
+    enabled: true
+    label: ブルーウルスス
+
+  - key: darwin-no-taizai
+    work_key: darwin-no-taizai
+    site: mangaone
+    url: https://manga-one.com/manga/26798/chapter/285371
+    enabled: true
+    label: ダーウィンの大罪
+
+  - key: miharu-no-senjou
+    work_key: miharu-no-senjou
+    site: mangaone
+    url: https://manga-one.com/manga/26481/chapter/277699
+    enabled: true
+    label: ミハルの戦場
+
+  - key: hotaru-no-yomeiri
+    work_key: hotaru-no-yomeiri
+    site: mangaone
+    url: https://manga-one.com/manga/2169/chapter/200733
+    enabled: true
+    label: ホタルの嫁入り
+
+  - key: mizuki-no-koi
+    work_key: mizuki-no-koi
+    site: mangaone
+    url: https://manga-one.com/manga/28408/chapter/358336
+    enabled: true
+    label: 水月の恋人
+
   - key: nibanmekanojo
     work_key: nibanmekanojo
     site: bookwalker
     url: https://bookwalker.jp/series/317089/list/
     enabled: true
     label: わたし、二番目の彼女でいいから。
+
+  - key: youjitsu
+    work_key: youjitsu
+    site: bookwalker
+    url: https://bookwalker.jp/series/44784/list/
+    enabled: false
+    label: ようこそ実力至上主義の教室へ
+
+  - key: koakuma-teiri-to-kyuuseishu
+    work_key: koakuma-teiri-to-kyuuseishu
+    site: bookwalker
+    url: https://bookwalker.jp/series/2435/list/
+    enabled: true
+    label: 小悪魔ティーリと救世主
+
+  - key: sword-art-online
+    work_key: sword-art-online
+    site: bookwalker
+    url: https://bookwalker.jp/series/56430/list/
+    enabled: true
+    label: ソードアート・オンライン
+
+  - key: sword-art-online-progressive
+    work_key: sword-art-online-progressive
+    site: bookwalker
+    url: https://bookwalker.jp/series/56431/list/
+    enabled: true
+    label: ソードアート・オンラインプログレッシブ
+
+  - key: accel-world
+    work_key: accel-world
+    site: bookwalker
+    url: https://bookwalker.jp/series/53782/list/
+    enabled: true
+    label: アクセル・ワールド
+
+  - key: gimai-seikatsu
+    work_key: gimai-seikatsu
+    site: bookwalker
+    url: https://bookwalker.jp/series/284993/list/
+    enabled: true
+    label: 義妹生活
+
+  - key: spy-classroom
+    work_key: spy-classroom
+    site: bookwalker
+    url: https://bookwalker.jp/series/232476/list/
+    enabled: true
+    label: スパイ教室
+
+  - key: spy-classroom-short-story
+    work_key: spy-classroom-short-story
+    site: bookwalker
+    url: https://bookwalker.jp/series/292630/list/
+    enabled: true
+    label: スパイ教室短編集
