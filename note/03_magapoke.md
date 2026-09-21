@@ -119,9 +119,11 @@ writing to a transport that is already being torn down.
 Unit tests cover URL/context, response filtering, JPEG magic/dimensions/MCU
 inspection, coefficient-domain aligned tile permutation, non-divisible PNG
 tile permutation, missing/overlap/gap and unsafe mapping rejection. The local
-Playwright fixture covers native PNG reconstruction, bad JPEG response-header
-fallback, tainted canvas screenshot behavior through Core, and episode URL
-change.
+Playwright fixtures cover the complete Adapter-level hierarchy: an aligned
+fixture returns coefficient-domain JPEG, while the existing non-aligned and
+bad-header fixture exercises PNG reconstruction and Locator screenshot
+fallback. They also cover tainted canvas screenshot behavior through Core and
+episode URL change.
 
 The real-site CDP smoke on 2026-09-21 captured 25 artifacts from episode
 244815, all as JPEG at 685x1024 through the coefficient path, and packaged them
