@@ -25,7 +25,10 @@ is `unknown`. Episode titles remain raw `order_label` values and
 
 Full and incremental discovery use the same complete expansion. Incremental
 stopping remains the generic known-streak behavior; no Magapoke-specific stop
-hook is installed. Magapoke Batch, SitePolicy, ticket/point controls, active
+hook is installed. The current generic known-source threshold is five
+consecutive distinct known identities; a new identity resets the streak. The
+older two-source examples later in this historical design note are superseded
+by this current implementation value. Magapoke Batch, SitePolicy, ticket/point controls, active
 grant persistence, and Catalog/Core schema changes remain out of scope.
 
 ## Phase 5A status
@@ -586,7 +589,10 @@ latest
   unknown -> add, known streak 0
   unknown -> add, known streak 0
   known   -> refresh, streak 1
-  known   -> refresh, streak 2 -> stop
+  known   -> refresh, streak 2
+  known   -> refresh, streak 3
+  known   -> refresh, streak 4
+  known   -> refresh, streak 5 -> stop
 ```
 
 incremental syncでは、観測していない過去sourceを `available=false` にしない。

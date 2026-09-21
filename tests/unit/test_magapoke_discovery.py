@@ -64,10 +64,22 @@ def test_magapoke_conflicting_access_states_are_incomplete() -> None:
     with pytest.raises(DiscoveryIncompleteError):
         map_magapoke_access_mode(
             [
-                "c-episode-item__ico c-episode-item__ico--free",
-                "c-episode-item__ico c-episode-item__ico--point",
+                "c-episode-item__ico c-episode-item__ico--ticket-free",
+                "c-episode-item__ico c-episode-item__ico--renting",
             ]
         )
+
+
+def test_magapoke_duplicate_known_class_and_unknown_presentation_are_allowed() -> None:
+    assert map_magapoke_access_mode(
+        [
+            "c-episode-item__ico c-episode-item__ico--free",
+            "c-episode-item__ico c-episode-item__ico--free",
+        ]
+    ) == "free"
+    assert map_magapoke_access_mode(
+        "c-episode-item__ico some-presentation-class c-episode-item__ico--free"
+    ) == "free"
 
 
 def _row(
@@ -259,8 +271,8 @@ async def test_magapoke_incremental_uses_generic_known_streak(
     result = await service.discover(browser_page, _target(), "incremental")
 
     assert result.complete is None
-    assert result.observed_count == 2
-    assert result.known_count == 2
+    assert result.observed_count == 5
+    assert result.known_count == 5
     assert result.stopped_reason == "known_streak"
 
 

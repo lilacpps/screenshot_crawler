@@ -372,10 +372,12 @@ async def test_full_reconciliation_only_happens_after_complete_exhaustion(tmp_pa
 
 
 async def test_incremental_known_streak_and_run_start_snapshot_are_preserved(tmp_path: Path) -> None:
-    adapter = FakeDiscoveryAdapter([record("one"), record("two"), record("three")])
+    adapter = FakeDiscoveryAdapter(
+        [record(external_id) for external_id in ("one", "two", "three", "four", "five", "six")]
+    )
     service, catalog, watch_target = setup_service(tmp_path, adapter)
     work = catalog.create_work(WorkInput(work_key="work-a", title="作品A"))
-    for external_id in ("one", "two"):
+    for external_id in ("one", "two", "three", "four", "five"):
         item = catalog.create_item(work_id=work.id)
         catalog.create_source(
             SourceInput(site="site-a", external_id=external_id, discovery_key=watch_target.key),
@@ -384,8 +386,40 @@ async def test_incremental_known_streak_and_run_start_snapshot_are_preserved(tmp
 
     result = await service.discover(FakePage(), watch_target, "incremental")
     assert result.stopped_reason == "known_streak"
-    assert result.observed_count == 2
-    assert catalog.find_source("site-a", "three") is None
+    assert result.observed_count == 5
+    assert catalog.find_source("site-a", "six") is None
+
+
+async def test_incremental_known_streak_resets_after_new_source(tmp_path: Path) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [
+            record(external_id)
+            for external_id in (
+                "known-a",
+                "known-b",
+                "new-c",
+                "known-d",
+                "known-e",
+                "known-f",
+                "known-g",
+                "known-h",
+            )
+        ]
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="作品A"))
+    for external_id in ("known-a", "known-b", "known-d", "known-e", "known-f", "known-g", "known-h"):
+        item = catalog.create_item(work_id=work.id)
+        catalog.create_source(
+            SourceInput(site="site-a", external_id=external_id, discovery_key=watch_target.key),
+            item_id=item.id,
+        )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.stopped_reason == "known_streak"
+    assert result.observed_count == 8
+    assert result.new_count == 1
 
 
 async def test_incremental_duplicate_known_source_does_not_increase_streak(

@@ -263,7 +263,8 @@ Generic known-streak remains the incremental stop mechanism. Because the
 adapter yields a fully expanded, validated newest-to-oldest sequence, no
 Magapoke-specific stop hook is needed. M1 does not add Batch/SitePolicy,
 `access_strategy` handling, ticket or point clicks, active-grant persistence,
-or Catalog/Core schema changes.
+or Catalog/Core schema changes. The current generic known-streak threshold is
+five consecutive distinct known identities; a new source resets the streak.
 
 ### M1 live verification
 
@@ -280,8 +281,9 @@ episode row or paid/quota control was clicked.
 - Catalog access modes were `paid=3`, `quota=226`, and `free=30`; the former
   M0 active-rental observation (`episode_id=244841`) is represented as
   `quota` without local grant timestamps;
-- a subsequent incremental run observed two already-known newest rows and
-  stopped with generic `known_streak` (`complete=None`);
+- the initial M1 live verification was performed while the generic threshold
+  was 2, so its incremental run observed two already-known newest rows and
+  stopped with generic `known_streak` (`complete=None`); current code uses 5;
 - Catalog export showed 259 items, 259 sources, and no crawl runs or artifacts.
 
 The temporary Watchlist and Catalog were removed after verification. The

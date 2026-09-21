@@ -81,16 +81,17 @@ def map_magapoke_access_mode(icon_classes: str | Iterable[str] | None) -> str:
     """Map observed row icon classes to site-neutral access modes."""
 
     values = [icon_classes] if isinstance(icon_classes, str) else (icon_classes or ())
-    states = {
-        state
+    recognized_classes = {
+        class_name
         for value in values
         for class_name in (value or "").split()
-        for state in [_ACCESS_CLASSES.get(class_name)]
-        if state is not None
+        if class_name in _ACCESS_CLASSES
     }
-    if len(states) > 1:
+    if len(recognized_classes) > 1:
         raise DiscoveryIncompleteError("Magapoke episode row has conflicting access states")
-    return next(iter(states), "unknown")
+    if not recognized_classes:
+        return "unknown"
+    return _ACCESS_CLASSES[next(iter(recognized_classes))]
 
 
 def _clean_text(value: str) -> str:

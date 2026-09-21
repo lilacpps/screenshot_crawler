@@ -641,6 +641,13 @@ BookWalker Discoveryはseries listから商品URLを列挙し、商品ページ�
 
 ### 22.3 Discovery framework（実装済み）
 
+#### Current incremental known-streak threshold
+
+The current generic incremental Discovery implementation stops after five
+consecutive distinct known source identities. Observing a new source resets
+the streak to zero. Any older two-known-source examples in this historical
+note describe the former default and are superseded by the current value.
+
 `DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。targetの`work_key`でWorkをfind/createし、Work titleは新規作成時だけ`label`から初期化する。author/genreは観測値が非NULLでWork側がNULLの場合だけ補完し、既存値を上書きしない。
 
 `DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。現行のreal-site用AdapterはManga ONEとBookWalkerである。BookWalkerはWatchlistのseries list targetだけを対象にする。

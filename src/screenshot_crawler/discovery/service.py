@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from screenshot_crawler.watchlist.models import WatchlistTarget
 
 _VALID_MODES = frozenset({"full", "incremental"})
-_KNOWN_STREAK_LIMIT = 2
+_KNOWN_STREAK_LIMIT = 5
 _WHITESPACE = re.compile(r"\s+")
 
 
