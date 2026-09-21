@@ -89,6 +89,10 @@ The adapter receives a Playwright `Page`. It does not launch Chrome, select a
 profile, resolve a CDP endpoint, or manage browser lifecycle. Use the shared
 `.chrome-crawler/` profile and `CRAWLER_CDP_ENDPOINT` through the common CLI.
 
+The CLI closes the crawl Page and disconnects the Playwright/CDP session before
+filesystem-only ZIP packaging. This prevents late viewer/CDP events from
+writing to a transport that is already being torn down.
+
 ## Tests and live verification
 
 Unit tests cover URL/context, response filtering, JPEG magic/dimensions/MCU

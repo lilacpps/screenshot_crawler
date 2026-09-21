@@ -1,12 +1,14 @@
 import builtins
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
 
 from screenshot_crawler import cli
 from screenshot_crawler.cli import _parser
+from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery.models import DiscoveryResult
 
 
@@ -33,6 +35,77 @@ def test_crawl_uses_cdp_options() -> None:
     assert not hasattr(args, "auth_state")
     assert not hasattr(args, "auth_required")
     assert not hasattr(args, "headed")
+
+
+@pytest.mark.asyncio
+async def test_crawl_disconnects_browser_before_packaging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeAdapter:
+        def get_output_metadata(self) -> dict[str, str]:
+            return {"title": "Test"}
+
+    class FakeRegistry:
+        def create(self, _site: str) -> FakeAdapter:
+            return FakeAdapter()
+
+    class FakeSession:
+        @classmethod
+        async def connect(cls, _endpoint: str) -> "FakeSession":
+            return cls()
+
+        async def new_page(self) -> object:
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            events.append("close_page")
+
+        async def close(self) -> None:
+            events.append("close_session")
+
+    class FakeRunner:
+        def __init__(self, _config: object) -> None:
+            pass
+
+        async def run(self, _page: object, _adapter: FakeAdapter) -> object:
+            events.append("crawl")
+            return SimpleNamespace(
+                pages=(object(),),
+                stop_reason="next_content",
+                stop_state=PageState.NEXT_CONTENT,
+            )
+
+    def fake_package(*_args: object, **_kwargs: object) -> object:
+        events.append("package")
+        return SimpleNamespace(
+            archive_path=tmp_path / "archive.zip",
+            status_path=tmp_path / "status.json",
+        )
+
+    monkeypatch.setattr(cli, "_registry", lambda: FakeRegistry())
+    monkeypatch.setattr(cli, "BrowserSession", FakeSession)
+    monkeypatch.setattr(cli, "CrawlerRunner", FakeRunner)
+    monkeypatch.setattr(cli, "package_crawl_output", fake_package)
+
+    args = _parser().parse_args(
+        [
+            "crawl",
+            "--site",
+            "magapoke",
+            "--url",
+            "https://example.test/title/1/episode/2",
+            "--output-dir",
+            str(tmp_path / "crawl"),
+            "--cdp-endpoint",
+            "http://127.0.0.1:9222",
+        ]
+    )
+    await cli._run_crawl(args)
+
+    assert events == ["crawl", "close_page", "close_session", "package"]
 
 
 def test_discover_parser_accepts_watchlist_catalog_and_mode() -> None:

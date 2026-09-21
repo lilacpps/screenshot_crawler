@@ -435,20 +435,12 @@ async def _run_crawl(args: argparse.Namespace) -> None:
         values=values,
     )
     session = await BrowserSession.connect(endpoint)
+    result = None
     try:
         page = await session.new_page()
         try:
             result = await CrawlerRunner(config).run(page, adapter)
             print(f"Saved {len(result.pages)} pages; stopped at {result.stop_reason}.")
-            if result.stop_state in {PageState.END, PageState.NEXT_CONTENT}:
-                package = package_crawl_output(
-                    output_dir,
-                    adapter.get_output_metadata(),
-                    library_dir=library_dir,
-                    explicit_metadata=config.output_metadata,
-                )
-                print(f"Archive saved to {package.archive_path}")
-                print(f"Completion status saved to {package.status_path}")
         except BaseException:
             if args.keep_open:
                 print("Browser is open. Inspect it manually, then press Enter here to close it.")
@@ -462,6 +454,19 @@ async def _run_crawl(args: argparse.Namespace) -> None:
             await session.close_page(page)
     finally:
         await session.close()
+
+    # Packaging is filesystem-only. Do it after the Page and Playwright/CDP
+    # connection are closed so late browser events cannot race transport
+    # teardown and emit asyncio "socket.send() raised exception" warnings.
+    if result is not None and result.stop_state in {PageState.END, PageState.NEXT_CONTENT}:
+        package = package_crawl_output(
+            output_dir,
+            adapter.get_output_metadata(),
+            library_dir=library_dir,
+            explicit_metadata=config.output_metadata,
+        )
+        print(f"Archive saved to {package.archive_path}")
+        print(f"Completion status saved to {package.status_path}")
 
 
 async def _discover_target(

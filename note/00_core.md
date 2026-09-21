@@ -451,6 +451,11 @@ error.txt
 
 ## 19. CLI / packaging flow
 
+The crawl CLI closes the worker Page and disconnects the Playwright/CDP
+session before running the filesystem-only `package_crawl_output()` step. This
+keeps delayed browser events from writing to a transport that is already being
+torn down. The remote Crawler Chrome process itself is never closed.
+
 現行real-site crawl:
 
 ```text
