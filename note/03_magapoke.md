@@ -289,6 +289,27 @@ episode row or paid/quota control was clicked.
 The temporary Watchlist and Catalog were removed after verification. The
 live counts are observations only and are not production constants.
 
+## Batch implementation (M2)
+
+M2 adds `MagapokeSitePolicy` to the existing site-neutral Batch Planner and
+Executor path. The policy is deliberately free-only:
+
+| Catalog state | Policy result |
+| --- | --- |
+| `free` | eligible, `direct`, `consumes_quota=False` |
+| `quota` | skipped, `quota_not_supported` |
+| `paid` | skipped, `paid` |
+| `unknown` | skipped, `unknown` |
+| `owned` | skipped, `owned_not_verified` |
+| unavailable | skipped, `unavailable` |
+
+`MagapokeAdapter.configure_run()` accepts `auto` and `direct`, and rejects
+`quota` before navigation. Direct execution uses the existing viewer flow;
+M2 adds no ticket, premium-ticket, point, quota, or reader-entry click. The
+Batch Executor therefore preserves NULL `quota_started_at` and
+`access_granted_until` for free runs. Quota/renting handling, ownership, and
+all grant persistence remain deferred to M3.
+
 ## Tests and live verification
 
 Unit tests cover URL/context, response filtering, JPEG magic/dimensions/MCU

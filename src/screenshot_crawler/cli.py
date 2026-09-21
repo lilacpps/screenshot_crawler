@@ -46,6 +46,7 @@ from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
+    MagapokeSitePolicy,
     MangaOneSitePolicy,
     SitePolicyRegistry,
 )
@@ -343,6 +344,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
 def _batch_policy_registry() -> SitePolicyRegistry:
     registry = SitePolicyRegistry()
     registry.register("bookwalker", BookWalkerSitePolicy)
+    registry.register("magapoke", MagapokeSitePolicy)
     registry.register("mangaone", MangaOneSitePolicy)
     return registry
 

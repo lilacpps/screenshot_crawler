@@ -34,9 +34,12 @@ grant persistence, and Catalog/Core schema changes remain out of scope.
 ## Phase 5A status
 
 The read-only Batch Planner, Site Policy registry, Manga ONE Policy, and
-BookWalker Policy are implemented. `batch plan` reads pending Catalog items
+BookWalker Policy are implemented. Magapoke M2 adds a free-only Magapoke
+Policy: `free` is eligible with `direct`; `quota`, `paid`, `unknown`, and
+unverified `owned` are skipped. `batch plan` reads pending Catalog items
 and creates candidates; it never runs the Crawler or changes Catalog state.
 BookWalker uses a site-wide capacity of one quota start per 05:00 JST window.
+Magapoke does not implement quota capacity or grant-expiry logic in M2.
 
 ## Phase 5B status
 

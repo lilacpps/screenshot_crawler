@@ -8,8 +8,11 @@ from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
-from screenshot_crawler.core.errors import PageChangeTimeoutError
-from screenshot_crawler.core.models import ContentContext, ContentIdentity
+from screenshot_crawler.core.errors import (
+    PageChangeTimeoutError,
+    UnsupportedAccessStrategyError,
+)
+from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.magapoke.native_capture import (
@@ -210,6 +213,7 @@ class MagapokeAdapter(SiteAdapter):
     next_selector = ".c-viewer__pager-next"
 
     def __init__(self) -> None:
+        self._access_strategy: AccessStrategy = "auto"
         self._initial_url: str | None = None
         self._initial_parts: MagapokeUrlParts | None = None
         self._source_episode: MagapokeUrlParts | None = None
@@ -218,6 +222,18 @@ class MagapokeAdapter(SiteAdapter):
         self._source_response_tasks: dict[str, asyncio.Task[bytes | None]] = {}
         self._output_title: str | None = None
         self._output_order: str | None = None
+
+    async def configure_run(
+        self, page: Page, access_strategy: AccessStrategy
+    ) -> None:
+        """Allow only direct navigation; quota entry is intentionally unsupported."""
+
+        del page
+        if access_strategy not in {"auto", "direct"}:
+            raise UnsupportedAccessStrategyError(
+                f"MagapokeAdapter does not support access_strategy={access_strategy!r}"
+            )
+        self._access_strategy = access_strategy
 
     async def prepare_page(self, page: Page) -> None:
         for task in self._source_response_tasks.values():

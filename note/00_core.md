@@ -648,6 +648,15 @@ consecutive distinct known source identities. Observing a new source resets
 the streak to zero. Any older two-known-source examples in this historical
 note describe the former default and are superseded by the current value.
 
+#### Magapoke M2 Batch boundary
+
+Magapoke is now registered in the Batch Policy registry with a free-only
+policy. Only `access_mode="free"` produces an eligible `direct` candidate;
+quota, paid, unknown, and unverified owned sources are skipped. The policy
+does not implement quota capacity, grant expiry, ticket consumption, or
+Catalog mutation. The existing generic Batch Planner and Executor remain
+site-neutral.
+
 `DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。targetの`work_key`でWorkをfind/createし、Work titleは新規作成時だけ`label`から初期化する。author/genreは観測値が非NULLでWork側がNULLの場合だけ補完し、既存値を上書きしない。
 
 `DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。現行のreal-site用AdapterはManga ONEとBookWalkerである。BookWalkerはWatchlistのseries list targetだけを対象にする。

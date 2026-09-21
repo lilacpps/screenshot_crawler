@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from screenshot_crawler.core.capture import CaptureResult
+from screenshot_crawler.core.errors import UnsupportedAccessStrategyError
 from screenshot_crawler.site_adapters.magapoke.adapter import MagapokeAdapter
 from screenshot_crawler.site_adapters.magapoke.native_capture import (
     is_magapoke_jpeg_response,
@@ -60,6 +61,22 @@ MAPPINGS = [
     _mapping(sx=0, sy=0, sw=3, sh=7, dx=7, dy=0),
     _mapping(sx=3, sy=0, sw=7, sh=7, dx=0, dy=0),
 ]
+
+
+@pytest.mark.parametrize("access_strategy", ["auto", "direct"])
+async def test_magapoke_configure_run_allows_auto_and_direct(access_strategy: str) -> None:
+    adapter = MagapokeAdapter()
+
+    await adapter.configure_run(object(), access_strategy)  # type: ignore[arg-type]
+
+    assert adapter._access_strategy == access_strategy
+
+
+async def test_magapoke_configure_run_rejects_quota_without_navigation() -> None:
+    adapter = MagapokeAdapter()
+
+    with pytest.raises(UnsupportedAccessStrategyError):
+        await adapter.configure_run(object(), "quota")
 
 
 def _jpeg() -> bytes:

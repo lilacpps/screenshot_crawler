@@ -6,11 +6,13 @@ from screenshot_crawler.site_policies.base import (
     SitePolicyError,
 )
 from screenshot_crawler.site_policies.bookwalker import BookWalkerSitePolicy
+from screenshot_crawler.site_policies.magapoke import MagapokeSitePolicy
 from screenshot_crawler.site_policies.mangaone import MangaOneSitePolicy
 from screenshot_crawler.site_policies.registry import SitePolicyRegistry
 
 __all__ = [
     "BookWalkerSitePolicy",
+    "MagapokeSitePolicy",
     "MangaOneSitePolicy",
     "PolicyDecision",
     "SitePolicy",
