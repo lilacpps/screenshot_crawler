@@ -341,6 +341,9 @@ optional情報が後から埋まっただけではNEXT_CONTENTにしない。
 基本はLocator単位capture。
 
 Canvas targetの場合、`capture.py` はcanvas raw PNG bufferを取得できる。
+`toDataURL()` がtainted canvasの `SecurityError` やPlaywright evaluate errorで
+失敗した場合は、同じLocatorの `screenshot()` へsite-neutralにfallbackする。
+これによりcross-origin画像を描画するcanvasも、viewer外を撮らずに保存できる。
 
 Adapterは `get_capture_targets()` で複数targetを返せる。保存順はAdapterが返した順。
 
@@ -385,7 +388,7 @@ manifestは保存ページ一覧のauthority。
 各page entryは `mime_type` と `file_extension` を持つ。Locator / canvas captureの
 defaultは `image/png` / `.png` で、Adapterのdirect captureはsource-native artifactの
 formatをそのまま記録できる。Runnerはこのextensionで連番ファイル名を生成し、
-packagingはmanifest記載の安全なPNG/WebP artifactだけを対象にする。
+packagingはmanifest記載の安全なJPEG/PNG/WebP artifactだけを対象にする。
 
 `progress.json` はlast sequence / identity / fingerprint / contextを持つが、**自動resume機能ではない**。
 

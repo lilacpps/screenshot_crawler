@@ -59,6 +59,26 @@ async def test_capture_canvas_uses_raw_png_buffer() -> None:
     assert (result.width, result.height) == (1, 1)
 
 
+class TaintedCanvasLocator(FakeCanvasLocator):
+    async def evaluate(self, expression: str) -> object:
+        if "instanceof HTMLCanvasElement" in expression:
+            return True
+        raise RuntimeError("SecurityError: Tainted canvases may not be exported")
+
+    async def screenshot(self, **_kwargs: object) -> bytes:
+        return (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00"
+            b"\xb5\x1c\x0c\x02\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+
+
+async def test_capture_tainted_canvas_falls_back_to_locator_screenshot() -> None:
+    result = await capture_locator(TaintedCanvasLocator())  # type: ignore[arg-type]
+
+    assert result.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+
 class FakePage:
     url = "https://example.test/viewer"
 

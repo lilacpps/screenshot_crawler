@@ -47,11 +47,17 @@ async def capture_locator(locator: Locator) -> CaptureResult:
         "element => element instanceof HTMLCanvasElement"
     )
     if is_canvas:
-        data_url = await locator.evaluate("canvas => canvas.toDataURL('image/png')")
-        if isinstance(data_url, str) and data_url.startswith("data:image/png;base64,"):
-            data = base64.b64decode(data_url.split(",", 1)[1])
-        else:
+        try:
+            data_url = await locator.evaluate("canvas => canvas.toDataURL('image/png')")
+        except Exception:  # noqa: BLE001 - tainted canvas is a normal fallback
             data = await locator.screenshot(animations="disabled")
+        else:
+            if isinstance(data_url, str) and data_url.startswith(
+                "data:image/png;base64,"
+            ):
+                data = base64.b64decode(data_url.split(",", 1)[1])
+            else:
+                data = await locator.screenshot(animations="disabled")
     else:
         data = await locator.screenshot(animations="disabled")
     dimensions = _png_dimensions(data)

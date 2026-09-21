@@ -23,6 +23,7 @@ noteと上位authorityまたはcode/testsが食い違う場合、noteを現行�
 - `00_core.md`: Core / Runner / browser / output / packaging / diagnostics / resume /共通安全装置
 - `01_bookwalker.md`: BookWalker固有の観測・Adapter・login・capture・終端
 - `02_mangaone.md`: Manga ONE固有の観測・Adapter・login・capture・終端
+- `03_magapoke.md`: Magapoke固有のviewer・scrambled JPEG tile再構成・PNG fallback・遷移
 - 新規site追加時: `03_xxx.md` のように対応noteを追加
 
 ## Mandatory synchronization

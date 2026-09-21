@@ -388,6 +388,28 @@ Use lower capture levels only when that direct resource path is unavailable or u
 
 Site-specific details remain in each Adapter's documentation.
 
+### Magapoke
+
+The CDN JPEG is a scrambled transport image, not a completed page. Do not save
+it directly or JPEG-reencode it. Prefer the following verified hierarchy:
+
+```text
+scrambled transport JPEG
+    -> drawImage tile mapping observed for the current source
+    -> native pixel tile reconstruction
+    -> PNG
+    -> canvas Locator screenshot PNG fallback
+```
+
+Native reconstruction is accepted only for integer, equal-size rectangles with
+identity transform, normal source-over composition, complete non-overlapping
+coverage, and a uniquely attributable current-episode source. Unknown or
+unsafe mapping, invalid/unavailable JPEG, decode failure, or incomplete
+coverage falls back for the whole visible spread. Lossless WebP is not used;
+compressed-domain JPEG rearrangement is not adopted because the required MCU
+and arbitrary coefficient-domain handling is not a simple maintainable runtime
+path.
+
 ---
 
 ## 13. Provenance
