@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-09-19
+最終同期: 2026-09-21
 
 ## 1. 目的と現在のscope
 
@@ -276,6 +276,14 @@ author: None
 genre: 漫画
 ```
 
+Batchで`order_key`がNULLの非定型item（例: `おまけ`、`特別編`、PR系）を実行する場合、
+`order`の人間向け表記は変更せず、`Source.external_id`から作った
+`mangaone-{external_id}`をarchive stem末尾のdisambiguatorとして付ける。
+そのため、同じ作品の`おまけ`でもchapterごとに
+`作品名-おまけ-mangaone-214131.zip`のように安定して分離される。
+通常の`order_key`を持つ話、手動crawl、同じchapterの再packageは従来の命名と
+destination存在時の停止動作を維持する。
+
 ## 16. Login
 
 Manga ONE loginは実装済み。
@@ -342,6 +350,14 @@ endpoint優先順位:
 ```text
 output/Books/漫画/<title>/<title>-<order>.zip
 ```
+
+BatchのManga ONE非定型itemだけは、次のようにstable disambiguatorが付く。
+
+```text
+output/Books/漫画/<title>/<title>-<order>-mangaone-<external_id>.zip
+```
+
+ZIP内部のtop-level directoryと`crawl-status`のJSON filenameも同じarchive stemを使う。
 
 source crawl directoryは、manifest / progress / manifest記載artifact以外を含まない場合に限りcleanupされる。
 

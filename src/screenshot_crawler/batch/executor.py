@@ -103,11 +103,16 @@ class BatchExecutor:
             )
             crawl_result = await self.runner_factory(config).run(page, adapter)
             _require_normal_stop(crawl_result, candidate)
+            package_kwargs = {
+                "library_dir": library_dir,
+                "explicit_metadata": candidate.metadata,
+            }
+            if candidate.artifact_disambiguator is not None:
+                package_kwargs["artifact_disambiguator"] = candidate.artifact_disambiguator
             package = self.package_function(
                 output_dir,
                 adapter.get_output_metadata(),
-                library_dir=library_dir,
-                explicit_metadata=candidate.metadata,
+                **package_kwargs,
             )
             archive_path = Path(package.archive_path)
             sha256, byte_size = _hash_archive(archive_path)

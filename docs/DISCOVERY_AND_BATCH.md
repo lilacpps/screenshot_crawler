@@ -1025,6 +1025,12 @@ BatchCandidateはCatalog identityとして`item_id`、`source_id`、`target_id`�
 `backend`と`locator`を持つ。現時点でExecutorが受け付けるbackendは`web`だけであり、
 `locator`を既存Crawlerの`RunConfig.source_url`へ変換する。
 
+BatchCandidateは必要な場合だけ、Crawlerのmetadataとは別のpackaging-onlyな
+`artifact_disambiguator`を持てる。これはarchive stem、ZIP内部root、completion status
+filenameのsuffixに使うが、`title` / `order`等のmetadataやCatalogの`order_label`は変更しない。
+Manga ONEの`order_key = NULL` itemでは、Batch Plannerがstableな
+`mangaone-{Source.external_id}`を設定する。通常item、手動crawl、他siteでは未指定とする。
+
 手動crawlでは:
 
 ```text

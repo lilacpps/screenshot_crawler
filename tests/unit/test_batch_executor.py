@@ -74,10 +74,12 @@ def make_executor(
         *,
         library_dir: str | Path,
         explicit_metadata: dict[str, str],
+        artifact_disambiguator: str | None = None,
     ) -> PackageResult:
         if fail_package:
             raise RuntimeError("packaging failed")
-        archive_path = Path(library_dir) / "漫画" / "作品A" / "archive.zip"
+        suffix = f"-{artifact_disambiguator}" if artifact_disambiguator else ""
+        archive_path = Path(library_dir) / "漫画" / "作品A" / f"archive{suffix}.zip"
         if not missing_archive:
             archive_path.parent.mkdir(parents=True, exist_ok=True)
             with ZipFile(archive_path, "w") as archive:
@@ -190,6 +192,30 @@ async def test_direct_candidate_runs_and_completes_without_quota_state(
     source = service.get_source(candidate.source_id)
     assert source.quota_started_at is None
     assert source.access_granted_until is None
+
+
+async def test_artifact_disambiguator_is_forwarded_to_packaging(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = replace(
+        add_candidate(service, access_mode="free"),
+        metadata={"title": "作品A", "order": "おまけ"},
+        artifact_disambiguator="mangaone-214131",
+    )
+    executor = make_executor(service)
+
+    result = await executor.execute_candidate(
+        object(),
+        candidate,
+        output_root=tmp_path / "batch",
+        library_dir=tmp_path / "Books",
+        now=NOW,
+    )
+
+    assert result.archive_path == (
+        tmp_path / "Books" / "漫画" / "作品A" / "archive-mangaone-214131.zip"
+    )
 
 
 async def test_quota_state_is_persisted_before_crawl_and_granted_for_24_hours(

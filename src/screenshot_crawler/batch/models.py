@@ -33,6 +33,7 @@ class BatchCandidate:
     access_mode: str = "unknown"
     reason: str = ""
     consumes_quota: bool = False
+    artifact_disambiguator: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

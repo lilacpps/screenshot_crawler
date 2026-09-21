@@ -205,6 +205,11 @@ def _candidate_from_selection(selection: _Selection) -> BatchCandidate:
         locator=selection.target.locator,
         access_strategy=decision.access_strategy,
         metadata=_metadata(selection.work, item),
+        artifact_disambiguator=(
+            f"mangaone-{source.external_id}"
+            if source.site == "mangaone" and item.order_key is None
+            else None
+        ),
         access_mode=source.access_mode,
         reason=decision.reason,
         consumes_quota=decision.consumes_quota,

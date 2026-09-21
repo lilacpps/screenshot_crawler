@@ -13,7 +13,11 @@ from screenshot_crawler.catalog import (
     WorkInput,
 )
 from screenshot_crawler.catalog.service import JST
-from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
+from screenshot_crawler.site_policies import (
+    BookWalkerSitePolicy,
+    MangaOneSitePolicy,
+    SitePolicyRegistry,
+)
 
 NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
 
@@ -227,6 +231,67 @@ def test_source_priority_and_metadata_mapping(tmp_path: Path) -> None:
         "order": "第80話-後編",
         "genre": "漫画",
     }
+
+
+def test_mangaone_non_numeric_order_gets_stable_artifact_disambiguator(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    first_item, first_source = add_source(
+        service,
+        item=ItemInput(item_title="おまけ", order_label="おまけ"),
+        external_id="214131",
+        access_mode="free",
+    )
+    second_item, second_source = add_source(
+        service,
+        item=ItemInput(item_title="おまけ", order_label="おまけ"),
+        external_id="214987",
+        access_mode="free",
+    )
+
+    plan = plan_for(service)
+    candidates = {candidate.source_id: candidate for candidate in plan.candidates}
+
+    assert candidates[first_source.id].artifact_disambiguator == "mangaone-214131"
+    assert candidates[second_source.id].artifact_disambiguator == "mangaone-214987"
+    assert candidates[first_source.id].metadata["order"] == "おまけ"
+    assert candidates[second_source.id].metadata["order"] == "おまけ"
+    assert candidates[first_source.id].item_id == first_item.id
+    assert candidates[second_source.id].item_id == second_item.id
+
+
+def test_mangaone_numeric_order_has_no_artifact_disambiguator(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    _, source = add_source(
+        service,
+        item=ItemInput(item_title="第80話", order_key="80", order_label="第80話"),
+        external_id="214131",
+        access_mode="free",
+    )
+
+    candidate = plan_for(service).candidates[0]
+
+    assert candidate.source_id == source.id
+    assert candidate.artifact_disambiguator is None
+
+
+def test_non_mangaone_candidate_has_no_artifact_disambiguator(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="book", title="作品"))
+    item = service.create_item(ItemInput(item_title="第01巻", order_key="01"), work_id=work.id)
+    source = service.create_source(
+        SourceInput(site="bookwalker", external_id="book-1", access_mode="owned"),
+        item_id=item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/book-1"),
+        source_id=source.id,
+    )
+
+    registry = SitePolicyRegistry()
+    registry.register("bookwalker", BookWalkerSitePolicy)
+    plan = BatchPlanner(service, registry).plan(site="bookwalker", now=NOW)
+
+    assert plan.candidates[0].artifact_disambiguator is None
 
 
 def test_planner_selects_enabled_web_target_and_skips_other_backends(

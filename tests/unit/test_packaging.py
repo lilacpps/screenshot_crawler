@@ -1,5 +1,6 @@
 import json
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -102,6 +103,27 @@ def test_archive_stem_accepts_generic_order_for_episode_archives() -> None:
     )
     assert stem == "作品名-第01話-前編"
     assert (title, genre, order, author) == ("作品名", "漫画", "第01話-前編", None)
+
+
+def test_archive_stem_appends_optional_disambiguator_after_author() -> None:
+    stem, title, genre, order, author = archive_stem(
+        {
+            "title": "作品名",
+            "order": "おまけ",
+            "author": "著者",
+            "genre": "漫画",
+        },
+        artifact_disambiguator="mangaone-214131",
+    )
+
+    assert stem == "作品名-おまけ-著者-mangaone-214131"
+    assert (title, genre, order, author) == ("作品名", "漫画", "おまけ", "著者")
+
+
+def test_archive_stem_without_disambiguator_is_unchanged() -> None:
+    stem, *_ = archive_stem({"title": "作品名", "order": "第80話", "genre": "漫画"})
+
+    assert stem == "作品名-第80話"
 
 
 def test_package_crawl_output_creates_library_tree_and_zip(tmp_path) -> None:
@@ -235,6 +257,68 @@ def test_package_does_not_rmtree_unrelated_files(tmp_path) -> None:
     assert result.archive_path.exists()
     assert crawl_dir.exists()
     assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
+def test_package_disambiguator_updates_archive_root_and_status_name(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "page-0001.png").write_bytes(b"png")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+
+    result = package_crawl_output(
+        crawl_dir,
+        {"title": "作品名", "order": "おまけ", "genre": "漫画"},
+        artifact_disambiguator="mangaone-214131",
+        library_dir=tmp_path / "Books",
+    )
+
+    expected_stem = "作品名-おまけ-mangaone-214131"
+    assert result.archive_path == (
+        tmp_path / "Books" / "漫画" / "作品名" / f"{expected_stem}.zip"
+    )
+    assert result.status_path == tmp_path / "crawl-status" / f"{expected_stem}.json"
+    with zipfile.ZipFile(result.archive_path) as archive:
+        assert archive.namelist() == [f"{expected_stem}/page-0001.png"]
+
+
+def test_package_same_disambiguated_destination_still_raises(tmp_path) -> None:
+    def make_crawl(name: str) -> Path:
+        crawl_dir = tmp_path / name
+        crawl_dir.mkdir()
+        (crawl_dir / "page-0001.png").write_bytes(b"png")
+        (crawl_dir / "manifest.json").write_text(
+            json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+        )
+        (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+        return crawl_dir
+
+    library_dir = tmp_path / "Books"
+    metadata = {"title": "作品名", "order": "おまけ", "genre": "漫画"}
+    package_crawl_output(
+        make_crawl("first"),
+        metadata,
+        artifact_disambiguator="mangaone-214131",
+        library_dir=library_dir,
+    )
+
+    second = package_crawl_output(
+        make_crawl("different-chapter"),
+        metadata,
+        artifact_disambiguator="mangaone-214987",
+        library_dir=library_dir,
+    )
+    assert second.archive_path.name == "作品名-おまけ-mangaone-214987.zip"
+
+    with pytest.raises(FileExistsError, match="Archive already exists"):
+        package_crawl_output(
+            make_crawl("same-chapter"),
+            metadata,
+            artifact_disambiguator="mangaone-214131",
+            library_dir=library_dir,
+        )
 
 
 def test_package_fails_when_manifest_page_is_missing(tmp_path) -> None:
