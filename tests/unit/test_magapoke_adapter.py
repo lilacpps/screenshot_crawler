@@ -52,6 +52,7 @@ def _mapping(*, sx: int, sy: int, sw: int, sh: int, dx: int, dy: int, **override
 
 
 BASE = _mapping(sx=0, sy=0, sw=10, sh=7, dx=0, dy=0)
+VISIBLE = BASE
 MAPPINGS = [
     _mapping(sx=0, sy=0, sw=3, sh=7, dx=7, dy=0),
     _mapping(sx=3, sy=0, sw=7, sh=7, dx=0, dy=0),
@@ -120,6 +121,7 @@ def test_reconstructs_non_divisible_tile_permutation_to_png() -> None:
         _jpeg(),
         base=BASE,
         mappings=MAPPINGS,
+        visible_draw=VISIBLE,
         source_path=SOURCE_PATH,
         canvas_size=(10, 7),
     )
@@ -129,6 +131,31 @@ def test_reconstructs_non_divisible_tile_permutation_to_png() -> None:
     assert result.file_extension == ".png"
     assert (result.width, result.height) == (10, 7)
     assert result.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_visible_final_draw_and_source_canvas_size_are_safety_gates() -> None:
+    assert (
+        reconstruct_jpeg_png(
+            _jpeg(),
+            base=BASE,
+            mappings=MAPPINGS,
+            visible_draw=_mapping(sx=0, sy=0, sw=10, sh=7, dx=0, dy=0, dw=9),
+            source_path=SOURCE_PATH,
+            canvas_size=(10, 7),
+        )
+        is None
+    )
+    assert (
+        reconstruct_jpeg_png(
+            _jpeg(),
+            base=BASE,
+            mappings=MAPPINGS,
+            visible_draw=VISIBLE,
+            source_path=SOURCE_PATH,
+            canvas_size=(20, 14),
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -155,6 +182,7 @@ def test_unsafe_mapping_falls_out_of_native_reconstruction(name: str, mappings: 
             _jpeg(),
             base=BASE,
             mappings=mappings,
+            visible_draw=VISIBLE,
             source_path=SOURCE_PATH,
             canvas_size=(10, 7),
         )

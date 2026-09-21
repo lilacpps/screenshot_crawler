@@ -50,6 +50,17 @@ _CANVAS_HOOK = r"""
     if (image) return { ...image, sourceType: 'HTMLImageElement' };
     return null;
   }
+  function offscreenMeta(source, meta) {
+    if (!globalThis.OffscreenCanvas || !(source instanceof globalThis.OffscreenCanvas) || !meta) {
+      return null;
+    }
+    return {
+      sourcePath: meta.sourcePath,
+      sourceWidth: source.width,
+      sourceHeight: source.height,
+      sourceType: 'OffscreenCanvas',
+    };
+  }
   function geometry(args, source) {
     const sourceWidth = source && (source.naturalWidth || source.width || 0) || 0;
     const sourceHeight = source && (source.naturalHeight || source.height || 0) || 0;
@@ -102,6 +113,9 @@ _CANVAS_HOOK = r"""
       sequence: meta.sequence,
       base: meta.base ? { ...meta.base, transform: [...meta.base.transform] } : null,
       mapping: meta.mapping.map(item => ({ ...item, transform: [...item.transform] })),
+      visibleDraw: meta.visibleDraw
+        ? { ...meta.visibleDraw, transform: [...meta.visibleDraw.transform] }
+        : null,
     };
   }
   const offscreenProto = globalThis.OffscreenCanvasRenderingContext2D &&
@@ -131,7 +145,16 @@ _CANVAS_HOOK = r"""
     function hookedCanvasDrawImage(...args) {
       const source = args[0];
       const meta = source && state.offscreenSources.get(source);
-      if (meta && this.canvas) state.visibleSources.set(this.canvas, copyState(meta));
+      if (this.canvas) {
+        if (meta) {
+          const visibleDraw = drawRecord(this, args, offscreenMeta(source, meta));
+          const snapshot = copyState(meta);
+          snapshot.visibleDraw = visibleDraw;
+          state.visibleSources.set(this.canvas, snapshot);
+        } else {
+          state.visibleSources.delete(this.canvas);
+        }
+      }
       return original.apply(this, args);
     }
     hookedCanvasDrawImage.__magapoke = true;
@@ -152,10 +175,11 @@ _CANVAS_HOOK = r"""
           sourcePath: meta && meta.sourcePath || null,
           sourceWidth: meta && meta.sourceWidth || 0,
           sourceHeight: meta && meta.sourceHeight || 0,
-          canvasWidth: meta && meta.canvasWidth || canvas.width,
-          canvasHeight: meta && meta.canvasHeight || canvas.height,
+          canvasWidth: meta && meta.visibleDraw && meta.visibleDraw.canvasWidth || canvas.width,
+          canvasHeight: meta && meta.visibleDraw && meta.visibleDraw.canvasHeight || canvas.height,
           base: meta && meta.base || null,
           mapping: meta && meta.mapping || null,
+          visibleDraw: meta && meta.visibleDraw || null,
           sequence: meta && meta.sequence || 0,
         };
       }).filter(row => row.visible);
@@ -431,6 +455,7 @@ class MagapokeAdapter(SiteAdapter):
                 paths_to_release.add(path)
                 mappings = row.get("mapping")
                 base = row.get("base")
+                visible_draw = row.get("visibleDraw")
                 width = int(row.get("canvasWidth") or 0)
                 height = int(row.get("canvasHeight") or 0)
                 body = None
@@ -440,6 +465,7 @@ class MagapokeAdapter(SiteAdapter):
                     and source_matches_episode(path, self._source_episode)
                     and isinstance(mappings, list)
                     and isinstance(base, dict)
+                    and isinstance(visible_draw, dict)
                     and width > 0
                     and height > 0
                 ):
@@ -449,6 +475,7 @@ class MagapokeAdapter(SiteAdapter):
                         body,
                         base=base,
                         mappings=mappings,
+                        visible_draw=visible_draw,
                         source_path=path,
                         canvas_size=(width, height),
                     )

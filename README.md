@@ -48,6 +48,7 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - Playwright Probe
 - BookWalker Adapter
 - Manga ONE Adapter
+- Magapoke Adapter（scrambled JPEGのtile再構成PNG、canvas screenshot fallback）
 - 既存ChromeへCDP接続するcrawl/loginフロー
 - 共通Crawler Chrome launcher (`scripts/start_crawler_chrome.ps1`)
 - BookWalker canvas / spread capture

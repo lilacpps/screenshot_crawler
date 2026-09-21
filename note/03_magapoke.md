@@ -18,6 +18,11 @@ strings are preserved: `work_id=title_id`, `episode_id=episode_id`,
 The content target is `.c-viewer__comic canvas`. In the live viewer, an
 `OffscreenCanvas` first receives the complete CDN JPEG and then receives tile
 `drawImage()` calls. The visible canvas receives the completed OffscreenCanvas.
+The final visible-canvas draw is recorded separately. Native reconstruction is
+accepted only when that draw is also a full-size 1:1 identity draw with the
+expected source/destination geometry, transform, composite operation, and
+filter. A later crop, scale, flip, or other renderer change therefore falls
+back to a screenshot.
 
 `prepare_page()` installs a bounded, metadata-only hook before navigation. It
 records source path/type/dimensions, source and destination rectangles, the

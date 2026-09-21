@@ -241,6 +241,7 @@ def reconstruct_jpeg_png(
     *,
     base: object,
     mappings: list[object],
+    visible_draw: object,
     source_path: str,
     canvas_size: tuple[int, int],
 ) -> CaptureResult | None:
@@ -260,9 +261,16 @@ def reconstruct_jpeg_png(
     canvas_width, canvas_height = canvas_size
     if canvas_width <= 0 or canvas_height <= 0:
         return None
+    if dimensions != canvas_size:
+        return None
 
     base_mapping = DrawMapping.from_dict(base)
     if base_mapping is None or not _valid_base(base_mapping, source_path, dimensions, canvas_size):
+        return None
+    visible_mapping = DrawMapping.from_dict(visible_draw)
+    if visible_mapping is None or not _valid_base(
+        visible_mapping, source_path, dimensions, canvas_size
+    ):
         return None
     parsed = [DrawMapping.from_dict(item) for item in mappings]
     if not parsed or any(item is None for item in parsed):

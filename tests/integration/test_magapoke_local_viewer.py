@@ -55,6 +55,7 @@ MAPPINGS = [
     _mapping(sx=3, sy=0, sw=7, sh=7, dx=0, dy=0),
 ]
 BASE = _mapping(sx=0, sy=0, sw=10, sh=7, dx=0, dy=0)
+VISIBLE = BASE
 
 
 def _scrambled_jpeg() -> bytes:
@@ -160,6 +161,7 @@ async def test_magapoke_reconstructs_jpeg_and_falls_back_to_screenshot(
         jpeg,
         base=BASE,
         mappings=MAPPINGS,
+        visible_draw=VISIBLE,
         source_path=SOURCE_PATH,
         canvas_size=(10, 7),
     )
