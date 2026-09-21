@@ -11,6 +11,23 @@ so missing-source reconciliation is not performed. BookWalker Discovery is
 implemented as a series-scoped adapter; its current boundary is the explicit
 series-list target described in 8.4.
 
+## Magapoke Discovery M1 status
+
+Magapoke Discovery is implemented for any supported episode URL used as a
+Watchlist target. The adapter preserves the URL path identity (`title_id` and
+`episode_id`), scopes the episode list to the matching visible
+`div.p-episode__sec`, expands `button.p-episode__more-btn` with bounded
+progress checks, validates all rows before yielding, and emits rows in the
+observed newest-to-oldest order. `--free` maps to `free`, `--ticket-free` and
+`--renting` map to `quota`, `--point` maps to `paid`, and an unrecognized state
+is `unknown`. Episode titles remain raw `order_label` values and
+`order_key=None`.
+
+Full and incremental discovery use the same complete expansion. Incremental
+stopping remains the generic known-streak behavior; no Magapoke-specific stop
+hook is installed. Magapoke Batch, SitePolicy, ticket/point controls, active
+grant persistence, and Catalog/Core schema changes remain out of scope.
+
 ## Phase 5A status
 
 The read-only Batch Planner, Site Policy registry, Manga ONE Policy, and

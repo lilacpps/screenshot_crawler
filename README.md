@@ -37,6 +37,20 @@ BookWalker Discovery and Policy remain unsupported. Manga ONE Batch Crawler
 execution, quota persistence, packaging, and completed updates are available
 through `batch run`.
 
+## Magapoke Discovery (M1)
+
+Magapoke Discovery accepts any supported episode URL as a Watchlist target,
+extracts the work `title_id` from that URL, expands the scoped episode list
+until its visible `もっと見る` control is gone, validates every row, and
+synchronizes each row's `episode_id` and canonical URL into Catalog. Rows are
+yielded newest-to-oldest. The observed state classes map to `free`, `quota`
+(`--ticket-free` and active `--renting`), `paid` (`--point`), or `unknown`.
+
+Both full and incremental discovery fully expand and validate the list before
+the generic incremental known-streak logic is applied. Magapoke Batch,
+SitePolicy, ticket/point operations, and active-grant persistence are not part
+of M1.
+
 Python + Playwrightで、Webビューアを1ページずつ進めながら本文だけをPNG保存し、正常終了時にZIPへまとめるクローラです。
 
 万能な自動判定は目的にしていません。共通処理を `core/` に置き、サイト差分は `site_adapters/` に閉じ込めます。新しいサイトは Probe → 調査 → Adapter実装 → テスト → 実サイト確認、の順で追加します。

@@ -3,8 +3,10 @@
 ## Purpose and scope
 
 `MagapokeAdapter` crawls one episode through the shared Crawler Chrome/CDP
-session. Discovery, batch, catalog, login, purchase, quota, and watchlist
-flows are out of scope.
+session. Magapoke Discovery is implemented separately for episode-list
+enumeration and Catalog synchronization. Batch, SitePolicy, login, purchase,
+quota operations, active-grant persistence, and ticket consumption remain out
+of scope.
 
 ## URL and context
 
@@ -204,6 +206,86 @@ Generic known-streak is usable as the incremental stop mechanism, with one adapt
 - Rental expiry was observed only as human-readable `あと71時間`; no absolute expiry or hidden dataset value was found.
 - The class names and image paths are site/build-specific and may change. No stable `data-testid` or state data attribute was observed.
 - M0 did not implement `MagapokeDiscoveryAdapter`, registry changes, Site Policy, Batch, access strategies, or any Catalog/Core change.
+
+## Discovery implementation (M1)
+
+M1 implements `MagapokeDiscoveryAdapter` and registers it under the
+site-neutral `discover` CLI registry. A Watchlist target may be any supported
+episode URL; the target episode's displayed title or access state is not used
+to decide whether the work can be discovered. The target path supplies the
+work `title_id`, while every discovered `episode_id` and URL comes from that
+row's own `a.c-episode-item[href]`. Leading zeroes in `title_id` are retained.
+
+The adapter uses the following observed selectors:
+
+- work title: `h1.p-episode__comic-ttl`;
+- unique episode-list scope: visible `div.p-episode__sec` containing both
+  `.p-episode__list` and `ul.c-episode-items`;
+- rows: `ul.c-episode-items > li.c-episode-items__item > a.c-episode-item`;
+- row title: `h2.c-episode-item__ttl`;
+- access indicator: `.c-episode-item__ico` and its state suffix class;
+- expansion control: visible `button.p-episode__more-btn` inside that same
+  episode-list section.
+
+Both full and incremental discovery first expand the complete list, then
+validate every row and construct the records before yielding any item. Each
+click is bounded and the control is re-selected after DOM mutation. Progress
+requires a larger episode identity set with all previous identities retained;
+no-progress, timeout, attempt-limit, selector ambiguity, wrong-work rows, and
+duplicate `episode_id` values raise `DiscoveryIncompleteError`. Hidden
+same-class controls in unrelated sections are ignored. Successful records are
+yielded in the observed newest-to-oldest DOM order.
+
+The M1 access mapping is:
+
+| DOM class | Catalog `access_mode` |
+| --- | --- |
+| `.c-episode-item__ico--free` | `free` |
+| `.c-episode-item__ico--ticket-free` | `quota` |
+| `.c-episode-item__ico--renting` | `quota` |
+| `.c-episode-item__ico--point` | `paid` |
+| no recognized state suffix | `unknown` |
+
+Conflicting recognized state classes are incomplete. Mapping active rental to
+`quota` does not create or update `quota_started_at` or
+`access_granted_until`; M1 has no Batch or active-grant operation. Ownership
+remains `unknown` unless a future explicit, non-consuming signal is verified.
+Each item uses the work title as `canonical_title`, `genre="漫画"`,
+`kind="episode"`, `order_key=None`, and the raw episode title as
+`order_label`. Each source uses `episode_id` as `external_id`, the canonical
+episode URL, `available=True`, and no local expiry.
+
+The M0 live ID/title discrepancy (`244815` versus the observed episode-7 row
+`244841`) is not a production Discovery blocker: the target is only the work
+scope entry point and row identity is always taken from each row href.
+
+Generic known-streak remains the incremental stop mechanism. Because the
+adapter yields a fully expanded, validated newest-to-oldest sequence, no
+Magapoke-specific stop hook is needed. M1 does not add Batch/SitePolicy,
+`access_strategy` handling, ticket or point clicks, active-grant persistence,
+or Catalog/Core schema changes.
+
+### M1 live verification
+
+On 2026-09-22, the M1 CLI was run against the shared Crawler Chrome at
+`http://127.0.0.1:9222` with a temporary Watchlist and temporary Catalog. The
+target was the supplied episode URL `.../title/00695/episode/244815`; no
+episode row or paid/quota control was clicked.
+
+- full discovery completed with 259 observed sources and
+  `stopped_reason=exhausted`;
+- the live page currently exposes two `.p-episode__list` columns inside the
+  same episode section, so the adapter treats the unique section as the
+  listing scope and validates all descendant `ul.c-episode-items` rows;
+- Catalog access modes were `paid=3`, `quota=226`, and `free=30`; the former
+  M0 active-rental observation (`episode_id=244841`) is represented as
+  `quota` without local grant timestamps;
+- a subsequent incremental run observed two already-known newest rows and
+  stopped with generic `known_streak` (`complete=None`);
+- Catalog export showed 259 items, 259 sources, and no crawl runs or artifacts.
+
+The temporary Watchlist and Catalog were removed after verification. The
+live counts are observations only and are not production constants.
 
 ## Tests and live verification
 

@@ -324,6 +324,10 @@ def test_batch_policy_registry_contains_bookwalker_and_mangaone() -> None:
     assert cli._batch_policy_registry().sites() == ("bookwalker", "mangaone")
 
 
+def test_discovery_registry_contains_magapoke() -> None:
+    assert cli._discovery_registry().sites() == ("bookwalker", "magapoke", "mangaone")
+
+
 def test_batch_run_parser_accepts_execution_options() -> None:
     defaults = _parser().parse_args(["batch", "run", "--site", "mangaone"])
     args = _parser().parse_args(
