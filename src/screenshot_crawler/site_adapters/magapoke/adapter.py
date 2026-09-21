@@ -17,6 +17,7 @@ from screenshot_crawler.site_adapters.magapoke.native_capture import (
     is_magapoke_jpeg_response,
     normalize_source_path,
     parse_magapoke_url,
+    reconstruct_jpeg_lossless,
     reconstruct_jpeg_png,
     source_matches_episode,
 )
@@ -446,9 +447,8 @@ class MagapokeAdapter(SiteAdapter):
         if not rows:
             return None
         targets = await self.get_capture_targets(page)
-        native_captures: list[CaptureResult] = []
-        native_ok = True
         paths_to_release: set[str] = set()
+        records: list[dict[str, object]] = []
         try:
             for row in rows:
                 path = str(row.get("sourcePath") or "")
@@ -470,28 +470,72 @@ class MagapokeAdapter(SiteAdapter):
                     and height > 0
                 ):
                     body = await self._source_bytes_for(path)
-                native = (
-                    reconstruct_jpeg_png(
+                records.append(
+                    {
+                        "path": path,
+                        "body": body,
+                        "base": base,
+                        "mappings": mappings,
+                        "visible_draw": visible_draw,
+                        "canvas_size": (width, height),
+                    }
+                )
+
+            lossless_captures: list[CaptureResult] = []
+            lossless_ok = True
+            for record in records:
+                body = record["body"]
+                result = (
+                    reconstruct_jpeg_lossless(
                         body,
-                        base=base,
-                        mappings=mappings,
-                        visible_draw=visible_draw,
-                        source_path=path,
-                        canvas_size=(width, height),
+                        base=record["base"],
+                        mappings=record["mappings"],
+                        visible_draw=record["visible_draw"],
+                        source_path=str(record["path"]),
+                        canvas_size=record["canvas_size"],
                     )
-                    if body is not None
+                    if isinstance(body, bytes)
+                    and isinstance(record["base"], dict)
+                    and isinstance(record["mappings"], list)
+                    and isinstance(record["visible_draw"], dict)
                     else None
                 )
-                if native is None:
-                    native_ok = False
+                if result is None:
+                    lossless_ok = False
                 else:
-                    native_captures.append(native)
+                    lossless_captures.append(result)
+            if lossless_ok:
+                return tuple(lossless_captures)
+
+            png_captures: list[CaptureResult] = []
+            png_ok = True
+            for record in records:
+                body = record["body"]
+                result = (
+                    reconstruct_jpeg_png(
+                        body,
+                        base=record["base"],
+                        mappings=record["mappings"],
+                        visible_draw=record["visible_draw"],
+                        source_path=str(record["path"]),
+                        canvas_size=record["canvas_size"],
+                    )
+                    if isinstance(body, bytes)
+                    and isinstance(record["base"], dict)
+                    and isinstance(record["mappings"], list)
+                    and isinstance(record["visible_draw"], dict)
+                    else None
+                )
+                if result is None:
+                    png_ok = False
+                else:
+                    png_captures.append(result)
+            if png_ok:
+                return tuple(png_captures)
         finally:
             for path in paths_to_release:
                 if path:
                     await self._discard_source(path)
-        if native_ok:
-            return tuple(native_captures)
         # A visible spread is all-native or all-fallback; never mix provenance.
         return tuple([await capture_locator(target) for target in targets])
 

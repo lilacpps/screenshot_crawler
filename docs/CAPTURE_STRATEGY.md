@@ -391,24 +391,51 @@ Site-specific details remain in each Adapter's documentation.
 ### Magapoke
 
 The CDN JPEG is a scrambled transport image, not a completed page. Do not save
-it directly or JPEG-reencode it. Prefer the following verified hierarchy:
+it directly or pixel-decode/JPEG-reencode it in the production Adapter. Prefer
+the following verified hierarchy:
 
 ```text
 scrambled transport JPEG
-    -> drawImage tile mapping observed for the current source
+    -> observed drawImage mapping and JPEG structure validation
+    -> quantized-DCT tile/block permutation
+    -> lossless reconstructed JPEG
     -> native pixel tile reconstruction
     -> PNG
     -> canvas Locator screenshot PNG fallback
 ```
 
+The coefficient level is production-enabled only with `jpeglib>=1,<2` and
+only when all components are 1x1 sampled (grayscale or 4:4:4), all observed
+source/destination rectangles are 8x8 aligned, and the existing base/final
+draw safety checks pass. The mapping is calculated from each observed
+`sx/sy/sw/sh/dx/dy/dw/dh`; no fixed tile count or permutation is assumed.
+The implementation verifies dimensions, component sampling, quantization
+tables, quantized coefficient arrays, DQT/DHT/DRI payloads, progressive mode,
+source APPn/COM metadata presence, and untouched coded blocks at the right
+edge. Any failure falls back to the existing PNG reconstruction and then the
+Locator screenshot path. 4:2:2 and 4:2:0 remain rejected because equivalent
+chroma upsampling at tile seams has not been proven.
+
 Native reconstruction is accepted only for integer, equal-size rectangles with
 identity transform, normal source-over composition, complete non-overlapping
 coverage, and a uniquely attributable current-episode source. Unknown or
 unsafe mapping, invalid/unavailable JPEG, decode failure, or incomplete
-coverage falls back for the whole visible spread. Lossless WebP is not used;
-compressed-domain JPEG rearrangement is not adopted because the required MCU
-and arbitrary coefficient-domain handling is not a simple maintainable runtime
-path.
+coverage falls back for the whole visible spread.
+
+The diagnostic reference remains in `poc/magapoke_lossless_jpeg.py`; the
+production implementation is in the Magapoke native capture helper and uses
+the same observed mapping and restrictions. Other sampling factors are
+rejected because chroma upsampling equivalence has not been proven.
+
+The artificial fixture and five live artifacts from episode 244815 matched the
+existing PNG reconstruction pixel-for-pixel and preserved quantized DCT
+coefficients, quantization tables, and Huffman tables. The live JPEGs were
+685x1024 grayscale with a 688x1024 coded grid; the two rightmost coded block
+columns were left unchanged for the 13px visible edge plus padding.
+`jpeglib.write_dct()` duplicates JFIF APP0 and may renumber component IDs, so
+the validator treats JPEG container bytes as non-authoritative while requiring
+the source metadata payloads and image coefficients needed by this path.
+Lossless WebP is not used.
 
 ---
 

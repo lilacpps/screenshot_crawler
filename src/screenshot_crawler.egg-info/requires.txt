@@ -1,6 +1,7 @@
 playwright<2,>=1.55
 PyYAML<7,>=6
 Pillow<13,>=10
+jpeglib<2,>=1
 
 [dev]
 pytest<9,>=8

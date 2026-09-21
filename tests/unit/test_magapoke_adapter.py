@@ -12,6 +12,7 @@ from screenshot_crawler.site_adapters.magapoke.native_capture import (
     jpeg_mcu_dimensions,
     normalize_source_path,
     parse_magapoke_url,
+    reconstruct_jpeg_lossless,
     reconstruct_jpeg_png,
     safe_canvas_source_paths,
     source_matches_episode,
@@ -131,6 +132,107 @@ def test_reconstructs_non_divisible_tile_permutation_to_png() -> None:
     assert result.file_extension == ".png"
     assert (result.width, result.height) == (10, 7)
     assert result.data.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_reconstructs_aligned_tile_permutation_in_jpeg_coefficient_domain() -> None:
+    width, height = 70, 48
+    source_path = SOURCE_PATH
+    normal = Image.new("RGB", (width, height))
+    for y in range(height):
+        for x in range(width):
+            normal.putpixel((x, y), ((x * 17 + y * 3) % 256, (y * 19) % 256, (x * 7 + y * 11) % 256))
+
+    tile_order = [
+        (0, 0, 16, 16, 48, 32),
+        (16, 0, 16, 16, 32, 32),
+        (32, 0, 16, 16, 16, 32),
+        (48, 0, 16, 16, 0, 32),
+        (0, 16, 16, 16, 48, 16),
+        (16, 16, 16, 16, 32, 16),
+        (32, 16, 16, 16, 16, 16),
+        (48, 16, 16, 16, 0, 16),
+        (0, 32, 16, 16, 48, 0),
+        (16, 32, 16, 16, 32, 0),
+        (32, 32, 16, 16, 16, 0),
+        (48, 32, 16, 16, 0, 0),
+    ]
+    mappings = [
+        _mapping(
+            sx=sx,
+            sy=sy,
+            sw=sw,
+            sh=sh,
+            dx=dx,
+            dy=dy,
+            sourceWidth=width,
+            sourceHeight=height,
+            canvasWidth=width,
+            canvasHeight=height,
+            dw=sw,
+            dh=sh,
+        )
+        for sx, sy, sw, sh, dx, dy in tile_order
+    ]
+    scrambled = normal.copy()
+    for item in mappings:
+        crop = normal.crop((item["dx"], item["dy"], item["dx"] + item["dw"], item["dy"] + item["dh"]))
+        scrambled.paste(crop, (item["sx"], item["sy"]))
+    buffer = io.BytesIO()
+    scrambled.save(buffer, format="JPEG", quality=87, subsampling=0)
+
+    base = _mapping(
+        sx=0,
+        sy=0,
+        sw=width,
+        sh=height,
+        dx=0,
+        dy=0,
+        sourceWidth=width,
+        sourceHeight=height,
+        canvasWidth=width,
+        canvasHeight=height,
+        dw=width,
+        dh=height,
+    )
+    jpeg = reconstruct_jpeg_lossless(
+        buffer.getvalue(),
+        base=base,
+        mappings=mappings,
+        visible_draw=base,
+        source_path=source_path,
+        canvas_size=(width, height),
+    )
+    png = reconstruct_jpeg_png(
+        buffer.getvalue(),
+        base=base,
+        mappings=mappings,
+        visible_draw=base,
+        source_path=source_path,
+        canvas_size=(width, height),
+    )
+
+    assert jpeg is not None
+    assert png is not None
+    assert jpeg.mime_type == "image/jpeg"
+    assert jpeg.file_extension == ".jpg"
+    assert (jpeg.width, jpeg.height) == (width, height)
+    assert Image.open(io.BytesIO(jpeg.data)).convert("RGB").tobytes() == Image.open(
+        io.BytesIO(png.data)
+    ).convert("RGB").tobytes()
+
+    subsampled = io.BytesIO()
+    scrambled.save(subsampled, format="JPEG", quality=87, subsampling=2)
+    assert (
+        reconstruct_jpeg_lossless(
+            subsampled.getvalue(),
+            base=base,
+            mappings=mappings,
+            visible_draw=base,
+            source_path=source_path,
+            canvas_size=(width, height),
+        )
+        is None
+    )
 
 
 def test_visible_final_draw_and_source_canvas_size_are_safety_gates() -> None:
