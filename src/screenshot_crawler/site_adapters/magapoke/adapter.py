@@ -228,6 +228,12 @@ class MagapokeAdapter(SiteAdapter):
         self._output_title: str | None = None
         self._output_order: str | None = None
 
+    def get_initialize_timeout_ms(self, default_ms: int) -> int:
+        # Initialization can sequence readiness, click confirmation, viewer
+        # setup, and render stabilization. Keep each phase bounded without
+        # cancelling the overall operation at the single-phase deadline.
+        return max(default_ms, 5 * self.page_change_timeout_ms)
+
     async def configure_run(
         self, page: Page, access_strategy: AccessStrategy
     ) -> None:
@@ -494,22 +500,39 @@ class MagapokeAdapter(SiteAdapter):
 
         control = work[0][0]
         await control.click(timeout=self.page_change_timeout_ms)
-        elapsed = 0
-        while elapsed < self.page_change_timeout_ms:
-            rows = await self._canvas_rows(page)
-            remaining = await self._visible_access_controls(page)
-            if rows and not remaining:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.page_change_timeout_ms / 1000
+        while True:
+            remaining_ms = int((deadline - loop.time()) * 1000)
+            if remaining_ms <= 0:
+                raise PageChangeTimeoutError(
+                    "Magapoke Work Ticket click did not reach confirmed viewer content"
+                )
+            try:
+                rows = await asyncio.wait_for(
+                    self._canvas_rows(page), timeout=remaining_ms / 1000
+                )
+                remaining_ms = int((deadline - loop.time()) * 1000)
+                if remaining_ms <= 0:
+                    continue
+                controls = await asyncio.wait_for(
+                    self._visible_access_controls(page), timeout=remaining_ms / 1000
+                )
+            except TimeoutError as exc:
+                raise PageChangeTimeoutError(
+                    "Magapoke Work Ticket click did not reach confirmed viewer content"
+                ) from exc
+            remaining_ms = int((deadline - loop.time()) * 1000)
+            if rows and not controls:
                 self._access_consumption = AccessConsumption(
                     consumed=True,
                     resource="work_ticket",
                     consumed_at=datetime.now(UTC),
                 )
                 return
-            await page.wait_for_timeout(100)
-            elapsed += 100
-        raise PageChangeTimeoutError(
-            "Magapoke Work Ticket click did not reach confirmed viewer content"
-        )
+            if remaining_ms <= 0:
+                continue
+            await page.wait_for_timeout(min(100, remaining_ms))
 
     async def _viewer_canvas_visible(self, page: Page) -> bool:
         canvases = page.locator(self.content_canvas_selector)

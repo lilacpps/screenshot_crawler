@@ -127,6 +127,11 @@ class SiteAdapter(ABC):
 
         return int(getattr(self, "page_change_timeout_ms", default_ms))
 
+    def get_initialize_timeout_ms(self, default_ms: int) -> int:
+        """Return the bounded overall initialization budget."""
+
+        return default_ms
+
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
         """Optional site-specific data appended to generic diagnostics."""
         return {}

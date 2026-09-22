@@ -327,6 +327,34 @@ async def test_runner_uses_adapter_timeout_for_initialize(tmp_path: Path) -> Non
     assert result.stop_state is PageState.END
 
 
+class ExtendedInitializeAdapter(FakeAdapter):
+    async def initialize(self, page: FakePage) -> None:
+        await asyncio.sleep(0.04)
+
+    def get_initialize_timeout_ms(self, default_ms: int) -> int:
+        return max(default_ms, 80)
+
+
+async def test_runner_uses_adapter_overall_initialize_timeout(tmp_path: Path) -> None:
+    adapter = ExtendedInitializeAdapter(
+        [PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+            page_change_timeout_ms=20,
+            adapter_timeout_grace_ms=0,
+        )
+    ).run(FakePage(), adapter)
+
+    assert result.stop_state is PageState.END
+
+
 @pytest.mark.parametrize("strategy", ["direct", "quota"])
 async def test_runner_rejects_unsupported_strategy_without_auto_fallback(
     tmp_path: Path,

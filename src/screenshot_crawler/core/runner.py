@@ -133,8 +133,8 @@ class CrawlerRunner:
         await self._adapter_call(
             adapter.initialize(page),
             "initialize",
-            timeout_ms=adapter.get_page_change_timeout_ms(
-                self.config.page_change_timeout_ms
+            timeout_ms=adapter.get_initialize_timeout_ms(
+                adapter.get_page_change_timeout_ms(self.config.page_change_timeout_ms)
             ),
         )
         initial_context = await self._adapter_call(

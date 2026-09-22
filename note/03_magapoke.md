@@ -44,13 +44,17 @@ Premium Ticket allocation, and all paid fallback behavior remain out of scope.
   M3c1. M3c2 owns Premium Ticket count, premium resource planning, account-wide
   capacity, old-Work concentration, and any Premium Ticket live use.
 
-## M3c1 Work Ticket entry readiness and initial live finding (2026-09-22)
+## M3c1 Work Ticket entry readiness and live findings (2026-09-22)
 
-- The initial live Batch attempt for `03294` / episode `442501` failed before
-  confirmed consumption with `Magapoke Work Ticket entry UI is unknown or
-  ambiguous`. `quota_started_at` and `access_granted_until` remained NULL. No
-  Work Ticket, Premium Ticket, point, coin, purchase, rental, subscription, or
-  other resource-changing control was clicked.
+- The first live Batch attempt for `03294` / episode `442501` failed before
+  clicking with `Magapoke Work Ticket entry UI is unknown or ambiguous`;
+  `quota_started_at` and `access_granted_until` remained NULL. No resource was
+  consumed in that attempt.
+- After the readiness/classification fix, a subsequent user-run Batch attempt
+  reported that the Work Ticket was consumed, then failed with
+  `Adapter operation timed out: initialize`. The output run directory was empty,
+  so no screenshot or manifest was written. The resolved `$Catalog` path was not
+  available in this checkout to verify that run's quota fields.
 - Read-only inspection confirmed an initial-load race: immediately after
   `goto(..., wait_until="commit")`, the purchase panel and controls were absent;
   the panel became available within about one second. The `.c-viewer` wrapper
@@ -67,8 +71,13 @@ Premium Ticket allocation, and all paid fallback behavior remain out of scope.
   Only the known comment navigation anchor classes/hrefs are excluded from
   access-action classification. Unknown visible actions remain fail-closed.
   Ticket click and `AccessConsumption` confirmation semantics are unchanged.
-- The initial failure consumed no resource. The live investigation was read-only;
-  no live Work Ticket was clicked to verify this code fix.
+  Runner allows Magapoke initialization up to five bounded page-change windows
+  plus the Core grace, so readiness, ticket confirmation, and viewer setup are
+  not cancelled by a single 12-second outer deadline. Other adapters keep their
+  existing initialization budget.
+- The first investigation used read-only navigation and consumed no resource.
+  Codex did not click a live Work Ticket to verify this code fix; the later
+  consumption was reported from the user's Batch run.
 
 ## URL and context
 

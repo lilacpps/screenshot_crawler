@@ -84,6 +84,12 @@ async def test_magapoke_configure_run_allows_quota_until_resource_validation() -
     await adapter.configure_run(object(), "quota")  # type: ignore[arg-type]
 
 
+def test_magapoke_initialization_timeout_covers_serial_entry_phases() -> None:
+    adapter = MagapokeAdapter()
+
+    assert adapter.get_initialize_timeout_ms(20) == 5 * adapter.page_change_timeout_ms
+
+
 async def test_magapoke_quota_requires_work_ticket_resource() -> None:
     adapter = MagapokeAdapter()
     await adapter.configure_run(object(), "quota")  # type: ignore[arg-type]

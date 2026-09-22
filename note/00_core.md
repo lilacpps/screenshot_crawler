@@ -279,13 +279,14 @@ LOADINGはbounded retryし、解消しなければ `PageChangeTimeoutError`。
 ## Adapter timeout layering
 
 `RunConfig.page_change_timeout_ms` is the adapter-owned operation deadline. The
-Core `CrawlerRunner._adapter_call()` wrapper uses the same deadline plus
-`adapter_timeout_grace_ms` (default 2,000 ms). This keeps the Core guard for a
-hung adapter while allowing an adapter such as BookWalker to raise its own
-`PageChangeTimeoutError` first, instead of being cancelled by an equal outer
-`asyncio.wait_for()` timeout. The adapter-specific budget is applied to
-`initialize()` and page-change waits; the grace applies to all adapter calls
-and does not add a site-specific branch.
+Core `CrawlerRunner._adapter_call()` wrapper uses the adapter deadline plus
+`adapter_timeout_grace_ms` (default 2,000 ms). Adapters may override
+`get_initialize_timeout_ms()` when initialization sequences multiple bounded
+phases; the base implementation returns the usual page-change budget, so other
+adapters retain their existing timeout. Magapoke uses a larger bounded outer
+budget for access readiness, click confirmation, and viewer stabilization.
+Page-change waits still use their original per-phase budget, and the grace
+applies to all adapter calls.
 
 ## 8. max_pages
 
