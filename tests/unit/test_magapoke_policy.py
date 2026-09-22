@@ -26,7 +26,7 @@ NOW = datetime(2026, 9, 22, 15, 0, tzinfo=JST)
     ("access_mode", "eligible", "strategy", "reason", "consumes_quota"),
     [
         ("free", True, "direct", "free", False),
-        ("quota", False, None, "quota_not_supported", False),
+        ("quota", True, "quota", "work_ticket_candidate", True),
         ("paid", False, None, "paid", False),
         ("unknown", False, None, "unknown", False),
         ("owned", False, None, "owned_not_verified", False),
@@ -82,8 +82,8 @@ def test_magapoke_policy_rejects_naive_now() -> None:
     ("grant", "eligible", "reason"),
     [
         ("2026-09-22T16:00:00+09:00", True, "active_rental"),
-        ("2026-09-22T15:00:00+09:00", False, "quota_not_supported"),
-        (None, False, "quota_not_supported"),
+        ("2026-09-22T15:00:00+09:00", True, "work_ticket_candidate"),
+        (None, True, "work_ticket_candidate"),
     ],
 )
 def test_magapoke_active_rental_policy_uses_direct_without_quota(
@@ -97,8 +97,9 @@ def test_magapoke_active_rental_policy_uses_direct_without_quota(
     )
     assert decision.eligible is eligible
     assert decision.reason == reason
-    assert decision.access_strategy == ("direct" if eligible else None)
-    assert decision.consumes_quota is False
+    expected_strategy = "direct" if reason == "active_rental" else "quota"
+    assert decision.access_strategy == expected_strategy
+    assert decision.consumes_quota is (grant in {"2026-09-22T15:00:00+09:00", None})
 
 
 @pytest.mark.parametrize(
@@ -115,7 +116,7 @@ def test_magapoke_policy_rejects_invalid_grant_timestamps(grant: object) -> None
         )
 
 
-def test_magapoke_batch_plan_contains_free_candidates_only(tmp_path: Path) -> None:
+def test_magapoke_batch_plan_contains_direct_then_work_ticket_candidates(tmp_path: Path) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     for access_mode in ("free", "quota", "quota-active", "paid", "unknown"):
         catalog_mode = "quota" if access_mode == "quota-active" else access_mode
@@ -155,9 +156,89 @@ def test_magapoke_batch_plan_contains_free_candidates_only(tmp_path: Path) -> No
     ] == [
         ("free", "direct", "free", False),
         ("quota", "direct", "active_rental", False),
+        ("quota", "quota", "work_ticket_candidate", True),
     ]
     assert {skipped.reason for skipped in plan.skipped} == {
-        "quota_not_supported",
         "paid",
         "unknown",
     }
+
+
+def test_work_ticket_plan_limits_each_work_to_oldest_published_source(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work_items: dict[str, list[tuple[int, str]]] = {}
+    for work_key, entries in (
+        ("A", [("2026-09-10", "A old"), ("2026-09-20", "A newer"), ("2026-09-30", "A newest")]),
+        ("B", [("2026-09-11", "B old"), ("2026-09-21", "B newer")]),
+        ("C", [("2026-09-12", "C old"), ("2026-09-22", "C newer")]),
+    ):
+        work = catalog.create_work(WorkInput(work_key=f"work-{work_key}", title=work_key))
+        work_items[work_key] = []
+        for index, (published, label) in enumerate(entries):
+            item = catalog.create_item(ItemInput(order_label=label), work_id=work.id)
+            work_items[work_key].append((item.id, label))
+            source = catalog.create_source(
+                SourceInput(
+                    site="magapoke",
+                    external_id=f"{work_key}-{index}",
+                    access_mode="quota",
+                    published_at=f"{published}T00:00:00+09:00",
+                    access_granted_until=(
+                        "2026-09-23T00:00:00+09:00"
+                        if work_key == "C" and label == "C newer"
+                        else None
+                    ),
+                ),
+                item_id=item.id,
+            )
+            catalog.create_source_target(
+                SourceTargetInput(
+                    backend="web",
+                    locator=f"https://pocket.shonenmagazine.com/title/00695/episode/{source.external_id}",
+                ),
+                source_id=source.id,
+            )
+
+    policies = SitePolicyRegistry()
+    policies.register("magapoke", MagapokeSitePolicy)
+    plan = BatchPlanner(catalog, policies).plan(site="magapoke", now=NOW)
+
+    direct = [candidate for candidate in plan.candidates if candidate.access_strategy == "direct"]
+    quota = [candidate for candidate in plan.candidates if candidate.access_strategy == "quota"]
+    labels_by_id = {item_id: label for entries in work_items.values() for item_id, label in entries}
+    assert [labels_by_id[candidate.item_id] for candidate in direct] == ["C newer"]
+    assert [labels_by_id[candidate.item_id] for candidate in quota] == [
+        "A old", "B old", "C old"
+    ]
+    assert all(candidate.quota_resource == "work_ticket" for candidate in quota)
+    assert all(candidate.quota_scope == "work" and candidate.quota_limit == 1 for candidate in quota)
+    assert all(
+        candidate.quota_commit_mode == "after_observed_consumption" for candidate in quota
+    )
+    assert sum(skip.reason == "quota_work_limit" for skip in plan.skipped) == 3
+
+
+def test_missing_published_at_sorts_after_dated_sources(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="work", title="Work"))
+    ordered_ids = []
+    for index, published in enumerate((None, "2026-09-12T00:00:00+09:00")):
+        item = catalog.create_item(ItemInput(order_label=f"Episode {index}"), work_id=work.id)
+        ordered_ids.append(item.id)
+        source = catalog.create_source(
+            SourceInput(
+                site="magapoke", external_id=str(index), access_mode="quota",
+                published_at=published,
+            ), item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(backend="web", locator=f"https://example.invalid/{index}"),
+            source_id=source.id,
+        )
+    policies = SitePolicyRegistry()
+    policies.register("magapoke", MagapokeSitePolicy)
+    plan = BatchPlanner(catalog, policies).plan(site="magapoke", now=NOW)
+    assert len(plan.candidates) == 1
+    assert plan.candidates[0].item_id == ordered_ids[1]

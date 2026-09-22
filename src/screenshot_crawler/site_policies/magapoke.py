@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from screenshot_crawler.catalog.models import Source
 from screenshot_crawler.catalog.service import JST
@@ -13,6 +13,11 @@ class MagapokeSitePolicy(SitePolicy):
     """Allow free episodes and observed active rentals through direct navigation."""
 
     site = "magapoke"
+
+    def access_grant_until(self, started_at: datetime) -> datetime:
+        if started_at.tzinfo is None or started_at.utcoffset() is None:
+            raise SitePolicyError("started_at must be timezone-aware")
+        return started_at + timedelta(hours=71)
 
     def evaluate(
         self,
@@ -37,7 +42,16 @@ class MagapokeSitePolicy(SitePolicy):
                     "active_rental",
                     consumes_quota=False,
                 )
-            return PolicyDecision(False, None, "quota_not_supported")
+            return PolicyDecision(
+                True,
+                "quota",
+                "work_ticket_candidate",
+                consumes_quota=True,
+                quota_resource="work_ticket",
+                quota_scope="work",
+                quota_limit=1,
+                quota_commit_mode="after_observed_consumption",
+            )
         if source.access_mode == "paid":
             return PolicyDecision(False, None, "paid")
         if source.access_mode == "unknown":

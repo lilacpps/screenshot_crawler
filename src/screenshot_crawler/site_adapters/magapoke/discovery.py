@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 
+from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.discovery.base import DiscoveryAdapter
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
@@ -36,6 +37,7 @@ POLL_INTERVAL_MS = 100
 MAX_EXPAND_ATTEMPTS = 200
 RENTING_TEXT_SELECTOR = ".c-episode-item__txt--renting"
 RENTING_LABEL_SELECTOR = ".c-episode-item__label02-txt"
+PUBLISHED_DATE_SELECTOR = "p.c-episode-item__date"
 _RENTAL_REMAINING_HOURS = re.compile(r"^あと\s*(\d+)\s*時間$")
 
 _EPISODE_PATH = re.compile(
@@ -100,6 +102,20 @@ def map_magapoke_access_mode(icon_classes: str | Iterable[str] | None) -> str:
 
 def _clean_text(value: str) -> str:
     return " ".join(value.split()).strip()
+
+
+def parse_magapoke_published_at(text: str | None) -> datetime | None:
+    """Parse the observed YYYY/MM/DD date as a JST calendar-day timestamp."""
+
+    match = re.fullmatch(r"(\d{4})/(\d{2})/(\d{2})", _clean_text(text or ""))
+    if match is None:
+        return None
+    try:
+        return datetime(
+            int(match.group(1)), int(match.group(2)), int(match.group(3)), tzinfo=JST
+        )
+    except ValueError:
+        return None
 
 
 def magapoke_rental_grant_until(
@@ -348,6 +364,13 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
             if not order_label:
                 raise DiscoveryIncompleteError("Magapoke episode row title is empty")
 
+            date_elements = row.locator(PUBLISHED_DATE_SELECTOR)
+            published_at = None
+            if await date_elements.count() == 1 and await date_elements.first.is_visible():
+                published_at = parse_magapoke_published_at(
+                    await date_elements.first.inner_text()
+                )
+
             icons = row.locator(".c-episode-item__ico")
             icon_classes = [
                 await icons.nth(index).get_attribute("class")
@@ -386,6 +409,7 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
                         url=canonical_magapoke_episode_url(parts),
                         access_mode=access_mode,
                         free_until=None,
+                        published_at=published_at,
                         access_granted_until=access_granted_until,
                         available=True,
                     ),

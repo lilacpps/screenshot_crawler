@@ -65,6 +65,7 @@ class RunConfig:
     auth_required: bool = False
     device_scale_factor: float = 1.0
     access_strategy: AccessStrategy = "auto"
+    quota_resource: str | None = None
     output_metadata: Mapping[str, str | None] | None = field(default_factory=dict)
 
     def __post_init__(self) -> None:

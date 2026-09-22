@@ -37,7 +37,7 @@ class DiscoveryIncompleteError(RuntimeError):
 
 
 class DiscoveryService:
-    """Run a Discovery adapter and synchronize its results into Catalog v3."""
+    """Run a Discovery adapter and synchronize its results into Catalog v4."""
 
     def __init__(self, catalog: CatalogService, registry: DiscoveryAdapterRegistry) -> None:
         self.catalog = catalog
@@ -127,6 +127,7 @@ class DiscoveryService:
                     discovery_key=target.key,
                     access_mode=access_mode,
                     free_until=record.source.free_until,
+                    published_at=record.source.published_at,
                     access_granted_until=record.source.access_granted_until,
                     available=record.source.available,
                     access_checked_at=record.source.access_checked_at,

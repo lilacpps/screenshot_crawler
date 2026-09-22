@@ -5,9 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
+from playwright.async_api import Error, async_playwright
 
 from screenshot_crawler.core.capture import CaptureResult
-from screenshot_crawler.core.errors import UnsupportedAccessStrategyError
+from screenshot_crawler.core.errors import (
+    AccessResourceUnavailableError,
+    UnsupportedAccessStrategyError,
+)
+from screenshot_crawler.core.models import ContentContext
 from screenshot_crawler.site_adapters.magapoke.adapter import MagapokeAdapter
 from screenshot_crawler.site_adapters.magapoke.native_capture import (
     is_magapoke_jpeg_response,
@@ -72,11 +77,155 @@ async def test_magapoke_configure_run_allows_auto_and_direct(access_strategy: st
     assert adapter._access_strategy == access_strategy
 
 
-async def test_magapoke_configure_run_rejects_quota_without_navigation() -> None:
+async def test_magapoke_configure_run_allows_quota_until_resource_validation() -> None:
     adapter = MagapokeAdapter()
 
+    await adapter.configure_run(object(), "quota")  # type: ignore[arg-type]
+
+
+async def test_magapoke_quota_requires_work_ticket_resource() -> None:
+    adapter = MagapokeAdapter()
+    await adapter.configure_run(object(), "quota")  # type: ignore[arg-type]
     with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter.configure_run(object(), "quota")
+        await adapter.configure_quota_resource(object(), None)  # type: ignore[arg-type]
+    with pytest.raises(UnsupportedAccessStrategyError):
+        await adapter.configure_quota_resource(object(), "premium_ticket")  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(object(), "work_ticket")  # type: ignore[arg-type]
+
+
+async def _new_page():
+    playwright = await async_playwright().start()
+    try:
+        browser = await playwright.chromium.launch(headless=True)
+    except Error as exc:
+        await playwright.stop()
+        pytest.skip(f"Chromium is unavailable: {exc}")
+    page = await browser.new_page()
+    return playwright, browser, page
+
+
+@pytest.mark.asyncio
+async def test_work_ticket_entry_clicks_exact_unique_control_once_and_confirms_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--ticket" href="javascript:void(0)">
+              作品チケットで読む
+            </a>
+          </div>
+          <script>
+            window.clicks = 0;
+            document.querySelector('a').addEventListener('click', () => {
+              window.clicks++;
+              document.querySelector('.p-episode-purchase').remove();
+              document.body.insertAdjacentHTML('beforeend', '<canvas width="10" height="10"></canvas>');
+            });
+          </script>
+        """)
+        adapter = MagapokeAdapter()
+        async def rows(_page):
+            return [{"pageIndex": 0}] if await page.locator("canvas").count() else []
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+        await adapter._enter_with_work_ticket(page)
+        consumption = adapter.get_access_consumption()
+        assert await page.evaluate("window.clicks") == 1
+        assert consumption.consumed is True
+        assert consumption.resource == "work_ticket"
+        assert consumption.consumed_at is not None and consumption.consumed_at.utcoffset() is not None
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_premium_only_is_expected_unavailable_without_click() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--premium-ticket">
+              プレミアムチケットで読む
+            </a>
+          </div>
+          <script>window.clicks = 0; document.querySelector('a').onclick = () => window.clicks++;</script>
+        """)
+        adapter = MagapokeAdapter()
+        with pytest.raises(AccessResourceUnavailableError, match="work_ticket_unavailable"):
+            await adapter._enter_with_work_ticket(page)
+        assert await page.evaluate("window.clicks") == 0
+        assert adapter.get_access_consumption().consumed is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_already_visible_viewer_skips_work_ticket_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--ticket">作品チケットで読む</a>
+          </div>
+          <canvas width="10" height="10"></canvas>
+          <script>window.clicks=0; document.querySelector('a').onclick=()=>window.clicks++;</script>
+        """)
+        adapter = MagapokeAdapter()
+        await adapter.configure_run(page, "quota")
+        await adapter.configure_quota_resource(page, "work_ticket")
+        monkeypatch.setattr(adapter, "_canvas_rows", lambda _page: _ready_rows())
+        async def ready(_page):
+            return [{"pageIndex": 0}]
+        async def no_wait(_page):
+            return None
+        async def context(_page):
+            return ContentContext(content_id="episode")
+        monkeypatch.setattr(adapter, "_canvas_rows", ready)
+        monkeypatch.setattr(adapter, "_wait_for_render_ready", no_wait)
+        monkeypatch.setattr(adapter, "get_content_context", context)
+        await adapter.initialize(page)
+        assert await page.evaluate("window.clicks") == 0
+        assert adapter.get_access_consumption().consumed is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+async def _ready_rows():
+    return [{"pageIndex": 0}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "markup",
+    [
+        (
+            '<a class="c-btn-icon-primary c-btn-icon-primary--ticket">作品チケットで読む</a>'
+            '<a class="c-btn-icon-primary c-btn-icon-primary--ticket">作品チケットで読む</a>'
+        ),
+        '<a class="c-btn-icon-primary c-btn-icon-primary--ticket c-btn-icon-primary--premium-ticket">作品チケットで読む</a>',
+        '<button class="point-purchase">ポイントで購入</button>',
+    ],
+)
+async def test_ambiguous_or_unknown_access_ui_fails_without_click(markup: str) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(
+            '<div class="p-episode-purchase">' + markup + '</div>'
+            '<script>window.clicks=0; document.querySelectorAll("a,button").forEach(x => x.onclick=()=>window.clicks++);</script>'
+        )
+        adapter = MagapokeAdapter()
+        with pytest.raises(UnsupportedAccessStrategyError):
+            await adapter._enter_with_work_ticket(page)
+        assert await page.evaluate("window.clicks") == 0
+    finally:
+        await browser.close()
+        await playwright.stop()
 
 
 def _jpeg() -> bytes:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 CREATE TABLE works (
@@ -46,6 +46,7 @@ CREATE TABLE sources (
     last_seen_at TEXT,
     quota_started_at TEXT,
     access_granted_until TEXT,
+    published_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(site, external_id)
@@ -128,7 +129,7 @@ _REQUIRED_COLUMNS = {
     "sources": {
         "id", "item_id", "site", "external_id", "discovery_key", "access_mode",
         "free_until", "available", "access_checked_at", "last_seen_at", "quota_started_at",
-        "access_granted_until", "created_at", "updated_at",
+        "access_granted_until", "published_at", "created_at", "updated_at",
     },
     "source_targets": {
         "id", "source_id", "backend", "target_key", "locator", "priority", "enabled",
@@ -160,7 +161,7 @@ def user_version(connection: sqlite3.Connection) -> int:
 
 
 def validate_existing_schema(connection: sqlite3.Connection) -> None:
-    """Validate an existing v3 schema without creating or changing anything."""
+    """Validate an existing v4 schema without creating or changing anything."""
 
     version = user_version(connection)
     if version != SCHEMA_VERSION:
@@ -177,7 +178,7 @@ def validate_existing_schema(connection: sqlite3.Connection) -> None:
     missing_tables = set(_REQUIRED_COLUMNS) - tables
     if missing_tables:
         raise SchemaError(
-            f"Catalog schema version 3 is missing table(s): {', '.join(sorted(missing_tables))}"
+            f"Catalog schema version 4 is missing table(s): {', '.join(sorted(missing_tables))}"
         )
 
     for table, required_columns in _REQUIRED_COLUMNS.items():
@@ -185,19 +186,19 @@ def validate_existing_schema(connection: sqlite3.Connection) -> None:
         missing_columns = required_columns - columns
         if missing_columns:
             raise SchemaError(
-                f"Catalog schema version 3 is missing {table} column(s): "
+                f"Catalog schema version 4 is missing {table} column(s): "
                 f"{', '.join(sorted(missing_columns))}"
             )
         forbidden_columns = _FORBIDDEN_COLUMNS.get(table, set()) & columns
         if forbidden_columns:
             raise SchemaError(
-                f"Catalog schema version 3 has removed {table} column(s): "
+                f"Catalog schema version 4 has removed {table} column(s): "
                 f"{', '.join(sorted(forbidden_columns))}"
             )
 
 
 def initialize(connection: sqlite3.Connection) -> None:
-    """Create v3 or validate it; never migrate an existing schema."""
+    """Create v4 or validate it; never migrate an existing schema."""
 
     version = user_version(connection)
     if version not in (0, SCHEMA_VERSION):

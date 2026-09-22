@@ -120,6 +120,11 @@ class CrawlerRunner:
             adapter.configure_run(page, self.config.access_strategy),
             "configure_run",
         )
+        # Validate the resource before navigation can expose an access screen.
+        await self._adapter_call(
+            adapter.configure_quota_resource(page, self.config.quota_resource),
+            "configure_quota_resource",
+        )
         await page.goto(
             self.config.source_url,
             timeout=self.config.navigation_timeout_ms,

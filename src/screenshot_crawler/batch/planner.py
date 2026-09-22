@@ -97,6 +97,7 @@ class BatchPlanner:
             quota_selections = [
                 selection for selection in selections if selection.decision.consumes_quota
             ]
+            quota_selections = _enforce_work_quota_limits(quota_selections, plan.skipped)
             group_ranks = _discovery_group_ranks(sources)
             quota_selections.sort(
                 key=lambda selection: _quota_selection_order_key(selection, group_ranks)
@@ -106,21 +107,31 @@ class BatchPlanner:
             else:
                 accepted_quota = quota_selections[: max(0, quota_available)]
             accepted_quota_ids = {selection.item.id for selection in accepted_quota}
-            for selection in selections:
-                if (
-                    selection.decision.consumes_quota
-                    and selection.item.id not in accepted_quota_ids
-                ):
+            for selection in quota_selections:
+                if selection.item.id not in accepted_quota_ids:
                     plan.skipped.append(
                         BatchSkipped(selection.item.id, selection.source.id, "quota_exhausted")
                     )
 
-            quota_iter = iter(accepted_quota)
-            for selection in selections:
-                if selection.decision.consumes_quota:
-                    if selection.item.id not in accepted_quota_ids:
-                        continue
-                    selection = next(quota_iter)
+            if any(
+                selection.decision.quota_scope == "work"
+                for selection in selections
+                if selection.decision.consumes_quota
+            ):
+                ordered_selections = [
+                    selection for selection in selections
+                    if not selection.decision.consumes_quota
+                ] + accepted_quota
+            else:
+                accepted_ids = {selection.item.id for selection in accepted_quota}
+                quota_iter = iter(accepted_quota)
+                ordered_selections = []
+                for selection in selections:
+                    if not selection.decision.consumes_quota:
+                        ordered_selections.append(selection)
+                    elif selection.item.id in accepted_ids:
+                        ordered_selections.append(next(quota_iter))
+            for selection in ordered_selections:
                 plan.candidates.append(_candidate_from_selection(selection))
 
             plan.quota_remaining = (
@@ -213,6 +224,10 @@ def _candidate_from_selection(selection: _Selection) -> BatchCandidate:
         access_mode=source.access_mode,
         reason=decision.reason,
         consumes_quota=decision.consumes_quota,
+        quota_resource=decision.quota_resource,
+        quota_scope=decision.quota_scope,
+        quota_limit=decision.quota_limit,
+        quota_commit_mode=decision.quota_commit_mode,
     )
 
 
@@ -268,17 +283,62 @@ def _discovery_group_ranks(sources: Iterable[Source]) -> dict[str, int]:
 def _quota_selection_order_key(
     selection: _Selection,
     group_ranks: dict[str, int],
-) -> tuple[int, int, tuple[int, int, int, str, int]]:
+) -> tuple[object, ...]:
     """Order new quota consumption by Discovery group, then item order.
 
     Sources without a discovery key are deliberately placed after all explicit
     groups and retain the same stable item-order fallback as other candidates.
     """
 
+    if selection.decision.quota_scope == "work":
+        return (
+            0,
+            selection.work.created_at,
+            selection.work.id,
+            _published_date_key(selection.source),
+            _item_order_key(selection.item),
+            selection.source.id,
+        )
     group_rank = group_ranks.get(selection.source.discovery_key)
     if group_rank is None:
         return (1, 0, _item_order_key(selection.item))
     return (0, group_rank, _item_order_key(selection.item))
+
+
+def _enforce_work_quota_limits(
+    selections: list[_Selection], skipped: list[BatchSkipped]
+) -> list[_Selection]:
+    # Work-scoped limits are independent; site-scoped candidates keep the old allocator.
+    by_work: dict[int, list[_Selection]] = defaultdict(list)
+    unrestricted: list[_Selection] = []
+    for selection in selections:
+        decision = selection.decision
+        if decision.quota_scope != "work" or decision.quota_limit is None:
+            unrestricted.append(selection)
+        else:
+            by_work[selection.work.id].append(selection)
+    accepted = list(unrestricted)
+    for work_selections in by_work.values():
+        limit = work_selections[0].decision.quota_limit or 0
+        ranked = sorted(
+            work_selections,
+            key=lambda selection: (
+                _published_date_key(selection.source),
+                _item_order_key(selection.item),
+                selection.source.id,
+            ),
+        )
+        accepted.extend(ranked[:limit])
+        skipped.extend(
+            BatchSkipped(selection.item.id, selection.source.id, "quota_work_limit")
+            for selection in ranked[limit:]
+        )
+    return accepted
+
+
+def _published_date_key(source: Source) -> tuple[int, datetime]:
+    published = _parse_aware(source.published_at, "published_at")
+    return (1, _MAX_DATETIME) if published is None else (0, published)
 
 
 def _parse_episode_order_key(value: str | None) -> tuple[int, int] | None:

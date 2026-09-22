@@ -10,6 +10,7 @@ from screenshot_crawler.catalog.migrations import (
     _run_migrations,
     migrate_catalog,
 )
+from screenshot_crawler.catalog.schema import SCHEMA_SQL
 
 
 def make_database(path: Path, *, version: int = 3, value: str = "before") -> None:
@@ -19,15 +20,15 @@ def make_database(path: Path, *, version: int = 3, value: str = "before") -> Non
         connection.execute(f"PRAGMA user_version = {version}")
 
 
-def test_production_v3_migration_is_noop_without_backup(tmp_path: Path) -> None:
+def test_current_v4_migration_is_noop_without_backup(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     CatalogService(path).initialize()
     before = path.read_bytes()
 
     result = migrate_catalog(path, backup_dir=tmp_path / "backup")
 
-    assert result.from_version == 3
-    assert result.to_version == 3
+    assert result.from_version == 4
+    assert result.to_version == 4
     assert result.migrated is False
     assert result.backup_path is None
     assert path.read_bytes() == before
@@ -183,7 +184,7 @@ def test_missing_migration_step_rejects_before_backup_or_mutation(tmp_path: Path
     assert not backup_dir.exists()
 
 
-@pytest.mark.parametrize("version", [0, 4])
+@pytest.mark.parametrize("version", [0, 5])
 def test_invalid_migration_version_is_rejected_without_backup(
     tmp_path: Path, version: int
 ) -> None:
@@ -195,3 +196,38 @@ def test_invalid_migration_version_is_rejected_without_backup(
         migrate_catalog(path, backup_dir=tmp_path / "backup")
 
     assert not (tmp_path / "backup").exists()
+
+
+def test_production_v3_to_v4_migration_preserves_rows_and_creates_backup(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "catalog-v3.sqlite"
+    backup_dir = tmp_path / "backup"
+    old_schema_sql = SCHEMA_SQL.replace("    published_at TEXT,\n", "")
+    with sqlite3.connect(path) as connection:
+        connection.executescript(old_schema_sql)
+        connection.execute(
+            "INSERT INTO works (work_key, title, created_at, updated_at) "
+            "VALUES ('w', 'Work', '2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
+        )
+        connection.execute(
+            "INSERT INTO items (work_id, status, created_at, updated_at) "
+            "VALUES (1, 'pending', '2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
+        )
+        connection.execute(
+            "INSERT INTO sources (item_id, site, external_id, created_at, updated_at) "
+            "VALUES (1, 'magapoke', 'e1', '2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
+        )
+        connection.execute("PRAGMA user_version = 3")
+
+    result = migrate_catalog(path, backup_dir=backup_dir)
+
+    assert result.migrated is True
+    assert result.from_version == 3 and result.to_version == 4
+    assert result.backup_path is not None and result.backup_path.is_file()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert connection.execute("SELECT count(*) FROM works").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM items").fetchone()[0] == 1
+        assert connection.execute("SELECT published_at FROM sources").fetchone()[0] is None

@@ -25,6 +25,10 @@ class PolicyDecision:
     access_strategy: BatchAccessStrategy | None
     reason: str
     consumes_quota: bool = False
+    quota_resource: str | None = None
+    quota_scope: Literal["site", "work"] = "site"
+    quota_limit: int | None = None
+    quota_commit_mode: Literal["before_run", "after_observed_consumption"] = "before_run"
 
 
 class SitePolicy(ABC):

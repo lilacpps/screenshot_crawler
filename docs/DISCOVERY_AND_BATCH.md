@@ -1351,3 +1351,16 @@ crawl_pages          # page単位履歴が本当に必要になった場合
 - schedulerそのものの実装
 - BookWalkerの10分を秒単位で使い切る複数冊最適化
 - BookWalkerの途中停止巻を翌日同じrunへresumeする機能
+
+
+## 18. Magapoke M3c1 and Catalog schema v4
+
+Catalog schema v4 adds nullable sources.published_at; it is Source-specific observed publication metadata. Date-only Magapoke observations use the live-confirmed YYYY/MM/DD format and normalize to aware JST midnight for stable ordering. Missing or malformed dates do not make Discovery incomplete. The field never belongs to Item and never becomes order_key.
+
+catalog migrate explicitly migrates v3 to v4. It checks the complete migration path before taking a writer lock, creates a pre-migration backup while holding BEGIN IMMEDIATE, applies ALTER TABLE, advances user_version, runs quick_check, validates the final schema, then commits. Normal Catalog initialization never migrates a production database implicitly.
+
+Magapoke Batch planning places direct candidates first. A quota source with a future observed grant uses direct access without consuming a new resource. Other quota sources produce one work_ticket candidate per Work, selected by oldest Source.published_at first, NULL last, stable item ordering, then source ID. Work pass order is Work.created_at, then Work.id. Magapoke keeps order_key=None. Manga ONE and BookWalker keep their existing site-wide quota allocation order.
+
+PolicyDecision carries site-neutral quota_resource, quota_scope, quota_limit, and quota_commit_mode metadata. Magapoke Work Ticket uses work_ticket, work, 1, and fter_observed_consumption. Runner passes the resource to the optional Adapter hook. The Magapoke Adapter accepts only work_ticket for quota and clicks one visible, unique, exact Work Ticket control. The page DOM is the final eligibility authority. Premium Ticket, points, coins, subscriptions, and other purchase controls are never fallback actions. Premium-only is an expected skip; unknown or ambiguous controls fail without a click.
+
+The Adapter reports AccessConsumption only after the Work Ticket click, disappearance of the access control, and viewer content are observed. Executor persists quota_started_at=consumed_at and the conservative Magapoke grant consumed_at + 71 hours before packaging, including when the crawl then fails. Unavailable and already-accessible cases leave quota state unchanged. M3c2 retains Premium Ticket counts, resource and account-wide capacity planning, oldest-Work concentration, zero-balance stop, and Premium Ticket live use.

@@ -4,9 +4,45 @@
 
 `MagapokeAdapter` crawls one episode through the shared Crawler Chrome/CDP
 session. Magapoke Discovery is implemented separately for episode-list
-enumeration and Catalog synchronization. Batch, SitePolicy, login, purchase,
-quota operations, active-grant persistence, and ticket consumption remain out
-of scope.
+enumeration and Catalog synchronization. Batch and SitePolicy support free and
+active-rental direct access, plus one Work Ticket candidate per Work. Login,
+Premium Ticket allocation, and all paid fallback behavior remain out of scope.
+
+## Current M3c1 behavior
+
+- Catalog schema v4 stores nullable `sources.published_at`. This is the
+  Magapoke-observed publication date for that Source, not an Item property.
+- The live row date selector is `p.c-episode-item__date`; the observed text
+  format is `YYYY/MM/DD`. A date-only observation is normalized to JST midnight
+  (`+09:00`) for stable ordering; it does not claim that publication occurred
+  at midnight. Missing or malformed dates remain NULL without making Discovery
+  incomplete.
+- Magapoke `order_key` remains `None`; `published_at` is priority metadata only.
+- Batch candidates run direct access first. This includes free episodes and a
+  quota source with a future observed `access_granted_until` (`active_rental`).
+- An ungranted quota source is a Work Ticket candidate with
+  `quota_resource="work_ticket"`, `quota_scope="work"`, `quota_limit=1`, and
+  `quota_commit_mode="after_observed_consumption"`. The Planner groups by Work,
+  selects its oldest dated pending candidate first, puts NULL dates last, then
+  uses existing stable item ordering and source ID as ties. Work pass order is
+  `Work.created_at`, then `Work.id`.
+- The visible page is the final authority on resource eligibility. The Adapter
+  clicks only one visible `.c-btn-icon-primary--ticket` control with exact
+  normalized text `作品チケットで読む`. It never clicks Premium Ticket, points,
+  coins, subscriptions, or other purchase controls. Premium-only is the
+  expected `work_ticket_unavailable` skip; ambiguous or unknown controls fail
+  without clicking.
+- Existing viewer content is entered without a ticket click. Consumption is
+  reported only after the unique Work Ticket click, control disappearance, and
+  viewer canvas content are all observed.
+- `quota_started_at` is written only after observed consumption, using the
+  Adapter's aware click/entry timestamp. Magapoke records a conservative
+  `access_granted_until` at `consumed_at + 71 hours`. Both are saved before
+  packaging and remain recorded if crawling then fails. Unavailable and
+  already-accessible cases do not record quota state.
+- No live Work Ticket or Premium Ticket was consumed to implement or verify
+  M3c1. M3c2 owns Premium Ticket count, premium resource planning, account-wide
+  capacity, old-Work concentration, and any Premium Ticket live use.
 
 ## URL and context
 

@@ -750,3 +750,12 @@ CrawlRun(failed)へ記録し、Itemはpending、Artifactは作成しない。
 `batch plan`は引き続きCatalog read-onlyであり、`batch run`だけがquota local stateと
 CrawlRun / Artifact / Item statusを書き換える。Manga ONEとBookWalkerのquota policyは既存挙動を
 維持し、Android targetはCatalogへ保持できるがPhase 3 Executorでは実行しない。
+
+
+### Catalog v4 / Magapoke M3c1 current update
+
+Catalog schema v4 adds nullable sources.published_at and explicitly migrates v3 after an automatic pre-migration backup inside the existing transactional catalog migrate flow. Ordinary initialization remains non-migrating. Timestamp validation uses the same aware ISO/JST normalization as other Catalog timestamps.
+
+Discovery passes DiscoveredSource.published_at into SourceInput; a non-NULL observation updates the Source, while NULL preserves the prior value. Magapoke parses the live-confirmed YYYY/MM/DD row date to JST midnight. This represents the site-observed publication day normalized for stable ordering, not an observed time of day. order_key remains site-neutral and Magapoke keeps it NULL.
+
+Batch metadata now carries generic quota resource, scope, limit, and commit timing. Work-scoped quota limits are applied by grouping on Work.id; sources are ranked by published_at ascending with NULL last, then existing item ordering and stable source ID. Only work-scoped policies use the direct-first phase; Manga ONE and BookWalker retain their established site quota ordering. BatchExecutor passes quota_resource through RunConfig and commits after-observed consumption only when the Adapter reports a matching aware timestamp.

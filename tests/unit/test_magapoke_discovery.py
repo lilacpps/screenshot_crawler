@@ -7,6 +7,7 @@ import pytest
 from playwright.async_api import Error, async_playwright
 
 from screenshot_crawler.catalog import CatalogService
+from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.discovery import (
     DiscoveryAdapterRegistry,
     DiscoveryIncompleteError,
@@ -18,6 +19,7 @@ from screenshot_crawler.site_adapters.magapoke.discovery import (
     magapoke_rental_grant_until,
     map_magapoke_access_mode,
     parse_magapoke_episode_url,
+    parse_magapoke_published_at,
 )
 from screenshot_crawler.watchlist import WatchlistTarget
 
@@ -98,11 +100,21 @@ def test_magapoke_rental_display_produces_conservative_lower_bound() -> None:
         )
 
 
+def test_magapoke_published_date_parser_uses_jst_midnight() -> None:
+    parsed = parse_magapoke_published_at("2026/09/22")
+    assert parsed == datetime(2026, 9, 22, tzinfo=JST)
+    assert parse_magapoke_published_at(None) is None
+    assert parse_magapoke_published_at("2026-09-22") is None
+    assert parse_magapoke_published_at("2026/9/22") is None
+    assert parse_magapoke_published_at("2026/02/30") is None
+
+
 def _row(
     episode_id: str,
     title: str,
     icon_class: str | None = None,
     icon_text: str = "",
+    published_date: str | None = None,
 ) -> str:
     icon = ""
     if icon_class:
@@ -120,6 +132,7 @@ def _row(
         <a class="c-episode-item" href="/title/00695/episode/{episode_id}">
           <div class="c-episode-item__detail">
             <h2 class="c-episode-item__ttl">{title}</h2>
+            {f'<p class="c-episode-item__date">{published_date}</p>' if published_date else ''}
             <div class="c-episode-item__label02">{icon}</div>
           </div>
         </a>
@@ -139,6 +152,7 @@ def _listing_html(
         "【第５話】「最新」(1)",
         "c-episode-item__ico--point",
         "90",
+        "2026/09/22",
     )
     tail_id = "999001" if wrong_work else "244815"
     tail_href = f"/title/{'99999' if wrong_work else '00695'}/episode/{tail_id}"
@@ -272,6 +286,7 @@ async def test_magapoke_full_discovery_expands_validates_and_syncs_catalog(
     assert sources[1].access_granted_until is None
     assert sources[2].access_granted_until is not None
     assert sources[2].access_granted_until.endswith("+09:00")
+    assert sources[0].published_at == "2026-09-22T00:00:00+09:00"
     assert all(item.order_key is None for item in catalog.list_items())
     assert [item.order_label for item in catalog.list_items()] == [
         "【第５話】「最新」(1)",

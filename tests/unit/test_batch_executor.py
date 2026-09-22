@@ -19,12 +19,18 @@ from screenshot_crawler.catalog import (
     WorkInput,
 )
 from screenshot_crawler.catalog.service import JST
+from screenshot_crawler.core.errors import AccessResourceUnavailableError
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult
 from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.site_adapters.base import AccessConsumption
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
-from screenshot_crawler.site_policies import MangaOneSitePolicy, SitePolicyRegistry
+from screenshot_crawler.site_policies import (
+    MagapokeSitePolicy,
+    MangaOneSitePolicy,
+    SitePolicyRegistry,
+)
 
 NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
 COMPLETED_NOW = datetime(2026, 9, 17, 15, 30, tzinfo=JST)
@@ -511,3 +517,125 @@ def test_batch_output_directory_is_unique_and_windows_safe(tmp_path: Path) -> No
     assert path_a != path_b
     assert path_a.parent == tmp_path / "batch" / "mangaone"
     assert all(part not in path_a.name for part in '<>:/\\|?*')
+
+
+def _add_magapoke_candidate(service: CatalogService) -> BatchCandidate:
+    work = service.create_work(WorkInput(work_key="magapoke-work", title="Magapoke"))
+    item = service.create_item(ItemInput(order_label="Episode 1"), work_id=work.id)
+    source = service.create_source(
+        SourceInput(site="magapoke", external_id="mp-1", access_mode="quota"),
+        item_id=item.id,
+    )
+    target = service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/mp-1"),
+        source_id=source.id,
+    )
+    return BatchCandidate(
+        item_id=item.id, source_id=source.id, target_id=target.id,
+        site="magapoke", backend="web", target_key=target.target_key,
+        locator=target.locator, access_strategy="quota", access_mode="quota",
+        reason="work_ticket_candidate", consumes_quota=True,
+        quota_resource="work_ticket", quota_scope="work", quota_limit=1,
+        quota_commit_mode="after_observed_consumption",
+    )
+
+
+def _make_magapoke_executor(
+    service: CatalogService,
+    consumption: AccessConsumption,
+    *,
+    failure: BaseException | None = None,
+) -> BatchExecutor:
+    class ConsumingAdapter(FakeAdapter):
+        def get_access_consumption(self) -> AccessConsumption:
+            return consumption
+
+    class Runner:
+        def __init__(self, _config: RunConfig) -> None:
+            pass
+
+        async def run(self, _page: object, _adapter: ConsumingAdapter) -> RunResult:
+            if failure is not None:
+                raise failure
+            return RunResult(pages=(), stop_state=PageState.END, stop_reason="end")
+
+    def package(output_dir, _metadata, *, library_dir, explicit_metadata, **_kwargs):
+        archive = Path(library_dir) / "magapoke.zip"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(archive, "w") as stream:
+            stream.writestr("page.txt", "fixture")
+        return PackageResult(
+            archive_path=archive,
+            title=explicit_metadata.get("title", "Magapoke"),
+            genre="manga", volume=explicit_metadata.get("order"), author=None,
+            status_path=Path(output_dir) / "status.json",
+        )
+
+    policies = SitePolicyRegistry()
+    policies.register("magapoke", MagapokeSitePolicy)
+    adapters = AdapterRegistry()
+    adapters.register("magapoke", ConsumingAdapter)
+    return BatchExecutor(
+        service, policies, adapters,
+        runner_factory=Runner,  # type: ignore[arg-type]
+        package_function=package,
+    )
+
+
+async def test_work_ticket_consumption_is_recorded_at_observed_time(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(True, "work_ticket", consumed_at)
+    )
+    await executor.execute_candidate(
+        object(), candidate, output_root=tmp_path / "batch",
+        library_dir=tmp_path / "Books", now=NOW,
+    )
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at == consumed_at.isoformat()
+    assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
+    assert service.get_item(candidate.item_id).status == "completed"
+
+
+async def test_consumption_is_recorded_when_crawl_fails_after_entry(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(True, "work_ticket", consumed_at),
+        failure=RuntimeError("crawl failed after entry"),
+    )
+    with pytest.raises(BatchExecutionError, match="crawl failed after entry"):
+        await executor.execute_candidate(object(), candidate, now=NOW)
+    assert service.get_source(candidate.source_id).quota_started_at == consumed_at.isoformat()
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+
+
+async def test_unavailable_and_already_accessible_do_not_record_consumption(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "unavailable.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(),
+        failure=AccessResourceUnavailableError("work_ticket_unavailable"),
+    )
+    with pytest.raises(AccessResourceUnavailableError):
+        await executor.execute_candidate(object(), candidate, now=NOW)
+    assert service.get_source(candidate.source_id).quota_started_at is None
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+    assert service.list_crawl_runs()[0].status == "failed"
+
+    service2 = CatalogService(tmp_path / "accessible.sqlite")
+    candidate2 = _add_magapoke_candidate(service2)
+    executor2 = _make_magapoke_executor(service2, AccessConsumption())
+    await executor2.execute_candidate(
+        object(), candidate2, output_root=tmp_path / "batch2",
+        library_dir=tmp_path / "Books2", now=NOW,
+    )
+    assert service2.get_source(candidate2.source_id).quota_started_at is None
+    assert service2.get_item(candidate2.item_id).status == "completed"

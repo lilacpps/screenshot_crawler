@@ -13,8 +13,11 @@ from screenshot_crawler.catalog.service import CatalogError, format_timestamp, n
 
 Migration = Callable[[sqlite3.Connection], None]
 
-# Production migrations are intentionally empty until a real v3 -> v4 design exists.
-MIGRATIONS: dict[int, Migration] = {}
+def migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
+    connection.execute("ALTER TABLE sources ADD COLUMN published_at TEXT")
+
+
+MIGRATIONS: dict[int, Migration] = {3: migrate_v3_to_v4}
 
 
 class CatalogMigrationError(CatalogError):

@@ -377,6 +377,8 @@ def test_quota_is_reserved_in_memory_only(tmp_path: Path) -> None:
     assert plan.quota_count == 4
     assert plan.quota_remaining == 0
     assert sum(item.consumes_quota for item in plan.candidates) == 4
+    assert all(item.quota_resource is None for item in plan.candidates)
+    assert all(item.quota_commit_mode == "before_run" for item in plan.candidates)
     assert [skipped.reason for skipped in plan.skipped] == ["quota_exhausted"]
     assert before == after
     assert service.path.read_bytes() == before_bytes

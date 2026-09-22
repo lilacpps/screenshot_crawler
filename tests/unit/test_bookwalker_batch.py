@@ -73,6 +73,15 @@ def make_candidate(service: CatalogService, *, order: str = "01") -> BatchCandid
     )
 
 
+def test_bookwalker_candidate_keeps_site_quota_defaults(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = make_candidate(service)
+    assert candidate.consumes_quota is True
+    assert candidate.quota_resource is None
+    assert candidate.quota_scope == "site"
+    assert candidate.quota_commit_mode == "before_run"
+
+
 def make_executor(service: CatalogService, *, fail: bool = False) -> BatchExecutor:
     policies = SitePolicyRegistry()
     policies.register("bookwalker", BookWalkerSitePolicy)

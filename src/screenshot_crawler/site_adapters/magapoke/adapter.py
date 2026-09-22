@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import (
+    AccessResourceUnavailableError,
     PageChangeTimeoutError,
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.base import AccessConsumption, SiteAdapter
 from screenshot_crawler.site_adapters.magapoke.native_capture import (
     MagapokeUrlParts,
     is_magapoke_jpeg_response,
@@ -214,6 +217,8 @@ class MagapokeAdapter(SiteAdapter):
 
     def __init__(self) -> None:
         self._access_strategy: AccessStrategy = "auto"
+        self._quota_resource: str | None = None
+        self._access_consumption = AccessConsumption()
         self._initial_url: str | None = None
         self._initial_parts: MagapokeUrlParts | None = None
         self._source_episode: MagapokeUrlParts | None = None
@@ -226,14 +231,36 @@ class MagapokeAdapter(SiteAdapter):
     async def configure_run(
         self, page: Page, access_strategy: AccessStrategy
     ) -> None:
-        """Allow only direct navigation; quota entry is intentionally unsupported."""
+        """Allow direct navigation and defer quota resource validation to its hook."""
 
         del page
-        if access_strategy not in {"auto", "direct"}:
+        if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
                 f"MagapokeAdapter does not support access_strategy={access_strategy!r}"
             )
         self._access_strategy = access_strategy
+        self._access_consumption = AccessConsumption()
+
+    async def configure_quota_resource(
+        self, page: Page, quota_resource: str | None
+    ) -> None:
+        del page
+        if quota_resource not in {None, "work_ticket"}:
+            raise UnsupportedAccessStrategyError(
+                f"MagapokeAdapter does not support quota_resource={quota_resource!r}"
+            )
+        if quota_resource is not None and self._access_strategy != "quota":
+            raise UnsupportedAccessStrategyError(
+                "Magapoke quota_resource requires access_strategy='quota'"
+            )
+        if self._access_strategy == "quota" and quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "Magapoke quota access requires quota_resource='work_ticket'"
+            )
+        self._quota_resource = quota_resource
+
+    def get_access_consumption(self) -> AccessConsumption:
+        return self._access_consumption
 
     async def prepare_page(self, page: Page) -> None:
         for task in self._source_response_tasks.values():
@@ -350,12 +377,102 @@ class MagapokeAdapter(SiteAdapter):
             elapsed += 100
         raise PageChangeTimeoutError("Magapoke viewer did not finish loading within the timeout")
 
+    @staticmethod
+    def _normalized_access_text(value: str) -> str:
+        return " ".join(value.split())
+
+    async def _visible_access_controls(self, page: Page) -> list[tuple[Locator, str, set[str]]]:
+        controls = page.locator(".p-episode-purchase a, .p-episode-purchase button")
+        visible: list[tuple[Locator, str, set[str]]] = []
+        for index in range(await controls.count()):
+            control = controls.nth(index)
+            if not await control.is_visible():
+                continue
+            text = self._normalized_access_text(await control.inner_text())
+            classes = set((await control.get_attribute("class") or "").split())
+            visible.append((control, text, classes))
+        return visible
+
+    async def _enter_with_work_ticket(self, page: Page) -> None:
+        work_text = "作品チケットで読む"
+        premium_text = "プレミアムチケットで読む"
+        controls = await self._visible_access_controls(page)
+        work = [
+            entry for entry in controls
+            if entry[1] == work_text and "c-btn-icon-primary--ticket" in entry[2]
+        ]
+        premium = [
+            entry for entry in controls
+            if entry[1] == premium_text
+            and "c-btn-icon-primary--premium-ticket" in entry[2]
+        ]
+        if any(
+            ("c-btn-icon-primary--ticket" in classes)
+            and ("c-btn-icon-primary--premium-ticket" in classes)
+            for _, _, classes in controls
+        ):
+            raise UnsupportedAccessStrategyError(
+                "Magapoke access control has conflicting Work/Premium Ticket classes"
+            )
+        if len(work) > 1 or len(premium) > 1:
+            raise UnsupportedAccessStrategyError("Magapoke ticket controls are ambiguous")
+        # A Premium-only screen is normal for a charging Work Ticket; never fallback to it.
+        if len(controls) == 1 and len(premium) == 1 and not work:
+            raise AccessResourceUnavailableError("work_ticket_unavailable")
+        if len(controls) != 1 or len(work) != 1 or premium:
+            raise UnsupportedAccessStrategyError(
+                "Magapoke Work Ticket entry UI is unknown or ambiguous"
+            )
+
+        control = work[0][0]
+        await control.click(timeout=self.page_change_timeout_ms)
+        elapsed = 0
+        while elapsed < self.page_change_timeout_ms:
+            rows = await self._canvas_rows(page)
+            remaining = await self._visible_access_controls(page)
+            if rows and not remaining:
+                self._access_consumption = AccessConsumption(
+                    consumed=True,
+                    resource="work_ticket",
+                    consumed_at=datetime.now(UTC),
+                )
+                return
+            await page.wait_for_timeout(100)
+            elapsed += 100
+        raise PageChangeTimeoutError(
+            "Magapoke Work Ticket click did not reach confirmed viewer content"
+        )
+
+    async def _viewer_canvas_visible(self, page: Page) -> bool:
+        canvases = page.locator(self.content_canvas_selector)
+        for index in range(await canvases.count()):
+            canvas = canvases.nth(index)
+            if not await canvas.is_visible():
+                continue
+            try:
+                has_pixels = await canvas.evaluate(
+                    "element => element.width > 0 && element.height > 0"
+                )
+            except PlaywrightError:
+                continue
+            if has_pixels:
+                return True
+        return False
+
     async def initialize(self, page: Page) -> None:
         self._initial_url = page.url
         self._initial_parts = parse_magapoke_url(page.url)
         self._source_episode = self._initial_parts
         self._advance_pending = False
         rows = await self._canvas_rows(page)
+        already_accessible = bool(rows) or await self._viewer_canvas_visible(page)
+        if (
+            self._access_strategy == "quota"
+            and self._quota_resource == "work_ticket"
+            and not already_accessible
+        ):
+            await self._enter_with_work_ticket(page)
+            rows = await self._canvas_rows(page)
         page_indices = [
             int(row["pageIndex"])
             for row in rows

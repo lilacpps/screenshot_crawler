@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from screenshot_crawler.core.capture import CaptureResult
@@ -10,6 +12,13 @@ from screenshot_crawler.core.state import PageState
 
 if TYPE_CHECKING:
     from playwright.async_api import Locator, Page
+
+
+@dataclass(frozen=True, slots=True)
+class AccessConsumption:
+    consumed: bool = False
+    resource: str | None = None
+    consumed_at: datetime | None = None
 
 
 class SiteAdapter(ABC):
@@ -39,6 +48,23 @@ class SiteAdapter(ABC):
                 f"{type(self).__name__} does not support "
                 f"access_strategy={access_strategy!r}"
             )
+
+    async def configure_quota_resource(
+        self, page: Page, quota_resource: str | None
+    ) -> None:
+        """Validate optional quota resource metadata before navigation."""
+
+        del page
+        if quota_resource is not None:
+            raise UnsupportedAccessStrategyError(
+                f"{type(self).__name__} does not support "
+                f"quota_resource={quota_resource!r}"
+            )
+
+    def get_access_consumption(self) -> AccessConsumption:
+        """Report any resource use observed by this adapter during the run."""
+
+        return AccessConsumption()
 
     @abstractmethod
     async def initialize(self, page: Page) -> None:

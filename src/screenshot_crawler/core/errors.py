@@ -6,6 +6,10 @@ class UnsupportedAccessStrategyError(CrawlerError):
     """Raised when an adapter cannot execute the requested access strategy."""
 
 
+class AccessResourceUnavailableError(CrawlerError):
+    """Expected skip when a requested resource is clearly unavailable."""
+
+
 class UnknownPageStateError(CrawlerError):
     """Raised when an adapter cannot safely classify the current screen."""
 

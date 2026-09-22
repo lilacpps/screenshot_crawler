@@ -35,6 +35,7 @@ from screenshot_crawler.core.browser import (
     launch_browser,
     resolve_cdp_endpoint,
 )
+from screenshot_crawler.core.errors import AccessResourceUnavailableError
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.progress import normalize_path
@@ -793,6 +794,11 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                     max_same_content=args.max_same_content,
                 )
                 print(f"  completed: {result.archive_path}")
+            except AccessResourceUnavailableError as exc:
+                print(
+                    f"  SKIPPED item={candidate.item_id} "
+                    f"reason=work_ticket_unavailable ({exc})"
+                )
             except BaseException as exc:
                 print(
                     "FAILED:",

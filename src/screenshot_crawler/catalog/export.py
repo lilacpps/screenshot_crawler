@@ -1,4 +1,4 @@
-"""Read-only CSV snapshot export for the Schema v3 Catalog."""
+"""Read-only CSV snapshot export for the Schema v4 Catalog."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ class ExportResult:
 
 
 def export_catalog_csv(catalog_path: str | Path, output_dir: str | Path) -> ExportResult:
-    """Export all v3 Catalog tables to a read-only, six-CSV snapshot."""
+    """Export all v4 Catalog tables to a read-only, six-CSV snapshot."""
 
     catalog_path = Path(catalog_path)
     output_dir = Path(output_dir)

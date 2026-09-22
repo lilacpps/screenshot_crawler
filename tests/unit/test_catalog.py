@@ -43,13 +43,13 @@ def make_graph(service: CatalogService):
     return work, item, source, target
 
 
-def test_initialize_creates_v3_tables_indexes_and_foreign_keys(tmp_path: Path) -> None:
+def test_initialize_creates_v4_tables_indexes_and_foreign_keys(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     service = CatalogService(path)
     service.initialize()
 
-    assert SCHEMA_VERSION == 3
-    assert service.schema_version() == 3
+    assert SCHEMA_VERSION == 4
+    assert service.schema_version() == 4
     with service._connection() as connection:
         tables = {
             row[0]
@@ -63,6 +63,8 @@ def test_initialize_creates_v3_tables_indexes_and_foreign_keys(tmp_path: Path) -
         assert {"canonical_title", "author", "genre", "local_path"}.isdisjoint(item_columns)
         target_columns = {row[1] for row in connection.execute("PRAGMA table_info(source_targets)")}
         assert "target_key" in target_columns
+        source_columns = {row[1] for row in connection.execute("PRAGMA table_info(sources)")}
+        assert "published_at" in source_columns
         indexes = {
             row[1]
             for row in connection.execute("PRAGMA index_list(items)")
@@ -105,6 +107,7 @@ def test_discovery_grant_create_and_refresh_null_preservation(tmp_path: Path) ->
             discovery_key="magapoke-target",
             access_mode="quota",
             access_granted_until="2026-09-22T16:00:00+00:00",
+            published_at="2026-09-22T00:00:00+00:00",
         ),
         web_target_input=SourceTargetInput(
             backend="web", locator="https://example.invalid/episode"
@@ -112,6 +115,7 @@ def test_discovery_grant_create_and_refresh_null_preservation(tmp_path: Path) ->
     )
     assert created.source.quota_started_at is None
     assert created.source.access_granted_until == "2026-09-23T01:00:00+09:00"
+    assert created.source.published_at == "2026-09-22T09:00:00+09:00"
 
     refreshed = service.refresh_discovered_source(
         work_id=work.id,
@@ -123,6 +127,7 @@ def test_discovery_grant_create_and_refresh_null_preservation(tmp_path: Path) ->
             discovery_key="magapoke-target",
             access_mode="quota",
             access_granted_until="2026-09-22T17:00:00+00:00",
+            published_at="2026-09-21T15:00:00+00:00",
         ),
         web_target_input=SourceTargetInput(
             backend="web", locator="https://example.invalid/episode"
@@ -130,6 +135,7 @@ def test_discovery_grant_create_and_refresh_null_preservation(tmp_path: Path) ->
     )
     assert refreshed.source.quota_started_at is None
     assert refreshed.source.access_granted_until == "2026-09-23T02:00:00+09:00"
+    assert refreshed.source.published_at == "2026-09-22T00:00:00+09:00"
 
     preserved = service.refresh_discovered_source(
         work_id=work.id,
@@ -147,6 +153,37 @@ def test_discovery_grant_create_and_refresh_null_preservation(tmp_path: Path) ->
         ),
     )
     assert preserved.source.access_granted_until == "2026-09-23T02:00:00+09:00"
+    assert preserved.source.published_at == "2026-09-22T00:00:00+09:00"
+
+
+def test_source_published_at_requires_timezone_awareness_and_normalizes_to_jst(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(work_id=work.id)
+    with pytest.raises(CatalogValidationError, match="Naive"):
+        service.create_source(
+            SourceInput(
+                site="magapoke",
+                external_id="naive",
+                published_at="2026-09-22T00:00:00",
+            ),
+            item_id=item.id,
+        )
+    source = service.create_source(
+        SourceInput(
+            site="magapoke",
+            external_id="aware",
+            published_at="2026-09-22T00:00:00+09:00",
+        ),
+        item_id=item.id,
+    )
+    updated = service.update_source_external_state(
+        "magapoke", "aware", published_at="2026-09-21T15:00:00+00:00"
+    )
+    assert source.published_at == "2026-09-22T00:00:00+09:00"
+    assert updated.published_at == "2026-09-22T00:00:00+09:00"
 
 
 def test_item_requires_existing_work_and_completion_has_no_path(tmp_path: Path) -> None:

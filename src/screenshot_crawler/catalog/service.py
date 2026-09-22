@@ -1,4 +1,4 @@
-"""Catalog v3 SQLite service."""
+"""Catalog v4 SQLite service."""
 
 from __future__ import annotations
 
@@ -300,13 +300,15 @@ class CatalogService:
                 cursor = connection.execute(
                     "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
                     "free_until, available, access_checked_at, last_seen_at, quota_started_at, "
-                    "access_granted_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "access_granted_until, published_at, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (item_id, source_input.site, source_input.external_id, source_input.discovery_key,
                      source_input.access_mode, format_timestamp(source_input.free_until),
                      1 if source_input.available is None else int(source_input.available),
                      format_timestamp(source_input.access_checked_at), last_seen,
                      format_timestamp(source_input.quota_started_at),
-                     format_timestamp(source_input.access_granted_until), timestamp, timestamp),
+                     format_timestamp(source_input.access_granted_until),
+                     format_timestamp(source_input.published_at), timestamp, timestamp),
                 )
             except sqlite3.IntegrityError as exc:
                 raise CatalogValidationError(f"Could not create source: {exc}") from exc
@@ -373,6 +375,7 @@ class CatalogService:
         available: bool | object = _UNSET,
         access_checked_at: datetime | str | None | object = _UNSET,
         last_seen_at: datetime | str | None | object = _UNSET,
+        published_at: datetime | str | None | object = _UNSET,
     ) -> Source:
         self._validate_nonempty(site, "site")
         self._validate_nonempty(external_id, "external_id")
@@ -388,6 +391,7 @@ class CatalogService:
                 ("discovery_key", discovery_key), ("access_mode", access_mode),
                 ("free_until", free_until), ("available", available),
                 ("access_checked_at", access_checked_at), ("last_seen_at", last_seen_at),
+                ("published_at", published_at),
             ):
                 if value is _UNSET:
                     continue
@@ -397,7 +401,7 @@ class CatalogService:
                     if not isinstance(value, bool):
                         raise CatalogValidationError("available must be a boolean")
                     value = int(value)
-                elif column in {"free_until", "access_checked_at", "last_seen_at"}:
+                elif column in {"free_until", "access_checked_at", "last_seen_at", "published_at"}:
                     value = format_timestamp(value)
                 assignments.append(f"{column} = ?")
                 values.append(value)
@@ -514,12 +518,14 @@ class CatalogService:
                 source_cursor = connection.execute(
                     "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
                     "free_until, available, access_checked_at, last_seen_at, quota_started_at, "
-                    "access_granted_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "access_granted_until, published_at, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (item_id, source.site, source.external_id, source.discovery_key,
                      source.access_mode, format_timestamp(source.free_until),
                      1 if source.available is None else int(source.available),
                      format_timestamp(source.access_checked_at), last_seen, None,
                      format_timestamp(source.access_granted_until),
+                     format_timestamp(source.published_at),
                      timestamp, timestamp),
                 )
                 source_id = source_cursor.lastrowid
@@ -595,6 +601,9 @@ class CatalogService:
             if source.access_granted_until is not None:
                 assignments.insert(-1, "access_granted_until = ?")
                 values.insert(-2, format_timestamp(source.access_granted_until))
+            if source.published_at is not None:
+                assignments.insert(-1, "published_at = ?")
+                values.insert(-2, format_timestamp(source.published_at))
             connection.execute(
                 "UPDATE sources SET " + ", ".join(assignments) + " WHERE id = ?", values
             )
@@ -1126,7 +1135,7 @@ class CatalogService:
         if source.available is not None and not isinstance(source.available, bool):
             raise CatalogValidationError("available must be a boolean")
         for value in (source.free_until, source.access_checked_at, source.last_seen_at,
-                      source.quota_started_at, source.access_granted_until):
+                      source.quota_started_at, source.access_granted_until, source.published_at):
             format_timestamp(value)
 
     @classmethod
