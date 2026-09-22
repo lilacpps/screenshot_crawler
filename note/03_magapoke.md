@@ -236,10 +236,14 @@ bit-for-bit JPEG container preservation.
 
 Identity combines the visible canvas page index and current source path. The
 source path is used only as a current-page identity signal, not as response
-arrival order. The next operation clicks `.c-viewer__pager-next` once and
-bounded `wait_for_change()` waits for either identity or URL change. A URL
-change from episode 244815 to 244816 is a normal `NEXT_CONTENT` completion and
-244816 is not captured.
+arrival order. The next operation clicks `.c-viewer__pager-next` once. A
+bounded `wait_for_change()` waits for either identity, URL change, or the
+viewport-visible and stable `.c-viewer__last` terminal card. The terminal card
+is an `END` for the current episode; its `次の話を読む` `.c-viewer__page-btn`
+is not clicked, so the next episode is not entered or captured. A terminal
+card that exists only in the DOM or outside the viewport is not an `END` signal.
+A URL change from episode 244815 to 244816 remains a normal `NEXT_CONTENT`
+completion and 244816 is not captured.
 
 ## Output metadata
 

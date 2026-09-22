@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
-from playwright.async_api import Error, async_playwright
+from playwright.async_api import Error, Page, async_playwright
 
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import (
@@ -13,7 +13,8 @@ from screenshot_crawler.core.errors import (
     PageChangeTimeoutError,
     UnsupportedAccessStrategyError,
 )
-from screenshot_crawler.core.models import ContentContext
+from screenshot_crawler.core.models import ContentContext, ContentIdentity
+from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.magapoke.adapter import (
     MagapokeAdapter,
     parse_premium_ticket_count,
@@ -287,6 +288,85 @@ async def test_work_ticket_entry_times_out_if_no_access_ui_or_viewer_appears() -
         with pytest.raises(PageChangeTimeoutError, match="access controls did not load"):
             await adapter._enter_with_work_ticket(page)
         assert adapter.get_access_consumption().consumed is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_visible_magapoke_terminal_card_is_end() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(
+            """
+            <div class="c-viewer">
+              <div class="c-viewer__last">
+                <a class="c-viewer__page-btn" href="javascript:void(0)">次の話を読む</a>
+              </div>
+            </div>
+            """
+        )
+        adapter = MagapokeAdapter()
+
+        assert await adapter.detect_state(page) is PageState.END
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "style",
+    ["display: none", "position: absolute; top: 2000px; left: 0"],
+)
+async def test_magapoke_terminal_card_must_be_in_viewport(style: str) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(
+            f"""
+            <div class="c-viewer">
+              <div class="c-viewer__last" style="{style}">
+                <a class="c-viewer__page-btn" href="javascript:void(0)">次の話を読む</a>
+              </div>
+            </div>
+            """
+        )
+        adapter = MagapokeAdapter()
+
+        assert await adapter.detect_state(page) is PageState.UNKNOWN
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_magapoke_wait_for_change_stops_on_terminal_card_without_retrying_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(
+            """
+            <div class="c-viewer">
+              <div class="c-viewer__last">
+                <a class="c-viewer__page-btn" href="javascript:void(0)">次の話を読む</a>
+              </div>
+            </div>
+            """
+        )
+        adapter = MagapokeAdapter()
+        adapter.page_change_timeout_ms = 1_000
+        next_calls = 0
+
+        async def unexpected_next(_page: Page) -> None:
+            nonlocal next_calls
+            next_calls += 1
+
+        monkeypatch.setattr(adapter, "go_next", unexpected_next)
+        await adapter.wait_for_change(page, ContentIdentity(page_id="previous"))
+
+        assert next_calls == 0
+        assert adapter._advance_pending is False
     finally:
         await browser.close()
         await playwright.stop()

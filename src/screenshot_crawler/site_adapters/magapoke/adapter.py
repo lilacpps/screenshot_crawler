@@ -231,6 +231,7 @@ class MagapokeAdapter(SiteAdapter):
     viewer_selector = ".c-viewer"
     content_canvas_selector = ".c-viewer__comic canvas"
     next_selector = ".c-viewer__pager-next"
+    terminal_selector = ".c-viewer__last"
 
     def __init__(self) -> None:
         self._access_strategy: AccessStrategy = "auto"
@@ -402,6 +403,50 @@ class MagapokeAdapter(SiteAdapter):
             await page.wait_for_timeout(100)
             elapsed += 100
         raise PageChangeTimeoutError("Magapoke viewer did not finish loading within the timeout")
+
+    async def _terminal_screen_signature(
+        self, page: Page
+    ) -> tuple[object, ...] | None:
+        """Return a stable viewport signal for Magapoke's final episode card."""
+
+        try:
+            value = await asyncio.wait_for(
+                page.evaluate(
+                    """(selector) => {
+                        const viewportWidth = window.innerWidth;
+                        const viewportHeight = window.innerHeight;
+                        const candidates = [...document.querySelectorAll(selector)];
+                        const visible = candidates.map((element, index) => {
+                            const rect = element.getBoundingClientRect();
+                            const inViewport = rect.width > 0 && rect.height > 0 &&
+                                rect.right > 0 && rect.bottom > 0 &&
+                                rect.left < viewportWidth && rect.top < viewportHeight;
+                            if (!inViewport) return null;
+                            const button = element.querySelector('.c-viewer__page-btn');
+                            const buttonRect = button ? button.getBoundingClientRect() : null;
+                            const buttonVisible = Boolean(
+                                buttonRect && buttonRect.width > 0 && buttonRect.height > 0 &&
+                                buttonRect.right > 0 && buttonRect.bottom > 0 &&
+                                buttonRect.left < viewportWidth && buttonRect.top < viewportHeight
+                            );
+                            return [
+                                index,
+                                Math.round(rect.left), Math.round(rect.top),
+                                Math.round(rect.width), Math.round(rect.height),
+                                buttonVisible,
+                            ];
+                        }).filter(Boolean);
+                        return visible.length === 1 ? visible[0] : null;
+                    }""",
+                    self.terminal_selector,
+                ),
+                timeout=2,
+            )
+        except Exception:  # noqa: BLE001 - transient DOM state is not terminal
+            return None
+        if not isinstance(value, list) or len(value) != 6:
+            return None
+        return tuple(value)
 
     @staticmethod
     def _normalized_access_text(value: str) -> str:
@@ -766,6 +811,8 @@ class MagapokeAdapter(SiteAdapter):
             current = parse_magapoke_url(page.url)
             if current is not None and current != self._initial_parts:
                 return PageState.NEXT_CONTENT
+        if await self._terminal_screen_signature(page) is not None:
+            return PageState.END
         if await self._canvas_rows(page):
             return PageState.CONTENT
         if await page.locator(self.content_canvas_selector).count():
@@ -958,6 +1005,8 @@ class MagapokeAdapter(SiteAdapter):
         elapsed = 0
         retries = 0
         retry_at = self.page_change_timeout_ms // (self.advance_retry_count + 1)
+        previous_terminal: tuple[object, ...] | None = None
+        terminal_stable = 0
         while elapsed < self.page_change_timeout_ms:
             current_parts = parse_magapoke_url(page.url)
             if self._initial_url is not None and page.url != self._initial_url:
@@ -966,12 +1015,29 @@ class MagapokeAdapter(SiteAdapter):
             if self._initial_parts is not None and current_parts != self._initial_parts:
                 self._advance_pending = False
                 return
-            current = await self.get_content_identity(page)
-            if current.page_id is not None and current != previous_identity:
-                await self._wait_for_render_ready(page)
-                self._advance_pending = False
-                return
-            if retries < self.advance_retry_count and elapsed >= retry_at * (retries + 1):
+            terminal = await self._terminal_screen_signature(page)
+            if terminal is not None:
+                if terminal == previous_terminal:
+                    terminal_stable += 1
+                    if terminal_stable >= self.render_stable_checks:
+                        self._advance_pending = False
+                        return
+                else:
+                    terminal_stable = 0
+                previous_terminal = terminal
+            else:
+                previous_terminal = None
+                terminal_stable = 0
+                current = await self.get_content_identity(page)
+                if current.page_id is not None and current != previous_identity:
+                    await self._wait_for_render_ready(page)
+                    self._advance_pending = False
+                    return
+            if (
+                terminal is None
+                and retries < self.advance_retry_count
+                and elapsed >= retry_at * (retries + 1)
+            ):
                 retries += 1
                 await self.go_next(page)
             await page.wait_for_timeout(100)

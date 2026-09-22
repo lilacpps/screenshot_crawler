@@ -6,6 +6,8 @@ import pytest
 from PIL import Image
 from playwright.async_api import Error, Page, async_playwright
 
+from screenshot_crawler.core.models import RunConfig
+from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
 from screenshot_crawler.site_adapters.magapoke.native_capture import reconstruct_jpeg_png
@@ -185,6 +187,71 @@ def magapoke_fixture_html() -> str:
     """
 
 
+def terminal_magapoke_fixture_html() -> str:
+    mapping = [
+        {
+            key: value
+            for key, value in item.items()
+            if key in {"sx", "sy", "sw", "sh", "dx", "dy", "dw", "dh"}
+        }
+        for item in MAPPINGS
+    ]
+    return f"""
+    <title>Fixture Work | Episode 1 / Test</title>
+    <style>
+      body {{ margin: 0; }}
+      .c-viewer {{ width: 400px; height: 500px; }}
+      .c-viewer__comic canvas {{ width: 240px; height: 360px; }}
+      .c-viewer__pager-next {{ position: fixed; left: 500px; top: 200px; }}
+      .c-viewer__last {{ display: none; width: 300px; height: 200px; }}
+    </style>
+    <div class="c-viewer">
+      <div class="c-viewer__pages-item">
+        <div class="c-viewer__comic"><canvas width="10" height="7"></canvas></div>
+      </div>
+      <div class="c-viewer__last">
+        <a class="c-viewer__page-btn" href="javascript:void(0)">次の話を読む</a>
+      </div>
+      <button class="c-viewer__pager-next" type="button">next</button>
+    </div>
+    <script>
+      const paths = [
+        'https://mgpk-cdn.magazinepocket.com/static/web_titles/695/episodes/244815/p1.jpg',
+        'https://mgpk-cdn.magazinepocket.com/static/web_titles/695/episodes/244815/p2.jpg'
+      ];
+      const tileMapping = {mapping!r};
+      let index = 0;
+      const canvas = document.querySelector('canvas');
+      const terminal = document.querySelector('.c-viewer__last');
+      window.nextEpisodeClicks = 0;
+      function render() {{
+        const image = new Image();
+        image.onload = () => {{
+          const offscreen = new OffscreenCanvas(image.naturalWidth, image.naturalHeight);
+          const ctx = offscreen.getContext('2d');
+          ctx.drawImage(image, 0, 0);
+          for (const tile of tileMapping) {{
+            ctx.drawImage(image, tile.sx, tile.sy, tile.sw, tile.sh,
+              tile.dx, tile.dy, tile.dw, tile.dh);
+          }}
+          canvas.getContext('2d').drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+        }};
+        image.src = paths[index];
+      }}
+      document.querySelector('.c-viewer__pager-next').onclick = () => {{
+        if (index === 0) {{ index = 1; render(); return; }}
+        canvas.style.display = 'none';
+        terminal.style.display = 'block';
+      }};
+      document.querySelector('.c-viewer__page-btn').onclick = () => {{
+        window.nextEpisodeClicks++;
+        history.pushState({{}}, '', '/title/00695/episode/244816');
+      }};
+      render();
+    </script>
+    """
+
+
 def aligned_magapoke_fixture_html() -> str:
     mapping = [
         {
@@ -289,6 +356,42 @@ async def test_magapoke_reconstructs_jpeg_and_falls_back_to_screenshot(
     await adapter.wait_for_change(browser_page, second_identity)
     assert await adapter.detect_state(browser_page) is PageState.NEXT_CONTENT
     assert "episode/244816" in browser_page.url
+
+
+async def test_magapoke_runner_stops_at_terminal_card_without_opening_next_episode(
+    browser_page: Page,
+    tmp_path,
+) -> None:
+    jpeg = _scrambled_jpeg()
+    target_url = "https://pocket.shonenmagazine.com/title/00695/episode/244815"
+
+    async def html_route(route) -> None:
+        await route.fulfill(
+            body=terminal_magapoke_fixture_html(), content_type="text/html"
+        )
+
+    async def image_route(route) -> None:
+        content_type = "image/jpeg" if route.request.url.endswith("p1.jpg") else "image/png"
+        await route.fulfill(body=jpeg, content_type=content_type)
+
+    await browser_page.route(target_url, html_route)
+    await browser_page.route(
+        "https://mgpk-cdn.magazinepocket.com/static/web_titles/695/episodes/244815/**",
+        image_route,
+    )
+
+    config = RunConfig(
+        site="magapoke",
+        source_url=target_url,
+        output_dir=tmp_path / "run",
+        diagnostics_dir=tmp_path / "diagnostics",
+        page_change_timeout_ms=2_000,
+    )
+    result = await CrawlerRunner(config).run(browser_page, MagapokeAdapter())
+
+    assert result.stop_state is PageState.END
+    assert len(result.pages) == 2
+    assert await browser_page.evaluate("window.nextEpisodeClicks") == 0
 
 
 async def test_magapoke_adapter_prefers_coefficient_jpeg_for_aligned_mapping(
