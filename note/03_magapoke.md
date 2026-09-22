@@ -561,13 +561,21 @@ episode `401715`. This is a separate work from the stopped `01367` attempt.
 - Unit tests cover whole-hour parsing, malformed display text, aware-time
   enforcement, Catalog creation/update/NULL-preservation, active/expired grant
   policy, and the existing direct Executor regression.
-- No live ticket or other resource was consumed for M3b. A read-only M3b live
-  Discovery attempt used an isolated temporary Watchlist/Catalog for
-  `title_id=02585`, episode `401350`. The endpoint `/json/version` responded
-  with Chrome 152, but Playwright `connect_over_cdp` timed out after 180s
-  during its WebSocket connection handshake. The CLI failed before opening a
-  page or creating the temporary Catalog DB, so no live M3b Discovery result
-  or Batch plan was verified. The temporary Watchlist was removed. Existing
-  M3a evidence for this episode remains: `--renting`, `あと71時間`, and
-  successful direct viewer access after reload.
+- Live verification succeeded on 2026-09-22 after restarting shared Crawler
+  Chrome. A temporary Watchlist and Catalog were used for
+  `title_id=02585`, episode `401350`; full Discovery completed successfully
+  with 57 rows (`complete=true`, `stopped_reason=exhausted`). The observed
+  source had `access_mode=quota`, a future JST `access_granted_until`, and
+  `quota_started_at=NULL`. This confirms the current row countdown parsed to
+  the conservative lower bound and persisted without a schema change.
+- The real `batch plan --site magapoke` CLI exited successfully against that
+  temporary Catalog: 11 eligible/direct candidates, 0 quota candidates, and
+  46 skipped. Episode `401350` was candidate source 54 with
+  `access_mode=quota`, `access_strategy=direct`, `reason=active_rental`, and
+  `consumes_quota=false`. The temporary plan recorded zero CrawlRuns and zero
+  Artifacts. The temporary Watchlist and Catalog were removed on completion.
+- No viewer access control was clicked, and no Work Ticket, Premium Ticket,
+  point, subscription, or other resource was consumed. The first retry before
+  restarting Chrome had hit the earlier 180-second CDP handshake timeout; the
+  successful retry confirms that restart resolved the connection problem.
 - Premium Ticket behavior and all M3c consumption remain out of scope.
