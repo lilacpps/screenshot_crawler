@@ -437,6 +437,37 @@ async def test_premium_request_skips_work_only_control_without_fallback() -> Non
 
 
 @pytest.mark.asyncio
+async def test_premium_request_rejects_work_and_premium_controls_without_click() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--ticket">作品チケットで読む</a>
+            <a class="c-btn-icon-primary c-btn-icon-primary--premium-ticket">プレミアムチケットで読む</a>
+            <dl class="p-episode-purchase__point">
+              <dt class="p-episode-purchase__point-ttl">プレミアムチケット</dt>
+              <dd class="p-episode-purchase__point-data">8枚</dd>
+            </dl>
+          </div>
+          <script>
+            window.workClicks=0; window.premiumClicks=0;
+            document.querySelector('.c-btn-icon-primary--ticket').onclick=()=>window.workClicks++;
+            document.querySelector('.c-btn-icon-primary--premium-ticket').onclick=()=>window.premiumClicks++;
+          </script>
+        """)
+        adapter = MagapokeAdapter()
+        with pytest.raises(AccessResourceUnavailableError) as error:
+            await adapter._enter_with_premium_ticket(page)
+        assert error.value.reason == "premium_ticket_unavailable"
+        assert await page.evaluate("window.workClicks") == 0
+        assert await page.evaluate("window.premiumClicks") == 0
+        assert adapter.get_access_consumption().consumed is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
 async def test_premium_request_with_already_accessible_viewer_does_not_click(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
