@@ -93,6 +93,62 @@ def test_work_upsert_preserves_id_and_created_at(tmp_path: Path) -> None:
     assert updated.title == "New"
 
 
+def test_discovery_grant_create_and_refresh_null_preservation(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="magapoke-work", title="Work"))
+    created = service.create_discovered_item_source_target(
+        work_id=work.id,
+        item_input=ItemInput(order_label="Episode"),
+        source_input=SourceInput(
+            site="magapoke",
+            external_id="renting-1",
+            discovery_key="magapoke-target",
+            access_mode="quota",
+            access_granted_until="2026-09-22T16:00:00+00:00",
+        ),
+        web_target_input=SourceTargetInput(
+            backend="web", locator="https://example.invalid/episode"
+        ),
+    )
+    assert created.source.quota_started_at is None
+    assert created.source.access_granted_until == "2026-09-23T01:00:00+09:00"
+
+    refreshed = service.refresh_discovered_source(
+        work_id=work.id,
+        source_id=created.source.id,
+        item_input=ItemInput(order_label="Episode"),
+        source_input=SourceInput(
+            site="magapoke",
+            external_id="renting-1",
+            discovery_key="magapoke-target",
+            access_mode="quota",
+            access_granted_until="2026-09-22T17:00:00+00:00",
+        ),
+        web_target_input=SourceTargetInput(
+            backend="web", locator="https://example.invalid/episode"
+        ),
+    )
+    assert refreshed.source.quota_started_at is None
+    assert refreshed.source.access_granted_until == "2026-09-23T02:00:00+09:00"
+
+    preserved = service.refresh_discovered_source(
+        work_id=work.id,
+        source_id=created.source.id,
+        item_input=ItemInput(order_label="Episode"),
+        source_input=SourceInput(
+            site="magapoke",
+            external_id="renting-1",
+            discovery_key="magapoke-target",
+            access_mode="quota",
+            access_granted_until=None,
+        ),
+        web_target_input=SourceTargetInput(
+            backend="web", locator="https://example.invalid/episode"
+        ),
+    )
+    assert preserved.source.access_granted_until == "2026-09-23T02:00:00+09:00"
+
+
 def test_item_requires_existing_work_and_completion_has_no_path(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     work = service.create_work(WorkInput(work_key="w", title="Work"))

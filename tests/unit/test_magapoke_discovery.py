@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from screenshot_crawler.discovery import (
 from screenshot_crawler.site_adapters.magapoke.discovery import (
     MagapokeDiscoveryAdapter,
     canonical_magapoke_episode_url,
+    magapoke_rental_grant_until,
     map_magapoke_access_mode,
     parse_magapoke_episode_url,
 )
@@ -82,6 +84,20 @@ def test_magapoke_duplicate_known_class_and_unknown_presentation_are_allowed() -
     ) == "free"
 
 
+def test_magapoke_rental_display_produces_conservative_lower_bound() -> None:
+    observed = datetime(2026, 9, 22, 10, 30, tzinfo=UTC)
+    assert magapoke_rental_grant_until("あと71時間", observed_at=observed) == (
+        observed + timedelta(hours=71)
+    )
+    assert magapoke_rental_grant_until("あと0時間", observed_at=observed) == observed
+    assert magapoke_rental_grant_until("あと22時間58分", observed_at=observed) is None
+    assert magapoke_rental_grant_until("", observed_at=observed) is None
+    with pytest.raises(ValueError, match="timezone-aware"):
+        magapoke_rental_grant_until(
+            "あと71時間", observed_at=datetime(2026, 9, 22, 10, 30)  # noqa: DTZ001
+        )
+
+
 def _row(
     episode_id: str,
     title: str,
@@ -90,10 +106,15 @@ def _row(
 ) -> str:
     icon = ""
     if icon_class:
-        icon = (
-            '<div class="c-episode-item__ico '
-            f'{icon_class}">{icon_text}</div>'
-        )
+        icon = f'<div class="c-episode-item__ico {icon_class}"></div>'
+        if icon_class.endswith("--renting"):
+            icon += (
+                '<div class="c-episode-item__label02-txt">'
+                f'<div class="c-episode-item__txt c-episode-item__txt--renting">{icon_text}</div>'
+                '</div>'
+            )
+        elif icon_text:
+            icon += icon_text
     return f"""
       <li class="c-episode-items__item">
         <a class="c-episode-item" href="/title/00695/episode/{episode_id}">
@@ -145,7 +166,7 @@ def _listing_html(
               <div class="c-episode-item__detail">
                 <h2 class="c-episode-item__ttl">${title}</h2>
                 <div class="c-episode-item__label02">
-                  ${iconClass ? `<div class="c-episode-item__ico ${iconClass}">${text}</div>` : ''}
+                  ${iconClass ? `<div class="c-episode-item__ico ${iconClass}"></div>${iconClass.endsWith('--renting') ? `<div class="c-episode-item__label02-txt"><div class="c-episode-item__txt c-episode-item__txt--renting">${text}</div></div>` : text}` : ''}
                 </div>
               </div>
             </a>
@@ -247,6 +268,10 @@ async def test_magapoke_full_discovery_expands_validates_and_syncs_catalog(
         "free",
         "unknown",
     ]
+    sources = catalog.list_sources()
+    assert sources[1].access_granted_until is None
+    assert sources[2].access_granted_until is not None
+    assert sources[2].access_granted_until.endswith("+09:00")
     assert all(item.order_key is None for item in catalog.list_items())
     assert [item.order_label for item in catalog.list_items()] == [
         "【第５話】「最新」(1)",

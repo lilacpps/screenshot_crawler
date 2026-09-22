@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import Error as PlaywrightError
@@ -33,6 +34,9 @@ MORE_BUTTON_SELECTOR = "button.p-episode__more-btn"
 WAIT_TIMEOUT_MS = 10_000
 POLL_INTERVAL_MS = 100
 MAX_EXPAND_ATTEMPTS = 200
+RENTING_TEXT_SELECTOR = ".c-episode-item__txt--renting"
+RENTING_LABEL_SELECTOR = ".c-episode-item__label02-txt"
+_RENTAL_REMAINING_HOURS = re.compile(r"^あと\s*(\d+)\s*時間$")
 
 _EPISODE_PATH = re.compile(
     r"^/title/(?P<title_id>\d+)/episode/(?P<episode_id>\d+)/?$"
@@ -96,6 +100,21 @@ def map_magapoke_access_mode(icon_classes: str | Iterable[str] | None) -> str:
 
 def _clean_text(value: str) -> str:
     return " ".join(value.split()).strip()
+
+
+def magapoke_rental_grant_until(
+    text: str | None,
+    *,
+    observed_at: datetime,
+) -> datetime | None:
+    """Return a conservative grant lower bound from the displayed whole hours."""
+
+    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        raise ValueError("observed_at must be a timezone-aware datetime")
+    match = _RENTAL_REMAINING_HOURS.fullmatch(_clean_text(text or ""))
+    if match is None:
+        return None
+    return observed_at + timedelta(hours=int(match.group(1)))
 
 
 class MagapokeDiscoveryAdapter(DiscoveryAdapter):
@@ -335,6 +354,23 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
                 for index in range(await icons.count())
             ]
             access_mode = map_magapoke_access_mode(icon_classes)
+            access_granted_until = None
+            if any(
+                "c-episode-item__ico--renting" in (classes or "").split()
+                for classes in icon_classes
+            ):
+                rental_text = None
+                renting_text = row.locator(RENTING_TEXT_SELECTOR)
+                if await renting_text.count() == 1:
+                    rental_text = await renting_text.first.inner_text()
+                else:
+                    label_text = row.locator(RENTING_LABEL_SELECTOR)
+                    if await label_text.count() == 1:
+                        rental_text = await label_text.first.inner_text()
+                access_granted_until = magapoke_rental_grant_until(
+                    rental_text,
+                    observed_at=datetime.now(UTC),
+                )
             records.append(
                 DiscoveredRecord(
                     item=DiscoveredItem(
@@ -350,6 +386,7 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
                         url=canonical_magapoke_episode_url(parts),
                         access_mode=access_mode,
                         free_until=None,
+                        access_granted_until=access_granted_until,
                         available=True,
                     ),
                 )

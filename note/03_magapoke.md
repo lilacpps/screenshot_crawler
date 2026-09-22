@@ -527,3 +527,47 @@ episode `401715`. This is a separate work from the stopped `01367` attempt.
 - `order_key=None` remains unchanged. The observed newest-to-oldest DOM order
   supports reversing a preserved same-work discovery order as a candidate
   oldest-first Batch priority, but not a site eligibility rule.
+
+## M3b active-rental Discovery and Batch support (2026-09-22)
+
+### Current behavior
+
+- `DiscoveredSource.access_granted_until` carries an optional observed grant
+  timestamp through Discovery Service into the existing Catalog column. New
+  sources persist a non-NULL observation while leaving `quota_started_at`
+  NULL. On refresh, a non-NULL observation updates the grant; NULL preserves
+  any stored grant. No schema migration was added.
+- For a row whose access icon includes
+  `.c-episode-item__ico--renting`, Discovery reads
+  `.c-episode-item__txt--renting`, falling back to that row's
+  `.c-episode-item__label02-txt`. Only the complete text `あとNN時間` is
+  accepted. `あと22時間58分`, missing text, and other formats yield no grant.
+  Parsing requires a timezone-aware observation time and returns that time
+  plus the displayed whole hours. This is a conservative lower bound, not an
+  exact expiry; no extra hour is added.
+- `MagapokeSitePolicy` validates grant timestamps. A future grant on a
+  `quota` source yields eligible `direct`, `reason="active_rental"`, and
+  `consumes_quota=False`. Missing or expired grants remain skipped as
+  `quota_not_supported`; invalid/naive timestamps raise `SitePolicyError`.
+  Other access states are unchanged. `quota_available` is ignored; no ticket
+  capacity, ticket click, schema, Adapter quota entry, Planner, or Executor
+  behavior was added.
+- Magapoke `order_key` remains `None`. No order key is derived from row
+  position. Episode-list ordering and any future oldest-first Batch priority
+  remain separate concerns.
+
+### Verification
+
+- Unit tests cover whole-hour parsing, malformed display text, aware-time
+  enforcement, Catalog creation/update/NULL-preservation, active/expired grant
+  policy, and the existing direct Executor regression.
+- No live ticket or other resource was consumed for M3b. A read-only M3b live
+  Discovery attempt used an isolated temporary Watchlist/Catalog for
+  `title_id=02585`, episode `401350`. The endpoint `/json/version` responded
+  with Chrome 152, but Playwright `connect_over_cdp` timed out after 180s
+  during its WebSocket connection handshake. The CLI failed before opening a
+  page or creating the temporary Catalog DB, so no live M3b Discovery result
+  or Batch plan was verified. The temporary Watchlist was removed. Existing
+  M3a evidence for this episode remains: `--renting`, `あと71時間`, and
+  successful direct viewer access after reload.
+- Premium Ticket behavior and all M3c consumption remain out of scope.

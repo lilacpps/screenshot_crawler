@@ -28,18 +28,23 @@ stopping remains the generic known-streak behavior; no Magapoke-specific stop
 hook is installed. The current generic known-source threshold is five
 consecutive distinct known identities; a new identity resets the streak. The
 older two-source examples later in this historical design note are superseded
-by this current implementation value. Magapoke Batch, SitePolicy, ticket/point controls, active
-grant persistence, and Catalog/Core schema changes remain out of scope.
+by this current implementation value. Magapoke M3b carries a row-observed
+active-rental lower-bound timestamp into the existing `access_granted_until`
+field. `order_key` remains NULL. There is no schema change, ticket/point
+control, or quota-consumption behavior.
 
 ## Phase 5A status
 
 The read-only Batch Planner, Site Policy registry, Manga ONE Policy, and
-BookWalker Policy are implemented. Magapoke M2 adds a free-only Magapoke
-Policy: `free` is eligible with `direct`; `quota`, `paid`, `unknown`, and
-unverified `owned` are skipped. `batch plan` reads pending Catalog items
+BookWalker Policy are implemented. Magapoke M3b allows `free` and a `quota`
+source with an observed, future `access_granted_until` using `direct` and
+`consumes_quota=False`; other `quota`, `paid`, `unknown`, and unverified
+`owned` sources are skipped. `batch plan` reads pending Catalog items
 and creates candidates; it never runs the Crawler or changes Catalog state.
 BookWalker uses a site-wide capacity of one quota start per 05:00 JST window.
-Magapoke does not implement quota capacity or grant-expiry logic in M2.
+Magapoke does not implement quota capacity or ticket consumption. Its displayed
+whole-hour rental countdown is converted at observation time to a conservative
+lower bound, not an exact rental expiry.
 
 ## Phase 5B status
 
@@ -422,13 +427,14 @@ Discoveryが更新してよいexternal state:
 - `available`
 - `access_checked_at`
 - `last_seen_at`
+- adapterが明示的に観測した非NULLの `access_granted_until`
 - Work / Itemの観測metadata
 - Web `source_target` の `locator` と `enabled=true`
 
 Discoveryが変更してはいけないlocal/history state:
 
 - Itemの `status=completed` / `completed_at`
-- Sourceの `quota_started_at` / `access_granted_until`
+- Sourceの `quota_started_at`
 - 過去 `crawl_runs`
 - 過去/現在 `artifacts`
 
@@ -439,6 +445,12 @@ Discovery = external state synchronization
 Batch/Crawl = local execution/history state update
 Artifact management = physical payload state update
 ```
+
+`DiscoveredSource.access_granted_until` is optional. A non-NULL value may
+refresh the existing Source grant; NULL means that Discovery made no grant
+observation and therefore preserves the stored value. Discovery never writes
+`quota_started_at`. Magapoke uses this exception only for a row-scoped active
+rental countdown; it does not infer a grant from other quota states.
 
 ## 6. 別siteの同一作品
 

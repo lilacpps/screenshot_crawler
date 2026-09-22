@@ -40,7 +40,9 @@ def test_magapoke_policy_is_free_only(
     reason: str,
     consumes_quota: bool,
 ) -> None:
-    source = SimpleNamespace(access_mode=access_mode, available=True)
+    source = SimpleNamespace(
+        access_mode=access_mode, available=True, access_granted_until=None
+    )
 
     decision = MagapokeSitePolicy().evaluate(
         source, now=NOW, quota_available=None  # type: ignore[arg-type]
@@ -66,7 +68,7 @@ def test_magapoke_policy_skips_unavailable_before_access_mode() -> None:
 
 
 def test_magapoke_policy_rejects_naive_now() -> None:
-    source = SimpleNamespace(access_mode="free", available=True)
+    source = SimpleNamespace(access_mode="free", available=True, access_granted_until=None)
 
     with pytest.raises(SitePolicyError, match="timezone-aware"):
         MagapokeSitePolicy().evaluate(
@@ -76,9 +78,47 @@ def test_magapoke_policy_rejects_naive_now() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("grant", "eligible", "reason"),
+    [
+        ("2026-09-22T16:00:00+09:00", True, "active_rental"),
+        ("2026-09-22T15:00:00+09:00", False, "quota_not_supported"),
+        (None, False, "quota_not_supported"),
+    ],
+)
+def test_magapoke_active_rental_policy_uses_direct_without_quota(
+    grant: str | None, eligible: bool, reason: str
+) -> None:
+    source = SimpleNamespace(
+        access_mode="quota", available=True, access_granted_until=grant
+    )
+    decision = MagapokeSitePolicy().evaluate(
+        source, now=NOW, quota_available=None  # type: ignore[arg-type]
+    )
+    assert decision.eligible is eligible
+    assert decision.reason == reason
+    assert decision.access_strategy == ("direct" if eligible else None)
+    assert decision.consumes_quota is False
+
+
+@pytest.mark.parametrize(
+    "grant",
+    ["not-a-date", "2026-09-22T16:00:00", 123],
+)
+def test_magapoke_policy_rejects_invalid_grant_timestamps(grant: object) -> None:
+    source = SimpleNamespace(
+        access_mode="quota", available=True, access_granted_until=grant
+    )
+    with pytest.raises(SitePolicyError, match="access_granted_until"):
+        MagapokeSitePolicy().evaluate(
+            source, now=NOW, quota_available=None  # type: ignore[arg-type]
+        )
+
+
 def test_magapoke_batch_plan_contains_free_candidates_only(tmp_path: Path) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
-    for access_mode in ("free", "quota", "paid", "unknown"):
+    for access_mode in ("free", "quota", "quota-active", "paid", "unknown"):
+        catalog_mode = "quota" if access_mode == "quota-active" else access_mode
         work = catalog.create_work(
             WorkInput(work_key=f"work-{access_mode}", title=access_mode)
         )
@@ -87,8 +127,13 @@ def test_magapoke_batch_plan_contains_free_candidates_only(tmp_path: Path) -> No
             SourceInput(
                 site="magapoke",
                 external_id=access_mode,
-                access_mode=access_mode,
+                access_mode=catalog_mode,
                 available=True,
+                access_granted_until=(
+                    "2026-09-22T16:00:00+09:00"
+                    if access_mode == "quota-active"
+                    else None
+                ),
             ),
             item_id=item.id,
         )
@@ -104,8 +149,12 @@ def test_magapoke_batch_plan_contains_free_candidates_only(tmp_path: Path) -> No
     policies.register("magapoke", MagapokeSitePolicy)
     plan = BatchPlanner(catalog, policies).plan(site="magapoke", now=NOW)
 
-    assert [(candidate.access_mode, candidate.access_strategy) for candidate in plan.candidates] == [
-        ("free", "direct")
+    assert [
+        (candidate.access_mode, candidate.access_strategy, candidate.reason, candidate.consumes_quota)
+        for candidate in plan.candidates
+    ] == [
+        ("free", "direct", "free", False),
+        ("quota", "direct", "active_rental", False),
     ]
     assert {skipped.reason for skipped in plan.skipped} == {
         "quota_not_supported",

@@ -127,6 +127,7 @@ class DiscoveryService:
                     discovery_key=target.key,
                     access_mode=access_mode,
                     free_until=record.source.free_until,
+                    access_granted_until=record.source.access_granted_until,
                     available=record.source.available,
                     access_checked_at=record.source.access_checked_at,
                     last_seen_at=record.source.last_seen_at,

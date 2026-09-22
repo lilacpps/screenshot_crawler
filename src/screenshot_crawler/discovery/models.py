@@ -45,6 +45,7 @@ class DiscoveredSource:
     url: str
     access_mode: str = "unknown"
     free_until: TimestampValue = None
+    access_granted_until: TimestampValue = None
     available: bool | None = None
     access_checked_at: TimestampValue = None
     last_seen_at: TimestampValue = None

@@ -518,7 +518,8 @@ class CatalogService:
                     (item_id, source.site, source.external_id, source.discovery_key,
                      source.access_mode, format_timestamp(source.free_until),
                      1 if source.available is None else int(source.available),
-                     format_timestamp(source.access_checked_at), last_seen, None, None,
+                     format_timestamp(source.access_checked_at), last_seen, None,
+                     format_timestamp(source.access_granted_until),
                      timestamp, timestamp),
                 )
                 source_id = source_cursor.lastrowid
@@ -591,6 +592,9 @@ class CatalogService:
             if source.available is not None:
                 assignments.insert(3, "available = ?")
                 values.insert(3, int(source.available))
+            if source.access_granted_until is not None:
+                assignments.insert(-1, "access_granted_until = ?")
+                values.insert(-2, format_timestamp(source.access_granted_until))
             connection.execute(
                 "UPDATE sources SET " + ", ".join(assignments) + " WHERE id = ?", values
             )

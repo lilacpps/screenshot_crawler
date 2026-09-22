@@ -648,18 +648,23 @@ consecutive distinct known source identities. Observing a new source resets
 the streak to zero. Any older two-known-source examples in this historical
 note describe the former default and are superseded by the current value.
 
-#### Magapoke M2 Batch boundary
+#### Magapoke M3b Batch boundary
 
-Magapoke is now registered in the Batch Policy registry with a free-only
-policy. Only `access_mode="free"` produces an eligible `direct` candidate;
-quota, paid, unknown, and unverified owned sources are skipped. The policy
-does not implement quota capacity, grant expiry, ticket consumption, or
-Catalog mutation. The existing generic Batch Planner and Executor remain
-site-neutral.
+Magapoke Policy allows free sources with `direct`. A quota source is eligible
+only when Discovery observed a future `access_granted_until`, in which case it
+uses `direct`, `reason="active_rental"`, and `consumes_quota=False`; all other
+quota, paid, unknown, and unverified owned sources are skipped. Discovery reads
+the renting countdown only within the matching episode row. The displayed
+`あとNN時間` is floored human text, so the recorded `access_granted_until` is
+an observation-time lower bound, not an exact rental expiry. A later non-NULL
+observation refreshes that field; NULL preserves the stored grant. Discovery
+does not write `quota_started_at`. There is no schema change, quota capacity,
+ticket consumption, or site-specific Planner/Executor behavior. Adapter entry
+remains `auto`/`direct`; quota entry remains rejected.
 
 `DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。targetの`work_key`でWorkをfind/createし、Work titleは新規作成時だけ`label`から初期化する。author/genreは観測値が非NULLでWork側がNULLの場合だけ補完し、既存値を上書きしない。
 
-`DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。現行のreal-site用AdapterはManga ONEとBookWalkerである。BookWalkerはWatchlistのseries list targetだけを対象にする。
+`DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。現行のreal-site用AdapterはManga ONE、BookWalker、Magapokeである。BookWalkerはWatchlistのseries list targetだけを対象にする。
 
 Discovery Serviceは各recordについて、canonical titleをItemへ保存せず、kind/orderをItemへ、title/author/genreをWorkへ反映する。新規recordではItem/Source/web-default targetを一つのtransactionで作成し、既存sourceでは既存Itemを再利用して外部状態と非NULL Item metadataだけを更新する。観測した`DiscoveredSource.url`は`SourceTargetInput(backend="web", target_key="default", locator=...)`として同じsourceへupsertする。URL変更は同じ`(source_id, web, default)` targetのlocator更新になり、既存androidやweb/direct等の別targetは変更しない。sourceのfull-sync missing reconciliationは`available=false`だけを更新し、targetの削除や自動disableは行わない。既存sourceの`discovery_key` scope不一致、または既存Itemが別Workに属する場合はincompleteとして扱い、reparentや部分的な新規graph作成を行わない。
 
