@@ -382,21 +382,85 @@ class MagapokeAdapter(SiteAdapter):
         return " ".join(value.split())
 
     async def _visible_access_controls(self, page: Page) -> list[tuple[Locator, str, set[str]]]:
-        controls = page.locator(".p-episode-purchase a, .p-episode-purchase button")
+        controls = page.locator(
+            ".p-episode-purchase a, .p-episode-purchase button, "
+            ".p-episode-purchase [role='button'], "
+            ".p-episode-purchase input[type='button'], "
+            ".p-episode-purchase input[type='submit']"
+        )
         visible: list[tuple[Locator, str, set[str]]] = []
         for index in range(await controls.count()):
             control = controls.nth(index)
             if not await control.is_visible():
                 continue
-            text = self._normalized_access_text(await control.inner_text())
             classes = set((await control.get_attribute("class") or "").split())
+            tag_name = await control.evaluate("element => element.tagName.toLowerCase()")
+            href = await control.get_attribute("href")
+            known_comment_navigation = (
+                tag_name == "a"
+                and "p-episode-comment-btn" in classes
+                and (
+                    ("p-episode-comment-btn--pc" in classes and href == "#comment")
+                    or (
+                        "p-episode-comment-btn--sp" in classes
+                        and href == "javascript:void(0);"
+                    )
+                )
+            )
+            if known_comment_navigation:
+                continue
+            text = self._normalized_access_text(await control.inner_text())
             visible.append((control, text, classes))
         return visible
+
+    async def _wait_for_work_ticket_entry_state(
+        self, page: Page
+    ) -> tuple[list[dict[str, object]], list[tuple[Locator, str, set[str]]], bool]:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.page_change_timeout_ms / 1000
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise PageChangeTimeoutError(
+                    "Magapoke viewer content or access controls did not load"
+                )
+            try:
+                rows = await asyncio.wait_for(self._canvas_rows(page), timeout=remaining)
+                if rows:
+                    return rows, [], True
+
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    continue
+                if await asyncio.wait_for(
+                    self._viewer_canvas_visible(page), timeout=remaining
+                ):
+                    return rows, [], True
+
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    continue
+                controls = await asyncio.wait_for(
+                    self._visible_access_controls(page), timeout=remaining
+                )
+            except TimeoutError as exc:
+                raise PageChangeTimeoutError(
+                    "Magapoke viewer content or access controls did not load"
+                ) from exc
+            if controls:
+                return rows, controls, False
+
+            remaining_ms = int((deadline - loop.time()) * 1000)
+            if remaining_ms <= 0:
+                continue
+            await page.wait_for_timeout(min(100, remaining_ms))
 
     async def _enter_with_work_ticket(self, page: Page) -> None:
         work_text = "作品チケットで読む"
         premium_text = "プレミアムチケットで読む"
-        controls = await self._visible_access_controls(page)
+        rows, controls, already_accessible = await self._wait_for_work_ticket_entry_state(page)
+        if already_accessible:
+            return
         work = [
             entry for entry in controls
             if entry[1] == work_text and "c-btn-icon-primary--ticket" in entry[2]
@@ -423,6 +487,10 @@ class MagapokeAdapter(SiteAdapter):
             raise UnsupportedAccessStrategyError(
                 "Magapoke Work Ticket entry UI is unknown or ambiguous"
             )
+
+        rows = await self._canvas_rows(page)
+        if rows or await self._viewer_canvas_visible(page):
+            return
 
         control = work[0][0]
         await control.click(timeout=self.page_change_timeout_ms)

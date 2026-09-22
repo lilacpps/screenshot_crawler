@@ -44,6 +44,32 @@ Premium Ticket allocation, and all paid fallback behavior remain out of scope.
   M3c1. M3c2 owns Premium Ticket count, premium resource planning, account-wide
   capacity, old-Work concentration, and any Premium Ticket live use.
 
+## M3c1 Work Ticket entry readiness and initial live finding (2026-09-22)
+
+- The initial live Batch attempt for `03294` / episode `442501` failed before
+  confirmed consumption with `Magapoke Work Ticket entry UI is unknown or
+  ambiguous`. `quota_started_at` and `access_granted_until` remained NULL. No
+  Work Ticket, Premium Ticket, point, coin, purchase, rental, subscription, or
+  other resource-changing control was clicked.
+- Read-only inspection confirmed an initial-load race: immediately after
+  `goto(..., wait_until="commit")`, the purchase panel and controls were absent;
+  the panel became available within about one second. The `.c-viewer` wrapper
+  could appear before any canvas existed, so it alone does not establish access.
+- In the stable panel, the Work Ticket anchor retained the expected exact label
+  and `.c-btn-icon-primary--ticket` class. The same panel also contained a
+  comment anchor in a separate `.p-episode-purchase__btn`, with
+  `.p-episode-comment-btn` and a comment-navigation href. The broad panel-wide
+  anchor/button selector therefore counted a non-access navigation link; the
+  Work Ticket text/class contract itself was still valid.
+- Entry now polls at bounded intervals until canvas content is usable, visible
+  access actions can be classified, or `page_change_timeout_ms` expires. A
+  visible `.c-viewer` wrapper without canvas content is not treated as access.
+  Only the known comment navigation anchor classes/hrefs are excluded from
+  access-action classification. Unknown visible actions remain fail-closed.
+  Ticket click and `AccessConsumption` confirmation semantics are unchanged.
+- The initial failure consumed no resource. The live investigation was read-only;
+  no live Work Ticket was clicked to verify this code fix.
+
 ## URL and context
 
 The supported identity is `/title/{title_id}/episode/{episode_id}`. The URL

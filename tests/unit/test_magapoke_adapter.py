@@ -10,6 +10,7 @@ from playwright.async_api import Error, async_playwright
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import (
     AccessResourceUnavailableError,
+    PageChangeTimeoutError,
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import ContentContext
@@ -135,6 +136,134 @@ async def test_work_ticket_entry_clicks_exact_unique_control_once_and_confirms_c
         assert consumption.consumed is True
         assert consumption.resource == "work_ticket"
         assert consumption.consumed_at is not None and consumption.consumed_at.utcoffset() is not None
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_initialize_waits_for_delayed_work_ticket_control_without_early_click(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(r"""
+          <div class="p-episode-purchase">
+            <div class="p-episode-purchase__btn">
+              <a class="p-episode-comment-btn p-episode-comment-btn--pc" href="#comment">Comments</a>
+            </div>
+            <div class="p-episode-purchase__btn" id="access-actions"></div>
+          </div>
+          <script>
+            window.workClicks = 0;
+            window.commentClicks = 0;
+            document.querySelector('.p-episode-comment-btn').addEventListener('click', event => {
+              event.preventDefault(); window.commentClicks++;
+            });
+            setTimeout(() => {
+              const work = document.createElement('a');
+              work.className = 'c-btn-icon-primary c-btn-icon-primary--ticket';
+              work.href = 'javascript:void(0);';
+              work.textContent = '\u4f5c\u54c1\u30c1\u30b1\u30c3\u30c8\u3067\u8aad\u3080';
+              work.addEventListener('click', event => {
+                event.preventDefault(); window.workClicks++; work.remove();
+                document.querySelector('.p-episode-purchase').insertAdjacentHTML(
+                  'afterend', '<div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>'
+                );
+              });
+              document.querySelector('#access-actions').append(work);
+            }, 150);
+          </script>
+        """)
+        adapter = MagapokeAdapter()
+        adapter.page_change_timeout_ms = 1200
+        await adapter.configure_run(page, "quota")
+        await adapter.configure_quota_resource(page, "work_ticket")
+
+        assert await adapter._visible_access_controls(page) == []
+        assert not await adapter._viewer_canvas_visible(page)
+
+        async def rows(_page):
+            return [{"pageIndex": 0}] if await page.locator(".c-viewer__comic canvas").count() else []
+
+        async def render_ready(_page):
+            return None
+
+        async def content_context(_page):
+            return ContentContext(content_id="episode")
+
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+        monkeypatch.setattr(adapter, "_wait_for_render_ready", render_ready)
+        monkeypatch.setattr(adapter, "get_content_context", content_context)
+
+        await adapter.initialize(page)
+
+        assert await page.evaluate("window.workClicks") == 1
+        assert await page.evaluate("window.commentClicks") == 0
+        assert adapter.get_access_consumption().consumed is True
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_work_ticket_control_ignores_live_comment_navigation_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(r"""
+          <div class="p-episode-purchase">
+            <div class="p-episode-purchase__btn">
+              <a class="c-btn-icon-primary c-btn-icon-primary--ticket" href="javascript:void(0);"></a>
+            </div>
+            <div class="p-episode-purchase__btn">
+              <a class="p-episode-comment-btn p-episode-comment-btn--pc" href="#comment">Comments</a>
+              <a class="p-episode-comment-btn p-episode-comment-btn--sp" href="javascript:void(0);">Comments</a>
+            </div>
+          </div>
+          <script>
+            window.workClicks=0; window.commentClicks=0;
+            const work = document.querySelector('.c-btn-icon-primary--ticket');
+            work.textContent = '\u4f5c\u54c1\u30c1\u30b1\u30c3\u30c8\u3067\u8aad\u3080';
+            work.addEventListener('click', event => {
+              event.preventDefault(); window.workClicks++;
+              event.currentTarget.remove();
+              document.body.insertAdjacentHTML('beforeend', '<div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>');
+            });
+            document.querySelectorAll('.p-episode-comment-btn').forEach(link => link.addEventListener('click', event => {
+              event.preventDefault(); window.commentClicks++;
+            }));
+          </script>
+        """)
+        adapter = MagapokeAdapter()
+
+        async def rows(_page):
+            return [{"pageIndex": 0}] if await page.locator(".c-viewer__comic canvas").count() else []
+
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+        visible = await adapter._visible_access_controls(page)
+        assert len(visible) == 1
+        await adapter._enter_with_work_ticket(page)
+
+        assert await page.evaluate("window.workClicks") == 1
+        assert await page.evaluate("window.commentClicks") == 0
+        assert adapter.get_access_consumption().consumed is True
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_work_ticket_entry_times_out_if_no_access_ui_or_viewer_appears() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content('<div class="p-episode-purchase"></div>')
+        adapter = MagapokeAdapter()
+        adapter.page_change_timeout_ms = 250
+        with pytest.raises(PageChangeTimeoutError, match="access controls did not load"):
+            await adapter._enter_with_work_ticket(page)
+        assert adapter.get_access_consumption().consumed is False
     finally:
         await browser.close()
         await playwright.stop()
