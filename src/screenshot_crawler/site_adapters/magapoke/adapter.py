@@ -541,14 +541,14 @@ class MagapokeAdapter(SiteAdapter):
             )
         if len(work) > 1 or len(premium) > 1:
             raise UnsupportedAccessStrategyError("Magapoke ticket controls are ambiguous")
-        if work:
-            # Premium requested with a separate Work Ticket action is a
-            # resource ambiguity. Never spend either ticket in this state.
-            raise AccessResourceUnavailableError("premium_ticket_unavailable")
         if len(work) + len(premium) != len(controls):
             raise UnsupportedAccessStrategyError(
                 "Magapoke Premium Ticket entry UI is unknown or ambiguous"
             )
+        if work:
+            # Premium requested with a separate Work Ticket action is a
+            # resource ambiguity. Never spend either ticket in this state.
+            raise AccessResourceUnavailableError("premium_ticket_unavailable")
         if not premium:
             if len(controls) == 1 and len(work) == 1:
                 raise AccessResourceUnavailableError("premium_ticket_unavailable")

@@ -468,6 +468,32 @@ async def test_premium_request_rejects_work_and_premium_controls_without_click()
 
 
 @pytest.mark.asyncio
+async def test_premium_request_rejects_work_and_unknown_control_without_click() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--ticket">作品チケットで読む</a>
+            <button class="purchase-unknown">コインで購入</button>
+          </div>
+          <script>
+            window.workClicks=0; window.unknownClicks=0;
+            document.querySelector('.c-btn-icon-primary--ticket').onclick=()=>window.workClicks++;
+            document.querySelector('.purchase-unknown').onclick=()=>window.unknownClicks++;
+          </script>
+        """)
+        adapter = MagapokeAdapter()
+        with pytest.raises(UnsupportedAccessStrategyError):
+            await adapter._enter_with_premium_ticket(page)
+        assert await page.evaluate("window.workClicks") == 0
+        assert await page.evaluate("window.unknownClicks") == 0
+        assert adapter.get_access_consumption().consumed is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
 async def test_premium_request_with_already_accessible_viewer_does_not_click(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
