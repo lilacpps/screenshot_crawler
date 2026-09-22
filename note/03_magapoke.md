@@ -340,3 +340,40 @@ transforms, filters, composites, incomplete mapping, and missing response
 bodies use screenshot fallback. The mapping is intentionally bounded to the
 current render generation; a future renderer change should fail safe rather
 than infer a new permutation.
+
+## M3a quota investigation (2026-09-22; safely stopped)
+
+### Target and live precondition
+
+- Latest `origin/main` checked before investigation: `120c550` (`Add Magapoke free-only Batch support`); the local `main` was at the same commit.
+- Target work: `title_id=01367`, `ギルティサークル`; supplied entry `.../episode/319720`.
+- The shared Crawler Chrome CDP endpoint `http://127.0.0.1:9222` was available (Chrome 152). The specified episode page loaded in the existing browser context; no cookies or storage were inspected.
+- The page initially rendered 10 rows. The episode list was expanded in two visible `もっと見る` actions, with counts 10 → 160 → 274. Final DOM order is newest-to-oldest. The target rows were at the old end of the list: `320359` at DOM index 271 (zero-based), then `319721`, then `319720` at index 273.
+- Live row observations: `319720` = `【第1話】上京物語`, `.c-episode-item__ico--free`; `320359` = `【第3話】ヤリサー`; `320474` = `【第4話】星見さんの秘密`. On the initial 10-row observation, `320359` and `320474` showed `.c-episode-item__ico--ticket-free`. After full list expansion, `320359` showed `.c-episode-item__ico--renting`, `alt="レンタル中"`, and `あと71時間`.
+- No episode row or access control was clicked during this investigation. The change in observed `320359` state occurred without a crawler click. Because the fully expanded/current state was already renting, the mandated stop condition applied. No further ticket-state, rental, 320474 viewer, header, or My Page investigation was performed.
+- The final full-list row snapshot existed only in the temporary diagnostic process and was not persisted before the fail-closed stop. Therefore the complete 274-row `(episode_id, raw title, DOM order, access class)` inventory is not available in this note; only the count/order and target rows above were retained. Do not treat the list inspection as complete inventory evidence.
+
+### Resource-safety outcome
+
+- Work Ticket click count: **0** (the allowed one-time click was not used because `320359` was already renting).
+- Premium Ticket click count: **0**; Premium Ticket was not consumed.
+- No point purchase, subscription, or other resource-changing operation was performed.
+- Premium Ticket balance/count, expiry display, header selectors, charge details, and the `320474` access UI remain **unobserved** in M3a. No selector or parsing contract is established for Premium Ticket balance.
+- Work Ticket vs Premium Ticket controls, exact labels, roles, enabled states, and safe locators remain **unverified**. Do not implement a click fallback based on this investigation.
+- The rental observation `あと71時間` is human-readable only; no absolute expiry or hidden timestamp was inspected. It must not be converted into a production expiry timestamp.
+
+### M3a design findings and recommendations (provisional)
+
+- Keep Magapoke `order_key=None`; use the raw displayed episode title for `order_label`. Do not synthesize an order key from DOM position.
+- Keep quota priority separate from catalog order metadata. The observed full list is newest-to-oldest, so reverse observation/insertion order is a candidate oldest-first strategy only if the Catalog preserves discovery insertion order for each work. Validate the actual Source/Item identifier and insertion semantics before relying on descending IDs; a discovery-order change would change this heuristic. No evidence here establishes that `Source.id` alone is a durable chronology contract.
+- Treat oldest-first as a Batch preference only, never as a site-enforced eligibility rule. The live snapshot included ticket-free rows for episodes 3 and 4, but episode 3 was already renting when the fully expanded state was inspected; no ticket was consumed to test eligibility.
+- Provisional M3b direction remains: a confirmed active `--renting` grant should use direct episode navigation with `consumes_quota=False`, without a resource button click. Persist an absolute `access_granted_until` only if a trustworthy absolute timestamp is later observed; `あとNN時間` alone is insufficient. M3a did not reload the rental URL, so direct viewer access remains unverified.
+- Provisional M3c direction remains per-work Work Ticket first and account-global Premium Ticket allocation second, with oldest-first as a crawler preference. This investigation did not observe either balance or either access control, so exact controls, availability checks, charge state, and allocation counts still require a safely eligible live episode and fresh explicit verification.
+- `order_key`, Discovery, SitePolicy, Adapter quota behavior, Batch Planner/Executor, Catalog schema, and production ticket code were not changed.
+
+### Remaining investigation
+
+- Re-run only after confirming `320359` is not already renting and the logged-in session is expected. Before any one-time Work Ticket use, verify the exact currently visible Work Ticket control is unique and distinct from Premium Ticket and point-purchase controls; otherwise stop without clicking.
+- Capture and retain all expanded row identities/titles/classes before any mutation.
+- Observe Premium Ticket count before and after any authorized Work Ticket use, including hover-triggered viewer/header content; inspect My Page only if viewer/header does not expose a stable count. Record expiry buckets only if plainly present.
+- After a permitted Work Ticket use, verify renting/list state, displayed remaining duration, ticket recharge DOM, direct reload behavior, and the separate no-click Premium Ticket UI at `320474`.
