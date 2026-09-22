@@ -566,6 +566,9 @@ episode `401715`. This is a separate work from the stopped `01367` attempt.
 
 ## M3b active-rental Discovery and Batch support (2026-09-22)
 
+The quota behavior below describes the M3b implementation at that stage. M3c1
+later changed expired/no-grant quota sources into Work Ticket candidates.
+
 ### Current behavior
 
 - `DiscoveredSource.access_granted_until` carries an optional observed grant
