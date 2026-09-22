@@ -377,3 +377,153 @@ than infer a new permutation.
 - Capture and retain all expanded row identities/titles/classes before any mutation.
 - Observe Premium Ticket count before and after any authorized Work Ticket use, including hover-triggered viewer/header content; inspect My Page only if viewer/header does not expose a stable count. Record expiry buckets only if plainly present.
 - After a permitted Work Ticket use, verify renting/list state, displayed remaining duration, ticket recharge DOM, direct reload behavior, and the separate no-click Premium Ticket UI at `320474`.
+
+### M3a retry on a different work (2026-09-22)
+
+The user explicitly authorized one Work Ticket consumption on
+`title_id=02585`, episode `401350`, and asked to inspect Premium Ticket UI on
+episode `401715`. This is a separate work from the stopped `01367` attempt.
+
+#### Complete episode-list observation
+
+- Work title: `となりの黒川さん`; list total: 57 episodes; expansion: 10 → 57; DOM order newest-to-oldest.
+- Before consumption, `401350` was `【第4話】気になります` and
+  `401715` was `【第5話】すれ違う想い`. Both rows showed
+  `.c-episode-item__ico--ticket-free` with `img alt="無料"`.
+- State counts at this observation: 46 `--ticket-free`, 10 `--free`, 1
+  `--point`, 0 `--renting`.
+- `order_key` remains `None`; no Discovery or Catalog data was changed.
+
+| DOM index | episode_id | Raw title | Access class |
+| ---: | ---: | --- | --- |
+| 0 | 443848 | 【第52話】熱あるんじゃないか | `--point` |
+| 1 | 443119 | 【第51話】すけこましめ | `--free` |
+| 2 | 442060 | 【第50話】ずるい… | `--free` |
+| 3 | 441310 | 【第49話】すれ違いとすり合わせ | `--free` |
+| 4 | 440715 | 【第48話】んもう！ | `--ticket-free` |
+| 5 | 440019 | 【第47話】返せぇぇぇ!! | `--ticket-free` |
+| 6 | 439142 | 【第46話】とにかく暑い日 | `--ticket-free` |
+| 7 | 438372 | 【第45話】これはデートです | `--ticket-free` |
+| 8 | 437937 | 【第44話】そんなヒマはない！ | `--ticket-free` |
+| 9 | 436397 | 【第43話】それぞれが抱く気持ち | `--ticket-free` |
+| 10 | 436396 | 【単行本4巻発売記念おまけ】「走る!! 弥生ちゃん！」 | `--free` |
+| 11 | 435011 | 【第42話】意識しすぎて… | `--ticket-free` |
+| 12 | 434398 | 【第41話】勇気を出して | `--ticket-free` |
+| 13 | 432600 | 【第40話】見える… | `--ticket-free` |
+| 14 | 432064 | 【第39話】どうしたら… | `--ticket-free` |
+| 15 | 431411 | 【第38話】冷静ではもちろんいられない | `--ticket-free` |
+| 16 | 430750 | 【第37話】高橋の父について | `--ticket-free` |
+| 17 | 430125 | 【第36話】そういうところが | `--ticket-free` |
+| 18 | 429464 | 【第35話】恋の相談？ | `--ticket-free` |
+| 19 | 428688 | 【第34話】どうしよう。 | `--ticket-free` |
+| 20 | 428494 | 【単行本発売記念おまけ】「弥生ちゃんの看病…？」 | `--free` |
+| 21 | 427861 | 【第33話】責任重大な約束 | `--ticket-free` |
+| 22 | 427148 | 【第32話】失いたくないもの | `--ticket-free` |
+| 23 | 426440 | 【第31話】努力と不穏… | `--ticket-free` |
+| 24 | 425556 | 【第30話】どんな男の子だって | `--ticket-free` |
+| 25 | 424822 | 【第29話】2人の約束と勝負 | `--ticket-free` |
+| 26 | 424193 | 【第28話】ついに来てしまった | `--ticket-free` |
+| 27 | 423466 | 【第27話】気づいてしまったコト | `--ticket-free` |
+| 28 | 421653 | 【番外編】玄内さんと弥生ちゃん inイギリス | `--ticket-free` |
+| 29 | 420880 | 【第26話】わからせてあげますから | `--ticket-free` |
+| 30 | 419995 | 【第25話】黒川さんだけには | `--ticket-free` |
+| 31 | 419233 | 【第24話】待ちわびた日 | `--ticket-free` |
+| 32 | 418526 | 【第23話】ドキドキソワソワ！ | `--ticket-free` |
+| 33 | 417404 | 【第22話】黒川さんの間違い | `--ticket-free` |
+| 34 | 416633 | 【第21話】最大の間違い | `--ticket-free` |
+| 35 | 415788 | 【第20話】お願いがあるの | `--ticket-free` |
+| 36 | 415882 | 【単行本宣伝話】 | `--free` |
+| 37 | 415177 | 【第19話】○○を潰す | `--ticket-free` |
+| 38 | 413699 | 【第18話】何かのご縁… | `--ticket-free` |
+| 39 | 412867 | 【第17話】"ただの散歩"…？ | `--ticket-free` |
+| 40 | 412030 | 【第16話】とても | `--ticket-free` |
+| 41 | 411432 | 【第15話】確実なので… | `--ticket-free` |
+| 42 | 411171 | 【単行本宣伝話】【1巻が発売になりました！】 | `--free` |
+| 43 | 408612 | 【第14話】黒川さんの過去 | `--ticket-free` |
+| 44 | 407824 | 【第13話】後悔と思い出 | `--ticket-free` |
+| 45 | 407134 | 【第12話】兄と妹 | `--ticket-free` |
+| 46 | 406561 | 【第11話】ドキドキなお出かけ！ | `--ticket-free` |
+| 47 | 405785 | 【第10話】2人のお出かけ！ | `--ticket-free` |
+| 48 | 404370 | 【第9話】それって、デ… | `--ticket-free` |
+| 49 | 403764 | 【第8話】放課後の危機② | `--ticket-free` |
+| 50 | 403155 | 【第7話】放課後の危機① | `--ticket-free` |
+| 51 | 402277 | 【第6話】交換したい | `--ticket-free` |
+| 52 | 401715 | 【第5話】すれ違う想い | `--ticket-free` |
+| 53 | 401350 | 【第4話】気になります | `--ticket-free` |
+| 54 | 400199 | 【第3話】エッチじゃ、ないです！ | `--free` |
+| 55 | 399935 | 【第2話】彼女は友達 | `--free` |
+| 56 | 399934 | 【第1話】彼女はヒロイン？ | `--free` |
+
+#### Work Ticket use and rental observation
+
+- Immediately before use, the shared header showed point `35` and ticket `8`.
+  The episode page also said `チャージ完了！`.
+- `401350` was `--ticket-free`, not `--renting`. The one visible access
+  control was an `<a href="javascript:void(0);">` with exact text
+  `作品チケットで読む` and class
+  `c-btn-icon-primary c-btn-icon-primary--ticket`. No Premium Ticket or
+  point-purchase control was mixed into this access choice. The exact link was
+  clicked **once**.
+- The viewer appeared on the same URL. Directly reloading
+  `.../episode/401350` also opened the viewer without another access click.
+- After reload, row `401350` showed
+  `.c-episode-item__ico--renting`, `alt="レンタル中"`, and `あと71時間`.
+  No absolute expiry timestamp was found in the observed UI.
+- Work-level charge DOM changed from `チャージ完了！` to
+  `.p-episode__charge-txt` = `あと22時間58分` (observed shortly after
+  use); its parent is `.p-episode__charge-meter`. This is a displayed
+  countdown, not an absolute recharge timestamp.
+- Header counters remained point `35`, ticket `8` after the Work Ticket action.
+  No Premium Ticket action was clicked.
+
+#### Premium Ticket UI on episode 401715 (no click)
+
+- Current episode title: `【第5話】すれ違う想い`. The purchase panel was
+  `.p-episode-purchase > .p-episode-purchase__inner`.
+- The Premium Ticket control was one visible enabled anchor:
+  exact text `プレミアムチケットで読む`, class
+  `c-btn-icon-primary c-btn-icon-primary--premium-ticket`, href
+  `javascript:void(0);`. It is clearly distinct from the Work Ticket anchor
+  by both exact label and class suffix. It was **not clicked**.
+- The same panel had `dt.p-episode__...`-style label/value content in the
+  observed structure: `dl.p-episode-purchase__point` contains
+  `dt.p-episode-purchase__point-ttl` = `プレミアムチケット` and
+  `dd.p-episode-purchase__point-data` = `8枚`. The reliable count selector
+  candidate is scoped to
+  `.p-episode-purchase__point:has(.p-episode-purchase__point-ttl)` and reads
+  the matching `.p-episode-purchase__point-data`; validate the label text
+  before parsing. The header candidate is
+  `.l-header__status-item-inner--ticket` = `8`, but is less semantically
+  specific by itself.
+- Premium Ticket count: before Work Ticket `8` from the header; after Work
+  Ticket `8` in the header and explicitly `8枚` in the Premium Ticket panel.
+  This supports `premium_ticket_count=8`; the count did not change.
+- No Premium Ticket expiry text or expiry bucket was visible in the header or
+  purchase panel. No My Page fallback was needed for count retrieval.
+- The requested Premium Ticket control was displayed and enabled, but never
+  clicked. No point purchase, subscription, or other paid action occurred.
+
+#### Updated provisional M3 recommendations
+
+- A unique Work Ticket action can be recognized as the exact visible link
+  `作品チケットで読む` with class
+  `.c-btn-icon-primary--ticket`; it is an anchor, not a `<button>`.
+- A unique Premium Ticket action can be recognized separately as the exact
+  visible link `プレミアムチケットで読む` with class
+  `.c-btn-icon-primary--premium-ticket`. Production should fail closed unless
+  the requested resource's exact control is uniquely present and does not
+  match the other resource class.
+- `--renting` → direct entry is now live-confirmed for this work, with no
+  second click after reload. Keep `consumes_quota=False`; use the human-readable
+  rental/charge countdown only as an observation, not as an absolute expiry.
+- Work Ticket availability/charge appears per work: `チャージ完了！` before
+  use and `.p-episode__charge-txt` countdown afterward. Prefer observing this
+  DOM state over a hard-coded charge duration.
+- `--ticket-free` in the list did not itself reveal the final reader-entry
+  control: on `401715`, the list class was `--ticket-free` while the page's
+  access panel exposed the Premium Ticket option. Future execution must
+  inspect the live episode access panel and must not infer Work-vs-Premium
+  control solely from the list class.
+- `order_key=None` remains unchanged. The observed newest-to-oldest DOM order
+  supports reversing a preserved same-work discovery order as a candidate
+  oldest-first Batch priority, but not a site eligibility rule.
