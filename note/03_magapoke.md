@@ -46,8 +46,8 @@ behavior remain out of scope.
   re-reads the live semantic balance before every click. The balance is never
   written to Catalog. A displayed zero stops the Premium pass.
 - Premium Ticket access uses the same conservative `consumed_at + 71 hours`
-  grant as Work Ticket pending live confirmation that Premium Ticket access
-  has the same rental duration.
+  grant as Work Ticket. The complete Premium path, including that grant,
+  was live-verified on 2026-09-23.
 
 ## M3c2 Premium Ticket contract
 
@@ -68,8 +68,37 @@ behavior remain out of scope.
 - Consumption is reported only after the requested ticket action disappears
   and viewer canvas content is observed. Executor persists the existing
   conservative 71-hour source grant after observed consumption, including
-  crawl failures. Premium's 71-hour duration is an implementation assumption;
-  no Premium Ticket has been consumed live to verify its rental state.
+  crawl failures. Premium's use of the same 71-hour grant as Work Ticket is
+  now live-verified for the tested production path.
+
+### M3c2 Premium Ticket live verification (2026-09-23)
+
+- Target: `title_id=00002`, episode `305886`, using a temporary Watchlist and
+  temporary Catalog. This was the same Work in which episode `310045` had
+  already consumed a Work Ticket during M3c1 verification, so the Work Ticket
+  was still charging and the target episode exposed Premium-only entry.
+- The initial Batch pass selected `305886` as a `work_ticket` quota candidate.
+  The live page correctly returned `work_ticket_unavailable`; no Work Ticket or
+  Premium Ticket was clicked in that pass and the Item remained pending.
+- Batch then re-read Catalog and created the `premium_ticket` resource pass.
+  With `--limit 2`, the Work Ticket attempt consumed the first attempt slot and
+  the Premium attempt consumed the second. A preliminary run with `--limit 1`
+  therefore stopped normally after `work_ticket_unavailable`; this confirms
+  that expected resource-unavailable skips count as execution attempts for the
+  global Batch limit.
+- The Premium pass observed the semantic Premium Ticket balance, clicked the
+  unique exact Premium Ticket control once, confirmed viewer content, and
+  recorded `AccessConsumption(resource="premium_ticket")`. The observed balance
+  decreased by one ticket.
+- The same Premium run continued through page capture and packaging without a
+  second resource click. The Item completed successfully and a ZIP artifact was
+  produced.
+- Catalog recorded `quota_started_at` from the observed Premium consumption and
+  `access_granted_until = consumed_at + 71 hours`, confirming that the
+  conservative grant used by production matches the tested Premium rental path.
+- This verifies the intended M3c2 sequence end-to-end:
+  `work_ticket_unavailable` -> Premium re-plan -> one Premium Ticket consumed ->
+  viewer/crawl completion -> quota/grant persistence -> ZIP packaging.
 
 ## M3c1 Work Ticket entry readiness and live findings (2026-09-22)
 
