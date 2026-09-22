@@ -34,7 +34,13 @@ class BatchPlanner:
         self.catalog = catalog
         self.policies = policies
 
-    def plan(self, *, site: str, now: datetime | None = None) -> BatchPlan:
+    def plan(
+        self,
+        *,
+        site: str,
+        now: datetime | None = None,
+        quota_resource: str | None = None,
+    ) -> BatchPlan:
         current = _normalize_now(now_jst() if now is None else now)
         try:
             policy = self.policies.create(site)
@@ -76,6 +82,7 @@ class BatchPlanner:
                     quota_remaining=quota_available,
                     skipped=plan.skipped,
                     targets_by_source=targets_by_source,
+                    quota_resource=quota_resource,
                 )
                 if selected is None:
                     continue
@@ -152,15 +159,26 @@ class BatchPlanner:
         quota_remaining: int | None,
         skipped: list[BatchSkipped],
         targets_by_source: dict[int, list[SourceTarget]],
+        quota_resource: str | None,
     ) -> tuple[Source, SourceTarget, PolicyDecision] | None:
         for source in sorted(sources, key=_source_priority_key):
-            decision = policy.evaluate(
-                source,
-                now=now,
-                quota_available=quota_remaining,
-            )
+            if quota_resource is None:
+                decision = policy.evaluate(
+                    source,
+                    now=now,
+                    quota_available=quota_remaining,
+                )
+            else:
+                decision = policy.evaluate_for_quota_resource(
+                    source,
+                    now=now,
+                    quota_available=quota_remaining,
+                    quota_resource=quota_resource,
+                )
             if not decision.eligible:
                 skipped.append(BatchSkipped(source.item_id, source.id, decision.reason))
+                continue
+            if quota_resource is not None and not decision.consumes_quota:
                 continue
             if decision.consumes_quota and quota_remaining is not None and quota_remaining <= 0:
                 skipped.append(BatchSkipped(source.item_id, source.id, "quota_exhausted"))

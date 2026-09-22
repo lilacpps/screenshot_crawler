@@ -9,6 +9,11 @@ class UnsupportedAccessStrategyError(CrawlerError):
 class AccessResourceUnavailableError(CrawlerError):
     """Expected skip when a requested resource is clearly unavailable."""
 
+    def __init__(self, reason: str, *, stop_resource_pass: bool = False) -> None:
+        self.reason = reason
+        self.stop_resource_pass = stop_resource_pass
+        super().__init__(reason)
+
 
 class UnknownPageStateError(CrawlerError):
     """Raised when an adapter cannot safely classify the current screen."""

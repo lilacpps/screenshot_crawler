@@ -202,11 +202,19 @@ class BatchExecutor:
         try:
             site_sources = self.catalog.list_sources(site=candidate.site)
             actual_quota_available = policy.available_quota(site_sources, now)
-            decision = policy.evaluate(
-                source,
-                now=now,
-                quota_available=actual_quota_available,
-            )
+            if candidate.consumes_quota and candidate.quota_resource is not None:
+                decision = policy.evaluate_for_quota_resource(
+                    source,
+                    now=now,
+                    quota_available=actual_quota_available,
+                    quota_resource=candidate.quota_resource,
+                )
+            else:
+                decision = policy.evaluate(
+                    source,
+                    now=now,
+                    quota_available=actual_quota_available,
+                )
         except SitePolicyError as exc:
             raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
         if (

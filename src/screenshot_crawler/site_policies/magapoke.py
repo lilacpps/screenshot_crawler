@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from screenshot_crawler.catalog.models import Source
@@ -13,6 +14,9 @@ class MagapokeSitePolicy(SitePolicy):
     """Allow free episodes and observed active rentals through direct navigation."""
 
     site = "magapoke"
+
+    def additional_quota_resources(self) -> tuple[str, ...]:
+        return ("premium_ticket",)
 
     def access_grant_until(self, started_at: datetime) -> datetime:
         if started_at.tzinfo is None or started_at.utcoffset() is None:
@@ -59,6 +63,36 @@ class MagapokeSitePolicy(SitePolicy):
         if source.access_mode == "owned":
             return PolicyDecision(False, None, "owned_not_verified")
         return PolicyDecision(False, None, "unsupported_access_mode")
+
+    def evaluate_for_quota_resource(
+        self,
+        source: Source,
+        *,
+        now: datetime,
+        quota_available: int | None,
+        quota_resource: str,
+    ) -> PolicyDecision:
+        decision = self.evaluate(
+            source,
+            now=now,
+            quota_available=quota_available,
+        )
+        if not decision.consumes_quota:
+            return decision
+        if quota_resource == "work_ticket":
+            return decision
+        if quota_resource == "premium_ticket":
+            return replace(
+                decision,
+                reason="premium_ticket_candidate",
+                quota_resource="premium_ticket",
+                quota_scope="work",
+                quota_limit=None,
+                quota_commit_mode="after_observed_consumption",
+            )
+        raise SitePolicyError(
+            f"MagapokeSitePolicy does not support quota_resource={quota_resource!r}"
+        )
 
     @staticmethod
     def _parse_grant_until(value: datetime | str | None) -> datetime | None:

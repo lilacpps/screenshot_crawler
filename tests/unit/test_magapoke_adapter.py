@@ -14,7 +14,10 @@ from screenshot_crawler.core.errors import (
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import ContentContext
-from screenshot_crawler.site_adapters.magapoke.adapter import MagapokeAdapter
+from screenshot_crawler.site_adapters.magapoke.adapter import (
+    MagapokeAdapter,
+    parse_premium_ticket_count,
+)
 from screenshot_crawler.site_adapters.magapoke.native_capture import (
     is_magapoke_jpeg_response,
     jpeg_dimensions,
@@ -90,14 +93,28 @@ def test_magapoke_initialization_timeout_covers_serial_entry_phases() -> None:
     assert adapter.get_initialize_timeout_ms(20) == 5 * adapter.page_change_timeout_ms
 
 
-async def test_magapoke_quota_requires_work_ticket_resource() -> None:
+async def test_magapoke_quota_accepts_only_ticket_resources() -> None:
     adapter = MagapokeAdapter()
     await adapter.configure_run(object(), "quota")  # type: ignore[arg-type]
     with pytest.raises(UnsupportedAccessStrategyError):
         await adapter.configure_quota_resource(object(), None)  # type: ignore[arg-type]
-    with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter.configure_quota_resource(object(), "premium_ticket")  # type: ignore[arg-type]
     await adapter.configure_quota_resource(object(), "work_ticket")  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(object(), "premium_ticket")  # type: ignore[arg-type]
+    with pytest.raises(UnsupportedAccessStrategyError):
+        await adapter.configure_quota_resource(object(), "points")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("0枚", 0), ("1枚", 1), ("8枚", 8), ("123枚", 123), (" 8 枚 ", 8)],
+)
+def test_parse_premium_ticket_count_exact_integer_format(text: str, expected: int) -> None:
+    assert parse_premium_ticket_count(text) == expected
+
+
+@pytest.mark.parametrize("text", [None, "", "8", "8 枚余", "-1枚", "1.5枚", "八枚"])
+def test_parse_premium_ticket_count_rejects_malformed_values(text: str | None) -> None:
+    assert parse_premium_ticket_count(text) is None
 
 
 async def _new_page():
@@ -292,6 +309,204 @@ async def test_premium_only_is_expected_unavailable_without_click() -> None:
             await adapter._enter_with_work_ticket(page)
         assert await page.evaluate("window.clicks") == 0
         assert adapter.get_access_consumption().consumed is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_premium_ticket_click_requires_semantic_positive_balance_and_confirms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--premium-ticket" href="javascript:void(0);">
+              プレミアムチケットで読む
+            </a>
+            <dl class="p-episode-purchase__point">
+              <dt class="p-episode-purchase__point-ttl">プレミアムチケット</dt>
+              <dd class="p-episode-purchase__point-data">8枚</dd>
+            </dl>
+          </div>
+          <script>
+            window.premiumClicks = 0;
+            window.document.querySelector('a').addEventListener('click', event => {
+              event.preventDefault(); window.premiumClicks++;
+              event.currentTarget.remove();
+              document.body.insertAdjacentHTML('beforeend',
+                '<div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>');
+            });
+          </script>
+        """)
+        adapter = MagapokeAdapter()
+
+        async def rows(_page):
+            return [{"pageIndex": 0}] if await page.locator("canvas").count() else []
+
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+        await adapter._enter_with_premium_ticket(page)
+
+        consumption = adapter.get_access_consumption()
+        assert await page.evaluate("window.premiumClicks") == 1
+        assert consumption.consumed is True
+        assert consumption.resource == "premium_ticket"
+        assert consumption.consumed_at is not None
+        assert consumption.consumed_at.utcoffset() is not None
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_zero_premium_balance_is_expected_exhaustion_without_click() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--premium-ticket">プレミアムチケットで読む</a>
+            <dl class="p-episode-purchase__point">
+              <dt class="p-episode-purchase__point-ttl">プレミアムチケット</dt>
+              <dd class="p-episode-purchase__point-data">0枚</dd>
+            </dl>
+          </div>
+          <script>window.clicks=0; document.querySelector('a').onclick=()=>window.clicks++;</script>
+        """)
+        adapter = MagapokeAdapter()
+        with pytest.raises(AccessResourceUnavailableError) as error:
+            await adapter._enter_with_premium_ticket(page)
+        assert error.value.reason == "premium_ticket_exhausted"
+        assert error.value.stop_resource_pass is True
+        assert await page.evaluate("window.clicks") == 0
+        assert adapter.get_access_consumption().consumed is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "balance_markup",
+    [
+        "",
+        "<dl class='p-episode-purchase__point'><dt class='p-episode-purchase__point-ttl'>ポイント</dt><dd class='p-episode-purchase__point-data'>8枚</dd></dl>",
+        "<dl class='p-episode-purchase__point'><dt class='p-episode-purchase__point-ttl'>プレミアムチケット</dt><dd class='p-episode-purchase__point-data'>たくさん</dd></dl>",
+        "<dl class='p-episode-purchase__point'><dt class='p-episode-purchase__point-ttl'>プレミアムチケット</dt><dt class='p-episode-purchase__point-ttl'>プレミアムチケット</dt><dd class='p-episode-purchase__point-data'>8枚</dd></dl>",
+        "<dl class='p-episode-purchase__point'><dt class='p-episode-purchase__point-ttl'>プレミアムチケット</dt><dd class='p-episode-purchase__point-data'>8枚</dd></dl><dl class='p-episode-purchase__point'><dt class='p-episode-purchase__point-ttl'>プレミアムチケット</dt><dd class='p-episode-purchase__point-data'>8枚</dd></dl>",
+    ],
+)
+async def test_premium_balance_unknown_fails_closed_without_click(balance_markup: str) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(
+            '<div class="p-episode-purchase">'
+            '<a class="c-btn-icon-primary c-btn-icon-primary--premium-ticket">'
+            'プレミアムチケットで読む</a>'
+            + balance_markup
+            + '</div><script>window.clicks=0;document.querySelector("a").onclick=()=>window.clicks++;</script>'
+        )
+        adapter = MagapokeAdapter()
+        with pytest.raises(UnsupportedAccessStrategyError):
+            await adapter._enter_with_premium_ticket(page)
+        assert await page.evaluate("window.clicks") == 0
+        assert adapter.get_access_consumption().consumed is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_premium_request_skips_work_only_control_without_fallback() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--ticket">作品チケットで読む</a>
+          </div>
+          <script>window.clicks=0;document.querySelector('a').onclick=()=>window.clicks++;</script>
+        """)
+        adapter = MagapokeAdapter()
+        with pytest.raises(AccessResourceUnavailableError) as error:
+            await adapter._enter_with_premium_ticket(page)
+        assert error.value.reason == "premium_ticket_unavailable"
+        assert await page.evaluate("window.clicks") == 0
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_premium_request_with_already_accessible_viewer_does_not_click(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--premium-ticket">プレミアムチケットで読む</a>
+          </div>
+          <canvas width="10" height="10"></canvas>
+          <script>window.clicks=0;document.querySelector('a').onclick=()=>window.clicks++;</script>
+        """)
+        adapter = MagapokeAdapter()
+
+        async def rows(_page):
+            return [{"pageIndex": 0}]
+
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+        await adapter._enter_with_premium_ticket(page)
+
+        assert await page.evaluate("window.clicks") == 0
+        assert adapter.get_access_consumption().consumed is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_premium_controls_fail_without_click() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--premium-ticket">プレミアムチケットで読む</a>
+            <a class="c-btn-icon-primary c-btn-icon-primary--premium-ticket">プレミアムチケットで読む</a>
+            <dl class="p-episode-purchase__point">
+              <dt class="p-episode-purchase__point-ttl">プレミアムチケット</dt>
+              <dd class="p-episode-purchase__point-data">8枚</dd>
+            </dl>
+          </div>
+          <script>window.clicks=0;document.querySelectorAll('a').forEach(x=>x.onclick=()=>window.clicks++);</script>
+        """)
+        adapter = MagapokeAdapter()
+        with pytest.raises(UnsupportedAccessStrategyError):
+            await adapter._enter_with_premium_ticket(page)
+        assert await page.evaluate("window.clicks") == 0
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_premium_unknown_access_action_fails_without_click() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--premium-ticket">プレミアムチケットで読む</a>
+            <button class="purchase-unknown">コインで購入</button>
+            <dl class="p-episode-purchase__point">
+              <dt class="p-episode-purchase__point-ttl">プレミアムチケット</dt>
+              <dd class="p-episode-purchase__point-data">8枚</dd>
+            </dl>
+          </div>
+          <script>window.clicks=0;document.querySelectorAll('a,button').forEach(x=>x.onclick=()=>window.clicks++);</script>
+        """)
+        adapter = MagapokeAdapter()
+        with pytest.raises(UnsupportedAccessStrategyError):
+            await adapter._enter_with_premium_ticket(page)
+        assert await page.evaluate("window.clicks") == 0
     finally:
         await browser.close()
         await playwright.stop()

@@ -220,6 +220,60 @@ def test_work_ticket_plan_limits_each_work_to_oldest_published_source(
     assert sum(skip.reason == "quota_work_limit" for skip in plan.skipped) == 3
 
 
+def test_premium_ticket_pass_groups_all_pending_episodes_by_oldest_work(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    for work_key, dates in (
+        ("old-work", ["2026-09-10", "2026-09-12", "2026-09-15"]),
+        ("new-work", ["2026-09-11", "2026-09-13"]),
+    ):
+        work = catalog.create_work(WorkInput(work_key=work_key, title=work_key))
+        for index, published in enumerate(dates):
+            source_id = f"{work_key}-{index}"
+            item = catalog.create_item(
+                ItemInput(order_label=source_id), work_id=work.id
+            )
+            source = catalog.create_source(
+                SourceInput(
+                    site="magapoke",
+                    external_id=source_id,
+                    access_mode="quota",
+                    published_at=f"{published}T00:00:00+09:00",
+                ),
+                item_id=item.id,
+            )
+            catalog.create_source_target(
+                SourceTargetInput(
+                    backend="web",
+                    locator=f"https://example.invalid/{source_id}",
+                ),
+                source_id=source.id,
+            )
+    policies = SitePolicyRegistry()
+    policies.register("magapoke", MagapokeSitePolicy)
+    plan = BatchPlanner(catalog, policies).plan(
+        site="magapoke", now=NOW, quota_resource="premium_ticket"
+    )
+
+    assert [candidate.target_key for candidate in plan.candidates] == ["default"] * 5
+    assert [candidate.locator.rsplit("/", 1)[-1] for candidate in plan.candidates] == [
+        "old-work-0",
+        "old-work-1",
+        "old-work-2",
+        "new-work-0",
+        "new-work-1",
+    ]
+    assert all(candidate.quota_resource == "premium_ticket" for candidate in plan.candidates)
+    assert all(candidate.quota_scope == "work" for candidate in plan.candidates)
+    assert all(candidate.quota_limit is None for candidate in plan.candidates)
+    assert all(candidate.reason == "premium_ticket_candidate" for candidate in plan.candidates)
+
+
+def test_magapoke_policy_declares_premium_as_following_resource_pass() -> None:
+    assert MagapokeSitePolicy().additional_quota_resources() == ("premium_ticket",)
+
+
 def test_missing_published_at_sorts_after_dated_sources(tmp_path: Path) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(WorkInput(work_key="work", title="Work"))

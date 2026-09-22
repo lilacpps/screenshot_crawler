@@ -519,7 +519,9 @@ def test_batch_output_directory_is_unique_and_windows_safe(tmp_path: Path) -> No
     assert all(part not in path_a.name for part in '<>:/\\|?*')
 
 
-def _add_magapoke_candidate(service: CatalogService) -> BatchCandidate:
+def _add_magapoke_candidate(
+    service: CatalogService, *, resource: str = "work_ticket"
+) -> BatchCandidate:
     work = service.create_work(WorkInput(work_key="magapoke-work", title="Magapoke"))
     item = service.create_item(ItemInput(order_label="Episode 1"), work_id=work.id)
     source = service.create_source(
@@ -534,8 +536,9 @@ def _add_magapoke_candidate(service: CatalogService) -> BatchCandidate:
         item_id=item.id, source_id=source.id, target_id=target.id,
         site="magapoke", backend="web", target_key=target.target_key,
         locator=target.locator, access_strategy="quota", access_mode="quota",
-        reason="work_ticket_candidate", consumes_quota=True,
-        quota_resource="work_ticket", quota_scope="work", quota_limit=1,
+        reason=f"{resource}_candidate", consumes_quota=True,
+        quota_resource=resource, quota_scope="work",
+        quota_limit=1 if resource == "work_ticket" else None,
         quota_commit_mode="after_observed_consumption",
     )
 
@@ -597,6 +600,51 @@ async def test_work_ticket_consumption_is_recorded_at_observed_time(tmp_path: Pa
     assert source.quota_started_at == consumed_at.isoformat()
     assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
     assert service.get_item(candidate.item_id).status == "completed"
+
+
+async def test_premium_ticket_consumption_and_later_failure_are_persisted(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service, resource="premium_ticket")
+    consumed_at = datetime(2026, 9, 22, 22, 25, 33, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "premium_ticket", consumed_at),
+        failure=RuntimeError("capture failed after Premium Ticket entry"),
+    )
+
+    with pytest.raises(BatchExecutionError, match="capture failed"):
+        await executor.execute_candidate(object(), candidate, now=NOW)
+
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at == consumed_at.isoformat()
+    assert source.access_granted_until == "2026-09-25T21:25:33+09:00"
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+
+
+async def test_successful_premium_ticket_candidate_completes_item(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service, resource="premium_ticket")
+    consumed_at = datetime(2026, 9, 22, 22, 25, 33, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "premium_ticket", consumed_at),
+    )
+
+    result = await executor.execute_candidate(
+        object(), candidate, output_root=tmp_path / "batch",
+        library_dir=tmp_path / "Books", now=NOW,
+    )
+
+    assert service.get_item(candidate.item_id).status == "completed"
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at == consumed_at.isoformat()
+    assert source.access_granted_until == "2026-09-25T21:25:33+09:00"
+    assert service.get_crawl_run(result.crawl_run_id).status == "succeeded"
 
 
 async def test_consumption_is_recorded_when_crawl_fails_after_entry(tmp_path: Path) -> None:

@@ -48,6 +48,11 @@ class SitePolicy(ABC):
         del started_at
         return None
 
+    def additional_quota_resources(self) -> tuple[str, ...]:
+        """Return ordered resource passes that follow the default quota pass."""
+
+        return ()
+
     @abstractmethod
     def evaluate(
         self,
@@ -59,3 +64,29 @@ class SitePolicy(ABC):
         """Evaluate one source without mutating Catalog or external state."""
 
         raise NotImplementedError
+
+    def evaluate_for_quota_resource(
+        self,
+        source: Source,
+        *,
+        now: datetime,
+        quota_available: int | None,
+        quota_resource: str,
+    ) -> PolicyDecision:
+        """Evaluate a candidate for an explicitly requested quota resource.
+
+        Policies may opt into additional resource passes while keeping resource
+        semantics outside the planner and Core.
+        """
+
+        decision = self.evaluate(
+            source,
+            now=now,
+            quota_available=quota_available,
+        )
+        if decision.consumes_quota and decision.quota_resource != quota_resource:
+            raise SitePolicyError(
+                f"{type(self).__name__} does not support "
+                f"quota_resource={quota_resource!r}"
+            )
+        return decision

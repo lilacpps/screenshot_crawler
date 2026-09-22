@@ -5,10 +5,11 @@
 `MagapokeAdapter` crawls one episode through the shared Crawler Chrome/CDP
 session. Magapoke Discovery is implemented separately for episode-list
 enumeration and Catalog synchronization. Batch and SitePolicy support free and
-active-rental direct access, plus one Work Ticket candidate per Work. Login,
-Premium Ticket allocation, and all paid fallback behavior remain out of scope.
+active-rental direct access, one Work Ticket candidate per Work, and a
+sequential account-global Premium Ticket pass. Login and all paid fallback
+behavior remain out of scope.
 
-## Current M3c1 behavior
+## Current Batch behavior (M3c1 and M3c2)
 
 - Catalog schema v4 stores nullable `sources.published_at`. This is the
   Magapoke-observed publication date for that Source, not an Item property.
@@ -26,12 +27,12 @@ Premium Ticket allocation, and all paid fallback behavior remain out of scope.
   selects its oldest dated pending candidate first, puts NULL dates last, then
   uses existing stable item ordering and source ID as ties. Work pass order is
   `Work.created_at`, then `Work.id`.
-- The visible page is the final authority on resource eligibility. The Adapter
-  clicks only one visible `.c-btn-icon-primary--ticket` control with exact
-  normalized text `作品チケットで読む`. It never clicks Premium Ticket, points,
-  coins, subscriptions, or other purchase controls. Premium-only is the
-  expected `work_ticket_unavailable` skip; ambiguous or unknown controls fail
-  without clicking.
+- The visible page is the final authority on resource eligibility. Work Ticket
+  and Premium Ticket have separate exact text/class checks and click paths.
+  Neither resource falls back to the other. Points, coins, subscriptions, and
+  unknown purchase controls are never clicked. A Premium-only screen during
+  Work Ticket pass is `work_ticket_unavailable`; a Work-only screen during
+  Premium pass is `premium_ticket_unavailable`.
 - Existing viewer content is entered without a ticket click. Consumption is
   reported only after the unique Work Ticket click, control disappearance, and
   viewer canvas content are all observed.
@@ -40,9 +41,35 @@ Premium Ticket allocation, and all paid fallback behavior remain out of scope.
   `access_granted_until` at `consumed_at + 71 hours`. Both are saved before
   packaging and remain recorded if crawling then fails. Unavailable and
   already-accessible cases do not record quota state.
-- No live Work Ticket or Premium Ticket was consumed to implement or verify
-  M3c1. M3c2 owns Premium Ticket count, premium resource planning, account-wide
-  capacity, old-Work concentration, and any Premium Ticket live use.
+- M3c2 adds a `premium_ticket` resource pass after the complete Work Ticket
+  pass. It concentrates Premium candidates in the oldest Work first, and
+  re-reads the live semantic balance before every click. The balance is never
+  written to Catalog. A displayed zero stops the Premium pass.
+- Premium Ticket access uses the same conservative `consumed_at + 71 hours`
+  grant as Work Ticket pending live confirmation that Premium Ticket access
+  has the same rental duration.
+
+## M3c2 Premium Ticket contract
+
+- `premium_ticket` is account-global external state. No balance is stored in
+  Catalog. Batch runs Premium only after completing all direct and per-Work
+  Work Ticket candidates, then replans against current pending Catalog state.
+- Premium pass orders `Work.created_at ASC`, `Work.id ASC`, then source
+  `published_at ASC` (NULL last), existing item order, and source ID. It keeps
+  all selected candidates for an older Work together before moving to a newer
+  Work.
+- Before each Premium click, the Adapter reads one exact semantic balance row:
+  `dl.p-episode-purchase__point`, normalized `dt` label
+  `プレミアムチケット`, and `dd` value matching `N枚`. Header count is not
+  authoritative. A missing, duplicate, malformed, or structurally ambiguous
+  balance fails closed. `0枚` yields `premium_ticket_exhausted`, does not click,
+  and stops the Premium pass. A known Work-only screen yields
+  `premium_ticket_unavailable` and leaves the Item pending.
+- Consumption is reported only after the requested ticket action disappears
+  and viewer canvas content is observed. Executor persists the existing
+  conservative 71-hour source grant after observed consumption, including
+  crawl failures. Premium's 71-hour duration is an implementation assumption;
+  no Premium Ticket has been consumed live to verify its rental state.
 
 ## M3c1 Work Ticket entry readiness and live findings (2026-09-22)
 
@@ -78,6 +105,12 @@ Premium Ticket allocation, and all paid fallback behavior remain out of scope.
 - The first investigation used read-only navigation and consumed no resource.
   Codex did not click a live Work Ticket to verify this code fix; the later
   consumption was reported from the user's Batch run.
+- The user later confirmed a successful M3c1 live run for
+  `00002/310045`: `quota_started_at=2026-09-22T22:25:33.703444+09:00`,
+  `access_granted_until=2026-09-25T21:25:33.703444+09:00`, Item completed,
+  CrawlRun succeeded with 42 pages and `next_content`, and a present ZIP
+  artifact of 9,935,703 bytes. This verifies Work Ticket click through
+  consumption recording, continued scanning, packaging, and completion.
 
 ## URL and context
 

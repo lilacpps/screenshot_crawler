@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime
 
 from playwright.async_api import Error as PlaywrightError
@@ -196,6 +197,22 @@ _CANVAS_HOOK = r"""
 })();
 """
 
+_PREMIUM_TICKET_COUNT = re.compile(r"^\s*(\d+)\s*枚\s*$")
+_WORK_TICKET_TEXT = "作品チケットで読む"
+_PREMIUM_TICKET_TEXT = "プレミアムチケットで読む"
+_WORK_TICKET_CLASS = "c-btn-icon-primary--ticket"
+_PREMIUM_TICKET_CLASS = "c-btn-icon-primary--premium-ticket"
+_PREMIUM_TICKET_LABEL = "プレミアムチケット"
+
+
+def parse_premium_ticket_count(value: str | None) -> int | None:
+    """Parse the exact live `N枚` Premium Ticket value format."""
+
+    if value is None:
+        return None
+    match = _PREMIUM_TICKET_COUNT.fullmatch(value)
+    return int(match.group(1)) if match is not None else None
+
 
 class MagapokeAdapter(SiteAdapter):
     """Capture one Magapoke episode from its shared browser page."""
@@ -251,7 +268,7 @@ class MagapokeAdapter(SiteAdapter):
         self, page: Page, quota_resource: str | None
     ) -> None:
         del page
-        if quota_resource not in {None, "work_ticket"}:
+        if quota_resource not in {None, "work_ticket", "premium_ticket"}:
             raise UnsupportedAccessStrategyError(
                 f"MagapokeAdapter does not support quota_resource={quota_resource!r}"
             )
@@ -259,9 +276,12 @@ class MagapokeAdapter(SiteAdapter):
             raise UnsupportedAccessStrategyError(
                 "Magapoke quota_resource requires access_strategy='quota'"
             )
-        if self._access_strategy == "quota" and quota_resource != "work_ticket":
+        if self._access_strategy == "quota" and quota_resource not in {
+            "work_ticket",
+            "premium_ticket",
+        }:
             raise UnsupportedAccessStrategyError(
-                "Magapoke quota access requires quota_resource='work_ticket'"
+                "Magapoke quota access requires a supported ticket resource"
             )
         self._quota_resource = quota_resource
 
@@ -419,7 +439,7 @@ class MagapokeAdapter(SiteAdapter):
             visible.append((control, text, classes))
         return visible
 
-    async def _wait_for_work_ticket_entry_state(
+    async def _wait_for_quota_entry_state(
         self, page: Page
     ) -> tuple[list[dict[str, object]], list[tuple[Locator, str, set[str]]], bool]:
         loop = asyncio.get_running_loop()
@@ -462,23 +482,20 @@ class MagapokeAdapter(SiteAdapter):
             await page.wait_for_timeout(min(100, remaining_ms))
 
     async def _enter_with_work_ticket(self, page: Page) -> None:
-        work_text = "作品チケットで読む"
-        premium_text = "プレミアムチケットで読む"
-        rows, controls, already_accessible = await self._wait_for_work_ticket_entry_state(page)
+        rows, controls, already_accessible = await self._wait_for_quota_entry_state(page)
         if already_accessible:
             return
         work = [
             entry for entry in controls
-            if entry[1] == work_text and "c-btn-icon-primary--ticket" in entry[2]
+            if entry[1] == _WORK_TICKET_TEXT and _WORK_TICKET_CLASS in entry[2]
         ]
         premium = [
             entry for entry in controls
-            if entry[1] == premium_text
-            and "c-btn-icon-primary--premium-ticket" in entry[2]
+            if entry[1] == _PREMIUM_TICKET_TEXT and _PREMIUM_TICKET_CLASS in entry[2]
         ]
         if any(
-            ("c-btn-icon-primary--ticket" in classes)
-            and ("c-btn-icon-primary--premium-ticket" in classes)
+            (_WORK_TICKET_CLASS in classes)
+            and (_PREMIUM_TICKET_CLASS in classes)
             for _, _, classes in controls
         ):
             raise UnsupportedAccessStrategyError(
@@ -500,13 +517,98 @@ class MagapokeAdapter(SiteAdapter):
 
         control = work[0][0]
         await control.click(timeout=self.page_change_timeout_ms)
+        await self._confirm_ticket_consumption(page, resource="work_ticket")
+
+    async def _enter_with_premium_ticket(self, page: Page) -> None:
+        _, controls, already_accessible = await self._wait_for_quota_entry_state(page)
+        if already_accessible:
+            return
+        work = [
+            entry for entry in controls
+            if entry[1] == _WORK_TICKET_TEXT and _WORK_TICKET_CLASS in entry[2]
+        ]
+        premium = [
+            entry for entry in controls
+            if entry[1] == _PREMIUM_TICKET_TEXT and _PREMIUM_TICKET_CLASS in entry[2]
+        ]
+        if any(
+            (_WORK_TICKET_CLASS in classes)
+            and (_PREMIUM_TICKET_CLASS in classes)
+            for _, _, classes in controls
+        ):
+            raise UnsupportedAccessStrategyError(
+                "Magapoke access control has conflicting Work/Premium Ticket classes"
+            )
+        if len(work) > 1 or len(premium) > 1:
+            raise UnsupportedAccessStrategyError("Magapoke ticket controls are ambiguous")
+        if len(work) + len(premium) != len(controls):
+            raise UnsupportedAccessStrategyError(
+                "Magapoke Premium Ticket entry UI is unknown or ambiguous"
+            )
+        if not premium:
+            if len(controls) == 1 and len(work) == 1:
+                raise AccessResourceUnavailableError("premium_ticket_unavailable")
+            raise UnsupportedAccessStrategyError(
+                "Magapoke Premium Ticket entry UI is unknown or ambiguous"
+            )
+
+        count = await self._read_premium_ticket_count(page)
+        if count == 0:
+            raise AccessResourceUnavailableError(
+                "premium_ticket_exhausted", stop_resource_pass=True
+            )
+
+        await premium[0][0].click(timeout=self.page_change_timeout_ms)
+        await self._confirm_ticket_consumption(page, resource="premium_ticket")
+
+    async def _read_premium_ticket_count(self, page: Page) -> int:
+        panels = page.locator("dl.p-episode-purchase__point")
+        matches: list[Locator] = []
+        for index in range(await panels.count()):
+            panel = panels.nth(index)
+            labels = panel.locator("dt.p-episode-purchase__point-ttl")
+            matching_labels = []
+            for label_index in range(await labels.count()):
+                label = labels.nth(label_index)
+                text = self._normalized_access_text(await label.inner_text())
+                if text == _PREMIUM_TICKET_LABEL:
+                    matching_labels.append(label)
+            if matching_labels:
+                if len(matching_labels) != 1:
+                    raise UnsupportedAccessStrategyError(
+                        "Magapoke Premium Ticket balance label is duplicated"
+                    )
+                matches.append(panel)
+
+        if len(matches) != 1:
+            raise UnsupportedAccessStrategyError(
+                "Magapoke Premium Ticket balance is missing or ambiguous"
+            )
+        label = matches[0].locator("dt.p-episode-purchase__point-ttl")
+        value = matches[0].locator("dd.p-episode-purchase__point-data")
+        if await label.count() != 1 or await value.count() != 1:
+            raise UnsupportedAccessStrategyError(
+                "Magapoke Premium Ticket balance structure is unexpected"
+            )
+        label_text = self._normalized_access_text(await label.inner_text())
+        count = parse_premium_ticket_count(await value.inner_text())
+        if label_text != _PREMIUM_TICKET_LABEL or count is None:
+            raise UnsupportedAccessStrategyError(
+                "Magapoke Premium Ticket balance value is malformed"
+            )
+        return count
+
+    async def _confirm_ticket_consumption(
+        self, page: Page, *, resource: str
+    ) -> None:
+        resource_label = "Work Ticket" if resource == "work_ticket" else "Premium Ticket"
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.page_change_timeout_ms / 1000
         while True:
             remaining_ms = int((deadline - loop.time()) * 1000)
             if remaining_ms <= 0:
                 raise PageChangeTimeoutError(
-                    "Magapoke Work Ticket click did not reach confirmed viewer content"
+                    f"Magapoke {resource_label} click did not reach confirmed viewer content"
                 )
             try:
                 rows = await asyncio.wait_for(
@@ -520,13 +622,23 @@ class MagapokeAdapter(SiteAdapter):
                 )
             except TimeoutError as exc:
                 raise PageChangeTimeoutError(
-                    "Magapoke Work Ticket click did not reach confirmed viewer content"
+                    f"Magapoke {resource_label} click did not reach confirmed viewer content"
                 ) from exc
             remaining_ms = int((deadline - loop.time()) * 1000)
-            if rows and not controls:
+            if resource == "work_ticket":
+                still_visible = any(
+                    text == _WORK_TICKET_TEXT and _WORK_TICKET_CLASS in classes
+                    for _, text, classes in controls
+                )
+            else:
+                still_visible = any(
+                    text == _PREMIUM_TICKET_TEXT and _PREMIUM_TICKET_CLASS in classes
+                    for _, text, classes in controls
+                )
+            if rows and not still_visible:
                 self._access_consumption = AccessConsumption(
                     consumed=True,
-                    resource="work_ticket",
+                    resource=resource,
                     consumed_at=datetime.now(UTC),
                 )
                 return
@@ -559,10 +671,12 @@ class MagapokeAdapter(SiteAdapter):
         already_accessible = bool(rows) or await self._viewer_canvas_visible(page)
         if (
             self._access_strategy == "quota"
-            and self._quota_resource == "work_ticket"
             and not already_accessible
         ):
-            await self._enter_with_work_ticket(page)
+            if self._quota_resource == "work_ticket":
+                await self._enter_with_work_ticket(page)
+            elif self._quota_resource == "premium_ticket":
+                await self._enter_with_premium_ticket(page)
             rows = await self._canvas_rows(page)
         page_indices = [
             int(row["pageIndex"])

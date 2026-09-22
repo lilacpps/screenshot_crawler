@@ -384,8 +384,14 @@ def test_batch_run_continues_after_work_ticket_unavailable(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     candidates = [
-        SimpleNamespace(item_id=1, source_id=11, metadata={}, access_strategy="quota"),
-        SimpleNamespace(item_id=2, source_id=22, metadata={}, access_strategy="direct"),
+        SimpleNamespace(
+            item_id=1, source_id=11, metadata={}, access_strategy="quota",
+            quota_resource="work_ticket",
+        ),
+        SimpleNamespace(
+            item_id=2, source_id=22, metadata={}, access_strategy="direct",
+            quota_resource=None,
+        ),
     ]
     calls: list[int] = []
 
@@ -393,8 +399,9 @@ def test_batch_run_continues_after_work_ticket_unavailable(
         def __init__(self, *_args: object) -> None:
             pass
 
-        def plan(self, *, site: str) -> object:
+        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
             assert site == "magapoke"
+            assert quota_resource is None
             return SimpleNamespace(candidates=candidates, skipped=[])
 
     class FakeSession:
@@ -424,7 +431,13 @@ def test_batch_run_continues_after_work_ticket_unavailable(
             return SimpleNamespace(archive_path=Path("candidate-b.zip"))
 
     monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
-    monkeypatch.setattr(cli, "_batch_policy_registry", lambda: object())
+    monkeypatch.setattr(
+        cli,
+        "_batch_policy_registry",
+        lambda: SimpleNamespace(
+            create=lambda _site: SimpleNamespace(additional_quota_resources=lambda: ())
+        ),
+    )
     monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
     monkeypatch.setattr(cli, "BrowserSession", FakeSession)
     monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
@@ -447,6 +460,107 @@ def test_batch_run_continues_after_work_ticket_unavailable(
     assert "completed: candidate-b.zip" in output.out
     assert "FAILED" not in output.out
     assert "FAILED" not in output.err
+
+
+def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    initial = [
+        SimpleNamespace(
+            item_id=1, source_id=11, metadata={}, access_strategy="direct",
+            quota_resource=None,
+        ),
+        SimpleNamespace(
+            item_id=2, source_id=22, metadata={}, access_strategy="quota",
+            quota_resource="work_ticket",
+        ),
+    ]
+    premium = [
+        SimpleNamespace(
+            item_id=3, source_id=33, metadata={}, access_strategy="quota",
+            quota_resource="premium_ticket",
+        ),
+        SimpleNamespace(
+            item_id=4, source_id=44, metadata={}, access_strategy="quota",
+            quota_resource="premium_ticket",
+        ),
+    ]
+    calls: list[int] = []
+    plans: list[str | None] = []
+
+    class FakePlanner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+            assert site == "magapoke"
+            plans.append(quota_resource)
+            return SimpleNamespace(
+                candidates=initial if quota_resource is None else premium,
+                skipped=[],
+            )
+
+    class FakeSession:
+        @classmethod
+        async def connect(cls, _endpoint: str) -> "FakeSession":
+            return cls()
+
+        async def new_page(self) -> object:
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    class FakeExecutor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        async def execute_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            calls.append(candidate.item_id)
+            if candidate.item_id == 3:
+                raise cli.AccessResourceUnavailableError(
+                    "premium_ticket_exhausted", stop_resource_pass=True
+                )
+            return SimpleNamespace(archive_path=Path(f"item-{candidate.item_id}.zip"))
+
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(
+        cli,
+        "_batch_policy_registry",
+        lambda: SimpleNamespace(
+            create=lambda _site: SimpleNamespace(
+                additional_quota_resources=lambda: ("premium_ticket",)
+            )
+        ),
+    )
+    monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
+    monkeypatch.setattr(cli, "BrowserSession", FakeSession)
+    monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_registry", lambda: object())
+    monkeypatch.setattr(
+        cli, "resolve_cdp_endpoint", lambda **_kwargs: "http://example.test:9222"
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "batch", "run", "--site", "magapoke"],
+    )
+
+    cli.main()
+
+    output = capsys.readouterr()
+    assert plans == [None, "premium_ticket"]
+    assert calls == [1, 2, 3]
+    assert "reason=premium_ticket_exhausted" in output.out
+    assert "stopping this resource pass" in output.out
+    assert "item=4" not in output.out
+    assert "FAILED" not in output.out
 
 
 class FakeLoginAdapter:

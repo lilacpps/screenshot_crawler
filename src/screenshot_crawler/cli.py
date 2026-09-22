@@ -15,6 +15,7 @@ from screenshot_crawler.auth.env import (
     require_site_env_value,
 )
 from screenshot_crawler.batch import (
+    BatchCandidate,
     BatchExecutionError,
     BatchExecutor,
     BatchPlan,
@@ -754,7 +755,8 @@ def _run_batch_plan(args: argparse.Namespace) -> None:
 async def _run_batch_run(args: argparse.Namespace) -> None:
     catalog = CatalogService(args.catalog)
     policies = _batch_policy_registry()
-    plan = BatchPlanner(catalog, policies).plan(site=args.site)
+    planner = BatchPlanner(catalog, policies)
+    plan = planner.plan(site=args.site)
     candidates = plan.candidates[: args.limit] if args.limit is not None else plan.candidates
     print("Batch run:")
     print(f"  site: {args.site}")
@@ -776,52 +778,104 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     session = await BrowserSession.connect(endpoint)
     executor = BatchExecutor(catalog, policies, _registry())
     try:
-        for index, candidate in enumerate(candidates, start=1):
-            order = candidate.metadata.get("order", "-")
-            print(
-                f"[{index}/{len(candidates)}] item={candidate.item_id} "
-                f"source={candidate.source_id} {order} {candidate.access_strategy}"
+        initial_complete = len(candidates) == len(plan.candidates)
+        processed, should_continue = await _execute_batch_candidates(
+            args,
+            session,
+            executor,
+            candidates,
+            phase="direct/Work Ticket",
+        )
+        if should_continue and initial_complete:
+            remaining_limit = (
+                None if args.limit is None else max(0, args.limit - processed)
             )
-            page = None
-            try:
-                page = await session.new_page()
-                result = await executor.execute_candidate(
-                    page,
-                    candidate,
-                    output_root=args.output_root,
-                    library_dir=args.library_dir,
-                    max_pages=args.max_pages,
-                    max_same_content=args.max_same_content,
+            policy = policies.create(args.site)
+            for quota_resource in policy.additional_quota_resources():
+                if remaining_limit == 0:
+                    break
+                # Re-plan from Catalog after direct and Work Ticket execution.
+                resource_plan = planner.plan(
+                    site=args.site,
+                    quota_resource=quota_resource,
                 )
-                print(f"  completed: {result.archive_path}")
-            except AccessResourceUnavailableError as exc:
+                resource_candidates = resource_plan.candidates
+                if remaining_limit is not None:
+                    resource_candidates = resource_candidates[:remaining_limit]
                 print(
-                    f"  SKIPPED item={candidate.item_id} "
-                    f"reason=work_ticket_unavailable ({exc})"
+                    f"Batch resource pass: {quota_resource}; "
+                    f"planned={len(resource_plan.candidates)} "
+                    f"executing={len(resource_candidates)}"
                 )
-            except BaseException as exc:
-                print(
-                    "FAILED:",
-                    file=sys.stderr,
+                pass_processed, should_continue = await _execute_batch_candidates(
+                    args,
+                    session,
+                    executor,
+                    resource_candidates,
+                    phase=quota_resource,
                 )
-                print(f"  item={candidate.item_id}", file=sys.stderr)
-                print(f"  source={candidate.source_id}", file=sys.stderr)
-                print(f"  strategy={candidate.access_strategy}", file=sys.stderr)
-                print(f"  error={exc}", file=sys.stderr)
-                if args.keep_open:
-                    print("Browser is open. Press Enter here to disconnect.")
-                    await asyncio.to_thread(input)
-                if isinstance(exc, BatchExecutionError):
-                    raise
-                raise BatchExecutionError(str(exc)) from exc
-            finally:
-                if page is not None:
-                    await session.close_page(page)
+                if remaining_limit is not None:
+                    remaining_limit -= pass_processed
+                if not should_continue or len(resource_candidates) < len(resource_plan.candidates):
+                    break
         if args.keep_open:
             print("Browser is open. Press Enter here to disconnect.")
             await asyncio.to_thread(input)
     finally:
         await session.close()
+
+
+async def _execute_batch_candidates(
+    args: argparse.Namespace,
+    session: BrowserSession,
+    executor: BatchExecutor,
+    candidates: list[BatchCandidate],
+    *,
+    phase: str,
+) -> tuple[int, bool]:
+    """Execute a sequential resource phase; return attempts and continue flag."""
+
+    for index, candidate in enumerate(candidates, start=1):
+        order = candidate.metadata.get("order", "-")
+        resource = f" resource={candidate.quota_resource}" if candidate.quota_resource else ""
+        print(
+            f"[{phase} {index}/{len(candidates)}] item={candidate.item_id} "
+            f"source={candidate.source_id} {order} {candidate.access_strategy}{resource}"
+        )
+        page = None
+        try:
+            page = await session.new_page()
+            result = await executor.execute_candidate(
+                page,
+                candidate,
+                output_root=args.output_root,
+                library_dir=args.library_dir,
+                max_pages=args.max_pages,
+                max_same_content=args.max_same_content,
+            )
+            print(f"  completed: {result.archive_path}")
+        except AccessResourceUnavailableError as exc:
+            reason = exc.reason
+            print(f"  SKIPPED item={candidate.item_id} reason={reason} ({exc})")
+            if exc.stop_resource_pass:
+                print("  Resource is exhausted; stopping this resource pass.")
+                return index, False
+        except BaseException as exc:
+            print("FAILED:", file=sys.stderr)
+            print(f"  item={candidate.item_id}", file=sys.stderr)
+            print(f"  source={candidate.source_id}", file=sys.stderr)
+            print(f"  strategy={candidate.access_strategy}", file=sys.stderr)
+            print(f"  error={exc}", file=sys.stderr)
+            if args.keep_open:
+                print("Browser is open. Press Enter here to disconnect.")
+                await asyncio.to_thread(input)
+            if isinstance(exc, BatchExecutionError):
+                raise
+            raise BatchExecutionError(str(exc)) from exc
+        finally:
+            if page is not None:
+                await session.close_page(page)
+    return len(candidates), True
 
 
 def main() -> None:
