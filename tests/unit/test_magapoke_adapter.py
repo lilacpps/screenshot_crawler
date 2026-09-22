@@ -315,6 +315,35 @@ async def test_visible_magapoke_terminal_card_is_end() -> None:
 
 
 @pytest.mark.asyncio
+async def test_visible_magapoke_content_takes_precedence_over_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(
+            """
+            <div class="c-viewer">
+              <div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>
+              <div class="c-viewer__last">
+                <a class="c-viewer__page-btn" href="javascript:void(0)">次の話を読む</a>
+              </div>
+            </div>
+            """
+        )
+        adapter = MagapokeAdapter()
+
+        async def current_content(_page: Page) -> list[dict[str, object]]:
+            return [{"index": 0, "pageIndex": 0, "sourcePath": "/content.jpg"}]
+
+        monkeypatch.setattr(adapter, "_canvas_rows", current_content)
+
+        assert await adapter.detect_state(page) is PageState.CONTENT
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "style",
     ["display: none", "position: absolute; top: 2000px; left: 0"],
@@ -365,6 +394,56 @@ async def test_magapoke_wait_for_change_stops_on_terminal_card_without_retrying_
         monkeypatch.setattr(adapter, "go_next", unexpected_next)
         await adapter.wait_for_change(page, ContentIdentity(page_id="previous"))
 
+        assert next_calls == 0
+        assert adapter._advance_pending is False
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_magapoke_wait_for_change_prioritizes_new_content_over_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(
+            """
+            <div class="c-viewer">
+              <div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>
+              <div class="c-viewer__last">
+                <a class="c-viewer__page-btn" href="javascript:void(0)">次の話を読む</a>
+              </div>
+            </div>
+            """
+        )
+        adapter = MagapokeAdapter()
+        adapter.page_change_timeout_ms = 1_000
+        render_ready_calls = 0
+        next_calls = 0
+
+        async def new_identity(_page: Page) -> ContentIdentity:
+            return ContentIdentity(page_id="new-content")
+
+        async def current_content(_page: Page) -> list[dict[str, object]]:
+            return [{"index": 0, "pageIndex": 1, "sourcePath": "/new-content.jpg"}]
+
+        async def render_ready(_page: Page, **_: object) -> None:
+            nonlocal render_ready_calls
+            render_ready_calls += 1
+
+        async def unexpected_next(_page: Page) -> None:
+            nonlocal next_calls
+            next_calls += 1
+
+        monkeypatch.setattr(adapter, "get_content_identity", new_identity)
+        monkeypatch.setattr(adapter, "_canvas_rows", current_content)
+        monkeypatch.setattr(adapter, "_wait_for_render_ready", render_ready)
+        monkeypatch.setattr(adapter, "go_next", unexpected_next)
+
+        await adapter.wait_for_change(page, ContentIdentity(page_id="previous"))
+
+        assert render_ready_calls == 1
         assert next_calls == 0
         assert adapter._advance_pending is False
     finally:

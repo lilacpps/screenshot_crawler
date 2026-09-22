@@ -238,12 +238,15 @@ Identity combines the visible canvas page index and current source path. The
 source path is used only as a current-page identity signal, not as response
 arrival order. The next operation clicks `.c-viewer__pager-next` once. A
 bounded `wait_for_change()` waits for either identity, URL change, or the
-viewport-visible and stable `.c-viewer__last` terminal card. The terminal card
-is an `END` for the current episode; its `次の話を読む` `.c-viewer__page-btn`
-is not clicked, so the next episode is not entered or captured. A terminal
-card that exists only in the DOM or outside the viewport is not an `END` signal.
-A URL change from episode 244815 to 244816 remains a normal `NEXT_CONTENT`
-completion and 244816 is not captured.
+viewport-visible and stable `.c-viewer__last` terminal card. A newly visible
+captureable canvas/content identity takes priority over the terminal card, so
+a transitional viewport containing `[final comic page] [terminal card]`
+captures the comic page first. The terminal card is an `END` for the current
+episode only when no current captureable content is available; its `次の話を読む`
+`.c-viewer__page-btn` is not clicked, so the next episode is not entered or
+captured. A terminal card that exists only in the DOM or outside the viewport
+is not an `END` signal. A URL change from episode 244815 to 244816 remains a
+normal `NEXT_CONTENT` completion and 244816 is not captured.
 
 ## Output metadata
 

@@ -203,7 +203,10 @@ def terminal_magapoke_fixture_html() -> str:
       .c-viewer {{ width: 400px; height: 500px; }}
       .c-viewer__comic canvas {{ width: 240px; height: 360px; }}
       .c-viewer__pager-next {{ position: fixed; left: 500px; top: 200px; }}
-      .c-viewer__last {{ display: none; width: 300px; height: 200px; }}
+      .c-viewer__last {{
+        display: none; position: absolute; left: 260px; top: 100px;
+        width: 100px; height: 100px;
+      }}
     </style>
     <div class="c-viewer">
       <div class="c-viewer__pages-item">
@@ -239,9 +242,13 @@ def terminal_magapoke_fixture_html() -> str:
         image.src = paths[index];
       }}
       document.querySelector('.c-viewer__pager-next').onclick = () => {{
-        if (index === 0) {{ index = 1; render(); return; }}
+        if (index === 0) {{
+          index = 1;
+          terminal.style.display = 'block';
+          render();
+          return;
+        }}
         canvas.style.display = 'none';
-        terminal.style.display = 'block';
       }};
       document.querySelector('.c-viewer__page-btn').onclick = () => {{
         window.nextEpisodeClicks++;

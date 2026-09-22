@@ -378,13 +378,17 @@ class MagapokeAdapter(SiteAdapter):
             reverse=True,
         )
 
-    async def _wait_for_render_ready(self, page: Page) -> None:
+    async def _wait_for_render_ready(
+        self, page: Page, *, allow_terminal: bool = False
+    ) -> bool:
         previous: tuple[object, ...] | None = None
         stable = 0
+        previous_terminal: tuple[object, ...] | None = None
+        terminal_stable = 0
         elapsed = 0
         while elapsed < self.page_change_timeout_ms:
             if self._initial_url is not None and page.url != self._initial_url:
-                return
+                return True
             rows = await self._canvas_rows(page)
             signature = tuple(
                 (
@@ -396,10 +400,23 @@ class MagapokeAdapter(SiteAdapter):
             if signature and signature == previous:
                 stable += 1
                 if stable >= self.render_stable_checks:
-                    return
+                    return True
             else:
                 stable = 0
             previous = signature
+            if allow_terminal:
+                terminal = await self._terminal_screen_signature(page)
+                if terminal is not None and not rows:
+                    if terminal == previous_terminal:
+                        terminal_stable += 1
+                        if terminal_stable >= self.render_stable_checks:
+                            return False
+                    else:
+                        terminal_stable = 0
+                    previous_terminal = terminal
+                else:
+                    previous_terminal = None
+                    terminal_stable = 0
             await page.wait_for_timeout(100)
             elapsed += 100
         raise PageChangeTimeoutError("Magapoke viewer did not finish loading within the timeout")
@@ -811,10 +828,10 @@ class MagapokeAdapter(SiteAdapter):
             current = parse_magapoke_url(page.url)
             if current is not None and current != self._initial_parts:
                 return PageState.NEXT_CONTENT
-        if await self._terminal_screen_signature(page) is not None:
-            return PageState.END
         if await self._canvas_rows(page):
             return PageState.CONTENT
+        if await self._terminal_screen_signature(page) is not None:
+            return PageState.END
         if await page.locator(self.content_canvas_selector).count():
             return PageState.LOADING
         try:
@@ -1015,6 +1032,18 @@ class MagapokeAdapter(SiteAdapter):
             if self._initial_parts is not None and current_parts != self._initial_parts:
                 self._advance_pending = False
                 return
+            current = await self.get_content_identity(page)
+            if current.page_id is not None and current != previous_identity:
+                # Re-check captureable content after the identity read. During
+                # the final transition, the identity can briefly change while
+                # the old canvas is being removed and the terminal card is
+                # taking over the viewport.
+                rows = await self._canvas_rows(page)
+                if rows:
+                    await self._wait_for_render_ready(page, allow_terminal=True)
+                    self._advance_pending = False
+                    return
+
             terminal = await self._terminal_screen_signature(page)
             if terminal is not None:
                 if terminal == previous_terminal:
@@ -1028,11 +1057,6 @@ class MagapokeAdapter(SiteAdapter):
             else:
                 previous_terminal = None
                 terminal_stable = 0
-                current = await self.get_content_identity(page)
-                if current.page_id is not None and current != previous_identity:
-                    await self._wait_for_render_ready(page)
-                    self._advance_pending = False
-                    return
             if (
                 terminal is None
                 and retries < self.advance_retry_count
