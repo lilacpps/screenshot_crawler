@@ -745,11 +745,17 @@ def _print_batch_plan(plan: BatchPlan, *, site: str) -> None:
 
 
 def _run_batch_plan(args: argparse.Namespace) -> None:
-    plan = BatchPlanner(
-        CatalogService(args.catalog),
-        _batch_policy_registry(),
-    ).plan(site=args.site)
+    planner = BatchPlanner(CatalogService(args.catalog), _batch_policy_registry())
+    plan = planner.plan(site=args.site)
     _print_batch_plan(plan, site=args.site)
+    if args.site == "magapoke":
+        premium_plan = planner.plan(
+            site=args.site,
+            quota_resource="premium_ticket",
+        )
+        print("Potential Premium pass:")
+        print(f"  candidates: {len(premium_plan.candidates)}")
+        print("  balance: checked live during batch run")
 
 
 async def _run_batch_run(args: argparse.Namespace) -> None:

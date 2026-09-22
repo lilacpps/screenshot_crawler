@@ -379,6 +379,83 @@ def test_batch_run_parser_rejects_zero_limit() -> None:
         )
 
 
+def test_batch_plan_magapoke_shows_potential_premium_pass_without_browser(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[str | None] = []
+
+    def candidate(strategy: str, index: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            item_id=index,
+            source_id=index,
+            metadata={},
+            access_mode="quota" if strategy == "quota" else "free",
+            access_strategy=strategy,
+            locator=f"https://example.invalid/{index}",
+        )
+
+    normal = [candidate("direct", index) for index in range(5)] + [
+        candidate("quota", 5)
+    ]
+    premium = [candidate("quota", index) for index in range(135)]
+
+    class FakePlanner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+            assert site == "magapoke"
+            calls.append(quota_resource)
+            return SimpleNamespace(
+                candidates=normal if quota_resource is None else premium,
+                skipped=[],
+                direct_count=5 if quota_resource is None else 0,
+                quota_count=1 if quota_resource is None else 135,
+                quota_remaining=None,
+            )
+
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(cli, "_batch_policy_registry", lambda: object())
+    monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
+
+    args = _parser().parse_args(["batch", "plan", "--site", "magapoke"])
+    cli._run_batch_plan(args)
+
+    output = capsys.readouterr().out
+    assert calls == [None, "premium_ticket"]
+    assert "Potential Premium pass:" in output
+    assert "  candidates: 135" in output
+    assert "  balance: checked live during batch run" in output
+
+
+@pytest.mark.parametrize("site", ["mangaone", "bookwalker"])
+def test_batch_plan_non_magapoke_does_not_show_potential_premium_pass(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    site: str,
+) -> None:
+    class FakePlanner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+            assert quota_resource is None
+            return SimpleNamespace(
+                candidates=[], skipped=[], direct_count=0, quota_count=0,
+                quota_remaining=None,
+            )
+
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(cli, "_batch_policy_registry", lambda: object())
+    monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
+
+    args = _parser().parse_args(["batch", "plan", "--site", site])
+    cli._run_batch_plan(args)
+
+    assert "Potential Premium pass:" not in capsys.readouterr().out
+
+
 def test_batch_run_continues_after_work_ticket_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
