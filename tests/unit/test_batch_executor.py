@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -611,6 +611,35 @@ async def test_work_ticket_consumption_is_recorded_at_observed_time(tmp_path: Pa
     assert state is not None
     assert state.last_consumed_at == consumed_at.isoformat()
 
+    assert executor.grant_only_skip_reason(
+        candidate, now=consumed_at + timedelta(hours=1)
+    ) == "work_ticket_cooldown"
+
+
+async def test_mismatched_observed_resource_fails_closed_without_persistence(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(True, "premium_ticket", consumed_at)
+    )
+
+    with pytest.raises(BatchExecutionError, match="unexpected quota resource"):
+        await executor.execute_candidate(object(), candidate, now=NOW)
+
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at is None
+    assert source.access_granted_until is None
+    assert service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="work_ticket",
+    ) is None
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+
 
 async def test_grant_only_work_ticket_persists_state_without_completion_or_artifact(
     tmp_path: Path,
@@ -729,6 +758,41 @@ async def test_consumption_is_recorded_when_crawl_fails_after_entry(tmp_path: Pa
     with pytest.raises(BatchExecutionError, match="crawl failed after entry"):
         await executor.execute_candidate(object(), candidate, now=NOW)
     assert service.get_source(candidate.source_id).quota_started_at == consumed_at.isoformat()
+    state = service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="work_ticket",
+    )
+    assert state is not None
+    assert state.last_consumed_at == consumed_at.isoformat()
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+
+
+async def test_grant_only_unconfirmed_failure_does_not_record_consumption(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "unconfirmed-grant.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(),
+        failure=RuntimeError("viewer confirmation failed"),
+    )
+
+    with pytest.raises(BatchExecutionError, match="viewer confirmation failed"):
+        await executor.execute_grant_only_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at is None
+    assert source.access_granted_until is None
+    assert service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="work_ticket",
+    ) is None
     assert service.get_item(candidate.item_id).status == "pending"
     assert service.list_artifacts() == []
 

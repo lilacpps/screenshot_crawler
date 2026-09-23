@@ -479,6 +479,24 @@ class CatalogService:
                 raise CatalogValidationError("source.site does not match site")
             if item["work_id"] != work_id:
                 raise CatalogValidationError("source item does not belong to work_id")
+            existing_state = connection.execute(
+                "SELECT * FROM quota_resource_states "
+                "WHERE work_id = ? AND site = ? AND resource = ?",
+                (work_id, site, resource),
+            ).fetchone()
+            if existing_state is not None:
+                existing_consumed = datetime.fromisoformat(
+                    existing_state["last_consumed_at"]
+                )
+                observed_consumed = datetime.fromisoformat(consumed)
+                if existing_consumed > observed_consumed:
+                    source_row = connection.execute(
+                        "SELECT * FROM sources WHERE id = ?", (source_id,)
+                    ).fetchone()
+                    return (
+                        self._source_from_row(source_row),
+                        self._quota_resource_state_from_row(existing_state),
+                    )
             connection.execute(
                 "UPDATE sources SET quota_started_at = ?, access_granted_until = ?, "
                 "updated_at = ? WHERE id = ?",

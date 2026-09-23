@@ -286,6 +286,16 @@ def test_quota_resource_state_and_source_grant_commit_atomically(tmp_path: Path)
         assert connection.execute(
             "SELECT count(*) FROM quota_resource_states"
         ).fetchone()[0] == 1
+    stale_source, stale_state = service.record_quota_access_with_resource_state(
+        source.id,
+        work_id=work.id,
+        site="magapoke",
+        resource="work_ticket",
+        consumed_at="2026-09-23T09:00:00+09:00",
+        access_granted_until="2026-09-26T08:00:00+09:00",
+    )
+    assert stale_state.last_consumed_at == newer.last_consumed_at
+    assert stale_source.access_granted_until == "2026-09-27T09:00:00+09:00"
 
 
 def test_clear_quota_access_is_compare_and_set_and_preserves_source_identity(
