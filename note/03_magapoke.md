@@ -742,6 +742,8 @@ as source grant plus Catalog schema v5 `quota_resource_states(work_id, site,
 resource, last_consumed_at)`. The default local negative cooldown is 23 hours;
 state skips happen before site access and exactly-expired state is live-checked.
 `premium_ticket` grant-only and `--grant-only all` remain Phase 5 planned behavior.
+Normal Batch uses the same observed Work Ticket persistence path as grant-only;
+confirmed consumption is retained if a later crawl or finalization step fails.
 This current-state section supersedes the older Phase 3 planning sentence.
 
 ### Phase 1 runtime pacing / Batch ordering

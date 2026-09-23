@@ -603,6 +603,13 @@ async def test_work_ticket_consumption_is_recorded_at_observed_time(tmp_path: Pa
     assert source.quota_started_at == consumed_at.isoformat()
     assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
     assert service.get_item(candidate.item_id).status == "completed"
+    state = service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="work_ticket",
+    )
+    assert state is not None
+    assert state.last_consumed_at == consumed_at.isoformat()
 
 
 async def test_grant_only_work_ticket_persists_state_without_completion_or_artifact(
@@ -633,6 +640,37 @@ async def test_grant_only_work_ticket_persists_state_without_completion_or_artif
     run = service.get_crawl_run(result.crawl_run_id)
     assert run.status == "succeeded"
     assert run.page_count == 0
+
+
+async def test_grant_only_consumption_survives_later_failure(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "work_ticket", consumed_at),
+        failure=RuntimeError("entry flow failed after consumption"),
+    )
+
+    with pytest.raises(BatchExecutionError, match="entry flow failed"):
+        await executor.execute_grant_only_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at == consumed_at.isoformat()
+    assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
+    state = service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="work_ticket",
+    )
+    assert state is not None
+    assert state.last_consumed_at == consumed_at.isoformat()
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
 
 
 async def test_premium_ticket_consumption_and_later_failure_are_persisted(

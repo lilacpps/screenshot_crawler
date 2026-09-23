@@ -301,6 +301,8 @@ Phase 5 and is **PLANNED / NOT YET IMPLEMENTED**.
 - wire generic grant-only to `work_ticket`,
 - persist `last_consumed_at` only after confirmed Work Ticket entry,
 - persist conservative source grant,
+- normal Batch and grant-only share the observed-consumption persistence path;
+  later failure does not roll back confirmed source/state updates,
 - do not capture/package/complete.
 
 ### Shared Phase 5 integration - Premium/all

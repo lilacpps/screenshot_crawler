@@ -772,6 +772,9 @@ Work/site/resource state, and confirmed consumption atomically updates that
 state plus the source grant. Local cooldown skips happen before browser/page
 creation; confirmed grant-only runs do not capture, package, or complete the
 Item. Premium Ticket grant-only and `all` remain Phase 5 planned behavior.
+Normal Batch and grant-only share the observed resource-consumption persistence
+helper; confirmed Work Ticket consumption updates source grant and Work state,
+and later failure does not undo either update.
 This Phase 4 section is the current implementation state and supersedes the
 older Phase 3 planning sentence below.
 

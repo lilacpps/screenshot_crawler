@@ -79,6 +79,7 @@ class BatchExecutor:
         crawl_result: RunResult | None = None
         adapter: SiteAdapter | None = None
         policy: SitePolicy | None = None
+        consumption_checked = False
         try:
             if candidate.backend != "web":
                 raise BatchExecutionError(
@@ -150,7 +151,8 @@ class BatchExecutor:
             )
             crawl_result = await self.runner_factory(config).run(page, adapter)
             # A deferred commit is based on observed adapter state, never planning intent.
-            _record_observed_consumption(self.catalog, candidate, policy, adapter)
+            _record_observed_resource_consumption(self.catalog, candidate, policy, adapter)
+            consumption_checked = True
             _require_normal_stop(crawl_result, candidate)
             package_kwargs = {
                 "library_dir": library_dir,
@@ -191,9 +193,11 @@ class BatchExecutor:
                 stop_reason=crawl_result.stop_reason,
             )
         except BaseException as exc:
-            if adapter is not None and policy is not None:
+            if not consumption_checked and adapter is not None and policy is not None:
                 try:
-                    _record_observed_consumption(self.catalog, candidate, policy, adapter)
+                    _record_observed_resource_consumption(
+                        self.catalog, candidate, policy, adapter
+                    )
                 except Exception as recording_error:  # noqa: BLE001
                     exc.add_note(f"Could not record observed quota consumption: {recording_error}")
             if run_id is not None:
@@ -263,6 +267,7 @@ class BatchExecutor:
         crawl_result: RunResult | None = None
         adapter: SiteAdapter | None = None
         policy: SitePolicy | None = None
+        consumption_checked = False
         try:
             if candidate.quota_resource is None:
                 raise BatchExecutionError("grant-only candidate has no access resource")
@@ -323,13 +328,13 @@ class BatchExecutor:
             crawl_result = await self.runner_factory(config).run(page, adapter)
             if not crawl_result.entry_confirmed:
                 raise BatchExecutionError("grant-only entry was not confirmed")
-            consumption = adapter.get_access_consumption()
-            if not consumption.consumed:
-                reason = policy.grant_only_unavailable_reason(candidate.quota_resource)
-                raise AccessResourceUnavailableError(reason)
-            _record_observed_grant(
+            observed = _record_observed_resource_consumption(
                 self.catalog, candidate, policy, adapter
             )
+            consumption_checked = True
+            if not observed:
+                reason = policy.grant_only_unavailable_reason(candidate.quota_resource)
+                raise AccessResourceUnavailableError(reason)
             self.catalog.mark_crawl_run_succeeded(
                 run_id,
                 page_count=0,
@@ -345,6 +350,13 @@ class BatchExecutor:
                 stop_reason=crawl_result.stop_reason,
             )
         except BaseException as exc:
+            if not consumption_checked and adapter is not None and policy is not None:
+                try:
+                    _record_observed_resource_consumption(
+                        self.catalog, candidate, policy, adapter
+                    )
+                except Exception as recording_error:  # noqa: BLE001
+                    exc.add_note(f"Could not record observed quota consumption: {recording_error}")
             if run_id is not None:
                 _record_failed_run(self.catalog, run_id, exc, crawl_result)
             if isinstance(exc, AccessStopError):
@@ -479,56 +491,41 @@ def _record_failed_run(
         error.add_note(f"Could not record failed CrawlRun {run_id}: {recording_error}")
 
 
-def _record_observed_consumption(
+def _record_observed_resource_consumption(
     catalog: CatalogService,
     candidate: BatchCandidate,
     policy: SitePolicy,
     adapter: SiteAdapter,
-) -> None:
+) -> bool:
     if candidate.quota_commit_mode != "after_observed_consumption":
-        return
+        return False
     consumption = adapter.get_access_consumption()
     if not consumption.consumed:
-        return
+        return False
     if candidate.quota_resource is None or consumption.resource != candidate.quota_resource:
         raise BatchExecutionError("adapter reported an unexpected quota resource")
     if consumption.consumed_at is None:
         raise BatchExecutionError("adapter reported resource consumption without a timestamp")
     if consumption.consumed_at.tzinfo is None or consumption.consumed_at.utcoffset() is None:
         raise BatchExecutionError("adapter consumption timestamp must be timezone-aware")
-    catalog.record_quota_access(
-        candidate.source_id,
-        quota_started_at=consumption.consumed_at,
-        access_granted_until=policy.access_grant_until(consumption.consumed_at),
-    )
-
-
-def _record_observed_grant(
-    catalog: CatalogService,
-    candidate: BatchCandidate,
-    policy: SitePolicy,
-    adapter: SiteAdapter,
-) -> None:
-    consumption = adapter.get_access_consumption()
-    if not consumption.consumed:
-        raise AccessResourceUnavailableError(
-            policy.grant_only_unavailable_reason(candidate.quota_resource or "resource")
+    access_granted_until = policy.access_grant_until(consumption.consumed_at)
+    if policy.resource_state_scope(candidate.quota_resource) == "work":
+        item = catalog.get_item(candidate.item_id)
+        catalog.record_quota_access_with_resource_state(
+            candidate.source_id,
+            work_id=item.work_id,
+            site=candidate.site,
+            resource=candidate.quota_resource,
+            consumed_at=consumption.consumed_at,
+            access_granted_until=access_granted_until,
         )
-    if candidate.quota_resource is None or consumption.resource != candidate.quota_resource:
-        raise BatchExecutionError("adapter reported an unexpected grant-only resource")
-    if consumption.consumed_at is None:
-        raise BatchExecutionError("adapter reported resource consumption without a timestamp")
-    if consumption.consumed_at.tzinfo is None or consumption.consumed_at.utcoffset() is None:
-        raise BatchExecutionError("adapter consumption timestamp must be timezone-aware")
-    item = catalog.get_item(candidate.item_id)
-    catalog.record_quota_access_with_resource_state(
-        candidate.source_id,
-        work_id=item.work_id,
-        site=candidate.site,
-        resource=candidate.quota_resource,
-        consumed_at=consumption.consumed_at,
-        access_granted_until=policy.access_grant_until(consumption.consumed_at),
-    )
+    else:
+        catalog.record_quota_access(
+            candidate.source_id,
+            quota_started_at=consumption.consumed_at,
+            access_granted_until=access_granted_until,
+        )
+    return True
 
 
 def _normalize_now(value: datetime) -> datetime:

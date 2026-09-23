@@ -105,6 +105,8 @@ Status: **IMPLEMENTED**.
 - apply configured 23-hour local negative gate,
 - persist Work Ticket `last_consumed_at` only after observed confirmed consumption,
 - persist source access grant,
+- use the same observed-consumption persistence helper for normal Batch and grant-only;
+  confirmed consumption survives later crawl/finalization failure,
 - leave Item pending and do not capture/package/complete.
 
 ### Acceptance tests

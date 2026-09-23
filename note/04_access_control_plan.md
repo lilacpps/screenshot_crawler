@@ -37,6 +37,9 @@ artifact/package is created. A local `work_ticket_cooldown` skip is evaluated be
 opening a Page; the default cooldown is 23 hours and exactly-expired state is live-checked.
 Metrics use the existing incremental `output/metrics/*.jsonl` writer with mode
 `grant-only`. `premium_ticket` grant-only and `--grant-only all` remain unimplemented.
+Normal Batch and grant-only now use one observed-consumption persistence path, so a
+confirmed Work Ticket updates both source grant and Work state even when a later
+crawl/finalization step fails.
 
 Remaining planned shared changes:
 

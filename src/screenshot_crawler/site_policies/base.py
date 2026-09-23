@@ -119,6 +119,12 @@ class SitePolicy(ABC):
     def grant_only_unavailable_reason(self, resource: str) -> str:
         return f"{resource}_unavailable"
 
+    def resource_state_scope(self, resource: str) -> Literal["work"] | None:
+        """Return the Catalog state scope for confirmed resource use, if any."""
+
+        del resource
+        return None
+
     @abstractmethod
     def evaluate(
         self,

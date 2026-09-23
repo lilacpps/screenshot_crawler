@@ -31,6 +31,11 @@ class MagapokeSitePolicy(SitePolicy):
 
         return ("work_ticket",)
 
+    def resource_state_scope(self, resource: str) -> str | None:
+        if resource == "work_ticket":
+            return "work"
+        return None
+
     def grant_only_skip_reason(
         self,
         *,
