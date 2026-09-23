@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 CREATE TABLE works (
@@ -108,6 +108,17 @@ CREATE TABLE artifacts (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE quota_resource_states (
+    id INTEGER PRIMARY KEY,
+    work_id INTEGER NOT NULL REFERENCES works(id),
+    site TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    last_consumed_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(work_id, site, resource)
+);
+
 CREATE INDEX idx_items_work_id ON items(work_id);
 CREATE INDEX idx_sources_item_id ON sources(item_id);
 CREATE INDEX idx_sources_site ON sources(site);
@@ -118,6 +129,9 @@ CREATE INDEX idx_crawl_runs_source_id ON crawl_runs(source_id);
 CREATE INDEX idx_crawl_runs_target_id ON crawl_runs(target_id);
 CREATE INDEX idx_artifacts_item_id ON artifacts(item_id);
 CREATE INDEX idx_artifacts_crawl_run_id ON artifacts(crawl_run_id);
+CREATE INDEX idx_quota_resource_states_work_id ON quota_resource_states(work_id);
+CREATE INDEX idx_quota_resource_states_site_resource
+    ON quota_resource_states(site, resource);
 """
 
 _REQUIRED_COLUMNS = {
@@ -145,6 +159,9 @@ _REQUIRED_COLUMNS = {
         "id", "item_id", "crawl_run_id", "kind", "format", "sha256", "byte_size",
         "storage_backend", "locator", "state", "last_verified_at", "created_at", "updated_at",
     },
+    "quota_resource_states": {
+        "id", "work_id", "site", "resource", "last_consumed_at", "created_at", "updated_at",
+    },
 }
 
 _FORBIDDEN_COLUMNS = {
@@ -161,7 +178,7 @@ def user_version(connection: sqlite3.Connection) -> int:
 
 
 def validate_existing_schema(connection: sqlite3.Connection) -> None:
-    """Validate an existing v4 schema without creating or changing anything."""
+    """Validate an existing v5 schema without creating or changing anything."""
 
     version = user_version(connection)
     if version != SCHEMA_VERSION:
@@ -178,7 +195,7 @@ def validate_existing_schema(connection: sqlite3.Connection) -> None:
     missing_tables = set(_REQUIRED_COLUMNS) - tables
     if missing_tables:
         raise SchemaError(
-            f"Catalog schema version 4 is missing table(s): {', '.join(sorted(missing_tables))}"
+            f"Catalog schema version 5 is missing table(s): {', '.join(sorted(missing_tables))}"
         )
 
     for table, required_columns in _REQUIRED_COLUMNS.items():
@@ -186,19 +203,19 @@ def validate_existing_schema(connection: sqlite3.Connection) -> None:
         missing_columns = required_columns - columns
         if missing_columns:
             raise SchemaError(
-                f"Catalog schema version 4 is missing {table} column(s): "
+                f"Catalog schema version 5 is missing {table} column(s): "
                 f"{', '.join(sorted(missing_columns))}"
             )
         forbidden_columns = _FORBIDDEN_COLUMNS.get(table, set()) & columns
         if forbidden_columns:
             raise SchemaError(
-                f"Catalog schema version 4 has removed {table} column(s): "
+                f"Catalog schema version 5 has removed {table} column(s): "
                 f"{', '.join(sorted(forbidden_columns))}"
             )
 
 
 def initialize(connection: sqlite3.Connection) -> None:
-    """Create v4 or validate it; never migrate an existing schema."""
+    """Create v5 or validate it; never migrate an existing schema."""
 
     version = user_version(connection)
     if version not in (0, SCHEMA_VERSION):

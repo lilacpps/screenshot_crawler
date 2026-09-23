@@ -35,6 +35,7 @@ class RunResult:
     pages: tuple[CapturedPage, ...]
     stop_state: PageState
     stop_reason: str
+    entry_confirmed: bool = False
 
 
 def _identity_key(identity: ContentIdentity) -> tuple[object, ...]:
@@ -265,6 +266,16 @@ class CrawlerRunner:
         try:
             while True:
                 await self._check_access(page)
+                if self.config.entry_only:
+                    consumption = adapter.get_access_consumption()
+                    if not consumption.consumed:
+                        raise LookupError("access resource consumption was not confirmed")
+                    return RunResult(
+                        tuple(saved_pages),
+                        PageState.END,
+                        "entry_confirmed",
+                        entry_confirmed=True,
+                    )
                 state = await self._detect_non_loading_state(page, adapter)
                 if state in {PageState.END, PageState.NEXT_CONTENT}:
                     return RunResult(tuple(saved_pages), state, state.value)

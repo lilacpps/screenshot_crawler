@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +20,26 @@ from screenshot_crawler.site_policies import (
 )
 
 NOW = datetime(2026, 9, 22, 15, 0, tzinfo=JST)
+
+
+def test_grant_only_work_ticket_cooldown_is_strict_at_expiry() -> None:
+    policy = MagapokeSitePolicy()
+    consumed_at = NOW
+    assert policy.grant_only_supported_access_resources() == ("work_ticket",)
+    assert policy.grant_only_skip_reason(
+        resource="work_ticket",
+        last_consumed_at=consumed_at,
+        now=consumed_at + timedelta(hours=23) - timedelta(seconds=1),
+        cooldown_hours=23,
+    ) == "work_ticket_cooldown"
+    assert policy.grant_only_skip_reason(
+        resource="work_ticket",
+        last_consumed_at=consumed_at,
+        now=consumed_at + timedelta(hours=23),
+        cooldown_hours=23,
+    ) is None
+    with pytest.raises(SitePolicyError, match="not implemented"):
+        policy.validate_grant_only_resource("premium_ticket")
 
 
 @pytest.mark.parametrize(

@@ -75,6 +75,7 @@ class RunConfig:
     device_scale_factor: float = 1.0
     access_strategy: AccessStrategy = "auto"
     quota_resource: str | None = None
+    entry_only: bool = False
     output_metadata: Mapping[str, str | None] | None = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -94,6 +95,8 @@ class RunConfig:
                 raise TypeError(f"{field_name} must be a boolean")
         if self.access_strategy not in VALID_ACCESS_STRATEGIES:
             raise ValueError("access_strategy must be one of: auto, direct, quota")
+        if not isinstance(self.entry_only, bool):
+            raise TypeError("entry_only must be a boolean")
 
         if self.output_metadata is None:
             self.output_metadata = {}

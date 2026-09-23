@@ -521,6 +521,9 @@ Implement in small reviewable phases.
 
 ### Phase 4 - generic grant-only + first Magapoke Work Ticket integration
 
+Status: **IMPLEMENTED** for generic grant-only Work Ticket. Premium Ticket and
+`all` remain Phase 5 and are not implemented.
+
 - add generic `--grant-only <resource>|all` CLI validation/orchestration,
 - share normal entry semantics rather than duplicating adapter logic,
 - implement Magapoke Work Ticket work-scoped resource state and cooldown per its site spec,

@@ -43,13 +43,13 @@ def make_graph(service: CatalogService):
     return work, item, source, target
 
 
-def test_initialize_creates_v4_tables_indexes_and_foreign_keys(tmp_path: Path) -> None:
+def test_initialize_creates_v5_tables_indexes_and_foreign_keys(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     service = CatalogService(path)
     service.initialize()
 
-    assert SCHEMA_VERSION == 4
-    assert service.schema_version() == 4
+    assert SCHEMA_VERSION == 5
+    assert service.schema_version() == 5
     with service._connection() as connection:
         tables = {
             row[0]
@@ -57,7 +57,10 @@ def test_initialize_creates_v4_tables_indexes_and_foreign_keys(tmp_path: Path) -
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             )
         }
-        assert tables == {"works", "items", "sources", "source_targets", "crawl_runs", "artifacts"}
+        assert tables == {
+            "works", "items", "sources", "source_targets", "crawl_runs", "artifacts",
+            "quota_resource_states",
+        }
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         item_columns = {row[1] for row in connection.execute("PRAGMA table_info(items)")}
         assert {"canonical_title", "author", "genre", "local_path"}.isdisjoint(item_columns)
@@ -238,6 +241,51 @@ def test_source_identity_external_state_quota_and_reconciliation(tmp_path: Path)
     )
     assert count == 0
     assert service.get_source(source.id).available is False
+
+
+def test_quota_resource_state_and_source_grant_commit_atomically(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="grant-work", title="Work"))
+    item = service.create_item(work_id=work.id)
+    source = service.create_source(
+        SourceInput(site="magapoke", external_id="episode", access_mode="quota"),
+        item_id=item.id,
+    )
+    consumed_at = "2026-09-23T10:00:00+09:00"
+    grant_until = "2026-09-26T09:00:00+09:00"
+
+    assert service.get_quota_resource_state(
+        work.id, site="magapoke", resource="work_ticket"
+    ) is None
+    updated_source, state = service.record_quota_access_with_resource_state(
+        source.id,
+        work_id=work.id,
+        site="magapoke",
+        resource="work_ticket",
+        consumed_at=consumed_at,
+        access_granted_until=grant_until,
+    )
+
+    assert updated_source.quota_started_at == consumed_at
+    assert updated_source.access_granted_until == grant_until
+    assert state.last_consumed_at == consumed_at
+    assert service.get_quota_resource_state(
+        work.id, site="magapoke", resource="work_ticket"
+    ) == state
+
+    newer = service.record_quota_access_with_resource_state(
+        source.id,
+        work_id=work.id,
+        site="magapoke",
+        resource="work_ticket",
+        consumed_at="2026-09-24T10:00:00+09:00",
+        access_granted_until="2026-09-27T09:00:00+09:00",
+    )[1]
+    assert newer.id == state.id
+    with service._connection() as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM quota_resource_states"
+        ).fetchone()[0] == 1
 
 
 def test_clear_quota_access_is_compare_and_set_and_preserves_source_identity(

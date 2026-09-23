@@ -112,6 +112,30 @@ class BatchMetricsWriter:
             }
         )
 
+    def record_local_skip(self, candidate: BatchCandidate, *, reason: str) -> None:
+        """Record a Catalog-only skip without opening a site page."""
+
+        self._candidates_skipped += 1
+        self._write(
+            {
+                "type": "candidate",
+                "event": "result",
+                "run_id": self.run_id,
+                "item_id": getattr(candidate, "item_id", None),
+                "source_id": getattr(candidate, "source_id", None),
+                "target_id": getattr(candidate, "target_id", None),
+                "access_strategy": getattr(candidate, "access_strategy", None),
+                "resource": getattr(candidate, "quota_resource", None),
+                "start_time": None,
+                "elapsed": 0.0,
+                "request_count": 0,
+                "retry_count": 0,
+                "result": "skipped",
+                "stop_reason": reason,
+                "resource_consumed": False,
+            }
+        )
+
     def record_access_event(self, event: AccessEvent) -> None:
         if event.event_type == "request":
             self._http_requests_total += 1

@@ -91,6 +91,34 @@ class SitePolicy(ABC):
                 f"Unsupported access resource for site {self.site}: {resource}"
             )
 
+    def grant_only_supported_access_resources(self) -> tuple[str, ...]:
+        """Return resources whose grant-only flow this policy supports now."""
+
+        return ()
+
+    def validate_grant_only_resource(self, resource: str) -> None:
+        if resource not in self.grant_only_supported_access_resources():
+            raise SitePolicyError(
+                f"Grant-only access resource is not implemented for site {self.site}: "
+                f"{resource}"
+            )
+
+    def grant_only_skip_reason(
+        self,
+        *,
+        resource: str,
+        last_consumed_at: datetime | None,
+        now: datetime,
+        cooldown_hours: int | None,
+    ) -> str | None:
+        """Return a local-only skip reason, without inspecting site state."""
+
+        del resource, last_consumed_at, now, cooldown_hours
+        return None
+
+    def grant_only_unavailable_reason(self, resource: str) -> str:
+        return f"{resource}_unavailable"
+
     @abstractmethod
     def evaluate(
         self,

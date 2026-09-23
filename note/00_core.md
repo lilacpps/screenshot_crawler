@@ -756,13 +756,24 @@ CrawlRun / Artifact / Item statusを書き換える。Manga ONEとBookWalkerのq
 維持し、Android targetはCatalogへ保持できるがPhase 3 Executorでは実行しない。
 
 
-### Catalog v4 / Magapoke M3c1 current update
+### Catalog v5 / Magapoke M3c1 current update
 
 Catalog schema v4 adds nullable sources.published_at and explicitly migrates v3 after an automatic pre-migration backup inside the existing transactional catalog migrate flow. Ordinary initialization remains non-migrating. Timestamp validation uses the same aware ISO/JST normalization as other Catalog timestamps.
 
 Discovery passes DiscoveredSource.published_at into SourceInput; a non-NULL observation updates the Source, while NULL preserves the prior value. Magapoke parses the live-confirmed YYYY/MM/DD row date to JST midnight. This represents the site-observed publication day normalized for stable ordering, not an observed time of day. order_key remains site-neutral and Magapoke keeps it NULL.
 
 Batch metadata now carries generic quota resource, scope, limit, and commit timing. Work-scoped quota limits are applied by grouping on Work.id; sources are ranked by published_at ascending with NULL last, then existing item ordering and stable source ID. Only work-scoped policies use the direct-first phase; Manga ONE and BookWalker retain their established site quota ordering. BatchExecutor passes quota_resource through RunConfig and commits after-observed consumption only when the Adapter reports a matching aware timestamp.
+
+### Phase 4 current state: generic grant-only
+
+Generic grant-only uses the existing adapter entry path with Core
+`entry_only=True`. Work Ticket state is persisted in Catalog schema v5 as
+Work/site/resource state, and confirmed consumption atomically updates that
+state plus the source grant. Local cooldown skips happen before browser/page
+creation; confirmed grant-only runs do not capture, package, or complete the
+Item. Premium Ticket grant-only and `all` remain Phase 5 planned behavior.
+This Phase 4 section is the current implementation state and supersedes the
+older Phase 3 planning sentence below.
 
 ### Phase 1 runtime settings / pacing
 

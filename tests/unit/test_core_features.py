@@ -20,7 +20,7 @@ from screenshot_crawler.core.models import ContentContext, ContentIdentity, RunC
 from screenshot_crawler.core.progress import ProgressStore, atomic_write_json
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.base import AccessConsumption, SiteAdapter
 
 
 def test_fingerprint_is_sha256() -> None:
@@ -128,6 +128,25 @@ class FakeAdapter(SiteAdapter):
         return None
 
 
+class EntryOnlyAdapter(FakeAdapter):
+    async def configure_run(self, page: FakePage, access_strategy: str) -> None:
+        return None
+
+    async def configure_quota_resource(
+        self, page: FakePage, quota_resource: str | None
+    ) -> None:
+        return None
+
+    def get_access_consumption(self) -> AccessConsumption:
+        return AccessConsumption(consumed=True, resource="work_ticket")
+
+    async def detect_state(self, page: FakePage) -> PageState:
+        raise AssertionError("entry-only runs must not enter the capture loop")
+
+    async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...]:
+        raise AssertionError("entry-only runs must not capture")
+
+
 class OrderedNavigationAdapter(FakeAdapter):
     def __init__(self, states: list[PageState], identities: list[ContentIdentity], events: list[str]) -> None:
         super().__init__(states, identities)
@@ -223,6 +242,29 @@ async def test_base_adapter_capture_page_defaults_to_locator_fallback() -> None:
     )
 
     assert await adapter.capture_page(FakePage()) is None
+
+
+@pytest.mark.asyncio
+async def test_entry_only_stops_after_confirmed_access_without_capture(tmp_path: Path) -> None:
+    adapter = EntryOnlyAdapter(
+        [PageState.CONTENT],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+            entry_only=True,
+            access_strategy="quota",
+            quota_resource="work_ticket",
+        )
+    ).run(FakePage(), adapter)
+
+    assert result.entry_confirmed is True
+    assert result.pages == ()
+    assert result.stop_reason == "entry_confirmed"
 
 
 async def test_adapter_call_preserves_inner_page_change_timeout() -> None:

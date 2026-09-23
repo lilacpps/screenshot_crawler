@@ -54,6 +54,7 @@ from screenshot_crawler.site_policies import (
     MangaOneSitePolicy,
     SitePolicyRegistry,
 )
+from screenshot_crawler.site_policies.base import SitePolicyError
 from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
 
@@ -320,6 +321,11 @@ def _parser() -> argparse.ArgumentParser:
         "--limit",
         type=_positive_int,
         help="Execute only the first N planned candidates (N >= 1)",
+    )
+    batch_run.add_argument(
+        "--grant-only",
+        metavar="RESOURCE",
+        help="Confirm an explicit access grant without capturing content",
     )
     batch_run.add_argument("--max-pages", type=int, default=1000)
     batch_run.add_argument("--max-same-content", type=int, default=3)
@@ -798,14 +804,33 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     policies = _batch_policy_registry()
     planner = BatchPlanner(catalog, policies)
     runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
-    plan = planner.plan(site=args.site)
-    candidates = plan.candidates[: args.limit] if args.limit is not None else plan.candidates
-    metrics = BatchMetricsWriter("output/metrics", site=args.site, mode="normal")
+    grant_only = getattr(args, "grant_only", None)
+    if grant_only is not None:
+        if grant_only == "all":
+            raise BatchPlanningError(
+                "grant-only all is not implemented until Phase 5"
+            )
+        policy = policies.create(args.site)
+        try:
+            policy.validate_grant_only_resource(grant_only)
+        except SitePolicyError as exc:
+            raise BatchPlanningError(str(exc)) from exc
+        plan = planner.plan(site=args.site, quota_resource=grant_only)
+        candidates = plan.candidates
+        metrics_mode = "grant-only"
+    else:
+        plan = planner.plan(site=args.site)
+        candidates = plan.candidates[: args.limit] if args.limit is not None else plan.candidates
+        metrics_mode = "normal"
+    metrics = BatchMetricsWriter("output/metrics", site=args.site, mode=metrics_mode)
     metrics.record_planned_skips(plan.skipped)
     print("Batch run:")
     print(f"  site: {args.site}")
     print(f"  planned: {len(plan.candidates)}")
-    print(f"  executing: {len(candidates)}")
+    print(
+        f"  executing: {len(candidates)}"
+        + (f" resource={grant_only}" if grant_only is not None else "")
+    )
     print(f"  direct: {sum(item.access_strategy == 'direct' for item in candidates)}")
     print(f"  quota: {sum(item.access_strategy == 'quota' for item in candidates)}")
     if plan.skipped:
@@ -838,11 +863,13 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             session,
             executor,
             candidates,
-            phase="default",
+            phase=(f"grant-only:{grant_only}" if grant_only is not None else "default"),
             inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
             metrics=metrics,
+            grant_only=grant_only is not None,
+            attempt_limit=args.limit if grant_only is not None else None,
         )
-        if should_continue and initial_complete:
+        if grant_only is None and should_continue and initial_complete:
             previous_phase_had_site_access = processed > 0
             remaining_limit = (
                 None if args.limit is None else max(0, args.limit - processed)
@@ -916,12 +943,28 @@ async def _execute_batch_candidates(
     inter_candidate_delay_ms: int = 3000,
     delay_before_first_ms: int | None = None,
     metrics: BatchMetricsWriter | None = None,
+    grant_only: bool = False,
+    attempt_limit: int | None = None,
 ) -> tuple[int, bool]:
     """Execute a sequential resource phase; return attempts and continue flag."""
 
+    attempts = 0
     for index, candidate in enumerate(candidates, start=1):
-        if index == 1 and delay_before_first_ms is not None:
+        if attempt_limit is not None and attempts >= attempt_limit:
+            break
+        if grant_only:
+            local_skip_reason = executor.grant_only_skip_reason(candidate)
+            if local_skip_reason is not None:
+                print(
+                    f"[{phase} {index}/{len(candidates)}] item={candidate.item_id} "
+                    f"SKIPPED {local_skip_reason}"
+                )
+                if metrics is not None:
+                    metrics.record_local_skip(candidate, reason=local_skip_reason)
+                continue
+        if attempts == 0 and delay_before_first_ms is not None:
             await asyncio.sleep(delay_before_first_ms / 1000)
+        attempts += 1
         order = candidate.metadata.get("order", "-")
         resource = f" resource={candidate.quota_resource}" if candidate.quota_resource else ""
         print(
@@ -936,20 +979,34 @@ async def _execute_batch_candidates(
         try:
             page = await session.new_page()
             contacted_site = True
-            result = await executor.execute_candidate(
-                page,
-                candidate,
-                output_root=args.output_root,
-                library_dir=args.library_dir,
-                max_pages=args.max_pages,
-                max_same_content=args.max_same_content,
-            )
-            print(f"  completed: {result.archive_path}")
+            if grant_only:
+                result = await executor.execute_grant_only_candidate(
+                    page,
+                    candidate,
+                    output_root=args.output_root,
+                    max_pages=args.max_pages,
+                    max_same_content=args.max_same_content,
+                )
+                print(f"  grant confirmed: {result.resource}")
+            else:
+                result = await executor.execute_candidate(
+                    page,
+                    candidate,
+                    output_root=args.output_root,
+                    library_dir=args.library_dir,
+                    max_pages=args.max_pages,
+                    max_same_content=args.max_same_content,
+                )
+                print(f"  completed: {result.archive_path}")
             continue_after_candidate = True
             if metrics is not None:
                 metrics.finish_candidate(
                     result="completed",
                     stop_reason=getattr(result, "stop_reason", None),
+                    resource_consumed=(
+                        getattr(result, "resource_consumed", None)
+                        if grant_only else None
+                    ),
                 )
         except AccessResourceUnavailableError as exc:
             reason = exc.reason
@@ -958,7 +1015,7 @@ async def _execute_batch_candidates(
                 metrics.finish_candidate(result="skipped", stop_reason=reason)
             if exc.stop_resource_pass:
                 print("  Resource is exhausted; stopping this resource pass.")
-                return index, False
+                return attempts, False
             continue_after_candidate = True
         except BaseException as exc:
             if metrics is not None:
@@ -985,13 +1042,20 @@ async def _execute_batch_candidates(
         finally:
             if page is not None:
                 await session.close_page(page)
-            if (
-                contacted_site
-                and continue_after_candidate
-                and index < len(candidates)
-            ):
-                await asyncio.sleep(inter_candidate_delay_ms / 1000)
-    return len(candidates), True
+            if contacted_site and continue_after_candidate:
+                if grant_only:
+                    has_future_access = any(
+                        executor.grant_only_skip_reason(future)
+                        is None
+                        for future in candidates[index:]
+                    )
+                    if attempt_limit is not None and attempts >= attempt_limit:
+                        has_future_access = False
+                else:
+                    has_future_access = index < len(candidates)
+                if has_future_access:
+                    await asyncio.sleep(inter_candidate_delay_ms / 1000)
+    return attempts, True
 
 
 def main() -> None:

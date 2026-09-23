@@ -184,11 +184,11 @@ def test_export_rejects_unsupported_schema_without_mutation(tmp_path: Path, vers
     assert not (tmp_path / "out").exists()
 
 
-def test_export_rejects_broken_v4_schema_without_repair(tmp_path: Path) -> None:
+def test_export_rejects_broken_v5_schema_without_repair(tmp_path: Path) -> None:
     catalog_path = tmp_path / "catalog.sqlite"
     with sqlite3.connect(catalog_path) as connection:
         connection.execute("CREATE TABLE works (id INTEGER PRIMARY KEY)")
-        connection.execute("PRAGMA user_version = 4")
+        connection.execute("PRAGMA user_version = 5")
     before = catalog_path.read_bytes()
 
     with pytest.raises(CatalogExportError, match="missing table"):

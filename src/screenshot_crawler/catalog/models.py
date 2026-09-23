@@ -1,4 +1,4 @@
-"""Catalog v4 input and row models."""
+"""Catalog v5 input and row models."""
 
 from __future__ import annotations
 
@@ -79,6 +79,17 @@ class Source:
     quota_started_at: str | None
     access_granted_until: str | None
     published_at: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class QuotaResourceState:
+    id: int
+    work_id: int
+    site: str
+    resource: str
+    last_consumed_at: str
     created_at: str
     updated_at: str
 

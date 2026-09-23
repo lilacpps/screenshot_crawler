@@ -37,6 +37,17 @@ def test_crawl_uses_cdp_options() -> None:
     assert not hasattr(args, "headed")
 
 
+def test_batch_grant_only_accepts_explicit_resource_and_all_shape() -> None:
+    args = _parser().parse_args(
+        ["batch", "run", "--site", "magapoke", "--grant-only", "work_ticket"]
+    )
+    assert args.grant_only == "work_ticket"
+    all_args = _parser().parse_args(
+        ["batch", "run", "--site", "magapoke", "--grant-only", "all"]
+    )
+    assert all_args.grant_only == "all"
+
+
 @pytest.mark.asyncio
 async def test_crawl_disconnects_browser_before_packaging(
     tmp_path: Path,
@@ -833,6 +844,62 @@ async def test_batch_empty_candidate_list_has_no_candidate_delay(
         inter_candidate_delay_ms=17,
     ) == (0, True)
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_grant_only_local_skip_does_not_open_page_or_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeSession:
+        async def new_page(self) -> object:
+            events.append("new")
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            events.append("close")
+
+    class FakeExecutor:
+        def grant_only_skip_reason(self, candidate: object, **_kwargs: object) -> str | None:
+            return "work_ticket_cooldown" if candidate.item_id == 1 else None
+
+        async def execute_grant_only_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            events.append(f"execute:{candidate.item_id}")
+            return SimpleNamespace(
+                resource="work_ticket", stop_reason="entry_confirmed", resource_consumed=True
+            )
+
+    async def fake_sleep(seconds: float) -> None:
+        events.append(f"delay:{seconds}")
+
+    monkeypatch.setattr(cli.asyncio, "sleep", fake_sleep)
+    args = SimpleNamespace(
+        output_root=Path("output/batch"),
+        library_dir=Path("output/Books"),
+        max_pages=1000,
+        max_same_content=3,
+        keep_open=False,
+    )
+    candidates = [
+        SimpleNamespace(item_id=1, source_id=11, metadata={}, access_strategy="quota", quota_resource="work_ticket"),
+        SimpleNamespace(item_id=2, source_id=22, metadata={}, access_strategy="quota", quota_resource="work_ticket"),
+    ]
+
+    processed, should_continue = await cli._execute_batch_candidates(
+        args,
+        FakeSession(),
+        FakeExecutor(),
+        candidates,
+        phase="grant-only",
+        inter_candidate_delay_ms=17,
+        grant_only=True,
+    )
+
+    assert (processed, should_continue) == (1, True)
+    assert events == ["new", "execute:2", "close"]
 
 
 class FakeLoginAdapter:

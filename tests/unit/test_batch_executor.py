@@ -560,7 +560,10 @@ def _make_magapoke_executor(
         async def run(self, _page: object, _adapter: ConsumingAdapter) -> RunResult:
             if failure is not None:
                 raise failure
-            return RunResult(pages=(), stop_state=PageState.END, stop_reason="end")
+            return RunResult(
+                pages=(), stop_state=PageState.END, stop_reason="entry_confirmed",
+                entry_confirmed=True,
+            )
 
     def package(output_dir, _metadata, *, library_dir, explicit_metadata, **_kwargs):
         archive = Path(library_dir) / "magapoke.zip"
@@ -600,6 +603,36 @@ async def test_work_ticket_consumption_is_recorded_at_observed_time(tmp_path: Pa
     assert source.quota_started_at == consumed_at.isoformat()
     assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
     assert service.get_item(candidate.item_id).status == "completed"
+
+
+async def test_grant_only_work_ticket_persists_state_without_completion_or_artifact(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(True, "work_ticket", consumed_at)
+    )
+
+    result = await executor.execute_grant_only_candidate(
+        object(), candidate, output_root=tmp_path / "batch", now=NOW
+    )
+
+    assert result.resource == "work_ticket"
+    assert result.resource_consumed is True
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+    state = service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="work_ticket",
+    )
+    assert state is not None
+    assert state.last_consumed_at == consumed_at.isoformat()
+    run = service.get_crawl_run(result.crawl_run_id)
+    assert run.status == "succeeded"
+    assert run.page_count == 0
 
 
 async def test_premium_ticket_consumption_and_later_failure_are_persisted(

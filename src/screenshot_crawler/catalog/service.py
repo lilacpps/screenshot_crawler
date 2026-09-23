@@ -1,4 +1,4 @@
-"""Catalog v4 SQLite service."""
+"""Catalog v5 SQLite service."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from screenshot_crawler.catalog.models import (
     CrawlRun,
     Item,
     ItemInput,
+    QuotaResourceState,
     Source,
     SourceInput,
     SourceTarget,
@@ -436,6 +437,70 @@ class CatalogService:
             )
             row = connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
         return self._source_from_row(row)
+
+    def get_quota_resource_state(
+        self, work_id: int, *, site: str, resource: str
+    ) -> QuotaResourceState | None:
+        """Return the last confirmed consumption for one Work/resource pair."""
+
+        self._validate_nonempty(site, "site")
+        self._validate_nonempty(resource, "resource")
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM quota_resource_states "
+                "WHERE work_id = ? AND site = ? AND resource = ?",
+                (work_id, site, resource),
+            ).fetchone()
+        return None if row is None else self._quota_resource_state_from_row(row)
+
+    def record_quota_access_with_resource_state(
+        self,
+        source_id: int,
+        *,
+        work_id: int,
+        site: str,
+        resource: str,
+        consumed_at: datetime | str,
+        access_granted_until: datetime | str | None,
+    ) -> tuple[Source, QuotaResourceState]:
+        """Atomically persist source grant and confirmed Work resource use."""
+
+        self._validate_nonempty(site, "site")
+        self._validate_nonempty(resource, "resource")
+        consumed = format_timestamp(consumed_at)
+        if consumed is None:
+            raise CatalogValidationError("consumed_at is required")
+        granted_until = format_timestamp(access_granted_until)
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            source = self._require_row(connection, "sources", source_id, "source")
+            item = self._require_row(connection, "items", source["item_id"], "item")
+            if source["site"] != site:
+                raise CatalogValidationError("source.site does not match site")
+            if item["work_id"] != work_id:
+                raise CatalogValidationError("source item does not belong to work_id")
+            connection.execute(
+                "UPDATE sources SET quota_started_at = ?, access_granted_until = ?, "
+                "updated_at = ? WHERE id = ?",
+                (consumed, granted_until, timestamp, source_id),
+            )
+            connection.execute(
+                "INSERT INTO quota_resource_states "
+                "(work_id, site, resource, last_consumed_at, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(work_id, site, resource) DO UPDATE SET "
+                "last_consumed_at = excluded.last_consumed_at, updated_at = excluded.updated_at",
+                (work_id, site, resource, consumed, timestamp, timestamp),
+            )
+            source_row = connection.execute(
+                "SELECT * FROM sources WHERE id = ?", (source_id,)
+            ).fetchone()
+            state_row = connection.execute(
+                "SELECT * FROM quota_resource_states "
+                "WHERE work_id = ? AND site = ? AND resource = ?",
+                (work_id, site, resource),
+            ).fetchone()
+        return self._source_from_row(source_row), self._quota_resource_state_from_row(state_row)
 
     def clear_quota_access(
         self,
@@ -1312,6 +1377,10 @@ class CatalogService:
         values = dict(row)
         values["available"] = bool(values["available"])
         return Source(**values)
+
+    @staticmethod
+    def _quota_resource_state_from_row(row: sqlite3.Row) -> QuotaResourceState:
+        return QuotaResourceState(**dict(row))
 
     @staticmethod
     def _source_target_from_row(row: sqlite3.Row) -> SourceTarget:

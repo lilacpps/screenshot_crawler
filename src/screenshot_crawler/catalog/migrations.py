@@ -17,7 +17,28 @@ def migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
     connection.execute("ALTER TABLE sources ADD COLUMN published_at TEXT")
 
 
-MIGRATIONS: dict[int, Migration] = {3: migrate_v3_to_v4}
+def migrate_v4_to_v5(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE quota_resource_states (
+            id INTEGER PRIMARY KEY,
+            work_id INTEGER NOT NULL REFERENCES works(id),
+            site TEXT NOT NULL,
+            resource TEXT NOT NULL,
+            last_consumed_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(work_id, site, resource)
+        );
+        CREATE INDEX idx_quota_resource_states_work_id
+            ON quota_resource_states(work_id);
+        CREATE INDEX idx_quota_resource_states_site_resource
+            ON quota_resource_states(site, resource);
+        """
+    )
+
+
+MIGRATIONS: dict[int, Migration] = {3: migrate_v3_to_v4, 4: migrate_v4_to_v5}
 
 
 class CatalogMigrationError(CatalogError):

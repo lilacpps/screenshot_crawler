@@ -15,6 +15,7 @@ from screenshot_crawler.batch.models import (
     BatchCandidate,
     BatchExecutionError,
     BatchExecutionResult,
+    GrantOnlyExecutionResult,
 )
 from screenshot_crawler.catalog import ArtifactInput, CatalogError, CatalogService
 from screenshot_crawler.catalog.service import JST, now_jst
@@ -212,6 +213,153 @@ class BatchExecutor:
                 f"source={candidate.source_id}): {exc}"
             ) from exc
 
+    def grant_only_skip_reason(
+        self, candidate: BatchCandidate, *, now: datetime | None = None
+    ) -> str | None:
+        """Check local resource state before opening a browser page."""
+
+        if candidate.quota_resource is None:
+            raise BatchExecutionError("grant-only candidate has no access resource")
+        current = _normalize_now(now_jst() if now is None else now)
+        policy = self.policies.create(candidate.site)
+        try:
+            policy.validate_grant_only_resource(candidate.quota_resource)
+            item = self.catalog.get_item(candidate.item_id)
+            state = self.catalog.get_quota_resource_state(
+                item.work_id,
+                site=candidate.site,
+                resource=candidate.quota_resource,
+            )
+            last_consumed_at = (
+                datetime.fromisoformat(state.last_consumed_at) if state is not None else None
+            )
+            return policy.grant_only_skip_reason(
+                resource=candidate.quota_resource,
+                last_consumed_at=last_consumed_at,
+                now=current,
+                cooldown_hours=(
+                    self.runtime_settings.work_ticket_cooldown_hours
+                    if self.runtime_settings is not None
+                    else None
+                ),
+            )
+        except (CatalogError, SitePolicyError, ValueError) as exc:
+            raise BatchExecutionError(f"Could not evaluate grant-only state: {exc}") from exc
+
+    async def execute_grant_only_candidate(
+        self,
+        page: Page,
+        candidate: BatchCandidate,
+        *,
+        output_root: str | Path = "output/batch",
+        max_pages: int = 1000,
+        max_same_content: int = 3,
+        now: datetime | None = None,
+    ) -> GrantOnlyExecutionResult:
+        """Confirm one explicit access grant and leave the Item pending."""
+
+        current = _normalize_now(now_jst() if now is None else now)
+        run_id: int | None = None
+        crawl_result: RunResult | None = None
+        adapter: SiteAdapter | None = None
+        policy: SitePolicy | None = None
+        try:
+            if candidate.quota_resource is None:
+                raise BatchExecutionError("grant-only candidate has no access resource")
+            policy = self.policies.create(candidate.site)
+            policy.validate_grant_only_resource(candidate.quota_resource)
+            self._validate_candidate(candidate, policy, current)
+            run = self.catalog.create_crawl_run(
+                item_id=candidate.item_id,
+                source_id=candidate.source_id,
+                target_id=candidate.target_id,
+                access_strategy=candidate.access_strategy,
+                started_at=current,
+            )
+            run_id = run.id
+            output_dir = _new_output_dir(output_root, candidate, current)
+            adapter = self.adapters.create(candidate.site)
+            config = RunConfig(
+                site=candidate.site,
+                source_url=candidate.locator,
+                output_dir=output_dir,
+                diagnostics_dir=output_dir / "diagnostics",
+                max_pages=max_pages,
+                max_same_content=max_same_content,
+                page_turn_delay_ms=(
+                    self.runtime_settings.page_turn_delay_ms
+                    if self.runtime_settings is not None
+                    else DEFAULT_PAGE_TURN_DELAY_MS
+                ),
+                stop_on_http_403=(
+                    self.runtime_settings.stop_on_http_403
+                    if self.runtime_settings is not None else True
+                ),
+                stop_on_http_429=(
+                    self.runtime_settings.stop_on_http_429
+                    if self.runtime_settings is not None else True
+                ),
+                stop_on_challenge=(
+                    self.runtime_settings.stop_on_challenge
+                    if self.runtime_settings is not None else True
+                ),
+                stop_on_captcha=(
+                    self.runtime_settings.stop_on_captcha
+                    if self.runtime_settings is not None else True
+                ),
+                access_event_sink=self.access_event_sink,
+                diagnostics_metadata={
+                    "item_id": candidate.item_id,
+                    "source_id": candidate.source_id,
+                    "target_id": candidate.target_id,
+                    "site": candidate.site,
+                    "grant_only": True,
+                },
+                access_strategy=candidate.access_strategy,
+                quota_resource=candidate.quota_resource,
+                entry_only=True,
+                output_metadata=candidate.metadata,
+            )
+            crawl_result = await self.runner_factory(config).run(page, adapter)
+            if not crawl_result.entry_confirmed:
+                raise BatchExecutionError("grant-only entry was not confirmed")
+            consumption = adapter.get_access_consumption()
+            if not consumption.consumed:
+                reason = policy.grant_only_unavailable_reason(candidate.quota_resource)
+                raise AccessResourceUnavailableError(reason)
+            _record_observed_grant(
+                self.catalog, candidate, policy, adapter
+            )
+            self.catalog.mark_crawl_run_succeeded(
+                run_id,
+                page_count=0,
+                stop_reason=crawl_result.stop_reason,
+            )
+            return GrantOnlyExecutionResult(
+                item_id=candidate.item_id,
+                source_id=candidate.source_id,
+                target_id=candidate.target_id,
+                crawl_run_id=run_id,
+                resource=candidate.quota_resource,
+                resource_consumed=True,
+                stop_reason=crawl_result.stop_reason,
+            )
+        except BaseException as exc:
+            if run_id is not None:
+                _record_failed_run(self.catalog, run_id, exc, crawl_result)
+            if isinstance(exc, AccessStopError):
+                raise BatchExecutionError(
+                    f"Fatal access stop for item={candidate.item_id}, "
+                    f"source={candidate.source_id}: {exc.reason}",
+                    access_stop=exc,
+                ) from exc
+            if isinstance(exc, (BatchExecutionError, AccessResourceUnavailableError)):
+                raise
+            raise BatchExecutionError(
+                f"Grant-only candidate failed (item={candidate.item_id}, "
+                f"source={candidate.source_id}): {exc}"
+            ) from exc
+
     def _validate_candidate(
         self, candidate: BatchCandidate, policy: SitePolicy, now: datetime
     ) -> None:
@@ -351,6 +499,34 @@ def _record_observed_consumption(
     catalog.record_quota_access(
         candidate.source_id,
         quota_started_at=consumption.consumed_at,
+        access_granted_until=policy.access_grant_until(consumption.consumed_at),
+    )
+
+
+def _record_observed_grant(
+    catalog: CatalogService,
+    candidate: BatchCandidate,
+    policy: SitePolicy,
+    adapter: SiteAdapter,
+) -> None:
+    consumption = adapter.get_access_consumption()
+    if not consumption.consumed:
+        raise AccessResourceUnavailableError(
+            policy.grant_only_unavailable_reason(candidate.quota_resource or "resource")
+        )
+    if candidate.quota_resource is None or consumption.resource != candidate.quota_resource:
+        raise BatchExecutionError("adapter reported an unexpected grant-only resource")
+    if consumption.consumed_at is None:
+        raise BatchExecutionError("adapter reported resource consumption without a timestamp")
+    if consumption.consumed_at.tzinfo is None or consumption.consumed_at.utcoffset() is None:
+        raise BatchExecutionError("adapter consumption timestamp must be timezone-aware")
+    item = catalog.get_item(candidate.item_id)
+    catalog.record_quota_access_with_resource_state(
+        candidate.source_id,
+        work_id=item.work_id,
+        site=candidate.site,
+        resource=candidate.quota_resource,
+        consumed_at=consumption.consumed_at,
         access_granted_until=policy.access_grant_until(consumption.consumed_at),
     )
 

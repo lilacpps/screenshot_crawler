@@ -26,6 +26,32 @@ class MagapokeSitePolicy(SitePolicy):
 
         return ("premium_ticket",)
 
+    def grant_only_supported_access_resources(self) -> tuple[str, ...]:
+        """Phase 4 exposes only the Work Ticket grant-only pass."""
+
+        return ("work_ticket",)
+
+    def grant_only_skip_reason(
+        self,
+        *,
+        resource: str,
+        last_consumed_at: datetime | None,
+        now: datetime,
+        cooldown_hours: int | None,
+    ) -> str | None:
+        if resource != "work_ticket" or last_consumed_at is None:
+            return None
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise SitePolicyError("now must be a timezone-aware datetime")
+        if last_consumed_at.tzinfo is None or last_consumed_at.utcoffset() is None:
+            raise SitePolicyError("last_consumed_at must be timezone-aware")
+        hours = 23 if cooldown_hours is None else cooldown_hours
+        if isinstance(hours, bool) or not isinstance(hours, int) or hours < 0:
+            raise SitePolicyError("cooldown_hours must be a non-negative integer")
+        if now.astimezone(JST) < last_consumed_at.astimezone(JST) + timedelta(hours=hours):
+            return "work_ticket_cooldown"
+        return None
+
     def access_grant_until(self, started_at: datetime) -> datetime:
         if started_at.tzinfo is None or started_at.utcoffset() is None:
             raise SitePolicyError("started_at must be timezone-aware")

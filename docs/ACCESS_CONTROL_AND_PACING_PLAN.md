@@ -3,8 +3,8 @@
 This implementation plan accompanies `docs/ACCESS_CONTROL_AND_PACING.md` and the site-specific access specifications.
 
 Phase 1 status: **IMPLEMENTED**. Phase 2 status: **IMPLEMENTED**.
-Phase 3 status: **IMPLEMENTED**. Phase 4 through Phase 6 remain
-**PLANNED / NOT YET IMPLEMENTED**.
+Phase 3 status: **IMPLEMENTED**. Phase 4 status: **IMPLEMENTED**.
+Phase 5 and Phase 6 remain **PLANNED / NOT YET IMPLEMENTED**.
 
 ## Phase 1 - Runtime settings, pacing, and site ordering
 
@@ -94,6 +94,8 @@ Status: **IMPLEMENTED**.
 
 ## Phase 4 - Generic grant-only + Magapoke Work Ticket
 
+Status: **IMPLEMENTED**.
+
 ### Changes
 
 - add generic `batch run --site <site> --grant-only <resource>|all`,
@@ -116,6 +118,8 @@ Status: **IMPLEMENTED**.
 - existing normal Batch Work Ticket flow remains unchanged.
 
 ## Phase 5 - Magapoke Premium / all
+
+Status: **PLANNED / NOT YET IMPLEMENTED**.
 
 ### Changes
 

@@ -8,6 +8,7 @@ from screenshot_crawler.batch.models import (
     BatchPlan,
     BatchPlanningError,
     BatchSkipped,
+    GrantOnlyExecutionResult,
 )
 from screenshot_crawler.batch.planner import BatchPlanner
 
@@ -20,4 +21,5 @@ __all__ = [
     "BatchPlanner",
     "BatchPlanningError",
     "BatchSkipped",
+    "GrantOnlyExecutionResult",
 ]

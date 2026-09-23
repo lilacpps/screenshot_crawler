@@ -733,6 +733,17 @@ Catalogをreplanして追加resource passを実行し、requested resourceと異
 silent fallbackをしない。grant-only、Work Ticket cooldown persistence、resource stateの
 永続化はPhase 4以降で未実装である。
 
+### Phase 4 grant-only current state
+
+Magapoke supports generic grant-only for `work_ticket` only. The normal adapter
+entry path is reused with Core entry-only execution, so no content capture,
+packaging, or Item completion occurs. Confirmed consumption is stored atomically
+as source grant plus Catalog schema v5 `quota_resource_states(work_id, site,
+resource, last_consumed_at)`. The default local negative cooldown is 23 hours;
+state skips happen before site access and exactly-expired state is live-checked.
+`premium_ticket` grant-only and `--grant-only all` remain Phase 5 planned behavior.
+This current-state section supersedes the older Phase 3 planning sentence.
+
 ### Phase 1 runtime pacing / Batch ordering
 
 Magapoke Discoveryの列挙順は引き続きlatest-firstであり、Discoveryのreverseは行わない。Batchは既存のdirect先行・

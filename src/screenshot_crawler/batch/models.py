@@ -84,3 +84,16 @@ class BatchExecutionResult:
     status_path: Path
     page_count: int
     stop_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class GrantOnlyExecutionResult:
+    """Confirmed resource grant without content capture or Item completion."""
+
+    item_id: int
+    source_id: int
+    target_id: int
+    crawl_run_id: int
+    resource: str
+    resource_consumed: bool
+    stop_reason: str

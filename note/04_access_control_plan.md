@@ -1,11 +1,11 @@
 # Shared Access Control / Pacing Plan
 
-Status: **Phase 1 IMPLEMENTED; Phase 2 IMPLEMENTED; Phase 3 IMPLEMENTED**. Phase 4 through
-Phase 6 remain **PLANNED / NOT YET IMPLEMENTED**.
+Status: **Phase 1 IMPLEMENTED; Phase 2 IMPLEMENTED; Phase 3 IMPLEMENTED; Phase 4 IMPLEMENTED**.
+Phase 5 and Phase 6 remain **PLANNED / NOT YET IMPLEMENTED**.
 
 Authority: `docs/ACCESS_CONTROL_AND_PACING.md`.
 
-This note records the adopted shared plan and the current Phase 1/2/3 implementation state. Current implementation snapshots remain in each site's note and are synchronized when shared behavior affects that site.
+This note records the adopted shared plan and the current Phase 1/2/3/4 implementation state. Current implementation snapshots remain in each site's note and are synchronized when shared behavior affects that site.
 
 Phase 1 current state: root `crawler.yaml` is parsed outside Core into typed per-site settings with safe
 non-zero defaults and explicit zero overrides. CONTENT pacing occurs once after all logical-page artifacts
@@ -29,21 +29,27 @@ the normal/default pass, replans Catalog state between policy-ordered additional
 and keeps `AccessConsumption` matching against the requested resource. Magapoke exposes
 `work_ticket` then `premium_ticket`; Manga ONE and BookWalker expose no additional named resource.
 
-Grant-only and Work Ticket cooldown persistence are still planned and not implemented.
+Phase 4 current state: generic `batch run --site magapoke --grant-only work_ticket`
+is policy-validated and reuses the normal adapter entry path with `entry_only` Core
+execution. A confirmed Work Ticket updates the source grant and the Work-scoped
+`quota_resource_states` row atomically, while the Item remains pending and no
+artifact/package is created. A local `work_ticket_cooldown` skip is evaluated before
+opening a Page; the default cooldown is 23 hours and exactly-expired state is live-checked.
+Metrics use the existing incremental `output/metrics/*.jsonl` writer with mode
+`grant-only`. `premium_ticket` grant-only and `--grant-only all` remain unimplemented.
 
 Remaining planned shared changes:
 
-- define generic `--grant-only <resource>|all` orchestration,
 - define `all` as site-policy-ordered resource passes with replanning between passes,
-- reuse normal entry semantics for grant-only rather than duplicating ticket/resource click and initialization logic,
-- do not capture/package/complete an Item in grant-only mode.
+- extend grant-only to later resources without changing generic Batch semantics,
+- retain no-capture/no-package/no-completion semantics for grant-only.
 
 The planned repository-wide implementation remains intentionally phased:
 
 - Phase 1 — Runtime settings, pacing, and site ordering: **IMPLEMENTED**
 - Phase 2 — Shared AccessGuard + CAPTCHA/challenge/403/429 + JSONL metrics: **IMPLEMENTED**
 - Phase 3 — Generic access-resource selection contract: **IMPLEMENTED**
-- Phase 4 — Generic grant-only + first Magapoke Work Ticket integration: **PLANNED / NOT YET IMPLEMENTED**
+- Phase 4 - Generic grant-only + first Magapoke Work Ticket integration: **IMPLEMENTED**
 - Phase 5 — Magapoke Premium/all integration: **PLANNED / NOT YET IMPLEMENTED**
 - Phase 6 — Cross-site regression and live verification: **PLANNED / NOT YET IMPLEMENTED**
 

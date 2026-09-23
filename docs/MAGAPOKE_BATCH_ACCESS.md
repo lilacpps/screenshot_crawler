@@ -293,6 +293,9 @@ The repository-wide implementation order is defined by the shared specification.
 
 ### Shared Phase 4 integration - Work Ticket grant-only
 
+**IMPLEMENTED** for Work Ticket grant-only. Premium/all behavior remains
+Phase 5 and is **PLANNED / NOT YET IMPLEMENTED**.
+
 - add Work-scoped resource state migration,
 - add 23-hour local negative gate,
 - wire generic grant-only to `work_ticket`,
