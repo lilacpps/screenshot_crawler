@@ -336,6 +336,11 @@ class CrawlerRunner:
                 if not captures:
                     raise LookupError("Adapter returned no capture results")
                 await self._check_access(page)
+                capture_debug = await self._adapter_call(
+                    adapter.collect_debug_metadata(page), "collect_debug_metadata"
+                )
+                if not isinstance(capture_debug, dict):
+                    capture_debug = {}
                 fingerprints = [fingerprint_bytes(capture.data) for capture in captures]
                 new_captures = [
                     (index, capture, fingerprints[index])
@@ -383,9 +388,10 @@ class CrawlerRunner:
                         mime_type=capture.mime_type,
                         file_extension=extension,
                         metadata=(
-                            {"part": part_index + 1, "parts": part_count}
-                            if part_count > 1
-                            else {}
+                            {
+                                **({"part": part_index + 1, "parts": part_count} if part_count > 1 else {}),
+                                **capture_debug,
+                            }
                         ),
                     )
                     captured_pages.append(captured)

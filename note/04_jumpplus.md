@@ -2,6 +2,10 @@
 
 ## Scope
 
+Production Site Adapter is implemented for normal crawl only. Jump+ Discovery,
+Site Policy, Batch, Watchlist, quota/resource management, and login automation
+remain unimplemented.
+
 少年ジャンプ＋（Jump+）のproduction Site Adapter / Discovery / Site
 Policy / Batchは未実装。これはviewer構造を調査するためのread-only J0
 probeの現行スナップショットである。ポイント、購入、レンタル、チケット、
@@ -280,3 +284,59 @@ candidate不足のため`unmatched`で、全体判定は引き続き`inconclusiv
 parse failure、ambiguous時のpixel fallbackとDCT停止を確認した。production Site Adapterは
 未実装であり、candidate ambiguityを含む別episode・別JPEG形式の確認後までproductionへは
 進めない。
+
+## Production Site Adapter (2026-09-24)
+
+Production implementation files:
+
+- \`src/screenshot_crawler/site_adapters/jumpplus/__init__.py\`
+- \`src/screenshot_crawler/site_adapters/jumpplus/adapter.py\`
+- \`src/screenshot_crawler/site_adapters/jumpplus/native_capture.py\`
+- \`src/screenshot_crawler/site_adapters/jumpplus/access.py\`
+
+The CLI registers \`jumpplus\` only for normal crawl. Discovery, site policy,
+batch, watchlist, quota, ticket, point purchase, rental, and login automation
+remain unimplemented.
+
+The active viewer is \`section.viewer.js-viewer .image-container.js-viewer-content\`;
+only visible \`canvas.page-image.js-page-image\` elements with at least 50 percent
+viewport intersection are considered. Staging/prefetch canvases outside that
+container are excluded. Live DOM page-area indices, canvas geometry, draw
+metadata, and forward transitions confirmed the observed order: rightmost
+active canvas first (\`x\` descending). This is based on live viewer behavior,
+not on a Japanese-reading-direction assumption.
+
+Only a unique, revalidated viewer page-forward control is clickable. Purchase,
+point, rental, and another-episode navigation are rejected. A changed episode
+URL is \`NEXT_CONTENT\`. END uses the episode JSON main-page count together with
+the active DOM page index and captured active rows; the final page does not
+click a next-episode control.
+
+Capture priority is transport JPEG plus runtime drawImage mapping and DCT
+coefficient reorder, then safe decoded-pixel replay to PNG, then all-page
+locator screenshot. Raw CDN JPEG bytes are never emitted. The hook records only
+lightweight IDs, URLs, dimensions, draw rectangles, transforms, compositing,
+filter, alpha, sequence, and mutations. Source snapshots occur in capture
+phase and are keyed by sourceId plus draw-time blob URL. Candidate selection
+uses decoded RGB SHA and the J2.1 \`unique\`, \`equivalent_multiple\`, \`ambiguous\`,
+and \`unmatched\` states. A spread is all-native or all-fallback. Response body
+retention is bounded to 128 candidates and released after capture.
+
+DCT requires identity/source-over/alpha=1/no filter/no scaling, integer MCU
+aligned geometry, valid coverage, a safe compatible candidate, unchanged source,
+and no unsupported mutation. JPEG dimensions, sampling, quantization tables,
+and reconstructed coefficients are validated. PNG replay has the same safe
+mapping requirements and never JPEG-reencodes.
+
+The final shared Crawler Chrome direct-access run completed with \`Saved 65
+pages; stopped at end.\` The archive contained page-0001 through page-0065,
+all PNG screenshot pages, and no JPEG pages. A complete manifest verification
+showed contiguous sequence and no duplicate fingerprints. A two-page production
+smoke run exercised \`jpeg_dct\` twice with \`unique\` candidate selection; the
+full run fell back to screenshots because transport/blob correspondence was not
+proven for every active page. The target title was observed as \`左ききのエレン\`;
+no point/ticket UI was clicked and the episode URL did not change.
+
+\`page_number\` remains unset because the viewer DOM index is not treated as an
+external page number. Other episodes, alternate JPEG sampling, and access-gated
+episodes remain unverified.

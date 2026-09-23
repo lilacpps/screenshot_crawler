@@ -340,10 +340,12 @@ def _parser() -> argparse.ArgumentParser:
 def _registry() -> AdapterRegistry:
     registry = AdapterRegistry()
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerAdapter
+    from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
 
     registry.register("bookwalker", BookWalkerAdapter)
+    registry.register("jumpplus", JumpPlusAdapter)
     registry.register("magapoke", MagapokeAdapter)
     registry.register("mangaone", MangaOneAdapter)
     return registry
