@@ -6,8 +6,10 @@ from PIL import Image
 
 from poc.jumpplus_reconstruct import (
     _candidate_index,
+    dct_lossless_feasibility,
     decoded_pixel_sha256,
     reconstruct_canvas,
+    reconstruct_jpeg_dct,
 )
 
 
@@ -27,7 +29,7 @@ def _fixture(tmp_path: Path, draw_calls: list[dict], source_sha: str = "source-s
     canvas_reference.write_bytes(transport_path.read_bytes())
     pixels = {
         "canvas_artifacts": [{"canvasId": 3, "file": "j1/state_000/canvas.png"}],
-        "source_artifacts": [{"sourceId": 1, "pixel_sha256": source_sha}],
+        "source_artifacts": [{"sourceId": 1, "url": "blob:one", "pixel_sha256": source_sha}],
     }
     candidates = [{"file": "network_images/transport.jpg", "pixel_sha256": actual_sha}]
     if source_sha == "source-sha":
@@ -47,6 +49,7 @@ def _draw(sequence: int, source_rect: tuple[int, int, int, int], destination: tu
         "canvas": {"id": 3, "width": 4, "height": 4},
         "source": {
             "sourceId": 1,
+            "url": "blob:one",
             "type": "HTMLImageElement",
             "naturalWidth": 4,
             "naturalHeight": 4,
@@ -75,7 +78,7 @@ def test_reconstructs_crop_paste_and_preserves_draw_order(tmp_path: Path) -> Non
         pixels=fixture["pixels"],
         candidates_by_pixel=_candidate_index(fixture["candidates"]),
     )
-    assert result["status"] == "confirmed"
+    assert result["status"] in {"likely", "lossless_mapping_complete"}
     assert result["mapping"]["draw_count_applied"] == 2
     with (
         Image.open(output_dir / "state_000" / "canvas_03_reconstructed.png") as image,
@@ -116,3 +119,81 @@ def test_scaling_is_explicitly_unsupported_for_lossless_path(tmp_path: Path) -> 
     )
     assert result["status"] == "inconclusive"
     assert any(item["reason"] == "scaled_draw_observed" for item in result["mapping"]["unsupported"])
+
+
+def test_same_source_id_with_different_url_is_rejected(tmp_path: Path) -> None:
+    input_dir, output_dir, state, fixture = _fixture(
+        tmp_path,
+        [_draw(1, (0, 0, 4, 4), (0, 0, 4, 4), source={"sourceId": 1, "url": "blob:two"})],
+    )
+    result = reconstruct_canvas(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        state=state,
+        pixels=fixture["pixels"],
+        candidates_by_pixel=_candidate_index(fixture["candidates"]),
+    )
+    assert result["mapping"]["source_match"] == "changed_after_draw"
+    assert result["mapping"]["unmatched_sources"][0]["reason"] == "changed_after_draw"
+
+
+def test_content_canvas_mutation_is_unsupported(tmp_path: Path) -> None:
+    input_dir, output_dir, state, fixture = _fixture(
+        tmp_path,
+        [_draw(1, (0, 0, 4, 4), (0, 0, 4, 4))],
+    )
+    state["content_mutations"] = [{"operation": "clearRect", "sequence": 1}]
+    result = reconstruct_canvas(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        state=state,
+        pixels=fixture["pixels"],
+        candidates_by_pixel=_candidate_index(fixture["candidates"]),
+    )
+    assert result["mapping"]["mapping_status"] == "unsupported"
+    assert "unsupported_canvas_mutation" in result["mapping"]["unsupported"]
+
+
+def test_mcu_alignment_rejects_misaligned_tile(tmp_path: Path) -> None:
+    jpeg_path = tmp_path / "aligned.jpg"
+    Image.new("L", (16, 16), 128).save(jpeg_path, quality=90)
+    result = dct_lossless_feasibility(
+        jpeg_bytes=jpeg_path.read_bytes(),
+        source_rectangles=[(1, 0, 8, 8)],
+        destination_rectangles=[(0, 0, 8, 8)],
+        canvas_size=(16, 16),
+    )
+    assert result["status"] == "infeasible"
+    assert result["reason"] == "tile_geometry_not_mcu_aligned"
+
+
+def test_dct_reorder_preserves_coefficients_and_decoded_pixels(tmp_path: Path) -> None:
+    image = Image.new("L", (16, 16))
+    for y in range(16):
+        for x in range(16):
+            image.putpixel((x, y), (x * 11 + y * 7) % 256)
+    jpeg_path = tmp_path / "transport.jpg"
+    image.save(jpeg_path, quality=90)
+    with Image.open(jpeg_path) as source:
+        expected = source.convert("RGB").copy()
+    tiles = []
+    for sy, dy in ((0, 8), (8, 0)):
+        tiles.append({
+            "sourceRect": {"sx": 0, "sy": sy, "sw": 16, "sh": 8},
+            "destinationRect": {"dx": 0, "dy": dy, "dw": 16, "dh": 8},
+        })
+        expected.paste(source.crop((0, sy, 16, sy + 8)).convert("RGB"), (0, dy))
+    png_path = tmp_path / "reconstructed.png"
+    expected.save(png_path)
+    output_path = tmp_path / "reconstructed.jpg"
+    result = reconstruct_jpeg_dct(
+        jpeg_bytes=jpeg_path.read_bytes(),
+        tile_draws=tiles,
+        canvas_size=(16, 16),
+        output_path=output_path,
+        png_path=png_path,
+    )
+    assert result["feasibility"]["status"] == "feasible"
+    assert result["jpeg_dct_reconstruction"] == "successful"
+    assert result["coefficients_equal"] is True
+    assert result["decoded_pixel_comparison"]["exact"] is True

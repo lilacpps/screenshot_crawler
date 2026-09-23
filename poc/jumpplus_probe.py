@@ -220,6 +220,16 @@ def draw_calls_for_canvas(draw_calls: list[dict[str, Any]], canvas_id: int | Non
     return [call for call in draw_calls if (call.get("canvas") or {}).get("id") == canvas_id]
 
 
+def canvas_mutations_for_canvas(
+    mutations: list[dict[str, Any]], canvas_id: int | None
+) -> list[dict[str, Any]]:
+    """Associate mutation metadata by canvas identity, never by dimensions."""
+
+    if canvas_id is None:
+        return []
+    return [item for item in mutations if (item.get("canvas") or {}).get("id") == canvas_id]
+
+
 def _pixel_comparison(left_path: Path, right_path: Path) -> dict[str, Any]:
     """Compare decoded RGB pixels without requiring numpy."""
 
@@ -300,6 +310,7 @@ _DRAW_HOOK = r"""
   const state = {
     installed: false,
     drawCalls: [],
+    canvasMutations: [],
     rendererEvents: [],
     canvasIds: new WeakMap(),
     nextCanvasId: 1,
@@ -372,6 +383,17 @@ _DRAW_HOOK = r"""
   const trim = (items) => {
     if (items.length > maxRecords) items.splice(0, items.length - maxRecords);
   };
+  const recordMutation = (context, operation, geometry) => {
+    state.canvasMutations.push({
+      sequence: state.nextDrawSequence++,
+      timestamp: Date.now(),
+      monotonicMs: performance.now(),
+      canvas: canvasInfo(context?.canvas),
+      operation,
+      geometry: geometry || null,
+    });
+    trim(state.canvasMutations);
+  };
   const originalDrawImage = typeof CanvasRenderingContext2D !== "undefined"
     ? CanvasRenderingContext2D.prototype.drawImage : null;
   if (originalDrawImage) {
@@ -418,6 +440,33 @@ _DRAW_HOOK = r"""
       return originalDrawImage.apply(this, args);
     };
   }
+  const mutationMethods = {
+    clearRect: (args) => ({x: Number(args[0]), y: Number(args[1]), width: Number(args[2]), height: Number(args[3])}),
+    fillRect: (args) => ({x: Number(args[0]), y: Number(args[1]), width: Number(args[2]), height: Number(args[3])}),
+    putImageData: (args) => ({
+      dx: Number(args[1]), dy: Number(args[2]),
+      dirtyX: args.length > 3 ? Number(args[3]) : null,
+      dirtyY: args.length > 4 ? Number(args[4]) : null,
+      dirtyWidth: args.length > 5 ? Number(args[5]) : null,
+      dirtyHeight: args.length > 6 ? Number(args[6]) : null,
+    }),
+    save: () => null,
+    restore: () => null,
+    translate: (args) => ({x: Number(args[0]), y: Number(args[1])}),
+    scale: (args) => ({x: Number(args[0]), y: Number(args[1])}),
+    rotate: (args) => ({angle: Number(args[0])}),
+    transform: (args) => ({a: Number(args[0]), b: Number(args[1]), c: Number(args[2]), d: Number(args[3]), e: Number(args[4]), f: Number(args[5])}),
+    setTransform: (args) => ({a: Number(args[0]), b: Number(args[1]), c: Number(args[2]), d: Number(args[3]), e: Number(args[4]), f: Number(args[5])}),
+  };
+  for (const [operation, geometryFactory] of Object.entries(mutationMethods)) {
+    const original = typeof CanvasRenderingContext2D !== "undefined"
+      ? CanvasRenderingContext2D.prototype[operation] : null;
+    if (typeof original !== "function") continue;
+    CanvasRenderingContext2D.prototype[operation] = function(...args) {
+      try { recordMutation(this, operation, geometryFactory(args)); } catch (_) {}
+      return original.apply(this, args);
+    };
+  }
   if (typeof window.createImageBitmap === "function") {
     const originalCreateImageBitmap = window.createImageBitmap.bind(window);
     window.createImageBitmap = function(...args) {
@@ -442,6 +491,7 @@ _DRAW_HOOK = r"""
       const result = {
         installed: state.installed,
         drawCalls: state.drawCalls.splice(0),
+        canvasMutations: state.canvasMutations.splice(0),
         rendererEvents: state.rendererEvents.splice(0),
         offscreenCanvasAvailable: typeof OffscreenCanvas !== "undefined",
         createImageBitmapAvailable: typeof window.createImageBitmap === "function",
@@ -935,13 +985,13 @@ class JumpPlusProbe:
         try:
             return await self.page.evaluate(
                 """() => window.__jumpplusProbe ? window.__jumpplusProbe.take() : {
-                    installed: false, drawCalls: [], rendererEvents: [],
+                    installed: false, drawCalls: [], canvasMutations: [], rendererEvents: [],
                     offscreenCanvasAvailable: null, createImageBitmapAvailable: null
                 }"""
             )
         except BaseException as exc:  # noqa: BLE001
             self.errors.append(f"draw call collection failed: {type(exc).__name__}: {exc}")
-            return {"installed": False, "drawCalls": [], "rendererEvents": [], "error": str(exc)}
+            return {"installed": False, "drawCalls": [], "canvasMutations": [], "rendererEvents": [], "error": str(exc)}
 
     async def collect_snapshot(self, directory_name: str, *, include_html: bool) -> ProbeObservation:
         await self.drain_image_tasks()
@@ -1148,6 +1198,7 @@ class JumpPlusProbe:
             "canvas_artifacts": canvas_artifacts,
             "source_artifacts": source_artifacts,
             "draw_calls": observation.draw.get("drawCalls", []),
+            "canvas_mutations": observation.draw.get("canvasMutations", []),
             "renderer_events": observation.draw.get("rendererEvents", []),
             "spread_observed": any(
                 "is-spread" in str(item.get("className") or "")
@@ -1242,6 +1293,9 @@ class JumpPlusProbe:
                 height = canvas.get("height")
                 canvas_id = canvas.get("canvasId")
                 draw_calls = draw_calls_for_canvas(state["draw_calls"], canvas_id)
+                canvas_mutations = canvas_mutations_for_canvas(
+                    state.get("canvas_mutations", []), canvas_id
+                )
                 candidate_matches = self._match_reference_to_candidates(canvas.get("file"))
                 canvas_comparisons.append(
                     {
@@ -1252,6 +1306,11 @@ class JumpPlusProbe:
                         "canvas_pixel_sha256": canvas.get("pixel_sha256"),
                         "rendered_rect": canvas.get("renderedRect"),
                         "draw_calls": draw_calls,
+                        "canvas_mutations": canvas_mutations,
+                        "content_mutations": [
+                            item for item in canvas_mutations
+                            if item.get("operation") in {"clearRect", "fillRect", "putImageData"}
+                        ],
                         "draw_geometry": classify_draw_geometry(draw_calls),
                         "candidate_matches": candidate_matches,
                         "result": self._match_result(candidate_matches),
@@ -1284,6 +1343,7 @@ class JumpPlusProbe:
                 "canvas_positions": state.get("canvas_positions", []),
                 "canvas_comparisons": canvas_comparisons,
                 "source_comparisons": source_comparisons,
+                "canvas_mutations": state.get("canvas_mutations", []),
             }
             _write_json(j1_dir / state["state"] / "comparison.json", comparison)
             _write_json(j1_dir / state["state"] / "equivalence.json", comparison)

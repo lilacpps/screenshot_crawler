@@ -165,3 +165,95 @@ staging/prefetch canvasを比較対象から分離する。特に次を確認す
 
 不明なものは`unknown / not observed`として扱い、production adapterへの実装は
 この確認後に別途行う。
+
+## J2 hardening / JPEG-domain lossless reconstruction (2026-09-23)
+
+指定URLをshared Crawler ChromeでJ1として再実行し、`poc/jumpplus_reconstruct.py`
+を更新したJ2 PoCへ入力した。対象URLは
+`https://shonenjumpplus.com/episode/13932016480029111789`、stateは
+`state_000`〜`state_003`、canvas artifactは44件、draw callを持つactive canvasは
+14件だった。production Site Adapterは変更していない。
+
+### Source / renderer hardening
+
+- draw時`sourceId`とsource URL、およびstable後のsource artifactの`sourceId`とURLを
+  照合するようにした。同じ`sourceId`でもURLが違う場合は
+  `source_changed_after_draw`としてreconstruction対象から除外する。stable後にblob
+  source snapshotが得られない場合は`draw_source_snapshot_unavailable`として記録する。
+- canvas hookは`drawImage`に加えて`clearRect`、`fillRect`、`putImageData`と、
+  `save`、`restore`、`translate`、`scale`、`rotate`、`transform`、`setTransform`を
+  軽量metadataだけ記録する。draw/mutationはcanvas IDを使う共有sequenceで保存し、
+  encode、hash、network、large pixel copyはhook内で行わない。
+- 今回のactive canvasではcontent-affecting mutationは`not observed`だった。mutationが
+  観測されたcanvasは`unsupported_canvas_mutation`としてlossless判定しない。
+- locator screenshotはvisual referenceに限定し、`visual_close`だけではconfirmedに
+  しない。canvasのdraw mapping、source対応、DCT係数、decoded pixel比較を分離して記録する。
+
+### JPEG structure and MCU alignment
+
+- 保存されたtransport JPEGは代表的に`764x1200`、sampling factor`[[1,1]]`、MCU
+  `8x8`だった。tileは実測の`184x296`を使用し、`16 tile = 4x4`とは仮定せず、
+  source/destinationの実rectをcoverage検証した。
+- active draw canvasではfull-frame draw後のpartial tile mappingについて、source coverage
+  は`[0,0,736,1184]`、destination coverageも同じ、source/destination areaも一致し、
+  gap/overlapなし、MCU alignment成立だった。764x1200全体の右28px・下16pxはbase drawで
+  残るedge領域として扱い、tile領域を勝手に全体へ拡張していない。
+- MCU alignment判定はJPEGごとに`feasible`、`infeasible`、`unknown`と理由を出力する。
+  transform、composite、filter、alpha、scaling、coverage不整合もfail-closedで扱う。
+
+### JPEG-domain DCT reconstruction
+
+`poc/jumpplus_reconstruct.py`はPoC側で`jpeglib`と`numpy`を使い、JPEGをdecodeして
+再encodeせず、quantized DCT block arrayをsource rectからdestination rectへコピーする。
+full-frame drawはtransport JPEGの初期係数を残し、その後の実測tile drawをsequence順に
+適用する。output JPEGについて次を検証する。
+
+- output dimensions、sampling factor、quantization tableの一致
+- expected/output DCT coefficient arrayの一致
+- APPn/COM等のmetadata preservation状況
+- lossless JPEG decode pixelと従来のPillow crop/paste PNGの比較
+
+今回の実測結果:
+
+| 項目 | 結果 |
+| --- | --- |
+| active draw canvas | 14件 |
+| source URL一致 | 10件は候補JPEGへ対応、4件はnetwork候補未取得で`unmatched` |
+| JPEG DCT feasibility | 10件 `feasible`、未対応4件は`unknown` |
+| DCT reconstruction | 10件 `successful` |
+| DCT coefficient一致 | 成功10件すべてtrue |
+| decoded JPEG pixel == PNG reconstruction pixel | 成功10件すべてexact |
+| metadata | 成功10件でAPP marker保持true、COMは今回0件 |
+| drawImage以外のcontent mutation | `not observed` |
+
+成功したcanvasでは、`*_reconstructed_lossless.jpg`、係数hash、sampling/MCU、coverage、
+`decoded_pixel_comparison`を`output/jumpplus_probe/j2/state_*/canvas_*_mapping.json`へ保存した。
+`summary.md`と`reconstruction_report.json`にもstate/canvas単位の判定を保存する。
+
+### 判定とcapture recommendation
+
+成功10件は`lossless_mapping_complete`であり、これはruntime mappingからJPEG-domain
+再構成が成立したというPoC判定である。raw canvas pixel exportは依然taintedで、全canvasの
+raw pixel equalityを証明したものではない。4件のsource未対応と30件のdraw未観測
+staging/prefetch候補を含む全体判定は`inconclusive`とする。
+
+現時点の第一候補は、固定static permutationではなく:
+
+```text
+transport JPEG
+→ そのstate/canvasで観測したruntime draw mapping
+→ DCT coefficient tile reorder
+→ reconstructed JPEG
+```
+
+である。DCT alignment、coverage、source対応、係数検証が満たせないページは、既存の
+decoded pixel crop/paste→PNGをfallback候補とする。production captureへの組み込み、
+固定mappingの採用、Site Adapter実装はまだ行わない。
+
+### Remaining unknowns
+
+- 今回network保存範囲外だった4 active canvasのtransport JPEG対応は`unproven`。
+- raw canvasがtaintedなため、再構成JPEGとbrowser canvasの全pixel equalityは未確認。
+- 別episode、異なるviewer条件、色付き/subsampled JPEGでのDCT pathは`unknown`。
+- mappingが今回の4 stateを越えて固定であることは確認していない。productionではruntime
+  observed mappingを使用する前提を維持する。

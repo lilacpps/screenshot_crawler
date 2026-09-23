@@ -9,6 +9,7 @@ from poc.jumpplus_probe import (
     JumpPlusProbe,
     _decoded_pixel_sha256,
     _pixel_comparison,
+    canvas_mutations_for_canvas,
     classify_draw_geometry,
     classify_resource,
     draw_calls_for_canvas,
@@ -209,3 +210,12 @@ def test_draw_calls_are_separated_by_canvas_id_not_dimensions() -> None:
     assert draw_calls_for_canvas(calls, 7) == [calls[0]]
     assert draw_calls_for_canvas(calls, 8) == [calls[1]]
     assert draw_calls_for_canvas(calls, None) == []
+
+
+def test_canvas_mutations_are_separated_by_canvas_id() -> None:
+    mutations = [
+        {"sequence": 1, "canvas": {"id": 7}, "operation": "clearRect"},
+        {"sequence": 2, "canvas": {"id": 8}, "operation": "fillRect"},
+    ]
+    assert canvas_mutations_for_canvas(mutations, 7) == [mutations[0]]
+    assert canvas_mutations_for_canvas(mutations, 8) == [mutations[1]]
