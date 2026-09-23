@@ -7,11 +7,12 @@
 1. `docs/SPEC.md`
 2. `docs/ARCHITECTURE.md`
 3. `docs/DISCOVERY_AND_BATCH.md`（Discovery / Catalog / Batch変更時）
-4. `docs/DECISIONS.md`
-5. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
-6. 現在のコードとテスト
-7. Site Adapter固有README / probe出力
-8. `note/` の現行実装ノート
+4. `docs/MAGAPOKE_BATCH_ACCESS.md`（Magapoke Batch / ticket grant / access load control変更時）
+5. `docs/DECISIONS.md`
+6. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+7. 現在のコードとテスト
+8. Site Adapter固有README / probe出力
+9. `note/` の現行実装ノート
 
 `note/` は詳細な現行実装スナップショットとして常に更新する。ただし、上位authorityと競合する場合は上位authorityを優先し、note側を修正する。
 
@@ -92,8 +93,9 @@ noteには少なくとも、現在の挙動、主要な判定ロジック、設�
 1. `docs/CODEX_IMPLEMENTATION_GUIDE.md` を読む。
 2. 変更対象に対応する `note/` を読む。
 3. Discovery / Catalog / Batchを変更する場合は `docs/DISCOVERY_AND_BATCH.md` を読む。
-4. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
-5. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
+4. Magapoke Batch / ticket grant / access load controlを変更する場合は `docs/MAGAPOKE_BATCH_ACCESS.md` を読む。
+5. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
+6. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
 
 ## After coding
 
