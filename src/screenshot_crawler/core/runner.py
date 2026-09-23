@@ -271,6 +271,7 @@ class CrawlerRunner:
                 if state is PageState.UNKNOWN:
                     raise UnknownPageStateError("Adapter returned UNKNOWN page state")
                 if state is PageState.AD:
+                    await self._check_access(page)
                     await self._adapter_call(adapter.go_next(page), "go_next")
                     await self._adapter_call(
                         adapter.wait_for_change(page, previous_identity),
@@ -385,6 +386,7 @@ class CrawlerRunner:
                 previous_identity = identity
 
                 await self._pace_before_page_turn(page)
+                await self._check_access(page)
                 await self._adapter_call(adapter.go_next(page), "go_next")
                 await self._adapter_call(
                     adapter.wait_for_change(page, previous_identity),

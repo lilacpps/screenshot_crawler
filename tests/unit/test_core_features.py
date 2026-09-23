@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import (
+    AccessStopError,
     CaptureUnavailableError,
     MaxPagesExceededError,
     PageChangeTimeoutError,
@@ -503,6 +505,108 @@ async def test_runner_persists_then_paces_then_advances_once_per_spread(
     ).run(FakePage(), adapter)
 
     assert events == ["save", "save", "persist", "delay:123", "go_next", "wait_for_change"]
+
+
+async def test_runner_does_not_start_content_navigation_after_pacing_stop(
+    tmp_path: Path,
+    fake_capture: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_guards: list[AccessGuard] = []
+    events: list[str] = []
+
+    def make_guard(_cls: type[AccessGuard], **kwargs: object) -> AccessGuard:
+        profile = kwargs.pop("profile")
+        guard = AccessGuard(
+            relevant_host=profile.relevant_host,  # type: ignore[union-attr]
+            challenge_detector=profile.challenge_detector,  # type: ignore[union-attr]
+            captcha_detector=profile.captcha_detector,  # type: ignore[union-attr]
+            **kwargs,
+        )
+        created_guards.append(guard)
+        return guard
+
+    monkeypatch.setattr(
+        "screenshot_crawler.core.runner.AccessGuard.from_profile",
+        classmethod(make_guard),
+    )
+    adapter = OrderedNavigationAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+        events,
+    )
+
+    async def sleep(_delay_ms: int) -> None:
+        events.append("delay")
+        created_guards[0]._stop(
+            reason="http_429",
+            url="https://example.test/viewer",
+            status=429,
+        )
+
+    with pytest.raises(AccessStopError, match="http_429"):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=tmp_path / "run",
+                diagnostics_dir=tmp_path / "diagnostics",
+                page_turn_delay_ms=123,
+            ),
+            sleep=sleep,
+        ).run(FakePage(), adapter)
+
+    assert events == ["delay"]
+
+
+async def test_runner_checks_access_before_ad_navigation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StopBeforeAdNavigationGuard(AccessGuard):
+        checks = 0
+
+        async def check_page(self, page: FakePage) -> None:
+            self.checks += 1
+            if self.checks == 4:
+                self._stop(
+                    reason="challenge_detected",
+                    url=page.url,
+                    classification="test challenge",
+                )
+            await super().check_page(page)
+
+    def make_guard(_cls: type[AccessGuard], **kwargs: object) -> AccessGuard:
+        profile = kwargs.pop("profile")
+        return StopBeforeAdNavigationGuard(
+            relevant_host=profile.relevant_host,  # type: ignore[union-attr]
+            challenge_detector=profile.challenge_detector,  # type: ignore[union-attr]
+            captcha_detector=profile.captcha_detector,  # type: ignore[union-attr]
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        "screenshot_crawler.core.runner.AccessGuard.from_profile",
+        classmethod(make_guard),
+    )
+    events: list[str] = []
+    adapter = OrderedNavigationAdapter(
+        [PageState.AD],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+        events,
+    )
+
+    with pytest.raises(AccessStopError, match="challenge_detected"):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=tmp_path / "run",
+                diagnostics_dir=tmp_path / "diagnostics",
+            )
+        ).run(FakePage(), adapter)
+
+    assert events == []
 
 
 async def test_runner_page_delay_is_outside_wait_timeout_budget(tmp_path: Path) -> None:
