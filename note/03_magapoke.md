@@ -761,8 +761,12 @@ conservative 71-hour grant) and leaves the Item pending. Later failure retains
 the source grant through the shared observed-consumption helper. `all` obtains
 its order from Policy, replans after each pass, shares one total site-attempt
 limit, and preserves inter-candidate pacing. Premium balance is never cached or
-persisted in Catalog. Phase 6 live verification/cross-site regression remains
-planned.
+persisted in Catalog. Phase 6 automated cross-site regression is verified, but
+live verification is partial. The full automated suite covers Work and
+Premium persistence, `all` replanning, zero-balance pass stop, normal capture,
+and shared pacing/AccessGuard behavior. New normal live Batch and Ticket
+consumption were intentionally not forced; details are in
+`docs/PHASE6_VERIFICATION.md`.
 
 ### Phase 1 runtime pacing / Batch ordering
 
@@ -774,4 +778,6 @@ site-accessing candidate前に1回だけ適用する。Magapoke adapterのnaviga
 direct accessの既存挙動は変更していない。Phase 2ではMagapoke adapterがshared AccessGuardへ接続され、
 `pocket.shonenmagazine.com`と`mgpk-cdn.magazinepocket.com`のrelevant hostだけの403/429をfatal stopとする。
 explicit challengeとvisible CAPTCHAも共通stop reason/Batch JSONL metricsへ記録する。
-site-specific signalのlive verificationとPhase 6のcross-site総合確認は未実施である。
+site-specific signalのlive verificationは未実施である。Phase 6のcross-site
+自動回帰は完了し、実サイト確認は一部未実施である。詳細は
+`docs/PHASE6_VERIFICATION.md`を参照する。

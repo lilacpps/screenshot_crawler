@@ -1,11 +1,13 @@
 # Shared Access Control / Pacing Plan
 
 Status: **Phase 1 IMPLEMENTED; Phase 2 IMPLEMENTED; Phase 3 IMPLEMENTED; Phase 4 IMPLEMENTED; Phase 5 IMPLEMENTED**.
-Phase 6 remains **PLANNED / NOT YET IMPLEMENTED**.
+Phase 6 status: **AUTOMATED VERIFIED / LIVE PARTIAL**.
+
+Phase 6 verification evidence is maintained in `docs/PHASE6_VERIFICATION.md`.
 
 Authority: `docs/ACCESS_CONTROL_AND_PACING.md`.
 
-This note records the adopted shared plan and the current Phase 1/2/3/4 implementation state. Current implementation snapshots remain in each site's note and are synchronized when shared behavior affects that site.
+This note records the adopted shared plan and the current Phase 1–6 implementation/verification state. Current implementation snapshots remain in each site's note and are synchronized when shared behavior affects that site.
 
 Phase 1 current state: root `crawler.yaml` is parsed outside Core into typed per-site settings with safe
 non-zero defaults and explicit zero overrides. CONTENT pacing occurs once after all logical-page artifacts
@@ -63,7 +65,13 @@ The planned repository-wide implementation remains intentionally phased:
 - Phase 3 — Generic access-resource selection contract: **IMPLEMENTED**
 - Phase 4 - Generic grant-only + first Magapoke Work Ticket integration: **IMPLEMENTED**
 - Phase 5 — Magapoke Premium/all integration: **IMPLEMENTED**
-- Phase 6 — Cross-site regression and live verification: **PLANNED / NOT YET IMPLEMENTED**
+- Phase 6 — Cross-site regression and live verification: **AUTOMATED VERIFIED / LIVE PARTIAL**
+
+Phase 6 automated regression is green for Magapoke, Manga ONE, and BookWalker,
+including pacing, AccessGuard, metrics, resource orchestration, grant-only
+semantics, persistence, and Catalog migration. Read-only plans succeeded on a
+temporary migrated Catalog copy. Normal live Batch and actual Ticket
+consumption remain intentionally unrun; see the verification document.
 
 The shared contract is intentionally future-facing: Magapoke Work/Premium Ticket is the first implementation, but Manga ONE, BookWalker, and future site adapters may add their own access resources later without changing generic Batch semantics.
 

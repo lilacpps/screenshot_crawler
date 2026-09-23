@@ -793,6 +793,18 @@ shares its total site-attempt `--limit`, applies cross-pass pacing, and stops
 the whole run only for fatal AccessGuard errors. Grant-only leaves Items pending
 and creates no capture/package/Artifact.
 
+### Phase 6 cross-site verification current state
+
+The full automated regression suite is green across Magapoke, Manga ONE, and
+BookWalker (`647 passed`). It covers Phase 1 pacing and timeout isolation,
+Phase 2 AccessGuard/metrics, generic resource passes, Work/Premium grant-only,
+Catalog v5 migration, adapter retry/capture, and normal Batch semantics.
+Read-only `batch plan` also passed for all three sites on a temporary v4 -> v5
+Catalog migration copy. Actual normal live Batch and scarce Work/Premium
+consumption were not forced because no safe non-consuming candidate/session was
+available. The detailed matrix is `docs/PHASE6_VERIFICATION.md`; current status
+is **AUTOMATED VERIFIED / LIVE PARTIAL**.
+
 ### Phase 1 runtime settings / pacing
 
 rootの`crawler.yaml`は`runtime_settings.py`が読み込み、`SiteRuntimeSettings`へresolveする。

@@ -4,7 +4,7 @@ This implementation plan accompanies `docs/ACCESS_CONTROL_AND_PACING.md` and the
 
 Phase 1 status: **IMPLEMENTED**. Phase 2 status: **IMPLEMENTED**.
 Phase 3 status: **IMPLEMENTED**. Phase 4 status: **IMPLEMENTED**.
-Phase 5 status: **IMPLEMENTED**. Phase 6 remains **PLANNED / NOT YET IMPLEMENTED**.
+Phase 5 status: **IMPLEMENTED**. Phase 6 status: **AUTOMATED VERIFIED / LIVE PARTIAL**.
 
 ## Phase 1 - Runtime settings, pacing, and site ordering
 
@@ -151,6 +151,12 @@ Status: **IMPLEMENTED**.
 - Premium exhaustion does not execute later Premium candidates.
 
 ## Phase 6 - Cross-site regression and live verification
+
+Status: **AUTOMATED VERIFIED / LIVE PARTIAL**. See
+`docs/PHASE6_VERIFICATION.md` for the test inventory, read-only plans, and
+truthful live-verification matrix. Ticket-consuming and normal quota live runs
+were not forced when a safe non-consuming candidate or usable browser session
+was unavailable.
 
 Verify:
 

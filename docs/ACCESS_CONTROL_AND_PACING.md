@@ -550,6 +550,9 @@ passes never capture, package, create artifacts, or complete Items.
 
 ### Phase 6 - regression and live verification
 
+Status: **AUTOMATED VERIFIED / LIVE PARTIAL**. The regression inventory and
+live-verification results are recorded in `docs/PHASE6_VERIFICATION.md`.
+
 Verify at minimum:
 
 - normal Batch for Magapoke, Manga ONE, BookWalker,

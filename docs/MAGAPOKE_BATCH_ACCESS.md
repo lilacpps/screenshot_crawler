@@ -326,6 +326,12 @@ Resource exhaustion ends only the current pass, while AccessGuard fatal stops
 end the complete run. No grant-only pass captures, packages, creates an
 Artifact, or completes an Item.
 
+### Phase 6 verification status
+
+**AUTOMATED VERIFIED / LIVE PARTIAL**. Cross-site regression evidence,
+read-only planning results, and intentionally unrun ticket-consuming scenarios
+are recorded in `docs/PHASE6_VERIFICATION.md`.
+
 ## 12. Magapoke acceptance criteria
 
 Magapoke-specific work is complete when:

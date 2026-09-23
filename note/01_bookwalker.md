@@ -895,6 +895,11 @@ JPEG artifacts in `canvas` mode.
 - BookWalker Site Policyは05:00 JST window / site-wide capacity 1として実装済み。
 - BookWalker Adapterのstrict `direct` / `quota` entryとBatch Executor連携は実装済み。
 - BookWalker quotaの実サイトlive clickは未確認。synthetic/local Catalogでのpolicy・planner・executor検証までを完了範囲とする。
+- Phase 6 automated cross-site regression is green, including BookWalker
+  navigation retry, native capture/fallback, quota policy, packaging, and
+  shared pacing/AccessGuard behavior. A new normal live Batch was not run
+  because the verification Catalog exposed only a quota candidate; see
+  `docs/PHASE6_VERIFICATION.md`.
 - 2026-09-18にseries 317089をshared Crawler Chromeでlive確認済み（`ul.m-tile-list` / `li.m-tile` 11件 / full Discovery成功）。別構造のpagination variantは未確認。
 - 現行reader candidate scoringはmanual `auto` 互換経路として維持する。
 

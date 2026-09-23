@@ -670,3 +670,8 @@ persist後、initial `go_next()`直前に1回だけ使う。Batchではcandidate
 `manga-one.com`と`app.manga-one.com`のrelevant hostだけの403/429をfatal stopとする。
 explicit challengeとvisible CAPTCHAも共通stop reason/Batch JSONL metricsへ記録する。
 site-specific signalのlive verificationは未実施で、grant-onlyは未実装である。
+Phase 6 automated cross-site regression is green for Manga ONE, including
+normal direct/quota entry, source-native WebP retry/fallback, navigation, and
+shared pacing/AccessGuard coverage. A new normal live Batch was not run because
+the verification Catalog exposed only quota candidates; see
+`docs/PHASE6_VERIFICATION.md`.
