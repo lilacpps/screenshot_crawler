@@ -7,12 +7,14 @@
 1. `docs/SPEC.md`
 2. `docs/ARCHITECTURE.md`
 3. `docs/DISCOVERY_AND_BATCH.md`（Discovery / Catalog / Batch変更時）
-4. `docs/MAGAPOKE_BATCH_ACCESS.md`（shared runtime access pacing / Magapoke Batch / ticket grant / access load control変更時）
-5. `docs/DECISIONS.md`
-6. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
-7. 現在のコードとテスト
-8. Site Adapter固有README / probe出力
-9. `note/` の現行実装ノート
+4. `docs/ACCESS_CONTROL_AND_PACING.md`（shared runtime pacing / AccessGuard / metrics / access-resource selection / grant-only変更時）
+5. `docs/MAGAPOKE_BATCH_ACCESS.md`（Magapoke固有のBatch / Work Ticket / Premium Ticket / resource rule変更時）
+6. `docs/ACCESS_CONTROL_AND_PACING_PLAN.md`（上記shared access仕様の実装Phase・受け入れテスト）
+7. `docs/DECISIONS.md`
+8. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+9. 現在のコードとテスト
+10. Site Adapter固有README / probe出力
+11. `note/` の現行実装ノート
 
 `note/` は詳細な現行実装スナップショットとして常に更新する。ただし、上位authorityと競合する場合は上位authorityを優先し、note側を修正する。
 
@@ -42,7 +44,7 @@ Site Adapter
 - Site AdapterからChrome launch / profile選択 / endpoint解決 / `connect_over_cdp()` を行わない
 - Raw CDP ProtocolはPlaywrightで代替できない場合だけ使う
 
-shared profileでBookWalker/Manga ONEのlogin・crawl・session共存と既存viewer behaviorをlive verification済みである。real-siteのlauncher/profileは共通構成を標準とし、site-specific endpoint/profileは例外overrideとしてのみ扱う。
+shared profileでBookWalker/MANGA ONEのlogin・crawl・session共存と既存viewer behaviorをlive verification済みである。real-siteのlauncher/profileは共通構成を標準とし、site-specific endpoint/profileは例外overrideとしてのみ扱う。
 
 ## Implementation rules
 
@@ -66,6 +68,9 @@ shared profileでBookWalker/Manga ONEのlogin・crawl・session共存と既存vi
 - `access_strategy` に応じたsite固有entry操作はSite Adapterに置く。
 - output metadataはfield単位で `explicit Crawl Request > Adapter > packaging fallback` とする。
 - metadata overrideでsource URLやmanifest URLを置換しない。
+- generic Batch/Coreに `work_ticket` / `premium_ticket` など特定siteのresource名をハードコードしない。
+- access resourceの候補・順序はSite Policy/integration、実際の利用可否・消費確認はlive site state / Site Adapterをauthorityとする。
+- あるresourceのattempt中に別resourceへ暗黙fallbackしない。resource切替は明示的なpass orchestrationで行う。
 
 ## Note synchronization rule
 
@@ -77,8 +82,11 @@ shared profileでBookWalker/Manga ONEのlogin・crawl・session共存と既存vi
 - Discovery / Catalog / Batchの共通変更 → `note/00_core.md`（実装前は未実装であることも明記する）
 - BookWalker固有変更 → `note/01_bookwalker.md`
 - Manga ONE固有変更 → `note/02_mangaone.md`
+- Magapoke固有変更 → `note/03_magapoke.md`
 - 新規サイト追加 → 対応する `note/<nn>_<site>.md` を追加
 - 共通変更が実サイト挙動にも影響する場合 → `00_core.md` と影響するsite noteの両方
+
+計画段階のaccess-control仕様同期には `note/04_access_control_plan.md`、Magapoke固有の未実装計画同期には `note/03_magapoke_access_plan.md` を使用する。これらは明示的に PLANNED / NOT YET IMPLEMENTED とし、現行実装スナップショットと混同しない。
 
 noteには少なくとも、現在の挙動、主要な判定ロジック、設定/CLI、出力、既知の制約、実サイト確認状況を残す。
 
@@ -93,9 +101,10 @@ noteには少なくとも、現在の挙動、主要な判定ロジック、設�
 1. `docs/CODEX_IMPLEMENTATION_GUIDE.md` を読む。
 2. 変更対象に対応する `note/` を読む。
 3. Discovery / Catalog / Batchを変更する場合は `docs/DISCOVERY_AND_BATCH.md` を読む。
-4. shared runtime access pacingまたはMagapoke Batch / ticket grant / access load controlを変更する場合は `docs/MAGAPOKE_BATCH_ACCESS.md` を読む。
-5. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
-6. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
+4. shared runtime pacing / AccessGuard / metrics / generic access-resource selection / grant-onlyを変更する場合は `docs/ACCESS_CONTROL_AND_PACING.md` と `docs/ACCESS_CONTROL_AND_PACING_PLAN.md` を読む。
+5. Magapoke固有のWork Ticket / Premium Ticket / resource semanticsを変更する場合は `docs/MAGAPOKE_BATCH_ACCESS.md` を読む。
+6. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
+7. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
 
 ## After coding
 
