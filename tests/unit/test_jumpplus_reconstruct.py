@@ -10,6 +10,7 @@ from poc.jumpplus_reconstruct import (
     decoded_pixel_sha256,
     reconstruct_canvas,
     reconstruct_jpeg_dct,
+    select_transport_candidate,
 )
 
 
@@ -197,3 +198,103 @@ def test_dct_reorder_preserves_coefficients_and_decoded_pixels(tmp_path: Path) -
     assert result["jpeg_dct_reconstruction"] == "successful"
     assert result["coefficients_equal"] is True
     assert result["decoded_pixel_comparison"]["exact"] is True
+
+
+def test_candidate_selection_unique() -> None:
+    candidate = {"file": "one.jpg", "pixel_sha256": "pixel"}
+    result = select_transport_candidate("pixel", [candidate])
+    assert result["selection_status"] == "unique"
+    assert result["selected_candidate"] is candidate
+    assert result["candidate_count"] == 1
+
+
+def test_candidate_selection_accepts_identical_raw_duplicates() -> None:
+    candidates = [
+        {"file": "one.jpg", "pixel_sha256": "pixel", "raw_sha256": "same"},
+        {"file": "two.jpg", "pixel_sha256": "pixel", "raw_sha256": "same"},
+    ]
+    result = select_transport_candidate("pixel", candidates, load_bytes=lambda _: b"same")
+    assert result["selection_status"] == "equivalent_multiple"
+    assert result["selection_reason"] == "identical_raw_sha256"
+    assert result["equivalent_candidate_count"] == 2
+
+
+def test_candidate_selection_accepts_dct_equivalent_distinct_bytes() -> None:
+    candidates = [
+        {"file": "one.jpg", "pixel_sha256": "pixel", "raw_sha256": "one"},
+        {"file": "two.jpg", "pixel_sha256": "pixel", "raw_sha256": "two"},
+    ]
+    signatures = {
+        "one.jpg": {"content_key": (1,), "metadata_key": ("a",)},
+        "two.jpg": {"content_key": (1,), "metadata_key": ("b",)},
+    }
+    result = select_transport_candidate(
+        "pixel",
+        candidates,
+        load_bytes=lambda candidate: candidate["file"].encode(),
+        analyze_candidate=lambda candidate, _: signatures[candidate["file"]],
+    )
+    assert result["selection_status"] == "equivalent_multiple"
+    assert result["selection_reason"] == "identical_dct_image_content"
+    assert result["metadata_equivalent"] is False
+
+
+def test_candidate_selection_rejects_dct_distinct_pixel_duplicates() -> None:
+    candidates = [
+        {"file": "one.jpg", "pixel_sha256": "pixel", "raw_sha256": "one"},
+        {"file": "two.jpg", "pixel_sha256": "pixel", "raw_sha256": "two"},
+    ]
+    result = select_transport_candidate(
+        "pixel",
+        candidates,
+        load_bytes=lambda candidate: candidate["file"].encode(),
+        analyze_candidate=lambda candidate, _: {
+            "content_key": (candidate["file"],),
+            "metadata_key": (),
+        },
+    )
+    assert result["selection_status"] == "ambiguous"
+    assert result["selection_reason"] == "multiple_pixel_equal_but_dct_distinct_candidates"
+    assert result["selected_candidate"] is None
+
+
+def test_candidate_selection_parse_failure_is_fail_closed() -> None:
+    candidates = [
+        {"file": "one.jpg", "pixel_sha256": "pixel", "raw_sha256": "one"},
+        {"file": "two.jpg", "pixel_sha256": "pixel", "raw_sha256": "two"},
+    ]
+
+    def fail(_: dict, __: bytes) -> dict:
+        raise ValueError("invalid JPEG")
+
+    result = select_transport_candidate(
+        "pixel",
+        candidates,
+        load_bytes=lambda candidate: candidate["file"].encode(),
+        analyze_candidate=fail,
+    )
+    assert result["selection_status"] == "ambiguous"
+    assert result["selection_reason"] == "candidate_equivalence_unproven"
+
+
+def test_ambiguous_candidate_uses_pixel_fallback_but_skips_dct(tmp_path: Path) -> None:
+    draws = [_draw(1, (0, 0, 4, 4), (0, 0, 4, 4))]
+    input_dir, output_dir, state, fixture = _fixture(tmp_path, draws)
+    bad_path = input_dir / "network_images" / "not-a-jpeg.jpg"
+    bad_path.write_bytes(b"not a jpeg")
+    pixel_sha = fixture["candidates"][0]["pixel_sha256"]
+    fixture["candidates"].append({
+        "file": "network_images/not-a-jpeg.jpg",
+        "pixel_sha256": pixel_sha,
+        "raw_sha256": "different-raw-bytes",
+    })
+    result = reconstruct_canvas(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        state=state,
+        pixels=fixture["pixels"],
+        candidates_by_pixel=_candidate_index(fixture["candidates"]),
+    )
+    assert result["mapping"]["candidate_selection_statuses"] == ["ambiguous"]
+    assert result["mapping"]["pixel_reconstruction"] == "successful"
+    assert result["mapping"]["jpeg_dct_reconstruction"] == "not_attempted"

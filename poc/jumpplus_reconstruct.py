@@ -14,6 +14,7 @@ import json
 import math
 import tempfile
 from collections import Counter
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -128,6 +129,165 @@ def _candidate_index(candidate_images: list[dict[str, Any]]) -> dict[str, list[d
         if pixel_sha:
             result.setdefault(str(pixel_sha), []).append(candidate)
     return result
+
+
+def select_transport_candidate(
+    source_pixel_sha256: str | None,
+    candidates: list[dict[str, Any]],
+    *,
+    load_bytes: Callable[[dict[str, Any]], bytes] | None = None,
+    analyze_candidate: Callable[[dict[str, Any], bytes], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Select a transport JPEG only after proving candidate equivalence.
+
+    A single pixel-SHA candidate is safe to select.  Multiple candidates are
+    accepted only when their raw bytes or their JPEG image-domain content is
+    identical.  The returned ``selected_candidate`` is intentionally absent
+    for an ambiguous set; callers may use ``pixel_fallback_candidate`` only
+    for decoded-pixel reconstruction.
+    """
+
+    matching = [
+        candidate for candidate in candidates
+        if source_pixel_sha256 and str(candidate.get("pixel_sha256") or "") == source_pixel_sha256
+    ]
+    result: dict[str, Any] = {
+        "selected_candidate": None,
+        "pixel_fallback_candidate": None,
+        "selection_status": "unmatched",
+        "selection_reason": "no_pixel_sha_match",
+        "candidate_count": len(matching),
+        "equivalent_candidate_count": 0,
+        "metadata_equivalent": None,
+    }
+    if not matching:
+        return result
+    if len(matching) == 1:
+        candidate = next(iter(matching))
+        result.update({
+            "selected_candidate": candidate,
+            "pixel_fallback_candidate": candidate,
+            "selection_status": "unique",
+            "selection_reason": "single_pixel_match",
+            "equivalent_candidate_count": 1,
+            "metadata_equivalent": True,
+        })
+        return result
+
+    if load_bytes is None:
+        result.update({
+            "selection_status": "ambiguous",
+            "selection_reason": "candidate_equivalence_unproven",
+            "pixel_fallback_candidate": next(iter(matching)),
+        })
+        return result
+    raw_sha256: list[str] = []
+    raw_bytes: dict[int, bytes] = {}
+    try:
+        for index, candidate in enumerate(matching):
+            data = load_bytes(candidate)
+            raw_bytes[index] = data
+            raw_sha256.append(hashlib.sha256(data).hexdigest())
+    except Exception as exc:  # noqa: BLE001 - candidate ambiguity fails closed
+        result.update({
+            "selection_status": "ambiguous",
+            "selection_reason": "candidate_equivalence_unproven",
+            "pixel_fallback_candidate": next(iter(matching)),
+            "selection_error": f"{type(exc).__name__}: {exc}",
+        })
+        return result
+
+    if len(set(raw_sha256)) == 1:
+        result.update({
+            "selected_candidate": next(iter(matching)),
+            "pixel_fallback_candidate": next(iter(matching)),
+            "selection_status": "equivalent_multiple",
+            "selection_reason": "identical_raw_sha256",
+            "equivalent_candidate_count": len(matching),
+            "metadata_equivalent": True,
+        })
+        return result
+
+    signatures: list[dict[str, Any]] = []
+    try:
+        for index, candidate in enumerate(matching):
+            if analyze_candidate is None:
+                raise ValueError("JPEG candidate analyzer is unavailable")
+            signatures.append(analyze_candidate(candidate, raw_bytes[index]))
+    except Exception as exc:  # noqa: BLE001 - candidate ambiguity fails closed
+        result.update({
+            "selection_status": "ambiguous",
+            "selection_reason": "candidate_equivalence_unproven",
+            "pixel_fallback_candidate": next(iter(matching)),
+            "selection_error": f"{type(exc).__name__}: {exc}",
+        })
+        return result
+
+    content_keys = [signature.get("content_key") for signature in signatures]
+    equivalent_count = sum(key == content_keys[0] for key in content_keys)
+    metadata_keys = [signature.get("metadata_key") for signature in signatures]
+    metadata_equivalent = len(set(metadata_keys)) == 1
+    if len(set(content_keys)) == 1:
+        result.update({
+            "selected_candidate": next(iter(matching)),
+            "pixel_fallback_candidate": next(iter(matching)),
+            "selection_status": "equivalent_multiple",
+            "selection_reason": "identical_dct_image_content",
+            "equivalent_candidate_count": equivalent_count,
+            "metadata_equivalent": metadata_equivalent,
+        })
+        return result
+
+    result.update({
+        "selection_status": "ambiguous",
+        "selection_reason": "multiple_pixel_equal_but_dct_distinct_candidates",
+        "equivalent_candidate_count": equivalent_count,
+        "metadata_equivalent": metadata_equivalent,
+        "pixel_fallback_candidate": next(iter(matching)),
+    })
+    return result
+
+
+def _analyze_jpeg_candidate(candidate: dict[str, Any], data: bytes) -> dict[str, Any]:
+    """Return a comparable JPEG image-domain signature for candidate selection."""
+
+    dimensions = jpeg_dimensions(data)
+    sampling = jpeg_sampling_factors(data)
+    if dimensions is None or sampling is None:
+        raise ValueError("invalid JPEG dimensions or sampling factors")
+    import numpy as np  # type: ignore[import-not-found]
+
+    dct, temporary_path = _read_dct(data)
+    try:
+        component_names = [
+            name for name in ("Y", "Cb", "Cr") if getattr(dct, name, None) is not None
+        ]
+        if not component_names:
+            raise ValueError("JPEG has no supported DCT components")
+        coefficient_hashes = tuple(
+            (name, hashlib.sha256(np.asarray(getattr(dct, name)).tobytes()).hexdigest())
+            for name in component_names
+        )
+        quant_hash = hashlib.sha256(np.asarray(dct.qt).tobytes()).hexdigest()
+        quant_number_hash = hashlib.sha256(np.asarray(dct.quant_tbl_no).tobytes()).hexdigest()
+        content_key = (
+            tuple(dimensions),
+            tuple(tuple(item) for item in sampling),
+            quant_hash,
+            quant_number_hash,
+            coefficient_hashes,
+        )
+        metadata_key = tuple(_jpeg_marker_payloads(data))
+        return {
+            "content_key": content_key,
+            "metadata_key": metadata_key,
+            "raw_sha256": hashlib.sha256(data).hexdigest(),
+        }
+    finally:
+        with suppress(Exception):
+            dct.close()
+        with suppress(OSError):
+            temporary_path.unlink(missing_ok=True)
 
 
 def _jpeg_sof(data: bytes) -> tuple[int, int, tuple[tuple[int, int], ...]] | None:
@@ -611,6 +771,8 @@ def reconstruct_canvas(
         "jpeg_dct_feasibility": "unknown",
         "jpeg_dct_reconstruction": "not_attempted",
         "visual_reference": "unavailable",
+        "candidate_selection_statuses": [],
+        "candidate_selections": [],
         "background_mode": "unknown",
     }
     if canvas_id is None or not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
@@ -630,7 +792,11 @@ def reconstruct_canvas(
         mapping["mapping_status"] = "unsupported"
 
     output = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    loaded_sources: dict[tuple[int, str], tuple[Image.Image, dict[str, Any], list[dict[str, Any]]]] = {}
+    loaded_sources: dict[
+        tuple[int, str],
+        tuple[Image.Image, dict[str, Any], list[dict[str, Any]], dict[str, Any]],
+    ] = {}
+    selection_cache: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
     for sequence, draw in enumerate(draws):
         source = draw.get("source") or {}
         destination = _rect_values(draw.get("destinationRect"), ("dx", "dy", "dw", "dh"))
@@ -682,7 +848,42 @@ def reconstruct_canvas(
                 "status": reason,
             })
             continue
-        candidate = candidates[0]
+        selection_key = (
+            str(source_pixel_sha),
+            tuple(str(item.get("file") or "") for item in candidates),
+        )
+        selection = selection_cache.get(selection_key)
+        if selection is None:
+            selection = select_transport_candidate(
+                source_pixel_sha,
+                candidates,
+                load_bytes=lambda item: (input_dir / str(item["file"])).read_bytes(),
+                analyze_candidate=_analyze_jpeg_candidate,
+            )
+            selection_cache[selection_key] = selection
+        selection_status = str(selection.get("selection_status") or "unmatched")
+        if selection_status not in mapping["candidate_selection_statuses"]:
+            mapping["candidate_selection_statuses"].append(selection_status)
+        selection_record = {
+            key: value for key, value in selection.items()
+            if key not in {"selected_candidate", "pixel_fallback_candidate"}
+        }
+        selection_record["source_id"] = source_id
+        selection_record["source_url"] = source_url
+        selection_record["candidate_files"] = [item.get("file") for item in candidates]
+        if selection_record not in mapping["candidate_selections"]:
+            mapping["candidate_selections"].append(selection_record)
+        candidate = selection.get("selected_candidate") or selection.get("pixel_fallback_candidate")
+        if candidate is None:
+            mapping["source_match"] = "unmatched"
+            mapping["unmatched_sources"].append({
+                "sequence": draw.get("sequence", sequence),
+                "source_id": source_id,
+                "source_url": source_url,
+                "reason": "unmatched_source",
+                "selection_status": selection_status,
+            })
+            continue
         loaded_key = (source_id, source_url)
         if loaded_key not in loaded_sources:
             source_path = input_dir / str(candidate["file"])
@@ -691,6 +892,7 @@ def reconstruct_canvas(
                     Image.open(source_path).convert("RGBA"),
                     source_artifact,
                     candidates,
+                    selection,
                 )
             except (OSError, ValueError) as exc:
                 mapping["unmatched_sources"].append({
@@ -713,9 +915,13 @@ def reconstruct_canvas(
                 "network_candidates": [item["file"] for item in candidates],
                 "pixel_sha256": source_pixel_sha,
                 "matched_by": "decoded_pixel_sha256",
-                "same_pixel_candidate_count": len(candidates),
+                "selection_status": selection_status,
+                "selection_reason": selection.get("selection_reason"),
+                "candidate_count": selection.get("candidate_count", len(candidates)),
+                "equivalent_candidate_count": selection.get("equivalent_candidate_count", 0),
+                "metadata_equivalent": selection.get("metadata_equivalent"),
             })
-        source_image, source_artifact, candidates = loaded_sources[loaded_key]
+        source_image, source_artifact, candidates, selection = loaded_sources[loaded_key]
         source_rect = _rect_values(draw.get("sourceRect"), ("sx", "sy", "sw", "sh"))
         issues: list[str] = []
         if source.get("type") != "HTMLImageElement":
@@ -746,6 +952,8 @@ def reconstruct_canvas(
             "network_file": candidate["file"],
             "pixel_sha256": source_pixel_sha,
             "matched_by": "decoded_pixel_sha256",
+            "selection_status": selection.get("selection_status"),
+            "selection_reason": selection.get("selection_reason"),
             "sourceRect": draw.get("sourceRect"),
             "destinationRect": draw.get("destinationRect"),
             "status": "unsupported" if issues else "applied",
@@ -806,7 +1014,11 @@ def reconstruct_canvas(
         if not is_full_frame:
             tile_draws.append(item)
     source_files = {str(item.get("network_file")) for item in mapping["sources"] if item.get("network_file")}
-    if all_supported and len(source_files) == 1 and tile_draws:
+    dct_selection_allowed = bool(mapping["candidate_selection_statuses"]) and all(
+        status in {"unique", "equivalent_multiple"}
+        for status in mapping["candidate_selection_statuses"]
+    )
+    if all_supported and dct_selection_allowed and len(source_files) == 1 and tile_draws:
         source_file = input_dir / next(iter(source_files))
         if source_file.exists():
             try:
@@ -829,6 +1041,9 @@ def reconstruct_canvas(
         else:
             mapping["jpeg_dct_reconstruction"] = "not_attempted"
             mapping["jpeg_dct_error"] = "network_file_unavailable"
+    elif all_supported and not dct_selection_allowed:
+        mapping["jpeg_dct_reconstruction"] = "not_attempted"
+        mapping["jpeg_dct_error"] = "ambiguous_transport_candidate"
     elif all_supported:
         mapping["jpeg_dct_reconstruction"] = "not_attempted"
         mapping["jpeg_dct_error"] = "no_single_source_tile_mapping"
@@ -885,6 +1100,11 @@ def make_summary(report: dict[str, Any]) -> str:
         for state in active_states
         for item in state.get("mapping", {}).get("canvas_mutations", [])
     )
+    candidate_selection_counts = Counter(
+        status
+        for state in active_states
+        for status in state.get("mapping", {}).get("candidate_selection_statuses", [])
+    )
     lossless_count = sum(
         state.get("mapping", {}).get("status") == "lossless_mapping_complete"
         for state in active_states
@@ -913,6 +1133,7 @@ def make_summary(report: dict[str, Any]) -> str:
         f"- draw stage classifications: `{json.dumps(dict(Counter(state.get('mapping', {}).get('draw_stage') for state in active_states)), ensure_ascii=False, sort_keys=True)}`",
         f"- JPEG MCU/DCT feasibility: `{json.dumps(dict(dct_feasibility), ensure_ascii=False, sort_keys=True)}`",
         f"- JPEG DCT reconstruction results: `{json.dumps(dict(dct_results), ensure_ascii=False, sort_keys=True)}`",
+        f"- transport candidate selection statuses: `{json.dumps(dict(candidate_selection_counts), ensure_ascii=False, sort_keys=True)}`",
         "- Full-frame and partial tile calls were retained and replayed in sequence; no call was discarded solely because it was a staging-looking full-frame draw.",
         "",
         "## Per-canvas results",

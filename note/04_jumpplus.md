@@ -257,3 +257,26 @@ decoded pixel crop/paste→PNGをfallback候補とする。production captureへ
 - 別episode、異なるviewer条件、色付き/subsampled JPEGでのDCT pathは`unknown`。
 - mappingが今回の4 stateを越えて固定であることは確認していない。productionではruntime
   observed mappingを使用する前提を維持する。
+
+## J2.1 candidate ambiguity hardening (2026-09-23)
+
+J2のnetwork candidate選択で、decoded pixel SHA一致候補を無条件に先頭選択していた
+処理を修正した。`select_transport_candidate()`へ分離し、次のstatusを導入した。
+
+- `unique`: pixel SHA一致候補が1件。JPEG-domain pathで利用可能。
+- `equivalent_multiple`: raw SHAが同一、またはdimensions、sampling、quantization table、
+  DCT coefficientが同一。代表JPEGはJPEG-domain pathで利用可能だが、metadata差分は記録する。
+- `ambiguous`: DCT image contentの差異、またはcandidate解析不能。pixel fallbackだけ許可し、
+  JPEG DCT reconstructionは`not_attempted`とする。
+- `unmatched`: pixel SHA一致候補なし。
+
+`output/jumpplus_probe/j2/`を既存の対象episode artifactで再生成した。active canvas 14件の
+うち、candidate対応が得られた10件はすべて`candidate_count=1`、`unique`、
+`single_pixel_match`だった。複数candidateは実サイトartifactでは`not observed`で、
+10件のJPEG-domain reconstructionは引き続き`successful`だった。未対応4件はnetwork
+candidate不足のため`unmatched`で、全体判定は引き続き`inconclusive`である。
+
+追加unit testでは、unique、raw duplicate、DCT equivalent（metadata差分含む）、DCT distinct、
+parse failure、ambiguous時のpixel fallbackとDCT停止を確認した。production Site Adapterは
+未実装であり、candidate ambiguityを含む別episode・別JPEG形式の確認後までproductionへは
+進めない。
