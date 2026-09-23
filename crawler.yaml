@@ -1,0 +1,25 @@
+sites:
+  magapoke:
+    page_turn_delay_ms: 1000
+    inter_candidate_delay_ms: 3000
+    stop_on_http_403: true
+    stop_on_http_429: true
+    stop_on_challenge: true
+    stop_on_captcha: true
+    work_ticket_cooldown_hours: 23
+
+  mangaone:
+    page_turn_delay_ms: 1000
+    inter_candidate_delay_ms: 3000
+    stop_on_http_403: true
+    stop_on_http_429: true
+    stop_on_challenge: true
+    stop_on_captcha: true
+
+  bookwalker:
+    page_turn_delay_ms: 1000
+    inter_candidate_delay_ms: 3000
+    stop_on_http_403: true
+    stop_on_http_429: true
+    stop_on_challenge: true
+    stop_on_captcha: true

@@ -45,6 +45,7 @@ from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
 from screenshot_crawler.discovery.models import DiscoveryResult
 from screenshot_crawler.probe.collector import ProbeCollector
+from screenshot_crawler.runtime_settings import load_runtime_settings
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
@@ -127,6 +128,12 @@ def _parser() -> argparse.ArgumentParser:
     crawl.add_argument("--order")
     crawl.add_argument("--genre")
     crawl.add_argument("--env-file", type=Path, default=Path(".env"))
+    crawl.add_argument(
+        "--crawler-config",
+        type=Path,
+        default=Path("crawler.yaml"),
+        help="Runtime settings YAML path (default: crawler.yaml)",
+    )
     crawl.add_argument(
         "--cdp-endpoint",
         help=(
@@ -301,6 +308,12 @@ def _parser() -> argparse.ArgumentParser:
         help="Root directory for completed ZIP archives (default: output/Books)",
     )
     batch_run.add_argument("--env-file", type=Path, default=Path(".env"))
+    batch_run.add_argument(
+        "--crawler-config",
+        type=Path,
+        default=Path("crawler.yaml"),
+        help="Runtime settings YAML path (default: crawler.yaml)",
+    )
     batch_run.add_argument("--cdp-endpoint")
     batch_run.add_argument(
         "--limit",
@@ -414,6 +427,7 @@ async def _run_crawl(args: argparse.Namespace) -> None:
         else output_dir / "diagnostics"
     )
     library_dir = normalize_path(args.library_dir)
+    runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
     config = RunConfig(
         site=args.site,
         source_url=args.url,
@@ -421,6 +435,7 @@ async def _run_crawl(args: argparse.Namespace) -> None:
         diagnostics_dir=diagnostics_dir,
         max_pages=args.max_pages,
         max_same_content=args.max_same_content,
+        page_turn_delay_ms=runtime_settings.page_turn_delay_ms,
         access_strategy=args.access_strategy,
         output_metadata={
             field_name: value
@@ -762,6 +777,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     catalog = CatalogService(args.catalog)
     policies = _batch_policy_registry()
     planner = BatchPlanner(catalog, policies)
+    runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
     plan = planner.plan(site=args.site)
     candidates = plan.candidates[: args.limit] if args.limit is not None else plan.candidates
     print("Batch run:")
@@ -783,6 +799,10 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     )
     session = await BrowserSession.connect(endpoint)
     executor = BatchExecutor(catalog, policies, _registry())
+    # Keep the orchestration input site-neutral and preserve compatibility with
+    # lightweight test doubles that implement the pre-Phase-1 constructor.
+    if hasattr(executor, "runtime_settings"):
+        executor.runtime_settings = runtime_settings
     try:
         initial_complete = len(candidates) == len(plan.candidates)
         processed, should_continue = await _execute_batch_candidates(
@@ -791,8 +811,10 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             executor,
             candidates,
             phase="direct/Work Ticket",
+            inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
         )
         if should_continue and initial_complete:
+            previous_phase_had_site_access = processed > 0
             remaining_limit = (
                 None if args.limit is None else max(0, args.limit - processed)
             )
@@ -819,6 +841,15 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                     executor,
                     resource_candidates,
                     phase=quota_resource,
+                    inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                    delay_before_first_ms=(
+                        runtime_settings.inter_candidate_delay_ms
+                        if previous_phase_had_site_access
+                        else None
+                    ),
+                )
+                previous_phase_had_site_access = (
+                    previous_phase_had_site_access or pass_processed > 0
                 )
                 if remaining_limit is not None:
                     remaining_limit -= pass_processed
@@ -838,10 +869,14 @@ async def _execute_batch_candidates(
     candidates: list[BatchCandidate],
     *,
     phase: str,
+    inter_candidate_delay_ms: int = 3000,
+    delay_before_first_ms: int | None = None,
 ) -> tuple[int, bool]:
     """Execute a sequential resource phase; return attempts and continue flag."""
 
     for index, candidate in enumerate(candidates, start=1):
+        if index == 1 and delay_before_first_ms is not None:
+            await asyncio.sleep(delay_before_first_ms / 1000)
         order = candidate.metadata.get("order", "-")
         resource = f" resource={candidate.quota_resource}" if candidate.quota_resource else ""
         print(
@@ -849,8 +884,11 @@ async def _execute_batch_candidates(
             f"source={candidate.source_id} {order} {candidate.access_strategy}{resource}"
         )
         page = None
+        contacted_site = False
+        continue_after_candidate = False
         try:
             page = await session.new_page()
+            contacted_site = True
             result = await executor.execute_candidate(
                 page,
                 candidate,
@@ -860,12 +898,14 @@ async def _execute_batch_candidates(
                 max_same_content=args.max_same_content,
             )
             print(f"  completed: {result.archive_path}")
+            continue_after_candidate = True
         except AccessResourceUnavailableError as exc:
             reason = exc.reason
             print(f"  SKIPPED item={candidate.item_id} reason={reason} ({exc})")
             if exc.stop_resource_pass:
                 print("  Resource is exhausted; stopping this resource pass.")
                 return index, False
+            continue_after_candidate = True
         except BaseException as exc:
             print("FAILED:", file=sys.stderr)
             print(f"  item={candidate.item_id}", file=sys.stderr)
@@ -881,6 +921,12 @@ async def _execute_batch_candidates(
         finally:
             if page is not None:
                 await session.close_page(page)
+            if (
+                contacted_site
+                and continue_after_candidate
+                and index < len(candidates)
+            ):
+                await asyncio.sleep(inter_candidate_delay_ms / 1000)
     return len(candidates), True
 
 

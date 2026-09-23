@@ -142,6 +142,21 @@ class BatchPlanner:
                         ordered_selections.append(selection)
                     elif selection.item.id in accepted_ids:
                         ordered_selections.append(next(quota_iter))
+            if site == "magapoke":
+                direct_selections = [
+                    selection
+                    for selection in ordered_selections
+                    if not selection.decision.consumes_quota
+                ]
+                quota_selections = [
+                    selection
+                    for selection in ordered_selections
+                    if selection.decision.consumes_quota
+                ]
+                ordered_selections = (
+                    _order_magapoke_within_work(direct_selections)
+                    + _order_magapoke_within_work(quota_selections)
+                )
             for selection in ordered_selections:
                 plan.candidates.append(
                     _candidate_from_selection(
@@ -407,6 +422,31 @@ def _enforce_work_quota_limits(
 def _published_date_key(source: Source) -> tuple[int, datetime]:
     published = _parse_aware(source.published_at, "published_at")
     return (1, _MAX_DATETIME) if published is None else (0, published)
+
+
+def _order_magapoke_within_work(selections: list[_Selection]) -> list[_Selection]:
+    """Keep the existing Work sequence while processing each Work old-to-new."""
+
+    by_work: dict[int, list[_Selection]] = defaultdict(list)
+    work_order: list[int] = []
+    for selection in selections:
+        work_id = selection.work.id
+        if work_id not in by_work:
+            work_order.append(work_id)
+        by_work[work_id].append(selection)
+
+    ordered: list[_Selection] = []
+    for work_id in work_order:
+        ordered.extend(
+            sorted(
+                by_work[work_id],
+                key=lambda selection: (
+                    _published_date_key(selection.source),
+                    selection.source.id,
+                ),
+            )
+        )
+    return ordered
 
 
 def _parse_episode_order_key(value: str | None) -> tuple[int, int] | None:

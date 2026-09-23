@@ -132,28 +132,39 @@ class ProgressStore:
         return self._manifest["pages"]
 
     def add_page(self, page: CapturedPage, *, fingerprint: str) -> None:
-        relative_file = page.file.as_posix()
-        self.pages.append(
-            {
-                "sequence": page.sequence,
-                "page_number": page.identity.page_number,
-                "file": relative_file,
-                "width": page.width,
-                "height": page.height,
-                "mime_type": page.mime_type,
-                "file_extension": page.file_extension,
-                "fingerprint": fingerprint,
-                "identity": _identity_dict(page.identity),
-                "metadata": page.metadata,
-            }
-        )
-        self._progress.update(
-            {
-                "last_saved_sequence": page.sequence,
-                "last_identity": _identity_dict(page.identity),
-                "last_fingerprint": fingerprint,
-            }
-        )
+        self.add_pages((page,), (fingerprint,))
+
+    def add_pages(
+        self,
+        pages: tuple[CapturedPage, ...] | list[CapturedPage],
+        fingerprints: tuple[str, ...] | list[str],
+    ) -> None:
+        """Persist all artifacts belonging to one logical page/spread together."""
+
+        if len(pages) != len(fingerprints):
+            raise ValueError("pages and fingerprints must have the same length")
+        for page, fingerprint in zip(pages, fingerprints, strict=True):
+            self.pages.append(
+                {
+                    "sequence": page.sequence,
+                    "page_number": page.identity.page_number,
+                    "file": page.file.as_posix(),
+                    "width": page.width,
+                    "height": page.height,
+                    "mime_type": page.mime_type,
+                    "file_extension": page.file_extension,
+                    "fingerprint": fingerprint,
+                    "identity": _identity_dict(page.identity),
+                    "metadata": page.metadata,
+                }
+            )
+            self._progress.update(
+                {
+                    "last_saved_sequence": page.sequence,
+                    "last_identity": _identity_dict(page.identity),
+                    "last_fingerprint": fingerprint,
+                }
+            )
         self.flush()
 
     def flush(self) -> None:

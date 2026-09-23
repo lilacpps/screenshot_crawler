@@ -721,6 +721,101 @@ def test_batch_run_limit_spans_initial_and_premium_phases(
     assert "FAILED" not in output.err
 
 
+async def test_batch_candidate_delay_runs_after_close_only_between_site_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.index = 0
+
+        async def new_page(self) -> object:
+            self.index += 1
+            page = f"page-{self.index}"
+            events.append(f"new:{page}")
+            return page
+
+        async def close_page(self, page: object) -> None:
+            events.append(f"close:{page}")
+
+    class FakeExecutor:
+        async def execute_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            events.append(f"execute:{candidate.item_id}")
+            return SimpleNamespace(archive_path=Path(f"item-{candidate.item_id}.zip"))
+
+    async def fake_sleep(seconds: float) -> None:
+        events.append(f"delay:{seconds}")
+
+    monkeypatch.setattr(cli.asyncio, "sleep", fake_sleep)
+    args = SimpleNamespace(
+        output_root=Path("output/batch"),
+        library_dir=Path("output/Books"),
+        max_pages=1000,
+        max_same_content=3,
+        keep_open=False,
+    )
+    candidates = [
+        SimpleNamespace(
+            item_id=1, source_id=11, metadata={}, access_strategy="direct", quota_resource=None
+        ),
+        SimpleNamespace(
+            item_id=2, source_id=22, metadata={}, access_strategy="direct", quota_resource=None
+        ),
+    ]
+
+    processed, should_continue = await cli._execute_batch_candidates(
+        args,
+        FakeSession(),
+        FakeExecutor(),
+        candidates,
+        phase="test",
+        inter_candidate_delay_ms=17,
+    )
+
+    assert (processed, should_continue) == (2, True)
+    assert events == [
+        "new:page-1",
+        "execute:1",
+        "close:page-1",
+        "delay:0.017",
+        "new:page-2",
+        "execute:2",
+        "close:page-2",
+    ]
+
+
+async def test_batch_empty_candidate_list_has_no_candidate_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def fake_sleep(_seconds: float) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(cli.asyncio, "sleep", fake_sleep)
+    args = SimpleNamespace(
+        output_root=Path("output/batch"),
+        library_dir=Path("output/Books"),
+        max_pages=1000,
+        max_same_content=3,
+        keep_open=False,
+    )
+
+    assert await cli._execute_batch_candidates(
+        args,
+        object(),
+        object(),
+        [],
+        phase="test",
+        inter_candidate_delay_ms=17,
+    ) == (0, True)
+    assert called is False
+
+
 class FakeLoginAdapter:
     def __init__(self, *, should_fail: bool) -> None:
         self.should_fail = should_fail

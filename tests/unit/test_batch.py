@@ -311,6 +311,50 @@ def test_magapoke_distinct_episode_labels_keep_normal_filename(tmp_path: Path) -
     assert candidates[second_source.id].artifact_disambiguator is None
 
 
+def test_magapoke_batch_orders_each_work_old_to_new_without_reversing_discovery(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work_a = service.create_work(WorkInput(work_key="work-a", title="作品A"))
+    work_b = service.create_work(WorkInput(work_key="work-b", title="作品B"))
+    rows = (
+        (work_a, "new", "2026-09-22T00:00:00+09:00"),
+        (work_b, "b-old", "2026-09-20T00:00:00+09:00"),
+        (work_a, "old", "2026-09-20T00:00:00+09:00"),
+        (work_a, "unknown-date", None),
+        (work_b, "b-new", "2026-09-22T00:00:00+09:00"),
+    )
+    for work, external_id, published_at in rows:
+        item = service.create_item(
+            ItemInput(item_title=external_id, order_label=external_id), work_id=work.id
+        )
+        source = service.create_source(
+            SourceInput(
+                site="magapoke",
+                external_id=external_id,
+                access_mode="free",
+                published_at=published_at,
+            ),
+            item_id=item.id,
+        )
+        service.create_source_target(
+            SourceTargetInput(
+                backend="web", locator=f"https://magapoke.example/{external_id}"
+            ),
+            source_id=source.id,
+        )
+
+    plan = magapoke_plan_for(service)
+
+    assert [candidate.metadata["order"] for candidate in plan.candidates] == [
+        "old",
+        "new",
+        "unknown-date",
+        "b-old",
+        "b-new",
+    ]
+
+
 def test_magapoke_pending_collision_disambiguates_every_item(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     work = service.create_work(WorkInput(work_key="magapoke-work", title="作品A"))

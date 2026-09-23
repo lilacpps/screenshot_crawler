@@ -24,6 +24,10 @@ from screenshot_crawler.core.packaging import PackageResult, package_crawl_outpu
 from screenshot_crawler.core.progress import normalize_path
 from screenshot_crawler.core.runner import CrawlerRunner, RunResult
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.runtime_settings import (
+    DEFAULT_PAGE_TURN_DELAY_MS,
+    SiteRuntimeSettings,
+)
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
@@ -44,12 +48,14 @@ class BatchExecutor:
         *,
         runner_factory: RunnerFactory = CrawlerRunner,
         package_function: PackageFunction = package_crawl_output,
+        runtime_settings: SiteRuntimeSettings | None = None,
     ) -> None:
         self.catalog = catalog
         self.policies = policies
         self.adapters = adapters
         self.runner_factory = runner_factory
         self.package_function = package_function
+        self.runtime_settings = runtime_settings
 
     async def execute_candidate(
         self,
@@ -102,6 +108,11 @@ class BatchExecutor:
                 diagnostics_dir=output_dir / "diagnostics",
                 max_pages=max_pages,
                 max_same_content=max_same_content,
+                page_turn_delay_ms=(
+                    self.runtime_settings.page_turn_delay_ms
+                    if self.runtime_settings is not None
+                    else DEFAULT_PAGE_TURN_DELAY_MS
+                ),
                 access_strategy=candidate.access_strategy,
                 quota_resource=candidate.quota_resource,
                 output_metadata=candidate.metadata,

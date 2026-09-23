@@ -61,6 +61,7 @@ class RunConfig:
     navigation_timeout_ms: int = 10_000
     page_change_timeout_ms: int = 10_000
     adapter_timeout_grace_ms: int = 2_000
+    page_turn_delay_ms: int = 1_000
     auth_state: Path | None = None
     auth_required: bool = False
     device_scale_factor: float = 1.0
@@ -69,6 +70,12 @@ class RunConfig:
     output_metadata: Mapping[str, str | None] | None = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if isinstance(self.page_turn_delay_ms, bool) or not isinstance(
+            self.page_turn_delay_ms, int
+        ):
+            raise TypeError("page_turn_delay_ms must be a non-negative integer")
+        if self.page_turn_delay_ms < 0:
+            raise ValueError("page_turn_delay_ms must be a non-negative integer")
         if self.access_strategy not in VALID_ACCESS_STRATEGIES:
             raise ValueError("access_strategy must be one of: auto, direct, quota")
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -75,8 +76,20 @@ def _context_changed(initial: ContentContext, current: ContentContext) -> bool:
 class CrawlerRunner:
     """Run an adapter while keeping all site decisions outside Core."""
 
-    def __init__(self, config: RunConfig) -> None:
+    def __init__(
+        self,
+        config: RunConfig,
+        *,
+        sleep: Callable[[int], Awaitable[None]] | None = None,
+    ) -> None:
         self.config = config
+        self._sleep = sleep
+
+    async def _pace_before_page_turn(self, page: Page) -> None:
+        if self._sleep is not None:
+            await self._sleep(self.config.page_turn_delay_ms)
+        else:
+            await page.wait_for_timeout(self.config.page_turn_delay_ms)
 
     async def _adapter_call(
         self,
@@ -235,12 +248,14 @@ class CrawlerRunner:
 
                 same_content_count = 0
                 part_count = len(captures)
+                captured_pages: list[CapturedPage] = []
+                captured_fingerprints: list[str] = []
                 for part_index, capture, fingerprint in new_captures:
-                    if len(saved_pages) >= self.config.max_pages:
+                    if len(saved_pages) + len(captured_pages) >= self.config.max_pages:
                         raise MaxPagesExceededError(
                             f"max_pages exceeded: {self.config.max_pages}"
                         )
-                    sequence = len(saved_pages) + 1
+                    sequence = len(saved_pages) + len(captured_pages) + 1
                     extension = capture.file_extension.lower()
                     if not extension.startswith(".") or "/" in extension or "\\" in extension:
                         raise ValueError(
@@ -262,12 +277,15 @@ class CrawlerRunner:
                             else {}
                         ),
                     )
-                    saved_pages.append(captured)
-                    seen_fingerprints.add(fingerprint)
-                    store.add_page(captured, fingerprint=fingerprint)
+                    captured_pages.append(captured)
+                    captured_fingerprints.append(fingerprint)
+                store.add_pages(captured_pages, captured_fingerprints)
+                saved_pages.extend(captured_pages)
+                seen_fingerprints.update(captured_fingerprints)
                 seen_identities.add(identity_key)
                 previous_identity = identity
 
+                await self._pace_before_page_turn(page)
                 await self._adapter_call(adapter.go_next(page), "go_next")
                 await self._adapter_call(
                     adapter.wait_for_change(page, previous_identity),

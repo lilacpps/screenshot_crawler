@@ -102,6 +102,7 @@ class FakeAdapter(SiteAdapter):
     async def initialize(self, page: FakePage) -> None:
         return None
 
+
     async def detect_state(self, page: FakePage) -> PageState:
         return self.states[min(self.index, len(self.states) - 1)]
 
@@ -123,6 +124,31 @@ class FakeAdapter(SiteAdapter):
         previous_identity: ContentIdentity | None,
     ) -> None:
         return None
+
+
+class OrderedNavigationAdapter(FakeAdapter):
+    def __init__(self, states: list[PageState], identities: list[ContentIdentity], events: list[str]) -> None:
+        super().__init__(states, identities)
+        self.events = events
+
+    async def go_next(self, page: FakePage) -> None:
+        self.events.append("go_next")
+        await super().go_next(page)
+
+    async def wait_for_change(
+        self,
+        page: FakePage,
+        previous_identity: ContentIdentity | None,
+    ) -> None:
+        self.events.append("wait_for_change")
+
+
+class OrderedSpreadAdapter(OrderedNavigationAdapter):
+    async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...] | None:
+        return (
+            CaptureResult(data=b"right", width=1, height=1),
+            CaptureResult(data=b"left", width=1, height=1),
+        )
 
 
 class SlowInitializeAdapter(FakeAdapter):
@@ -437,6 +463,85 @@ async def test_runner_captures_content_and_stops_at_end(
     assert len(result.pages) == 1
     manifest = json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["pages"][0]["sequence"] == 1
+
+
+async def test_runner_persists_then_paces_then_advances_once_per_spread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    adapter = OrderedSpreadAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+        events,
+    )
+
+    def save(_capture: CaptureResult, _path: Path) -> None:
+        events.append("save")
+
+    monkeypatch.setattr("screenshot_crawler.core.runner.save_capture", save)
+    original_add_pages = ProgressStore.add_pages
+
+    def add_pages(store: ProgressStore, pages, fingerprints) -> None:
+        original_add_pages(store, pages, fingerprints)
+        events.append("persist")
+
+    monkeypatch.setattr(ProgressStore, "add_pages", add_pages)
+
+    async def sleep(delay_ms: int) -> None:
+        events.append(f"delay:{delay_ms}")
+
+    await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+            page_turn_delay_ms=123,
+        ),
+        sleep=sleep,
+    ).run(FakePage(), adapter)
+
+    assert events == ["save", "save", "persist", "delay:123", "go_next", "wait_for_change"]
+
+
+async def test_runner_page_delay_is_outside_wait_timeout_budget(tmp_path: Path) -> None:
+    class SlowWaitAdapter(OrderedNavigationAdapter):
+        async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...] | None:
+            return (CaptureResult(data=b"content", width=1, height=1),)
+
+        async def wait_for_change(
+            self,
+            page: FakePage,
+            previous_identity: ContentIdentity | None,
+        ) -> None:
+            self.events.append("wait_for_change")
+            await asyncio.sleep(0.04)
+
+    events: list[str] = []
+    adapter = SlowWaitAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+        events,
+    )
+
+    async def no_wait(_delay_ms: int) -> None:
+        return None
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+            page_change_timeout_ms=60,
+            adapter_timeout_grace_ms=0,
+            page_turn_delay_ms=60_000,
+        ),
+        sleep=no_wait,
+    ).run(FakePage(), adapter)
+
+    assert result.stop_state is PageState.END
 
 
 async def test_runner_prefers_native_capture_over_locator_targets(

@@ -724,3 +724,13 @@ later changed expired/no-grant quota sources into Work Ticket candidates.
   restarting Chrome had hit the earlier 180-second CDP handshake timeout; the
   successful retry confirms that restart resolved the connection problem.
 - Premium Ticket behavior and all M3c consumption remain out of scope.
+
+### Phase 1 runtime pacing / Batch ordering
+
+Magapoke Discoveryの列挙順は引き続きlatest-firstであり、Discoveryのreverseは行わない。Batchは既存のdirect先行・
+Work間stable orderingを維持し、同一Workの各Batch phase内を`published_at ASC (NULL last), source_id ASC`で
+old-to-newに並べる。root `crawler.yaml`の`page_turn_delay_ms`はCONTENTの全artifactとprogress persist後、
+initial `go_next()`直前に1回だけ適用する。Batchの`inter_candidate_delay_ms`はcandidate Page close後、次の
+site-accessing candidate前に1回だけ適用する。Magapoke adapterのnavigation retry、Work Ticket、Premium Ticket、
+direct accessの既存挙動は変更していない。AccessGuard、403/429、challenge/CAPTCHA、JSONL metrics、grant-only、
+cooldown persistenceは未実装である。

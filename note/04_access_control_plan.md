@@ -1,20 +1,23 @@
-# Shared Access Control / Pacing Plan (planned, not yet implemented)
+# Shared Access Control / Pacing Plan
 
-Status: **PLANNED / NOT YET IMPLEMENTED**.
+Status: **Phase 1 IMPLEMENTED**. Phase 2 and later remain **PLANNED / NOT YET IMPLEMENTED**.
 
 Authority: `docs/ACCESS_CONTROL_AND_PACING.md`.
 
 This note records the adopted shared plan without describing the behavior as already implemented. Current implementation snapshots remain in each site's existing note until the relevant phase lands; implementation changes must update the applicable current-state note in the same change.
 
-Planned shared changes:
+Phase 1 current state: root `crawler.yaml` is parsed outside Core into typed per-site settings with safe
+non-zero defaults and explicit zero overrides. CONTENT pacing occurs once after all logical-page artifacts
+and manifest/progress persistence, before the initial `go_next()`, outside adapter timeout/retry budgets.
+Batch pacing occurs once after a site-accessing candidate's Page is closed and only before another such
+candidate. Magapoke Discovery remains latest-first; Batch is old-to-new within each Work by
+`published_at ASC (NULL last), source_id ASC` while existing direct/quota phases and Work ordering remain.
 
-- keep Batch sequential,
-- add root `crawler.yaml` for runtime behavior,
-- resolve per-site settings without making Core parse YAML or branch on site names,
-- add shared `page_turn_delay_ms` and `inter_candidate_delay_ms`,
-- apply CONTENT pacing exactly once after successful save/progress persistence and before the initial `adapter.go_next()`,
-- keep pacing outside `page_change_timeout_ms`, `adapter_timeout_grace_ms`, and adapter-owned retry budgets,
-- do not pace AD advancement, loading polling, same-content waits, ticket/resource confirmation clicks, or adapter retries,
+The remaining AccessGuard, 403/429 stop, challenge/CAPTCHA detection, JSONL metrics, resource-selection
+expansion, grant-only, and Work Ticket cooldown persistence are still planned and not implemented.
+
+Remaining planned shared changes:
+
 - add per-site `stop_on_http_403`, `stop_on_http_429`, `stop_on_challenge`, and `stop_on_captcha`,
 - add a reusable AccessGuard with distinct `http_403`, `http_429`, `challenge_detected`, and `captcha_detected` reasons,
 - stop only on relevant-host 403/429 rather than unrelated third-party traffic,
@@ -34,12 +37,11 @@ Planned shared changes:
 
 The planned repository-wide implementation remains intentionally phased:
 
-1. runtime settings/pacing + site-specific ordering changes,
-2. shared AccessGuard + CAPTCHA/challenge/403/429 + JSONL metrics,
-3. generic access-resource selection contract,
-4. generic grant-only + first Magapoke Work Ticket integration,
-5. Magapoke Premium/all integration,
-6. cross-site regression and live verification.
+1. shared AccessGuard + CAPTCHA/challenge/403/429 + JSONL metrics,
+2. generic access-resource selection contract,
+3. generic grant-only + first Magapoke Work Ticket integration,
+4. Magapoke Premium/all integration,
+5. cross-site regression and live verification.
 
 The shared contract is intentionally future-facing: Magapoke Work/Premium Ticket is the first implementation, but Manga ONE, BookWalker, and future site adapters may add their own access resources later without changing generic Batch semantics.
 

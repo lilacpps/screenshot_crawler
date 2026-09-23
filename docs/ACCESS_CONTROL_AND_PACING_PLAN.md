@@ -2,6 +2,8 @@
 
 This implementation plan accompanies `docs/ACCESS_CONTROL_AND_PACING.md` and the site-specific access specifications.
 
+Phase 1 status: **IMPLEMENTED**. Phase 2 and later remain planned.
+
 ## Phase 1 - Runtime settings, pacing, and site ordering
 
 ### Changes

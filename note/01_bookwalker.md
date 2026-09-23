@@ -1115,3 +1115,10 @@ quotaのlive clickによる実quota消費は未実施である。
 - BookWalker全作品・全まる読み対象の自動探索
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。
+
+### Phase 1 runtime pacing
+
+BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を
+CONTENT保存後、initial `go_next()`直前に1回だけ使う。Batch candidate間はPage close後に
+`inter_candidate_delay_ms`を1回だけ使う。BookWalkerのexisting navigation retry、END判定、timeout budgetは
+変更していない。AccessGuard、403/429、challenge/CAPTCHA、metrics、grant-onlyは未実装である。

@@ -654,3 +654,10 @@ capture behaviorはsource-native WebP優先、ページ単位PNG fallbackであ�
 - diagnostics Adapter固有metadata統合は未実装。
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。
+
+### Phase 1 runtime pacing
+
+Manga ONEはroot `crawler.yaml`からresolvedされた`page_turn_delay_ms`をCONTENT artifactとmanifest/progressの
+persist後、initial `go_next()`直前に1回だけ使う。Batchではcandidate Pageのclose後、次のsite-accessing candidate前に
+`inter_candidate_delay_ms`を1回だけ使う。既存のManga ONE `wait_for_change()` retry、END判定、timeout budgetは
+変更していない。AccessGuard、403/429、challenge/CAPTCHA、metrics、grant-onlyは未実装である。

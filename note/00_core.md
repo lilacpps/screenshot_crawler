@@ -763,3 +763,20 @@ Catalog schema v4 adds nullable sources.published_at and explicitly migrates v3 
 Discovery passes DiscoveredSource.published_at into SourceInput; a non-NULL observation updates the Source, while NULL preserves the prior value. Magapoke parses the live-confirmed YYYY/MM/DD row date to JST midnight. This represents the site-observed publication day normalized for stable ordering, not an observed time of day. order_key remains site-neutral and Magapoke keeps it NULL.
 
 Batch metadata now carries generic quota resource, scope, limit, and commit timing. Work-scoped quota limits are applied by grouping on Work.id; sources are ranked by published_at ascending with NULL last, then existing item ordering and stable source ID. Only work-scoped policies use the direct-first phase; Manga ONE and BookWalker retain their established site quota ordering. BatchExecutor passes quota_resource through RunConfig and commits after-observed consumption only when the Adapter reports a matching aware timestamp.
+
+### Phase 1 runtime settings / pacing
+
+rootの`crawler.yaml`は`runtime_settings.py`が読み込み、`SiteRuntimeSettings`へresolveする。
+ファイルまたはsite entryがない場合は`page_turn_delay_ms=1000`、`inter_candidate_delay_ms=3000`を使う。
+不正なdelay（負数、bool、文字列、float）は明示的に失敗し、0はoperator overrideとして有効である。
+CrawlerRunnerはYAMLを読まず、CLI/Batchがresolved値を`RunConfig`またはBatch orchestrationへ渡す。
+
+正常なCONTENT captureでは、logical page/spreadの全artifactをsaveした後にmanifest/progressを一括persistし、
+`page_turn_delay_ms`を1回だけ待ってからinitial `adapter.go_next()`、`adapter.wait_for_change()`を呼ぶ。
+delayはadapter timeout/grace/retry budgetの外側で、AD、loading polling、same-content wait、entry clickには適用しない。
+BatchはsiteへアクセスしたcandidateのPageをcloseした後、次のsite-accessing candidateの前に
+`inter_candidate_delay_ms`を1回だけ適用し、末尾candidateやCatalog local skipには適用しない。
+
+Magapoke BatchはDiscoveryのlatest-firstを維持し、同一Work内を`published_at ASC (NULL last), source_id ASC`
+で処理する。既存のdirect先行とWork間orderingは維持する。AccessGuard、403/429 stop、challenge/CAPTCHA、
+JSONL metrics、grant-only、resource selection拡張、Work Ticket cooldown persistenceはPhase 2以降で未実装である。
