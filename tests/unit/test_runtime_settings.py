@@ -68,3 +68,49 @@ def test_runtime_settings_rejects_invalid_yaml_shapes(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeSettingsError, match="sites"):
         load_runtime_settings(path)
+
+
+def test_runtime_settings_accepts_all_known_site_settings(tmp_path: Path) -> None:
+    path = tmp_path / "crawler.yaml"
+    path.write_text(
+        "sites:\n"
+        "  magapoke:\n"
+        "    page_turn_delay_ms: 0\n"
+        "    inter_candidate_delay_ms: 0\n"
+        "    stop_on_http_403: false\n"
+        "    stop_on_http_429: true\n"
+        "    stop_on_challenge: false\n"
+        "    stop_on_captcha: true\n"
+        "    work_ticket_cooldown_hours: 23\n",
+        encoding="utf-8",
+    )
+
+    assert load_runtime_settings(path).for_site("magapoke") == SiteRuntimeSettings(
+        page_turn_delay_ms=0,
+        inter_candidate_delay_ms=0,
+        stop_on_http_403=False,
+        stop_on_http_429=True,
+        stop_on_challenge=False,
+        stop_on_captcha=True,
+        work_ticket_cooldown_hours=23,
+    )
+
+
+@pytest.mark.parametrize("unknown_key", ["unknown_setting", "page_turn_dealy_ms"])
+def test_runtime_settings_rejects_unknown_site_settings(
+    tmp_path: Path, unknown_key: str
+) -> None:
+    path = tmp_path / "crawler.yaml"
+    path.write_text(
+        "sites:\n"
+        "  magapoke:\n"
+        f"    {unknown_key}: 1000\n"
+        "    page_turn_delay_ms: 0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuntimeSettingsError,
+        match=rf"^Unknown crawler\.yaml setting: sites\.magapoke\.{unknown_key}$",
+    ):
+        load_runtime_settings(path)

@@ -80,6 +80,13 @@ class RuntimeSettingsError(ValueError):
 
 
 def _resolve_site_settings(site: str, raw: dict[Any, Any]) -> SiteRuntimeSettings:
+    known_fields = set(SiteRuntimeSettings.__dataclass_fields__)
+    for key in raw:
+        if key not in known_fields:
+            raise RuntimeSettingsError(
+                f"Unknown crawler.yaml setting: sites.{site}.{key}"
+            )
+
     values: dict[str, Any] = {}
     for field_name in SiteRuntimeSettings.__dataclass_fields__:
         if field_name not in raw:
@@ -102,4 +109,3 @@ def _non_negative_int(value: Any, field_name: str) -> int:
     if value < 0:
         raise RuntimeSettingsError(f"{field_name} must be a non-negative integer")
     return value
-

@@ -37,11 +37,12 @@ Remaining planned shared changes:
 
 The planned repository-wide implementation remains intentionally phased:
 
-1. shared AccessGuard + CAPTCHA/challenge/403/429 + JSONL metrics,
-2. generic access-resource selection contract,
-3. generic grant-only + first Magapoke Work Ticket integration,
-4. Magapoke Premium/all integration,
-5. cross-site regression and live verification.
+- Phase 1 — Runtime settings, pacing, and site ordering: **IMPLEMENTED**
+- Phase 2 — Shared AccessGuard + CAPTCHA/challenge/403/429 + JSONL metrics: **PLANNED / NOT YET IMPLEMENTED**
+- Phase 3 — Generic access-resource selection contract: **PLANNED / NOT YET IMPLEMENTED**
+- Phase 4 — Generic grant-only + first Magapoke Work Ticket integration: **PLANNED / NOT YET IMPLEMENTED**
+- Phase 5 — Magapoke Premium/all integration: **PLANNED / NOT YET IMPLEMENTED**
+- Phase 6 — Cross-site regression and live verification: **PLANNED / NOT YET IMPLEMENTED**
 
 The shared contract is intentionally future-facing: Magapoke Work/Premium Ticket is the first implementation, but Manga ONE, BookWalker, and future site adapters may add their own access resources later without changing generic Batch semantics.
 
