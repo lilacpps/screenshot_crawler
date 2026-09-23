@@ -212,6 +212,14 @@ def classify_draw_geometry(draw_calls: list[dict[str, Any]]) -> str:
     return "tiled" if len(draw_calls) > 1 else "unknown"
 
 
+def draw_calls_for_canvas(draw_calls: list[dict[str, Any]], canvas_id: int | None) -> list[dict[str, Any]]:
+    """Associate calls by the hook-assigned canvas id, never by dimensions alone."""
+
+    if canvas_id is None:
+        return []
+    return [call for call in draw_calls if (call.get("canvas") or {}).get("id") == canvas_id]
+
+
 def _pixel_comparison(left_path: Path, right_path: Path) -> dict[str, Any]:
     """Compare decoded RGB pixels without requiring numpy."""
 
@@ -298,6 +306,7 @@ _DRAW_HOOK = r"""
     imageIds: new WeakMap(),
     imageSources: new Map(),
     nextImageId: 1,
+    nextDrawSequence: 0,
   };
 
   const shortSelector = (element) => {
@@ -391,6 +400,7 @@ _DRAW_HOOK = r"""
           transform = {a: matrix.a, b: matrix.b, c: matrix.c, d: matrix.d, e: matrix.e, f: matrix.f};
         } catch (_) {}
         state.drawCalls.push({
+          sequence: state.nextDrawSequence++,
           timestamp: Date.now(),
           monotonicMs: performance.now(),
           canvas: canvasInfo(this.canvas),
@@ -1146,11 +1156,12 @@ class JumpPlusProbe:
             "canvas_positions": [
                 {
                     "index": canvas["index"],
+                    "canvasId": canvas.get("canvasId"),
                     "x": (canvas.get("renderedRect") or {}).get("x"),
                     "y": (canvas.get("renderedRect") or {}).get("y"),
                 }
-                for canvas in canvas_artifacts
-            ],
+            for canvas in canvas_artifacts
+        ],
         }
         state_dir.mkdir(parents=True, exist_ok=True)
         _write_json(state_dir / "pixels.json", state_artifacts)
@@ -1229,16 +1240,14 @@ class JumpPlusProbe:
             for canvas in state["canvas_artifacts"]:
                 width = canvas.get("width")
                 height = canvas.get("height")
-                draw_calls = [
-                    call for call in state["draw_calls"]
-                    if call.get("canvas", {}).get("width") == width
-                    and call.get("canvas", {}).get("height") == height
-                ]
+                canvas_id = canvas.get("canvasId")
+                draw_calls = draw_calls_for_canvas(state["draw_calls"], canvas_id)
                 candidate_matches = self._match_reference_to_candidates(canvas.get("file"))
                 canvas_comparisons.append(
                     {
                         "state": state["state"],
                         "canvas_index": canvas["index"],
+                        "canvas_id": canvas_id,
                         "canvas_dimensions": [width, height],
                         "canvas_pixel_sha256": canvas.get("pixel_sha256"),
                         "rendered_rect": canvas.get("renderedRect"),
@@ -1257,6 +1266,7 @@ class JumpPlusProbe:
                 source_comparisons.append(
                     {
                         "source_index": source["index"],
+                        "source_id": source.get("sourceId"),
                         "source_url": source["url"],
                         "source_dimensions": [source.get("width"), source.get("height")],
                         "source_pixel_sha256": source.get("pixel_sha256"),

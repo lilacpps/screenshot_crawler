@@ -11,6 +11,7 @@ from poc.jumpplus_probe import (
     _pixel_comparison,
     classify_draw_geometry,
     classify_resource,
+    draw_calls_for_canvas,
     extract_episode_id,
     fingerprint_changed,
     is_target_episode_url,
@@ -198,3 +199,13 @@ def test_draw_geometry_classification_is_observation_based() -> None:
     assert classify_draw_geometry([full_copy]) == "full_frame_copy"
     assert classify_draw_geometry([cropped, cropped]) == "tiled"
     assert classify_draw_geometry([]) == "unknown"
+
+
+def test_draw_calls_are_separated_by_canvas_id_not_dimensions() -> None:
+    calls = [
+        {"sequence": 1, "canvas": {"id": 7, "width": 764, "height": 1200}},
+        {"sequence": 2, "canvas": {"id": 8, "width": 764, "height": 1200}},
+    ]
+    assert draw_calls_for_canvas(calls, 7) == [calls[0]]
+    assert draw_calls_for_canvas(calls, 8) == [calls[1]]
+    assert draw_calls_for_canvas(calls, None) == []

@@ -95,6 +95,41 @@ launch、profile選択、CDP接続処理を所有しない。
 比較詳細は各`j1/state_*/comparison.json`、全体結果は
 `j1/comparison_report.json`、人間向け結論は`j1/summary.md`にある。
 
+## J2 transport JPEG + drawImage mapping reconstruction PoC (2026-09-23)
+
+J1の最新artifactを入力に、`poc/jumpplus_reconstruct.py`を実行した。
+出力は`output/jumpplus_probe/j2/`に保存した。対象URLはJ1と同じ
+`13932016480029111789`で、production Site Adapterやcapture runtimeは変更していない。
+
+- `state_000`〜`state_003`の4 state、44 canvas artifactを処理した。うち14 canvasは
+  当該stateでdraw callがあり、30 canvasはcanvas IDは存在するが当該stateのdraw callが
+  観測されないstaging/prefetch候補として`inconclusive`にした。
+- draw callの紐付けはcanvas width/heightではなく、hookの`draw.canvas.id`とcaptureの
+  `canvasId`の一致だけを使用した。各drawにはhookの整数`sequence`を追加し、その順序を
+  Pillow再構成で維持した。
+- 14個のdraw対象canvasは全て、764x1200のfull-frame drawと184x296の16 tile drawを
+  含む同一のgeometry patternだった。transformはidentity、compositeはsource-over、
+  filterはnone、alphaは1、source/destinationは整数でscaleなしだった。
+- transport JPEGとの対応はblob sourceのdecoded RGB pixel SHA-256とnetwork JPEGの
+  decoded RGB pixel SHA-256で行った。10 canvasは対応するJPEGを得て17 drawを適用し、
+  4 canvasはnetwork候補範囲外のため`unmatched_source`となった。
+- 各canvasの最後にある`https://cdn-ak.shonenjumpplus.com/images/spacer.png`の
+  canvas外`(-1,-1,1,1)` drawは、canvasへの影響がないことをgeometryで確認し、
+  `ignored_non_content_noop`として記録した。勝手なsource mappingには使用していない。
+- reconstruction画像、mapping JSON、visual difference PNGを各stateへ保存した。
+  locator screenshotはraw canvas ground truthではなく、表示サイズを考慮したvisual
+  referenceとしてのみ比較した。14 draw canvasのうち2件が`close`、8件が`likely`、
+  4件がsource未対応による`inconclusive`だった。J2全体の判定は`inconclusive`。
+- active draw canvasのgeometryは今回の4 stateで固定だったが、固定static permutationを
+  採用する根拠とはしない。実ページのruntime mappingを使うOption Aを候補として残し、
+  Option Bは採用しない。
+
+J2の人間向け結果は`j2/summary.md`、全体結果は`j2/reconstruction_report.json`、
+canvasごとのmappingは`j2/state_*/canvas_*_mapping.json`にある。J2では、transport JPEG
+と観測mappingから正しい漫画ページを生成できるcanvasが存在することは確認できたが、
+全canvas・全stateのsource対応とvisual対応が揃っていないため、`J2 reconstruction confirmed`
+とはしない。
+
 ## Output contract
 
 `initial/`には`page.html`、`dom.json`、`network.json`、`draw_calls.json`,
@@ -118,13 +153,13 @@ production capture方式はまだ実装していない。J1の推奨は`rendered
 または観測済みtile mappingによる別途検証済みの再構成である。CDN JPEGの直接保存は
 採用しない。
 
-## Next investigation
+## Next investigation (J2後)
 
-追加調査を行う場合は、保存したJPEGのtile mappingとdrawImage geometryを使って、
-lossless reconstructionがrendered canvasと一致するかを確認する。特に次を確認する。
+追加調査では、まずdraw時点のcanvasとsourceの対応を同じstateで保存し、
+staging/prefetch canvasを比較対象から分離する。特に次を確認する。
 
-1. CDN JPEGがvisible page一枚と一対一に対応するか。
-2. blob化の前後で同じsource bytesを追跡できるか。
+1. unmatched sourceをnetwork response観測範囲内で減らせるか。
+2. draw時点のcanvas pixelまたは同じcanvasのvisual referenceを取得できるか。
 3. `is-spread`がDOMレイアウト上のspreadを意味する範囲と、readerのreading order。
 4. viewer state内のcurrent/total pageとEND/NEXT_CONTENT signal。
 
