@@ -1,58 +1,69 @@
-# Magapoke Access / Batch Plan (planned, not yet implemented)
+# Magapoke Access / Resource Plan (planned, not yet implemented)
 
 Status: **PLANNED / NOT YET IMPLEMENTED**.
 
-Authority: `docs/MAGAPOKE_BATCH_ACCESS.md`.
+Authorities:
 
-This note exists to satisfy note synchronization for the adopted Magapoke Batch/ticket/load-control specification without rewriting `note/03_magapoke.md` as though the behavior were already implemented. `note/03_magapoke.md` remains the current-implementation snapshot until each phase lands; implementations must update that current-state note in the same change.
+- shared pacing / AccessGuard / metrics / generic resource selection / grant-only: `docs/ACCESS_CONTROL_AND_PACING.md`,
+- Magapoke-specific resource behavior: `docs/MAGAPOKE_BATCH_ACCESS.md`.
 
-The latest plan also introduces a small **shared runtime pacing mechanism** used by Magapoke, Manga ONE, and BookWalker. The pacing mechanism is common; ticket/resource behavior below remains Magapoke-specific.
+This note exists to keep the adopted Magapoke plan synchronized without rewriting `note/03_magapoke.md` as though planned behavior were already implemented. `note/03_magapoke.md` remains the current-implementation snapshot until each phase lands; implementations must update that current-state note in the same change.
 
-Planned changes:
+The shared plan is also summarized in `note/04_access_control_plan.md`.
 
-- keep Batch sequential; do not add configurable concurrency,
-- add root `crawler.yaml` as a simple runtime configuration file,
-- make these settings generic per-site pacing settings for Magapoke, Manga ONE, and BookWalker:
-  - `page_turn_delay_ms: 1000`,
-  - `inter_candidate_delay_ms: 3000`,
-- keep `work_ticket_cooldown_hours: 23` Magapoke-specific,
-- keep safe non-zero code defaults when `crawler.yaml` or a known site entry is absent,
-- do not add YAML inheritance/rule DSL behavior in the first implementation,
-- pass page-turn pacing into Core through resolved run settings / `RunConfig`; Core must not parse YAML or branch on site name,
-- apply page-turn pacing exactly once after a successful CONTENT capture/save and before the initial `adapter.go_next()`,
-- do **not** apply that pacing to AD advancement, loading/change polling, same-content waits, ticket entry, or adapter-internal advance retries,
-- keep the pacing delay outside the `go_next` / `wait_for_change` timeout budget,
-- preserve the existing Magapoke, Manga ONE, and BookWalker adapter-owned retry algorithms; pacing must not create duplicate initial page advances,
-- apply `inter_candidate_delay_ms` once between site-accessing Batch candidates, not for local-only skips,
-- use deterministic pacing for load control; do not add random/human-like timing or synthetic mouse/scroll/keyboard activity,
-- keep Magapoke Discovery latest-first,
-- order Magapoke Batch candidates within a Work by `published_at ASC` (NULL last), then `source_id ASC`,
-- add `batch run --site magapoke --grant-only work_ticket|premium_ticket|all`,
-- grant-only confirms viewer access and persists the grant without capture/package/item completion,
-- persist Work-scoped Work Ticket `last_consumed_at` separately from episode/Premium usage,
-- if Work Ticket cooldown is <23h, skip that Work locally without site access,
-- after cooldown, live UI remains authoritative; unavailable Work Ticket is an expected skip and does not reset the cooldown timestamp,
-- respect Magapoke UI priority: when Work Ticket is available, do not attempt to bypass it to force Premium Ticket,
-- `premium_ticket` mode skips candidates whose normal UI requires Work Ticket,
-- `all` uses Work Ticket when available and Premium Ticket otherwise,
+Planned Magapoke-specific changes:
+
+- keep Discovery latest-first,
+- order Batch candidates within a Work by `published_at ASC` (NULL last), then `source_id ASC`,
+- expose `work_ticket` and `premium_ticket` as Magapoke instances of the generic access-resource contract,
+- provide resource pass order as `work_ticket` then `premium_ticket` from the Magapoke policy/integration rather than hard-coding those names in Batch,
+- add generic-compatible grant-only support for `work_ticket`, `premium_ticket`, and `all`,
+- define `all` as Work Ticket pass -> Catalog replan -> Premium Ticket pass,
+- persist Work-scoped Work Ticket `last_consumed_at` separately from episode/Premium state,
+- use `work_ticket_cooldown_hours: 23` as a local negative gate before site access,
+- after cooldown, keep live UI authoritative; unavailable Work Ticket is an expected skip and does not reset the cooldown timestamp,
+- respect Magapoke UI priority: do not bypass an available/required Work Ticket to force Premium Ticket,
+- Premium-only resource pass skips candidates whose normal UI requires Work Ticket,
 - retain live Premium Ticket balance checks and stop Premium attempts at zero,
-- add relevant-host Magapoke HTTP 403/429 fail-safe stop behavior,
-- also stop on explicit challenge detection such as `cf-mitigated: challenge`; record a distinct `challenge_detected` style reason and do not auto-retry/solve/reload through it,
-- do not add broad DOM/title challenge guesses to Core; explicit response markers or separately live-verified site states are preferred,
-- add lightweight Batch/candidate HTTP/access metrics including request counts, 403/429/5xx/challenge counts, retry counts, elapsed time, host counts, and cheap response-byte accounting,
-- persist those metrics as incremental JSONL runtime output under `output/metrics/`, not as Catalog rows or a new metrics database,
-- print a concise Batch summary and metrics path on normal and abnormal completion,
-- do not fetch/read response bodies solely for metrics,
-- do not add guessed 100/200-page session cutoffs or automatic browser restarts before real request/elapsed/challenge data has been observed; existing `--limit` can bound an operator-run when desired,
-- do not add proxy/IP rotation, UA/fingerprint spoofing, CAPTCHA/WAF bypass, challenge solving, browser/profile/session cycling, or random timing intended to disguise automation.
+- retain the existing conservative `access_granted_until = consumed_at + 71 hours` behavior,
+- keep resource switching explicit: a Work Ticket attempt never silently consumes Premium and a Premium attempt never silently consumes Work Ticket,
+- fail closed on ambiguous access UI or classification failure.
 
-Implementation remains intentionally split into four reviewable phases:
+Shared behavior applied to Magapoke through `docs/ACCESS_CONTROL_AND_PACING.md`:
 
-1. shared settings/pacing + Magapoke ordering,
-2. Work Ticket grant-only,
-3. Premium/all grant-only,
-4. access fail-safe + JSONL metrics.
+- root `crawler.yaml`,
+- `page_turn_delay_ms: 1000`,
+- `inter_candidate_delay_ms: 3000`,
+- CONTENT pacing after save/progress and before initial `go_next`, outside timeout/retry budgets,
+- no pacing for AD, loading polling, same-content waits, ticket confirmation, or adapter retries,
+- per-site 403/429/challenge/CAPTCHA stop policy,
+- relevant-host filtering,
+- distinct `challenge_detected` and `captcha_detected` reasons,
+- conservative visible CAPTCHA detection,
+- no automatic retry/reload/solve/bypass through challenge/CAPTCHA,
+- incremental JSONL Batch metrics under `output/metrics/`, including abnormal stops,
+- no guessed 100/200-page session threshold or automatic browser restart without evidence.
 
-Phase 1 must explicitly test `save -> one pacing delay -> initial go_next -> wait_for_change`, no delay on AD, no reapplication on adapter retry, no timeout-budget consumption, and preservation of existing Manga ONE / BookWalker / Magapoke navigation semantics.
+Implementation follows the shared repository-wide phases:
 
-See the authority document for acceptance criteria and detailed semantics.
+1. runtime settings/pacing + Magapoke ordering,
+2. shared AccessGuard + metrics wired to Magapoke/Manga ONE/BookWalker,
+3. generic access-resource selection contract,
+4. generic grant-only + Magapoke Work Ticket,
+5. Magapoke Premium/all,
+6. cross-site regression and live verification.
+
+Key regression requirements include:
+
+- `save -> one pacing delay -> initial go_next -> wait_for_change`,
+- no pacing on AD or adapter retry,
+- pacing outside timeout budgets,
+- existing Magapoke/Manga ONE/BookWalker navigation semantics preserved,
+- relevant-host 403/429 stop while unrelated third-party 403/429 do not,
+- explicit challenge and visible CAPTCHA stop without automatic solve/retry,
+- metrics survive abnormal stop,
+- grant-only does not capture/package/complete,
+- generic Batch contains no Magapoke resource-name branching,
+- existing Magapoke native capture, ticket confirmation, and 71-hour grant behavior remain covered.
+
+See the authority documents for detailed acceptance criteria and non-goals.
