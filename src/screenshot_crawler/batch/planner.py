@@ -23,6 +23,7 @@ from screenshot_crawler.catalog import (
     Work,
 )
 from screenshot_crawler.catalog.service import JST, now_jst
+from screenshot_crawler.core.packaging import archive_stem
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
 
@@ -57,6 +58,9 @@ class BatchPlanner:
         for target in targets:
             targets_by_source[target.source_id].append(target)
         works_by_id = {work.id: work for work in works}
+        magapoke_collision_item_ids = _magapoke_collision_item_ids(
+            items, sources, works_by_id
+        )
         # A site-scoped plan only considers items with at least one source for that site.
         site_item_ids = set(sources_by_item)
         plan = BatchPlan()
@@ -139,7 +143,12 @@ class BatchPlanner:
                     elif selection.item.id in accepted_ids:
                         ordered_selections.append(next(quota_iter))
             for selection in ordered_selections:
-                plan.candidates.append(_candidate_from_selection(selection))
+                plan.candidates.append(
+                    _candidate_from_selection(
+                        selection,
+                        magapoke_collision_item_ids=magapoke_collision_item_ids,
+                    )
+                )
 
             plan.quota_remaining = (
                 None
@@ -218,7 +227,11 @@ class _Selection:
     decision: PolicyDecision
 
 
-def _candidate_from_selection(selection: _Selection) -> BatchCandidate:
+def _candidate_from_selection(
+    selection: _Selection,
+    *,
+    magapoke_collision_item_ids: set[int],
+) -> BatchCandidate:
     item = selection.item
     source = selection.source
     decision = selection.decision
@@ -237,7 +250,11 @@ def _candidate_from_selection(selection: _Selection) -> BatchCandidate:
         artifact_disambiguator=(
             f"mangaone-{source.external_id}"
             if source.site == "mangaone" and item.order_key is None
-            else None
+            else (
+                f"magapoke-{source.external_id}"
+                if source.site == "magapoke" and item.id in magapoke_collision_item_ids
+                else None
+            )
         ),
         access_mode=source.access_mode,
         reason=decision.reason,
@@ -247,6 +264,39 @@ def _candidate_from_selection(selection: _Selection) -> BatchCandidate:
         quota_limit=decision.quota_limit,
         quota_commit_mode=decision.quota_commit_mode,
     )
+
+
+def _magapoke_collision_item_ids(
+    items: Iterable[Item],
+    sources: Iterable[Source],
+    works_by_id: dict[int, Work],
+) -> set[int]:
+    """Return Magapoke Items whose base archive stem collides within a Work.
+
+    The snapshot intentionally includes every Item status.  A completed Item's
+    existing archive must still disambiguate a later pending Item with the same
+    final, sanitized archive stem.
+    """
+
+    items_by_id = {item.id: item for item in items}
+    stems_by_work: dict[tuple[int, str], set[int]] = defaultdict(set)
+    for source in sources:
+        if source.site != "magapoke":
+            continue
+        item = items_by_id.get(source.item_id)
+        if item is None:
+            continue
+        work = works_by_id.get(item.work_id)
+        if work is None:
+            continue
+        base_stem, *_ = archive_stem(_metadata(work, item))
+        stems_by_work[(work.id, base_stem)].add(item.id)
+
+    collision_item_ids: set[int] = set()
+    for item_ids in stems_by_work.values():
+        if len(item_ids) > 1:
+            collision_item_ids.update(item_ids)
+    return collision_item_ids
 
 
 def _normalize_now(value: datetime) -> datetime:

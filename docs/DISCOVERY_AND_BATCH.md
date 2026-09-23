@@ -1067,7 +1067,9 @@ BatchCandidateは必要な場合だけ、Crawlerのmetadataとは別のpackaging
 `artifact_disambiguator`を持てる。これはarchive stem、ZIP内部root、completion status
 filenameのsuffixに使うが、`title` / `order`等のmetadataやCatalogの`order_label`は変更しない。
 Manga ONEの`order_key = NULL` itemでは、Batch Plannerがstableな
-`mangaone-{Source.external_id}`を設定する。通常item、手動crawl、他siteでは未指定とする。
+`mangaone-{Source.external_id}`を設定する。Magapokeでは同一Work内の全statusのItemを
+対象に、packagingの`archive_stem()`後のbase stemが重複するgroupへだけ
+`magapoke-{Source.external_id}`を設定する。通常item、手動crawl、他siteでは未指定とする。
 
 手動crawlでは:
 

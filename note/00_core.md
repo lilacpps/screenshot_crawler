@@ -425,6 +425,9 @@ Batch Candidateは必要な場合だけsite-neutralな`artifact_disambiguator`�
 これはmetadataの`title` / `order` / `author` / `genre`を変更せず、archive stemの末尾へ追加する。
 通常のmanual crawlやdisambiguator未指定のBatchでは従来のfilenameを維持する。
 Manga ONEの非定型itemではBatch Plannerが`mangaone-{Source.external_id}`を設定する。
+Magapokeでは同一Work内の全statusのItemを対象に、既存の`archive_stem()`で
+disambiguatorなしに生成したbase stemが重複するItemへだけ、
+`magapoke-{Source.external_id}`を設定する。通常のMagapoke episodeは従来のfilenameを維持する。
 ZIP内部のtop-level directoryとcompletion status JSONのfilenameも同じstemを使い、
 destination存在時の`FileExistsError`と自動連番なしの安全性を維持する。
 
@@ -630,7 +633,7 @@ Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request
 - metadata未指定なら現行Adapter自動取得を維持する
 - crawl + packaging成功時だけArtifact(present)、CrawlRun(succeeded)、Item(completed)を1 transactionで確定
 
-Phase 5AのBatch Plannerは `pending` itemだけを対象にし、completed / unavailable / paid / unknownをskipする。source priorityは期限付きfree、通常free、owned、quota、paid/unknownの順で、同順位はsource.id ASC。複数のquota-consuming candidateが新規枠を必要とする場合、quota仮予約の順序は`source.discovery_key`ごとのDiscovery groupをgroup内最小source.id（Catalog登録順）で並べ、group内を`order_key`のnatural orderで並べる。`order_key`を解釈できない場合は`order_label`、最後にitem.idのstable fallbackを使う。`discovery_key = NULL`のcandidateは明示groupの後ろに置く。free、owned、active grant中のquota sourceはdirectのままでこのquota allocation順序に入らない。Catalog metadataは`Work.title -> title`、`Work.author -> author`、`Item.order_label -> order`、`Work.genre -> genre`でcandidateへ写し、NULL/空値は省略する。Manga ONEで`item.order_key`がNULLの場合だけ、`Source.external_id`由来の`mangaone-{external_id}`をcandidateのartifact disambiguatorへ設定する。
+Phase 5AのBatch Plannerは `pending` itemだけを対象にし、completed / unavailable / paid / unknownをskipする。source priorityは期限付きfree、通常free、owned、quota、paid/unknownの順で、同順位はsource.id ASC。複数のquota-consuming candidateが新規枠を必要とする場合、quota仮予約の順序は`source.discovery_key`ごとのDiscovery groupをgroup内最小source.id（Catalog登録順）で並べ、group内を`order_key`のnatural orderで並べる。`order_key`を解釈できない場合は`order_label`、最後にitem.idのstable fallbackを使う。`discovery_key = NULL`のcandidateは明示groupの後ろに置く。free、owned、active grant中のquota sourceはdirectのままでこのquota allocation順序に入らない。Catalog metadataは`Work.title -> title`、`Work.author -> author`、`Item.order_label -> order`、`Work.genre -> genre`でcandidateへ写し、NULL/空値は省略する。Manga ONEで`item.order_key`がNULLの場合だけ、`Source.external_id`由来の`mangaone-{external_id}`をcandidateのartifact disambiguatorへ設定する。Magapokeではpendingだけでなく同一Work内の全statusのItemをcollision判定へ含め、`archive_stem()`後のbase stemが重複するgroup全体へ`magapoke-{Source.external_id}`を設定する。
 
 Manga ONE Policyはsite-wide local quotaを4枠、09:00/21:00 JSTのhalf-open window、24時間grantとして扱う。current window内の`quota_started_at`だけを数え、active grant（`access_granted_until > now`）はdirectでslotを減らさない。quota candidateはplanner内だけで仮予約し、Catalogは変更しない。手動・外部clientの実消費はCatalogから観測できない。
 

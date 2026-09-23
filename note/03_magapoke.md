@@ -11,6 +11,8 @@ behavior remain out of scope.
 
 ## Current Batch behavior (M3c1 and M3c2)
 
+- Magapoke Batchのarchive stemは通常のepisodeでは従来名を維持する。同一Work内で、全statusのCatalog Itemを対象に、packagingの`archive_stem()`でdisambiguatorなしに生成したbase stemが重複する場合だけ、collision groupのpending candidateへ`magapoke-{Source.external_id}`を設定する。completed Itemも判定対象だが、通常Batchのcandidateには含めない。既存ZIPがある場合のpackaging `FileExistsError` と自動renameなしの安全性は維持する。
+
 - Catalog schema v4 stores nullable `sources.published_at`. This is the
   Magapoke-observed publication date for that Source, not an Item property.
 - The live row date selector is `p.c-episode-item__date`; the observed text

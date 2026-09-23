@@ -15,6 +15,7 @@ from screenshot_crawler.catalog import (
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
+    MagapokeSitePolicy,
     MangaOneSitePolicy,
     SitePolicyRegistry,
 )
@@ -25,6 +26,12 @@ NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
 def make_registry() -> SitePolicyRegistry:
     registry = SitePolicyRegistry()
     registry.register("mangaone", MangaOneSitePolicy)
+    return registry
+
+
+def make_magapoke_registry() -> SitePolicyRegistry:
+    registry = SitePolicyRegistry()
+    registry.register("magapoke", MagapokeSitePolicy)
     return registry
 
 
@@ -88,6 +95,35 @@ def add_item(
 
 def plan_for(service: CatalogService, *, now: datetime = NOW):
     return BatchPlanner(service, make_registry()).plan(site="mangaone", now=now)
+
+
+def magapoke_plan_for(service: CatalogService, *, now: datetime = NOW):
+    return BatchPlanner(service, make_magapoke_registry()).plan(site="magapoke", now=now)
+
+
+def add_magapoke_source(
+    service: CatalogService,
+    *,
+    work,
+    order_label: str,
+    external_id: str,
+    status: str = "pending",
+):
+    item = service.create_item(
+        ItemInput(item_title=order_label, order_label=order_label, status=status),
+        work_id=work.id,
+    )
+    source = service.create_source(
+        SourceInput(site="magapoke", external_id=external_id, access_mode="free"),
+        item_id=item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(
+            backend="web", locator=f"https://magapoke.example/episode/{external_id}"
+        ),
+        source_id=source.id,
+    )
+    return item, source
 
 
 def test_pending_only_and_basic_access_modes(tmp_path: Path) -> None:
@@ -257,6 +293,80 @@ def test_mangaone_non_numeric_order_gets_stable_artifact_disambiguator(tmp_path:
     assert candidates[second_source.id].metadata["order"] == "おまけ"
     assert candidates[first_source.id].item_id == first_item.id
     assert candidates[second_source.id].item_id == second_item.id
+
+
+def test_magapoke_distinct_episode_labels_keep_normal_filename(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="magapoke-work", title="作品A"))
+    _, first_source = add_magapoke_source(
+        service, work=work, order_label="【第1話】", external_id="1"
+    )
+    _, second_source = add_magapoke_source(
+        service, work=work, order_label="【第2話】", external_id="2"
+    )
+
+    candidates = {candidate.source_id: candidate for candidate in magapoke_plan_for(service).candidates}
+
+    assert candidates[first_source.id].artifact_disambiguator is None
+    assert candidates[second_source.id].artifact_disambiguator is None
+
+
+def test_magapoke_pending_collision_disambiguates_every_item(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="magapoke-work", title="作品A"))
+    _, first_source = add_magapoke_source(
+        service, work=work, order_label="【番外編(1)】", external_id="100"
+    )
+    _, second_source = add_magapoke_source(
+        service, work=work, order_label="【番外編(1)】", external_id="200"
+    )
+
+    candidates = {candidate.source_id: candidate for candidate in magapoke_plan_for(service).candidates}
+
+    assert candidates[first_source.id].artifact_disambiguator == "magapoke-100"
+    assert candidates[second_source.id].artifact_disambiguator == "magapoke-200"
+
+
+def test_magapoke_completed_item_participates_in_collision_detection(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="magapoke-work", title="作品A"))
+    completed_item, _ = add_magapoke_source(
+        service,
+        work=work,
+        order_label="【単行本宣伝話】",
+        external_id="100",
+        status="completed",
+    )
+    _, pending_source = add_magapoke_source(
+        service,
+        work=work,
+        order_label="【単行本宣伝話】",
+        external_id="200",
+    )
+
+    plan = magapoke_plan_for(service)
+
+    assert completed_item.id not in {candidate.item_id for candidate in plan.candidates}
+    assert plan.candidates[0].source_id == pending_source.id
+    assert plan.candidates[0].artifact_disambiguator == "magapoke-200"
+
+
+def test_magapoke_sanitized_archive_stem_collision_disambiguates_items(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="magapoke-work", title="作品A"))
+    _, first_source = add_magapoke_source(
+        service, work=work, order_label="番外/編", external_id="100"
+    )
+    _, second_source = add_magapoke_source(
+        service, work=work, order_label="番外編", external_id="200"
+    )
+
+    candidates = {candidate.source_id: candidate for candidate in magapoke_plan_for(service).candidates}
+
+    assert candidates[first_source.id].artifact_disambiguator == "magapoke-100"
+    assert candidates[second_source.id].artifact_disambiguator == "magapoke-200"
 
 
 def test_mangaone_numeric_order_has_no_artifact_disambiguator(tmp_path: Path) -> None:
