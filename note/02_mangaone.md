@@ -660,4 +660,7 @@ capture behaviorはsource-native WebP優先、ページ単位PNG fallbackであ�
 Manga ONEはroot `crawler.yaml`からresolvedされた`page_turn_delay_ms`をCONTENT artifactとmanifest/progressの
 persist後、initial `go_next()`直前に1回だけ使う。Batchではcandidate Pageのclose後、次のsite-accessing candidate前に
 `inter_candidate_delay_ms`を1回だけ使う。既存のManga ONE `wait_for_change()` retry、END判定、timeout budgetは
-変更していない。AccessGuard、403/429、challenge/CAPTCHA、metrics、grant-onlyは未実装である。
+変更していない。Phase 2ではManga ONE adapterがshared AccessGuardへ接続され、
+`manga-one.com`と`app.manga-one.com`のrelevant hostだけの403/429をfatal stopとする。
+explicit challengeとvisible CAPTCHAも共通stop reason/Batch JSONL metricsへ記録する。
+site-specific signalのlive verificationは未実施で、grant-onlyは未実装である。

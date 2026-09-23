@@ -779,4 +779,7 @@ BatchはsiteへアクセスしたcandidateのPageをcloseした後、次のsite-
 
 Magapoke BatchはDiscoveryのlatest-firstを維持し、同一Work内を`published_at ASC (NULL last), source_id ASC`
 で処理する。既存のdirect先行とWork間orderingは維持する。AccessGuard、403/429 stop、challenge/CAPTCHA、
-JSONL metrics、grant-only、resource selection拡張、Work Ticket cooldown persistenceはPhase 2以降で未実装である。
+Phase 2のAccessGuardは3site共通で接続済みで、relevant hostの403/429、明示challenge、visible
+CAPTCHAをdistinct stop reasonとして扱う。Batchのbody-free access metricsは`output/metrics/*.jsonl`
+へ逐次flushされ、fatal stop前のCatalog更新とmetricsを保持する。resource selection拡張、grant-only、
+Work Ticket cooldown persistenceはPhase 3以降で未実装である。

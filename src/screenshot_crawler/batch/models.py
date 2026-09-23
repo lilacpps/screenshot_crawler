@@ -16,6 +16,10 @@ class BatchPlanningError(RuntimeError):
 class BatchExecutionError(RuntimeError):
     """Raised when a Batch candidate cannot be completed safely."""
 
+    def __init__(self, message: str, *, access_stop: BaseException | None = None) -> None:
+        self.access_stop = access_stop
+        super().__init__(message)
+
 
 @dataclass(frozen=True, slots=True)
 class BatchCandidate:

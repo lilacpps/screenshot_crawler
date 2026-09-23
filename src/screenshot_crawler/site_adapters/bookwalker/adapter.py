@@ -18,6 +18,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult, capture_png_bytes
 from screenshot_crawler.core.errors import (
     CaptureUnavailableError,
@@ -27,6 +28,7 @@ from screenshot_crawler.core.errors import (
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.bookwalker.access import bookwalker_access_profile
 from screenshot_crawler.site_adapters.bookwalker.login import login_bookwalker
 from screenshot_crawler.site_adapters.bookwalker.native_capture import (
     select_native_draw_calls,
@@ -422,6 +424,9 @@ class BookWalkerAdapter(SiteAdapter):
             tuple[tuple[int | None, int | None, str], ...],
             tuple[str, ...] | None,
         ] = {}
+
+    def get_access_profile(self) -> AccessProfile:
+        return bookwalker_access_profile()
 
     async def configure_run(
         self, page: Page, access_strategy: AccessStrategy

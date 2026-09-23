@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+from screenshot_crawler.core.access_guard import AccessEvent
 
 AccessStrategy = Literal["auto", "direct", "quota"]
 VALID_ACCESS_STRATEGIES = frozenset({"auto", "direct", "quota"})
@@ -62,6 +64,12 @@ class RunConfig:
     page_change_timeout_ms: int = 10_000
     adapter_timeout_grace_ms: int = 2_000
     page_turn_delay_ms: int = 1_000
+    stop_on_http_403: bool = True
+    stop_on_http_429: bool = True
+    stop_on_challenge: bool = True
+    stop_on_captcha: bool = True
+    access_event_sink: Callable[[AccessEvent], None] | None = None
+    diagnostics_metadata: Mapping[str, Any] | None = field(default_factory=dict)
     auth_state: Path | None = None
     auth_required: bool = False
     device_scale_factor: float = 1.0
@@ -76,22 +84,36 @@ class RunConfig:
             raise TypeError("page_turn_delay_ms must be a non-negative integer")
         if self.page_turn_delay_ms < 0:
             raise ValueError("page_turn_delay_ms must be a non-negative integer")
+        for field_name in (
+            "stop_on_http_403",
+            "stop_on_http_429",
+            "stop_on_challenge",
+            "stop_on_captcha",
+        ):
+            if not isinstance(getattr(self, field_name), bool):
+                raise TypeError(f"{field_name} must be a boolean")
         if self.access_strategy not in VALID_ACCESS_STRATEGIES:
             raise ValueError("access_strategy must be one of: auto, direct, quota")
 
         if self.output_metadata is None:
             self.output_metadata = {}
-            return
-        if not isinstance(self.output_metadata, Mapping):
-            raise TypeError("output_metadata must be a mapping or None")
+        else:
+            if not isinstance(self.output_metadata, Mapping):
+                raise TypeError("output_metadata must be a mapping or None")
 
-        unknown_fields = set(self.output_metadata) - OUTPUT_METADATA_FIELDS
-        if unknown_fields:
-            fields = ", ".join(sorted(unknown_fields))
-            raise ValueError(f"unsupported output metadata field(s): {fields}")
-        for field_name, value in self.output_metadata.items():
-            if value is not None and not isinstance(value, str):
-                raise TypeError(
-                    f"output metadata field {field_name!r} must be a string or None"
-                )
-        self.output_metadata = dict(self.output_metadata)
+            unknown_fields = set(self.output_metadata) - OUTPUT_METADATA_FIELDS
+            if unknown_fields:
+                fields = ", ".join(sorted(unknown_fields))
+                raise ValueError(f"unsupported output metadata field(s): {fields}")
+            for field_name, value in self.output_metadata.items():
+                if value is not None and not isinstance(value, str):
+                    raise TypeError(
+                        f"output metadata field {field_name!r} must be a string or None"
+                    )
+            self.output_metadata = dict(self.output_metadata)
+        if self.diagnostics_metadata is None:
+            self.diagnostics_metadata = {}
+        elif not isinstance(self.diagnostics_metadata, Mapping):
+            raise TypeError("diagnostics_metadata must be a mapping or None")
+        else:
+            self.diagnostics_metadata = dict(self.diagnostics_metadata)

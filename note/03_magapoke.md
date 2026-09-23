@@ -732,5 +732,7 @@ Work間stable orderingを維持し、同一Workの各Batch phase内を`published
 old-to-newに並べる。root `crawler.yaml`の`page_turn_delay_ms`はCONTENTの全artifactとprogress persist後、
 initial `go_next()`直前に1回だけ適用する。Batchの`inter_candidate_delay_ms`はcandidate Page close後、次の
 site-accessing candidate前に1回だけ適用する。Magapoke adapterのnavigation retry、Work Ticket、Premium Ticket、
-direct accessの既存挙動は変更していない。AccessGuard、403/429、challenge/CAPTCHA、JSONL metrics、grant-only、
-cooldown persistenceは未実装である。
+direct accessの既存挙動は変更していない。Phase 2ではMagapoke adapterがshared AccessGuardへ接続され、
+`pocket.shonenmagazine.com`と`mgpk-cdn.magazinepocket.com`のrelevant hostだけの403/429をfatal stopとする。
+explicit challengeとvisible CAPTCHAも共通stop reason/Batch JSONL metricsへ記録する。
+site-specific signalのlive verificationは未実施で、grant-onlyとcooldown persistenceは未実装である。

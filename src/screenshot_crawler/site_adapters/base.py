@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import UnsupportedAccessStrategyError
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
@@ -31,6 +32,11 @@ class SiteAdapter(ABC):
         """Optionally install page hooks before the first navigation."""
 
         return
+
+    def get_access_profile(self) -> AccessProfile:
+        """Return site-owned host and access-signal classification metadata."""
+
+        return AccessProfile()
 
     async def configure_run(
         self, page: Page, access_strategy: AccessStrategy

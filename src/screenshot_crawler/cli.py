@@ -22,6 +22,7 @@ from screenshot_crawler.batch import (
     BatchPlanner,
     BatchPlanningError,
 )
+from screenshot_crawler.batch.metrics import BatchMetricsWriter
 from screenshot_crawler.catalog import CatalogError, CatalogService
 from screenshot_crawler.catalog.backup import backup_catalog, default_backup_path
 from screenshot_crawler.catalog.export import export_catalog_csv
@@ -36,7 +37,7 @@ from screenshot_crawler.core.browser import (
     launch_browser,
     resolve_cdp_endpoint,
 )
-from screenshot_crawler.core.errors import AccessResourceUnavailableError
+from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.progress import normalize_path
@@ -436,6 +437,10 @@ async def _run_crawl(args: argparse.Namespace) -> None:
         max_pages=args.max_pages,
         max_same_content=args.max_same_content,
         page_turn_delay_ms=runtime_settings.page_turn_delay_ms,
+        stop_on_http_403=runtime_settings.stop_on_http_403,
+        stop_on_http_429=runtime_settings.stop_on_http_429,
+        stop_on_challenge=runtime_settings.stop_on_challenge,
+        stop_on_captcha=runtime_settings.stop_on_captcha,
         access_strategy=args.access_strategy,
         output_metadata={
             field_name: value
@@ -780,6 +785,8 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
     plan = planner.plan(site=args.site)
     candidates = plan.candidates[: args.limit] if args.limit is not None else plan.candidates
+    metrics = BatchMetricsWriter("output/metrics", site=args.site, mode="normal")
+    metrics.record_planned_skips(plan.skipped)
     print("Batch run:")
     print(f"  site: {args.site}")
     print(f"  planned: {len(plan.candidates)}")
@@ -789,21 +796,27 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     if plan.skipped:
         print(f"  skipped: {len(plan.skipped)}")
     if not candidates:
+        metrics.finish(stop_reason="no_candidates")
+        metrics.close()
+        print(f"  metrics: {metrics.path}")
         return
 
-    values = read_env_file(args.env_file) if args.env_file.is_file() else {}
-    endpoint = resolve_cdp_endpoint(
-        site=args.site,
-        cli_endpoint=args.cdp_endpoint,
-        values=values,
-    )
-    session = await BrowserSession.connect(endpoint)
-    executor = BatchExecutor(catalog, policies, _registry())
-    # Keep the orchestration input site-neutral and preserve compatibility with
-    # lightweight test doubles that implement the pre-Phase-1 constructor.
-    if hasattr(executor, "runtime_settings"):
-        executor.runtime_settings = runtime_settings
+    session = None
     try:
+        values = read_env_file(args.env_file) if args.env_file.is_file() else {}
+        endpoint = resolve_cdp_endpoint(
+            site=args.site,
+            cli_endpoint=args.cdp_endpoint,
+            values=values,
+        )
+        session = await BrowserSession.connect(endpoint)
+        executor = BatchExecutor(catalog, policies, _registry())
+        # Keep the orchestration input site-neutral and preserve compatibility with
+        # lightweight test doubles that implement the pre-Phase-1 constructor.
+        if hasattr(executor, "runtime_settings"):
+            executor.runtime_settings = runtime_settings
+        if hasattr(executor, "access_event_sink"):
+            executor.access_event_sink = metrics.record_access_event
         initial_complete = len(candidates) == len(plan.candidates)
         processed, should_continue = await _execute_batch_candidates(
             args,
@@ -812,6 +825,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             candidates,
             phase="direct/Work Ticket",
             inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+            metrics=metrics,
         )
         if should_continue and initial_complete:
             previous_phase_had_site_access = processed > 0
@@ -842,6 +856,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                     resource_candidates,
                     phase=quota_resource,
                     inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                    metrics=metrics,
                     delay_before_first_ms=(
                         runtime_settings.inter_candidate_delay_ms
                         if previous_phase_had_site_access
@@ -858,8 +873,22 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         if args.keep_open:
             print("Browser is open. Press Enter here to disconnect.")
             await asyncio.to_thread(input)
+    except BaseException as exc:
+        access_stop = getattr(exc, "access_stop", None)
+        metrics.finish(
+            stop_reason=(
+                getattr(access_stop, "reason", None)
+                or getattr(exc, "reason", None)
+                or type(exc).__name__
+            )
+        )
+        raise
     finally:
-        await session.close()
+        if session is not None:
+            await session.close()
+        metrics.finish()
+        print(f"  metrics: {metrics.path}")
+        metrics.close()
 
 
 async def _execute_batch_candidates(
@@ -871,6 +900,7 @@ async def _execute_batch_candidates(
     phase: str,
     inter_candidate_delay_ms: int = 3000,
     delay_before_first_ms: int | None = None,
+    metrics: BatchMetricsWriter | None = None,
 ) -> tuple[int, bool]:
     """Execute a sequential resource phase; return attempts and continue flag."""
 
@@ -886,6 +916,8 @@ async def _execute_batch_candidates(
         page = None
         contacted_site = False
         continue_after_candidate = False
+        if metrics is not None:
+            metrics.start_candidate(candidate)
         try:
             page = await session.new_page()
             contacted_site = True
@@ -899,14 +931,31 @@ async def _execute_batch_candidates(
             )
             print(f"  completed: {result.archive_path}")
             continue_after_candidate = True
+            if metrics is not None:
+                metrics.finish_candidate(
+                    result="completed",
+                    stop_reason=getattr(result, "stop_reason", None),
+                )
         except AccessResourceUnavailableError as exc:
             reason = exc.reason
             print(f"  SKIPPED item={candidate.item_id} reason={reason} ({exc})")
+            if metrics is not None:
+                metrics.finish_candidate(result="skipped", stop_reason=reason)
             if exc.stop_resource_pass:
                 print("  Resource is exhausted; stopping this resource pass.")
                 return index, False
             continue_after_candidate = True
         except BaseException as exc:
+            if metrics is not None:
+                access_stop = getattr(exc, "access_stop", None)
+                metrics.finish_candidate(
+                    result="failed",
+                    stop_reason=(
+                        getattr(access_stop, "reason", None)
+                        or getattr(exc, "reason", None)
+                        or type(exc).__name__
+                    ),
+                )
             print("FAILED:", file=sys.stderr)
             print(f"  item={candidate.item_id}", file=sys.stderr)
             print(f"  source={candidate.source_id}", file=sys.stderr)
@@ -963,6 +1012,9 @@ def main() -> None:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     except BatchExecutionError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    except AccessStopError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     except DiscoveryAllError as exc:

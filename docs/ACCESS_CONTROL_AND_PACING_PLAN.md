@@ -2,7 +2,8 @@
 
 This implementation plan accompanies `docs/ACCESS_CONTROL_AND_PACING.md` and the site-specific access specifications.
 
-Phase 1 status: **IMPLEMENTED**. Phase 2 and later remain planned.
+Phase 1 status: **IMPLEMENTED**. Phase 2 status: **IMPLEMENTED**.
+Phase 3 through Phase 6 remain **PLANNED / NOT YET IMPLEMENTED**.
 
 ## Phase 1 - Runtime settings, pacing, and site ordering
 
@@ -34,6 +35,8 @@ Phase 1 status: **IMPLEMENTED**. Phase 2 and later remain planned.
 - Manga ONE / BookWalker navigation regression.
 
 ## Phase 2 - Shared AccessGuard and metrics
+
+Status: **IMPLEMENTED**.
 
 ### Changes
 

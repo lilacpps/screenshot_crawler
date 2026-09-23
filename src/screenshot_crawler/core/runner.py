@@ -9,6 +9,7 @@ from pathlib import Path
 
 from playwright.async_api import Page
 
+from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.capture import capture_locator, save_capture
 from screenshot_crawler.core.diagnostics import write_diagnostics
 from screenshot_crawler.core.errors import (
@@ -103,15 +104,89 @@ class CrawlerRunner:
             if timeout_ms is None
             else timeout_ms
         )
+        timeout_seconds = (budget_ms + self.config.adapter_timeout_grace_ms) / 1000
+        guard = getattr(self, "_access_guard", None)
+        if guard is None:
+            try:
+                return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+            except TimeoutError as exc:
+                raise PageChangeTimeoutError(
+                    f"Adapter operation timed out: {operation}"
+                ) from exc
+
+        operation_task = asyncio.ensure_future(awaitable)
+        stop_task = asyncio.create_task(guard.wait_for_stop())
         try:
-            return await asyncio.wait_for(
-                awaitable,
-                timeout=(budget_ms + self.config.adapter_timeout_grace_ms) / 1000,
+            done, _pending = await asyncio.wait(
+                {operation_task, stop_task},
+                timeout=timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
             )
-        except TimeoutError as exc:
-            raise PageChangeTimeoutError(
-                f"Adapter operation timed out: {operation}"
-            ) from exc
+            if stop_task in done:
+                operation_task.cancel()
+                await asyncio.gather(operation_task, return_exceptions=True)
+                error = stop_task.result()
+                if error is not None:
+                    raise error
+            if operation_task not in done:
+                operation_task.cancel()
+                await asyncio.gather(operation_task, return_exceptions=True)
+                raise PageChangeTimeoutError(
+                    f"Adapter operation timed out: {operation}"
+                )
+            return operation_task.result()
+        finally:
+            if not stop_task.done():
+                stop_task.cancel()
+                await asyncio.gather(stop_task, return_exceptions=True)
+
+    async def _check_access(self, page: Page) -> None:
+        guard = getattr(self, "_access_guard", None)
+        if guard is not None:
+            await guard.check_page(page)
+
+    async def _write_failure_diagnostics(
+        self,
+        page: Page,
+        error: BaseException,
+        *,
+        state: PageState = PageState.UNKNOWN,
+        current_context: object | None = None,
+        saved_pages: int = 0,
+    ) -> None:
+        metadata = dict(self.config.diagnostics_metadata or {})
+        metadata.update(
+            {
+                "detected_state": state.value,
+                "content_context": asdict(current_context)
+                if current_context is not None
+                else {},
+                "saved_pages": saved_pages,
+            }
+        )
+        if hasattr(error, "reason") and hasattr(error, "url"):
+            metadata["access_stop"] = {
+                "reason": error.reason,
+                "site": getattr(error, "site", self.config.site),
+                "url": error.url,
+                "host": getattr(error, "host", None),
+                "status": getattr(error, "status", None),
+                "retry_after": getattr(error, "retry_after", None),
+                "classification": getattr(error, "classification", None),
+                "provider": getattr(error, "provider", None),
+            }
+        try:
+            await asyncio.wait_for(
+                write_diagnostics(
+                    page,
+                    self.config.diagnostics_dir,
+                    metadata=metadata,
+                    error=error,
+                ),
+                timeout=20,
+            )
+        except BaseException:  # noqa: BLE001, S110
+            pass
 
     async def _detect_non_loading_state(self, page: Page, adapter: SiteAdapter) -> PageState:
         state = await self._adapter_call(adapter.detect_state(page), "detect_state")
@@ -128,38 +203,58 @@ class CrawlerRunner:
         output_dir = normalize_path(self.config.output_dir)
         ensure_new_run(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        await self._adapter_call(adapter.prepare_page(page), "prepare_page")
-        await self._adapter_call(
-            adapter.configure_run(page, self.config.access_strategy),
-            "configure_run",
-        )
-        # Validate the resource before navigation can expose an access screen.
-        await self._adapter_call(
-            adapter.configure_quota_resource(page, self.config.quota_resource),
-            "configure_quota_resource",
-        )
-        await page.goto(
-            self.config.source_url,
-            timeout=self.config.navigation_timeout_ms,
-            wait_until="commit",
-        )
-        await self._adapter_call(
-            adapter.initialize(page),
-            "initialize",
-            timeout_ms=adapter.get_initialize_timeout_ms(
-                adapter.get_page_change_timeout_ms(self.config.page_change_timeout_ms)
-            ),
-        )
-        initial_context = await self._adapter_call(
-            adapter.get_content_context(page), "get_content_context"
-        )
-        store = ProgressStore(
-            manifest_path=output_dir / "manifest.json",
-            progress_path=output_dir / "progress.json",
-            source_url=self.config.source_url,
+        profile = adapter.get_access_profile()
+        guard = AccessGuard.from_profile(
             site=self.config.site,
-            content_context=initial_context,
+            profile=profile,
+            stop_on_http_403=self.config.stop_on_http_403,
+            stop_on_http_429=self.config.stop_on_http_429,
+            stop_on_challenge=self.config.stop_on_challenge,
+            stop_on_captcha=self.config.stop_on_captcha,
+            event_sink=self.config.access_event_sink,
         )
+        self._access_guard = guard
+        guard.start(page)
+        try:
+            await self._adapter_call(adapter.prepare_page(page), "prepare_page")
+            await self._adapter_call(
+                adapter.configure_run(page, self.config.access_strategy),
+                "configure_run",
+            )
+            # Validate the resource before navigation can expose an access screen.
+            await self._adapter_call(
+                adapter.configure_quota_resource(page, self.config.quota_resource),
+                "configure_quota_resource",
+            )
+            await page.goto(
+                self.config.source_url,
+                timeout=self.config.navigation_timeout_ms,
+                wait_until="commit",
+            )
+            await self._check_access(page)
+            await self._adapter_call(
+                adapter.initialize(page),
+                "initialize",
+                timeout_ms=adapter.get_initialize_timeout_ms(
+                    adapter.get_page_change_timeout_ms(self.config.page_change_timeout_ms)
+                ),
+            )
+            await self._check_access(page)
+            initial_context = await self._adapter_call(
+                adapter.get_content_context(page), "get_content_context"
+            )
+            store = ProgressStore(
+                manifest_path=output_dir / "manifest.json",
+                progress_path=output_dir / "progress.json",
+                source_url=self.config.source_url,
+                site=self.config.site,
+                content_context=initial_context,
+            )
+        except BaseException as exc:
+            await self._write_failure_diagnostics(page, exc)
+            await guard.close()
+            self._access_guard = None
+            raise
 
         saved_pages: list[CapturedPage] = []
         seen_identities: set[tuple[object, ...]] = set()
@@ -169,6 +264,7 @@ class CrawlerRunner:
 
         try:
             while True:
+                await self._check_access(page)
                 state = await self._detect_non_loading_state(page, adapter)
                 if state in {PageState.END, PageState.NEXT_CONTENT}:
                     return RunResult(tuple(saved_pages), state, state.value)
@@ -194,6 +290,7 @@ class CrawlerRunner:
                 current_context = await self._adapter_call(
                     adapter.get_content_context(page), "get_content_context"
                 )
+                await self._check_access(page)
                 if _has_context(initial_context) and _has_context(current_context) and _context_changed(
                     initial_context, current_context
                 ):
@@ -202,6 +299,7 @@ class CrawlerRunner:
                 identity = await self._adapter_call(
                     adapter.get_content_identity(page), "get_content_identity"
                 )
+                await self._check_access(page)
                 identity_key = _identity_key(identity)
                 try:
                     captures = await self._adapter_call(
@@ -225,6 +323,7 @@ class CrawlerRunner:
                         )
                 if not captures:
                     raise LookupError("Adapter returned no capture results")
+                await self._check_access(page)
                 fingerprints = [fingerprint_bytes(capture.data) for capture in captures]
                 new_captures = [
                     (index, capture, fingerprints[index])
@@ -297,25 +396,17 @@ class CrawlerRunner:
         except MaxPagesExceededError:
             raise
         except BaseException as exc:
-            try:
-                await asyncio.wait_for(
-                    write_diagnostics(
-                        page,
-                        self.config.diagnostics_dir,
-                        metadata={
-                            "detected_state": locals().get("state", PageState.UNKNOWN).value,
-                            "content_context": asdict(current_context)
-                            if "current_context" in locals()
-                            else {},
-                            "saved_pages": len(saved_pages),
-                        },
-                        error=exc,
-                    ),
-                    timeout=20,
-                )
-            except BaseException:  # noqa: BLE001, S110
-                pass
+            await self._write_failure_diagnostics(
+                page,
+                exc,
+                state=locals().get("state", PageState.UNKNOWN),
+                current_context=locals().get("current_context"),
+                saved_pages=len(saved_pages),
+            )
             raise
+        finally:
+            await guard.close()
+            self._access_guard = None
 
 
 async def run_crawler(page: Page, adapter: SiteAdapter, config: RunConfig) -> RunResult:

@@ -1121,4 +1121,8 @@ quotaのlive clickによる実quota消費は未実施である。
 BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を
 CONTENT保存後、initial `go_next()`直前に1回だけ使う。Batch candidate間はPage close後に
 `inter_candidate_delay_ms`を1回だけ使う。BookWalkerのexisting navigation retry、END判定、timeout budgetは
-変更していない。AccessGuard、403/429、challenge/CAPTCHA、metrics、grant-onlyは未実装である。
+変更していない。Phase 2ではBookWalker adapterがshared AccessGuardへ接続され、
+`bookwalker.jp`、`viewer.bookwalker.jp`、`viewer-epubs*.bookwalker.jp`、
+`bw-bv-epubs.bookwalker.jp`等のrelevant hostだけの403/429をfatal stopとする。
+explicit challengeとvisible CAPTCHAも共通stop reason/Batch JSONL metricsへ記録する。
+site-specific signalのlive verificationは未実施で、grant-onlyは未実装である。

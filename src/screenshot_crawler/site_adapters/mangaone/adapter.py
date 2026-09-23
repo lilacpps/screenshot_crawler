@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import (
     PageChangeTimeoutError,
@@ -23,6 +24,7 @@ from screenshot_crawler.core.errors import (
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.mangaone.access import mangaone_access_profile
 from screenshot_crawler.site_adapters.mangaone.login import login_mangaone
 from screenshot_crawler.site_adapters.mangaone.native_capture import capture_source_bytes
 
@@ -116,6 +118,9 @@ class MangaOneAdapter(SiteAdapter):
         self._output_order: str | None = None
         self._source_responses: dict[str, object] = {}
         self._source_response_tasks: dict[str, asyncio.Task[bytes | None]] = {}
+
+    def get_access_profile(self) -> AccessProfile:
+        return mangaone_access_profile()
 
     async def prepare_page(self, page: Page) -> None:
         """Record blob response bodies before the chapter navigation starts."""

@@ -18,7 +18,8 @@ from screenshot_crawler.batch.models import (
 )
 from screenshot_crawler.catalog import ArtifactInput, CatalogError, CatalogService
 from screenshot_crawler.catalog.service import JST, now_jst
-from screenshot_crawler.core.errors import AccessResourceUnavailableError
+from screenshot_crawler.core.access_guard import AccessEvent
+from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult, package_crawl_output
 from screenshot_crawler.core.progress import normalize_path
@@ -49,6 +50,7 @@ class BatchExecutor:
         runner_factory: RunnerFactory = CrawlerRunner,
         package_function: PackageFunction = package_crawl_output,
         runtime_settings: SiteRuntimeSettings | None = None,
+        access_event_sink: Callable[[AccessEvent], None] | None = None,
     ) -> None:
         self.catalog = catalog
         self.policies = policies
@@ -56,6 +58,7 @@ class BatchExecutor:
         self.runner_factory = runner_factory
         self.package_function = package_function
         self.runtime_settings = runtime_settings
+        self.access_event_sink = access_event_sink
 
     async def execute_candidate(
         self,
@@ -113,6 +116,33 @@ class BatchExecutor:
                     if self.runtime_settings is not None
                     else DEFAULT_PAGE_TURN_DELAY_MS
                 ),
+                stop_on_http_403=(
+                    self.runtime_settings.stop_on_http_403
+                    if self.runtime_settings is not None
+                    else True
+                ),
+                stop_on_http_429=(
+                    self.runtime_settings.stop_on_http_429
+                    if self.runtime_settings is not None
+                    else True
+                ),
+                stop_on_challenge=(
+                    self.runtime_settings.stop_on_challenge
+                    if self.runtime_settings is not None
+                    else True
+                ),
+                stop_on_captcha=(
+                    self.runtime_settings.stop_on_captcha
+                    if self.runtime_settings is not None
+                    else True
+                ),
+                access_event_sink=self.access_event_sink,
+                diagnostics_metadata={
+                    "item_id": candidate.item_id,
+                    "source_id": candidate.source_id,
+                    "target_id": candidate.target_id,
+                    "site": candidate.site,
+                },
                 access_strategy=candidate.access_strategy,
                 quota_resource=candidate.quota_resource,
                 output_metadata=candidate.metadata,
@@ -167,9 +197,15 @@ class BatchExecutor:
                     exc.add_note(f"Could not record observed quota consumption: {recording_error}")
             if run_id is not None:
                 _record_failed_run(self.catalog, run_id, exc, crawl_result)
-            if isinstance(exc, AccessResourceUnavailableError):
-                raise
+            if isinstance(exc, AccessStopError):
+                raise BatchExecutionError(
+                    f"Fatal access stop for item={candidate.item_id}, "
+                    f"source={candidate.source_id}: {exc.reason}",
+                    access_stop=exc,
+                ) from exc
             if isinstance(exc, BatchExecutionError):
+                raise
+            if isinstance(exc, AccessResourceUnavailableError):
                 raise
             raise BatchExecutionError(
                 f"Batch candidate failed (item={candidate.item_id}, "
@@ -271,7 +307,13 @@ def _record_failed_run(
     crawl_result: RunResult | None,
 ) -> None:
     page_count = len(crawl_result.pages) if crawl_result is not None else None
-    stop_reason = crawl_result.stop_reason if crawl_result is not None else None
+    stop_reason = (
+        crawl_result.stop_reason
+        if crawl_result is not None
+        else getattr(error, "reason", None)
+    )
+    if stop_reason is None and getattr(error, "access_stop", None) is not None:
+        stop_reason = getattr(error.access_stop, "reason", None)
     try:
         catalog.mark_crawl_run_failed(
             run_id,

@@ -1,10 +1,11 @@
 # Shared Access Control / Pacing Plan
 
-Status: **Phase 1 IMPLEMENTED**. Phase 2 and later remain **PLANNED / NOT YET IMPLEMENTED**.
+Status: **Phase 1 IMPLEMENTED; Phase 2 IMPLEMENTED**. Phase 3 through Phase 6 remain
+**PLANNED / NOT YET IMPLEMENTED**.
 
 Authority: `docs/ACCESS_CONTROL_AND_PACING.md`.
 
-This note records the adopted shared plan without describing the behavior as already implemented. Current implementation snapshots remain in each site's existing note until the relevant phase lands; implementation changes must update the applicable current-state note in the same change.
+This note records the adopted shared plan and the current Phase 1/2 implementation state. Current implementation snapshots remain in each site's note and are synchronized when shared behavior affects that site.
 
 Phase 1 current state: root `crawler.yaml` is parsed outside Core into typed per-site settings with safe
 non-zero defaults and explicit zero overrides. CONTENT pacing occurs once after all logical-page artifacts
@@ -13,18 +14,19 @@ Batch pacing occurs once after a site-accessing candidate's Page is closed and o
 candidate. Magapoke Discovery remains latest-first; Batch is old-to-new within each Work by
 `published_at ASC (NULL last), source_id ASC` while existing direct/quota phases and Work ordering remain.
 
-The remaining AccessGuard, 403/429 stop, challenge/CAPTCHA detection, JSONL metrics, resource-selection
-expansion, grant-only, and Work Ticket cooldown persistence are still planned and not implemented.
+Phase 2 current state: the shared `AccessGuard` observes body-free response metadata and
+candidate-scoped visible CAPTCHA/challenge signals for Magapoke, Manga ONE, and BookWalker.
+Relevant first-party 403/429 responses stop the current crawl and Batch, while unrelated
+third-party responses do not. Explicit `cf-mitigated: challenge` and visible reCAPTCHA,
+hCaptcha, and Turnstile UI use distinct fatal reasons. Batch metrics append and flush JSONL
+records under `output/metrics/`; diagnostics include the access stop details. No response body
+is read for metrics. No site-specific challenge/CAPTCHA hook has been live-verified yet.
+
+The remaining resource-selection expansion, grant-only, and Work Ticket cooldown persistence
+are still planned and not implemented.
 
 Remaining planned shared changes:
 
-- add per-site `stop_on_http_403`, `stop_on_http_429`, `stop_on_challenge`, and `stop_on_captcha`,
-- add a reusable AccessGuard with distinct `http_403`, `http_429`, `challenge_detected`, and `captcha_detected` reasons,
-- stop only on relevant-host 403/429 rather than unrelated third-party traffic,
-- detect CAPTCHA conservatively from visible user-facing challenge UI; script presence alone is insufficient,
-- do not auto-retry/reload/solve/bypass CAPTCHA or challenge states,
-- add incremental JSONL Batch metrics under `output/metrics/`, including CAPTCHA counts and abnormal-stop persistence,
-- keep relevant-host and site-specific challenge/CAPTCHA classification in each site integration,
 - define a generic **access resource** selection contract using the existing `quota_resource`, `SitePolicy.evaluate_for_quota_resource()`, `SiteAdapter.configure_quota_resource()`, and `AccessConsumption` extension points,
 - let site policy/integration expose supported resources and pass order,
 - keep generic Batch free of Magapoke resource-name branches,
@@ -38,7 +40,7 @@ Remaining planned shared changes:
 The planned repository-wide implementation remains intentionally phased:
 
 - Phase 1 — Runtime settings, pacing, and site ordering: **IMPLEMENTED**
-- Phase 2 — Shared AccessGuard + CAPTCHA/challenge/403/429 + JSONL metrics: **PLANNED / NOT YET IMPLEMENTED**
+- Phase 2 — Shared AccessGuard + CAPTCHA/challenge/403/429 + JSONL metrics: **IMPLEMENTED**
 - Phase 3 — Generic access-resource selection contract: **PLANNED / NOT YET IMPLEMENTED**
 - Phase 4 — Generic grant-only + first Magapoke Work Ticket integration: **PLANNED / NOT YET IMPLEMENTED**
 - Phase 5 — Magapoke Premium/all integration: **PLANNED / NOT YET IMPLEMENTED**

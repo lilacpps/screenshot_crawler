@@ -10,6 +10,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import (
     AccessResourceUnavailableError,
@@ -19,6 +20,7 @@ from screenshot_crawler.core.errors import (
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import AccessConsumption, SiteAdapter
+from screenshot_crawler.site_adapters.magapoke.access import magapoke_access_profile
 from screenshot_crawler.site_adapters.magapoke.native_capture import (
     MagapokeUrlParts,
     is_magapoke_jpeg_response,
@@ -245,6 +247,9 @@ class MagapokeAdapter(SiteAdapter):
         self._source_response_tasks: dict[str, asyncio.Task[bytes | None]] = {}
         self._output_title: str | None = None
         self._output_order: str | None = None
+
+    def get_access_profile(self) -> AccessProfile:
+        return magapoke_access_profile()
 
     def get_initialize_timeout_ms(self, default_ms: int) -> int:
         # Initialization can sequence readiness, click confirmation, viewer
