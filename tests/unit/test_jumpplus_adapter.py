@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 from types import SimpleNamespace
 
@@ -8,7 +9,8 @@ from PIL import Image
 
 from screenshot_crawler import cli
 from screenshot_crawler.core.capture import CaptureResult
-from screenshot_crawler.core.errors import UnsupportedAccessStrategyError
+from screenshot_crawler.core.errors import PageChangeTimeoutError, UnsupportedAccessStrategyError
+from screenshot_crawler.site_adapters.jumpplus import adapter as jumpplus_adapter_module
 from screenshot_crawler.site_adapters.jumpplus.access import is_jumpplus_relevant_host
 from screenshot_crawler.site_adapters.jumpplus.adapter import _CANVAS_HOOK, JumpPlusAdapter
 from screenshot_crawler.site_adapters.jumpplus.native_capture import (
@@ -148,3 +150,171 @@ def test_jumpplus_renderer_hook_is_lightweight_and_tracks_mutations() -> None:
 
 def test_capture_result_extensions_match_native_provenance() -> None:
     assert CaptureResult(b"x", 1, 1, "image/jpeg", ".jpg").file_extension == ".jpg"
+
+
+class _FakePage:
+    url = "https://shonenjumpplus.com/episode/123"
+
+    def locator(self, _selector: str):
+        return SimpleNamespace(nth=lambda _index: object())
+
+    async def wait_for_timeout(self, _milliseconds: int) -> None:
+        return None
+
+
+async def _completed_task(value: object = None) -> object:
+    return value
+
+
+def _seed_source_cache(adapter: JumpPlusAdapter, urls: list[str]) -> None:
+    for url in urls:
+        adapter._source_responses[url] = object()
+        adapter._source_tasks[url] = asyncio.create_task(_completed_task())  # type: ignore[assignment]
+
+
+@pytest.mark.asyncio
+async def test_capture_fallback_releases_used_source_but_retains_prefetch_cache(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _FakePage()
+    _seed_source_cache(adapter, ["page1.jpg", "page2.jpg", "page3.jpg"])
+
+    async def rows(_page):
+        return [{"index": 0, "pageIndex": 2}]
+
+    async def candidates():
+        return []
+
+    async def native(_page, _rows, _candidates):
+        return None, "safe_pixel_reconstruction_unavailable", ["ambiguous"], {"page1.jpg"}
+
+    async def screenshot(_target):
+        return CaptureResult(b"screen", 1, 1, "image/png", ".png")
+
+    monkeypatch.setattr(adapter, "_rows", rows)
+    monkeypatch.setattr(adapter, "_source_candidates", candidates)
+    monkeypatch.setattr(adapter, "_native_attempt", native)
+    monkeypatch.setattr(jumpplus_adapter_module, "capture_locator", screenshot)
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert "page1.jpg" not in adapter._source_responses
+    assert {"page2.jpg", "page3.jpg"} <= set(adapter._source_responses)
+    await adapter._discard_sources()
+
+
+@pytest.mark.asyncio
+async def test_screenshot_fallback_without_used_candidate_keeps_prefetch_cache(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _FakePage()
+    _seed_source_cache(adapter, ["page2.jpg", "page3.jpg"])
+
+    async def rows(_page):
+        return [{"index": 0, "pageIndex": 2}]
+
+    async def candidates():
+        return []
+
+    async def native(_page, _rows, _candidates):
+        return None, "unmatched_transport_candidate", ["unmatched"], set()
+
+    async def screenshot(_target):
+        return CaptureResult(b"screen", 1, 1, "image/png", ".png")
+
+    monkeypatch.setattr(adapter, "_rows", rows)
+    monkeypatch.setattr(adapter, "_source_candidates", candidates)
+    monkeypatch.setattr(adapter, "_native_attempt", native)
+    monkeypatch.setattr(jumpplus_adapter_module, "capture_locator", screenshot)
+
+    await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert {"page2.jpg", "page3.jpg"} <= set(adapter._source_responses)
+    await adapter._discard_sources()
+
+
+def _patch_initialize_dependencies(monkeypatch, adapter: JumpPlusAdapter, rows):
+    async def page_count(_page):
+        return None
+
+    async def metadata(_page):
+        return None
+
+    async def ready(_page):
+        return rows
+
+    monkeypatch.setattr(adapter, "_read_content_page_count", page_count)
+    monkeypatch.setattr(adapter, "_read_output_metadata", metadata)
+    monkeypatch.setattr(adapter, "_wait_for_render_ready", ready)
+
+
+@pytest.mark.asyncio
+async def test_initialize_waits_for_content_without_startup_forward(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _FakePage()
+    rows = [{"pageIndex": 2}]
+    calls = []
+    _patch_initialize_dependencies(monkeypatch, adapter, rows)
+
+    async def initial_state(_page):
+        return "content", rows
+
+    async def rewind(_page):
+        calls.append("rewind")
+        return True
+
+    async def forward(_page):
+        calls.append("forward")
+
+    monkeypatch.setattr(adapter, "_wait_for_initial_viewer_state", initial_state)
+    monkeypatch.setattr(adapter, "_rewind_to_first", rewind)
+    monkeypatch.setattr(adapter, "go_next", forward)
+
+    await adapter.initialize(page)  # type: ignore[arg-type]
+
+    assert calls == ["rewind"]
+
+
+@pytest.mark.asyncio
+async def test_initialize_start_state_forwards_once_and_guarantees_first_content(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _FakePage()
+    rows = [{"pageIndex": 2}]
+    calls = []
+    _patch_initialize_dependencies(monkeypatch, adapter, rows)
+
+    async def initial_state(_page):
+        return "start", []
+
+    async def forward(_page):
+        calls.append("forward")
+
+    monkeypatch.setattr(adapter, "_wait_for_initial_viewer_state", initial_state)
+    monkeypatch.setattr(adapter, "go_next", forward)
+
+    await adapter.initialize(page)  # type: ignore[arg-type]
+
+    assert calls == ["forward"]
+
+
+@pytest.mark.asyncio
+async def test_initialize_unknown_state_fails_closed_without_forward(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _FakePage()
+    calls = []
+
+    async def page_count(_page):
+        return None
+
+    async def initial_state(_page):
+        raise PageChangeTimeoutError("unknown")
+
+    async def forward(_page):
+        calls.append("forward")
+
+    monkeypatch.setattr(adapter, "_read_content_page_count", page_count)
+    monkeypatch.setattr(adapter, "_wait_for_initial_viewer_state", initial_state)
+    monkeypatch.setattr(adapter, "go_next", forward)
+
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.initialize(page)  # type: ignore[arg-type]
+    assert calls == []

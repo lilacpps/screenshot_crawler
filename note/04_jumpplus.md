@@ -340,3 +340,41 @@ no point/ticket UI was clicked and the episode URL did not change.
 \`page_number\` remains unset because the viewer DOM index is not treated as an
 external page number. Other episodes, alternate JPEG sampling, and access-gated
 episodes remain unverified.
+
+## Production hardening: source cache and initialize race (2026-09-24)
+
+The capture lifecycle now retains bounded prefetch JPEG responses across page
+turns. `capture_page()` tracks the transport URL actually selected for the
+current native attempt and releases only those URLs after capture. A screenshot
+fallback with no selected candidate releases nothing, so future-page responses
+remain available. `_discard_source(url)` is the source-level cleanup primitive;
+`_discard_sources()` remains reserved for run/page setup cleanup. The bound
+remains 128 responses.
+
+Initialization no longer treats an empty initial rows result as permission to
+advance. It first performs a bounded readiness wait. Startup forward is allowed
+only for the observed pre-content state: viewer visible, visible page-area index
+before `first_content_page_index`, one visible forward control, one visible
+unique hidden/disabled backward control, and unchanged episode URL. The startup
+forward is bounded to one action. If content is already present, bounded rewind
+is attempted first; initialization fails closed if the first content page cannot
+be guaranteed.
+
+Unit coverage now includes used-source release with future cache retention,
+screenshot fallback retention, content-before-start race, explicit startup
+state, unknown-state fail-closed behavior, and first-page initialization.
+
+The hardening live crawl completed with `Saved 65 pages; stopped at end.` The
+archive contained 65 page files: 61 JPEG files and 4 PNG files. The PNG pages
+were screenshot fallback; no PNG reconstruction was selected. The retained
+manifest inspection run observed 60 `jpeg_dct` / `unique,unique` pages and 4
+`screenshot` / `unmatched` pages; the successful archive had one additional
+JPEG due to normal viewer timing variation. The fallback reason observed was
+`unmatched_transport_candidate`; no duplicate fingerprint or missing archive
+sequence was observed. The previous all-screenshot full run therefore improved
+to majority native JPEG capture after cache retention. The startup race run
+initially exposed that Jump+'s disabled backward control is hidden rather than
+visible; the final live run recognized that explicit start state and completed
+without skipping the first content page.
+
+Discovery, Site Policy, and Batch remain out of scope.

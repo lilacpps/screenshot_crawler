@@ -182,14 +182,16 @@ class JumpPlusAdapter(SiteAdapter):
         return body if isinstance(body, bytes) and body[:3] == b"\xff\xd8\xff" else None
 
     async def _discard_sources(self) -> None:
-        tasks = list(self._source_tasks.values())
-        for task in tasks:
+        for url in tuple(self._source_tasks):
+            await self._discard_source(url)
+
+    async def _discard_source(self, url: str) -> None:
+        task = self._source_tasks.pop(url, None)
+        self._source_responses.pop(url, None)
+        if task is not None:
             if not task.done():
                 task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._source_tasks.clear()
-        self._source_responses.clear()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def _rows(self, page: Page) -> list[dict[str, object]]:
         try:
@@ -250,21 +252,95 @@ class JumpPlusAdapter(SiteAdapter):
             elapsed += 100
         raise PageChangeTimeoutError("Jump+ viewer did not finish loading within the timeout")
 
-    async def _rewind_to_first(self, page: Page) -> None:
+    async def _initial_viewer_state(self, page: Page) -> str:
+        try:
+            state = await asyncio.wait_for(
+                page.evaluate(
+                    """() => {
+                        const visible = (element) => {
+                            if (!element) return false;
+                            const rect = element.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0 &&
+                                rect.bottom > 0 && rect.right > 0 &&
+                                rect.left < innerWidth && rect.top < innerHeight;
+                        };
+                        const viewer = document.querySelector('section.viewer.js-viewer');
+                        const container = viewer?.querySelector('.image-container.js-viewer-content');
+                        const areas = container ? [...container.querySelectorAll('.page-area.js-page-area')] : [];
+                        const visibleIndex = areas.findIndex(visible);
+                        const forward = [...document.querySelectorAll('.page-navigation-forward.js-slide-forward')]
+                            .filter(visible);
+                        const backward = [...document.querySelectorAll('.page-navigation-backward.js-slide-backward')];
+                        const backwardDisabled = backward.length === 1 && (
+                            !visible(backward[0]) ||
+                            backward[0].getAttribute('aria-disabled') === 'true' ||
+                            backward[0].hasAttribute('disabled') ||
+                            backward[0].classList.contains('disabled') ||
+                            backward[0].classList.contains('is-disabled') ||
+                            backward[0].classList.contains('hidden') ||
+                            getComputedStyle(backward[0]).display === 'none'
+                        );
+                        return {
+                            viewerVisible: visible(viewer),
+                            visibleIndex,
+                            forwardCount: forward.length,
+                            backwardCount: backward.length,
+                            backwardDisabled,
+                            url: location.href,
+                        };
+                    }"""
+                ),
+                timeout=2,
+            )
+        except Exception:  # noqa: BLE001 - render race remains unknown
+            return "unknown"
+        if not isinstance(state, dict):
+            return "unknown"
+        if self._initial_url is not None and state.get("url") != self._initial_url:
+            return "unsupported"
+        if (
+            state.get("viewerVisible") is True
+            and int(state.get("visibleIndex", -1)) >= 0
+            and int(state.get("visibleIndex", -1)) < self.first_content_page_index
+            and state.get("forwardCount") == 1
+            and state.get("backwardCount") == 1
+            and state.get("backwardDisabled") is True
+        ):
+            return "start"
+        return "unknown"
+
+    async def _wait_for_initial_viewer_state(
+        self, page: Page
+    ) -> tuple[str, list[dict[str, object]]]:
+        elapsed = 0
+        while elapsed < self.page_change_timeout_ms:
+            rows = await self._rows(page)
+            if rows:
+                return "content", rows
+            state = await self._initial_viewer_state(page)
+            if state == "start":
+                return state, []
+            if state == "unsupported":
+                raise PageChangeTimeoutError("Jump+ initial viewer state changed or is unsupported")
+            await page.wait_for_timeout(100)
+            elapsed += 100
+        raise PageChangeTimeoutError("Jump+ initial viewer state was not ready within the timeout")
+
+    async def _rewind_to_first(self, page: Page) -> bool:
         previous_rows = await self._rows(page)
         previous = self._signature(previous_rows) or None
         for _ in range(self.rewind_max_steps):
             page_indices = [int(row.get("pageIndex", -1)) for row in previous_rows]
             if page_indices and min(page_indices) <= self.first_content_page_index:
-                return
+                return True
             button = page.locator("section.viewer.js-viewer .page-navigation-backward.js-slide-backward")
             if await button.count() != 1 or not await button.is_visible():
-                return
+                return False
             if await button.get_attribute("aria-disabled") == "true":
-                return
+                return False
             classes = await button.get_attribute("class") or ""
             if "disabled" in classes.split():
-                return
+                return False
             await button.click(timeout=1_000, no_wait_after=True)
             await page.wait_for_timeout(150)
             current = await self._rows(page)
@@ -274,6 +350,8 @@ class JumpPlusAdapter(SiteAdapter):
             if signature:
                 previous = signature
             previous_rows = current
+        page_indices = [int(row.get("pageIndex", -1)) for row in previous_rows]
+        return bool(page_indices and min(page_indices) <= self.first_content_page_index)
 
     async def initialize(self, page: Page) -> None:
         self._initial_url = page.url
@@ -284,25 +362,27 @@ class JumpPlusAdapter(SiteAdapter):
         self._terminal_reached = False
         self._captured_content_page_count = 0
         await self._read_content_page_count(page)
-        initial_rows = await self._rows(page)
-        if initial_rows:
-            await self._rewind_to_first(page)
+        initial_state, _initial_rows = await self._wait_for_initial_viewer_state(page)
+        if initial_state == "content":
+            if not await self._rewind_to_first(page):
+                raise PageChangeTimeoutError("Jump+ could not rewind to the first content page")
         else:
-            # Some live viewer loads start one safe page-navigation action
-            # before the first content canvas becomes viewport-active.  The
-            # only permitted recovery is the uniquely revalidated viewer
-            # forward control; it can never target another episode.
-            for _ in range(2):
-                await self.go_next(page)
-                self._advance_pending = False
-                try:
-                    await self._wait_for_render_ready(page)
-                except PageChangeTimeoutError:
-                    continue
-                break
+            # The live target exposes a distinct pre-content page-area state:
+            # the first non-content area is visible, the unique backward
+            # control is hidden/disabled, and the unique viewer-forward control
+            # is visible.  Only this state
+            # permits one startup forward action.
+            await self.go_next(page)
+            self._advance_pending = False
         rows = await self._wait_for_render_ready(page)
         if not rows:
             raise PageChangeTimeoutError("Jump+ active content was not found")
+        if min(int(row.get("pageIndex", -1)) for row in rows) > self.first_content_page_index:
+            if not await self._rewind_to_first(page):
+                raise PageChangeTimeoutError("Jump+ initialized after the first content page")
+            rows = await self._wait_for_render_ready(page)
+            if min(int(row.get("pageIndex", -1)) for row in rows) > self.first_content_page_index:
+                raise PageChangeTimeoutError("Jump+ first content page could not be guaranteed")
         await self._read_output_metadata(page)
 
     async def _read_output_metadata(self, page: Page) -> None:
@@ -402,7 +482,12 @@ class JumpPlusAdapter(SiteAdapter):
     def _native_candidate_status(status: object) -> bool:
         return status in {"unique", "equivalent_multiple"}
 
-    async def _native_attempt(self, page: Page, rows: list[dict[str, object]], candidates: list[dict[str, object]]) -> tuple[tuple[CaptureResult, ...] | None, str | None, list[str]]:
+    async def _native_attempt(
+        self,
+        page: Page,
+        rows: list[dict[str, object]],
+        candidates: list[dict[str, object]],
+    ) -> tuple[tuple[CaptureResult, ...] | None, str | None, list[str], set[str]]:
         wanted: list[dict[str, object]] = []
         for row in rows:
             source = row.get("source")
@@ -411,23 +496,27 @@ class JumpPlusAdapter(SiteAdapter):
         snapshots = await self._snapshot_sources(page, wanted)
         records: list[tuple[dict[str, object], dict[str, object], bytes]] = []
         selections: list[str] = []
+        used_source_urls: set[str] = set()
         for row in rows:
             source = row.get("source")
             base, mapping, visible = row.get("base"), row.get("mapping"), row.get("visibleDraw")
             if not isinstance(source, dict) or not isinstance(base, dict) or not isinstance(visible, dict) or not isinstance(mapping, list):
-                return None, "draw_mapping_unavailable", selections
+                return None, "draw_mapping_unavailable", selections, used_source_urls
             if any(isinstance(item, dict) and item.get("operation") in {"clearRect","fillRect","putImageData","strokeRect","fillText","strokeText","fill","stroke"} for item in row.get("mutations", [])):
-                return None, "unsupported_canvas_mutation", selections
+                return None, "unsupported_canvas_mutation", selections, used_source_urls
             source_key = (source.get("sourceId"), str(source.get("sourceUrl") or ""))
             snapshot = snapshots.get(source_key)
             if snapshot is None:
-                return None, "source_snapshot_unavailable_or_changed", selections
+                return None, "source_snapshot_unavailable_or_changed", selections, used_source_urls
             selection = select_transport_candidate(decoded_pixel_sha256(snapshot), candidates, load_bytes=lambda item: item["data"], analyze_candidate=_dct_signature)
             status = str(selection["selection_status"])
             selections.append(status)
             candidate = selection.get("selected_candidate") or selection.get("pixel_fallback_candidate")
             if not isinstance(candidate, dict):
-                return None, "unmatched_transport_candidate", selections
+                return None, "unmatched_transport_candidate", selections, used_source_urls
+            candidate_url = candidate.get("url")
+            if isinstance(candidate_url, str):
+                used_source_urls.add(candidate_url)
             records.append((row, selection, candidate["data"]))
         dct_results: list[CaptureResult] = []
         if all(self._native_candidate_status(status) for status in selections):
@@ -437,19 +526,20 @@ class JumpPlusAdapter(SiteAdapter):
                     break
                 dct_results.append(result)
             else:
-                return tuple(dct_results), None, selections
+                return tuple(dct_results), None, selections, used_source_urls
         png_results: list[CaptureResult] = []
         for row, _selection, data in records:
             result = reconstruct_jpeg_png(data, base=row["base"], mappings=row["mapping"], visible_draw=row["visibleDraw"], source_path=str(row["source"]["sourceUrl"]), canvas_size=(int(row["canvasWidth"]), int(row["canvasHeight"])))
             if result is None:
-                return None, "safe_pixel_reconstruction_unavailable", selections
+                return None, "safe_pixel_reconstruction_unavailable", selections, used_source_urls
             png_results.append(result)
-        return tuple(png_results), None, selections
+        return tuple(png_results), None, selections, used_source_urls
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
         fallback_targets: tuple[Locator, ...] = ()
         last_reason = "no_active_canvas"
         selections: list[str] = []
+        used_source_urls: set[str] = set()
         try:
             for attempt in range(self.capture_retry_count + 1):
                 rows = await self._rows(page)
@@ -460,10 +550,11 @@ class JumpPlusAdapter(SiteAdapter):
                     fallback_targets = tuple(page.locator(self.canvas_selector).nth(int(row["index"])) for row in rows)
                     candidates = await self._source_candidates()
                     try:
-                        captures, reason, current_selections = await self._native_attempt(page, rows, candidates)
+                        captures, reason, current_selections, current_used_urls = await self._native_attempt(page, rows, candidates)
                     except Exception:  # noqa: BLE001 - native capture is a safe fallback boundary
-                        captures, reason, current_selections = None, "native_capture_error", []
+                        captures, reason, current_selections, current_used_urls = None, "native_capture_error", [], set()
                     selections = current_selections
+                    used_source_urls.update(current_used_urls)
                     if captures is not None:
                         self._captured_content_page_count += len(rows)
                         self._capture_debug = {"capture_method": "jpeg_dct" if all(c.mime_type == "image/jpeg" for c in captures) else "png_reconstruction", "candidate_selection": selections, "canvas_count": len(rows), "source_count": len({(row.get("source") or {}).get("sourceId") for row in rows if isinstance(row.get("source"), dict)}), "fallback_reason": None}
@@ -474,7 +565,8 @@ class JumpPlusAdapter(SiteAdapter):
                     continue
                 break
         finally:
-            await self._discard_sources()
+            for url in used_source_urls:
+                await self._discard_source(url)
         if not fallback_targets:
             self._capture_debug = {"capture_method": "screenshot", "candidate_selection": selections or ["unmatched"], "canvas_count": 0, "source_count": 0, "fallback_reason": last_reason}
             return None
