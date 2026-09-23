@@ -1,11 +1,11 @@
 # Shared Access Control / Pacing Plan
 
-Status: **Phase 1 IMPLEMENTED; Phase 2 IMPLEMENTED**. Phase 3 through Phase 6 remain
-**PLANNED / NOT YET IMPLEMENTED**.
+Status: **Phase 1 IMPLEMENTED; Phase 2 IMPLEMENTED; Phase 3 IMPLEMENTED**. Phase 4 through
+Phase 6 remain **PLANNED / NOT YET IMPLEMENTED**.
 
 Authority: `docs/ACCESS_CONTROL_AND_PACING.md`.
 
-This note records the adopted shared plan and the current Phase 1/2 implementation state. Current implementation snapshots remain in each site's note and are synchronized when shared behavior affects that site.
+This note records the adopted shared plan and the current Phase 1/2/3 implementation state. Current implementation snapshots remain in each site's note and are synchronized when shared behavior affects that site.
 
 Phase 1 current state: root `crawler.yaml` is parsed outside Core into typed per-site settings with safe
 non-zero defaults and explicit zero overrides. CONTENT pacing occurs once after all logical-page artifacts
@@ -22,16 +22,17 @@ hCaptcha, and Turnstile UI use distinct fatal reasons. Batch metrics append and 
 records under `output/metrics/`; diagnostics include the access stop details. No response body
 is read for metrics. No site-specific challenge/CAPTCHA hook has been live-verified yet.
 
-The remaining resource-selection expansion, grant-only, and Work Ticket cooldown persistence
-are still planned and not implemented.
+Phase 3 current state: Site Policies expose supported resources and policy-defined ordering.
+The generic Planner validates explicit `quota_resource` values, passes the requested resource
+through Policy and Adapter, and never silently falls back to another resource. Batch executes
+the normal/default pass, replans Catalog state between policy-ordered additional resource passes,
+and keeps `AccessConsumption` matching against the requested resource. Magapoke exposes
+`work_ticket` then `premium_ticket`; Manga ONE and BookWalker expose no additional named resource.
+
+Grant-only and Work Ticket cooldown persistence are still planned and not implemented.
 
 Remaining planned shared changes:
 
-- define a generic **access resource** selection contract using the existing `quota_resource`, `SitePolicy.evaluate_for_quota_resource()`, `SiteAdapter.configure_quota_resource()`, and `AccessConsumption` extension points,
-- let site policy/integration expose supported resources and pass order,
-- keep generic Batch free of Magapoke resource-name branches,
-- make resource switching explicit through resource passes; one resource attempt must never silently consume another resource,
-- make live site state authoritative for actual resource consumption,
 - define generic `--grant-only <resource>|all` orchestration,
 - define `all` as site-policy-ordered resource passes with replanning between passes,
 - reuse normal entry semantics for grant-only rather than duplicating ticket/resource click and initialization logic,
@@ -41,7 +42,7 @@ The planned repository-wide implementation remains intentionally phased:
 
 - Phase 1 — Runtime settings, pacing, and site ordering: **IMPLEMENTED**
 - Phase 2 — Shared AccessGuard + CAPTCHA/challenge/403/429 + JSONL metrics: **IMPLEMENTED**
-- Phase 3 — Generic access-resource selection contract: **PLANNED / NOT YET IMPLEMENTED**
+- Phase 3 — Generic access-resource selection contract: **IMPLEMENTED**
 - Phase 4 — Generic grant-only + first Magapoke Work Ticket integration: **PLANNED / NOT YET IMPLEMENTED**
 - Phase 5 — Magapoke Premium/all integration: **PLANNED / NOT YET IMPLEMENTED**
 - Phase 6 — Cross-site regression and live verification: **PLANNED / NOT YET IMPLEMENTED**

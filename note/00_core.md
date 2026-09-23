@@ -783,4 +783,7 @@ Phase 2のAccessGuardは3site共通で接続済みで、relevant hostの403/429�
 CAPTCHAをdistinct stop reasonとして扱う。Batchのbody-free access metricsは`output/metrics/*.jsonl`
 へ逐次flushされ、fatal stop前のCatalog更新とmetricsを保持する。fatal access stop後は、
 CONTENTのpacing後およびAD advancement前に再確認し、新しいintentional `go_next()`を開始しない。
-resource selection拡張、grant-only、Work Ticket cooldown persistenceはPhase 3以降で未実装である。
+Phase 3では、Site Policyがgeneric access resourceのsupported/order contractを提供し、
+Plannerがexplicit `quota_resource`を検証する。Batchはnormal/default pass後にPolicy順でreplanし、
+requested resource以外へのsilent fallbackをしない。grant-onlyとWork Ticket cooldown persistenceは
+Phase 4以降で未実装である。

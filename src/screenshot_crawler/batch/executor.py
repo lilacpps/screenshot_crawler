@@ -225,6 +225,11 @@ class BatchExecutor:
             raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
 
         mismatches: list[str] = []
+        if candidate.quota_resource is not None:
+            try:
+                policy.validate_access_resource(candidate.quota_resource)
+            except SitePolicyError as exc:
+                raise BatchExecutionError(str(exc)) from exc
         if item.status != "pending":
             mismatches.append(f"item.status={item.status!r}")
         if source.item_id != candidate.item_id:

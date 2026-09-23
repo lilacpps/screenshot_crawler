@@ -1116,6 +1116,12 @@ quotaのlive clickによる実quota消費は未実施である。
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。
 
+### Phase 3 generic access-resource contract
+
+BookWalker exposes no additional named access resource in the Phase 3 Policy
+contract. Explicit resource planning therefore fails closed for unsupported
+resource names; normal direct/quota planning remains unchanged.
+
 ### Phase 1 runtime pacing
 
 BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を

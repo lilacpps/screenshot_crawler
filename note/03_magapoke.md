@@ -725,6 +725,14 @@ later changed expired/no-grant quota sources into Work Ticket candidates.
   successful retry confirms that restart resolved the connection problem.
 - Premium Ticket behavior and all M3c consumption remain out of scope.
 
+### Phase 3 generic access-resource contract
+
+Phase 3現在、Magapoke Policyはgeneric access-resource contractとして
+`work_ticket` -> `premium_ticket`のsupported/orderを提供する。Batchは通常pass後に
+Catalogをreplanして追加resource passを実行し、requested resourceと異なるresourceへの
+silent fallbackをしない。grant-only、Work Ticket cooldown persistence、resource stateの
+永続化はPhase 4以降で未実装である。
+
 ### Phase 1 runtime pacing / Batch ordering
 
 Magapoke Discoveryの列挙順は引き続きlatest-firstであり、Discoveryのreverseは行わない。Batchは既存のdirect先行・

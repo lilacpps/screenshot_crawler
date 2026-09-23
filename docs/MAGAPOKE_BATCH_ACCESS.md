@@ -285,9 +285,11 @@ The repository-wide implementation order is defined by the shared specification.
 
 ### Shared Phase 3 integration
 
-- expose `work_ticket` and `premium_ticket` through the generic supported-resource/order contract,
-- preserve existing `quota_resource` and `AccessConsumption` semantics,
-- ensure generic Batch has no Magapoke resource-name branches.
+- **IMPLEMENTED**: expose `work_ticket` and `premium_ticket` through the generic
+  supported-resource/order contract,
+- **IMPLEMENTED**: preserve existing `quota_resource` and `AccessConsumption` semantics,
+- **IMPLEMENTED**: generic Batch obtains additional resource passes from Site Policy
+  and does not interpret Magapoke resource names.
 
 ### Shared Phase 4 integration - Work Ticket grant-only
 

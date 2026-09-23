@@ -15,7 +15,15 @@ class MagapokeSitePolicy(SitePolicy):
 
     site = "magapoke"
 
+    def supported_access_resources(self) -> tuple[str, ...]:
+        return ("work_ticket", "premium_ticket")
+
+    def ordered_access_resource_passes(self) -> tuple[str, ...]:
+        return ("work_ticket", "premium_ticket")
+
     def additional_quota_resources(self) -> tuple[str, ...]:
+        """Compatibility view of passes after the normal Work Ticket pass."""
+
         return ("premium_ticket",)
 
     def access_grant_until(self, started_at: datetime) -> datetime:

@@ -3,7 +3,8 @@
 This implementation plan accompanies `docs/ACCESS_CONTROL_AND_PACING.md` and the site-specific access specifications.
 
 Phase 1 status: **IMPLEMENTED**. Phase 2 status: **IMPLEMENTED**.
-Phase 3 through Phase 6 remain **PLANNED / NOT YET IMPLEMENTED**.
+Phase 3 status: **IMPLEMENTED**. Phase 4 through Phase 6 remain
+**PLANNED / NOT YET IMPLEMENTED**.
 
 ## Phase 1 - Runtime settings, pacing, and site ordering
 
@@ -66,6 +67,8 @@ Status: **IMPLEMENTED**.
 
 ## Phase 3 - Generic access-resource selection
 
+Status: **IMPLEMENTED**.
+
 ### Changes
 
 - evolve the existing `quota_resource` extension points instead of adding a Magapoke-only path,
@@ -76,6 +79,8 @@ Status: **IMPLEMENTED**.
 - treat another resource being offered by live UI as resource-unavailable for the current pass,
 - implement generic `all` as policy-ordered passes with Catalog replanning between passes,
 - preserve `AccessConsumption` as observed adapter evidence.
+- preserve the existing normal/default Batch pass and replan from Catalog between
+  policy-ordered explicit resource passes.
 
 ### Acceptance tests
 

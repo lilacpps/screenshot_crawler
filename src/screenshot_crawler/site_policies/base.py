@@ -48,10 +48,48 @@ class SitePolicy(ABC):
         del started_at
         return None
 
+    def supported_access_resources(self) -> tuple[str, ...]:
+        """Return all named resources this policy can explicitly select."""
+
+        return self.ordered_access_resource_passes()
+
+    def ordered_access_resource_passes(self) -> tuple[str, ...]:
+        """Return policy-ordered named resource passes, including the default pass."""
+
+        # Keep the existing extension point usable for policies implemented
+        # before the generic contract was introduced.
+        return self.additional_quota_resources()
+
     def additional_quota_resources(self) -> tuple[str, ...]:
-        """Return ordered resource passes that follow the default quota pass."""
+        """Compatibility hook for resource passes after the default pass."""
 
         return ()
+
+    def additional_access_resource_passes(self) -> tuple[str, ...]:
+        """Return explicit passes that follow the normal/default Batch pass."""
+
+        ordered = self.ordered_access_resource_passes()
+        if type(self).ordered_access_resource_passes is SitePolicy.ordered_access_resource_passes:
+            return self.additional_quota_resources()
+        if ordered:
+            return ordered[1:]
+        return self.additional_quota_resources()
+
+    # Short aliases keep integrations independent of the persisted
+    # ``quota_resource`` field name without introducing a second contract.
+    def supported_resources(self) -> tuple[str, ...]:
+        return self.supported_access_resources()
+
+    def ordered_resource_passes(self) -> tuple[str, ...]:
+        return self.ordered_access_resource_passes()
+
+    def validate_access_resource(self, resource: str) -> None:
+        """Reject a resource that this policy cannot safely plan."""
+
+        if resource not in self.supported_access_resources():
+            raise SitePolicyError(
+                f"Unsupported access resource for site {self.site}: {resource}"
+            )
 
     @abstractmethod
     def evaluate(
@@ -79,6 +117,7 @@ class SitePolicy(ABC):
         semantics outside the planner and Core.
         """
 
+        self.validate_access_resource(quota_resource)
         decision = self.evaluate(
             source,
             now=now,

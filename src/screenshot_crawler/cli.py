@@ -765,17 +765,32 @@ def _print_batch_plan(plan: BatchPlan, *, site: str) -> None:
 
 
 def _run_batch_plan(args: argparse.Namespace) -> None:
-    planner = BatchPlanner(CatalogService(args.catalog), _batch_policy_registry())
+    policies = _batch_policy_registry()
+    planner = BatchPlanner(CatalogService(args.catalog), policies)
     plan = planner.plan(site=args.site)
     _print_batch_plan(plan, site=args.site)
-    if args.site == "magapoke":
-        premium_plan = planner.plan(
-            site=args.site,
-            quota_resource="premium_ticket",
-        )
-        print("Potential Premium pass:")
-        print(f"  candidates: {len(premium_plan.candidates)}")
-        print("  balance: checked live during batch run")
+    policy = policies.create(args.site)
+    for resource in _additional_access_resource_passes(policy):
+        resource_plan = planner.plan(site=args.site, quota_resource=resource)
+        print(f"Potential resource pass ({resource}):")
+        print(f"  candidates: {len(resource_plan.candidates)}")
+        print("  availability: checked during batch run")
+
+
+def _additional_access_resource_passes(policy: object) -> tuple[str, ...]:
+    """Resolve policy-ordered passes without interpreting resource names."""
+
+    additional = getattr(policy, "additional_access_resource_passes", None)
+    if callable(additional):
+        return tuple(additional())
+    ordered = getattr(policy, "ordered_access_resource_passes", None)
+    if callable(ordered):
+        values = tuple(ordered())
+        return values[1:]
+    legacy = getattr(policy, "additional_quota_resources", None)
+    if callable(legacy):
+        return tuple(legacy())
+    return ()
 
 
 async def _run_batch_run(args: argparse.Namespace) -> None:
@@ -823,7 +838,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             session,
             executor,
             candidates,
-            phase="direct/Work Ticket",
+            phase="default",
             inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
             metrics=metrics,
         )
@@ -833,7 +848,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                 None if args.limit is None else max(0, args.limit - processed)
             )
             policy = policies.create(args.site)
-            for quota_resource in policy.additional_quota_resources():
+            for quota_resource in _additional_access_resource_passes(policy):
                 if remaining_limit == 0:
                     break
                 # Re-plan from Catalog after direct and Work Ticket execution.
@@ -845,7 +860,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                 if remaining_limit is not None:
                     resource_candidates = resource_candidates[:remaining_limit]
                 print(
-                    f"Batch resource pass: {quota_resource}; "
+                    f"Batch resource pass ({quota_resource}); "
                     f"planned={len(resource_plan.candidates)} "
                     f"executing={len(resource_candidates)}"
                 )

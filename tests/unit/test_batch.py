@@ -17,6 +17,7 @@ from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
     MagapokeSitePolicy,
     MangaOneSitePolicy,
+    SitePolicyError,
     SitePolicyRegistry,
 )
 
@@ -33,6 +34,49 @@ def make_magapoke_registry() -> SitePolicyRegistry:
     registry = SitePolicyRegistry()
     registry.register("magapoke", MagapokeSitePolicy)
     return registry
+
+
+def test_access_resource_contract_is_policy_owned() -> None:
+    assert MagapokeSitePolicy().supported_access_resources() == (
+        "work_ticket",
+        "premium_ticket",
+    )
+    assert MagapokeSitePolicy().ordered_access_resource_passes() == (
+        "work_ticket",
+        "premium_ticket",
+    )
+    assert MagapokeSitePolicy().additional_access_resource_passes() == (
+        "premium_ticket",
+    )
+    assert MangaOneSitePolicy().supported_access_resources() == ()
+    assert BookWalkerSitePolicy().ordered_access_resource_passes() == ()
+
+
+def test_planner_rejects_unsupported_explicit_resource(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+
+    with pytest.raises(BatchPlanningError, match="Unsupported access resource"):
+        BatchPlanner(service, make_registry()).plan(
+            site="mangaone",
+            now=NOW,
+            quota_resource="premium_ticket",
+        )
+
+
+@pytest.mark.parametrize(
+    ("policy", "resource"),
+    [
+        (MagapokeSitePolicy(), "unknown_resource"),
+        (MangaOneSitePolicy(), "premium_ticket"),
+        (BookWalkerSitePolicy(), "work_ticket"),
+    ],
+)
+def test_unsupported_access_resource_is_explicitly_rejected(
+    policy: object,
+    resource: str,
+) -> None:
+    with pytest.raises(SitePolicyError, match="Unsupported access resource for site"):
+        policy.validate_access_resource(resource)  # type: ignore[attr-defined]
 
 
 def add_source(

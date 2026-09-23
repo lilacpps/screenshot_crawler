@@ -655,6 +655,12 @@ capture behaviorはsource-native WebP優先、ページ単位PNG fallbackであ�
 
 このnoteにはpassword、Cookie、storage state、session secretを記録しない。
 
+### Phase 3 generic access-resource contract
+
+Manga ONE exposes no additional named access resource in the Phase 3 Policy
+contract. Explicit resource planning therefore fails closed for unsupported
+resource names; normal direct/quota planning remains unchanged.
+
 ### Phase 1 runtime pacing
 
 Manga ONEはroot `crawler.yaml`からresolvedされた`page_turn_delay_ms`をCONTENT artifactとmanifest/progressの

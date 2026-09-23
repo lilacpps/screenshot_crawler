@@ -416,7 +416,18 @@ def test_batch_plan_magapoke_shows_potential_premium_pass_without_browser(
             )
 
     monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
-    monkeypatch.setattr(cli, "_batch_policy_registry", lambda: object())
+    monkeypatch.setattr(
+        cli,
+        "_batch_policy_registry",
+        lambda: SimpleNamespace(
+            create=lambda _site: SimpleNamespace(
+                ordered_access_resource_passes=lambda: (
+                    "work_ticket",
+                    "premium_ticket",
+                )
+            )
+        ),
+    )
     monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
 
     args = _parser().parse_args(["batch", "plan", "--site", "magapoke"])
@@ -424,9 +435,9 @@ def test_batch_plan_magapoke_shows_potential_premium_pass_without_browser(
 
     output = capsys.readouterr().out
     assert calls == [None, "premium_ticket"]
-    assert "Potential Premium pass:" in output
+    assert "Potential resource pass (premium_ticket):" in output
     assert "  candidates: 135" in output
-    assert "  balance: checked live during batch run" in output
+    assert "  availability: checked during batch run" in output
 
 
 @pytest.mark.parametrize("site", ["mangaone", "bookwalker"])
@@ -447,13 +458,21 @@ def test_batch_plan_non_magapoke_does_not_show_potential_premium_pass(
             )
 
     monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
-    monkeypatch.setattr(cli, "_batch_policy_registry", lambda: object())
+    monkeypatch.setattr(
+        cli,
+        "_batch_policy_registry",
+        lambda: SimpleNamespace(
+            create=lambda _site: SimpleNamespace(
+                ordered_access_resource_passes=lambda: ()
+            )
+        ),
+    )
     monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
 
     args = _parser().parse_args(["batch", "plan", "--site", site])
     cli._run_batch_plan(args)
 
-    assert "Potential Premium pass:" not in capsys.readouterr().out
+    assert "Potential resource pass" not in capsys.readouterr().out
 
 
 def test_batch_run_continues_after_work_ticket_unavailable(

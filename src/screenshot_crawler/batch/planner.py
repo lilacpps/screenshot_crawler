@@ -45,6 +45,8 @@ class BatchPlanner:
         current = _normalize_now(now_jst() if now is None else now)
         try:
             policy = self.policies.create(site)
+            if quota_resource is not None:
+                policy.validate_access_resource(quota_resource)
             works, items, sources, targets = (
                 self.catalog.read_works_items_sources_and_targets(site=site)
             )

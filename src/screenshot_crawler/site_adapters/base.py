@@ -58,7 +58,11 @@ class SiteAdapter(ABC):
     async def configure_quota_resource(
         self, page: Page, quota_resource: str | None
     ) -> None:
-        """Validate optional quota resource metadata before navigation."""
+        """Validate the selected access resource before navigation.
+
+        ``quota_resource`` is retained as the persisted/API field name while
+        representing the generic access-resource contract.
+        """
 
         del page
         if quota_resource is not None:
