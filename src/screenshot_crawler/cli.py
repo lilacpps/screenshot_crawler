@@ -805,11 +805,14 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     planner = BatchPlanner(catalog, policies)
     runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
     grant_only = getattr(args, "grant_only", None)
-    if grant_only is not None:
-        if grant_only == "all":
-            raise BatchPlanningError(
-                "grant-only all is not implemented until Phase 5"
-            )
+    grant_only_all = grant_only == "all"
+    if grant_only_all:
+        policy = policies.create(args.site)
+        grant_only_resources = _grant_only_resource_passes(policy)
+        plan = None
+        candidates: list[BatchCandidate] = []
+        metrics_mode = "grant-only:all"
+    elif grant_only is not None:
         policy = policies.create(args.site)
         try:
             policy.validate_grant_only_resource(grant_only)
@@ -823,19 +826,23 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         candidates = plan.candidates[: args.limit] if args.limit is not None else plan.candidates
         metrics_mode = "normal"
     metrics = BatchMetricsWriter("output/metrics", site=args.site, mode=metrics_mode)
-    metrics.record_planned_skips(plan.skipped)
+    if plan is not None:
+        metrics.record_planned_skips(plan.skipped)
     print("Batch run:")
     print(f"  site: {args.site}")
-    print(f"  planned: {len(plan.candidates)}")
+    print(
+        f"  planned: {len(plan.candidates) if plan is not None else 'policy resource passes'}"
+    )
     print(
         f"  executing: {len(candidates)}"
         + (f" resource={grant_only}" if grant_only is not None else "")
     )
-    print(f"  direct: {sum(item.access_strategy == 'direct' for item in candidates)}")
-    print(f"  quota: {sum(item.access_strategy == 'quota' for item in candidates)}")
-    if plan.skipped:
+    if plan is not None:
+        print(f"  direct: {sum(item.access_strategy == 'direct' for item in candidates)}")
+        print(f"  quota: {sum(item.access_strategy == 'quota' for item in candidates)}")
+    if plan is not None and plan.skipped:
         print(f"  skipped: {len(plan.skipped)}")
-    if not candidates:
+    if not grant_only_all and not candidates:
         metrics.finish(stop_reason="no_candidates")
         metrics.close()
         print(f"  metrics: {metrics.path}")
@@ -857,19 +864,64 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             executor.runtime_settings = runtime_settings
         if hasattr(executor, "access_event_sink"):
             executor.access_event_sink = metrics.record_access_event
-        initial_complete = len(candidates) == len(plan.candidates)
-        processed, should_continue = await _execute_batch_candidates(
-            args,
-            session,
-            executor,
-            candidates,
-            phase=(f"grant-only:{grant_only}" if grant_only is not None else "default"),
-            inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
-            metrics=metrics,
-            grant_only=grant_only is not None,
-            attempt_limit=args.limit if grant_only is not None else None,
-        )
-        if grant_only is None and should_continue and initial_complete:
+        if grant_only_all:
+            attempts = 0
+            previous_phase_had_site_access = False
+            for resource in grant_only_resources:
+                remaining_limit = (
+                    None if args.limit is None else max(0, args.limit - attempts)
+                )
+                if remaining_limit == 0:
+                    break
+                resource_plan = planner.plan(
+                    site=args.site,
+                    quota_resource=resource,
+                )
+                metrics.record_planned_skips(resource_plan.skipped)
+                resource_candidates = resource_plan.candidates
+                print(
+                    f"Batch grant-only resource pass ({resource}); "
+                    f"planned={len(resource_candidates)}"
+                )
+                pass_attempts, _pass_continue = await _execute_batch_candidates(
+                    args,
+                    session,
+                    executor,
+                    resource_candidates,
+                    phase=f"grant-only:{resource}",
+                    inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                    delay_before_first_ms=(
+                        runtime_settings.inter_candidate_delay_ms
+                        if previous_phase_had_site_access
+                        else None
+                    ),
+                    metrics=metrics,
+                    grant_only=True,
+                    attempt_limit=remaining_limit,
+                )
+                attempts += pass_attempts
+                previous_phase_had_site_access = (
+                    previous_phase_had_site_access or pass_attempts > 0
+                )
+            if attempts == 0:
+                metrics.finish(stop_reason="no_candidates")
+            if args.keep_open:
+                print("Browser is open. Press Enter here to disconnect.")
+                await asyncio.to_thread(input)
+        else:
+            initial_complete = len(candidates) == len(plan.candidates)
+            processed, should_continue = await _execute_batch_candidates(
+                args,
+                session,
+                executor,
+                candidates,
+                phase=(f"grant-only:{grant_only}" if grant_only is not None else "default"),
+                inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                metrics=metrics,
+                grant_only=grant_only is not None,
+                attempt_limit=args.limit if grant_only is not None else None,
+            )
+        if not grant_only_all and grant_only is None and should_continue and initial_complete:
             previous_phase_had_site_access = processed > 0
             remaining_limit = (
                 None if args.limit is None else max(0, args.limit - processed)
@@ -912,7 +964,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                     remaining_limit -= pass_processed
                 if not should_continue or len(resource_candidates) < len(resource_plan.candidates):
                     break
-        if args.keep_open:
+        if not grant_only_all and args.keep_open:
             print("Browser is open. Press Enter here to disconnect.")
             await asyncio.to_thread(input)
     except BaseException as exc:
@@ -931,6 +983,31 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         metrics.finish()
         print(f"  metrics: {metrics.path}")
         metrics.close()
+
+
+def _grant_only_resource_passes(policy: object) -> tuple[str, ...]:
+    """Resolve and validate the policy-owned resource order for ``all``."""
+
+    ordered_method = getattr(policy, "ordered_access_resource_passes", None)
+    supported_method = getattr(policy, "grant_only_supported_access_resources", None)
+    if not callable(ordered_method) or not callable(supported_method):
+        raise BatchPlanningError(
+            "Selected site policy does not expose the grant-only resource contract"
+        )
+    ordered = tuple(ordered_method())
+    supported = set(supported_method())
+    if not ordered:
+        raise BatchPlanningError(
+            "Selected site policy does not support any grant-only resource"
+        )
+    unsupported = tuple(resource for resource in ordered if resource not in supported)
+    if unsupported:
+        raise BatchPlanningError(
+            "Grant-only resource contract mismatch: " + ", ".join(unsupported)
+        )
+    if len(set(ordered)) != len(ordered):
+        raise BatchPlanningError("Selected site policy returned duplicate grant-only resources")
+    return ordered
 
 
 async def _execute_batch_candidates(

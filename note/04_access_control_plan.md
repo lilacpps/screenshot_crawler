@@ -1,7 +1,7 @@
 # Shared Access Control / Pacing Plan
 
-Status: **Phase 1 IMPLEMENTED; Phase 2 IMPLEMENTED; Phase 3 IMPLEMENTED; Phase 4 IMPLEMENTED**.
-Phase 5 and Phase 6 remain **PLANNED / NOT YET IMPLEMENTED**.
+Status: **Phase 1 IMPLEMENTED; Phase 2 IMPLEMENTED; Phase 3 IMPLEMENTED; Phase 4 IMPLEMENTED; Phase 5 IMPLEMENTED**.
+Phase 6 remains **PLANNED / NOT YET IMPLEMENTED**.
 
 Authority: `docs/ACCESS_CONTROL_AND_PACING.md`.
 
@@ -36,16 +36,25 @@ execution. A confirmed Work Ticket updates the source grant and the Work-scoped
 artifact/package is created. A local `work_ticket_cooldown` skip is evaluated before
 opening a Page; the default cooldown is 23 hours and exactly-expired state is live-checked.
 Metrics use the existing incremental `output/metrics/*.jsonl` writer with mode
-`grant-only`. `premium_ticket` grant-only and `--grant-only all` remain unimplemented.
+`grant-only`; Phase 5 adds Premium Ticket and `--grant-only all` on the same path.
 Normal Batch and grant-only now use one observed-consumption persistence path, so a
 confirmed Work Ticket updates both source grant and Work state even when a later
 crawl/finalization step fails.
 
+Phase 5 current state: Magapoke also supports
+`batch run --site magapoke --grant-only premium_ticket` and generic
+`--grant-only all`. The ordered resources come from Site Policy
+(`work_ticket`, then `premium_ticket`); `all` replans Catalog between passes and
+shares one total site-attempt limit. Premium balance is read live, never stored
+in Catalog, and a clear zero stops only the Premium pass. Work Ticket priority
+and fail-closed ambiguous UI behavior remain enforced by the Adapter. Confirmed
+Premium consumption persists only the source grant via the Policy's conservative
+71-hour grant. Both grant-only resources leave Items pending and create no
+capture/package/Artifact; AccessGuard fatal stops still terminate the whole run.
+
 Remaining planned shared changes:
 
-- define `all` as site-policy-ordered resource passes with replanning between passes,
-- extend grant-only to later resources without changing generic Batch semantics,
-- retain no-capture/no-package/no-completion semantics for grant-only.
+- retain no-capture/no-package/no-completion semantics for future grant-only resources.
 
 The planned repository-wide implementation remains intentionally phased:
 
@@ -53,7 +62,7 @@ The planned repository-wide implementation remains intentionally phased:
 - Phase 2 — Shared AccessGuard + CAPTCHA/challenge/403/429 + JSONL metrics: **IMPLEMENTED**
 - Phase 3 — Generic access-resource selection contract: **IMPLEMENTED**
 - Phase 4 - Generic grant-only + first Magapoke Work Ticket integration: **IMPLEMENTED**
-- Phase 5 — Magapoke Premium/all integration: **PLANNED / NOT YET IMPLEMENTED**
+- Phase 5 — Magapoke Premium/all integration: **IMPLEMENTED**
 - Phase 6 — Cross-site regression and live verification: **PLANNED / NOT YET IMPLEMENTED**
 
 The shared contract is intentionally future-facing: Magapoke Work/Premium Ticket is the first implementation, but Manga ONE, BookWalker, and future site adapters may add their own access resources later without changing generic Batch semantics.

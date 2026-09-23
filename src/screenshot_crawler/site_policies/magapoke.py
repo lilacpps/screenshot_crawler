@@ -27,9 +27,9 @@ class MagapokeSitePolicy(SitePolicy):
         return ("premium_ticket",)
 
     def grant_only_supported_access_resources(self) -> tuple[str, ...]:
-        """Phase 4 exposes only the Work Ticket grant-only pass."""
+        """Expose the policy-ordered Work and Premium grant-only passes."""
 
-        return ("work_ticket",)
+        return ("work_ticket", "premium_ticket")
 
     def resource_state_scope(self, resource: str) -> str | None:
         if resource == "work_ticket":

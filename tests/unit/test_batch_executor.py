@@ -671,6 +671,96 @@ async def test_grant_only_work_ticket_persists_state_without_completion_or_artif
     assert run.page_count == 0
 
 
+async def test_grant_only_premium_ticket_persists_source_only(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service, resource="premium_ticket")
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(True, "premium_ticket", consumed_at)
+    )
+
+    result = await executor.execute_grant_only_candidate(
+        object(), candidate, output_root=tmp_path / "batch", now=NOW
+    )
+
+    source = service.get_source(candidate.source_id)
+    assert result.resource == "premium_ticket"
+    assert source.quota_started_at == consumed_at.isoformat()
+    assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
+    assert service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="premium_ticket",
+    ) is None
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+    run = service.get_crawl_run(result.crawl_run_id)
+    assert run.status == "succeeded"
+    assert run.page_count == 0
+
+
+async def test_grant_only_premium_consumption_survives_later_failure(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service, resource="premium_ticket")
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "premium_ticket", consumed_at),
+        failure=RuntimeError("premium entry failed after consumption"),
+    )
+
+    with pytest.raises(BatchExecutionError, match="premium entry failed"):
+        await executor.execute_grant_only_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at == consumed_at.isoformat()
+    assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
+    assert service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="premium_ticket",
+    ) is None
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+    assert service.list_crawl_runs()[0].status == "failed"
+
+
+async def test_grant_only_premium_mismatch_does_not_persist_work_consumption(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service, resource="premium_ticket")
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(True, "work_ticket", consumed_at)
+    )
+
+    with pytest.raises(BatchExecutionError, match="unexpected quota resource"):
+        await executor.execute_grant_only_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at is None
+    assert source.access_granted_until is None
+    assert service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="work_ticket",
+    ) is None
+    assert service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="premium_ticket",
+    ) is None
+
+
 async def test_grant_only_consumption_survives_later_failure(
     tmp_path: Path,
 ) -> None:

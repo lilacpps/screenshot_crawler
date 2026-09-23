@@ -293,8 +293,8 @@ The repository-wide implementation order is defined by the shared specification.
 
 ### Shared Phase 4 integration - Work Ticket grant-only
 
-**IMPLEMENTED** for Work Ticket grant-only. Premium/all behavior remains
-Phase 5 and is **PLANNED / NOT YET IMPLEMENTED**.
+**IMPLEMENTED** for Work Ticket grant-only. Premium/all behavior is implemented
+in the Phase 5 section below.
 
 - add Work-scoped resource state migration,
 - add 23-hour local negative gate,
@@ -307,12 +307,24 @@ Phase 5 and is **PLANNED / NOT YET IMPLEMENTED**.
 
 ### Shared Phase 5 integration - Premium/all
 
+**IMPLEMENTED**.
+
 - wire `premium_ticket` into the generic resource pass contract,
 - preserve live semantic Premium balance checks,
 - stop Premium pass at zero,
 - preserve Work Ticket UI priority,
 - implement `all` as policy-defined Work Ticket pass then replan then Premium pass,
 - fail closed on ambiguous/error states.
+
+Premium grant-only uses the same `entry_only=True` adapter path as Work Ticket.
+Confirmed Premium consumption records the source grant through
+`policy.access_grant_until(consumed_at)` and does not create a Work-scoped
+resource state. Premium balance remains live-only. `all` resolves the ordered
+grant-only resources from Site Policy, replans Catalog between passes, and
+shares one total site-attempt limit; local Catalog skips do not consume it.
+Resource exhaustion ends only the current pass, while AccessGuard fatal stops
+end the complete run. No grant-only pass captures, packages, creates an
+Artifact, or completes an Item.
 
 ## 12. Magapoke acceptance criteria
 

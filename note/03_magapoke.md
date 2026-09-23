@@ -731,20 +731,38 @@ Phase 3現在、Magapoke Policyはgeneric access-resource contractとして
 `work_ticket` -> `premium_ticket`のsupported/orderを提供する。Batchは通常pass後に
 Catalogをreplanして追加resource passを実行し、requested resourceと異なるresourceへの
 silent fallbackをしない。grant-only、Work Ticket cooldown persistence、resource stateの
-永続化はPhase 4以降で未実装である。
+永続化はPhase 4で実装済みで、Premium/allはPhase 5で実装済みである。
 
 ### Phase 4 grant-only current state
 
-Magapoke supports generic grant-only for `work_ticket` only. The normal adapter
+Magapoke supports generic grant-only for `work_ticket`; Phase 5 additionally
+supports `premium_ticket`. The normal adapter
 entry path is reused with Core entry-only execution, so no content capture,
 packaging, or Item completion occurs. Confirmed consumption is stored atomically
 as source grant plus Catalog schema v5 `quota_resource_states(work_id, site,
 resource, last_consumed_at)`. The default local negative cooldown is 23 hours;
 state skips happen before site access and exactly-expired state is live-checked.
-`premium_ticket` grant-only and `--grant-only all` remain Phase 5 planned behavior.
+Premium consumption is source-grant-only; Premium balance is live-only and does
+not create a `quota_resource_states` row. `--grant-only all` is the Policy-ordered
+Work Ticket then Premium Ticket orchestration and replans Catalog between passes.
 Normal Batch uses the same observed Work Ticket persistence path as grant-only;
 confirmed consumption is retained if a later crawl or finalization step fails.
 This current-state section supersedes the older Phase 3 planning sentence.
+
+### Phase 5 current state: Premium Ticket grant-only and all
+
+Premium grant-only reads the exact live semantic balance immediately before the
+Premium control. A clear zero produces `premium_ticket_exhausted`, closes the
+candidate, and stops the Premium pass without opening later Premium candidates.
+The normal UI's Work Ticket priority is respected: a Work-only or mixed/unknown
+access panel never forces Premium or another purchase control. Confirmed
+Premium consumption uses `policy.access_grant_until(consumed_at)` (the current
+conservative 71-hour grant) and leaves the Item pending. Later failure retains
+the source grant through the shared observed-consumption helper. `all` obtains
+its order from Policy, replans after each pass, shares one total site-attempt
+limit, and preserves inter-candidate pacing. Premium balance is never cached or
+persisted in Catalog. Phase 6 live verification/cross-site regression remains
+planned.
 
 ### Phase 1 runtime pacing / Batch ordering
 
@@ -756,4 +774,4 @@ site-accessing candidate前に1回だけ適用する。Magapoke adapterのnaviga
 direct accessの既存挙動は変更していない。Phase 2ではMagapoke adapterがshared AccessGuardへ接続され、
 `pocket.shonenmagazine.com`と`mgpk-cdn.magazinepocket.com`のrelevant hostだけの403/429をfatal stopとする。
 explicit challengeとvisible CAPTCHAも共通stop reason/Batch JSONL metricsへ記録する。
-site-specific signalのlive verificationは未実施で、grant-onlyとcooldown persistenceは未実装である。
+site-specific signalのlive verificationとPhase 6のcross-site総合確認は未実施である。

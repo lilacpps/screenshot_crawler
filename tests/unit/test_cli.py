@@ -751,6 +751,208 @@ def test_batch_run_limit_spans_initial_and_premium_phases(
     assert "FAILED" not in output.err
 
 
+def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plans: list[str | None] = []
+    executions: list[tuple[str, int]] = []
+
+    def candidate(resource: str, item_id: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            item_id=item_id,
+            source_id=item_id + 100,
+            metadata={},
+            access_strategy="quota",
+            quota_resource=resource,
+        )
+
+    class FakePlanner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+            assert site == "magapoke"
+            plans.append(quota_resource)
+            if quota_resource == "resource_a":
+                candidates = [candidate("resource_a", 1), candidate("resource_a", 2)]
+            else:
+                assert quota_resource == "resource_b"
+                candidates = [candidate("resource_b", 3), candidate("resource_b", 4)]
+            return SimpleNamespace(candidates=candidates, skipped=[])
+
+    class FakeSession:
+        @classmethod
+        async def connect(cls, _endpoint: str) -> "FakeSession":
+            return cls()
+
+        async def new_page(self) -> object:
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    class FakeExecutor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
+            return None
+
+        async def execute_grant_only_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            executions.append((candidate.quota_resource, candidate.item_id))
+            return SimpleNamespace(
+                resource=candidate.quota_resource,
+                resource_consumed=True,
+                stop_reason="entry_confirmed",
+            )
+
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(
+        cli,
+        "_batch_policy_registry",
+        lambda: SimpleNamespace(
+            create=lambda _site: SimpleNamespace(
+                ordered_access_resource_passes=lambda: ("resource_a", "resource_b"),
+                grant_only_supported_access_resources=lambda: (
+                    "resource_a", "resource_b"
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
+    monkeypatch.setattr(cli, "BrowserSession", FakeSession)
+    monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_registry", lambda: object())
+    monkeypatch.setattr(
+        cli, "resolve_cdp_endpoint", lambda **_kwargs: "http://example.test:9222"
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "screenshot-crawler",
+            "batch",
+            "run",
+            "--site",
+            "magapoke",
+            "--grant-only",
+            "all",
+            "--limit",
+            "3",
+        ],
+    )
+
+    cli.main()
+
+    output = capsys.readouterr()
+    assert plans == ["resource_a", "resource_b"]
+    assert executions == [("resource_a", 1), ("resource_a", 2), ("resource_b", 3)]
+    assert "resource=all" in output.out
+    assert "item=4" not in output.out
+    assert "FAILED" not in output.out
+
+
+def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executions: list[int] = []
+
+    def candidate(resource: str, item_id: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            item_id=item_id,
+            source_id=item_id + 100,
+            metadata={},
+            access_strategy="quota",
+            quota_resource=resource,
+        )
+
+    class FakePlanner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+            assert site == "magapoke"
+            return SimpleNamespace(
+                candidates=(
+                    [candidate("resource_a", 1)]
+                    if quota_resource == "resource_a"
+                    else [candidate("resource_b", 2)]
+                ),
+                skipped=[],
+            )
+
+    class FakeSession:
+        @classmethod
+        async def connect(cls, _endpoint: str) -> "FakeSession":
+            return cls()
+
+        async def new_page(self) -> object:
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    class FakeExecutor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
+            return None
+
+        async def execute_grant_only_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            executions.append(candidate.item_id)
+            if candidate.item_id == 1:
+                raise cli.AccessResourceUnavailableError(
+                    "resource_a_exhausted", stop_resource_pass=True
+                )
+            return SimpleNamespace(
+                resource=candidate.quota_resource,
+                resource_consumed=True,
+                stop_reason="entry_confirmed",
+            )
+
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(
+        cli,
+        "_batch_policy_registry",
+        lambda: SimpleNamespace(
+            create=lambda _site: SimpleNamespace(
+                ordered_access_resource_passes=lambda: ("resource_a", "resource_b"),
+                grant_only_supported_access_resources=lambda: (
+                    "resource_a", "resource_b"
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
+    monkeypatch.setattr(cli, "BrowserSession", FakeSession)
+    monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_registry", lambda: object())
+    monkeypatch.setattr(
+        cli, "resolve_cdp_endpoint", lambda **_kwargs: "http://example.test:9222"
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "batch", "run", "--site", "magapoke", "--grant-only", "all"],
+    )
+
+    cli.main()
+
+    assert executions == [1, 2]
+
+
 async def test_batch_candidate_delay_runs_after_close_only_between_site_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

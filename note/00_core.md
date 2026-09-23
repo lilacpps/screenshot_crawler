@@ -771,12 +771,27 @@ Generic grant-only uses the existing adapter entry path with Core
 Work/site/resource state, and confirmed consumption atomically updates that
 state plus the source grant. Local cooldown skips happen before browser/page
 creation; confirmed grant-only runs do not capture, package, or complete the
-Item. Premium Ticket grant-only and `all` remain Phase 5 planned behavior.
+Item. Premium Ticket grant-only and policy-ordered `all` are implemented in
+Phase 5; Premium balance remains live-only and is not stored in Catalog.
 Normal Batch and grant-only share the observed resource-consumption persistence
 helper; confirmed Work Ticket consumption updates source grant and Work state,
 and later failure does not undo either update.
 This Phase 4 section is the current implementation state and supersedes the
 older Phase 3 planning sentence below.
+
+### Phase 5 current state: Magapoke Premium Ticket and generic all
+
+Magapoke exposes `work_ticket` then `premium_ticket` through the generic
+grant-only contract. `--grant-only premium_ticket` uses the normal
+`entry_only=True` Adapter path, reads the live semantic Premium Ticket balance,
+respects Work Ticket priority, and fails closed on ambiguous UI. A clear zero
+returns `premium_ticket_exhausted` and stops only that resource pass. Confirmed
+Premium consumption persists the source grant through the Policy's conservative
+71-hour `access_grant_until`; no Premium balance or Work-scoped resource state
+is stored. `--grant-only all` replans Catalog between Policy-ordered passes,
+shares its total site-attempt `--limit`, applies cross-pass pacing, and stops
+the whole run only for fatal AccessGuard errors. Grant-only leaves Items pending
+and creates no capture/package/Artifact.
 
 ### Phase 1 runtime settings / pacing
 
@@ -799,5 +814,5 @@ CAPTCHAをdistinct stop reasonとして扱う。Batchのbody-free access metrics
 CONTENTのpacing後およびAD advancement前に再確認し、新しいintentional `go_next()`を開始しない。
 Phase 3では、Site Policyがgeneric access resourceのsupported/order contractを提供し、
 Plannerがexplicit `quota_resource`を検証する。Batchはnormal/default pass後にPolicy順でreplanし、
-requested resource以外へのsilent fallbackをしない。grant-onlyとWork Ticket cooldown persistenceは
-Phase 4以降で未実装である。
+requested resource以外へのsilent fallbackをしない。Phase 4/5では同じcontractをgrant-onlyにも使い、
+Work Ticket cooldown、Premium live balance、Policy順`all`を実装している。

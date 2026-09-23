@@ -4,7 +4,7 @@ This implementation plan accompanies `docs/ACCESS_CONTROL_AND_PACING.md` and the
 
 Phase 1 status: **IMPLEMENTED**. Phase 2 status: **IMPLEMENTED**.
 Phase 3 status: **IMPLEMENTED**. Phase 4 status: **IMPLEMENTED**.
-Phase 5 and Phase 6 remain **PLANNED / NOT YET IMPLEMENTED**.
+Phase 5 status: **IMPLEMENTED**. Phase 6 remains **PLANNED / NOT YET IMPLEMENTED**.
 
 ## Phase 1 - Runtime settings, pacing, and site ordering
 
@@ -98,7 +98,8 @@ Status: **IMPLEMENTED**.
 
 ### Changes
 
-- add generic `batch run --site <site> --grant-only <resource>|all`,
+- add generic `batch run --site <site> --grant-only <resource>` validation and
+  orchestration for the first Work Ticket pass; Phase 5 adds `all`,
 - validate resource support through selected site policy,
 - refactor/reuse normal pre-capture entry semantics so grant-only does not duplicate resource click/initialization logic,
 - add Work-scoped resource persistence needed for Magapoke Work Ticket,
@@ -121,7 +122,7 @@ Status: **IMPLEMENTED**.
 
 ## Phase 5 - Magapoke Premium / all
 
-Status: **PLANNED / NOT YET IMPLEMENTED**.
+Status: **IMPLEMENTED**.
 
 ### Changes
 
@@ -132,6 +133,10 @@ Status: **PLANNED / NOT YET IMPLEMENTED**.
 - treat Work-only UI during Premium pass as `premium_ticket_unavailable`,
 - implement Magapoke `all` through generic Work Ticket pass -> replan -> Premium pass,
 - preserve conservative 71-hour grant persistence.
+- keep Premium balance live-only and do not persist Premium resource state in Catalog,
+- apply the total `--limit` across all resource passes, counting only site attempts,
+- continue to the next policy pass after non-fatal resource exhaustion while
+  propagating AccessGuard fatal stops to the whole run.
 
 ### Acceptance tests
 
@@ -141,6 +146,9 @@ Status: **PLANNED / NOT YET IMPLEMENTED**.
 - ambiguous balance/UI fails closed,
 - confirmed Premium grant persists while Item stays pending in grant-only,
 - normal Premium capture/package flow remains unchanged.
+- `--grant-only all` replans between Policy-ordered passes and applies one shared limit,
+- local-only skips do not consume the limit or trigger candidate pacing,
+- Premium exhaustion does not execute later Premium candidates.
 
 ## Phase 6 - Cross-site regression and live verification
 

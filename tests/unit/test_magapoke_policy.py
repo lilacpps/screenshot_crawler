@@ -25,7 +25,16 @@ NOW = datetime(2026, 9, 22, 15, 0, tzinfo=JST)
 def test_grant_only_work_ticket_cooldown_is_strict_at_expiry() -> None:
     policy = MagapokeSitePolicy()
     consumed_at = NOW
-    assert policy.grant_only_supported_access_resources() == ("work_ticket",)
+    assert policy.grant_only_supported_access_resources() == (
+        "work_ticket",
+        "premium_ticket",
+    )
+    assert policy.ordered_access_resource_passes() == (
+        "work_ticket",
+        "premium_ticket",
+    )
+    assert policy.resource_state_scope("work_ticket") == "work"
+    assert policy.resource_state_scope("premium_ticket") is None
     assert policy.grant_only_skip_reason(
         resource="work_ticket",
         last_consumed_at=consumed_at,
@@ -38,8 +47,7 @@ def test_grant_only_work_ticket_cooldown_is_strict_at_expiry() -> None:
         now=consumed_at + timedelta(hours=23),
         cooldown_hours=23,
     ) is None
-    with pytest.raises(SitePolicyError, match="not implemented"):
-        policy.validate_grant_only_resource("premium_ticket")
+    policy.validate_grant_only_resource("premium_ticket")
 
 
 @pytest.mark.parametrize(

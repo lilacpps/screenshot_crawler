@@ -522,19 +522,31 @@ Implement in small reviewable phases.
 ### Phase 4 - generic grant-only + first Magapoke Work Ticket integration
 
 Status: **IMPLEMENTED** for generic grant-only Work Ticket. Premium Ticket and
-`all` remain Phase 5 and are not implemented.
+`all` are implemented in the Phase 5 section below.
 
-- add generic `--grant-only <resource>|all` CLI validation/orchestration,
+- add generic `--grant-only <resource>` CLI validation/orchestration for the
+  first Work Ticket grant-only pass,
 - share normal entry semantics rather than duplicating adapter logic,
 - implement Magapoke Work Ticket work-scoped resource state and cooldown per its site spec,
 - persist confirmed grants/resource state without capture/package/completion.
 
 ### Phase 5 - Magapoke Premium/all integration
 
+Status: **IMPLEMENTED**.
+
 - wire Magapoke Premium Ticket into the generic resource-pass contract,
 - preserve live Premium balance behavior,
 - preserve Work Ticket priority and fail-closed semantics,
 - implement Magapoke `all` using policy-defined resource passes rather than Batch hard-coding.
+
+`--grant-only premium_ticket` uses the normal `entry_only` adapter path. A
+confirmed Premium Ticket consumption persists only the source grant using the
+policy's conservative 71-hour grant; Premium balance and state are never
+stored in Catalog. `--grant-only all` executes the Policy-ordered passes,
+replans Catalog between passes, shares the total site-attempt `--limit`, and
+keeps local skips out of that limit. A resource-pass exhaustion stops only the
+current pass, while AccessGuard fatal stops end the whole run. Grant-only
+passes never capture, package, create artifacts, or complete Items.
 
 ### Phase 6 - regression and live verification
 
