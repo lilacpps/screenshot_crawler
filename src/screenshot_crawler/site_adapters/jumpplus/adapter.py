@@ -119,10 +119,7 @@ class JumpPlusAdapter(SiteAdapter):
     source_response_wait_timeout_ms = 2_000
     max_source_responses = 128
     rewind_max_steps = 32
-    # In the observed Jump+ DOM the first two page-area nodes are a dummy and
-    # a link page; pageIndex=2 is the first content page.  This is a DOM
-    # observation for the production target, not a page-number guess.
-    first_content_page_index = 2
+    forward_interceptor_wait_ms = 5_000
     viewer_selector = "section.viewer.js-viewer"
     canvas_selector = "section.viewer.js-viewer .image-container.js-viewer-content canvas.page-image.js-page-image"
     forward_selector = "section.viewer.js-viewer .page-navigation-forward.js-slide-forward"
@@ -134,6 +131,7 @@ class JumpPlusAdapter(SiteAdapter):
         self._advance_pending = False
         self._terminal_reached = False
         self._content_page_count: int | None = None
+        self._first_content_page_index: int | None = None
         self._captured_content_page_count = 0
         self._last_active_max_page_index: int | None = None
         self._source_responses: dict[str, object] = {}
@@ -199,16 +197,39 @@ class JumpPlusAdapter(SiteAdapter):
         except Exception:  # noqa: BLE001 - transient render state
             return []
         result = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
-        raw_page_indices = [int(row.get("pageIndex", -1)) for row in result]
-        if raw_page_indices:
-            self._last_active_max_page_index = max(raw_page_indices)
-        if self._content_page_count is not None:
-            last_page_index = self.first_content_page_index + self._content_page_count
+        if self._first_content_page_index is not None:
+            content_end_index = self._content_end_index()
             result = [
-                row for row in result
-                if int(row.get("pageIndex", -1)) < last_page_index
+                row
+                for row in result
+                if int(row.get("pageIndex", -1)) >= self._first_content_page_index
+                and (content_end_index is None or int(row.get("pageIndex", -1)) <= content_end_index)
             ]
+        page_indices = [int(row.get("pageIndex", -1)) for row in result]
+        if page_indices:
+            self._last_active_max_page_index = max(page_indices)
         return result
+
+    def _content_end_index(self) -> int | None:
+        if self._first_content_page_index is None or self._content_page_count is None:
+            return None
+        return self._first_content_page_index + self._content_page_count - 1
+
+    def _all_main_content_captured(self) -> bool:
+        content_end_index = self._content_end_index()
+        return (
+            self._content_page_count is not None
+            and self._first_content_page_index is not None
+            and self._captured_content_page_count >= self._content_page_count
+            and self._last_active_max_page_index is not None
+            and content_end_index is not None
+            and self._last_active_max_page_index >= content_end_index
+        )
+
+    @staticmethod
+    def _page_index(rows: list[dict[str, object]]) -> int | None:
+        indices = [int(row.get("pageIndex", -1)) for row in rows if int(row.get("pageIndex", -1)) >= 0]
+        return min(indices) if indices else None
 
     async def _read_content_page_count(self, page: Page) -> None:
         try:
@@ -300,8 +321,6 @@ class JumpPlusAdapter(SiteAdapter):
             return "unsupported"
         if (
             state.get("viewerVisible") is True
-            and int(state.get("visibleIndex", -1)) >= 0
-            and int(state.get("visibleIndex", -1)) < self.first_content_page_index
             and state.get("forwardCount") == 1
             and state.get("backwardCount") == 1
             and state.get("backwardDisabled") is True
@@ -326,32 +345,121 @@ class JumpPlusAdapter(SiteAdapter):
             elapsed += 100
         raise PageChangeTimeoutError("Jump+ initial viewer state was not ready within the timeout")
 
+    async def _control_available(self, button: Locator) -> bool:
+        if await button.count() != 1 or not await button.is_visible():
+            return False
+        aria_disabled = await button.get_attribute("aria-disabled")
+        if aria_disabled == "true" or await button.get_attribute("disabled") is not None:
+            return False
+        classes = set((await button.get_attribute("class") or "").split())
+        return not classes & {"disabled", "is-disabled", "hidden"}
+
+    async def _click_forward(self, page: Page) -> None:
+        button = page.locator(self.forward_selector)
+        if not await self._control_available(button):
+            raise PageChangeTimeoutError("Jump+ forward control was not uniquely visible")
+        values = [
+            await button.inner_text(),
+            await button.get_attribute("aria-label"),
+            await button.get_attribute("title"),
+            await button.get_attribute("class"),
+            await button.get_attribute("href"),
+        ]
+        if _FORBIDDEN.search(" ".join(str(value or "") for value in values)) or values[-1] and "/episode/" in values[-1]:
+            raise PageChangeTimeoutError("Jump+ forward control failed navigation safety validation")
+        interceptor = page.locator(".js-slide-to-transit-guide")
+        elapsed = 0
+        while await interceptor.count() and await interceptor.is_visible():
+            if elapsed >= self.forward_interceptor_wait_ms:
+                raise PageChangeTimeoutError("Jump+ forward control was covered by a transit guide")
+            await page.wait_for_timeout(100)
+            elapsed += 100
+        self._advance_pending = True
+        await button.click(timeout=1_000, no_wait_after=True)
+
+    async def _has_preceding_page_areas(
+        self, page: Page, rows: list[dict[str, object]]
+    ) -> bool | None:
+        page_index = self._page_index(rows)
+        if page_index is None:
+            return None
+        try:
+            result = await page.evaluate(
+                """(index) => {
+                    const container = document.querySelector(
+                        'section.viewer.js-viewer .image-container.js-viewer-content'
+                    );
+                    const areas = container
+                        ? [...container.querySelectorAll('.page-area.js-page-area')]
+                        : [];
+                    return areas.length > 0 && index > 0;
+                }""",
+                page_index,
+            )
+        except Exception:  # noqa: BLE001 - structure is only a rewind hint
+            return None
+        return result if isinstance(result, bool) else None
+
     async def _rewind_to_first(self, page: Page) -> bool:
         previous_rows = await self._rows(page)
-        previous = self._signature(previous_rows) or None
         for _ in range(self.rewind_max_steps):
-            page_indices = [int(row.get("pageIndex", -1)) for row in previous_rows]
-            if page_indices and min(page_indices) <= self.first_content_page_index:
-                return True
-            button = page.locator("section.viewer.js-viewer .page-navigation-backward.js-slide-backward")
-            if await button.count() != 1 or not await button.is_visible():
+            if not previous_rows:
                 return False
-            if await button.get_attribute("aria-disabled") == "true":
+            preceding_areas = await self._has_preceding_page_areas(page, previous_rows)
+            if preceding_areas is False:
+                self._first_content_page_index = self._page_index(previous_rows)
+                return self._first_content_page_index is not None
+            backward = page.locator("section.viewer.js-viewer .page-navigation-backward.js-slide-backward")
+            backward_available = await self._control_available(backward)
+            if not backward_available:
+                self._first_content_page_index = self._page_index(previous_rows)
+                return self._first_content_page_index is not None
+
+            previous = self._signature(previous_rows)
+            previous_position = tuple(int(row.get("pageIndex", -1)) for row in previous_rows)
+            before_url = page.url
+            await backward.click(timeout=1_000, no_wait_after=True)
+            current_rows: list[dict[str, object]] | None = None
+            unchanged_checks = 0
+            elapsed = 0
+            while elapsed < self.page_change_timeout_ms:
+                if page.url != before_url:
+                    raise PageChangeTimeoutError("Jump+ rewind changed the episode URL")
+                candidate = await self._rows(page)
+                if candidate:
+                    candidate_signature = self._signature(candidate)
+                    candidate_position = tuple(int(row.get("pageIndex", -1)) for row in candidate)
+                    if (candidate_signature, candidate_position) != (previous, previous_position):
+                        current_rows = candidate
+                        break
+                    unchanged_checks += 1
+                    if unchanged_checks >= self.render_stable_checks:
+                        self._first_content_page_index = self._page_index(previous_rows)
+                        return self._first_content_page_index is not None
+                if not candidate and await self._initial_viewer_state(page) == "start":
+                    break
+                await page.wait_for_timeout(100)
+                elapsed += 100
+
+            if current_rows:
+                previous_rows = current_rows
+                continue
+
+            # The first content page may be preceded by a non-content area.
+            # Preserve the rows from before the backward click, restore them
+            # through the validated viewer-forward control, and derive the
+            # runtime index from the restored content rather than a threshold.
+            if await self._initial_viewer_state(page) != "start":
                 return False
-            classes = await button.get_attribute("class") or ""
-            if "disabled" in classes.split():
+            await self._click_forward(page)
+            self._advance_pending = False
+            restored_rows = await self._wait_for_render_ready(page)
+            if not restored_rows:
                 return False
-            await button.click(timeout=1_000, no_wait_after=True)
-            await page.wait_for_timeout(150)
-            current = await self._rows(page)
-            signature = self._signature(current)
-            if signature and signature == previous:
-                return
-            if signature:
-                previous = signature
-            previous_rows = current
-        page_indices = [int(row.get("pageIndex", -1)) for row in previous_rows]
-        return bool(page_indices and min(page_indices) <= self.first_content_page_index)
+            self._first_content_page_index = self._page_index(restored_rows)
+            return self._first_content_page_index is not None
+
+        return False
 
     async def initialize(self, page: Page) -> None:
         self._initial_url = page.url
@@ -361,6 +469,8 @@ class JumpPlusAdapter(SiteAdapter):
         self._advance_pending = False
         self._terminal_reached = False
         self._captured_content_page_count = 0
+        self._first_content_page_index = None
+        self._last_active_max_page_index = None
         await self._read_content_page_count(page)
         initial_state, _initial_rows = await self._wait_for_initial_viewer_state(page)
         if initial_state == "content":
@@ -377,12 +487,10 @@ class JumpPlusAdapter(SiteAdapter):
         rows = await self._wait_for_render_ready(page)
         if not rows:
             raise PageChangeTimeoutError("Jump+ active content was not found")
-        if min(int(row.get("pageIndex", -1)) for row in rows) > self.first_content_page_index:
-            if not await self._rewind_to_first(page):
-                raise PageChangeTimeoutError("Jump+ initialized after the first content page")
-            rows = await self._wait_for_render_ready(page)
-            if min(int(row.get("pageIndex", -1)) for row in rows) > self.first_content_page_index:
-                raise PageChangeTimeoutError("Jump+ first content page could not be guaranteed")
+        if self._first_content_page_index is None:
+            self._first_content_page_index = self._page_index(rows)
+        if self._first_content_page_index is None:
+            raise PageChangeTimeoutError("Jump+ first content page index was not observable")
         await self._read_output_metadata(page)
 
     async def _read_output_metadata(self, page: Page) -> None:
@@ -421,12 +529,7 @@ class JumpPlusAdapter(SiteAdapter):
         rows = await self._rows(page)
         if rows:
             return PageState.CONTENT
-        if (
-            self._content_page_count is not None
-            and self._last_active_max_page_index is not None
-            and self._last_active_max_page_index
-            >= self.first_content_page_index + self._content_page_count - 1
-        ):
+        if self._all_main_content_captured():
             return PageState.END
         viewer = page.locator(self.viewer_selector)
         if await viewer.count() and await viewer.is_visible(timeout=500):
@@ -595,24 +698,11 @@ class JumpPlusAdapter(SiteAdapter):
         return ContentContext(content_id=parts.episode_id if parts else None, episode_id=parts.episode_id if parts else None, title=title)
 
     async def go_next(self, page: Page) -> None:
-        if (
-            self._content_page_count is not None
-            and self._captured_content_page_count >= self._content_page_count
-            and self._last_active_max_page_index is not None
-            and self._last_active_max_page_index
-            >= self.first_content_page_index + self._content_page_count - 1
-        ):
+        if self._all_main_content_captured():
             self._terminal_reached = True
             self._advance_pending = False
             return
-        button = page.locator(self.forward_selector)
-        if await button.count() != 1 or not await button.is_visible():
-            raise PageChangeTimeoutError("Jump+ forward control was not uniquely visible")
-        values = [await button.inner_text(), await button.get_attribute("aria-label"), await button.get_attribute("title"), await button.get_attribute("class"), await button.get_attribute("href")]
-        if _FORBIDDEN.search(" ".join(str(value or "") for value in values)) or values[-1] and "/episode/" in values[-1]:
-            raise PageChangeTimeoutError("Jump+ forward control failed navigation safety validation")
-        self._advance_pending = True
-        await button.click(timeout=1_000, no_wait_after=True)
+        await self._click_forward(page)
 
     async def wait_for_change(self, page: Page, previous_identity: ContentIdentity | None) -> None:
         if self._terminal_reached:
@@ -631,16 +721,9 @@ class JumpPlusAdapter(SiteAdapter):
                 return
             current = await self.get_content_identity(page)
             current_rows = await self._rows(page)
-            content_end_index = (
-                self.first_content_page_index + self._content_page_count - 1
-                if self._content_page_count is not None
-                else None
-            )
             if (
                 self._advance_pending
-                and content_end_index is not None
-                and self._last_active_max_page_index is not None
-                and self._last_active_max_page_index >= content_end_index
+                and self._all_main_content_captured()
                 and (not current_rows or current == previous_identity)
             ):
                 self._terminal_reached = True
@@ -657,7 +740,7 @@ class JumpPlusAdapter(SiteAdapter):
             terminal = await self._terminal_signature(page)
             if terminal is not None and terminal == terminal_previous:
                 terminal_stable += 1
-                if terminal_stable >= self.render_stable_checks and self._advance_pending:
+                if terminal_stable >= self.render_stable_checks and self._advance_pending and self._all_main_content_captured():
                     self._terminal_reached = True
                     self._advance_pending = False
                     return

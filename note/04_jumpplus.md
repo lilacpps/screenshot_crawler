@@ -840,7 +840,96 @@ the safety baseline: an unrented paid episode failed closed without clicking
 purchase, point, or rental controls and did not package the target as manga
 content.
 
-## Terminal timeout investigation (2026-09-24)
+## Terminal timeout production fix (2026-09-24)
+
+The terminal investigation was fixed in the production Jump+ adapter after
+rebasing onto `706a7fb`. The adapter no longer has a global
+`first_content_page_index = 2`. Each viewer instance now derives
+`_first_content_page_index` from active content rows after a bounded rewind to
+the first content state. The runtime boundary is reused by `_rows()`,
+`detect_state()`, `go_next()`, and `wait_for_change()` through
+`_content_end_index()` and `_all_main_content_captured()`.
+
+The rewind is URL-safe and bounded. It revalidates the unique viewer backward
+control, requires changed row identity (including page indexes) when moving
+backward, and treats a stable no-op backward transition as a viewer boundary.
+If the viewer exposes a pre-content area, the previous content rows are
+restored through the validated viewer-forward control before the first index is
+committed. A layout with no preceding page areas can therefore establish index
+0 without clicking backward and without skipping the first page. The initial
+state classifier also no longer compares visible DOM indexes with a fixed
+threshold.
+
+The terminal contract is now shared by forward and wait logic:
+
+```text
+content_page_count is known
+first content index is known
+captured_content_page_count >= content_page_count
+last_active_max_page_index >= first + content_count - 1
+```
+
+Both count and index are required; neither signal alone can produce `END`.
+After this contract is true, `go_next()` marks terminal without clicking into
+back-matter. If a forward transition has already been issued, an empty/stable
+row or disabled-forward fallback is accepted only with the same complete
+contract. The disabled-forward state remains auxiliary, not authoritative.
+
+The adapter also waits, with a 5-second bound, for Jump+'s transient
+`.js-slide-to-transit-guide` to stop intercepting the validated viewer-forward
+control. This remains a viewer transition wait, not a click on the guide or on
+any purchase/rental/point/ticket/next-episode control.
+
+### Tests and live validation
+
+Unit coverage includes front-link index 2, no-front-link index 0, the manual
+index-0 shape, spread end indexes, index-0 initialization without startup
+forward, bounded middle rewind, pre-content restoration, complete/incomplete
+count and index terminal cases, and the `wait_for_change()` incomplete-capture
+regression. The adapter test file has 21 passing tests.
+
+Isolated shared-CDP live runs produced:
+
+| case | expected main pages | saved pages | result |
+| --- | ---: | ---: | --- |
+| normal long run 1 | 65 | 65 | END + archive |
+| normal long run 2 retry | 65 | 65 | END + archive |
+| free `9253191256637716604` | 23 | 23 | END + archive |
+| active manual rental `9253191254350319886` | 27 | 27 | END + archive |
+
+The first normal run 2 attempt also saved 65 pages and reached END, but its
+archive path collided with run 1 because the same library directory was used;
+it was rerun with an isolated library and archived successfully. The initial
+free attempt exposed the index-0/backward-control variant and the initial
+manual-rental attempt exposed the transient transit-guide race; both succeeded
+after the runtime boundary and bounded forward-wait fixes. The successful
+archives contained exactly 65, 65, 23, and 27 image entries respectively, with
+no duplicate or missing page observed.
+
+The isolated production path was also checked as:
+
+```text
+discover --mode full -> 13 records
+batch plan -> 8 direct candidates (7 free + 1 active manual rental), 5 paid skipped
+batch run -> free candidate archive succeeded
+batch run -> active manual-rental candidate archive succeeded
+```
+
+The manual-candidate Batch run used a cloned isolated Catalog with unrelated
+earlier free candidates marked completed solely to select the manual candidate;
+the production `BatchExecutor`, Jump+ Policy, adapter, Catalog finalization,
+and archive packaging were otherwise used normally. The manual rental remained
+active at observation time and was not reacquired. No purchase, points, rental,
+ticket, or next-episode control was clicked.
+
+The remaining observed P2 issue is a separate Jump+ transit-guide behavior for
+some special one/two-page illustration rows encountered when attempting to
+process every free candidate in one Batch queue. It is fail-closed and is not
+the original final-page terminal timeout. Discovery, Site Policy, Batch
+semantics, Catalog schema, Core Runner, and native reconstruction logic were
+not changed in this fix.
+
+## Terminal timeout investigation (historical, before production fix)
 
 The investigation used `poc/jumpplus_terminal_probe.py` against the shared
 Crawler Chrome/CDP session. It only clicked the existing viewer forward
@@ -882,13 +971,7 @@ condition without requiring `captured_content_page_count >= content_page_count`,
 which explains the 64-page repeat observed alongside the historical 65-page
 successful run.
 
-The smallest proposed production fix is to derive the first active main-page
-index per viewer instance from the observed page areas/rows and page structure,
-rather than using a global constant, and to require both complete capture count
-and a valid terminal transition before returning `END`. The final empty/loading
-state can be accepted only after all main pages are captured; forward-enabled
-state and a next-episode link are not sufficient terminal signals by
-themselves. Add tests for a front-link layout, a main-at-index-zero layout,
-spread rows, final empty/back-matter transition, and a count-complete but
-page-index-incomplete state. This phase only records the diagnosis and does
-not modify `JumpPlusAdapter`, the runner, discovery, batch, or site policy.
+The production fix derived from this investigation is documented in the
+`Terminal timeout production fix` section above. This historical section
+records the pre-fix evidence and must not be read as the current adapter
+behavior.

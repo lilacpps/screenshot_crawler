@@ -309,7 +309,7 @@ async def snapshot(page: Any, adapter: JumpPlusAdapter, *, label: str) -> dict[s
             "last_active_max_page_index": adapter._last_active_max_page_index,
             "terminal_reached": adapter._terminal_reached,
             "advance_pending": adapter._advance_pending,
-            "first_content_page_index": adapter.first_content_page_index,
+            "first_content_page_index": adapter._first_content_page_index,
         },
         "rows": row_summary(rows),
         "filtered_rows": row_summary(filtered_rows),
@@ -483,8 +483,9 @@ async def run_case(url: str, output_dir: Path, session: BrowserSession) -> dict[
                 "last_index_ge_expected_end": (
                     adapter._content_page_count is not None
                     and adapter._last_active_max_page_index is not None
+                    and adapter._first_content_page_index is not None
                     and adapter._last_active_max_page_index
-                    >= adapter.first_content_page_index + adapter._content_page_count - 1
+                    >= adapter._first_content_page_index + adapter._content_page_count - 1
                 ),
             },
         }

@@ -10,6 +10,7 @@ from PIL import Image
 from screenshot_crawler import cli
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import PageChangeTimeoutError, UnsupportedAccessStrategyError
+from screenshot_crawler.core.models import ContentIdentity
 from screenshot_crawler.site_adapters.jumpplus import adapter as jumpplus_adapter_module
 from screenshot_crawler.site_adapters.jumpplus.access import is_jumpplus_relevant_host
 from screenshot_crawler.site_adapters.jumpplus.adapter import _CANVAS_HOOK, JumpPlusAdapter
@@ -321,3 +322,226 @@ async def test_initialize_unknown_state_fails_closed_without_forward(monkeypatch
     with pytest.raises(PageChangeTimeoutError):
         await adapter.initialize(page)  # type: ignore[arg-type]
     assert calls == []
+
+
+def test_runtime_content_boundaries_support_front_link_and_index_zero_layouts() -> None:
+    adapter = JumpPlusAdapter()
+
+    adapter._first_content_page_index = 2
+    adapter._content_page_count = 65
+    assert adapter._content_end_index() == 66
+
+    adapter._first_content_page_index = 0
+    adapter._content_page_count = 23
+    assert adapter._content_end_index() == 22
+
+    adapter._content_page_count = 27
+    assert adapter._content_end_index() == 26
+
+
+def test_runtime_terminal_contract_requires_count_and_end_index() -> None:
+    adapter = JumpPlusAdapter()
+    adapter._first_content_page_index = 0
+    adapter._content_page_count = 23
+    adapter._last_active_max_page_index = 22
+
+    adapter._captured_content_page_count = 22
+    assert not adapter._all_main_content_captured()
+
+    adapter._captured_content_page_count = 23
+    assert adapter._all_main_content_captured()
+
+    adapter._last_active_max_page_index = 21
+    assert not adapter._all_main_content_captured()
+
+
+def test_runtime_terminal_contract_supports_spread_end_index() -> None:
+    adapter = JumpPlusAdapter()
+    adapter._first_content_page_index = 2
+    adapter._content_page_count = 10
+    adapter._captured_content_page_count = 10
+    adapter._last_active_max_page_index = 11
+
+    assert adapter._content_end_index() == 11
+    assert adapter._all_main_content_captured()
+
+
+class _Control:
+    def __init__(self) -> None:
+        self.click_count = 0
+
+    async def click(self, **_kwargs) -> None:
+        self.click_count += 1
+
+    async def count(self) -> int:
+        return 0
+
+    async def is_visible(self) -> bool:
+        return False
+
+    async def inner_text(self) -> str:
+        return ""
+
+    async def get_attribute(self, name: str) -> str | None:
+        return None if name != "class" else "page-navigation-forward js-slide-forward"
+
+
+class _ControlPage:
+    url = "https://shonenjumpplus.com/episode/123"
+
+    def __init__(self) -> None:
+        self.control = _Control()
+
+    def locator(self, _selector: str):
+        return self.control
+
+    async def wait_for_timeout(self, _milliseconds: int) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_rewind_from_middle_discovers_index_zero_without_threshold(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _ControlPage()
+    calls = 0
+
+    async def rows(_page):
+        nonlocal calls
+        calls += 1
+        return (
+            [{"pageIndex": 20, "canvasId": "middle"}]
+            if calls == 1
+            else [{"pageIndex": 0, "canvasId": "first"}]
+        )
+
+    availability_calls = 0
+
+    async def available(_button):
+        nonlocal availability_calls
+        availability_calls += 1
+        return availability_calls == 1
+
+    monkeypatch.setattr(adapter, "_rows", rows)
+    monkeypatch.setattr(adapter, "_control_available", available)
+
+    assert await adapter._rewind_to_first(page)  # type: ignore[arg-type]
+    assert adapter._first_content_page_index == 0
+    assert page.control.click_count == 1
+
+
+@pytest.mark.asyncio
+async def test_rewind_front_link_restores_content_after_precontent_state(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _ControlPage()
+    calls = 0
+
+    async def rows(_page):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return [{"pageIndex": 2}]
+        if calls == 2:
+            return []
+        return [{"pageIndex": 2}]
+
+    availability_calls = 0
+
+    async def available(_button):
+        nonlocal availability_calls
+        availability_calls += 1
+        return availability_calls <= 2
+
+    async def initial_state(_page):
+        return "start"
+
+    monkeypatch.setattr(adapter, "_rows", rows)
+    monkeypatch.setattr(adapter, "_control_available", available)
+    monkeypatch.setattr(adapter, "_initial_viewer_state", initial_state)
+
+    assert await adapter._rewind_to_first(page)  # type: ignore[arg-type]
+    assert adapter._first_content_page_index == 2
+    assert page.control.click_count == 2
+
+
+@pytest.mark.asyncio
+async def test_index_zero_initial_content_does_not_startup_forward(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _FakePage()
+    rows = [{"pageIndex": 0}]
+    calls = []
+    _patch_initialize_dependencies(monkeypatch, adapter, rows)
+
+    async def initial_state(_page):
+        return "content", rows
+
+    async def rewind(_page):
+        adapter._first_content_page_index = 0
+        return True
+
+    async def forward(_page):
+        calls.append("forward")
+
+    monkeypatch.setattr(adapter, "_wait_for_initial_viewer_state", initial_state)
+    monkeypatch.setattr(adapter, "_rewind_to_first", rewind)
+    monkeypatch.setattr(adapter, "go_next", forward)
+
+    await adapter.initialize(page)  # type: ignore[arg-type]
+
+    assert calls == []
+    assert adapter._first_content_page_index == 0
+
+
+@pytest.mark.asyncio
+async def test_go_next_ends_only_when_runtime_count_and_index_are_complete(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _ControlPage()
+    adapter._first_content_page_index = 0
+    adapter._content_page_count = 23
+    adapter._captured_content_page_count = 23
+    adapter._last_active_max_page_index = 22
+
+    await adapter.go_next(page)  # type: ignore[arg-type]
+    assert adapter._terminal_reached
+    assert page.control.click_count == 0
+
+    adapter._terminal_reached = False
+    adapter._captured_content_page_count = 22
+    clicked = []
+
+    async def click_forward(_page):
+        clicked.append(True)
+
+    monkeypatch.setattr(adapter, "_click_forward", click_forward)
+    await adapter.go_next(page)  # type: ignore[arg-type]
+    assert not adapter._terminal_reached
+    assert clicked == [True]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_change_terminal_requires_capture_completion(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _ControlPage()
+    previous = ContentIdentity(page_id="last", page_number=None, source_id="123")
+    adapter._first_content_page_index = 0
+    adapter._content_page_count = 23
+    adapter._last_active_max_page_index = 22
+    adapter._advance_pending = True
+
+    async def identity(_page):
+        return previous
+
+    async def rows(_page):
+        return []
+
+    monkeypatch.setattr(adapter, "get_content_identity", identity)
+    monkeypatch.setattr(adapter, "_rows", rows)
+    adapter._captured_content_page_count = 23
+    await adapter.wait_for_change(page, previous)  # type: ignore[arg-type]
+    assert adapter._terminal_reached
+
+    adapter._terminal_reached = False
+    adapter._advance_pending = True
+    adapter._captured_content_page_count = 22
+    adapter.page_change_timeout_ms = 0
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.wait_for_change(page, previous)  # type: ignore[arg-type]
