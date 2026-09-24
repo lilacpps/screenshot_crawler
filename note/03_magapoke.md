@@ -768,6 +768,42 @@ and shared pacing/AccessGuard behavior. New normal live Batch and Ticket
 consumption were intentionally not forced; details are in
 `docs/PHASE6_VERIFICATION.md`.
 
+### Entry confirmation and failure diagnostics current state
+
+Work/Premium Ticket confirmation requires the requested control to disappear
+and usable viewer content to be observed. Content evidence may be native
+canvas rows or a visible non-empty viewer canvas. This fallback is limited to
+entry confirmation; native capture still requires its existing canvas-source
+state. Resource mismatch, ambiguous controls, or a still-visible requested
+control fail closed, and Ticket resources never silently fallback to each
+other.
+
+Failure diagnostics include body-free Magapoke entry signals such as canvas
+row count, visible canvas count, requested resource, Ticket-control visibility,
+and capture-hook presence. Ticket confirmation additionally retains a bounded
+poll trace with probe timing, canvas/viewer observations, Ticket-control state,
+and probe errors. Ticket-control observation uses one atomic DOM snapshot so a
+same-document reload does not consume the whole confirmation window through
+sequential Locator waits; a transient Playwright/DOM probe error is recorded
+and retried within the remaining bounded window. If viewer content is already
+accessible before the requested Ticket click, the state is recorded as
+preexisting access and does not create a
+grant or resource-consumption record. Missing confirmed consumption in
+entry-only execution is reported as `AccessConsumptionUnconfirmedError`.
+Candidate site-operation failures stop the Batch after the current candidate
+cleanup, while cooldown/resource-unavailable outcomes remain skips. Operator cancellation records
+`interrupted`, preserves only confirmed consumption, and prevents later
+candidates from starting.
+
+Grant-only uses Magapoke's `initialize_entry_only()` path. It performs the
+viewer/access entry and confirmed-consumption checks, then returns without
+native canvas-row rewind or full render stabilization. A visible viewer canvas
+can therefore complete grant-only confirmation even when native canvas rows
+remain empty; normal crawl capture and navigation keep their existing native
+row requirements. AccessGuard and browser/page cleanup are bounded, and an
+initialization error remains the primary failure if cancellation occurs during
+cleanup.
+
 ### Phase 1 runtime pacing / Batch ordering
 
 Magapoke Discoveryの列挙順は引き続きlatest-firstであり、Discoveryのreverseは行わない。Batchは既存のdirect先行・

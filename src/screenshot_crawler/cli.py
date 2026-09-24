@@ -6,7 +6,9 @@ import argparse
 import asyncio
 import sys
 from collections import Counter
+from collections.abc import Awaitable
 from pathlib import Path
+from typing import Any
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -18,9 +20,11 @@ from screenshot_crawler.batch import (
     BatchCandidate,
     BatchExecutionError,
     BatchExecutor,
+    BatchInterruptedError,
     BatchPlan,
     BatchPlanner,
     BatchPlanningError,
+    CandidateExecutionError,
 )
 from screenshot_crawler.batch.metrics import BatchMetricsWriter
 from screenshot_crawler.catalog import CatalogError, CatalogService
@@ -801,6 +805,40 @@ def _additional_access_resource_passes(policy: object) -> tuple[str, ...]:
     return ()
 
 
+def _candidate_failure_reason(error: BaseException) -> str:
+    """Keep the original site/crawler error visible in Batch metrics."""
+
+    root = _candidate_failure_root(error)
+    return (
+        getattr(root, "reason", None)
+        or type(root).__name__
+    )
+
+
+def _candidate_failure_root(error: BaseException) -> BaseException:
+    """Return the underlying candidate error when Batch wrapped it."""
+
+    return error.__cause__ if error.__cause__ is not None else error
+
+
+async def _best_effort_cleanup(awaitable: Awaitable[Any]) -> None:
+    """Bound cleanup and keep it from replacing the active Batch error."""
+
+    task = asyncio.ensure_future(awaitable)
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=5)
+    except TimeoutError:
+        if not task.done():
+            task.cancel()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        if not task.done():
+            task.cancel()
+        raise
+    except BaseException:  # noqa: BLE001 - cleanup is best effort
+        if not task.done():
+            task.cancel()
+
+
 async def _run_batch_run(args: argparse.Namespace) -> None:
     catalog = CatalogService(args.catalog)
     policies = _batch_policy_registry()
@@ -851,6 +889,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         return
 
     session = None
+    primary_error: BaseException | None = None
     try:
         values = read_env_file(args.env_file) if args.env_file.is_file() else {}
         endpoint = resolve_cdp_endpoint(
@@ -970,18 +1009,37 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             print("Browser is open. Press Enter here to disconnect.")
             await asyncio.to_thread(input)
     except BaseException as exc:
+        primary_error = exc
         access_stop = getattr(exc, "access_stop", None)
         metrics.finish(
             stop_reason=(
                 getattr(access_stop, "reason", None)
+                or getattr(exc, "stop_reason", None)
                 or getattr(exc, "reason", None)
+                or (
+                    _candidate_failure_reason(exc)
+                    if isinstance(exc, CandidateExecutionError)
+                    else None
+                )
                 or type(exc).__name__
             )
         )
         raise
     finally:
+        cleanup_interruption: BatchInterruptedError | None = None
         if session is not None:
-            await session.close()
+            try:
+                await _best_effort_cleanup(session.close())
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                if primary_error is None:
+                    cleanup_interruption = BatchInterruptedError(
+                        "Batch interrupted while closing the browser session"
+                    )
+        if cleanup_interruption is not None:
+            metrics.finish(stop_reason="interrupted")
+            print(f"  metrics: {metrics.path}")
+            metrics.close()
+            raise cleanup_interruption
         metrics.finish()
         print(f"  metrics: {metrics.path}")
         metrics.close()
@@ -1053,6 +1111,7 @@ async def _execute_batch_candidates(
         page = None
         contacted_site = False
         continue_after_candidate = False
+        primary_error: BaseException | None = None
         if metrics is not None:
             metrics.start_candidate(candidate)
         try:
@@ -1087,6 +1146,32 @@ async def _execute_batch_candidates(
                         if grant_only else None
                     ),
                 )
+        except BatchInterruptedError as exc:
+            primary_error = exc
+            if metrics is not None:
+                metrics.finish_candidate(
+                    result="failed",
+                    stop_reason="interrupted",
+                    error_type="BatchInterruptedError",
+                    error_message="Batch interrupted by user",
+                )
+            print("  Batch interrupted by user.", file=sys.stderr)
+            raise
+        except (KeyboardInterrupt, asyncio.CancelledError) as exc:
+            interruption = BatchInterruptedError(
+                f"Batch interrupted while executing item={candidate.item_id}, "
+                f"source={candidate.source_id}"
+            )
+            primary_error = interruption
+            if metrics is not None:
+                metrics.finish_candidate(
+                    result="failed",
+                    stop_reason="interrupted",
+                    error_type="BatchInterruptedError",
+                    error_message=str(interruption),
+                )
+            print("  Batch interrupted by user.", file=sys.stderr)
+            raise interruption from exc
         except AccessResourceUnavailableError as exc:
             reason = exc.reason
             print(f"  SKIPPED item={candidate.item_id} reason={reason} ({exc})")
@@ -1096,7 +1181,23 @@ async def _execute_batch_candidates(
                 print("  Resource is exhausted; stopping this resource pass.")
                 return attempts, False
             continue_after_candidate = True
+        except CandidateExecutionError as exc:
+            primary_error = exc
+            root = _candidate_failure_root(exc)
+            if metrics is not None:
+                metrics.finish_candidate(
+                    result="failed",
+                    stop_reason=_candidate_failure_reason(exc),
+                    error_type=type(root).__name__,
+                    error_message=str(root)[:4000] or None,
+                )
+            print("FAILED (stopping batch):", file=sys.stderr)
+            print(f"  item={candidate.item_id}", file=sys.stderr)
+            print(f"  source={candidate.source_id}", file=sys.stderr)
+            print(f"  error={exc}", file=sys.stderr)
+            raise
         except BaseException as exc:
+            primary_error = exc
             if metrics is not None:
                 access_stop = getattr(exc, "access_stop", None)
                 metrics.finish_candidate(
@@ -1106,6 +1207,8 @@ async def _execute_batch_candidates(
                         or getattr(exc, "reason", None)
                         or type(exc).__name__
                     ),
+                    error_type=type(exc).__name__,
+                    error_message=str(exc)[:4000] or None,
                 )
             print("FAILED:", file=sys.stderr)
             print(f"  item={candidate.item_id}", file=sys.stderr)
@@ -1119,21 +1222,39 @@ async def _execute_batch_candidates(
                 raise
             raise BatchExecutionError(str(exc)) from exc
         finally:
-            if page is not None:
-                await session.close_page(page)
-            if contacted_site and continue_after_candidate:
-                if grant_only:
-                    has_future_access = any(
-                        executor.grant_only_skip_reason(future)
-                        is None
-                        for future in candidates[index:]
-                    )
-                    if attempt_limit is not None and attempts >= attempt_limit:
-                        has_future_access = False
+            try:
+                if page is not None:
+                    await _best_effort_cleanup(session.close_page(page))
+                if contacted_site and continue_after_candidate:
+                    if grant_only:
+                        has_future_access = any(
+                            executor.grant_only_skip_reason(future)
+                            is None
+                            for future in candidates[index:]
+                        )
+                        if attempt_limit is not None and attempts >= attempt_limit:
+                            has_future_access = False
+                    else:
+                        has_future_access = index < len(candidates)
+                    if has_future_access:
+                        await asyncio.sleep(inter_candidate_delay_ms / 1000)
+            except (KeyboardInterrupt, asyncio.CancelledError) as exc:
+                if primary_error is not None:
+                    pass
                 else:
-                    has_future_access = index < len(candidates)
-                if has_future_access:
-                    await asyncio.sleep(inter_candidate_delay_ms / 1000)
+                    interruption = BatchInterruptedError(
+                        f"Batch interrupted while finishing item={candidate.item_id}, "
+                        f"source={candidate.source_id}"
+                    )
+                    if metrics is not None:
+                        metrics.finish_candidate(
+                            result="failed",
+                            stop_reason="interrupted",
+                            error_type="BatchInterruptedError",
+                            error_message=str(interruption),
+                        )
+                    print("  Batch interrupted by user.", file=sys.stderr)
+                    raise interruption from exc
     return attempts, True
 
 
@@ -1169,6 +1290,9 @@ def main() -> None:
     except BatchPlanningError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
+    except BatchInterruptedError as exc:
+        print(f"Interrupted: {exc}", file=sys.stderr)
+        raise SystemExit(130) from exc
     except BatchExecutionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc

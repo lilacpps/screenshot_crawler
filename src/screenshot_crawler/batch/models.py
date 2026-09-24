@@ -21,6 +21,16 @@ class BatchExecutionError(RuntimeError):
         super().__init__(message)
 
 
+class CandidateExecutionError(BatchExecutionError):
+    """A candidate failed, but the surrounding Batch may continue."""
+
+
+class BatchInterruptedError(BatchExecutionError):
+    """The operator interrupted the current Batch run."""
+
+    stop_reason = "interrupted"
+
+
 @dataclass(frozen=True, slots=True)
 class BatchCandidate:
     """One source selected for a future site-neutral Crawl Request."""

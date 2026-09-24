@@ -366,3 +366,42 @@ Not part of this Magapoke-specific work:
 - assuming a Work Ticket must exist after 23 hours without live confirmation,
 - changing adapter-owned retry algorithms merely because shared pacing is added,
 - duplicating shared CAPTCHA/challenge/metrics logic inside Magapoke when the shared mechanism can be used.
+
+## 14. Entry confirmation and candidate interruption
+
+Ticket consumption confirmation requires both the requested Ticket control to
+be no longer visible and usable viewer content to be observed. Viewer content
+may be established by native canvas rows or by a visible, non-empty viewer
+canvas. The visible-canvas signal is only an additional confirmation signal;
+native capture and canvas-source collection retain their existing requirements.
+
+An ambiguous state, a still-visible requested control, or a resource mismatch
+fails closed. Work Ticket and Premium Ticket are never implicit fallbacks for
+one another. An ordinary site-operation failure marks the current candidate
+failed and stops the surrounding Batch after bounded cleanup. Expected
+cooldown/resource-unavailable outcomes remain skips. AccessGuard stops and
+Catalog/configuration errors still stop the Batch. Ctrl+C or task cancellation
+is recorded as `interrupted`, preserves only already confirmed consumption,
+and prevents later candidates from starting.
+
+The confirmation loop retains a bounded, body-free probe trace in failure
+diagnostics. The trace records poll timing, canvas-row and viewer-canvas
+observations, Ticket-control visibility, probe durations, and probe errors.
+Ticket-control observation uses one atomic DOM snapshot so a same-document
+reload does not consume the whole confirmation window through sequential
+Locator waits. A transient Playwright/DOM probe error is recorded and retried
+within the remaining bounded window. A viewer that was already accessible
+before the requested Ticket click is marked
+as preexisting access; it is not treated as consumption of the requested
+resource and does not create a grant.
+
+An unconfirmed access resource in `entry_only` execution is represented by
+`AccessConsumptionUnconfirmedError`, not a generic lookup failure. This is a
+candidate error and stops the Batch.
+
+For grant-only `entry_only` execution, Magapoke performs access entry and
+consumption confirmation without running the normal native-row rewind or
+render-stabilization phase. This is intentional: a visible viewer canvas is
+valid confirmation evidence, while native canvas rows remain required by the
+normal capture path. Cleanup after an initialization failure is bounded and
+must not replace the original candidate error.

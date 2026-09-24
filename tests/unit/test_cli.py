@@ -1,3 +1,4 @@
+import asyncio
 import builtins
 import sys
 from pathlib import Path
@@ -1017,6 +1018,131 @@ async def test_batch_candidate_delay_runs_after_close_only_between_site_candidat
         "execute:2",
         "close:page-2",
     ]
+
+
+async def test_candidate_failure_is_recorded_and_batch_stops() -> None:
+    events: list[str] = []
+
+    class FakeSession:
+        async def new_page(self) -> object:
+            page = object()
+            events.append("new")
+            return page
+
+        async def close_page(self, _page: object) -> None:
+            events.append("close")
+
+    class FakeExecutor:
+        async def execute_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            events.append(f"execute:{candidate.item_id}")
+            if candidate.item_id == 1:
+                raise cli.CandidateExecutionError("viewer timeout")
+            return SimpleNamespace(archive_path=Path("item-2.zip"))
+
+    args = SimpleNamespace(
+        output_root=Path("output/batch"),
+        library_dir=Path("output/Books"),
+        max_pages=1000,
+        max_same_content=3,
+        keep_open=False,
+    )
+    candidates = [
+        SimpleNamespace(item_id=1, source_id=11, metadata={}, access_strategy="direct", quota_resource=None),
+        SimpleNamespace(item_id=2, source_id=22, metadata={}, access_strategy="direct", quota_resource=None),
+    ]
+
+    with pytest.raises(cli.CandidateExecutionError, match="viewer timeout"):
+        await cli._execute_batch_candidates(
+            args,
+            FakeSession(),
+            FakeExecutor(),
+            candidates,
+            phase="test",
+            inter_candidate_delay_ms=0,
+        )
+
+    assert events == ["new", "execute:1", "close"]
+
+
+async def test_cleanup_cancellation_does_not_replace_candidate_failure() -> None:
+    class FakeSession:
+        async def new_page(self) -> object:
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            raise asyncio.CancelledError()
+
+    class FakeExecutor:
+        async def execute_candidate(
+            self, _page: object, _candidate: object, **_kwargs: object
+        ) -> object:
+            raise cli.CandidateExecutionError("viewer timeout")
+
+    args = SimpleNamespace(
+        output_root=Path("output/batch"),
+        library_dir=Path("output/Books"),
+        max_pages=1000,
+        max_same_content=3,
+        keep_open=False,
+    )
+    candidate = SimpleNamespace(
+        item_id=1, source_id=11, metadata={}, access_strategy="direct", quota_resource=None
+    )
+
+    with pytest.raises(cli.CandidateExecutionError, match="viewer timeout"):
+        await cli._execute_batch_candidates(
+            args,
+            FakeSession(),
+            FakeExecutor(),
+            [candidate],
+            phase="test",
+            inter_candidate_delay_ms=0,
+        )
+
+
+async def test_batch_interruption_does_not_start_next_candidate() -> None:
+    events: list[str] = []
+
+    class FakeSession:
+        async def new_page(self) -> object:
+            events.append("new")
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            events.append("close")
+
+    class FakeExecutor:
+        async def execute_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            events.append(f"execute:{candidate.item_id}")
+            raise cli.BatchInterruptedError("interrupted")
+
+    args = SimpleNamespace(
+        output_root=Path("output/batch"),
+        library_dir=Path("output/Books"),
+        max_pages=1000,
+        max_same_content=3,
+        keep_open=False,
+    )
+    candidates = [
+        SimpleNamespace(item_id=1, source_id=11, metadata={}, access_strategy="direct", quota_resource=None),
+        SimpleNamespace(item_id=2, source_id=22, metadata={}, access_strategy="direct", quota_resource=None),
+    ]
+
+    with pytest.raises(cli.BatchInterruptedError):
+        await cli._execute_batch_candidates(
+            args,
+            FakeSession(),
+            FakeExecutor(),
+            candidates,
+            phase="test",
+            inter_candidate_delay_ms=0,
+        )
+
+    assert events == ["new", "execute:1", "close"]
 
 
 async def test_batch_empty_candidate_list_has_no_candidate_delay(

@@ -790,13 +790,14 @@ Premium consumption persists the source grant through the Policy's conservative
 71-hour `access_grant_until`; no Premium balance or Work-scoped resource state
 is stored. `--grant-only all` replans Catalog between Policy-ordered passes,
 shares its total site-attempt `--limit`, applies cross-pass pacing, and stops
-the whole run only for fatal AccessGuard errors. Grant-only leaves Items pending
-and creates no capture/package/Artifact.
+the whole run for candidate site-operation errors or fatal AccessGuard errors.
+Expected cooldown/resource-unavailable outcomes remain pass-local skips.
+Grant-only leaves Items pending and creates no capture/package/Artifact.
 
 ### Phase 6 cross-site verification current state
 
 The full automated regression suite is green across Magapoke, Manga ONE, and
-BookWalker (`647 passed`). It covers Phase 1 pacing and timeout isolation,
+BookWalker (`681 passed`). It covers Phase 1 pacing and timeout isolation,
 Phase 2 AccessGuard/metrics, generic resource passes, Work/Premium grant-only,
 Catalog v5 migration, adapter retry/capture, and normal Batch semantics.
 Read-only `batch plan` also passed for all three sites on a temporary v4 -> v5
@@ -804,6 +805,28 @@ Catalog migration copy. Actual normal live Batch and scarce Work/Premium
 consumption were not forced because no safe non-consuming candidate/session was
 available. The detailed matrix is `docs/PHASE6_VERIFICATION.md`; current status
 is **AUTOMATED VERIFIED / LIVE PARTIAL**.
+
+### Batch candidate failure and interruption current state
+
+Batch site-operation errors are represented as candidate-scoped failures and
+stop the sequential Batch after the current candidate is cleaned up. The
+original underlying error type and message remain in the CrawlRun and metrics.
+Expected cooldown/resource-unavailable outcomes continue as skips. AccessGuard
+stops and Catalog/configuration errors remain Batch-fatal.
+
+Operator cancellation is normalized to `BatchInterruptedError` with
+`stop_reason=interrupted`. The active candidate is failed, no later candidate
+starts, and the CLI exits with code 130. Confirmed resource consumption is
+persisted before interruption is recorded; unconfirmed consumption is not
+inferred. Page, AccessGuard, and browser cleanup are bounded best-effort.
+Candidate failure metrics also carry `error_type` and `error_message`. The
+entry-only runner reports missing confirmed consumption as
+`AccessConsumptionUnconfirmedError` instead of a generic `LookupError`.
+Adapters may override `initialize_entry_only()` when grant-only access
+confirmation must not perform full crawl readiness or capture setup. Cleanup
+of AccessGuard, page, and BrowserSession is bounded and never replaces an
+active candidate error; interruption is preserved only when no primary error
+is already in flight.
 
 ### Phase 1 runtime settings / pacing
 

@@ -18,6 +18,7 @@ from screenshot_crawler.auth.storage import (
 )
 
 DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+_CLEANUP_TIMEOUT_SECONDS = 5
 
 
 def resolve_cdp_endpoint(
@@ -120,7 +121,21 @@ class BrowserSession:
     async def close_page(self, page: Any) -> None:
         """Close a work page without affecting the remote browser."""
 
-        await page.close()
+        task = asyncio.create_task(page.close())
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(task), timeout=_CLEANUP_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            if not task.done():
+                task.cancel()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            if not task.done():
+                task.cancel()
+            raise
+        except BaseException:  # noqa: BLE001 - cleanup must not replace the run error
+            if not task.done():
+                task.cancel()
 
     async def close(self) -> None:
         """Disconnect Playwright while leaving remote Chrome running."""
@@ -205,9 +220,13 @@ async def close_browser(
     if close_browser_instance:
         try:
             await asyncio.wait_for(browser.close(), timeout=5)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            raise
         except BaseException:  # noqa: BLE001, S110
             pass
     try:
         await asyncio.wait_for(playwright.stop(), timeout=5)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        raise
     except BaseException:  # noqa: BLE001, S110
         pass

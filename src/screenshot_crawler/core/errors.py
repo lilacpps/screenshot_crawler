@@ -58,6 +58,10 @@ class PageChangeTimeoutError(CrawlerError):
     """Raised when a requested page change cannot be confirmed."""
 
 
+class AccessConsumptionUnconfirmedError(CrawlerError):
+    """Raised when entry-only execution lacks confirmed resource consumption."""
+
+
 class CaptureUnavailableError(CrawlerError):
     """Raised when an adapter's direct capture cannot safely produce a page."""
 

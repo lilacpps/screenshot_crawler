@@ -5,9 +5,11 @@ from screenshot_crawler.batch.models import (
     BatchCandidate,
     BatchExecutionError,
     BatchExecutionResult,
+    BatchInterruptedError,
     BatchPlan,
     BatchPlanningError,
     BatchSkipped,
+    CandidateExecutionError,
     GrantOnlyExecutionResult,
 )
 from screenshot_crawler.batch.planner import BatchPlanner
@@ -17,9 +19,11 @@ __all__ = [
     "BatchExecutionError",
     "BatchExecutionResult",
     "BatchExecutor",
+    "BatchInterruptedError",
     "BatchPlan",
     "BatchPlanner",
     "BatchPlanningError",
     "BatchSkipped",
+    "CandidateExecutionError",
     "GrantOnlyExecutionResult",
 ]

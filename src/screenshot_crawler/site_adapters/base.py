@@ -83,6 +83,15 @@ class SiteAdapter(ABC):
         Examples: dismiss cookie UI, switch to single-page mode, hide viewer chrome.
         """
 
+    async def initialize_entry_only(self, page: Page) -> None:
+        """Prepare only the access entry path for grant-only runs.
+
+        Adapters that need to avoid full crawl readiness/capture setup may
+        override this hook. The default preserves the existing lifecycle.
+        """
+
+        await self.initialize(page)
+
     @abstractmethod
     async def detect_state(self, page: Page) -> PageState:
         """Classify the currently visible screen."""

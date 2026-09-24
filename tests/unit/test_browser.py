@@ -1,5 +1,8 @@
+import asyncio
+
 import pytest
 
+import screenshot_crawler.core.browser as browser_module
 from screenshot_crawler.core.browser import (
     DEFAULT_CDP_ENDPOINT,
     BrowserSession,
@@ -94,3 +97,16 @@ async def test_browser_session_disconnect_leaves_remote_browser_running() -> Non
 
     assert browser.close_calls == 0
     assert playwright.stop_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_session_page_cleanup_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class HangingPage:
+        async def close(self) -> None:
+            await asyncio.sleep(10)
+
+    monkeypatch.setattr(browser_module, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    session = BrowserSession(object(), object(), object())  # type: ignore[arg-type]
+    await asyncio.wait_for(session.close_page(HangingPage()), timeout=0.2)

@@ -166,6 +166,8 @@ class BatchMetricsWriter:
         stop_reason: str | None,
         resource_consumed: bool | None = None,
         retry_count: int = 0,
+        error_type: str | None = None,
+        error_message: str | None = None,
     ) -> None:
         if self._current is None or self._current_started_monotonic is None:
             return
@@ -191,6 +193,8 @@ class BatchMetricsWriter:
                 "result": result,
                 "stop_reason": stop_reason,
                 "resource_consumed": resource_consumed,
+                "error_type": error_type,
+                "error_message": error_message,
             }
         )
         self._current = None

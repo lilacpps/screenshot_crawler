@@ -285,7 +285,12 @@ def test_metrics_writer_flushes_request_candidate_and_summary_records(tmp_path: 
             retry_after="5",
         )
     )
-    writer.finish_candidate(result="failed", stop_reason="http_429")
+    writer.finish_candidate(
+        result="failed",
+        stop_reason="http_429",
+        error_type="AccessStopError",
+        error_message="access stop",
+    )
     writer.finish(stop_reason="http_429")
     writer.close()
 
@@ -294,6 +299,13 @@ def test_metrics_writer_flushes_request_candidate_and_summary_records(tmp_path: 
     assert writer.path.parent == tmp_path / "metrics"
     assert any(record["type"] == "request" for record in records)
     assert any(record["type"] == "candidate" for record in records)
+    candidate_result = next(
+        record
+        for record in records
+        if record["type"] == "candidate" and record["event"] == "result"
+    )
+    assert candidate_result["error_type"] == "AccessStopError"
+    assert candidate_result["error_message"] == "access stop"
     assert summary["type"] == "batch_summary"
     assert summary["http_requests_total"] == 1
     assert summary["http_429_count"] == 1

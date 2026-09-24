@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
@@ -229,9 +230,16 @@ class MagapokeAdapter(SiteAdapter):
     capture_retry_interval_ms = 100
     max_source_responses = 128
     rewind_max_steps = 32
+    confirmation_trace_limit = 128
 
     viewer_selector = ".c-viewer"
     content_canvas_selector = ".c-viewer__comic canvas"
+    access_controls_selector = (
+        ".p-episode-purchase a, .p-episode-purchase button, "
+        ".p-episode-purchase [role='button'], "
+        ".p-episode-purchase input[type='button'], "
+        ".p-episode-purchase input[type='submit']"
+    )
     next_selector = ".c-viewer__pager-next"
     terminal_selector = ".c-viewer__last"
 
@@ -247,6 +255,15 @@ class MagapokeAdapter(SiteAdapter):
         self._source_response_tasks: dict[str, asyncio.Task[bytes | None]] = {}
         self._output_title: str | None = None
         self._output_order: str | None = None
+        self._confirmation_trace: list[dict[str, Any]] = []
+        self._confirmation_poll_count = 0
+        self._confirmation_started_monotonic: float | None = None
+        self._confirmation_final_observation: str | None = None
+        self._preexisting_accessible = False
+        self._ticket_click_attempted = False
+        self._last_viewer_observation: dict[str, Any] = {}
+        self._last_canvas_probe_error: str | None = None
+        self._initialization_mode: str | None = None
 
     def get_access_profile(self) -> AccessProfile:
         return magapoke_access_profile()
@@ -269,6 +286,15 @@ class MagapokeAdapter(SiteAdapter):
             )
         self._access_strategy = access_strategy
         self._access_consumption = AccessConsumption()
+        self._confirmation_trace = []
+        self._confirmation_poll_count = 0
+        self._confirmation_started_monotonic = None
+        self._confirmation_final_observation = None
+        self._preexisting_accessible = False
+        self._ticket_click_attempted = False
+        self._last_viewer_observation = {}
+        self._last_canvas_probe_error = None
+        self._initialization_mode = None
 
     async def configure_quota_resource(
         self, page: Page, quota_resource: str | None
@@ -293,6 +319,11 @@ class MagapokeAdapter(SiteAdapter):
 
     def get_access_consumption(self) -> AccessConsumption:
         return self._access_consumption
+
+    def _record_confirmation_trace(self, record: dict[str, Any]) -> None:
+        self._confirmation_trace.append(record)
+        if len(self._confirmation_trace) > self.confirmation_trace_limit:
+            del self._confirmation_trace[: -self.confirmation_trace_limit]
 
     async def prepare_page(self, page: Page) -> None:
         for task in self._source_response_tasks.values():
@@ -365,6 +396,7 @@ class MagapokeAdapter(SiteAdapter):
             await asyncio.gather(task, return_exceptions=True)
 
     async def _canvas_rows(self, page: Page) -> list[dict[str, object]]:
+        self._last_canvas_probe_error = None
         try:
             rows = await asyncio.wait_for(
                 page.evaluate(
@@ -373,7 +405,8 @@ class MagapokeAdapter(SiteAdapter):
                 ),
                 timeout=2,
             )
-        except Exception:  # noqa: BLE001 - state is classified as loading/unknown
+        except Exception as exc:  # noqa: BLE001 - state is classified as loading/unknown
+            self._last_canvas_probe_error = type(exc).__name__
             return []
         if not isinstance(rows, list):
             return []
@@ -475,36 +508,49 @@ class MagapokeAdapter(SiteAdapter):
         return " ".join(value.split())
 
     async def _visible_access_controls(self, page: Page) -> list[tuple[Locator, str, set[str]]]:
-        controls = page.locator(
-            ".p-episode-purchase a, .p-episode-purchase button, "
-            ".p-episode-purchase [role='button'], "
-            ".p-episode-purchase input[type='button'], "
-            ".p-episode-purchase input[type='submit']"
-        )
-        visible: list[tuple[Locator, str, set[str]]] = []
-        for index in range(await controls.count()):
-            control = controls.nth(index)
-            if not await control.is_visible():
-                continue
-            classes = set((await control.get_attribute("class") or "").split())
-            tag_name = await control.evaluate("element => element.tagName.toLowerCase()")
-            href = await control.get_attribute("href")
-            known_comment_navigation = (
-                tag_name == "a"
-                and "p-episode-comment-btn" in classes
-                and (
-                    ("p-episode-comment-btn--pc" in classes and href == "#comment")
-                    or (
-                        "p-episode-comment-btn--sp" in classes
-                        and href == "javascript:void(0);"
-                    )
-                )
+        controls = page.locator(self.access_controls_selector)
+        state = await self._visible_access_control_state(page)
+        return [
+            (
+                controls.nth(int(entry["index"])),
+                str(entry["text"]),
+                set(entry["classes"]),
             )
-            if known_comment_navigation:
-                continue
-            text = self._normalized_access_text(await control.inner_text())
-            visible.append((control, text, classes))
-        return visible
+            for entry in state
+        ]
+
+    async def _visible_access_control_state(self, page: Page) -> list[dict[str, Any]]:
+        """Read access controls atomically during Vue/document transitions."""
+
+        value = await page.evaluate(
+            """(selector) => Array.from(document.querySelectorAll(selector))
+                .map((element, index) => {
+                    const rect = element.getBoundingClientRect();
+                    const style = window.getComputedStyle(element);
+                    const visible = rect.width > 0 && rect.height > 0 &&
+                        style.display !== 'none' && style.visibility !== 'hidden';
+                    if (!visible) return null;
+                    const classes = Array.from(element.classList);
+                    const tagName = element.tagName.toLowerCase();
+                    const href = element.getAttribute('href');
+                    const knownCommentNavigation = tagName === 'a' &&
+                        classes.includes('p-episode-comment-btn') &&
+                        ((classes.includes('p-episode-comment-btn--pc') && href === '#comment') ||
+                         (classes.includes('p-episode-comment-btn--sp') &&
+                          href === 'javascript:void(0);'));
+                    if (knownCommentNavigation) return null;
+                    return {
+                        index,
+                        text: (element.innerText || '').replace(/\\s+/g, ' ').trim(),
+                        classes,
+                    };
+                })
+                .filter(Boolean)""",
+            self.access_controls_selector,
+        )
+        if not isinstance(value, list):
+            return []
+        return [entry for entry in value if isinstance(entry, dict)]
 
     async def _wait_for_quota_entry_state(
         self, page: Page
@@ -551,6 +597,7 @@ class MagapokeAdapter(SiteAdapter):
     async def _enter_with_work_ticket(self, page: Page) -> None:
         rows, controls, already_accessible = await self._wait_for_quota_entry_state(page)
         if already_accessible:
+            self._preexisting_accessible = True
             return
         work = [
             entry for entry in controls
@@ -583,12 +630,30 @@ class MagapokeAdapter(SiteAdapter):
             return
 
         control = work[0][0]
+        self._ticket_click_attempted = True
+        self._record_confirmation_trace(
+            {
+                "phase": "ticket_click",
+                "resource": "work_ticket",
+                "event": "start",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
         await control.click(timeout=self.page_change_timeout_ms)
+        self._record_confirmation_trace(
+            {
+                "phase": "ticket_click",
+                "resource": "work_ticket",
+                "event": "complete",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
         await self._confirm_ticket_consumption(page, resource="work_ticket")
 
     async def _enter_with_premium_ticket(self, page: Page) -> None:
         _, controls, already_accessible = await self._wait_for_quota_entry_state(page)
         if already_accessible:
+            self._preexisting_accessible = True
             return
         work = [
             entry for entry in controls
@@ -629,7 +694,24 @@ class MagapokeAdapter(SiteAdapter):
                 "premium_ticket_exhausted", stop_resource_pass=True
             )
 
+        self._ticket_click_attempted = True
+        self._record_confirmation_trace(
+            {
+                "phase": "ticket_click",
+                "resource": "premium_ticket",
+                "event": "start",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
         await premium[0][0].click(timeout=self.page_change_timeout_ms)
+        self._record_confirmation_trace(
+            {
+                "phase": "ticket_click",
+                "resource": "premium_ticket",
+                "event": "complete",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
         await self._confirm_ticket_consumption(page, resource="premium_ticket")
 
     async def _read_premium_ticket_count(self, page: Page) -> int:
@@ -674,39 +756,145 @@ class MagapokeAdapter(SiteAdapter):
     ) -> None:
         resource_label = "Work Ticket" if resource == "work_ticket" else "Premium Ticket"
         loop = asyncio.get_running_loop()
+        started = loop.time()
         deadline = loop.time() + self.page_change_timeout_ms / 1000
+        self._confirmation_started_monotonic = started
+        self._confirmation_poll_count = 0
+        self._confirmation_final_observation = None
         while True:
+            self._confirmation_poll_count += 1
+            poll_started = loop.time()
             remaining_ms = int((deadline - loop.time()) * 1000)
             if remaining_ms <= 0:
+                self._confirmation_final_observation = "timeout"
+                self._record_confirmation_trace(
+                    {
+                        "phase": "confirmation",
+                        "poll": self._confirmation_poll_count,
+                        "elapsed_ms": round((poll_started - started) * 1000, 1),
+                        "remaining_ms": 0,
+                        "outcome": "timeout",
+                    }
+                )
                 raise PageChangeTimeoutError(
                     f"Magapoke {resource_label} click did not reach confirmed viewer content"
                 )
+            observation: dict[str, Any] = {
+                "phase": "confirmation",
+                "poll": self._confirmation_poll_count,
+                "elapsed_ms": round((poll_started - started) * 1000, 1),
+                "remaining_ms": remaining_ms,
+            }
             try:
+                probe_started = loop.time()
                 rows = await asyncio.wait_for(
                     self._canvas_rows(page), timeout=remaining_ms / 1000
                 )
+                observation["canvas_rows_ms"] = round((loop.time() - probe_started) * 1000, 1)
+                observation["canvas_row_count"] = len(rows)
+                if self._last_canvas_probe_error is not None:
+                    observation["canvas_rows_error_type"] = self._last_canvas_probe_error
                 remaining_ms = int((deadline - loop.time()) * 1000)
                 if remaining_ms <= 0:
+                    observation["outcome"] = "timeout"
+                    self._confirmation_final_observation = "timeout"
+                    self._record_confirmation_trace(observation)
                     continue
-                controls = await asyncio.wait_for(
-                    self._visible_access_controls(page), timeout=remaining_ms / 1000
+                probe_started = loop.time()
+                viewer_visible = await asyncio.wait_for(
+                    self._viewer_canvas_visible(page), timeout=remaining_ms / 1000
                 )
+                observation["viewer_ms"] = round((loop.time() - probe_started) * 1000, 1)
+                observation["viewer_canvas_visible"] = viewer_visible
+                observation.update(
+                    {
+                        key: value
+                        for key, value in self._last_viewer_observation.items()
+                        if key in {
+                            "canvas_count",
+                            "visible_canvas_count",
+                            "non_empty_canvas_count",
+                            "probe_error_types",
+                        }
+                    }
+                )
+                remaining_ms = int((deadline - loop.time()) * 1000)
+                if remaining_ms <= 0:
+                    observation["outcome"] = "timeout"
+                    self._confirmation_final_observation = "timeout"
+                    self._record_confirmation_trace(observation)
+                    continue
+                probe_started = loop.time()
+                control_state = await asyncio.wait_for(
+                    self._visible_access_control_state(page),
+                    timeout=remaining_ms / 1000,
+                )
+                observation["controls_ms"] = round((loop.time() - probe_started) * 1000, 1)
+                observation["access_control_count"] = len(control_state)
+                observation["work_ticket_visible"] = any(
+                    entry.get("text") == _WORK_TICKET_TEXT
+                    and _WORK_TICKET_CLASS in entry.get("classes", [])
+                    for entry in control_state
+                )
+                observation["premium_ticket_visible"] = any(
+                    entry.get("text") == _PREMIUM_TICKET_TEXT
+                    and _PREMIUM_TICKET_CLASS in entry.get("classes", [])
+                    for entry in control_state
+                )
+            except PlaywrightError as exc:
+                observation.update(
+                    {
+                        "outcome": "transient_probe_error",
+                        "probe": "access_controls",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc)[:500],
+                        "elapsed_ms": round((loop.time() - started) * 1000, 1),
+                    }
+                )
+                self._record_confirmation_trace(observation)
+                remaining_ms = int((deadline - loop.time()) * 1000)
+                if remaining_ms <= 0:
+                    self._confirmation_final_observation = "probe_timeout"
+                    raise PageChangeTimeoutError(
+                        f"Magapoke {resource_label} click did not reach confirmed viewer content"
+                    ) from exc
+                await page.wait_for_timeout(min(100, remaining_ms))
+                continue
             except TimeoutError as exc:
+                observation.update(
+                    {
+                        "outcome": "probe_timeout",
+                        "error_type": type(exc).__name__,
+                        "elapsed_ms": round((loop.time() - started) * 1000, 1),
+                    }
+                )
+                self._confirmation_final_observation = "probe_timeout"
+                self._record_confirmation_trace(observation)
                 raise PageChangeTimeoutError(
                     f"Magapoke {resource_label} click did not reach confirmed viewer content"
                 ) from exc
+            except BaseException as exc:
+                observation.update(
+                    {
+                        "outcome": "probe_error",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc)[:500],
+                        "elapsed_ms": round((loop.time() - started) * 1000, 1),
+                    }
+                )
+                self._confirmation_final_observation = "probe_error"
+                self._record_confirmation_trace(observation)
+                raise
             remaining_ms = int((deadline - loop.time()) * 1000)
-            if resource == "work_ticket":
-                still_visible = any(
-                    text == _WORK_TICKET_TEXT and _WORK_TICKET_CLASS in classes
-                    for _, text, classes in controls
-                )
-            else:
-                still_visible = any(
-                    text == _PREMIUM_TICKET_TEXT and _PREMIUM_TICKET_CLASS in classes
-                    for _, text, classes in controls
-                )
-            if rows and not still_visible:
+            still_visible = (
+                observation["work_ticket_visible"]
+                if resource == "work_ticket"
+                else observation["premium_ticket_visible"]
+            )
+            if (rows or viewer_visible) and not still_visible:
+                observation["outcome"] = "confirmed"
+                self._confirmation_final_observation = "confirmed"
+                self._record_confirmation_trace(observation)
                 self._access_consumption = AccessConsumption(
                     consumed=True,
                     resource=resource,
@@ -714,32 +902,95 @@ class MagapokeAdapter(SiteAdapter):
                 )
                 return
             if remaining_ms <= 0:
+                observation["outcome"] = "timeout"
+                self._confirmation_final_observation = "timeout"
+                self._record_confirmation_trace(observation)
                 continue
+            observation["outcome"] = "waiting"
+            self._record_confirmation_trace(observation)
             await page.wait_for_timeout(min(100, remaining_ms))
+
+    async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
+        """Expose bounded, body-free entry-state signals for failure diagnostics."""
+
+        rows = await self._canvas_rows(page)
+        controls = await self._visible_access_controls(page)
+        canvases = page.locator(self.content_canvas_selector)
+        visible_canvas_count = 0
+        for index in range(await canvases.count()):
+            if await canvases.nth(index).is_visible():
+                visible_canvas_count += 1
+        return {
+            "magapoke_entry_confirmation": {
+                "requested_resource": self._quota_resource,
+                "initialization_mode": self._initialization_mode,
+                "canvas_row_count": len(rows),
+                "visible_canvas_count": visible_canvas_count,
+                "viewer_canvas_visible": visible_canvas_count > 0,
+                "work_ticket_visible": any(
+                    text == _WORK_TICKET_TEXT and _WORK_TICKET_CLASS in classes
+                    for _, text, classes in controls
+                ),
+                "premium_ticket_visible": any(
+                    text == _PREMIUM_TICKET_TEXT and _PREMIUM_TICKET_CLASS in classes
+                    for _, text, classes in controls
+                ),
+                "capture_hook_installed": bool(
+                    await page.evaluate("() => Boolean(window.__magapokeCaptureState)")
+                ),
+                "trace": list(self._confirmation_trace),
+                "poll_count": self._confirmation_poll_count,
+                "elapsed_ms": (
+                    round((asyncio.get_running_loop().time() - self._confirmation_started_monotonic) * 1000, 1)
+                    if self._confirmation_started_monotonic is not None
+                    else None
+                ),
+                "timeout_ms": self.page_change_timeout_ms,
+                "final_observation": self._confirmation_final_observation,
+                "preexisting_accessible": self._preexisting_accessible,
+                "ticket_click_attempted": self._ticket_click_attempted,
+                "consumption_confirmed": self._access_consumption.consumed,
+            }
+        }
 
     async def _viewer_canvas_visible(self, page: Page) -> bool:
         canvases = page.locator(self.content_canvas_selector)
-        for index in range(await canvases.count()):
+        canvas_count = await canvases.count()
+        visible_canvas_count = 0
+        non_empty_canvas_count = 0
+        probe_errors: list[str] = []
+        for index in range(canvas_count):
             canvas = canvases.nth(index)
             if not await canvas.is_visible():
                 continue
+            visible_canvas_count += 1
             try:
                 has_pixels = await canvas.evaluate(
                     "element => element.width > 0 && element.height > 0"
                 )
-            except PlaywrightError:
+            except PlaywrightError as exc:
+                probe_errors.append(type(exc).__name__)
                 continue
             if has_pixels:
-                return True
-        return False
+                non_empty_canvas_count += 1
+        self._last_viewer_observation = {
+            "canvas_count": canvas_count,
+            "visible_canvas_count": visible_canvas_count,
+            "non_empty_canvas_count": non_empty_canvas_count,
+        }
+        if probe_errors:
+            self._last_viewer_observation["probe_error_types"] = probe_errors
+        return non_empty_canvas_count > 0
 
-    async def initialize(self, page: Page) -> None:
+    async def _initialize_access_entry(self, page: Page) -> list[dict[str, object]]:
         self._initial_url = page.url
         self._initial_parts = parse_magapoke_url(page.url)
         self._source_episode = self._initial_parts
         self._advance_pending = False
         rows = await self._canvas_rows(page)
         already_accessible = bool(rows) or await self._viewer_canvas_visible(page)
+        if already_accessible and self._access_strategy == "quota":
+            self._preexisting_accessible = True
         if (
             self._access_strategy == "quota"
             and not already_accessible
@@ -749,6 +1000,17 @@ class MagapokeAdapter(SiteAdapter):
             elif self._quota_resource == "premium_ticket":
                 await self._enter_with_premium_ticket(page)
             rows = await self._canvas_rows(page)
+        return rows
+
+    async def initialize_entry_only(self, page: Page) -> None:
+        """Confirm access without requiring native capture readiness."""
+
+        self._initialization_mode = "entry_only"
+        await self._initialize_access_entry(page)
+
+    async def initialize(self, page: Page) -> None:
+        self._initialization_mode = "full"
+        rows = await self._initialize_access_entry(page)
         page_indices = [
             int(row["pageIndex"])
             for row in rows

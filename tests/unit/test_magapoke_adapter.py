@@ -16,6 +16,7 @@ from screenshot_crawler.core.errors import (
 from screenshot_crawler.core.models import ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.magapoke.adapter import (
+    _WORK_TICKET_TEXT,
     MagapokeAdapter,
     parse_premium_ticket_count,
 )
@@ -166,6 +167,141 @@ async def test_work_ticket_entry_clicks_exact_unique_control_once_and_confirms_c
 
 
 @pytest.mark.asyncio
+async def test_work_ticket_confirmation_accepts_visible_viewer_without_canvas_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--ticket" href="javascript:void(0)">
+              菴懷刀繝√こ繝・ヨ縺ｧ隱ｭ繧
+            </a>
+          </div>
+          <script>
+            document.querySelector('a').addEventListener('click', event => {
+              event.preventDefault();
+              document.querySelector('.p-episode-purchase').remove();
+              document.body.insertAdjacentHTML(
+                'beforeend', '<div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>'
+              );
+            });
+          </script>
+        """)
+        await page.locator("a").evaluate(
+            "(element, text) => element.textContent = text", _WORK_TICKET_TEXT
+        )
+        adapter = MagapokeAdapter()
+        async def no_rows(_page: object) -> list[dict[str, object]]:
+            return []
+
+        monkeypatch.setattr(adapter, "_canvas_rows", no_rows)
+
+        await adapter._enter_with_work_ticket(page)
+
+        consumption = adapter.get_access_consumption()
+        assert consumption.consumed is True
+        assert consumption.resource == "work_ticket"
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_work_ticket_confirmation_retries_transient_reload_probe_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        adapter.page_change_timeout_ms = 500
+        probe_calls = 0
+
+        async def rows(_page: object) -> list[dict[str, object]]:
+            return []
+
+        async def viewer(_page: object) -> bool:
+            return True
+
+        async def controls(_page: object) -> list[dict[str, object]]:
+            nonlocal probe_calls
+            probe_calls += 1
+            if probe_calls == 1:
+                raise Error("Execution context was destroyed")
+            return []
+
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+        monkeypatch.setattr(adapter, "_viewer_canvas_visible", viewer)
+        monkeypatch.setattr(adapter, "_visible_access_control_state", controls)
+
+        await adapter._confirm_ticket_consumption(page, resource="work_ticket")
+
+        assert adapter.get_access_consumption().consumed is True
+        assert probe_calls == 2
+        outcomes = [item.get("outcome") for item in adapter._confirmation_trace]
+        assert "transient_probe_error" in outcomes
+        assert "confirmed" in outcomes
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_entry_only_initialization_skips_native_render_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content("""
+          <div class="p-episode-purchase">
+            <a class="c-btn-icon-primary c-btn-icon-primary--ticket" href="javascript:void(0)">
+              作品チケットで読む
+            </a>
+          </div>
+          <script>
+            document.querySelector('a').addEventListener('click', event => {
+              event.preventDefault();
+              document.querySelector('.p-episode-purchase').remove();
+              document.body.insertAdjacentHTML(
+                'beforeend', '<div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>'
+              );
+            });
+          </script>
+        """)
+        adapter = MagapokeAdapter()
+        adapter.page_change_timeout_ms = 500
+        await adapter.configure_run(page, "quota")
+        await adapter.configure_quota_resource(page, "work_ticket")
+
+        async def no_rows(_page: object) -> list[dict[str, object]]:
+            return []
+
+        async def unexpected_readiness(_page: object, **_kwargs: object) -> None:
+            raise AssertionError("entry-only initialization must not wait for render readiness")
+
+        async def unexpected_rewind(_page: object) -> None:
+            raise AssertionError("entry-only initialization must not rewind the viewer")
+
+        monkeypatch.setattr(adapter, "_canvas_rows", no_rows)
+        monkeypatch.setattr(adapter, "_wait_for_render_ready", unexpected_readiness)
+        monkeypatch.setattr(adapter, "_rewind_to_first_content", unexpected_rewind)
+
+        await adapter.initialize_entry_only(page)
+
+        consumption = adapter.get_access_consumption()
+        assert consumption.consumed is True
+        assert consumption.resource == "work_ticket"
+        debug = await adapter.collect_debug_metadata(page)
+        confirmation = debug["magapoke_entry_confirmation"]
+        assert confirmation["initialization_mode"] == "entry_only"
+        assert confirmation["canvas_row_count"] == 0
+        assert confirmation["viewer_canvas_visible"] is True
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
 async def test_initialize_waits_for_delayed_work_ticket_control_without_early_click(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -225,6 +361,13 @@ async def test_initialize_waits_for_delayed_work_ticket_control_without_early_cl
         assert await page.evaluate("window.workClicks") == 1
         assert await page.evaluate("window.commentClicks") == 0
         assert adapter.get_access_consumption().consumed is True
+        debug = await adapter.collect_debug_metadata(page)
+        confirmation = debug["magapoke_entry_confirmation"]
+        assert confirmation["ticket_click_attempted"] is True
+        assert confirmation["poll_count"] >= 1
+        assert any(
+            item.get("outcome") == "confirmed" for item in confirmation["trace"]
+        )
     finally:
         await browser.close()
         await playwright.stop()
@@ -757,6 +900,9 @@ async def test_already_visible_viewer_skips_work_ticket_entry(
         await adapter.initialize(page)
         assert await page.evaluate("window.clicks") == 0
         assert adapter.get_access_consumption().consumed is False
+        debug = await adapter.collect_debug_metadata(page)
+        assert debug["magapoke_entry_confirmation"]["preexisting_accessible"] is True
+        assert debug["magapoke_entry_confirmation"]["ticket_click_attempted"] is False
     finally:
         await browser.close()
         await playwright.stop()

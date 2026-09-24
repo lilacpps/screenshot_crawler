@@ -609,3 +609,24 @@ Not part of this work:
 - arbitrary per-session page/request caps without evidence,
 - a generic YAML rule engine for selectors/hosts/resource semantics,
 - prematurely modeling every future site's quota/resource persistence shape before a concrete need exists.
+
+## 14. Candidate failure and operator interruption
+
+Site-operation failures isolated to one candidate are recorded as failed and
+stop the surrounding sequential Batch after the current candidate is cleaned
+up. The original exception type and message remain visible in candidate
+metrics and CrawlRun records. Expected resource-unavailable and local cooldown
+outcomes remain skips and may continue within the explicit resource pass.
+AccessGuard stops, stale-plan/configuration errors, and Catalog persistence
+errors remain fatal to the Batch.
+
+Operator interruption is recorded with `stop_reason=interrupted` and a
+dedicated interruption error type. No later candidate is started. Confirmed
+resource consumption is persisted before the interrupted candidate is
+finalized; unconfirmed consumption is never inferred from interruption.
+Cleanup is bounded and best-effort so it cannot replace the original failure
+or interruption reason.
+
+AccessGuard, page, and BrowserSession shutdown each use a bounded wait. A
+timeout cancels the pending cleanup task without an unbounded follow-up wait;
+an already active candidate error remains the primary result.

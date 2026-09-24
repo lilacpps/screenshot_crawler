@@ -400,6 +400,7 @@ metadata overrideはmanifest/source URLのauthorityにはならない。
 prepare_page(page)
 configure_run(page, access_strategy)
 initialize(page)
+initialize_entry_only(page)  # optional; used when RunConfig.entry_only=True
 detect_state(page)
 get_capture_target(page)
 get_capture_targets(page)

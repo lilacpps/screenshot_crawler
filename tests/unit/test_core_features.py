@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 
+import screenshot_crawler.core.runner as runner_module
 from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.capture import CaptureResult, capture_locator
 from screenshot_crawler.core.errors import (
+    AccessConsumptionUnconfirmedError,
     AccessStopError,
     CaptureUnavailableError,
     MaxPagesExceededError,
@@ -129,6 +131,17 @@ class FakeAdapter(SiteAdapter):
 
 
 class EntryOnlyAdapter(FakeAdapter):
+    def __init__(self, states: list[PageState], identities: list[ContentIdentity]) -> None:
+        super().__init__(states, identities)
+        self.initialize_calls = 0
+        self.initialize_entry_only_calls = 0
+
+    async def initialize(self, page: FakePage) -> None:
+        self.initialize_calls += 1
+
+    async def initialize_entry_only(self, page: FakePage) -> None:
+        self.initialize_entry_only_calls += 1
+
     async def configure_run(self, page: FakePage, access_strategy: str) -> None:
         return None
 
@@ -145,6 +158,11 @@ class EntryOnlyAdapter(FakeAdapter):
 
     async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...]:
         raise AssertionError("entry-only runs must not capture")
+
+
+class UnconfirmedEntryOnlyAdapter(EntryOnlyAdapter):
+    def get_access_consumption(self) -> AccessConsumption:
+        return AccessConsumption()
 
 
 class OrderedNavigationAdapter(FakeAdapter):
@@ -265,6 +283,39 @@ async def test_entry_only_stops_after_confirmed_access_without_capture(tmp_path:
     assert result.entry_confirmed is True
     assert result.pages == ()
     assert result.stop_reason == "entry_confirmed"
+    assert adapter.initialize_calls == 0
+    assert adapter.initialize_entry_only_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_entry_only_raises_typed_error_when_consumption_is_unconfirmed(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        AccessConsumptionUnconfirmedError,
+        match="access resource consumption was not confirmed",
+    ):
+        await CrawlerRunner(
+            RunConfig(
+                site="test",
+                source_url="https://example.test/viewer",
+                output_dir=tmp_path / "run-unconfirmed",
+                diagnostics_dir=tmp_path / "diagnostics-unconfirmed",
+                entry_only=True,
+                access_strategy="quota",
+                quota_resource="work_ticket",
+            )
+            ).run(FakePage(), UnconfirmedEntryOnlyAdapter([], []))
+
+
+@pytest.mark.asyncio
+async def test_runner_guard_cleanup_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    class HangingGuard:
+        async def close(self) -> None:
+            await asyncio.sleep(10)
+
+    monkeypatch.setattr(runner_module, "_CLEANUP_TIMEOUT_SECONDS", 0.01)
+    await asyncio.wait_for(CrawlerRunner._close_guard(HangingGuard()), timeout=0.2)
 
 
 async def test_adapter_call_preserves_inner_page_change_timeout() -> None:

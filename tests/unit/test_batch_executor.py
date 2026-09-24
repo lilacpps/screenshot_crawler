@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -10,6 +11,7 @@ from screenshot_crawler.batch import (
     BatchCandidate,
     BatchExecutionError,
     BatchExecutor,
+    BatchInterruptedError,
 )
 from screenshot_crawler.catalog import (
     CatalogService,
@@ -884,6 +886,34 @@ async def test_grant_only_unconfirmed_failure_does_not_record_consumption(
         resource="work_ticket",
     ) is None
     assert service.get_item(candidate.item_id).status == "pending"
+
+
+async def test_grant_only_cancellation_is_recorded_as_interrupted(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "interrupted.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(),
+        failure=asyncio.CancelledError(),
+    )
+
+    with pytest.raises(BatchInterruptedError):
+        await executor.execute_grant_only_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+
+    run = service.list_crawl_runs()[0]
+    assert run.status == "failed"
+    assert run.error_type == "BatchInterruptedError"
+    assert run.stop_reason == "interrupted"
+    assert service.get_source(candidate.source_id).access_granted_until is None
+    assert service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="magapoke",
+        resource="work_ticket",
+    ) is None
     assert service.list_artifacts() == []
 
 

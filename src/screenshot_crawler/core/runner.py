@@ -13,6 +13,7 @@ from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.capture import capture_locator, save_capture
 from screenshot_crawler.core.diagnostics import write_diagnostics
 from screenshot_crawler.core.errors import (
+    AccessConsumptionUnconfirmedError,
     CaptureUnavailableError,
     MaxPagesExceededError,
     PageChangeTimeoutError,
@@ -28,6 +29,8 @@ from screenshot_crawler.core.models import (
 from screenshot_crawler.core.progress import ProgressStore, ensure_new_run, normalize_path
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
+
+_CLEANUP_TIMEOUT_SECONDS = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,10 +154,13 @@ class CrawlerRunner:
         page: Page,
         error: BaseException,
         *,
+        adapter: SiteAdapter | None = None,
         state: PageState = PageState.UNKNOWN,
         current_context: object | None = None,
         saved_pages: int = 0,
     ) -> None:
+        if isinstance(error, (KeyboardInterrupt, asyncio.CancelledError)):
+            return
         metadata = dict(self.config.diagnostics_metadata or {})
         metadata.update(
             {
@@ -176,6 +182,15 @@ class CrawlerRunner:
                 "classification": getattr(error, "classification", None),
                 "provider": getattr(error, "provider", None),
             }
+        if adapter is not None:
+            try:
+                adapter_debug = await asyncio.wait_for(
+                    adapter.collect_debug_metadata(page), timeout=2
+                )
+                if isinstance(adapter_debug, dict):
+                    metadata["adapter_debug"] = adapter_debug
+            except BaseException:  # noqa: BLE001 - diagnostics must not replace the error
+                metadata["adapter_debug"] = {}
         try:
             await asyncio.wait_for(
                 write_diagnostics(
@@ -233,9 +248,14 @@ class CrawlerRunner:
                 wait_until="commit",
             )
             await self._check_access(page)
+            initialize = (
+                adapter.initialize_entry_only
+                if self.config.entry_only
+                else adapter.initialize
+            )
             await self._adapter_call(
-                adapter.initialize(page),
-                "initialize",
+                initialize(page),
+                "initialize_entry_only" if self.config.entry_only else "initialize",
                 timeout_ms=adapter.get_initialize_timeout_ms(
                     adapter.get_page_change_timeout_ms(self.config.page_change_timeout_ms)
                 ),
@@ -252,8 +272,8 @@ class CrawlerRunner:
                 content_context=initial_context,
             )
         except BaseException as exc:
-            await self._write_failure_diagnostics(page, exc)
-            await guard.close()
+            await self._write_failure_diagnostics(page, exc, adapter=adapter)
+            await self._close_guard(guard, suppress_cancellation=True)
             self._access_guard = None
             raise
 
@@ -263,13 +283,16 @@ class CrawlerRunner:
         same_content_count = 0
         previous_identity: ContentIdentity | None = None
 
+        primary_error: BaseException | None = None
         try:
             while True:
                 await self._check_access(page)
                 if self.config.entry_only:
                     consumption = adapter.get_access_consumption()
                     if not consumption.consumed:
-                        raise LookupError("access resource consumption was not confirmed")
+                        raise AccessConsumptionUnconfirmedError(
+                            "access resource consumption was not confirmed"
+                        )
                     return RunResult(
                         tuple(saved_pages),
                         PageState.END,
@@ -412,20 +435,48 @@ class CrawlerRunner:
                         self.config.page_change_timeout_ms
                     ),
                 )
-        except MaxPagesExceededError:
+        except MaxPagesExceededError as exc:
+            primary_error = exc
             raise
         except BaseException as exc:
+            primary_error = exc
             await self._write_failure_diagnostics(
                 page,
                 exc,
+                adapter=adapter,
                 state=locals().get("state", PageState.UNKNOWN),
                 current_context=locals().get("current_context"),
                 saved_pages=len(saved_pages),
             )
             raise
         finally:
-            await guard.close()
+            await self._close_guard(
+                guard, suppress_cancellation=primary_error is not None
+            )
             self._access_guard = None
+
+    @staticmethod
+    async def _close_guard(
+        guard: AccessGuard, *, suppress_cancellation: bool = False
+    ) -> None:
+        """Stop the candidate monitor without masking the active exception."""
+
+        task = asyncio.create_task(guard.close())
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(task), timeout=_CLEANUP_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            if not task.done():
+                task.cancel()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            if not task.done():
+                task.cancel()
+            if not suppress_cancellation:
+                raise
+        except BaseException:  # noqa: BLE001 - cleanup is best effort
+            if not task.done():
+                task.cancel()
 
 
 async def run_crawler(page: Page, adapter: SiteAdapter, config: RunConfig) -> RunResult:

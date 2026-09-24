@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 import uuid
@@ -15,6 +16,8 @@ from screenshot_crawler.batch.models import (
     BatchCandidate,
     BatchExecutionError,
     BatchExecutionResult,
+    BatchInterruptedError,
+    CandidateExecutionError,
     GrantOnlyExecutionResult,
 )
 from screenshot_crawler.catalog import ArtifactInput, CatalogError, CatalogService
@@ -193,6 +196,23 @@ class BatchExecutor:
                 stop_reason=crawl_result.stop_reason,
             )
         except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
+                interrupted = BatchInterruptedError(
+                    f"Batch interrupted while executing item={candidate.item_id}, "
+                    f"source={candidate.source_id}"
+                )
+                if not consumption_checked and adapter is not None and policy is not None:
+                    try:
+                        _record_observed_resource_consumption(
+                            self.catalog, candidate, policy, adapter
+                        )
+                    except Exception as recording_error:  # noqa: BLE001
+                        interrupted.add_note(
+                            f"Could not record observed quota consumption: {recording_error}"
+                        )
+                if run_id is not None:
+                    _record_failed_run(self.catalog, run_id, interrupted, crawl_result)
+                raise interrupted from exc
             if not consumption_checked and adapter is not None and policy is not None:
                 try:
                     _record_observed_resource_consumption(
@@ -212,7 +232,7 @@ class BatchExecutor:
                 raise
             if isinstance(exc, AccessResourceUnavailableError):
                 raise
-            raise BatchExecutionError(
+            raise CandidateExecutionError(
                 f"Batch candidate failed (item={candidate.item_id}, "
                 f"source={candidate.source_id}): {exc}"
             ) from exc
@@ -327,7 +347,7 @@ class BatchExecutor:
             )
             crawl_result = await self.runner_factory(config).run(page, adapter)
             if not crawl_result.entry_confirmed:
-                raise BatchExecutionError("grant-only entry was not confirmed")
+                raise CandidateExecutionError("grant-only entry was not confirmed")
             observed = _record_observed_resource_consumption(
                 self.catalog, candidate, policy, adapter
             )
@@ -350,6 +370,23 @@ class BatchExecutor:
                 stop_reason=crawl_result.stop_reason,
             )
         except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
+                interrupted = BatchInterruptedError(
+                    f"Batch interrupted while executing item={candidate.item_id}, "
+                    f"source={candidate.source_id}"
+                )
+                if not consumption_checked and adapter is not None and policy is not None:
+                    try:
+                        _record_observed_resource_consumption(
+                            self.catalog, candidate, policy, adapter
+                        )
+                    except Exception as recording_error:  # noqa: BLE001
+                        interrupted.add_note(
+                            f"Could not record observed quota consumption: {recording_error}"
+                        )
+                if run_id is not None:
+                    _record_failed_run(self.catalog, run_id, interrupted, crawl_result)
+                raise interrupted from exc
             if not consumption_checked and adapter is not None and policy is not None:
                 try:
                     _record_observed_resource_consumption(
@@ -367,7 +404,7 @@ class BatchExecutor:
                 ) from exc
             if isinstance(exc, (BatchExecutionError, AccessResourceUnavailableError)):
                 raise
-            raise BatchExecutionError(
+            raise CandidateExecutionError(
                 f"Grant-only candidate failed (item={candidate.item_id}, "
                 f"source={candidate.source_id}): {exc}"
             ) from exc
@@ -447,7 +484,7 @@ class BatchExecutor:
 
 def _require_normal_stop(result: RunResult, candidate: BatchCandidate) -> None:
     if result.stop_state not in {PageState.END, PageState.NEXT_CONTENT}:
-        raise BatchExecutionError(
+        raise CandidateExecutionError(
             f"Crawler did not stop normally for item={candidate.item_id}, "
             f"source={candidate.source_id}: {result.stop_reason}"
         )
@@ -475,7 +512,8 @@ def _record_failed_run(
     stop_reason = (
         crawl_result.stop_reason
         if crawl_result is not None
-        else getattr(error, "reason", None)
+        else getattr(error, "stop_reason", None)
+        or getattr(error, "reason", None)
     )
     if stop_reason is None and getattr(error, "access_stop", None) is not None:
         stop_reason = getattr(error.access_stop, "reason", None)
