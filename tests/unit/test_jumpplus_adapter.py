@@ -292,12 +292,49 @@ async def test_initialize_start_state_forwards_once_and_guarantees_first_content
     async def forward(_page):
         calls.append("forward")
 
+    async def rewind(_page):
+        calls.append("rewind")
+        adapter._first_content_page_index = 2
+        return True
+
     monkeypatch.setattr(adapter, "_wait_for_initial_viewer_state", initial_state)
     monkeypatch.setattr(adapter, "go_next", forward)
+    monkeypatch.setattr(adapter, "_rewind_to_first", rewind)
 
     await adapter.initialize(page)  # type: ignore[arg-type]
 
-    assert calls == ["forward"]
+    assert calls == ["forward", "rewind"]
+
+
+@pytest.mark.asyncio
+async def test_initial_start_waits_for_mounted_content_hint(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+
+    class _MountedContentPage:
+        async def evaluate(self, _script):
+            return True
+
+        async def wait_for_timeout(self, _milliseconds: int) -> None:
+            return None
+
+    page = _MountedContentPage()
+    calls = 0
+
+    async def rows(_page):
+        nonlocal calls
+        calls += 1
+        return [] if calls == 1 else [{"pageIndex": 1}]
+
+    async def initial_state(_page):
+        return "start"
+
+    monkeypatch.setattr(adapter, "_rows", rows)
+    monkeypatch.setattr(adapter, "_initial_viewer_state", initial_state)
+
+    state, result = await adapter._wait_for_initial_viewer_state(page)  # type: ignore[arg-type]
+
+    assert state == "content"
+    assert result == [{"pageIndex": 1}]
 
 
 @pytest.mark.asyncio
@@ -464,6 +501,56 @@ async def test_rewind_front_link_restores_content_after_precontent_state(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_rewind_does_not_traverse_empty_leading_page_area(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+
+    class _EmptyLeadingAreaPage:
+        url = "https://shonenjumpplus.com/episode/123"
+
+        async def evaluate(self, _script, _index):
+            return False
+
+    page = _EmptyLeadingAreaPage()
+
+    async def rows(_page):
+        return [{"pageIndex": 1, "canvasId": "first-content"}]
+
+    async def unavailable(_button):
+        raise AssertionError("empty leading area must not trigger backward click")
+
+    monkeypatch.setattr(adapter, "_rows", rows)
+    monkeypatch.setattr(adapter, "_control_available", unavailable)
+
+    assert await adapter._rewind_to_first(page)  # type: ignore[arg-type]
+    assert adapter._first_content_page_index == 1
+
+
+@pytest.mark.asyncio
+async def test_rewind_fails_closed_for_ambiguous_preceding_page_area(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+
+    class _AmbiguousLeadingAreaPage:
+        url = "https://shonenjumpplus.com/episode/123"
+
+        async def evaluate(self, _script, _index):
+            return None
+
+    page = _AmbiguousLeadingAreaPage()
+
+    async def rows(_page):
+        return [{"pageIndex": 2, "canvasId": "second-content"}]
+
+    async def no_backward(_page):
+        return False
+
+    monkeypatch.setattr(adapter, "_rows", rows)
+    monkeypatch.setattr(adapter, "_wait_for_backward_control", no_backward)
+
+    assert not await adapter._rewind_to_first(page)  # type: ignore[arg-type]
+    assert adapter._first_content_page_index is None
+
+
+@pytest.mark.asyncio
 async def test_index_zero_initial_content_does_not_startup_forward(monkeypatch) -> None:
     adapter = JumpPlusAdapter()
     page = _FakePage()
@@ -515,6 +602,21 @@ async def test_go_next_ends_only_when_runtime_count_and_index_are_complete(monke
     await adapter.go_next(page)  # type: ignore[arg-type]
     assert not adapter._terminal_reached
     assert clicked == [True]
+
+
+@pytest.mark.asyncio
+async def test_one_page_special_does_not_click_forward() -> None:
+    adapter = JumpPlusAdapter()
+    page = _ControlPage()
+    adapter._first_content_page_index = 1
+    adapter._content_page_count = 1
+    adapter._captured_content_page_count = 1
+    adapter._last_active_max_page_index = 1
+
+    await adapter.go_next(page)  # type: ignore[arg-type]
+
+    assert adapter._terminal_reached
+    assert page.control.click_count == 0
 
 
 @pytest.mark.asyncio

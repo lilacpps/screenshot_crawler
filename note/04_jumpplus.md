@@ -886,7 +886,7 @@ Unit coverage includes front-link index 2, no-front-link index 0, the manual
 index-0 shape, spread end indexes, index-0 initialization without startup
 forward, bounded middle rewind, pre-content restoration, complete/incomplete
 count and index terminal cases, and the `wait_for_change()` incomplete-capture
-regression. The adapter test file has 21 passing tests.
+regression. The adapter test file has 25 passing tests.
 
 Isolated shared-CDP live runs produced:
 
@@ -922,12 +922,105 @@ and archive packaging were otherwise used normally. The manual rental remained
 active at observation time and was not reacquired. No purchase, points, rental,
 ticket, or next-episode control was clicked.
 
-The remaining observed P2 issue is a separate Jump+ transit-guide behavior for
-some special one/two-page illustration rows encountered when attempting to
-process every free candidate in one Batch queue. It is fail-closed and is not
-the original final-page terminal timeout. Discovery, Site Policy, Batch
-semantics, Catalog schema, Core Runner, and native reconstruction logic were
-not changed in this fix.
+## Special illustration transit-guide investigation and fix (2026-09-24)
+
+Phase A used an isolated full Discovery Catalog for
+`https://shonenjumpplus.com/episode/9253191254047172892`. The special rows
+were selected dynamically by `order_label`; no episode ID was hardcoded in the
+probe. The current accessible sample was:
+
+| label | episode ID | access | main pages |
+| --- | --- | --- | ---: |
+| `イラスト` | `9253191255124422366` | free | 2 |
+| `イラスト2` | `9253191255561726242` | free | 2 |
+| `イラスト3` | `9253191256195090294` | free | 2 |
+
+No current one-main-page illustration row was present in this series. Each
+special episode had two `type=main` entries followed by a `link`, two
+`other` entries, and `backMatter` in `#episode-json`. The DOM contained an
+empty leading page area at index 0, then main canvases at areas 1 and 2. The
+initial active row was area 1; area 2 was already in the DOM but outside the
+viewport.
+
+The Phase-A probe (`poc/jumpplus_transit_guide_probe.py`) recorded the guide,
+controls, `elementsFromPoint()` stack, active rows, page areas, page structure,
+adapter counters, and persistence key names. Before adapter initialization the
+guide was hidden. Initialization treated page index 1 as having a preceding
+area, clicked the backward viewer control while the leading area was empty,
+and left the row unchanged. That no-op transition caused
+`.js-slide-to-transit-guide` to become a full-viewer overlay. The failing
+`_click_forward()` call then came from the normal `go_next` path, not from
+startup forward, rewind restore, or `wait_for_change`.
+
+At offsets 0, 100, 300, 500, 1, 2, 3, 5, 8, 10, and 15 seconds after that
+forward call, the guide remained `display:flex`, visible, with
+`pointer-events:auto` and a full viewer-sized rectangle. The forward center's
+top `elementsFromPoint()` result was the guide; both viewer controls were
+covered. It did not naturally disappear, change to `pointer-events:none`, or
+move. The adapter had `content_page_count=2`, captured one page, and
+`last_active_max_page_index=1`, so this was not an early terminal decision.
+This is Case D: the rewind boundary classifier treated an empty leading area
+as traversable content, with Case F's persistent transit-guide interception as
+the resulting symptom.
+
+The production fix is deliberately small: `_has_preceding_page_areas()` now
+considers a preceding area a rewind target only when it contains a rendered
+page canvas or an explicit link. An empty leading area therefore establishes
+the first content index without backward navigation. The normal forward click
+then occurs while the guide is hidden. No force click, JavaScript click, guide
+click, DOM removal, style mutation, pointer-events mutation, or Batch behavior
+change was made.
+
+Post-fix probe and isolated direct crawls produced 2/2 pages and END for all
+three special rows, with exactly two archive images and no duplicate/missing
+image observed. The normal 23-page free episode, manual-rental 27-page
+episode, and normal-long 65-page episode also completed with exact archive
+counts. The isolated eight-candidate Batch plan completed the three special
+rows and the following candidates (including the active rental); it finally
+stopped at the last candidate, item 13, on a separate existing
+`wait_for_change` timeout. Generic Batch stop-on-error semantics were left
+unchanged, and the special rows no longer stop the queue.
+
+Artifacts:
+
+```text
+output/jumpplus_special_guide_phase_a/
+output/jumpplus_special_guide_phase_b/
+```
+
+Discovery, Site Policy, Batch semantics, Catalog schema, Core Runner, and
+native reconstruction logic were not changed by this fix.
+
+## Initial content page resolution fix (2026-09-24)
+
+The item-13 investigation found a separate startup race from the transit-guide
+case. The episode has 80 `type=main` pages. In the failing run, the first
+capture began at the second active spread and 79 pages were saved; the last
+page was present. Because the capture count was still 79, the normal terminal
+condition could not complete and `wait_for_change` timed out.
+
+Jump+ can contain an empty leading page-area before the first main page, while
+the first main page may exist in the DOM before its canvas is rendered. The
+adapter therefore distinguishes these states during rewind:
+
+- a preceding rendered canvas or `kirinuki`/generator content link is a real
+  preceding content page and must be rewound through;
+- an explicitly empty leading area is not a rewind target, preserving the
+  transit-guide protection for short illustration episodes;
+- an ambiguous preceding page-area is not accepted as the first content page
+  when the backward control is unavailable. The adapter waits boundedly for
+  the viewer to settle and fails closed if the boundary remains unknown.
+
+This avoids silently setting `first_content_page_index` to the first row that
+happens to be visible during initial rendering. The index remains runtime
+derived; no episode-specific or fixed index is used.
+
+Unit coverage includes index-zero layouts, normal front-link layouts, empty
+leading illustration layouts, ambiguous preceding areas, and the existing
+rewind/restore behavior. Live validation after the change produced 80/80
+pages and END for item 13 (`9253191254047172892`). A representative two-page
+special illustration (`9253191255124422366`) also produced 2/2 pages and END;
+no transit-guide regression was observed.
 
 ## Terminal timeout investigation (historical, before production fix)
 

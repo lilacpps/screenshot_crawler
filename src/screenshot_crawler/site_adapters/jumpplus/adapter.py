@@ -328,6 +328,38 @@ class JumpPlusAdapter(SiteAdapter):
             return "start"
         return "unknown"
 
+    async def _has_content_page_area_hint(self, page: Page) -> bool | None:
+        try:
+            value = await asyncio.wait_for(
+                page.evaluate(
+                    """() => {
+                        const container = document.querySelector(
+                            'section.viewer.js-viewer .image-container.js-viewer-content'
+                        );
+                        if (!container) return null;
+                        const areas = [...container.querySelectorAll('.page-area.js-page-area')];
+                        // A front-link layout intentionally starts behind a
+                        // non-content page-area.  Its main page canvases are
+                        // mounted before the first safe forward action, but
+                        // the startup forward is still required to leave the
+                        // front-link page.
+                        if (areas.some(area => area.querySelector('a[class*="gtm-front-page"]'))) {
+                            return false;
+                        }
+                        return areas.some(area =>
+                            area.querySelector('canvas.page-image.js-page-image') ||
+                            area.querySelector('a.kirinuki-link') ||
+                            area.querySelector('a[href*="/generator/"]') ||
+                            area.tagName.toLowerCase() === 'p'
+                        );
+                    }"""
+                ),
+                timeout=2,
+            )
+        except Exception:  # noqa: BLE001 - initial DOM may still be mounting
+            return None
+        return value if isinstance(value, bool) else None
+
     async def _wait_for_initial_viewer_state(
         self, page: Page
     ) -> tuple[str, list[dict[str, object]]]:
@@ -337,7 +369,13 @@ class JumpPlusAdapter(SiteAdapter):
             if rows:
                 return "content", rows
             state = await self._initial_viewer_state(page)
-            if state == "start":
+            # The viewer can briefly expose the pre-content control state
+            # while the first main page-area is already mounted but its
+            # canvas has not become active.  Clicking forward in that
+            # window skips the first page on some long episodes.  Wait
+            # for the hinted content to render; only a genuine pre-content
+            # DOM without a main-page hint permits startup forward.
+            if state == "start" and (await self._has_content_page_area_hint(page)) is not True:
                 return state, []
             if state == "unsupported":
                 raise PageChangeTimeoutError("Jump+ initial viewer state changed or is unsupported")
@@ -383,6 +421,8 @@ class JumpPlusAdapter(SiteAdapter):
         page_index = self._page_index(rows)
         if page_index is None:
             return None
+        if page_index <= 0:
+            return False
         try:
             result = await page.evaluate(
                 """(index) => {
@@ -392,13 +432,41 @@ class JumpPlusAdapter(SiteAdapter):
                     const areas = container
                         ? [...container.querySelectorAll('.page-area.js-page-area')]
                         : [];
-                    return areas.length > 0 && index > 0;
+                    if (index <= 0 || areas.length === 0) return false;
+                    const preceding = areas.slice(0, index);
+                    // A leading empty page-area is present on the short
+                    // illustration episodes.  It is not a page that can be
+                    // rewound through; treating it as preceding content
+                    // clicks the transit guide and leaves the real first
+                    // content page covered.
+                    if (preceding.some(area =>
+                        area.querySelector('canvas.page-image.js-page-image') ||
+                        area.querySelector('a.kirinuki-link') ||
+                        area.querySelector('a[href*="/generator/"]')
+                    )) return true;
+                    // A main page-area can exist before its canvas is
+                    // rendered.  Do not classify that state as an empty
+                    // leading area: accepting the current row here skips
+                    // the first content page.  The caller waits for a
+                    // rewind control or for this structure to settle.
+                    if (preceding.some(area => area.tagName.toLowerCase() === 'p')) return null;
+                    return false;
                 }""",
                 page_index,
             )
         except Exception:  # noqa: BLE001 - structure is only a rewind hint
             return None
         return result if isinstance(result, bool) else None
+
+    async def _wait_for_backward_control(self, page: Page) -> bool:
+        elapsed = 0
+        while elapsed < self.page_change_timeout_ms:
+            backward = page.locator("section.viewer.js-viewer .page-navigation-backward.js-slide-backward")
+            if await self._control_available(backward):
+                return True
+            await page.wait_for_timeout(100)
+            elapsed += 100
+        return False
 
     async def _rewind_to_first(self, page: Page) -> bool:
         previous_rows = await self._rows(page)
@@ -409,11 +477,18 @@ class JumpPlusAdapter(SiteAdapter):
             if preceding_areas is False:
                 self._first_content_page_index = self._page_index(previous_rows)
                 return self._first_content_page_index is not None
-            backward = page.locator("section.viewer.js-viewer .page-navigation-backward.js-slide-backward")
-            backward_available = await self._control_available(backward)
+            backward_available = await self._wait_for_backward_control(page)
             if not backward_available:
-                self._first_content_page_index = self._page_index(previous_rows)
-                return self._first_content_page_index is not None
+                # If the preceding areas have settled into a known empty
+                # leading state, accepting the current content is safe.  If
+                # a preceding area is still ambiguous or is known content,
+                # fail closed rather than silently omitting its page.
+                settled_preceding = await self._has_preceding_page_areas(page, previous_rows)
+                if settled_preceding is False:
+                    self._first_content_page_index = self._page_index(previous_rows)
+                    return self._first_content_page_index is not None
+                return False
+            backward = page.locator("section.viewer.js-viewer .page-navigation-backward.js-slide-backward")
 
             previous = self._signature(previous_rows)
             previous_position = tuple(int(row.get("pageIndex", -1)) for row in previous_rows)
@@ -480,10 +555,17 @@ class JumpPlusAdapter(SiteAdapter):
             # The live target exposes a distinct pre-content page-area state:
             # the first non-content area is visible, the unique backward
             # control is hidden/disabled, and the unique viewer-forward control
-            # is visible.  Only this state
-            # permits one startup forward action.
+            # is visible.  Only this state permits one startup forward action.
+            # The resulting rows still go through the same rewind/boundary
+            # resolution as a content-start state: a startup transition can
+            # land on the second spread before the first main page renders.
             await self.go_next(page)
             self._advance_pending = False
+            rows = await self._wait_for_render_ready(page)
+            if not rows:
+                raise PageChangeTimeoutError("Jump+ active content was not found after startup forward")
+            if not await self._rewind_to_first(page):
+                raise PageChangeTimeoutError("Jump+ could not resolve the first content page")
         rows = await self._wait_for_render_ready(page)
         if not rows:
             raise PageChangeTimeoutError("Jump+ active content was not found")
