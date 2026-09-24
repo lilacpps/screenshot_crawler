@@ -57,6 +57,23 @@ def _mapping(*, source: str = "blob:test", sx: int = 0, sy: int = 0, sw: int = 1
     return value
 
 
+def _jpeg_bytes(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=90, subsampling=0)
+    return buffer.getvalue()
+
+
+def _source_png_with_delta(jpeg_data: bytes, delta: int, *, size: tuple[int, int] | None = None) -> bytes:
+    with Image.open(io.BytesIO(jpeg_data)) as image:
+        source = image.convert("RGB")
+    if size is not None:
+        source = source.resize(size)
+    source = Image.eval(source, lambda value: min(255, value + delta))
+    buffer = io.BytesIO()
+    source.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def test_jumpplus_url_parsing_and_host_profile() -> None:
     assert parse_jumpplus_url("https://shonenjumpplus.com/episode/123") is not None
     assert parse_jumpplus_url("https://www.shonenjumpplus.com/episode/123?x=1").episode_id == "123"
@@ -73,6 +90,8 @@ def test_jumpplus_transport_response_classification() -> None:
     accepted = _response("https://cdn-ak-img.shonenjumpplus.com/public/page/2/abc.jpg")
     assert is_jumpplus_jpeg_response(accepted)
     assert is_jumpplus_jpeg_response(_response(accepted.url, resource_type="fetch"))
+    assert is_jumpplus_jpeg_response(_response(accepted.url, resource_type="other"))
+    assert not is_jumpplus_jpeg_response(_response(accepted.url, content_type="", resource_type="other"))
     assert not is_jumpplus_jpeg_response(_response("https://example.test/public/page/2/a.jpg"))
     assert not is_jumpplus_jpeg_response(_response(accepted.url, content_type="image/png"))
     assert not is_jumpplus_jpeg_response(_response(accepted.url, resource_type="script"))
@@ -94,6 +113,80 @@ def test_j21_candidate_selection_is_fail_closed() -> None:
     assert result["selection_status"] == "ambiguous"
     assert result["pixel_fallback_candidate"] is distinct[0]
     assert select_transport_candidate("missing", [one])["selection_status"] == "unmatched"
+
+
+def test_j21_raw_sha256_match_precedes_pixel_matching() -> None:
+    candidate = {"raw_sha256": "raw", "pixel_sha256": "different", "data": b"not-an-image"}
+    result = select_transport_candidate(
+        "missing",
+        [candidate],
+        source_raw_sha256="raw",
+        source_data=b"not-an-image",
+    )
+    assert result["selection_status"] == "unique"
+    assert result["selection_reason"] == "single_raw_sha256"
+    assert result["selected_candidate"] is candidate
+
+
+def test_j21_decoder_tolerant_pixel_match_accepts_maximum_difference_two() -> None:
+    image = Image.new("RGB", (8, 8), (40, 80, 120))
+    candidate_data = _jpeg_bytes(image)
+    source_data = _source_png_with_delta(candidate_data, 2)
+    result = select_transport_candidate(
+        "missing",
+        [{"raw_sha256": "candidate", "pixel_sha256": "different", "data": candidate_data}],
+        source_data=source_data,
+        load_bytes=lambda item: item["data"],
+    )
+    assert result["selection_status"] == "unique"
+    assert result["selection_reason"] == "single_decoder_tolerant_pixel_match"
+
+
+def test_j21_decoder_tolerant_pixel_match_rejects_difference_above_two() -> None:
+    image = Image.new("RGB", (8, 8), (40, 80, 120))
+    candidate_data = _jpeg_bytes(image)
+    source_data = _source_png_with_delta(candidate_data, 3)
+    result = select_transport_candidate(
+        "missing",
+        [{"raw_sha256": "candidate", "pixel_sha256": "different", "data": candidate_data}],
+        source_data=source_data,
+        load_bytes=lambda item: item["data"],
+    )
+    assert result["selection_status"] == "unmatched"
+    assert result["selected_candidate"] is None
+
+
+def test_j21_decoder_tolerant_pixel_match_rejects_size_mismatch() -> None:
+    source_image = Image.new("RGB", (8, 8), (40, 80, 120))
+    candidate_data = _jpeg_bytes(Image.new("RGB", (4, 4), (40, 80, 120)))
+    source_buffer = io.BytesIO()
+    source_image.save(source_buffer, format="PNG")
+    result = select_transport_candidate(
+        "missing",
+        [{"raw_sha256": "candidate", "pixel_sha256": "different", "data": candidate_data}],
+        source_data=source_buffer.getvalue(),
+        load_bytes=lambda item: item["data"],
+    )
+    assert result["selection_status"] == "unmatched"
+
+
+def test_j21_decoder_tolerant_pixel_match_is_ambiguous_for_multiple_candidates() -> None:
+    image = Image.new("RGB", (8, 8), (40, 80, 120))
+    candidate_data = _jpeg_bytes(image)
+    source_data = _source_png_with_delta(candidate_data, 1)
+    candidates = [
+        {"raw_sha256": "one", "pixel_sha256": "different-one", "data": candidate_data},
+        {"raw_sha256": "two", "pixel_sha256": "different-two", "data": candidate_data},
+    ]
+    result = select_transport_candidate(
+        "missing",
+        candidates,
+        source_data=source_data,
+        load_bytes=lambda item: item["data"],
+    )
+    assert result["selection_status"] == "ambiguous"
+    assert result["selection_reason"] == "multiple_decoder_tolerant_pixel_matches"
+    assert result["selected_candidate"] is None
 
 
 def test_dct_feasibility_rejects_misalignment_and_reconstruction_preserves_jpeg() -> None:

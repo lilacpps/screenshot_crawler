@@ -321,9 +321,22 @@ locator screenshot. Raw CDN JPEG bytes are never emitted. The hook records only
 lightweight IDs, URLs, dimensions, draw rectangles, transforms, compositing,
 filter, alpha, sequence, and mutations. Source snapshots occur in capture
 phase and are keyed by sourceId plus draw-time blob URL. Candidate selection
-uses decoded RGB SHA and the J2.1 \`unique\`, \`equivalent_multiple\`, \`ambiguous\`,
-and \`unmatched\` states. A spread is all-native or all-fallback. Response body
-retention is bounded to 128 candidates and released after capture.
+first compares source-blob and response-body raw SHA-256, then decoded RGB SHA;
+if both are unavailable or differ because of browser/Pillow JPEG decoder
+rounding, a same-size candidate with maximum RGB channel difference <= 2 may
+be accepted only when it is unique. The J2.1 \`unique\`,
+\`equivalent_multiple\`, \`ambiguous\`, and \`unmatched\` states remain in
+use, and ambiguous candidates remain non-native. A spread is all-native or
+all-fallback. Response body retention is bounded to 128 candidates and
+released after capture.
+
+The response classifier accepts `resource_type=other` only when the response
+has an explicit `Content-Type: image/jpeg` and a permitted Jump+ CDN
+`/public/page/` URL. Live initial-page preload responses use Playwright's
+`other` resource type, while later lazy-loaded page responses use `fetch`;
+without this classification, the first pages fall back to locator screenshots
+with `unmatched_transport_candidate`. Missing or non-JPEG content types remain
+fail-closed, and the existing native/fallback capture priority is unchanged.
 
 DCT requires identity/source-over/alpha=1/no filter/no scaling, integer MCU
 aligned geometry, valid coverage, a safe compatible candidate, unchanged source,

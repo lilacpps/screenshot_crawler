@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageChops, UnidentifiedImageError
 
 from screenshot_crawler.core.capture import CaptureResult
 
@@ -70,13 +70,31 @@ def is_jumpplus_jpeg_response(response: object) -> bool:
     )
     normalized_type = content_type.split(";", 1)[0].strip().lower()
     if normalized_type:
-        return normalized_type == "image/jpeg" and resource_type in {None, "", "image", "fetch", "xhr"}
+        return normalized_type == "image/jpeg" and resource_type in {None, "", "image", "fetch", "xhr", "other"}
     return resource_type in {None, "", "image"}
 
 
 def decoded_pixel_sha256(data: bytes) -> str:
     with Image.open(io.BytesIO(data)) as image:
         return hashlib.sha256(image.convert("RGB").tobytes()).hexdigest()
+
+
+def raw_sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def max_decoded_pixel_difference(source_data: bytes, candidate_data: bytes) -> int | None:
+    try:
+        with Image.open(io.BytesIO(source_data)) as source_image:
+            source = source_image.convert("RGB")
+        with Image.open(io.BytesIO(candidate_data)) as candidate_image:
+            candidate = candidate_image.convert("RGB")
+        if source.size != candidate.size:
+            return None
+        extrema = ImageChops.difference(source, candidate).getextrema()
+        return max(channel_extrema[1] for channel_extrema in extrema)
+    except (OSError, UnidentifiedImageError, ValueError):
+        return None
 
 
 def _jpeg_sof(data: bytes) -> tuple[int, int, tuple[tuple[int, int], ...]] | None:
@@ -207,10 +225,16 @@ def select_transport_candidate(
     source_pixel_sha256: str | None,
     candidates: list[dict[str, object]],
     *,
+    source_raw_sha256: str | None = None,
+    source_data: bytes | None = None,
     load_bytes: Callable[[dict[str, object]], bytes] | None = None,
     analyze_candidate: Callable[[dict[str, object], bytes], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Return J2.1's unique/equivalent/ambiguous/unmatched decision."""
+    raw_matching = [
+        item for item in candidates
+        if source_raw_sha256 and item.get("raw_sha256") == source_raw_sha256
+    ]
     matching = [
         item for item in candidates
         if source_pixel_sha256 and item.get("pixel_sha256") == source_pixel_sha256
@@ -224,8 +248,59 @@ def select_transport_candidate(
         "equivalent_candidate_count": 0,
         "metadata_equivalent": None,
     }
-    if not matching:
+
+    if raw_matching:
+        result["candidate_count"] = len(raw_matching)
+        result["pixel_fallback_candidate"] = raw_matching[0]
+        if len(raw_matching) == 1:
+            result.update(
+                selected_candidate=raw_matching[0],
+                selection_status="unique",
+                selection_reason="single_raw_sha256",
+                equivalent_candidate_count=1,
+                metadata_equivalent=True,
+            )
+        else:
+            result.update(
+                selected_candidate=raw_matching[0],
+                selection_status="equivalent_multiple",
+                selection_reason="identical_raw_sha256",
+                equivalent_candidate_count=len(raw_matching),
+                metadata_equivalent=True,
+            )
         return result
+
+    if not matching:
+        if source_data is None:
+            return result
+        tolerant: list[dict[str, object]] = []
+        for item in candidates:
+            data = load_bytes(item) if load_bytes is not None else item.get("data")
+            if not isinstance(data, bytes):
+                continue
+            max_difference = max_decoded_pixel_difference(source_data, data)
+            if max_difference is not None and max_difference <= 2:
+                tolerant.append(item)
+        if not tolerant:
+            return result
+        result["candidate_count"] = len(tolerant)
+        result["pixel_fallback_candidate"] = tolerant[0]
+        if len(tolerant) == 1:
+            result.update(
+                selected_candidate=tolerant[0],
+                selection_status="unique",
+                selection_reason="single_decoder_tolerant_pixel_match",
+                equivalent_candidate_count=1,
+                metadata_equivalent=True,
+            )
+            return result
+        result.update(
+            selection_status="ambiguous",
+            selection_reason="multiple_decoder_tolerant_pixel_matches",
+            equivalent_candidate_count=0,
+        )
+        return result
+
     result["pixel_fallback_candidate"] = matching[0]
     if len(matching) == 1:
         result.update(selected_candidate=matching[0], selection_status="unique",

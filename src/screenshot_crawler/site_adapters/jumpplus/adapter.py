@@ -22,6 +22,7 @@ from screenshot_crawler.site_adapters.jumpplus.native_capture import (
     is_jumpplus_jpeg_response,
     jpeg_dimensions,
     parse_jumpplus_url,
+    raw_sha256,
     reconstruct_jpeg_lossless,
     reconstruct_jpeg_png,
     select_transport_candidate,
@@ -88,6 +89,11 @@ _CANVAS_HOOK = r"""
   const mapping = (item) => ({sourcePath:item.sourcePath,sourceWidth:item.sourceWidth,sourceHeight:item.sourceHeight,canvasWidth:item.canvasWidth,canvasHeight:item.canvasHeight,
     sx:item.sx,sy:item.sy,sw:item.sw,sh:item.sh,dx:item.dx,dy:item.dy,dw:item.dw,dh:item.dh,transform:item.transform,
     globalCompositeOperation:item.globalCompositeOperation,filter:item.filter,globalAlpha:item.globalAlpha,sourceId:item.source.sourceId,sourceUrl:item.source.sourceUrl,sequence:item.sequence});
+  const sha256 = async (buffer) => {
+    if (!crypto?.subtle) return null;
+    const digest = await crypto.subtle.digest('SHA-256', buffer);
+    return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+  };
   window.__jumpplusProductionCapture = {
     getActiveRows: () => {
       const container = document.querySelector('section.viewer.js-viewer .image-container.js-viewer-content');
@@ -101,7 +107,7 @@ _CANVAS_HOOK = r"""
       }).filter(Boolean).sort((a,b)=>b.x-a.x);
     },
     snapshotSources: async (wanted) => { const result=[]; for (const item of wanted || []) { const image=state.images.get(Number(item.sourceId)); if (!image) continue; const current=image.currentSrc||image.src||''; if (current !== item.sourceUrl) { result.push({sourceId:Number(item.sourceId),sourceUrl:current,drawUrl:item.sourceUrl,changed:true}); continue; }
-        try { const canvas=document.createElement('canvas'); canvas.width=image.naturalWidth||image.width; canvas.height=image.naturalHeight||image.height; const ctx=canvas.getContext('2d'); ctx.drawImage(image,0,0); result.push({sourceId:Number(item.sourceId),sourceUrl:current,dataUrl:canvas.toDataURL('image/png')}); } catch (error) { result.push({sourceId:Number(item.sourceId),sourceUrl:current,error:String(error)}); }
+        try { const canvas=document.createElement('canvas'); canvas.width=image.naturalWidth||image.width; canvas.height=image.naturalHeight||image.height; const ctx=canvas.getContext('2d'); ctx.drawImage(image,0,0); let rawSha256=null; try { const response=await fetch(current); if (response.ok) rawSha256=await sha256(await response.arrayBuffer()); } catch (_) {} result.push({sourceId:Number(item.sourceId),sourceUrl:current,rawSha256,dataUrl:canvas.toDataURL('image/png')}); } catch (error) { result.push({sourceId:Number(item.sourceId),sourceUrl:current,error:String(error)}); }
       } return result; },
     debug: () => ({drawCount:state.draws.length,mutationCount:state.mutations.length,sourceCount:state.images.size})
   };
@@ -641,16 +647,16 @@ class JumpPlusAdapter(SiteAdapter):
                 data = task.result()
                 if data is None or jpeg_dimensions(data) is None:
                     continue
-                candidates.append({"url": url, "data": data, "pixel_sha256": decoded_pixel_sha256(data)})
+                candidates.append({"url": url, "data": data, "raw_sha256": raw_sha256(data), "pixel_sha256": decoded_pixel_sha256(data)})
             except Exception:  # noqa: BLE001, S112 - invalid candidate is ignored
                 continue
         return candidates
 
-    async def _snapshot_sources(self, page: Page, wanted: list[dict[str, object]]) -> dict[tuple[object, str], bytes]:
+    async def _snapshot_sources(self, page: Page, wanted: list[dict[str, object]]) -> dict[tuple[object, str], dict[str, object]]:
         if not wanted:
             return {}
         payload = await page.evaluate("wanted => window.__jumpplusProductionCapture.snapshotSources(wanted)", wanted)
-        result: dict[tuple[object, str], bytes] = {}
+        result: dict[tuple[object, str], dict[str, object]] = {}
         for item in payload if isinstance(payload, list) else []:
             if not isinstance(item, dict) or item.get("error") or item.get("changed"):
                 continue
@@ -658,7 +664,10 @@ class JumpPlusAdapter(SiteAdapter):
             if not isinstance(data_url, str) or not data_url.startswith("data:image/png;base64,"):
                 continue
             try:
-                result[(item.get("sourceId"), str(item.get("sourceUrl") or ""))] = base64.b64decode(data_url.split(",", 1)[1])
+                result[(item.get("sourceId"), str(item.get("sourceUrl") or ""))] = {
+                    "data": base64.b64decode(data_url.split(",", 1)[1]),
+                    "raw_sha256": item.get("rawSha256") if isinstance(item.get("rawSha256"), str) else None,
+                }
             except (ValueError, TypeError):
                 continue
         return result
@@ -690,10 +699,19 @@ class JumpPlusAdapter(SiteAdapter):
             if any(isinstance(item, dict) and item.get("operation") in {"clearRect","fillRect","putImageData","strokeRect","fillText","strokeText","fill","stroke"} for item in row.get("mutations", [])):
                 return None, "unsupported_canvas_mutation", selections, used_source_urls
             source_key = (source.get("sourceId"), str(source.get("sourceUrl") or ""))
-            snapshot = snapshots.get(source_key)
-            if snapshot is None:
+            snapshot_record = snapshots.get(source_key)
+            if snapshot_record is None:
                 return None, "source_snapshot_unavailable_or_changed", selections, used_source_urls
-            selection = select_transport_candidate(decoded_pixel_sha256(snapshot), candidates, load_bytes=lambda item: item["data"], analyze_candidate=_dct_signature)
+            snapshot = snapshot_record["data"]
+            source_raw_sha256 = snapshot_record.get("raw_sha256")
+            selection = select_transport_candidate(
+                decoded_pixel_sha256(snapshot),
+                candidates,
+                source_raw_sha256=source_raw_sha256 if isinstance(source_raw_sha256, str) else None,
+                source_data=snapshot,
+                load_bytes=lambda item: item["data"],
+                analyze_candidate=_dct_signature,
+            )
             status = str(selection["selection_status"])
             selections.append(status)
             candidate = selection.get("selected_candidate") or selection.get("pixel_fallback_candidate")
