@@ -641,6 +641,7 @@ class CatalogService:
         item_input: ItemInput | Mapping[str, Any],
         source_input: SourceInput | Mapping[str, Any],
         web_target_input: SourceTargetInput | Mapping[str, Any],
+        access_granted_until_observed: bool = False,
     ) -> CatalogRecord:
         """Atomically refresh an existing Discovery graph without local-state writes."""
 
@@ -681,7 +682,7 @@ class CatalogService:
             if source.available is not None:
                 assignments.insert(3, "available = ?")
                 values.insert(3, int(source.available))
-            if source.access_granted_until is not None:
+            if source.access_granted_until is not None or access_granted_until_observed:
                 assignments.insert(-1, "access_granted_until = ?")
                 values.insert(-2, format_timestamp(source.access_granted_until))
             if source.published_at is not None:

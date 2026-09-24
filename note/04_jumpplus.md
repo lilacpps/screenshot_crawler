@@ -612,9 +612,10 @@ For comparison, a normal paid row in the same series (`9253191254640655914`,
 
 This is sufficient to distinguish normal paid from an active manual rental
 without hardcoding episode 3 or any episode number. The authority order for
-this distinction is structured `purchase_info`/`status` plus matching row
-evidence; a text-only `レンタル中` label without an expiry is not enough for a
-direct-grant decision.
+this distinction prefers structured `purchase_info`/`status` plus matching row
+evidence, but production also accepts an explicit DOM `レンタル中` state without
+structured evidence. A displayed expiry is parsed when available; without an
+expiry the source remains `paid` with no grant timestamp.
 
 ### Access and expiry specification decision
 
@@ -666,7 +667,108 @@ selected-range state.
 
 The information is sufficient to implement a production Discovery design for
 DOM-based full/incremental enumeration and source-level access reconciliation.
-Before registering production code, a further live check is still advisable
-for an expired rental and an active rental with no exact expiry, because those
-states were not present in this four-sample matrix. No production code was
-changed in this J0 verification.
+Before registering production code, a further live check was still advisable
+for an expired rental and an active rental with no exact expiry. Those states
+remain unresolved live cases, but the production adapter now fails closed on
+conflicts and does not invent a grant timestamp.
+
+## Production Discovery (2026-09-24)
+
+`JumpPlusDiscoveryAdapter` is registered under `jumpplus`; Jump+ Site Policy
+and Batch policy remain intentionally unregistered. The existing J0 probe and
+matrix remain observation-only and are not imported by production code.
+
+### Scope and traversal
+
+The adapter requires an allowed `/episode/<numeric-id>` target and canonicalizes
+all discovered row links to `https://shonenjumpplus.com/episode/<id>`, using the
+episode id as `external_id`. It validates the unique `series_id` found in the
+page data (`data-giga_series` / `data-gtm-data-layer`) and cross-checks any
+scoped `pagination_readable_products` `aggregate_id` observed by the bounded
+response listener. A missing or conflicting series identity is incomplete.
+
+Both observed listing variants are supported:
+
+- React `[role=tab][data-key=episode]` -> its `aria-controls` tabpanel;
+- direct `.js-readable-products-pagination` -> `#pagination-top`.
+
+The semantic `ul` carrying `series-episode-list` is the row scope. React's
+episode tab is activated only when its panel is still empty; the initial mount
+retry is bounded to three page-load attempts. No episode/access/purchase
+control is clicked.
+
+For numeric range controls, the adapter re-reads and revalidates controls
+before every click, rejects episode links or forbidden access controls, keeps
+DOM order as the traversal order, and requires descending numeric upper bounds.
+It does not hardcode range count or labels. A direct one-range display such as
+`1話から` is not clicked as a range switch. Each range is fully expanded with a
+maximum of 20 `もっと見る` clicks; progress requires a growth in episode-id
+identity. Zero enabled controls is complete, while multiple or disabled visible
+controls, no-progress clicks, target navigation, and range-count mismatches are
+fail-closed.
+
+`full` collects and validates every range before yielding any record. It
+deduplicates by episode id and rejects conflicting duplicate metadata. Numeric
+range boundaries and any bounded pagination total are used as completeness
+checks. `incremental` traverses the newest numeric range first, then each older
+range, and yields each range's DOM order (observed newest-to-oldest); the
+generic known-streak stop can therefore operate on a global latest-first
+stream. The initial selected range is never used as a latestness signal.
+
+### Record and access mapping
+
+The visible title is preserved as `order_label`. `order_key` is populated only
+for an unambiguous leading numeric `N話` label; `イラスト*`, special-collection
+labels, and date text remain non-numeric. `YYYY/MM/DD` row dates become JST
+calendar-day timestamps. `free_until` remains `None`; scheduled labels such as
+`無料公開予定` are not current free access.
+
+Access mapping is:
+
+- current free badge/structured `is_free` -> `free` with no grant;
+- point/rental-required or `is_rentable` -> `paid` with no grant;
+- active manual rental -> `paid` with `access_granted_until` from structured
+  `rental_end_at` when present, otherwise the displayed JST minute expiry;
+- unrecognized or conflicting evidence -> `unknown` with no grant.
+
+Structured active-rental evidence is preferred, but is not required. An
+explicit DOM `レンタル中` state is sufficient to mark `paid` even when the
+structured response is unavailable. No 48-hour product duration is added to
+the observation time. A structured/DOM conflict is `unknown`. Every Jump+ row
+whose access state was observed sets `access_checked_at` and
+`access_granted_until_observed=True`.
+
+The manual-rental live validation found episode
+`9253191254350319886` in the 13-row series, not the target episode itself. Its
+Catalog state was `paid` with
+`2026-09-26T11:41:39+09:00`; normal paid rows remained `paid` with no grant.
+Manual rental is never mapped to `quota`, and no automatic rental, ticket, or
+point behavior is included.
+
+### Catalog grant reconciliation
+
+`DiscoveredSource.access_granted_until_observed` is a site-neutral tri-state
+observation flag. `False` preserves an existing Catalog grant when the incoming
+timestamp is `None`; `True` writes either the timestamp or SQL `NULL`. The
+Discovery Service forwards the flag to `CatalogService.refresh_discovered_source`.
+Existing BookWalker, Manga ONE, and Magapoke records retain their prior
+behavior because they leave the flag at its default `False`; non-null incoming
+grants still update as before. This uses the existing Catalog schema and does
+not add quota semantics.
+
+### Live validation and remaining issues
+
+The isolated full-discovery run succeeded with 286, 13, 2, and 1180 unique
+episodes for the baseline, manual-rental-containing, normal, and ultra-long
+samples respectively; no duplicate episode ids were observed. An incremental
+ultra-long run yielded the newest five rows and stopped at the generic
+`known_streak` boundary. The unrented paid direct-crawl smoke test failed
+closed during initial viewer readiness with zero saved pages and no manifest;
+it did not perform purchase, point, or rental controls and did not package the
+target as manga content.
+
+Remaining P2 observations are an expired-rental live sample and a DOM-only
+active rental with no expiry. They do not block this Discovery phase because
+both map conservatively without inventing a grant. Jump+ Site Policy and Batch
+integration are the next phase; automatic rental/points/tickets and quota
+handling remain out of scope.

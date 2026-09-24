@@ -47,6 +47,7 @@ class DiscoveredSource:
     free_until: TimestampValue = None
     published_at: TimestampValue = None
     access_granted_until: TimestampValue = None
+    access_granted_until_observed: bool = False
     available: bool | None = None
     access_checked_at: TimestampValue = None
     last_seen_at: TimestampValue = None

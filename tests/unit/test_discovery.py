@@ -40,6 +40,8 @@ def record(
     genre: str | None = None,
     access_mode: str = "free",
     available: bool | None = True,
+    access_granted_until: str | None = None,
+    access_granted_until_observed: bool = False,
 ) -> DiscoveredRecord:
     return DiscoveredRecord(
         item=DiscoveredItem(
@@ -54,9 +56,38 @@ def record(
             external_id=external_id,
             url=url or f"https://example.test/{external_id}",
             access_mode=access_mode,
+            access_granted_until=access_granted_until,
+            access_granted_until_observed=access_granted_until_observed,
             available=available,
         ),
     )
+
+
+async def test_discovery_propagates_explicit_grant_clear(tmp_path: Path) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [
+            record(
+                "one",
+                access_mode="paid",
+                access_granted_until="2026-09-26T11:41:00+09:00",
+                access_granted_until_observed=True,
+            )
+        ]
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    await service.discover(FakePage(), watch_target, "full")
+    assert catalog.list_sources()[0].access_granted_until == "2026-09-26T11:41:00+09:00"
+
+    adapter.records = [
+        record(
+            "one",
+            access_mode="paid",
+            access_granted_until=None,
+            access_granted_until_observed=True,
+        )
+    ]
+    await service.discover(FakePage(), watch_target, "full")
+    assert catalog.list_sources()[0].access_granted_until is None
 
 
 class FakeDiscoveryAdapter(DiscoveryAdapter):

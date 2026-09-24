@@ -154,6 +154,7 @@ class DiscoveryService:
                         item_input=item_input,
                         source_input=source_input,
                         web_target_input=web_target_input,
+                        access_granted_until_observed=record.source.access_granted_until_observed,
                     )
                 self.catalog.fill_work_metadata(
                     work.id,

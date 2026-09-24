@@ -359,11 +359,13 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     """Build the Discovery registry separately from viewer adapters."""
 
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerDiscoveryAdapter
+    from screenshot_crawler.site_adapters.jumpplus import JumpPlusDiscoveryAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeDiscoveryAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneDiscoveryAdapter
 
     registry = DiscoveryAdapterRegistry()
     registry.register("bookwalker", BookWalkerDiscoveryAdapter)
+    registry.register("jumpplus", JumpPlusDiscoveryAdapter)
     registry.register("magapoke", MagapokeDiscoveryAdapter)
     registry.register("mangaone", MangaOneDiscoveryAdapter)
     return registry

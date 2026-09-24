@@ -158,6 +158,24 @@ def test_discovery_grant_create_and_refresh_null_preservation(tmp_path: Path) ->
     assert preserved.source.access_granted_until == "2026-09-23T02:00:00+09:00"
     assert preserved.source.published_at == "2026-09-22T00:00:00+09:00"
 
+    cleared = service.refresh_discovered_source(
+        work_id=work.id,
+        source_id=created.source.id,
+        item_input=ItemInput(order_label="Episode"),
+        source_input=SourceInput(
+            site="magapoke",
+            external_id="renting-1",
+            discovery_key="magapoke-target",
+            access_mode="paid",
+            access_granted_until=None,
+        ),
+        web_target_input=SourceTargetInput(
+            backend="web", locator="https://example.invalid/episode"
+        ),
+        access_granted_until_observed=True,
+    )
+    assert cleared.source.access_granted_until is None
+
 
 def test_source_published_at_requires_timezone_awareness_and_normalizes_to_jst(
     tmp_path: Path,

@@ -33,6 +33,19 @@ active-rental lower-bound timestamp into the existing `access_granted_until`
 field. `order_key` remains NULL. There is no schema change, ticket/point
 control, or quota-consumption behavior.
 
+## Jump+ Discovery production status
+
+Jump+ production Discovery is implemented for the two observed episode-list
+DOM variants (`role=tabpanel` and direct pagination). It validates the scoped
+series identity, traverses all numeric ranges latest-first, expands bounded
+`もっと見る` controls, deduplicates episode ids, and maps free/paid/manual
+rental access without consuming points or starting rentals. Manual rental is
+represented as `paid` with an observed `access_granted_until` when available.
+The generic `access_granted_until_observed` flag allows a complete Jump+
+refresh to clear an expired grant while preserving grants from adapters that do
+not explicitly observe grant state. Jump+ Site Policy and Batch registration
+remain NOT YET IMPLEMENTED for the next phase.
+
 ## Phase 5A status
 
 The read-only Batch Planner, Site Policy registry, Manga ONE Policy, and

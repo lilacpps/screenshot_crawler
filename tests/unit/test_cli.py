@@ -341,7 +341,12 @@ def test_batch_policy_registry_contains_bookwalker_magapoke_and_mangaone() -> No
 
 
 def test_discovery_registry_contains_magapoke() -> None:
-    assert cli._discovery_registry().sites() == ("bookwalker", "magapoke", "mangaone")
+    assert cli._discovery_registry().sites() == (
+        "bookwalker",
+        "jumpplus",
+        "magapoke",
+        "mangaone",
+    )
 
 
 def test_batch_run_parser_accepts_execution_options() -> None:

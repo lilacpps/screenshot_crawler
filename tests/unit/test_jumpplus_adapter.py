@@ -136,7 +136,7 @@ async def test_jumpplus_access_rejects_quota_and_resource() -> None:
 
 def test_jumpplus_is_viewer_only_registry_entry() -> None:
     assert isinstance(cli._registry().create("jumpplus"), JumpPlusAdapter)
-    assert "jumpplus" not in cli._discovery_registry().sites()
+    assert "jumpplus" in cli._discovery_registry().sites()
     assert "jumpplus" not in cli._batch_policy_registry().sites()
 
 
