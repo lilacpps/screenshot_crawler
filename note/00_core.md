@@ -419,7 +419,9 @@ ZIP対象はdirectory globではなく `manifest.json` の `pages[].file` がaut
 - manifest file重複指定拒否
 - 既存同名ZIPは上書きしない
 
-ZIPはlibrary treeへ保存し、completion status JSONを別途残す。
+ZIPはlibrary treeへ保存し、completion status JSONを別途残す。ZIP内部の画像は
+manifestの`pages[].file`に記載された相対パスをそのまま使い、archive stemの
+top-level directoryは作成しない。
 
 Batch Candidateは必要な場合だけsite-neutralな`artifact_disambiguator`をpackagingへ渡せる。
 これはmetadataの`title` / `order` / `author` / `genre`を変更せず、archive stemの末尾へ追加する。
@@ -428,7 +430,8 @@ Manga ONEの非定型itemではBatch Plannerが`mangaone-{Source.external_id}`�
 Magapokeでは同一Work内の全statusのItemを対象に、既存の`archive_stem()`で
 disambiguatorなしに生成したbase stemが重複するItemへだけ、
 `magapoke-{Source.external_id}`を設定する。通常のMagapoke episodeは従来のfilenameを維持する。
-ZIP内部のtop-level directoryとcompletion status JSONのfilenameも同じstemを使い、
+ZIP内部の画像はmanifestの相対パスをそのまま使い、作品stemのtop-level directoryは作成しない。
+archive filenameとcompletion status JSONのfilenameは従来どおり同じstemを使い、
 destination存在時の`FileExistsError`と自動連番なしの安全性を維持する。
 
 ## 17. Intermediate directory cleanup

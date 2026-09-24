@@ -166,8 +166,8 @@ def package_crawl_output(
 ) -> PackageResult:
     """Zip a completed crawl and move it into the configured library tree.
 
-    The ZIP contains only manifest-declared page artifacts under a top-level folder whose
-    name matches the archive stem. The source crawl directory is removed only
+    The ZIP contains only manifest-declared page artifacts at the archive root. The
+    source crawl directory is removed only
     when it contains generated run files and the archive and completion
     status have been written successfully.
     """
@@ -201,9 +201,8 @@ def package_crawl_output(
 
     try:
         with zipfile.ZipFile(temporary_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive_root = Path(stem)
             for file_path, relative_file in page_files:
-                archive.write(file_path, (archive_root / relative_file).as_posix())
+                archive.write(file_path, relative_file.as_posix())
         os.replace(temporary_path, destination)
     except BaseException:
         temporary_path.unlink(missing_ok=True)

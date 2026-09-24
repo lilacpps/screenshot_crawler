@@ -154,9 +154,7 @@ def test_package_crawl_output_creates_library_tree_and_zip(tmp_path) -> None:
     )
     assert not crawl_dir.exists()
     with zipfile.ZipFile(result.archive_path) as archive:
-        assert sorted(archive.namelist()) == [
-            "作品名-第01巻-著者/page-0001.png",
-        ]
+        assert archive.namelist() == ["page-0001.png"]
 
 
 def test_package_uses_manifest_files_and_ignores_extra_png(tmp_path) -> None:
@@ -176,7 +174,7 @@ def test_package_uses_manifest_files_and_ignores_extra_png(tmp_path) -> None:
     )
 
     with zipfile.ZipFile(result.archive_path) as archive:
-        assert archive.namelist() == ["作品名/page-0001.png"]
+        assert archive.namelist() == ["page-0001.png"]
     assert (crawl_dir / "page-9999.png").exists()
 
 
@@ -206,8 +204,8 @@ def test_package_supports_mixed_native_webp_and_fallback_png(tmp_path) -> None:
 
     with zipfile.ZipFile(result.archive_path) as archive:
         assert archive.namelist() == [
-            "作品名/page-0001.webp",
-            "作品名/page-0002.png",
+            "page-0001.webp",
+            "page-0002.png",
         ]
 
 
@@ -234,7 +232,7 @@ def test_package_supports_original_jpeg_artifact(tmp_path) -> None:
     )
 
     with zipfile.ZipFile(result.archive_path) as archive:
-        assert archive.namelist() == ["菴懷刀蜷・/page-0001.jpg"]
+        assert archive.namelist() == ["page-0001.jpg"]
 
 
 def test_package_does_not_rmtree_unrelated_files(tmp_path) -> None:
@@ -259,7 +257,7 @@ def test_package_does_not_rmtree_unrelated_files(tmp_path) -> None:
     assert unrelated.read_text(encoding="utf-8") == "keep"
 
 
-def test_package_disambiguator_updates_archive_root_and_status_name(tmp_path) -> None:
+def test_package_disambiguator_updates_archive_and_status_name_only(tmp_path) -> None:
     crawl_dir = tmp_path / "crawl"
     crawl_dir.mkdir()
     (crawl_dir / "page-0001.png").write_bytes(b"png")
@@ -281,7 +279,7 @@ def test_package_disambiguator_updates_archive_root_and_status_name(tmp_path) ->
     )
     assert result.status_path == tmp_path / "crawl-status" / f"{expected_stem}.json"
     with zipfile.ZipFile(result.archive_path) as archive:
-        assert archive.namelist() == [f"{expected_stem}/page-0001.png"]
+        assert archive.namelist() == ["page-0001.png"]
 
 
 def test_package_same_disambiguated_destination_still_raises(tmp_path) -> None:

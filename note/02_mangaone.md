@@ -357,7 +357,8 @@ BatchのManga ONE非定型itemだけは、次のようにstable disambiguatorが
 output/Books/漫画/<title>/<title>-<order>-mangaone-<external_id>.zip
 ```
 
-ZIP内部のtop-level directoryと`crawl-status`のJSON filenameも同じarchive stemを使う。
+ZIP内部の画像はmanifestの相対パスを使い、作品stemのtop-level directoryは作成しない。
+`crawl-status`のJSON filenameは従来どおりarchive stemを使う。
 
 source crawl directoryは、manifest / progress / manifest記載artifact以外を含まない場合に限りcleanupされる。
 

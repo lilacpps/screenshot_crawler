@@ -1078,8 +1078,8 @@ BatchCandidateはCatalog identityとして`item_id`、`source_id`、`target_id`�
 `locator`を既存Crawlerの`RunConfig.source_url`へ変換する。
 
 BatchCandidateは必要な場合だけ、Crawlerのmetadataとは別のpackaging-onlyな
-`artifact_disambiguator`を持てる。これはarchive stem、ZIP内部root、completion status
-filenameのsuffixに使うが、`title` / `order`等のmetadataやCatalogの`order_label`は変更しない。
+`artifact_disambiguator`を持てる。これはarchive filenameとcompletion status filenameの
+suffixに使うが、ZIP内部の画像パス、`title` / `order`等のmetadataやCatalogの`order_label`は変更しない。
 Manga ONEの`order_key = NULL` itemでは、Batch Plannerがstableな
 `mangaone-{Source.external_id}`を設定する。Magapokeでは同一Work内の全statusのItemを
 対象に、packagingの`archive_stem()`後のbase stemが重複するgroupへだけ
