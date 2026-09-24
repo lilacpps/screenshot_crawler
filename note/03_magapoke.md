@@ -57,7 +57,7 @@ behavior remain out of scope.
   Catalog. Batch runs Premium only after completing all direct and per-Work
   Work Ticket candidates, then replans against current pending Catalog state.
 - Premium pass orders `Work.created_at ASC`, `Work.id ASC`, then source
-  `published_at ASC` (NULL last), existing item order, and source ID. It keeps
+  `published_at ASC` (NULL last), existing item order, and `source_id DESC`. It keeps
   all selected candidates for an older Work together before moving to a newer
   Work.
 - Before each Premium click, the Adapter reads one exact semantic balance row:
@@ -807,7 +807,7 @@ cleanup.
 ### Phase 1 runtime pacing / Batch ordering
 
 Magapoke Discoveryの列挙順は引き続きlatest-firstであり、Discoveryのreverseは行わない。Batchは既存のdirect先行・
-Work間stable orderingを維持し、同一Workの各Batch phase内を`published_at ASC (NULL last), source_id ASC`で
+Work間stable orderingを維持し、同一Workの各Batch phase内を`published_at ASC (NULL last), source_id DESC`で
 old-to-newに並べる。root `crawler.yaml`の`page_turn_delay_ms`はCONTENTの全artifactとprogress persist後、
 initial `go_next()`直前に1回だけ適用する。Batchの`inter_candidate_delay_ms`はcandidate Page close後、次の
 site-accessing candidate前に1回だけ適用する。Magapoke adapterのnavigation retry、Work Ticket、Premium Ticket、

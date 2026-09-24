@@ -11,6 +11,7 @@ from typing import Literal
 from screenshot_crawler.catalog.models import Source
 
 BatchAccessStrategy = Literal["direct", "quota"]
+BatchOrdering = Literal["catalog", "published_at"]
 
 
 class SitePolicyError(RuntimeError):
@@ -35,6 +36,11 @@ class SitePolicy(ABC):
     """Site-specific eligibility and access-strategy boundary."""
 
     site: str
+
+    def batch_ordering(self) -> BatchOrdering:
+        """Return the site-owned ordering strategy for Batch candidates."""
+
+        return "catalog"
 
     def available_quota(self, sources: Collection[Source], now: datetime) -> int | None:
         """Return local quota slots, or ``None`` for policies without quota."""

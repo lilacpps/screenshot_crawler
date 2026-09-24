@@ -17,8 +17,9 @@ Phase 5 status: **IMPLEMENTED**. Phase 6 status: **AUTOMATED VERIFIED / LIVE PAR
 - insert CONTENT pacing after all capture artifacts and progress are persisted and immediately before the initial `adapter.go_next()`,
 - keep the pacing sleep outside adapter timeout/retry calls,
 - apply candidate pacing only between candidates that contacted the site,
-- update Magapoke Batch ordering to old-to-new within a Work,
-- preserve latest-first Magapoke Discovery,
+- update Magapoke and Jump+ Batch ordering to old-to-new within a Work,
+- preserve latest-first Magapoke and Jump+ Discovery,
+- use `published_at ASC` with NULL last and `source_id DESC` as the same-date tie-breaker,
 - preserve existing adapter-owned retry algorithms for Magapoke, Manga ONE, and BookWalker.
 
 ### Acceptance tests
@@ -32,7 +33,7 @@ Phase 5 status: **IMPLEMENTED**. Phase 6 status: **AUTOMATED VERIFIED / LIVE PAR
 - page pacing excluded from page-change timeout budget,
 - one candidate delay between site-accessing candidates,
 - no candidate delay for local-only skips,
-- Magapoke ordering regression,
+- Magapoke / Jump+ ordering regression,
 - Manga ONE / BookWalker navigation regression.
 
 ## Phase 2 - Shared AccessGuard and metrics

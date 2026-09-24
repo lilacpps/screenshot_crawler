@@ -6,7 +6,12 @@ from datetime import datetime
 
 from screenshot_crawler.catalog.models import Source
 from screenshot_crawler.catalog.service import JST
-from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy, SitePolicyError
+from screenshot_crawler.site_policies.base import (
+    BatchOrdering,
+    PolicyDecision,
+    SitePolicy,
+    SitePolicyError,
+)
 
 
 class JumpPlusSitePolicy(SitePolicy):
@@ -19,6 +24,9 @@ class JumpPlusSitePolicy(SitePolicy):
     """
 
     site = "jumpplus"
+
+    def batch_ordering(self) -> BatchOrdering:
+        return "published_at"
 
     def evaluate(
         self,

@@ -187,3 +187,47 @@ def test_batch_planner_selects_free_and_active_rental_only(tmp_path) -> None:
         (4, "expired_rental"),
         (5, "unknown"),
     }
+
+
+def test_jumpplus_batch_orders_each_work_by_publication_date(tmp_path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="jumpplus-work", title="作品"))
+    rows = (
+        ("new", "2026-09-22T00:00:00+09:00"),
+        ("same-day-first", "2026-09-21T00:00:00+09:00"),
+        ("same-day-second", "2026-09-21T00:00:00+09:00"),
+        ("old", "2026-09-20T00:00:00+09:00"),
+        ("unknown-date", None),
+    )
+    for external_id, published_at in rows:
+        item = catalog.create_item(
+            ItemInput(item_title=external_id, order_label=external_id), work_id=work.id
+        )
+        source_record = catalog.create_source(
+            SourceInput(
+                site="jumpplus",
+                external_id=external_id,
+                access_mode="free",
+                published_at=published_at,
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(
+                backend="web",
+                locator=f"https://shonenjumpplus.com/episode/{external_id}",
+            ),
+            source_id=source_record.id,
+        )
+
+    registry = SitePolicyRegistry()
+    registry.register("jumpplus", JumpPlusSitePolicy)
+    plan = BatchPlanner(catalog, registry).plan(site="jumpplus", now=NOW)
+
+    assert [candidate.metadata["order"] for candidate in plan.candidates] == [
+        "old",
+        "same-day-second",
+        "same-day-first",
+        "new",
+        "unknown-date",
+    ]

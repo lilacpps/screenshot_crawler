@@ -14,7 +14,8 @@ non-zero defaults and explicit zero overrides. CONTENT pacing occurs once after 
 and manifest/progress persistence, before the initial `go_next()`, outside adapter timeout/retry budgets.
 Batch pacing occurs once after a site-accessing candidate's Page is closed and only before another such
 candidate. Magapoke Discovery remains latest-first; Batch is old-to-new within each Work by
-`published_at ASC (NULL last), source_id ASC` while existing direct/quota phases and Work ordering remain.
+`published_at ASC (NULL last), source_id DESC` while existing direct/quota phases and Work ordering remain.
+Jump+ Discovery also remains latest-first, while normal Batch applies the same Work-local ordering.
 
 Phase 2 current state: the shared `AccessGuard` observes body-free response metadata and
 candidate-scoped visible CAPTCHA/challenge signals for Magapoke, Manga ONE, and BookWalker.

@@ -144,7 +144,7 @@ class BatchPlanner:
                         ordered_selections.append(selection)
                     elif selection.item.id in accepted_ids:
                         ordered_selections.append(next(quota_iter))
-            if site == "magapoke":
+            if policy.batch_ordering() == "published_at":
                 direct_selections = [
                     selection
                     for selection in ordered_selections
@@ -156,8 +156,8 @@ class BatchPlanner:
                     if selection.decision.consumes_quota
                 ]
                 ordered_selections = (
-                    _order_magapoke_within_work(direct_selections)
-                    + _order_magapoke_within_work(quota_selections)
+                    _order_by_published_at_within_work(direct_selections)
+                    + _order_by_published_at_within_work(quota_selections)
                 )
             for selection in ordered_selections:
                 plan.candidates.append(
@@ -382,7 +382,7 @@ def _quota_selection_order_key(
             selection.work.id,
             _published_date_key(selection.source),
             _item_order_key(selection.item),
-            selection.source.id,
+            -selection.source.id,
         )
     group_rank = group_ranks.get(selection.source.discovery_key)
     if group_rank is None:
@@ -410,7 +410,7 @@ def _enforce_work_quota_limits(
             key=lambda selection: (
                 _published_date_key(selection.source),
                 _item_order_key(selection.item),
-                selection.source.id,
+                -selection.source.id,
             ),
         )
         accepted.extend(ranked[:limit])
@@ -426,8 +426,8 @@ def _published_date_key(source: Source) -> tuple[int, datetime]:
     return (1, _MAX_DATETIME) if published is None else (0, published)
 
 
-def _order_magapoke_within_work(selections: list[_Selection]) -> list[_Selection]:
-    """Keep the existing Work sequence while processing each Work old-to-new."""
+def _order_by_published_at_within_work(selections: list[_Selection]) -> list[_Selection]:
+    """Keep Work order while processing each Work from old to new."""
 
     by_work: dict[int, list[_Selection]] = defaultdict(list)
     work_order: list[int] = []
@@ -444,7 +444,7 @@ def _order_magapoke_within_work(selections: list[_Selection]) -> list[_Selection
                 by_work[work_id],
                 key=lambda selection: (
                     _published_date_key(selection.source),
-                    selection.source.id,
+                    -selection.source.id,
                 ),
             )
         )

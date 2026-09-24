@@ -7,13 +7,21 @@ from datetime import datetime, timedelta
 
 from screenshot_crawler.catalog.models import Source
 from screenshot_crawler.catalog.service import JST
-from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy, SitePolicyError
+from screenshot_crawler.site_policies.base import (
+    BatchOrdering,
+    PolicyDecision,
+    SitePolicy,
+    SitePolicyError,
+)
 
 
 class MagapokeSitePolicy(SitePolicy):
     """Allow free episodes and observed active rentals through direct navigation."""
 
     site = "magapoke"
+
+    def batch_ordering(self) -> BatchOrdering:
+        return "published_at"
 
     def supported_access_resources(self) -> tuple[str, ...]:
         return ("work_ticket", "premium_ticket")

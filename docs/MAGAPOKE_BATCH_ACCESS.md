@@ -39,7 +39,7 @@ Do **not** reverse Magapoke Discovery traversal. Incremental Discovery remains l
 Within the same Work, process candidates old-to-new using:
 
 ```text
-published_at ASC (NULL last), source_id ASC
+published_at ASC (NULL last), source_id DESC
 ```
 
 `source_id` is only a stable tie-breaker.
@@ -272,7 +272,7 @@ The repository-wide implementation order is defined by the shared specification.
 ### Shared Phase 1 integration
 
 - apply shared runtime settings/pacing,
-- change Magapoke Batch ordering to `published_at ASC (NULL last), source_id ASC` within a Work,
+- change Magapoke Batch ordering to `published_at ASC (NULL last), source_id DESC` within a Work,
 - preserve latest-first Discovery,
 - preserve Magapoke navigation retries.
 

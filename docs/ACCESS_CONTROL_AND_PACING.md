@@ -496,7 +496,7 @@ Implement in small reviewable phases.
 - implement exact CONTENT pacing placement,
 - preserve adapter retry algorithms and timeout budgets,
 - apply inter-candidate pacing only between site-accessing candidates,
-- implement any site-specific ordering change explicitly adopted by the site spec (initially Magapoke old-to-new within Work),
+- implement site-specific ordering changes explicitly adopted by the site spec (Magapoke and Jump+ old-to-new within Work),
 - preserve existing Discovery traversal semantics.
 
 ### Phase 2 - shared AccessGuard and metrics

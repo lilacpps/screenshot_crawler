@@ -2,14 +2,17 @@
 
 ## Scope
 
-Production Site Adapter is implemented for normal crawl only. Jump+ Discovery,
-Site Policy, Batch, Watchlist, quota/resource management, and login automation
-remain unimplemented.
+Production Site Adapter, Discovery, Site Policy, and normal Batch are
+implemented. Jump+ Discovery remains latest-first, while normal Batch orders
+pending candidates within each Work by `published_at ASC` (NULL last) and
+`source_id DESC` for same-date ties. Jump+ has no supported automatic quota or
+resource pass: paid episodes are eligible only when Discovery observed an
+active manual rental grant. Point purchase, rental automation, ticket access,
+and login automation remain out of scope.
 
-少年ジャンプ＋（Jump+）のproduction Site Adapter / Discovery / Site
-Policy / Batchは未実装。これはviewer構造を調査するためのread-only J0
-probeの現行スナップショットである。ポイント、購入、レンタル、チケット、
-ログイン状態変更、次episodeへの遷移は行わない。
+このファイルのJ0 probe記録はviewer構造を調査した時点の履歴であり、現在の
+production Discovery / Site Policy / Batchの挙動を置き換えない。通常のBatchは
+Discoveryの取得順を変更せず、Batch PlannerのWork内orderingだけを変更する。
 
 対象は次のepisode URLのみ。
 

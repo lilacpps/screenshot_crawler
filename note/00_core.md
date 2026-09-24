@@ -841,8 +841,9 @@ delayはadapter timeout/grace/retry budgetの外側で、AD、loading polling、
 BatchはsiteへアクセスしたcandidateのPageをcloseした後、次のsite-accessing candidateの前に
 `inter_candidate_delay_ms`を1回だけ適用し、末尾candidateやCatalog local skipには適用しない。
 
-Magapoke BatchはDiscoveryのlatest-firstを維持し、同一Work内を`published_at ASC (NULL last), source_id ASC`
-で処理する。既存のdirect先行とWork間orderingは維持する。AccessGuard、403/429 stop、challenge/CAPTCHA、
+Magapoke BatchはDiscoveryのlatest-firstを維持し、同一Work内を`published_at ASC (NULL last), source_id DESC`
+で処理する。Jump+もDiscoveryのlatest-firstを維持し、同じWork内orderingを通常direct candidateへ適用する。
+既存のdirect先行とWork間orderingは維持する。AccessGuard、403/429 stop、challenge/CAPTCHA、
 Phase 2のAccessGuardは3site共通で接続済みで、relevant hostの403/429、明示challenge、visible
 CAPTCHAをdistinct stop reasonとして扱う。Batchのbody-free access metricsは`output/metrics/*.jsonl`
 へ逐次flushされ、fatal stop前のCatalog更新とmetricsを保持する。fatal access stop後は、

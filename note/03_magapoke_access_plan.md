@@ -14,7 +14,7 @@ The shared plan is also summarized in `note/04_access_control_plan.md`.
 Planned Magapoke-specific changes:
 
 - keep Discovery latest-first,
-- order Batch candidates within a Work by `published_at ASC` (NULL last), then `source_id ASC`,
+- order Batch candidates within a Work by `published_at ASC` (NULL last), then `source_id DESC`,
 - expose `work_ticket` and `premium_ticket` as Magapoke instances of the generic access-resource contract,
 - provide resource pass order as `work_ticket` then `premium_ticket` from the Magapoke policy/integration rather than hard-coding those names in Batch,
 - add generic-compatible grant-only support for `work_ticket`, `premium_ticket`, and `all`,
