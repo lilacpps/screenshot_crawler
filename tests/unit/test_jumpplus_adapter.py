@@ -134,10 +134,13 @@ async def test_jumpplus_access_rejects_quota_and_resource() -> None:
         await adapter.configure_quota_resource(object(), "points")  # type: ignore[arg-type]
 
 
-def test_jumpplus_is_viewer_only_registry_entry() -> None:
+def test_jumpplus_registry_entry_has_policy_without_resources() -> None:
     assert isinstance(cli._registry().create("jumpplus"), JumpPlusAdapter)
     assert "jumpplus" in cli._discovery_registry().sites()
-    assert "jumpplus" not in cli._batch_policy_registry().sites()
+    policy = cli._batch_policy_registry().create("jumpplus")
+    assert "jumpplus" in cli._batch_policy_registry().sites()
+    assert policy.supported_access_resources() == ()
+    assert policy.grant_only_supported_access_resources() == ()
 
 
 def test_jumpplus_renderer_hook_is_lightweight_and_tracks_mutations() -> None:

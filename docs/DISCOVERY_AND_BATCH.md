@@ -44,7 +44,8 @@ represented as `paid` with an observed `access_granted_until` when available.
 The generic `access_granted_until_observed` flag allows a complete Jump+
 refresh to clear an expired grant while preserving grants from adapters that do
 not explicitly observe grant state. Jump+ Site Policy and Batch registration
-remain NOT YET IMPLEMENTED for the next phase.
+are implemented in the current phase; automatic rental, point/ticket
+consumption, quota, and grant-only handling remain NOT YET IMPLEMENTED.
 
 ## Phase 5A status
 

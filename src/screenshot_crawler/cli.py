@@ -54,6 +54,7 @@ from screenshot_crawler.runtime_settings import load_runtime_settings
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
+    JumpPlusSitePolicy,
     MagapokeSitePolicy,
     MangaOneSitePolicy,
     SitePolicyRegistry,
@@ -374,6 +375,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
 def _batch_policy_registry() -> SitePolicyRegistry:
     registry = SitePolicyRegistry()
     registry.register("bookwalker", BookWalkerSitePolicy)
+    registry.register("jumpplus", JumpPlusSitePolicy)
     registry.register("magapoke", MagapokeSitePolicy)
     registry.register("mangaone", MangaOneSitePolicy)
     return registry

@@ -769,6 +769,73 @@ target as manga content.
 
 Remaining P2 observations are an expired-rental live sample and a DOM-only
 active rental with no expiry. They do not block this Discovery phase because
-both map conservatively without inventing a grant. Jump+ Site Policy and Batch
-integration are the next phase; automatic rental/points/tickets and quota
-handling remain out of scope.
+both map conservatively without inventing a grant.
+
+## Site Policy + Batch integration (2026-09-24)
+
+`JumpPlusSitePolicy` is registered for `site="jumpplus"`. It is deliberately
+read-only with respect to Jump+ access acquisition: it never selects a point,
+rental, ticket, or quota operation.
+
+The decision table is:
+
+| Catalog state | Batch decision |
+| --- | --- |
+| `available=False` | skip, `unavailable` |
+| `free` | `direct`, `free` |
+| `paid` + `access_granted_until > now` | `direct`, `active_rental` |
+| `paid` + no grant | skip, `paid` |
+| `paid` + grant at or before `now` | skip, `expired_rental` |
+| `unknown` | skip, `unknown` |
+| `quota` | skip, `quota_not_supported` |
+| `owned` | skip, `owned_not_verified` |
+
+The grant boundary is strict: `access_granted_until == now` is expired. Both
+the stored grant and `now` must be timezone-aware; ISO strings are parsed with
+`datetime.fromisoformat()` and normalized to JST. Invalid or naive timestamps
+raise `SitePolicyError` rather than being guessed.
+
+The policy uses the existing site-neutral Batch Planner and Executor. Free
+episodes and manually rented episodes become ordinary `direct` candidates;
+normal paid episodes are skipped. `supported_access_resources()`,
+`ordered_access_resource_passes()`, `additional_quota_resources()`, and
+`grant_only_supported_access_resources()` remain empty through the base policy
+contract. No Catalog schema, Discovery adapter, Capture adapter, Core Runner,
+or other-site policy was changed for this phase.
+
+Operational flow for manual rental is:
+
+```text
+human rents episode on Jump+
+  -> discover --mode full
+  -> Catalog paid + observed access_granted_until
+  -> batch plan --site jumpplus
+  -> direct candidate
+  -> batch run --site jumpplus
+```
+
+Full discovery is the authority for refreshing current Jump+ access state. A
+stale or expired grant is therefore not eligible even if Catalog has not yet
+been refreshed. Planning is read-only, and Batch execution revalidates the
+candidate against current Catalog state before starting a crawl; an expiry
+between planning and execution is rejected as a stale candidate. Automatic
+rental, point/ticket consumption, quota, grant-only, and grant polling remain
+out of scope.
+
+The isolated live validation used the manual-rental-containing series and a
+separate Catalog. Full discovery completed with 13 unique episodes. The live
+policy plan produced 8 direct candidates (7 free rows and 1 active manual
+rental) and skipped 5 normal paid rows. The active rental was episode
+`9253191254350319886`; its Catalog grant was still future at observation time.
+
+Two isolated `batch run --limit 1` attempts were made: one free candidate and
+the active manual-rental candidate. Both reached the Jump+ Capture adapter and
+saved viewer pages, but stopped at the existing `wait_for_change` terminal
+timeout before a successful archive result was reported. The Batch layer did
+not select a quota/resource pass and no purchase, point, or rental control was
+available to the Jump+ policy. This is a Capture/site-adapter live-validation
+blocker, not a Policy eligibility failure; no Capture or Site Adapter change
+was included in this phase. The prior negative direct crawl smoke test remains
+the safety baseline: an unrented paid episode failed closed without clicking
+purchase, point, or rental controls and did not package the target as manga
+content.
