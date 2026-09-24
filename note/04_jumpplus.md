@@ -839,3 +839,56 @@ was included in this phase. The prior negative direct crawl smoke test remains
 the safety baseline: an unrented paid episode failed closed without clicking
 purchase, point, or rental controls and did not package the target as manga
 content.
+
+## Terminal timeout investigation (2026-09-24)
+
+The investigation used `poc/jumpplus_terminal_probe.py` against the shared
+Crawler Chrome/CDP session. It only clicked the existing viewer forward
+control; it did not click purchase, point, rental, ticket, login, or episode
+navigation controls. Raw artifacts are written under
+`output/jumpplus_terminal_probe/` and are intentionally not production input.
+
+The comparison was:
+
+| case | episode | main pages | saved unique pages | last active page index | result |
+| --- | --- | ---: | ---: | ---: | --- |
+| normal long | `13932016480029111789` | 65 | 65 in the successful baseline run (64 in a repeat race) | 66 | END |
+| free timeout | `9253191256637716604` | 23 | 23 | 22 | `wait_for_change` timeout |
+| manual-rental timeout | `9253191254350319886` | 27 | 27 | 26 | `wait_for_change` timeout |
+
+The raw `#episode-json` page structures explain the difference. The normal
+episode has a front link before its 65 main pages, so its active DOM rows start
+at page indexes 2 and finish at 66. The free and manual-rental episodes have
+no front-link area: their main pages start at DOM index 0 and finish at 22 and
+26 respectively. Their trailing page structures are `link(back)`, two
+`other` pages, and `backMatter`; the corresponding final DOM areas are visible
+in style but are not active content rows.
+
+The production adapter's global `first_content_page_index = 2` therefore
+calculates terminal indexes 24 and 28 for the two failing episodes. After the
+last main page is captured, the final forward click leaves the URL unchanged,
+the forward control remains visible and not disabled, and active rows become
+empty/loading while the viewer transitions into back-matter state. Since the
+observed max indexes are 22 and 26, the current terminal condition never
+becomes true and `wait_for_change` times out. At timeout, all expected main
+pages were already captured, with no duplicate capture and no missing main
+page.
+
+The concrete classification is primarily **Case 3: episode-specific
+page-index mapping**, with **Case 1: all content was saved but the terminal
+signal was missed** as the resulting symptom. There is also a secondary timing
+hazard in the current normal-path terminal check: it can rely on the page-index
+condition without requiring `captured_content_page_count >= content_page_count`,
+which explains the 64-page repeat observed alongside the historical 65-page
+successful run.
+
+The smallest proposed production fix is to derive the first active main-page
+index per viewer instance from the observed page areas/rows and page structure,
+rather than using a global constant, and to require both complete capture count
+and a valid terminal transition before returning `END`. The final empty/loading
+state can be accepted only after all main pages are captured; forward-enabled
+state and a next-episode link are not sufficient terminal signals by
+themselves. Add tests for a front-link layout, a main-at-index-zero layout,
+spread rows, final empty/back-matter transition, and a count-complete but
+page-index-incomplete state. This phase only records the diagnosis and does
+not modify `JumpPlusAdapter`, the runner, discovery, batch, or site policy.
