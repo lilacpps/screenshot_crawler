@@ -510,3 +510,163 @@ same React tab/list shape; whether nonnumeric/special episode labels require a
 stable order policy; whether logged-in, expired, or `レンタル中` displays add
 access states; whether the network/Atom schemas remain stable; and whether a
 fresh tab's lazy listing mount needs a bounded readiness/fallback strategy.
+
+## Discovery J0 multi-sample verification (2026-09-24)
+
+The observation-only probe was extended and run against four samples using the
+same schema. Production `JumpPlusDiscoveryAdapter`, `_discovery_registry()`,
+Jump+ Site Policy, Batch, Catalog schema, and the normal Site Adapter remain
+unchanged.
+
+### Sample matrix
+
+| sample | series_id | DOM variant | ranges | unique episodes | duplicates |
+| --- | --- | --- | ---: | ---: | ---: |
+| baseline `13932016480029111789` | `13932016480029111788` | React `role=tabpanel` | 3 | 286 | 0 |
+| manual-rental-containing `9253191254047172892` | `9253191254046896629` | direct pagination | 1 | 13 | 0 |
+| normal `9253191256637716556` | `9253191256479706037` | direct pagination | 1 | 2 | 0 |
+| ultra-long `10833519556325021794` | `10833497643049551729` | React `role=tabpanel` | 12 | 1180 | 0 |
+
+All four use the same work section and `ul.series-episode-list` row
+relationship. The difference is that baseline/ultra-long expose the episode
+list inside a React episode tab and `role=tabpanel`, while the manual-rental
+and normal samples render a direct `.js-readable-products-pagination` with
+`#pagination-top`; those direct samples have no episode `role=tab`. The
+production scope must support both variants and must not require the React tab
+as the only entry point. CSS-module hash suffixes remain diagnostic only.
+
+### Range and more-control behavior
+
+Baseline:
+
+| label | initial -> final | progress clicks |
+| --- | ---: | ---: |
+| `286 - 187` | 100 -> 100 | 0 |
+| `186 - 87` | 100 -> 100 | 0 |
+| `86 - 1` | 10 -> 86 | 1 |
+
+The initially selected range is `86 - 1`; it is not latest. Ultra-long has
+labels `1180 - 1081`, `1080 - 981`, `980 - 881`, `880 - 781`, `780 - 681`,
+`680 - 581`, `580 - 481`, `480 - 381`, `380 - 281`, `280 - 181`, `180 - 81`,
+and `80 - 1`. The first eleven contain 100 rows each without more clicks; the
+last contains 10 initially and expands to 80 with one progress click. Its
+initial selected range is `80 - 1`, again not latest.
+
+The manual-rental-containing series has one direct range (`1話から`) and 10
+initial rows, then 13 after one `もっと見る` progress click. The normal
+sample has one direct range, two rows, and no more control. A direct single
+range control is recorded but is not clicked as a range switch.
+
+The probe now treats more controls fail-closed: zero visible enabled controls
+is `no_more` and complete; exactly one is clickable; more than one is
+`ambiguous_more_control` and incomplete; a visible disabled control is recorded
+as `disabled_more_control` and incomplete. A click is progress only when the
+episode identity set grows. Range switches wait for rows to mount before the
+range expansion measurement, avoiding a false initial count of zero.
+
+When no selected range marker is present, selected range remains unknown. The
+probe does not select the first range heuristically.
+
+Observed pagination request offsets are baseline `0,100,200`, ultra-long
+`0,100,...,1100`, and `0` for both direct samples. The request carries the
+series `aggregate_id`; the pagination-information response supplies the total
+count and per-page size. These remain observed network candidates, not
+production API calls.
+
+### Ordering and special labels
+
+All four samples are newest-first within the observed row order. Numeric range
+labels are newest-to-oldest by descending upper bound. The ultra-long labels
+are therefore traversed from `1180 - 1081` down to `80 - 1`; the direct samples
+have no multi-range label. This supports global latest-first incremental
+ordering when ranges are sorted by parsed metadata, not by selected state.
+
+Special/non-numeric labels were observed and are not safe numeric order keys:
+the manual-rental series contains `イラスト3`, `イラスト2`, and `イラスト`; the
+ultra-long series contains `特別収録作品1 麦わら劇場 海の音楽会`. These retain
+the visible title as `order_label` and use `order_key=None`. The previous probe
+fallback that could read the publication year as an order number was corrected;
+numeric parsing is attempted only after the date or from the visible title.
+
+### Manual rental observation
+
+The target URL `9253191254047172892` itself is not rented. Full series
+discovery found a different row:
+
+- episode ID: `9253191254350319886`
+- href: `/episode/9253191254350319886`
+- visible label: `第3話`
+- published date: `2026/06/14`
+- DOM access class: `index-module--series-episode-list-rental--SWA_e`
+- DOM label: `レンタル中 2026/09/26 11:41まで`
+- structured `purchase_info.can_read`: `true`
+- structured `purchase_info.has_rented_via_point`: `true`
+- structured `status.label`: `has_rented`
+- structured `status.rental_end_at`: `2026-09-26T02:41:39Z` (JST 11:41:39)
+
+For comparison, a normal paid row in the same series (`9253191254640655914`,
+第4話) has `can_read=false`, `has_rented_via_point=false`,
+`status.label=is_rentable`, `rental_end_at=null`, and the normal `40ポイント
+レンタル・48時間` DOM display. A free row has `can_read=true`,
+`purchase_info.is_free=true`, and `status.label=is_free`.
+
+This is sufficient to distinguish normal paid from an active manual rental
+without hardcoding episode 3 or any episode number. The authority order for
+this distinction is structured `purchase_info`/`status` plus matching row
+evidence; a text-only `レンタル中` label without an expiry is not enough for a
+direct-grant decision.
+
+### Access and expiry specification decision
+
+The observed states are:
+
+- free: DOM `series-episode-list-is-free`, structured `is_free=true`;
+- normal paid/rentable: price/rental DOM classes, `can_read=false`,
+  `status.label=is_rentable`, no active rental end;
+- active manual rental: `series-episode-list-rental`, `can_read=true`,
+  `has_rented_via_point` or `has_rented_via_ticket`, `status.label=has_rented`,
+  and exact `rental_end_at`;
+- paid with a future scheduled free-publication label: the paid row may also
+  carry `episode-read-date` such as `2026年09月29日に無料公開予定`. This is a
+  scheduled release signal, not `free_until` and not current free access;
+- unknown: conflicting, missing, or unrecognized signals.
+
+The production representation should be:
+
+```text
+free -> access_mode=free, access_granted_until=None
+normal paid -> access_mode=paid, access_granted_until=None
+active manual rental -> access_mode=paid,
+                         access_granted_until=<exact rental_end_at>
+unknown -> access_mode=unknown
+```
+
+Manual rental must not be mapped to `quota`, and the 48-hour product term must
+not be converted into an expiry by adding 48 hours to observation time. The
+existing Catalog `access_granted_until` field is sufficient; no schema change
+is required. If an active-rental signal is present but no exact expiry is
+available, keep the source as paid/unknown for direct-access policy purposes
+and fail closed rather than inventing a grant timestamp.
+
+Full discovery must enumerate the complete series before reconciliation. It
+must not inspect only the target episode URL: the manually rented episode is a
+different row in the same series. Discovery should update each row's current
+access state and exact grant timestamp independently. Automatic rental,
+automatic point/ticket consumption, grant polling, and incremental grant-only
+refresh remain out of scope.
+
+### Artifacts and production-readiness decision
+
+The four reports and their before/expanded/network artifacts are under
+`output/jumpplus_discovery_matrix/`; `comparison.json` is generated by
+`poc/jumpplus_discovery_matrix.py`. The existing probe now also records
+structured readable-product access states, manual-rental candidates, direct
+pagination scope, disabled/ambiguous more-control outcomes, and unknown
+selected-range state.
+
+The information is sufficient to implement a production Discovery design for
+DOM-based full/incremental enumeration and source-level access reconciliation.
+Before registering production code, a further live check is still advisable
+for an expired rental and an active rental with no exact expiry, because those
+states were not present in this four-sample matrix. No production code was
+changed in this J0 verification.

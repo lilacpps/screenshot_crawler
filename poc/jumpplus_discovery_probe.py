@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -86,6 +87,86 @@ def access_pattern(row: dict[str, Any]) -> dict[str, Any]:
         "access_class": row.get("access_class", []),
         "access_icons": row.get("access_icons", []),
     }
+
+
+def network_episode_states(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract observed readable-product access fields from captured JSON."""
+
+    states: dict[str, dict[str, Any]] = {}
+
+    def visit(value: Any, source_url: str) -> None:
+        if isinstance(value, list):
+            for child in value:
+                visit(child, source_url)
+            return
+        if not isinstance(value, dict):
+            return
+        readable_product_id = value.get("readable_product_id")
+        if readable_product_id is not None and (
+            isinstance(value.get("purchase_info"), dict)
+            or isinstance(value.get("status"), dict)
+        ):
+            episode_id = str(readable_product_id)
+            states[episode_id] = {
+                "episode_id": episode_id,
+                "viewer_uri": value.get("viewer_uri"),
+                "title": value.get("title"),
+                "display_open_at": value.get("display_open_at"),
+                "free_term_start_at": value.get("free_term_start_at"),
+                "open_limit": value.get("open_limit"),
+                "purchase_info": value.get("purchase_info"),
+                "status": value.get("status"),
+                "source_urls": sorted(set(states.get(episode_id, {}).get("source_urls", [])) | {source_url}),
+            }
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                visit(child, source_url)
+
+    for record in records:
+        if record.get("json") is not None:
+            visit(record["json"], str(record.get("url") or ""))
+    return [states[key] for key in sorted(states)]
+
+
+def manual_rental_candidates(
+    rows: list[dict[str, Any]], network_states: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Find rows with a structured active rental, retaining DOM evidence."""
+
+    network_by_id = {str(state["episode_id"]): state for state in network_states}
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        episode_id = str(row.get("episode_id") or "")
+        state = network_by_id.get(episode_id, {})
+        purchase_info = state.get("purchase_info") or {}
+        status = state.get("status") or {}
+        structured_rented = (
+            status.get("label") == "has_rented"
+            or purchase_info.get("has_rented_via_point") is True
+            or purchase_info.get("has_rented_via_ticket") is True
+            or bool(status.get("rental_end_at"))
+        )
+        dom_access_text = " ".join(str(value) for value in row.get("access_text") or [])
+        dom_access_classes = " ".join(str(value) for value in row.get("access_class") or [])
+        dom_rented = (
+            "rental" in dom_access_classes.lower()
+            and any(marker in dom_access_text for marker in ("中", "まで", "期限"))
+        )
+        if structured_rented or dom_rented:
+            candidates.append(
+                {
+                    "episode_id": episode_id,
+                    "href": row.get("href"),
+                    "order_label": row.get("title_text") or row.get("order_text"),
+                    "order_key_candidate": row.get("order_text"),
+                    "published_text": row.get("published_text"),
+                    "access_text": row.get("access_text"),
+                    "access_class": row.get("access_class"),
+                    "dom_evidence": row.get("access_related_descendants"),
+                    "network_state": state or None,
+                }
+            )
+    return candidates
 
 
 def _now_iso() -> str:
@@ -391,7 +472,8 @@ async def inspect_listing_live(page: Page, target_episode_id: str) -> dict[str, 
           }
           function attributes(el) {
             return Object.fromEntries(Array.from(el.attributes)
-              .filter(a => a.name.indexOf('data-') === 0 || a.name.indexOf('aria-') === 0 || a.name === 'id')
+              .filter(a => a.name.indexOf('data-') === 0 || a.name.indexOf('aria-') === 0 ||
+                a.name === 'id' || a.name === 'title' || a.name === 'role')
               .map(a => [a.name, a.value]));
           }
           function episodeId(href) {
@@ -436,9 +518,13 @@ async def inspect_listing_live(page: Page, target_episode_id: str) -> dict[str, 
           const tab = document.querySelector('[role="tab"][data-key="episode"]') ||
             Array.from(document.querySelectorAll('[role="tab"]')).find(el => text(el).indexOf('話の一覧') >= 0);
           const panelId = tab ? tab.getAttribute('aria-controls') : null;
+          const section = document.querySelector('section.series-information.type-episode') ||
+            (tab ? (tab.closest('section.series-information.type-episode') || tab.closest('section')) : null);
+          const directPagination = section ? section.querySelector('.js-readable-products-pagination') : null;
+          const directScope = directPagination ? (directPagination.querySelector('#pagination-top') || directPagination) : null;
           const panel = (panelId ? document.getElementById(panelId) : null) ||
-            (tab && tab.parentElement && tab.parentElement.parentElement ? tab.parentElement.parentElement.querySelector('[role="tabpanel"]') : null);
-          const section = tab ? (tab.closest('section.series-information.type-episode') || tab.closest('section')) : null;
+            (tab && tab.parentElement && tab.parentElement.parentElement ? tab.parentElement.parentElement.querySelector('[role="tabpanel"]') : null) ||
+            directScope || document.querySelector('#pagination-top');
           const lists = panel ? Array.from(panel.querySelectorAll('ul')).filter(ul =>
             Array.from(ul.classList).some(c => /series-episode-list/i.test(c)) ||
             Array.from(ul.querySelectorAll('a[href]')).some(a => episodeId(a.href))
@@ -456,10 +542,20 @@ async def inspect_listing_live(page: Page, target_episode_id: str) -> dict[str, 
             const rowText = text(row);
             const date = rowText.match(/(?:\d{4}[年\/]\s*\d{1,2}[月\/]\s*\d{1,2}日?|\d{4}-\d{1,2}-\d{1,2})/);
             const order = rowText.match(/(?:第\s*)?[0-9０-９]+(?:\s*話|\s*回)?/);
-            const orderAfterDate = date ? rowText.slice(date[0].length).match(/^\s*([0-9]+)/) : null;
-            const accessElements = Array.from(row.querySelectorAll('[class*="series-episode-list-price"], [class*="series-episode-list-is-free"], [class*="rental-point"], [class*="rental-term"]')).filter(el => {
+            const orderAfterDate = date ? rowText.slice(date[0].length).match(/^\s*(?:第\s*)?([0-9]+)/) : null;
+            const titleElement = row.querySelector('[class*="series-episode-list-title--"],h3,h4');
+            const titleValue = text(titleElement);
+            const orderFromTitle = titleValue.match(/^\s*(?:第\s*)?([0-9]+)/);
+            const accessElements = Array.from(row.querySelectorAll('*')).filter(el => {
               const label = (text(el) + ' ' + classes(el).join(' ')).toLowerCase();
               return /free|point|rent|purchase|paid|lock|ticket|無料|ポイント|レンタル|購入|読める|公開終了|期限/.test(label);
+            });
+            const preciseAccessElements = Array.from(row.querySelectorAll('*')).filter(el => {
+              const classText = classes(el).join(' ');
+              const attrText = Array.from(el.attributes).map(attr => `${attr.name}=${attr.value}`).join(' ');
+              const leafText = !el.children.length ? text(el) : '';
+              if (/title|wrapper|container/i.test(classText) && !/price|free|rental|access|grant|expiry/i.test(classText)) return false;
+              return /price|free|rent|rental|point|paid|lock|ticket|readable|read|grant|expiry|remaining|end[_-]?at|available|can[_-]?read|無料|ポイント|レンタル|購入|読める|読み放題|閲覧|残り|期限|公開/i.test(`${classText} ${attrText} ${leafText}`);
             });
             return {
               index,
@@ -469,14 +565,15 @@ async def inspect_listing_live(page: Page, target_episode_id: str) -> dict[str, 
               text: rowText,
               classes: classes(row),
               data_attributes: attributes(row),
-              order_text: orderAfterDate ? orderAfterDate[1] : (order ? order[0] : null),
-              title_text: Array.from(row.querySelectorAll('[class*="title"],[class*="ttl"],h3,h4')).map(text).filter(Boolean).join(' | ') || null,
+              order_text: orderAfterDate ? orderAfterDate[1] : (orderFromTitle ? orderFromTitle[1] : null),
+              title_text: titleValue || null,
               published_text: date ? date[0] : null,
-              access_text: Array.from(new Set(accessElements.filter(visible).map(text).filter(Boolean))),
+              access_text: Array.from(new Set(preciseAccessElements.filter(visible).map(text).filter(Boolean))),
               access_title: (row.querySelector('[class*="series-episode-list-price"]') || {}).getAttribute?.('title') || null,
-              access_class: Array.from(new Set(accessElements.flatMap(classes))),
-              access_icons: Array.from(row.querySelectorAll('img,svg,i,use')).map(el => ({tag: el.tagName.toLowerCase(), text: text(el), classes: classes(el), data: attributes(el)})),
-              access_data: accessElements.map(attributes),
+              access_class: Array.from(new Set(preciseAccessElements.flatMap(classes))),
+              access_icons: preciseAccessElements.filter(el => ['img', 'svg', 'i', 'use'].includes(el.tagName.toLowerCase())).map(el => ({tag: el.tagName.toLowerCase(), text: text(el), classes: classes(el), data: attributes(el)})),
+              access_data: preciseAccessElements.map(attributes),
+              access_related_descendants: preciseAccessElements.slice(0, 40).map(el => ({tag: el.tagName.toLowerCase(), text: text(el), classes: classes(el), attributes: attributes(el)})),
               links: links.map(a => ({href: a.href, text: text(a), classes: classes(a), data: attributes(a)}))
             };
           });
@@ -502,11 +599,14 @@ async def inspect_listing_live(page: Page, target_episode_id: str) -> dict[str, 
           return {
             captured_at: new Date().toISOString(), url: location.href, target_episode_id: targetEpisodeId,
             tab: tab ? {tag: tab.tagName.toLowerCase(), text: text(tab), classes: classes(tab), data_attributes: attributes(tab), selector: selectorFor(tab)} : null,
-            scope: panel ? {selector: selectorFor(panel), tag: panel.tagName.toLowerCase(), id: panel.id || null, classes: classes(panel), data_attributes: attributes(panel), aria_labelledby: panel.getAttribute('aria-labelledby')} : null,
+            scope: panel ? {selector: selectorFor(panel), tag: panel.tagName.toLowerCase(), id: panel.id || null, classes: classes(panel), data_attributes: attributes(panel), aria_labelledby: panel.getAttribute('aria-labelledby'), variant: tab ? 'role-tabpanel' : 'direct-pagination'} : null,
+            work_section: section ? {selector: selectorFor(section), tag: section.tagName.toLowerCase(), classes: classes(section), data_attributes: attributes(section)} : null,
             listing_container: list ? {selector: selectorFor(list), tag: list.tagName.toLowerCase(), classes: classes(list), data_attributes: attributes(list), all_child_count: list.children.length, visible_child_count: rowElements.filter(visible).length} : null,
             work: section ? {selector: selectorFor(section), tag: section.tagName.toLowerCase(), classes: classes(section), data_attributes: attributes(section), title: text(section.querySelector('h1.series-header-title,[class*="series-header-title"]')) || null, author: text(section.querySelector('h2.series-header-author,[class*="series-header-author"]')) || null, links: sectionLinks} : null,
             episode_anchor_count: panel ? Array.from(panel.querySelectorAll('a[href]')).filter(a => episodeId(a.href)).length : 0,
-            episodes: rows, range_controls: rangeControls, more_controls: moreControls, controls,
+            episodes: rows, range_controls: rangeControls, more_controls: moreControls,
+            single_range_controls: controls.filter(x => !x.is_episode_link && !x.is_more_candidate && !x.is_range_candidate && x.classes.some(c => /switching|pagination|range/i.test(c))),
+            controls,
             current_episode_in_rows: rows.some(row => row.episode_id === targetEpisodeId),
             panel_text: text(panel), panel_html_length: panelHtml.length,
             panel_html_hash: panelHtml ? Array.from(new TextEncoder().encode(panelHtml)).reduce((h, c) => (h * 31 + c) >>> 0, 0).toString(16) : null
@@ -523,7 +623,10 @@ async def wait_for_listing(page: Page, target_episode_id: str) -> dict[str, Any]
     # readiness handling; it does not activate a site control.
     work_section = page.locator("section.series-information.type-episode")
     if await work_section.count():
-        await page.locator("section.series-information.type-episode").scroll_into_view_if_needed()
+        await work_section.scroll_into_view_if_needed()
+    pagination_anchor = page.locator("#pagination-top")
+    if await pagination_anchor.count():
+        await pagination_anchor.scroll_into_view_if_needed()
     for _ in range(80):
         last = remove_js_placeholder(await inspect_listing_live(page, target_episode_id))
         if last.get("scope") and last.get("episodes"):
@@ -540,15 +643,29 @@ async def wait_for_network_idle(page: Page) -> bool:
     return True
 
 
+async def try_inspect_listing(page: Page, target_episode_id: str) -> dict[str, Any] | None:
+    """Return no observation when a reused tab is navigating between checks."""
+
+    try:
+        return remove_js_placeholder(await inspect_listing_live(page, target_episode_id))
+    except PlaywrightError:
+        return None
+
+
 def episode_ids(observation: dict[str, Any]) -> list[str]:
     return [str(row["episode_id"]) for row in observation.get("episodes", []) if row.get("episode_id")]
 
 
 async def revalidate_and_click_more(page: Page, target_episode_id: str) -> dict[str, Any] | None:
     observation = remove_js_placeholder(await inspect_listing_live(page, target_episode_id))
-    candidates = [x for x in observation.get("more_controls", []) if x.get("visible") and not x.get("disabled")]
-    if len(candidates) != 1:
-        return {"status": "not_unique", "candidates": candidates}
+    visible_controls = [x for x in observation.get("more_controls", []) if x.get("visible")]
+    candidates = [x for x in visible_controls if not x.get("disabled")]
+    if not candidates:
+        if any(x.get("disabled") for x in visible_controls):
+            return {"status": "disabled_more_control", "candidates": visible_controls}
+        return {"status": "no_more", "candidates": visible_controls}
+    if len(candidates) > 1:
+        return {"status": "ambiguous_more_control", "candidates": candidates}
     candidate = candidates[0]
     if candidate.get("is_episode_link") or FORBIDDEN_TEXT_RE.search(str(candidate.get("text") or "")):
         return {"status": "rejected_forbidden", "candidate": candidate}
@@ -580,7 +697,7 @@ async def expand_current_range(page: Page, target_episode_id: str, output_dir: P
     for click_number in range(1, MAX_MORE_CLICKS + 1):
         result = await revalidate_and_click_more(page, target_episode_id)
         clicks.append({"click_number": click_number, **(result or {"status": "none"})})
-        if not result or result.get("status") == "not_unique":
+        if not result or result.get("status") == "no_more":
             break
         if result.get("status") == "progress":
             continue
@@ -622,10 +739,8 @@ async def run_probe(url: str, output_dir: Path, cdp_endpoint: str | None) -> dic
             continue
         if candidate_page.is_closed():
             continue
-        candidate_observation = remove_js_placeholder(
-            await inspect_listing_live(candidate_page, target_episode_id)
-        )
-        if candidate_observation.get("episodes"):
+        candidate_observation = await try_inspect_listing(candidate_page, target_episode_id)
+        if candidate_observation and candidate_observation.get("episodes"):
             page = candidate_page
             break
     if page is None:
@@ -666,14 +781,12 @@ async def run_probe(url: str, output_dir: Path, cdp_endpoint: str | None) -> dic
         initial = await wait_for_listing(page, target_episode_id)
         write_text(output_dir / "initial" / "page.html", await page.content())
         write_json(output_dir / "initial" / "listing.json", initial)
-        write_json(output_dir / "initial" / "controls.json", {"controls": initial.get("controls"), "range_controls": initial.get("range_controls"), "more_controls": initial.get("more_controls")})
+        write_json(output_dir / "initial" / "controls.json", {"controls": initial.get("controls"), "range_controls": initial.get("range_controls"), "single_range_controls": initial.get("single_range_controls"), "more_controls": initial.get("more_controls")})
         write_json(output_dir / "initial" / "scripts.json", await collect_scripts(page))
         await page.screenshot(path=str(output_dir / "initial" / "screenshot.png"), full_page=False)
 
         initial_range_controls = initial.get("range_controls", [])
         initial_selected = next((c for c in initial_range_controls if c.get("selected") in {"true", ""} or c.get("current")), None)
-        if initial_selected is None and initial_range_controls:
-            initial_selected = initial_range_controls[0]
 
         selected_index = next(
             (index for index, control in enumerate(initial_range_controls)
@@ -718,8 +831,7 @@ async def run_probe(url: str, output_dir: Path, cdp_endpoint: str | None) -> dic
                 after_click = before_click
             else:
                 await locator.click(timeout=WAIT_TIMEOUT_MS, no_wait_after=True)
-                await page.wait_for_timeout(500)
-                after_click = remove_js_placeholder(await inspect_listing_live(page, target_episode_id))
+                after_click = await wait_for_listing(page, target_episode_id)
             if page.url != before_url or extract_episode_id(page.url) != target_episode_id:
                 raise RuntimeError(f"Range click changed target URL: {before_url} -> {page.url}")
             range_dir = output_dir / f"range_{range_index:03d}"
@@ -763,6 +875,20 @@ async def run_probe(url: str, output_dir: Path, cdp_endpoint: str | None) -> dic
             distinct_access.setdefault(key, {**pattern, "sample_episode_ids": []})
             if len(distinct_access[key]["sample_episode_ids"]) < 10 and row.get("episode_id"):
                 distinct_access[key]["sample_episode_ids"].append(row["episode_id"])
+        structured_episode_states = network_episode_states(network_records)
+        unique_rows = [rows[0] for rows in by_id.values()]
+        rented_rows = manual_rental_candidates(unique_rows, structured_episode_states)
+        target_rented = next(
+            (candidate for candidate in rented_rows if candidate["episode_id"] == target_episode_id),
+            None,
+        )
+        manual_rental = {
+            "found": bool(rented_rows),
+            "target_episode_itself_rented": None if not structured_episode_states else bool(target_rented),
+            "rented_episode_id": rented_rows[0]["episode_id"] if rented_rows else None,
+            "order_label": rented_rows[0].get("order_label") if rented_rows else None,
+            "candidates": rented_rows,
+        }
         scripts = await collect_scripts(page)
         final = remove_js_placeholder(await inspect_listing_live(page, target_episode_id))
         work = initial.get("work") or {}
@@ -799,6 +925,8 @@ async def run_probe(url: str, output_dir: Path, cdp_endpoint: str | None) -> dic
             "observed_row_count_across_ranges": len(all_rows),
             "duplicate_episode_ids": duplicates,
             "distinct_access_states": list(distinct_access.values()),
+            "network_episode_states": structured_episode_states,
+            "manual_rental": manual_rental,
             "embedded_data": {
                 "application_json_count": len(scripts.get("application_json", [])),
                 "application_json": scripts.get("application_json", []),
