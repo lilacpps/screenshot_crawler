@@ -378,3 +378,135 @@ visible; the final live run recognized that explicit start state and completed
 without skipping the first content page.
 
 Discovery, Site Policy, and Batch remain out of scope.
+
+## Discovery J0 observation (2026-09-24)
+
+This section records an observation-only run. It does not implement or register
+`JumpPlusDiscoveryAdapter`; `_discovery_registry()` and production site policy
+were not changed.
+
+### Observed scope and identity
+
+The listing is scoped from the work-information section
+`section.series-information.type-episode`, through the React episode tab
+(`role=tab`, `data-key=episode`, `aria-controls`), into its `role=tabpanel`.
+The episode list is the child `ul.index-module--series-episode-list--lqZcz`.
+Rows are its `li` children; the current episode row has the additional
+`index-module--current-readable-product--HKk5y` class and has no episode anchor,
+so the target URL is used only for that current-row identity.
+
+The sample work is `左ききのエレン`, author `かっぴー/nifuni`. The stable work
+identifier observed in the HTML `data-gtm-data-layer`, the pagination request's
+`aggregate_id`, and Atom URLs is `series_id=13932016480029111788`. The target
+episode is `episode_id=13932016480029111789`. Episode anchors use the same
+`shonenjumpplus.com` host, `/episode/<numeric-id>` paths, and no query string in
+this sample. `external_id=episode_id` and canonical episode URLs are therefore
+reasonable production candidates, subject to another-work check in the adapter.
+
+### Ranges, expansion, and ordering
+
+The measured range controls were, in DOM order:
+
+| DOM index | label | episodes before/after expansion | `もっと見る` progress clicks |
+| ---: | --- | ---: | ---: |
+| 0 | `286 - 187` | 100 -> 100 | 0 |
+| 1 | `186 - 87` | 100 -> 100 | 0 |
+| 2 | `86 - 1` | 10 -> 86 | 1 |
+
+The target page initially selected `86 - 1`, confirming that the initially
+selected range is not necessarily the latest range. Switching a range keeps
+the page URL and current episode unchanged. The same episode tabpanel/list DOM
+is reused and its rows are replaced/expanded; it was not a navigation to an
+episode page. The measured requests include
+`/api/viewer/pagination_readable_products?type=episode&aggregate_id=13932016480029111788`
+with `offset=0`, `100`, and `200`, `limit=100`, `sort_order=desc`, and
+`is_guest=1`. The probe records these as network candidates only and does not
+use the endpoint as production code.
+
+The range labels are numeric and parse as `(start, end)` for this sample, but
+the values and count are not fixed. Range 0 is the latest range because its
+upper bound is greatest; it is also the first DOM control. Each range's row
+order is newest-to-oldest: `286 - 187` begins with episode 220 and ends with
+episode 202, `186 - 87` begins with 152 and ends with 78, and `86 - 1` begins
+with 77 and ends with 1. Date text is `YYYY/MM/DD`. Numeric `order_key` parsing
+works for these rows, but special/extra episode labels remain a reason to keep
+`order_key` nullable unless separately recognized.
+
+Across all three ranges the probe observed 286 unique episode IDs, 286 row
+observations, and zero range-overlap duplicates. A full traversal should still
+deduplicate by episode ID and fail closed if a range cannot be visited or a
+bounded expansion does not make identity progress.
+
+### Row fields and access states
+
+The row probe records href, episode ID, anchor count, visible text, row classes,
+`data-*` attributes, order text, title/date text, access classes/text/icons,
+and nested anchors. Published date is taken from the row's visible date text;
+the observed format is date-only `YYYY/MM/DD`, suitable for a JST calendar date
+after an explicit production policy decision.
+
+Two distinct access displays were observed:
+
+1. Free: class `index-module--series-episode-list-is-free--sMYEt`, visible
+   label `無料`.
+2. Rental/points: price class
+   `index-module--series-episode-list-price--aeph4`, rental-point class
+   `index-module--rental-point--kt0LK`, rental-term class
+   `index-module--rental-term--BRXkp`, title `40ポイント レンタル・48時間`,
+   and visible labels `40pt` / `レンタル・48時間`.
+
+No `レンタル中`, quota/ticket grant, or free-until label was observed. The
+row therefore supplies no `free_until`; the visible date must not be reused as
+a free-until value. The Atom candidate contains a free-term-start field, but
+that is not the same as a row free-until field.
+
+The next-phase mapping proposal is `無料` -> `free`, explicit point/rental or
+purchase-required state -> `paid`, and any unrecognized or ambiguous state ->
+`unknown`. No mapping function is implemented in J0. A state such as
+`レンタル中` must remain a separate observed state until live access behavior
+is verified; it must not be inferred as free or quota-granted.
+
+### Embedded data and authority candidates
+
+The HTML root carries a `data-gtm-data-layer` JSON object containing the sample
+series ID, episode ID, readable-product ID, title, and `can_read`. No complete
+episode listing was found in `script[type=application/json]` in this run. The
+page also exposes the pagination-information and pagination-readable-products
+network responses, and an Atom series feed candidate. These are useful
+structured-data candidates, but the API/Atom formats are internal or access
+semantics may be incomplete. For the next phase, DOM listing data remains the
+authority candidate for the observed access/published/title fields, with the
+network response evaluated as a possible optimization only after schema and
+stability checks. No direct API call was added to production.
+
+### Proposed production traversal
+
+Full discovery should identify the episode tabpanel, enumerate every range
+control without hardcoding labels/counts, visit each range, and fully expand
+that range. A `もっと見る` click counts as progress only when the set of
+episode IDs grows; a bounded no-progress or navigation change is incomplete.
+After all ranges are visited and stable, deduplicate by `episode_id` and
+validate the completeness signals (all controls visited, every expansion
+stable, and observed count/range boundaries consistent). Otherwise raise a
+fail-closed `DiscoveryIncompleteError`-style result.
+
+Incremental discovery must order ranges by parsed range metadata (latest upper
+bound first in this sample), not by the initial selected tab. Within each range
+it should read the observed newest-to-oldest DOM order, then use the generic
+known-streak stop only after yielding in that global latest-first order. The
+sample target being episode 1 demonstrates why selected-tab order is unsafe.
+
+### J0 artifacts and unresolved points
+
+The observation PoC is `poc/jumpplus_discovery_probe.py`. Its output is under
+`output/jumpplus_discovery_probe/`, including `report.json`, initial HTML/
+listing/control/script/network artifacts, per-range before/expanded/network
+artifacts, and screenshots. Safe clicks were limited to revalidated range
+controls and the episode-list `もっと見る`; episode links, viewer controls,
+purchase/rental/point/login controls, and comments controls were not clicked.
+
+Open questions before production implementation are: whether all works use the
+same React tab/list shape; whether nonnumeric/special episode labels require a
+stable order policy; whether logged-in, expired, or `レンタル中` displays add
+access states; whether the network/Atom schemas remain stable; and whether a
+fresh tab's lazy listing mount needs a bounded readiness/fallback strategy.
