@@ -250,6 +250,58 @@ captured. A terminal card that exists only in the DOM or outside the viewport
 is not an `END` signal. A URL change from episode 244815 to 244816 remains a
 normal `NEXT_CONTENT` completion and 244816 is not captured.
 
+### Viewer prefix recovery (2026-09-25)
+
+The live viewer for `item_id=3382` / `episode_id=944` prepends an advertisement
+item and a blank page item before the first comic canvases. The first
+captureable content therefore had global `pageIndex=2` (with the next canvas at
+`pageIndex=3`), rather than starting at index 0 or 1. HTTP/API/CDN loading was
+successful; this is not an access or image-download failure.
+
+The former initialization rule treated `min(pageIndex) > 1` as a persisted
+viewer position. At the left boundary, the advertisement and blank items
+produced no `_canvas_rows()`, so the rewind guard did not recognize that it had
+reached the beginning and repeatedly clicked `.c-viewer__pager-prev`.
+
+The current implementation obtains the first page index containing a sized
+`.c-viewer__comic canvas` from the capture hook and only rewinds when the
+visible content index is greater than that baseline. Empty canvas rows never
+start a rewind, and rewind stops at the content baseline without clicking into
+the advertisement/blank prefix. During initial render readiness, the adapter
+polls within the existing page-change deadline until the first-content
+geometry is available. Only when that content is completely left of the
+viewport does it perform one bounded `.c-viewer__pager-next` recovery click;
+it never repeats that click while rows remain empty. The page identity and
+output page-number semantics remain unchanged. If that recovery click changes
+the episode URL before content is visible, initialization fails closed instead
+of treating the new episode as a successfully initialized source.
+
+The read-only diagnostic is available at
+`scripts/diagnose_magapoke_episode.py`. The investigation did not click any
+ticket, point, purchase, subscription, or other paid/quota control. The
+production fix is covered by local regression tests and the diagnostic can be
+used to verify the live viewer after deployment.
+
+The post-change shared-CDP check found that the current live target can change
+from episode `944` to episode `1007` after the recovery click, with no canvas
+remaining on the new page. The adapter reports this as
+`Magapoke viewer changed episode during initial recovery`; no image is
+captured from the wrong episode. A successful live capture/next-page check for
+episode `944` remains pending until the live viewer returns the expected
+same-episode page-navigation state.
+
+A later batch attempt on 2026-09-25 still ended with
+`PageChangeTimeoutError` for this item. Its metrics showed successful episode
+HTML, viewer API, and comic JPEG responses (304 target events; no 403, 429, or
+5xx responses), but did not retain the viewer DOM state at failure. The exact
+`CrawlerRunner` path was then rerun read-only against the same episode and
+successfully initialized and saved one page. The current implementation covers
+the remaining commit-to-viewer-render timing race with bounded polling. Its
+failure diagnostics record the first-content index and geometry, initial and
+final canvas row counts, recovery reason, and recovery next-click count. The
+diagnostic `--initialize-immediately` option matches the runner's
+`wait_until="commit"` timing for further confirmation.
+
 ## Output metadata
 
 Title and order are read from the page title where available. Author is

@@ -172,7 +172,30 @@ _CANVAS_HOOK = r"""
     hookedCanvasDrawImage.__magapoke = true;
     canvasProto.drawImage = hookedCanvasDrawImage;
   }
+  function firstContentPageGeometry() {
+    const pageItems = [...document.querySelectorAll('.c-viewer__pages-item')];
+    const index = pageItems.findIndex(item => [...item.querySelectorAll('.c-viewer__comic canvas')]
+      .some(canvas => canvas.width > 0 && canvas.height > 0));
+    if (index < 0) return null;
+    const itemRect = pageItems[index].getBoundingClientRect();
+    const pages = document.querySelector('.c-viewer__pages');
+    const pagesRect = pages ? pages.getBoundingClientRect() : null;
+    if (!pagesRect) return null;
+    return {
+      index,
+      left: itemRect.left,
+      right: itemRect.right,
+      viewportLeft: pagesRect.left,
+      viewportRight: pagesRect.right,
+    };
+  }
   window.__magapokeCaptureState = {
+    getFirstContentPageIndex() {
+      return firstContentPageGeometry()?.index ?? -1;
+    },
+    getFirstContentPageGeometry() {
+      return firstContentPageGeometry();
+    },
     getCanvasSources() {
       return [...document.querySelectorAll('.c-viewer__comic canvas')].map((canvas, index) => {
         const rect = canvas.getBoundingClientRect();
@@ -264,6 +287,7 @@ class MagapokeAdapter(SiteAdapter):
         self._last_viewer_observation: dict[str, Any] = {}
         self._last_canvas_probe_error: str | None = None
         self._initialization_mode: str | None = None
+        self._initial_viewer_recovery: dict[str, Any] = {}
 
     def get_access_profile(self) -> AccessProfile:
         return magapoke_access_profile()
@@ -295,6 +319,7 @@ class MagapokeAdapter(SiteAdapter):
         self._last_viewer_observation = {}
         self._last_canvas_probe_error = None
         self._initialization_mode = None
+        self._initial_viewer_recovery = {}
 
     async def configure_quota_resource(
         self, page: Page, quota_resource: str | None
@@ -416,18 +441,111 @@ class MagapokeAdapter(SiteAdapter):
             reverse=True,
         )
 
+    async def _first_content_page_index(self, page: Page) -> int | None:
+        geometry = await self._first_content_page_geometry(page)
+        if geometry is None:
+            return None
+        page_index = geometry.get("index")
+        return int(page_index) if isinstance(page_index, int) and page_index >= 0 else None
+
+    async def _first_content_page_geometry(
+        self, page: Page
+    ) -> dict[str, float | int] | None:
+        self._last_canvas_probe_error = None
+        try:
+            geometry = await asyncio.wait_for(
+                page.evaluate(
+                    """() => window.__magapokeCaptureState
+                    ? window.__magapokeCaptureState.getFirstContentPageGeometry() : null"""
+                ),
+                timeout=2,
+            )
+        except Exception as exc:  # noqa: BLE001 - state is classified as loading/unknown
+            self._last_canvas_probe_error = type(exc).__name__
+            return None
+        if not isinstance(geometry, dict):
+            return None
+        required = ("index", "left", "right", "viewportLeft", "viewportRight")
+        if not all(key in geometry for key in required):
+            return None
+        return geometry
+
+    async def _recover_first_content_from_prefix(
+        self,
+        page: Page,
+        *,
+        rows: list[dict[str, object]],
+        deadline: float,
+    ) -> None:
+        """Boundedly recover a persisted position before the first comic page."""
+
+        recovery = self._initial_viewer_recovery
+        recovery["last_canvas_row_count"] = len(rows)
+        if rows or recovery.get("next_click_count", 0) >= 1:
+            recovery["last_reason"] = (
+                "content_visible" if rows else "next_clicked_waiting_for_content"
+            )
+            return
+
+        geometry = await self._first_content_page_geometry(page)
+        recovery["last_geometry"] = geometry
+        if geometry is None:
+            recovery["last_reason"] = "geometry_unavailable"
+            return
+        page_index = geometry.get("index")
+        if isinstance(page_index, int) and page_index >= 0:
+            recovery["first_content_page_index"] = page_index
+        if geometry["right"] > geometry["viewportLeft"]:
+            recovery["last_reason"] = "content_not_offscreen_left"
+            return
+
+        next_button = page.locator(self.next_selector)
+        if await next_button.count() != 1:
+            recovery["last_reason"] = "next_control_not_unique"
+            return
+        remaining_ms = max(1, round((deadline - asyncio.get_running_loop().time()) * 1000))
+        try:
+            await next_button.click(
+                timeout=min(1_000, remaining_ms), no_wait_after=True
+            )
+        except PlaywrightTimeoutError:
+            recovery["last_reason"] = "next_control_click_timeout"
+            return
+        recovery["next_click_count"] = recovery.get("next_click_count", 0) + 1
+        recovery["last_reason"] = "next_clicked_waiting_for_content"
+        await page.wait_for_timeout(min(150, max(1, remaining_ms)))
+
     async def _wait_for_render_ready(
-        self, page: Page, *, allow_terminal: bool = False
+        self,
+        page: Page,
+        *,
+        allow_terminal: bool = False,
+        recover_initial_prefix: bool = False,
     ) -> bool:
+        deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         previous: tuple[object, ...] | None = None
         stable = 0
         previous_terminal: tuple[object, ...] | None = None
         terminal_stable = 0
-        elapsed = 0
-        while elapsed < self.page_change_timeout_ms:
+        while asyncio.get_running_loop().time() < deadline:
             if self._initial_url is not None and page.url != self._initial_url:
+                if recover_initial_prefix:
+                    self._initial_viewer_recovery["last_reason"] = (
+                        "url_changed_during_initial_recovery"
+                    )
+                    raise PageChangeTimeoutError(
+                        "Magapoke viewer changed episode during initial recovery"
+                    )
                 return True
             rows = await self._canvas_rows(page)
+            if recover_initial_prefix:
+                self._initial_viewer_recovery["last_canvas_row_count"] = len(rows)
+                if rows:
+                    self._initial_viewer_recovery["last_reason"] = "content_visible"
+                else:
+                    await self._recover_first_content_from_prefix(
+                        page, rows=rows, deadline=deadline
+                    )
             signature = tuple(
                 (
                     row.get("pageIndex"), row.get("sourcePath"),
@@ -452,11 +570,13 @@ class MagapokeAdapter(SiteAdapter):
                     else:
                         terminal_stable = 0
                     previous_terminal = terminal
-                else:
-                    previous_terminal = None
-                    terminal_stable = 0
-            await page.wait_for_timeout(100)
-            elapsed += 100
+            else:
+                previous_terminal = None
+                terminal_stable = 0
+            remaining_ms = max(
+                1, round((deadline - asyncio.get_running_loop().time()) * 1000)
+            )
+            await page.wait_for_timeout(min(100, remaining_ms))
         raise PageChangeTimeoutError("Magapoke viewer did not finish loading within the timeout")
 
     async def _terminal_screen_signature(
@@ -920,6 +1040,17 @@ class MagapokeAdapter(SiteAdapter):
         for index in range(await canvases.count()):
             if await canvases.nth(index).is_visible():
                 visible_canvas_count += 1
+        first_content_geometry = await self._first_content_page_geometry(page)
+        recovery = dict(self._initial_viewer_recovery)
+        recovery.pop("started_monotonic", None)
+        recovery["final_canvas_row_count"] = len(rows)
+        recovery["final_geometry"] = first_content_geometry
+        started = self._initial_viewer_recovery.get("started_monotonic")
+        recovery["elapsed_ms"] = (
+            round((asyncio.get_running_loop().time() - started) * 1000, 1)
+            if isinstance(started, (int, float))
+            else None
+        )
         return {
             "magapoke_entry_confirmation": {
                 "requested_resource": self._quota_resource,
@@ -950,6 +1081,7 @@ class MagapokeAdapter(SiteAdapter):
                 "preexisting_accessible": self._preexisting_accessible,
                 "ticket_click_attempted": self._ticket_click_attempted,
                 "consumption_confirmed": self._access_consumption.consumed,
+                "initial_viewer_recovery": recovery,
             }
         }
 
@@ -1011,12 +1143,33 @@ class MagapokeAdapter(SiteAdapter):
     async def initialize(self, page: Page) -> None:
         self._initialization_mode = "full"
         rows = await self._initialize_access_entry(page)
+        first_content_geometry = await self._first_content_page_geometry(page)
+        first_content_page_index = (
+            int(first_content_geometry["index"])
+            if first_content_geometry is not None
+            else None
+        )
+        self._initial_viewer_recovery = {
+            "first_content_page_index": first_content_page_index,
+            "initial_canvas_row_count": len(rows),
+            "initial_geometry": first_content_geometry,
+            "next_click_count": 0,
+            "last_geometry": first_content_geometry,
+            "last_canvas_row_count": len(rows),
+            "last_reason": "content_visible" if rows else "waiting_for_geometry",
+            "started_monotonic": asyncio.get_running_loop().time(),
+        }
         page_indices = [
             int(row["pageIndex"])
             for row in rows
             if int(row.get("pageIndex", -1)) >= 0
         ]
-        needs_rewind = not rows or (page_indices and min(page_indices) > 1)
+        needs_rewind = bool(
+            rows
+            and page_indices
+            and first_content_page_index is not None
+            and min(page_indices) > first_content_page_index
+        )
         if needs_rewind:
             previous_button = page.locator(".c-viewer__pager-prev")
             elapsed = 0
@@ -1037,13 +1190,19 @@ class MagapokeAdapter(SiteAdapter):
                 raise PageChangeTimeoutError(
                     "Magapoke viewer content and navigation controls did not load"
                 )
-        await self._wait_for_render_ready(page)
+        await self._wait_for_render_ready(
+            page,
+            recover_initial_prefix=not rows,
+        )
         context = await self.get_content_context(page)
         self._output_title, self._output_order = self._split_title(context.title)
 
     async def _rewind_to_first_content(self, page: Page) -> None:
         """Clear a persisted viewer position without assuming episode length."""
 
+        first_content_page_index = await self._first_content_page_index(page)
+        if first_content_page_index is None:
+            return
         previous_signature: tuple[object, ...] | None = None
         for _ in range(self.rewind_max_steps):
             rows = await self._canvas_rows(page)
@@ -1052,7 +1211,9 @@ class MagapokeAdapter(SiteAdapter):
                 for row in rows
                 if int(row.get("pageIndex", -1)) >= 0
             ]
-            if page_indices and min(page_indices) <= 1:
+            if not page_indices:
+                return
+            if min(page_indices) <= first_content_page_index:
                 return
             signature = tuple(
                 (row.get("pageIndex"), row.get("sourcePath"), row.get("sequence"))
@@ -1068,6 +1229,8 @@ class MagapokeAdapter(SiteAdapter):
                 return
             await page.wait_for_timeout(150)
             next_rows = await self._canvas_rows(page)
+            if not next_rows:
+                return
             next_signature = tuple(
                 (row.get("pageIndex"), row.get("sourcePath"), row.get("sequence"))
                 for row in next_rows

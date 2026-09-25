@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from PIL import Image
@@ -128,6 +129,316 @@ async def _new_page():
         pytest.skip(f"Chromium is unavailable: {exc}")
     page = await browser.new_page()
     return playwright, browser, page
+
+
+LEADING_NON_CONTENT_VIEWER = """
+  <div class="c-viewer__pages">
+    <div class="c-viewer__pages-item"><img src="/ad.jpg"></div>
+    <div class="c-viewer__pages-item"></div>
+    <div class="c-viewer__pages-item">
+      <div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>
+    </div>
+    <div class="c-viewer__pages-item">
+      <div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>
+    </div>
+  </div>
+  <button class="c-viewer__pager-next" type="button">next</button>
+  <button class="c-viewer__pager-prev" type="button">previous</button>
+  <script>window.prevClicks = 0; window.nextClicks = 0;</script>
+"""
+
+
+async def _install_leading_non_content_viewer(
+    adapter: MagapokeAdapter, page: Page
+) -> None:
+    await adapter.prepare_page(page)
+    await page.goto(f"data:text/html,{quote(LEADING_NON_CONTENT_VIEWER)}")
+
+
+@pytest.mark.asyncio
+async def test_first_content_page_index_ignores_ad_and_blank_items() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await _install_leading_non_content_viewer(adapter, page)
+
+        assert await adapter._first_content_page_index(page) == 2
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_initialize_does_not_rewind_when_first_content_starts_at_page_index_two(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await _install_leading_non_content_viewer(adapter, page)
+
+        async def rows(_page: object) -> list[dict[str, object]]:
+            return [{"pageIndex": 2}, {"pageIndex": 3}]
+
+        async def render_ready(_page: object, **_kwargs: object) -> None:
+            return None
+
+        async def content_context(_page: object) -> ContentContext:
+            return ContentContext(content_id="episode", title="Title")
+
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+        monkeypatch.setattr(adapter, "_wait_for_render_ready", render_ready)
+        monkeypatch.setattr(adapter, "get_content_context", content_context)
+
+        await adapter.initialize(page)
+
+        assert await page.evaluate("window.prevClicks") == 0
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_initialize_does_not_rewind_while_canvas_rows_are_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await _install_leading_non_content_viewer(adapter, page)
+
+        async def no_rows(_page: object) -> list[dict[str, object]]:
+            return []
+
+        async def render_ready(_page: object, **_kwargs: object) -> None:
+            return None
+
+        async def content_context(_page: object) -> ContentContext:
+            return ContentContext(content_id="episode", title="Title")
+
+        monkeypatch.setattr(adapter, "_canvas_rows", no_rows)
+        monkeypatch.setattr(adapter, "_wait_for_render_ready", render_ready)
+        monkeypatch.setattr(adapter, "get_content_context", content_context)
+
+        await adapter.initialize(page)
+
+        assert await page.evaluate("window.prevClicks") == 0
+        debug = await adapter.collect_debug_metadata(page)
+        recovery = debug["magapoke_entry_confirmation"]["initial_viewer_recovery"]
+        assert recovery["first_content_page_index"] == 2
+        assert recovery["initial_canvas_row_count"] == 0
+        assert recovery["final_canvas_row_count"] == 0
+        assert recovery["next_click_count"] == 0
+        assert recovery["last_reason"] == "waiting_for_geometry"
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_initialize_recovers_when_first_content_is_left_of_viewer_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await _install_leading_non_content_viewer(adapter, page)
+        await page.locator(".c-viewer__pages-item").nth(2).evaluate(
+            "element => { element.style.position = 'absolute'; element.style.left = '-2000px'; }"
+        )
+        await page.locator(".c-viewer__pager-next").evaluate(
+            """element => element.onclick = () => {
+                window.nextClicks++;
+                document.querySelectorAll('.c-viewer__pages-item')[2].style.left = '0px';
+            }"""
+        )
+        adapter.page_change_timeout_ms = 1_000
+
+        async def rows(_page: object) -> list[dict[str, object]]:
+            if await page.evaluate("window.nextClicks") == 0:
+                return []
+            return [{"pageIndex": 2, "sourcePath": SOURCE_PATH, "x": 0, "y": 0}]
+
+        async def content_context(_page: object) -> ContentContext:
+            return ContentContext(content_id="episode", title="Title")
+
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+        monkeypatch.setattr(adapter, "get_content_context", content_context)
+
+        await adapter.initialize(page)
+
+        assert await page.evaluate("window.nextClicks") == 1
+        assert await page.evaluate("window.prevClicks") == 0
+        assert adapter._initial_viewer_recovery["next_click_count"] == 1
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_initial_prefix_waits_for_geometry_before_clicking_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await _install_leading_non_content_viewer(adapter, page)
+        await page.locator(".c-viewer__pager-next").evaluate(
+            """element => element.onclick = () => {
+                window.nextClicks++;
+                document.querySelectorAll('.c-viewer__pages-item')[2].style.left = '0px';
+            }"""
+        )
+        adapter.page_change_timeout_ms = 1_000
+        geometry = {
+            "index": 2,
+            "left": -2_000,
+            "right": -1_000,
+            "viewportLeft": 0,
+            "viewportRight": 1_000,
+        }
+        geometry_values = [None, geometry]
+
+        async def delayed_geometry(_page: object) -> dict[str, float | int] | None:
+            return geometry_values.pop(0) if geometry_values else geometry
+
+        async def rows(_page: object) -> list[dict[str, object]]:
+            if await page.evaluate("window.nextClicks") == 0:
+                return []
+            return [{"pageIndex": 2, "sourcePath": SOURCE_PATH, "x": 0, "y": 0}]
+
+        monkeypatch.setattr(adapter, "_first_content_page_geometry", delayed_geometry)
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+
+        adapter._initial_viewer_recovery = {
+            "next_click_count": 0,
+            "last_reason": "waiting_for_geometry",
+        }
+        await adapter._wait_for_render_ready(page, recover_initial_prefix=True)
+
+        assert await page.evaluate("window.nextClicks") == 1
+        assert adapter._initial_viewer_recovery["last_reason"] == "content_visible"
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_initial_prefix_with_unknown_geometry_times_out_without_clicking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await _install_leading_non_content_viewer(adapter, page)
+        adapter.page_change_timeout_ms = 250
+        adapter._initial_viewer_recovery = {"next_click_count": 0}
+
+        async def no_geometry(_page: object) -> None:
+            return None
+
+        async def no_rows(_page: object) -> list[dict[str, object]]:
+            return []
+
+        monkeypatch.setattr(adapter, "_first_content_page_geometry", no_geometry)
+        monkeypatch.setattr(adapter, "_canvas_rows", no_rows)
+
+        with pytest.raises(PageChangeTimeoutError, match="did not finish loading"):
+            await adapter._wait_for_render_ready(page, recover_initial_prefix=True)
+
+        assert await page.evaluate("window.nextClicks") == 0
+        assert adapter._initial_viewer_recovery["last_reason"] == "geometry_unavailable"
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_initial_prefix_url_change_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await _install_leading_non_content_viewer(adapter, page)
+        adapter.page_change_timeout_ms = 1_000
+        await page.locator(".c-viewer__pager-next").evaluate(
+            "element => element.onclick = () => { history.pushState({}, '', '#changed'); }"
+        )
+        geometry = {
+            "index": 2,
+            "left": -2_000,
+            "right": -1_000,
+            "viewportLeft": 0,
+            "viewportRight": 1_000,
+        }
+        async def fixed_geometry(_page: object) -> dict[str, float | int]:
+            return geometry
+
+        monkeypatch.setattr(adapter, "_first_content_page_geometry", fixed_geometry)
+        async def no_rows(_page: object) -> list[dict[str, object]]:
+            return []
+
+        monkeypatch.setattr(adapter, "_canvas_rows", no_rows)
+        adapter._initial_url = page.url
+        adapter._initial_viewer_recovery = {"next_click_count": 0}
+
+        with pytest.raises(PageChangeTimeoutError, match="changed episode"):
+            await adapter._wait_for_render_ready(page, recover_initial_prefix=True)
+
+        assert adapter._initial_viewer_recovery["next_click_count"] == 1
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_rewind_stops_at_first_content_page_index_without_overshooting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await _install_leading_non_content_viewer(adapter, page)
+        await page.locator(".c-viewer__pager-prev").evaluate(
+            "element => element.onclick = () => { window.prevClicks++; window.currentIndex--; }"
+        )
+        await page.evaluate("window.currentIndex = 5")
+
+        async def rows(_page: object) -> list[dict[str, object]]:
+            return [{"pageIndex": await page.evaluate("window.currentIndex")}]
+
+        monkeypatch.setattr(adapter, "_canvas_rows", rows)
+
+        await adapter._rewind_to_first_content(page)
+
+        assert await page.evaluate("window.prevClicks") == 3
+        assert await page.evaluate("window.currentIndex") == 2
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
+async def test_rewind_does_not_click_when_canvas_rows_are_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await _install_leading_non_content_viewer(adapter, page)
+
+        async def no_rows(_page: object) -> list[dict[str, object]]:
+            return []
+
+        monkeypatch.setattr(adapter, "_canvas_rows", no_rows)
+
+        await adapter._rewind_to_first_content(page)
+
+        assert await page.evaluate("window.prevClicks") == 0
+    finally:
+        await browser.close()
+        await playwright.stop()
 
 
 @pytest.mark.asyncio
@@ -346,7 +657,7 @@ async def test_initialize_waits_for_delayed_work_ticket_control_without_early_cl
         async def rows(_page):
             return [{"pageIndex": 0}] if await page.locator(".c-viewer__comic canvas").count() else []
 
-        async def render_ready(_page):
+        async def render_ready(_page, **_kwargs):
             return None
 
         async def content_context(_page):
@@ -890,7 +1201,7 @@ async def test_already_visible_viewer_skips_work_ticket_entry(
         monkeypatch.setattr(adapter, "_canvas_rows", lambda _page: _ready_rows())
         async def ready(_page):
             return [{"pageIndex": 0}]
-        async def no_wait(_page):
+        async def no_wait(_page, **_kwargs):
             return None
         async def context(_page):
             return ContentContext(content_id="episode")
