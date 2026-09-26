@@ -246,6 +246,21 @@ class CatalogService:
             row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
         return self._item_from_row(row)
 
+    def mark_item_pending(self, item_id: int) -> Item:
+        """Return an item to Batch eligibility and clear its completion timestamp."""
+
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            cursor = connection.execute(
+                "UPDATE items SET status = 'pending', completed_at = NULL, updated_at = ? "
+                "WHERE id = ?",
+                (timestamp, item_id),
+            )
+            if cursor.rowcount == 0:
+                raise CatalogNotFoundError(f"Catalog item not found: {item_id}")
+            row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+        return self._item_from_row(row)
+
     def update_item_metadata(
         self,
         item_id: int,

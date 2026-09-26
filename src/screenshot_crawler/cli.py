@@ -233,7 +233,7 @@ def _parser() -> argparse.ArgumentParser:
         action_parser.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
         action_parser.add_argument("--key", required=True)
 
-    catalog = subparsers.add_parser("catalog", help="Inspect Catalog data")
+    catalog = subparsers.add_parser("catalog", help="Manage and inspect Catalog data")
     catalog_subparsers = catalog.add_subparsers(dest="catalog_action", required=True)
     catalog_export = catalog_subparsers.add_parser(
         "export", help="Export Catalog items and sources as a CSV snapshot"
@@ -278,6 +278,19 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("backup"),
         help="Directory for the automatic pre-migration backup (default: backup)",
+    )
+    catalog_item_status = catalog_subparsers.add_parser(
+        "item-status", help="Show or change a Catalog item's Batch status"
+    )
+    catalog_item_status.add_argument("item_id", type=_positive_int)
+    catalog_item_status.add_argument(
+        "status", nargs="?", choices=("pending", "completed")
+    )
+    catalog_item_status.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
     )
 
     batch = subparsers.add_parser("batch", help="Plan or execute Catalog crawl candidates")
@@ -751,6 +764,17 @@ def _run_catalog(args: argparse.Namespace) -> None:
         print(f"  status: {status}")
         if result.backup_path is not None:
             print(f"  backup: {result.backup_path}")
+    elif args.catalog_action == "item-status":
+        service = CatalogService(args.catalog)
+        if args.status == "completed":
+            item = service.mark_item_completed(args.item_id)
+        elif args.status == "pending":
+            item = service.mark_item_pending(args.item_id)
+        else:
+            item = service.get_item(args.item_id)
+        print(
+            f"item={item.id} status={item.status} completed_at={item.completed_at}"
+        )
 
 
 def _print_batch_plan(plan: BatchPlan, *, site: str) -> None:

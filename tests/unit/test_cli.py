@@ -1,6 +1,7 @@
 import asyncio
 import builtins
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -8,6 +9,14 @@ from typing import ClassVar
 import pytest
 
 from screenshot_crawler import cli
+from screenshot_crawler.batch import BatchPlanner
+from screenshot_crawler.catalog import (
+    CatalogService,
+    ItemInput,
+    SourceInput,
+    SourceTargetInput,
+    WorkInput,
+)
 from screenshot_crawler.cli import _parser
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery.models import DiscoveryResult
@@ -291,6 +300,146 @@ def test_catalog_export_parser_accepts_defaults_and_overrides() -> None:
     assert defaults.output_dir == Path("catalog-export")
     assert custom.catalog == Path("custom.sqlite")
     assert custom.output_dir == Path("output/export")
+
+
+def test_catalog_item_status_parser_accepts_read_and_transition_forms() -> None:
+    read = _parser().parse_args(["catalog", "item-status", "13745"])
+    completed = _parser().parse_args(
+        ["catalog", "item-status", "13745", "completed", "--catalog", "custom.sqlite"]
+    )
+    pending = _parser().parse_args(["catalog", "item-status", "13745", "pending"])
+
+    assert read.item_id == 13745
+    assert read.status is None
+    assert read.catalog == Path("catalog.sqlite")
+    assert completed.status == "completed"
+    assert completed.catalog == Path("custom.sqlite")
+    assert pending.status == "pending"
+
+
+@pytest.mark.parametrize("status", ["skipped", "other"])
+def test_catalog_item_status_parser_rejects_unsupported_status(status: str) -> None:
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(["catalog", "item-status", "13745", status])
+
+    assert error.value.code == 2
+
+
+def test_catalog_item_status_cli_updates_batch_eligibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    service = CatalogService(catalog_path)
+    work = service.create_work(WorkInput(work_key="manual-status", title="Manual status"))
+    item = service.create_item(ItemInput(item_title="Chapter 1"), work_id=work.id)
+    source = service.create_source(
+        SourceInput(site="mangaone", external_id="chapter-1", access_mode="free"),
+        item_id=item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.test/chapter/1"),
+        source_id=source.id,
+    )
+    planner = BatchPlanner(service, cli._batch_policy_registry())
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "catalog", "item-status", str(item.id), "completed",
+         "--catalog", str(catalog_path)],
+    )
+    cli.main()
+    completed_output = capsys.readouterr().out.strip()
+    completed = service.get_item(item.id)
+    assert completed_output.startswith(f"item={item.id} status=completed completed_at=")
+    assert completed.completed_at is not None
+    assert "+09:00" in completed.completed_at
+    completed_at = datetime.fromisoformat(completed.completed_at)
+    assert completed_at.utcoffset() is not None
+    cli.main()
+    repeated_completed_output = capsys.readouterr().out.strip()
+    assert repeated_completed_output.startswith(
+        f"item={item.id} status=completed completed_at="
+    )
+    assert service.get_item(item.id).completed_at is not None
+    completed_plan = planner.plan(site="mangaone")
+    assert all(candidate.item_id != item.id for candidate in completed_plan.candidates)
+    assert any(
+        skipped.item_id == item.id and skipped.reason == "completed"
+        for skipped in completed_plan.skipped
+    )
+    assert service.list_crawl_runs(item_id=item.id) == []
+    assert service.list_artifacts(item_id=item.id) == []
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "catalog", "item-status", str(item.id), "pending",
+         "--catalog", str(catalog_path)],
+    )
+    cli.main()
+    assert capsys.readouterr().out.strip() == (
+        f"item={item.id} status=pending completed_at=None"
+    )
+    pending = service.get_item(item.id)
+    assert pending.status == "pending"
+    assert pending.completed_at is None
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "catalog", "item-status", str(item.id), "pending",
+         "--catalog", str(catalog_path)],
+    )
+    cli.main()
+    assert capsys.readouterr().out.strip() == (
+        f"item={item.id} status=pending completed_at=None"
+    )
+    pending_plan = planner.plan(site="mangaone")
+    assert [candidate.item_id for candidate in pending_plan.candidates] == [item.id]
+
+
+def test_catalog_item_status_cli_displays_current_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    service = CatalogService(catalog_path)
+    work = service.create_work(WorkInput(work_key="status-display", title="Status display"))
+    item = service.create_item(ItemInput(), work_id=work.id)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "catalog", "item-status", str(item.id),
+         "--catalog", str(catalog_path)],
+    )
+
+    cli.main()
+
+    assert capsys.readouterr().out.strip() == (
+        f"item={item.id} status=pending completed_at=None"
+    )
+
+
+def test_catalog_item_status_cli_missing_item_exits_nonzero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "catalog", "item-status", "123", "--catalog",
+         str(tmp_path / "catalog.sqlite")],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+
+    assert error.value.code == 2
+    assert "Catalog item not found: 123" in capsys.readouterr().err
 
 
 def test_catalog_backup_parser_accepts_default_and_optional_output() -> None:

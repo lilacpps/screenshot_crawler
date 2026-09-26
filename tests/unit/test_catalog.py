@@ -225,6 +225,22 @@ def test_item_requires_existing_work_and_completion_has_no_path(tmp_path: Path) 
         service.create_item(ItemInput(status="running"), work_id=work.id)
 
 
+def test_mark_item_pending_clears_completion_timestamp(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(work_id=work.id)
+    completed = service.mark_item_completed(item.id)
+    assert completed.completed_at is not None
+
+    pending = service.mark_item_pending(item.id)
+
+    assert pending.status == "pending"
+    assert pending.completed_at is None
+    assert pending.updated_at >= completed.updated_at
+    with pytest.raises(CatalogNotFoundError):
+        service.mark_item_pending(999)
+
+
 def test_source_identity_external_state_quota_and_reconciliation(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     work = service.create_work(WorkInput(work_key="w", title="Work"))
