@@ -434,6 +434,12 @@ ZIP内部の画像はmanifestの相対パスをそのまま使い、作品stem�
 archive filenameとcompletion status JSONのfilenameは従来どおり同じstemを使い、
 destination存在時の`FileExistsError`と自動連番なしの安全性を維持する。
 
+既存ZIPの移行用に、`scripts/flatten_zip_archives.py`を提供する。指定directory配下を
+再帰検索し、画像artifactだけが同じ1つのtop-level directory配下にあるZIPから、その1階層だけを
+除去して元ZIPを安全に置換する。flat済み、曖昧なtop-level、unsafe path、collision、破損ZIPは
+変更せず、`--dry-run`ではFIX / SKIP / ERROR判定とsummaryだけを表示する。画像データは
+読み書きするが、画像デコード・再エンコードやCatalog / crawler本体の更新は行わない。
+
 ## 17. Intermediate directory cleanup
 
 ZIP作成後、source crawl directoryを削除するのは、directory内容が次だけの場合に限る。
