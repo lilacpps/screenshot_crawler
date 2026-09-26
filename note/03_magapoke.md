@@ -238,8 +238,13 @@ bit-for-bit JPEG container preservation.
 
 Identity combines the visible canvas page index and current source path. The
 source path is used only as a current-page identity signal, not as response
-arrival order. The next operation clicks `.c-viewer__pager-next` once. A
-bounded `wait_for_change()` waits for either identity, URL change, or the
+arrival order. The next operation clicks `.c-viewer__pager-next` once. On the
+live terminal-page layout, the center of that left-side next region can be
+covered by the viewer's `.c-viewer__page-btn` page-number overlay. The adapter
+clicks at relative `x=min(80, width / 10)` and `y=height / 2` within the next
+region, where the overlay does not intercept pointer events. It does not use a
+forced click or click the terminal card's next-episode button. A bounded
+`wait_for_change()` waits for either identity, URL change, or the
 viewport-visible and stable `.c-viewer__last` terminal card. A newly visible
 captureable canvas/content identity takes priority over the terminal card, so
 a transitional viewport containing `[final comic page] [terminal card]`
@@ -249,6 +254,10 @@ episode only when no current captureable content is available; its `次の話を
 captured. A terminal card that exists only in the DOM or outside the viewport
 is not an `END` signal. A URL change from episode 244815 to 244816 remains a
 normal `NEXT_CONTENT` completion and 244816 is not captured.
+
+The shared Chrome profile may preserve the viewer's last-read position after a
+failed run. The current navigation fix does not reset that position; live
+verification of a complete crawl must start from page 1.
 
 ### Viewer prefix recovery (2026-09-25)
 

@@ -1437,9 +1437,19 @@ class MagapokeAdapter(SiteAdapter):
         button = page.locator(self.next_selector)
         if await button.count() != 1:
             raise PageChangeTimeoutError("Magapoke next control was not uniquely identified")
+        box = await button.bounding_box()
+        if box is None or box["width"] <= 0 or box["height"] <= 0:
+            raise PageChangeTimeoutError("Magapoke next control was not visible")
         self._advance_pending = True
         try:
-            await button.click(timeout=1_000, no_wait_after=True)
+            await button.click(
+                position={
+                    "x": min(80, box["width"] / 10),
+                    "y": box["height"] / 2,
+                },
+                timeout=1_000,
+                no_wait_after=True,
+            )
         except PlaywrightTimeoutError as exc:
             raise PageChangeTimeoutError("Magapoke next control could not be clicked") from exc
 

@@ -769,6 +769,40 @@ async def test_visible_magapoke_terminal_card_is_end() -> None:
 
 
 @pytest.mark.asyncio
+async def test_magapoke_go_next_avoids_page_number_overlay() -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        await page.set_content(
+            """
+            <style>
+              .c-viewer__pager { position: fixed; left: 0; top: 0; width: 800px; height: 600px; }
+              .c-viewer__pager-next { display: block; width: 400px; height: 600px; }
+              .c-viewer__pages { position: fixed; left: 0; top: 0; width: 800px; height: 600px; z-index: 20; pointer-events: none; }
+              .c-viewer__page-btn { position: absolute; left: 160px; top: 250px; width: 240px; height: 100px; pointer-events: auto; }
+            </style>
+            <div class="c-viewer__pager">
+              <a class="c-viewer__pager-next">次の話</a>
+            </div>
+            <div class="c-viewer__pages">
+              <a class="c-viewer__page-btn" href="#">5</a>
+            </div>
+            <script>
+              window.nextClicks = 0;
+              document.querySelector('.c-viewer__pager-next').onclick = () => window.nextClicks++;
+            </script>
+            """
+        )
+        adapter = MagapokeAdapter()
+
+        await adapter.go_next(page)
+
+        assert await page.evaluate("window.nextClicks") == 1
+    finally:
+        await browser.close()
+        await playwright.stop()
+
+
+@pytest.mark.asyncio
 async def test_visible_magapoke_content_takes_precedence_over_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

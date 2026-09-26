@@ -202,20 +202,28 @@ def terminal_magapoke_fixture_html() -> str:
       body {{ margin: 0; }}
       .c-viewer {{ width: 400px; height: 500px; }}
       .c-viewer__comic canvas {{ width: 240px; height: 360px; }}
-      .c-viewer__pager-next {{ position: fixed; left: 500px; top: 200px; }}
+      .c-viewer__pager {{ position: fixed; left: 0; top: 0; width: 800px; height: 500px; z-index: 10; }}
+      .c-viewer__pager-next {{ display: block; width: 400px; height: 500px; }}
+      .c-viewer__pages {{ position: fixed; left: 0; top: 0; width: 800px; height: 500px; z-index: 20; pointer-events: none; }}
+      .c-viewer__pages .c-viewer__page-btn {{ position: absolute; left: 160px; top: 200px; width: 240px; height: 100px; pointer-events: auto; }}
       .c-viewer__last {{
         display: none; position: absolute; left: 260px; top: 100px;
         width: 100px; height: 100px;
       }}
     </style>
     <div class="c-viewer">
+      <div class="c-viewer__pager">
+        <a class="c-viewer__pager-next">next</a>
+      </div>
+      <div class="c-viewer__pages">
+        <a class="c-viewer__page-btn" href="#">5</a>
+      </div>
       <div class="c-viewer__pages-item">
         <div class="c-viewer__comic"><canvas width="10" height="7"></canvas></div>
       </div>
       <div class="c-viewer__last">
         <a class="c-viewer__page-btn" href="javascript:void(0)">次の話を読む</a>
       </div>
-      <button class="c-viewer__pager-next" type="button">next</button>
     </div>
     <script>
       const paths = [
@@ -250,7 +258,7 @@ def terminal_magapoke_fixture_html() -> str:
         }}
         canvas.style.display = 'none';
       }};
-      document.querySelector('.c-viewer__page-btn').onclick = () => {{
+      document.querySelector('.c-viewer__last .c-viewer__page-btn').onclick = () => {{
         window.nextEpisodeClicks++;
         history.pushState({{}}, '', '/title/00695/episode/244816');
       }};
