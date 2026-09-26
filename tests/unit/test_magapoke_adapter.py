@@ -1309,17 +1309,19 @@ def test_magapoke_url_parse_preserves_leading_zero_identity() -> None:
     assert parse_magapoke_url("https://example.test/title/695") is None
 
 
-def test_magapoke_response_filter_and_source_path() -> None:
+@pytest.mark.parametrize("extension", ["jpg", "jpeg"])
+def test_magapoke_response_filter_and_source_path(extension: str) -> None:
     expected = parse_magapoke_url(
         "https://pocket.shonenmagazine.com/title/00695/episode/244815"
     )
     assert expected is not None
     response = _response(
-        "https://mgpk-cdn.magazinepocket.com/static/web_titles/695/episodes/244815/p1.jpg?sig=x"
+        "https://mgpk-cdn.magazinepocket.com/static/web_titles/695/episodes/244815/"
+        f"p1.{extension}?sig=x"
     )
 
     assert is_magapoke_jpeg_response(response, expected=expected)
-    assert normalize_source_path(response.url).endswith("/244815/p1.jpg")
+    assert normalize_source_path(response.url).endswith(f"/244815/p1.{extension}")
     source_path = normalize_source_path(response.url)
     assert source_path is not None
     assert source_matches_episode(source_path, expected)
@@ -1332,6 +1334,49 @@ def test_magapoke_response_filter_and_source_path() -> None:
     assert not is_magapoke_jpeg_response(
         _response(response.url.replace("244815", "244816")), expected=expected
     )
+
+
+@pytest.mark.parametrize("extension", ["jpg", "jpeg"])
+@pytest.mark.asyncio
+async def test_magapoke_canvas_hook_tracks_jpeg_extensions(extension: str) -> None:
+    playwright, browser, page = await _new_page()
+    try:
+        adapter = MagapokeAdapter()
+        await adapter.prepare_page(page)
+        await page.goto("data:text/html,<html><body></body></html>")
+
+        rows = await page.evaluate(
+            """async extension => {
+              document.body.innerHTML = `<div class="c-viewer__pages">
+                <div class="c-viewer__pages-item"><div class="c-viewer__comic">
+                  <canvas width="1" height="1"></canvas>
+                </div></div>
+              </div>`;
+              const source = new OffscreenCanvas(1, 1);
+              source.getContext('2d').fillRect(0, 0, 1, 1);
+              const image = new Image();
+              image.src = URL.createObjectURL(await source.convertToBlob());
+              await image.decode();
+              Object.defineProperty(image, 'currentSrc', {
+                configurable: true,
+                value: `https://mgpk-cdn.magazinepocket.com/static/web_titles/695/episodes/244815/p1.${extension}`
+              });
+              const offscreen = new OffscreenCanvas(1, 1);
+              offscreen.getContext('2d').drawImage(image, 0, 0);
+              document.querySelector('canvas').getContext('2d').drawImage(offscreen, 0, 0);
+              return window.__magapokeCaptureState.getCanvasSources();
+            }""",
+            extension,
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["sourcePath"].endswith(f"/244815/p1.{extension}")
+        assert len(rows[0]["mapping"]) == 0
+        assert rows[0]["base"] is not None
+        assert rows[0]["visibleDraw"] is not None
+    finally:
+        await browser.close()
+        await playwright.stop()
 
 
 def test_jpeg_magic_dimensions_and_mcu_are_inspected_without_reencoding() -> None:

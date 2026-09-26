@@ -17,9 +17,10 @@ from PIL import Image, UnidentifiedImageError
 from screenshot_crawler.core.capture import CaptureResult
 
 MAGAPOKE_CDN_HOST = "mgpk-cdn.magazinepocket.com"
+# Live CDN paths use `.jpeg`, while older fixtures and URLs may use `.jpg`.
 _SOURCE_PATH = re.compile(
     r"^/static/web_titles/(?P<title>[^/]+)/episodes/(?P<episode>[^/]+)/"
-    r"(?P<name>[^/]+\.jpg)$",
+    r"(?P<name>[^/]+\.jpe?g)$",
     re.IGNORECASE,
 )
 _IDENTITY_TRANSFORM = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)

@@ -172,6 +172,10 @@ The production path uses the mapping observed for the current source object;
 it does not assume 4x4, 16 tiles, a fixed permutation, or divisible image
 dimensions. The sampled live pages used 16 tile calls with 168x256 rectangles
 on a 685x1024 source, leaving a 13px right edge from the initial full draw.
+Source path matching accepts both `.jpg` and `.jpeg`. The live CDN currently
+serves `.jpeg`; the browser draw hook and response filter both need to accept
+that extension for source identity, tile mapping, and original response bytes
+to reach native reconstruction.
 
 ## Capture strategy
 
@@ -233,6 +237,12 @@ The production validator requires source APPn/COM payloads to remain present,
 and exact dimensions, sampling, quantization, DQT/DHT/DRI payloads, progressive
 mode, coefficient arrays, and untouched right-edge blocks. It does not promise
 bit-for-bit JPEG container preservation.
+
+Live verification on 2026-09-27 used direct entry to Magapoke episode `200033`.
+The CDN returned `.jpeg` paths; the Adapter matched 13 source responses and
+observed 16 tile mappings for each of the two visible pages. Both pages were
+captured through native coefficient reconstruction as 960x1378 JPEGs. No
+ticket or purchase control was clicked.
 
 ## Page identity and navigation
 

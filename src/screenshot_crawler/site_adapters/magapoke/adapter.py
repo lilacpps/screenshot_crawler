@@ -41,7 +41,8 @@ _CANVAS_HOOK = r"""
     visibleSources: new WeakMap(),
     sequence: 0,
   };
-  const sourcePattern = /^\/static\/web_titles\/[^/]+\/episodes\/[^/]+\/[^/]+\.jpg$/i;
+  // The live CDN uses `.jpeg`; retain `.jpg` compatibility for older URLs.
+  const sourcePattern = /^\/static\/web_titles\/[^/]+\/episodes\/[^/]+\/[^/]+\.jpe?g$/i;
   function imageSource(source) {
     if (!(source instanceof HTMLImageElement)) return null;
     const raw = source.currentSrc || source.src || '';
