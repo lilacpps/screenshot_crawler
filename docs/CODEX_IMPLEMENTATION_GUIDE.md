@@ -10,9 +10,10 @@
 2. `docs/SPEC.md`
 3. `docs/ARCHITECTURE.md`
 4. `docs/DECISIONS.md`
-5. 対象Site Adapter README
-6. 対象コードとテスト
-7. 対応する `note/`
+5. `docs/TEST_STRATEGY.md`
+6. 対象Site Adapter README
+7. 対象コードとテスト
+8. 対応する `note/`
 
 `note/` は詳細な現行実装スナップショットだが、上位authorityではない。上位authority / code / testsと食い違う場合はnoteを修正する。
 
@@ -180,10 +181,55 @@ Browser Sessionは既存共通層を使い、新規siteのために専用launche
 
 ## 11. Test
 
+テスト分類・選択・実行範囲は `docs/TEST_STRATEGY.md` をauthorityとする。
+
+Codexは変更内容を見て、まず「どの契約を変更するか」を特定し、その契約を直接または境界で検証するテストを選ぶ。directory名だけで選択しない。
+
+### 11.1 開発中
+
+開発中は最小のtargeted testを優先する。
+
+```text
+特定test node
+→ 対応test file
+→ 必要に応じて隣接component
+```
+
+小さな編集のたびにフルsuiteを実行しない。
+
+### 11.2 完了前
+
+変更の種類に応じて範囲を広げる。
+
+- pure helper / parser / policy: 対応Unit
+- Discovery / AdapterのDOMやbrowser挙動: 対応Unit + relevant Integration
+- Batch / Catalog / packaging: 対応component tests + 伝播する境界tests
+- Core Runner: Core tests + local viewer Integration
+- Browser Session: browser tests + relevant Integration
+- Research / Probe: 対象research tests。production contractへの影響時だけproduction testsも実行
+- shared / cross-site / large refactor: broad affected tests + full suiteを強く推奨
+
+現時点では `tests/unit/` 内にも実Chromiumを起動するtestがあり、`poc/` を直接importするtestもproduction test treeに混在している。分類整理が完了するまでは `pytest tests/unit` を「pure unitだけの高速suite」とみなさない。
+
+### 11.3 Full pytest
+
 ```bash
 pytest -q
-ruff check src tests
 ```
+
+はすべての変更で必須ではない。
+
+shared Core、共通data model、大規模refactor、複数siteへ影響する変更、または影響範囲に確信が持てない場合に実行する。release / milestone等で明示的な全回帰確認が必要な場合も実行する。
+
+### 11.4 実時間wait
+
+productionのdelay / timeout値そのものが検証対象でない限り、productionと同じ実時間を待たない。
+
+- pacingはfake sleep / injected delayで呼び出しを検証する
+- timeout contractは短いtest-specific timeoutで検証する
+- 実時間そのものが仕様の場合だけwall-clock testを残す
+
+### 11.5 Browser Session共通化での最低確認
 
 Browser Session共通化では最低限:
 
@@ -197,7 +243,30 @@ Browser Session共通化では最低限:
 
 Browser Session移行後は `scripts/start_crawler_chrome.ps1` と `.chrome-crawler/` を標準運用にし、loginは既存タブを再利用せず専用new Pageを閉じる。既存CDP listenerのprocess command lineがshared profileを示す場合だけ再利用し、それ以外は安全停止する。site-specific launcherは削除済みである。
 
-Playwright integrationがskipされた場合は件数と理由を報告する。
+### 11.6 Lint
+
+可能なら次も実行する。
+
+```bash
+ruff check src tests
+```
+
+### 11.7 Reporting
+
+最終報告では、実行したtestと結果だけでなく、重要な未実行カテゴリと理由も書く。
+
+```text
+Tests run:
+- PASS: ...
+
+Not run:
+- Integration: ...
+- Research/Probe: ...
+- Live verification: ...
+- Full suite: ...
+```
+
+Playwright integrationがskipされた場合は、skip件数と理由を報告する。
 
 ## 12. 完了条件 / 報告
 
