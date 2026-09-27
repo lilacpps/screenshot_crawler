@@ -1314,7 +1314,15 @@ async def run_probe(
     output_dir: Path,
     steps: int,
     cdp_endpoint: str | None,
+    z1: bool = False,
 ) -> dict[str, Any]:
+    if z1:
+        try:
+            from .zeblack_capture_probe import run_z1_probe
+        except ImportError:  # pragma: no cover - direct script execution.
+            from zeblack_capture_probe import run_z1_probe  # type: ignore[no-redef]
+
+        return await run_z1_probe(url, output_dir, steps, cdp_endpoint)
     identity = extract_viewer_identity(url)
     if identity is None:
         raise ValueError(
@@ -1340,13 +1348,18 @@ async def run_probe(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Read-only Zebrack Z0 viewer probe")
+    parser = argparse.ArgumentParser(description="Read-only Zebrack Z0/Z1 viewer probe")
     parser.add_argument("--url", default=DEFAULT_URL)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--steps", type=int, default=3, help="bounded in-chapter advances, maximum 3")
     parser.add_argument("--cdp-endpoint", default=None)
+    parser.add_argument(
+        "--z1",
+        action="store_true",
+        help="opt in to blob-JPEG retrieval and native pixel-equivalence verification",
+    )
     args = parser.parse_args()
-    report = asyncio.run(run_probe(args.url, args.output_dir, args.steps, args.cdp_endpoint))
+    report = asyncio.run(run_probe(args.url, args.output_dir, args.steps, args.cdp_endpoint, args.z1))
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

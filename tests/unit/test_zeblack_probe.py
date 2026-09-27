@@ -4,6 +4,14 @@ import json
 
 import pytest
 
+from poc.zeblack_capture_probe import (
+    ZebrackZ1Probe,
+    classify_z1_comparison,
+    classify_z1_verdict,
+    is_exact_pixel_match,
+    order_page_metadata,
+    parse_page_index,
+)
 from poc.zeblack_probe import (
     ZebrackProbe,
     classify_draw_geometry,
@@ -163,3 +171,103 @@ def test_report_and_summary_are_written_as_artifacts(tmp_path) -> None:
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
     assert report["target_chapter_id"] == "9265713"
     assert "## 11. Capture strategy assessment" in summary
+
+
+def test_page_alt_parser_accepts_only_numeric_page_alt() -> None:
+    assert parse_page_index("page_0") == 0
+    assert parse_page_index("page_12") == 12
+    assert parse_page_index("page_") is None
+    assert parse_page_index("page_1_extra") is None
+    assert parse_page_index("cover") is None
+    assert parse_page_index(None) is None
+
+
+def test_page_metadata_order_is_numeric_and_rejects_malformed_or_duplicate() -> None:
+    ordered = order_page_metadata(
+        [{"page_alt": "page_2"}, {"page_alt": "page_0"}, {"page_alt": "page_1"}]
+    )
+    assert ordered["status"] == "stable"
+    assert ordered["indices"] == [0, 1, 2]
+    assert [item["page_alt"] for item in ordered["ordered"]] == ["page_0", "page_1", "page_2"]
+
+    malformed = order_page_metadata([{"page_alt": "page_0"}, {"page_alt": "not-a-page"}])
+    assert malformed["status"] == "ambiguous"
+    assert malformed["malformed_count"] == 1
+
+    duplicate = order_page_metadata([{"page_alt": "page_1"}, {"page_alt": "page_1"}])
+    assert duplicate["status"] == "ambiguous"
+    assert duplicate["duplicate_indices"] == [1]
+
+
+def test_exact_pixel_match_requires_equal_native_dimensions_and_hashes() -> None:
+    assert is_exact_pixel_match("a", "a", [760, 1080], [760, 1080])
+    assert not is_exact_pixel_match("a", "b", [760, 1080], [760, 1080])
+    assert not is_exact_pixel_match("a", "a", [760, 1080], [380, 540])
+    assert not is_exact_pixel_match("a", "a", None, [760, 1080])
+
+
+def test_z1_comparison_classification_is_fail_closed() -> None:
+    common = {
+        "fetch_error": None,
+        "decoded_format": "JPEG",
+        "decoded_dimensions": [760, 1080],
+        "natural_dimensions": [760, 1080],
+        "decoded_pixel_sha256": "a",
+        "img_pixel_sha256": "a",
+        "canvas_error": None,
+    }
+    assert classify_z1_comparison(**common) == "exact_pixel_match"
+    assert classify_z1_comparison(**{**common, "decoded_dimensions": [380, 540]}) == "mismatch"
+    assert classify_z1_comparison(**{**common, "img_pixel_sha256": "b"}) == "mismatch"
+    assert classify_z1_comparison(**{**common, "canvas_error": "SecurityError"}) == "inconclusive"
+    assert classify_z1_comparison(**{**common, "fetch_error": "missing_blob"}) == "unavailable"
+    assert classify_z1_comparison(**{**common, "decoded_format": "PNG"}) == "unavailable"
+
+
+def test_z1_verdict_does_not_confirm_dimension_mismatch_or_ambiguous_order() -> None:
+    pages = [
+        {"page_index": 0, "equivalence": "exact_pixel_match"},
+        {"page_index": 1, "equivalence": "mismatch"},
+    ]
+    stable_spread = {
+        "status": "stable",
+        "spread_observed": True,
+        "gaps": [],
+    }
+    assert classify_z1_verdict(pages, stable_spread) == "rejected"
+    assert classify_z1_verdict(
+        [{"page_index": 0, "equivalence": "exact_pixel_match"}], stable_spread
+    ) == "inconclusive"
+    assert classify_z1_verdict(
+        [
+            {"page_index": 0, "equivalence": "exact_pixel_match"},
+            {"page_index": 1, "equivalence": "exact_pixel_match"},
+        ],
+        {**stable_spread, "status": "ambiguous"},
+    ) == "inconclusive"
+
+
+class _UnexpectedZ1Page:
+    async def evaluate(self, *args, **kwargs):
+        raise AssertionError("missing blob source must not trigger guessed browser access")
+
+
+@pytest.mark.asyncio
+async def test_z1_missing_blob_source_is_unavailable_without_guessing(tmp_path) -> None:
+    probe = ZebrackZ1Probe(
+        page=_UnexpectedZ1Page(),
+        output_dir=tmp_path,
+        expected_title_id="118286",
+        expected_chapter_id="9265713",
+    )
+    result = await probe._capture_page(
+        "state_000",
+        {
+            "page_alt": "page_0",
+            "dom_order": 0,
+            "blob_url": None,
+            "natural_dimensions": [760, 1080],
+        },
+    )
+    assert result["equivalence"] == "unavailable"
+    assert result["fetch_error"] == "malformed_page_alt_or_missing_blob_source"

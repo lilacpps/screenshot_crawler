@@ -1,10 +1,10 @@
-# Zebrack Z0 viewer probe 現行観測ノート
+# Zebrack Z0/Z1 viewer probe 現行観測ノート
 
 ## Scope
 
 これはゼブラック（Zebrack）の新規Site Adapter開発前に行う、対象chapter限定の
 read-only viewer probe記録である。Production Site Adapter、Discovery、Site Policy、
-Batch、access resource消費、login automationは未実装である。Z0では観測できた事実と
+Batch、access resource消費、login automationは未実装である。Z0/Z1では観測できた事実と
 未確認事項を分離し、毎日無料・ポイント・コイン・レンタル等のresource semanticsを
 決めていない。
 
@@ -36,6 +36,17 @@ Locator/keyboardを使用した。
 
 `--steps`は0〜3にbounded clampされる。response body候補は最大20件である。
 初期artifactは `output/zeblack_probe/initial/`、state artifactは `state_000`〜である。
+
+Z1は通常Z0と分離した明示的opt-inである。
+
+```powershell
+.\.venv\Scripts\python.exe poc\zeblack_probe.py `
+  --url "https://zebrack-comic.shueisha.co.jp/title/118286/chapter/9265713/viewer" `
+  --output-dir "output\zeblack_probe" --steps 3 --z1
+```
+
+Z1 artifactは `output/zeblack_probe/z1/` に保存し、`report.json`、
+`comparison.json`、`summary.md`、`pages/page_NNN.jpg`、各stateの`z1.json`を含む。
 
 ## Live verification (2026-09-27)
 
@@ -153,32 +164,152 @@ data-*、page alt、page counter、chapter/title link候補を保存した。
 page後の遷移、next chapter IDは未確認である。`1 / 25`等のcounter候補はEND判定のproduction
 実装には使わない。
 
+## Z1 live verification (2026-09-27)
+
+shared Crawler Chromeで上記targetだけを`--z1 --steps 3`で実行した。initialを
+`state_000`として、`state_001`〜`state_003`へArrowLeftでbounded navigationした。
+全3回が`changed_and_stable`で、全stateのURLはtarget chapterのままだった。access、
+ticket、購入、ポイント、コイン、広告、login、next chapter controlは操作していない。
+
+### Visible page image attribution
+
+Z1は全`img`から厳密な`alt=page_N`を抽出し、visibility、inViewport、natural size、
+rendered x/y/width/height、`src`、`currentSrc`、document.imagesのDOM orderを保存した。
+本文候補として採用したのは、exactな`page_N`、natural sizeが非zero、visible、viewport内で、
+source URLが`blob:`であるものだけである。viewer/class hashは補助metadataであり、唯一の
+authorityにはしていない。本文外画像をpage画像として推測していない。
+
+今回のstable stateは次のpage集合だった。
+
+```text
+state_000: page_0
+state_001: page_1 (x=953, 右), page_2 (x=259, 左)
+state_002: page_3 (x=953, 右), page_4 (x=259, 左)
+state_003: page_5 (x=953, 右), page_6 (x=259, 左)
+```
+
+各pageのnatural dimensionsは`760x1080`、表示サイズはおよそ`693.84x986` CSS pixels
+だった。DOM orderはscreen左右順と同一とは限らないため、x/yからlogical orderを推測しない。
+
+### Blob retrieval and encoded JPEG
+
+各current stateでvisible imgのblob URLを完全一致で記録し、まず同じPage内の
+`fetch(blobUrl)`を試行した。しかし今回の実サイトでは、表示中のimgが描画を継続していても、
+後発の`fetch(blob:)`は全7件で`TypeError: Failed to fetch`になった。state遷移後の
+lifetime checkも2件（page_0 after state_001、page_1 after state_002）を行い、両方とも
+fetch不可だった。従って、後から同じblob URLを取得できるとは仮定しない。
+
+Z0から継続している同一Playwright Pageのresponse listenerが、blob URLのresponse bodyを
+load時にbounded保存していたため、Z1は`blob_url`の完全一致が確認できる場合だけ、その
+既取得bodyをfallbackとして比較した。外部HTTP clientでblob URLを取得せず、別URL、asset
+URL、byte順推測へのfallbackも行っていない。今回の7件は全て
+`bytes_source=playwright_blob_response_body`で取得できた。
+
+7件すべてで次を確認した。
+
+- detected format: `JPEG`
+- dimensions: `760x1080`
+- JPEG decode success: true
+- encoded bytesは再encodeせず`pages/page_000.jpg`〜`page_006.jpg`へ保存
+
+### Pixel equivalence
+
+各blob response bodyをPillowでRGB decodeし、SHA-256を計算した。同じstable stateの
+visible `HTMLImageElement`をnatural size`760x1080`の一時canvasへ描画し、CSS表示サイズや
+viewport/device scaleを入れず、RGBAからRGBだけを取り出してSHA-256を計算した。
+
+`page_0`〜`page_6`の7/7で、decoded JPEG RGB hashとvisible img RGB hashが完全一致した。
+canvas read時のSecurityErrorは発生せず、mismatch、inconclusive、unavailableは0件だった。
+
+判定は次のとおりである。
+
+```text
+blob JPEG direct capture: confirmed
+pages: 7
+exact_pixel_match: 7
+mismatch: 0
+inconclusive: 0
+unavailable: 0
+```
+
+これは今回の対象chapter・対象state・対象page集合でのlive verificationであり、他chapterや
+別access stateへの一般化ではない。
+
+### Page_N attribution / spread / reading order
+
+`page_N`の観測indexは`[0,1,2,3,4,5,6]`で、欠落・malformed alt・duplicate indexは
+なかった。state間のpage集合は単調に進み、spread内の左右両pageを別々のblob URL、JPEG
+bytes、pixel hashとして検証できた。page counter候補は既存DOM artifactで
+`1 / 25`、`2 / 25`、`4 / 25`、`6 / 25`だった。
+
+したがって、このbounded runでは次が安定した。
+
+```text
+logical page order candidate = numeric page_N ascending
+```
+
+screen左右位置、DOM order、page counterは対応証拠として保存するが、logical page orderの
+authority候補は`page_N`の数値順である。missing、duplicate、non-monotonic transitionが
+出た場合はconfirmedにしない実装にしている。
+
+### Asset responseとの関係
+
+同じstateの`asset.zebrack-comic.com` image response候補はtimestamp、URL、content-type、
+content-length、body保存結果としてartifactに記録した。今回もasset側の`image/jpeg`
+response bytesはJPEG decode不能だった。一方、exact blob URLのresponse bodyはJPEG decode
+可能でvisible imgとpixel exact matchした。
+
+asset responseとblob生成の一対一生成時刻・変換過程は観測できていないため、asset bodyから
+blob bodyへのmapping、暗号化、scramble、tile permutation、compression方式は推測していない。
+同一stateに存在することは記録したが、asset transport bytesをcapture sourceとして採用していない。
+
+### Capture strategy conclusion
+
+今回のZ1証明により、このchapterについては次をZeblack固有の最上位capture候補としてよい。
+
+```text
+visible HTMLImageElement
+  -> exact blob URL / blob response bytes in the same browser context
+  -> encoded JPEG bytes
+  -> unchanged .jpg save
+```
+
+`CAPTURE_STRATEGY.md`のshared hierarchy自体は変更していない。用語上は、visible pageに
+一対一対応しdecode pixelsもexact matchしたencoded source bytesなので、Level 1 original
+bytesに相当するdirect-source候補として扱える。ただし、client側のblob生成過程やasset
+transportの原形式までoriginalと断定するものではない。重要なのは、PoCがJPEG bytesを
+再encodeせず保存できたことである。
+
+Production Site Adapterはまだ実装していない。productionでは、blob URLのlifetimeに依存せず、
+stable stateで必要なbytesを即時に確保する必要がある。fetch(blob:)が失敗する実サイト状態を
+踏まえ、response body listener等の同一browser context内の取得経路を、別Phaseでproduction
+設計として明示検討する。
+
 ## Capture candidates
 
 Z0のassessmentは次のとおり。
 
 | method | status | 根拠 |
 | --- | --- | --- |
-| original response bytes | possible | asset image responseとblob body候補の元bytesを保存できたが、visible pageとの一対一対応は未証明 |
-| source-native | possible | page-like imgのblob source、natural dimensions、DOM sizeを観測したが、production用の安全なsource attributionは未確認 |
+| original / direct blob response bytes | confirmed for this Z1 run | 7ページでJPEG decode、natural dimensions一致、visible img native RGBとのexact matchを確認。production Adapterは未実装 |
+| source-native | possible but not selected | encoded blob bytesが直接使えるため、source pixelの再materializeは不要。別chapterへの一般化は未確認 |
 | native reconstruction | unknown | drawImage/canvas mappingが未観測で、再構成実装は未作成 |
 | canvas | rejected for this run | visible canvas/drawImageはnot observed |
 | locator screenshot | possible | page-like img locator候補とviewport screenshotは取得できたが、本文のみlocator screenshotは未保存 |
 
-Z0ではcapture方式を決め打ちせず、production Site Adapterへ変更を入れていない。
+Z1ではdirect blob response bytesを対象chapter限定でconfirmedとしたが、production Site Adapter
+へは変更を入れていない。
 
-## Next investigation (Z1)
+## Next phase
 
-次のZ1では、同じtarget chapter内で以下だけを追加確認する。
+次Phaseでは、Z1の境界を越えない範囲で次を検討する。
 
-1. asset response元bytesとblob bodyの対応を、同一state・page alt・byte length・decode結果・
-   必要なら安全なpixel比較で検証する。暗号化/scramble/tile reconstructionと推測しない。
-2. blob sourceがそのまま表示page bytesなのか、blob生成前に復号/変換されるのかを確認する。
-3. spreadのpage_Nとx/yから、productionで許せるreading orderとcapture単位を明示的に検証する。
-4. page counterの意味、current/totalの安定性、END/NEXT_CONTENT signalをchapter末尾へ行かずに
-   script/DOM/networkから追加観測する。
-5. free/毎日無料/paid等がviewer内に表示される別安全な状態があるかを確認する。ただし
-   resource消費、購入、レンタル、広告視聴、ログインは行わない。
+1. production Adapterへ入れる前に、同じsafe capture契約をsite-specific実装として分離し、
+   current stable stateで即時取得・bounded memory・all-or-none spreadを設計する。
+2. 別chapterで同じ`page_N`/blob response/pixel exact条件が成立するかを、access操作なしで確認する。
+3. END/NEXT_CONTENT、別access state、loginは別phaseのread-only調査とし、Z1のdirect capture
+   結論へ混ぜない。
+4. asset transport bytesの復号・scramble・tile解析は、blob direct captureが利用できる限り行わない。
 
 ## Known limitations
 
@@ -187,4 +318,3 @@ Z0ではcapture方式を決め打ちせず、production Site Adapterへ変更を
 - cross-origin frameの内部viewer構造は調査していない。
 - response body保存は最大20件で、network responseの全body保存ではない。
 - Z0 artifactの画像候補は実サイト著作物を含み得るため、fixtureやCI入力として扱わない。
-
