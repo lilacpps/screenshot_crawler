@@ -17,7 +17,26 @@ read-only Batch planning and Manga ONE Policy. Phase
 
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
-最終同期: 2026-09-21
+最終同期: 2026-09-27
+
+
+### Test execution policy（2026-09-27）
+
+テスト分類・選択・実行範囲のauthorityは `docs/TEST_STRATEGY.md`。
+
+2026-09-27の実測では、full pytestは約4分で完走可能だったが、`tests/unit/` に実Chromiumを起動するtestが混在し、productionのpacing / timeoutを実時間で待つtestも存在することを確認した。詳細な測定snapshotは `note/test_suite_audit.md` に保存している。
+
+現在の運用方針:
+
+- 全変更で `pytest -q` を必須にしない
+- 開発中は変更した契約に直接対応するtargeted testを使う
+- 完了前に影響範囲のUnit / Integrationへ広げる
+- shared Core、共通data model、大規模refactor、複数site変更、影響範囲不明ではfull suiteを実行する
+- 実browser / DOMを使うものはIntegration相当、`poc/` を直接検証するものはResearch / Probe相当として扱う
+- productionの実時間delay / timeoutそのものが検証対象でなければ、testではfake / injection /短いtest-specific timeoutを使う
+- 最終報告では実行testsに加え、Integration / Research / Live / full suiteを未実行なら理由を書く
+
+**現時点ではtest fileの移動・削除・pytest設定変更はまだ行っていない。** `tests/unit/` というpathだけでpure Unitと判断せず、Phase 2で現行testをtaxonomyに沿って整理する。
 
 ## 1. Scope
 
