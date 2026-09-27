@@ -482,6 +482,34 @@ async def test_initial_start_waits_for_mounted_content_hint(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_initial_front_link_start_skips_mounted_content_hint(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _FakePage()
+    hint_calls = 0
+
+    async def rows(_page):
+        return []
+
+    async def initial_state(_page):
+        return "front_link_start"
+
+    async def content_hint(_page):
+        nonlocal hint_calls
+        hint_calls += 1
+        return True
+
+    monkeypatch.setattr(adapter, "_rows", rows)
+    monkeypatch.setattr(adapter, "_initial_viewer_state", initial_state)
+    monkeypatch.setattr(adapter, "_has_content_page_area_hint", content_hint)
+
+    state, result = await adapter._wait_for_initial_viewer_state(page)  # type: ignore[arg-type]
+
+    assert state == "front_link_start"
+    assert result == []
+    assert hint_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_initialize_unknown_state_fails_closed_without_forward(monkeypatch) -> None:
     adapter = JumpPlusAdapter()
     page = _FakePage()
@@ -611,7 +639,8 @@ async def test_rewind_from_middle_discovers_index_zero_without_threshold(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_rewind_front_link_restores_content_after_precontent_state(monkeypatch) -> None:
+@pytest.mark.parametrize("precontent_state", ["start", "front_link_start"])
+async def test_rewind_precontent_state_restores_content(monkeypatch, precontent_state) -> None:
     adapter = JumpPlusAdapter()
     page = _ControlPage()
     calls = 0
@@ -633,7 +662,7 @@ async def test_rewind_front_link_restores_content_after_precontent_state(monkeyp
         return availability_calls <= 2
 
     async def initial_state(_page):
-        return "start"
+        return precontent_state
 
     monkeypatch.setattr(adapter, "_rows", rows)
     monkeypatch.setattr(adapter, "_control_available", available)
@@ -642,6 +671,33 @@ async def test_rewind_front_link_restores_content_after_precontent_state(monkeyp
     assert await adapter._rewind_to_first(page)  # type: ignore[arg-type]
     assert adapter._first_content_page_index == 2
     assert page.control.click_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rewind_fails_closed_for_unknown_precontent_state(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    adapter.page_change_timeout_ms = 1
+    page = _ControlPage()
+    calls = 0
+
+    async def rows(_page):
+        nonlocal calls
+        calls += 1
+        return [{"pageIndex": 2}] if calls == 1 else []
+
+    async def backward_available(_page):
+        return True
+
+    async def initial_state(_page):
+        return "unknown"
+
+    monkeypatch.setattr(adapter, "_rows", rows)
+    monkeypatch.setattr(adapter, "_wait_for_backward_control", backward_available)
+    monkeypatch.setattr(adapter, "_initial_viewer_state", initial_state)
+
+    assert not await adapter._rewind_to_first(page)  # type: ignore[arg-type]
+    assert adapter._first_content_page_index is None
+    assert page.control.click_count == 1
 
 
 @pytest.mark.asyncio

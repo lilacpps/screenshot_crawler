@@ -366,14 +366,6 @@ class JumpPlusAdapter(SiteAdapter):
                         );
                         if (!container) return null;
                         const areas = [...container.querySelectorAll('.page-area.js-page-area')];
-                        // A front-link layout intentionally starts behind a
-                        // non-content page-area.  Its main page canvases are
-                        // mounted before the first safe forward action, but
-                        // the startup forward is still required to leave the
-                        // front-link page.
-                        if (areas.some(area => area.querySelector('a[class*="gtm-front-page"]'))) {
-                            return false;
-                        }
                         return areas.some(area =>
                             area.querySelector('canvas.page-image.js-page-image') ||
                             area.querySelector('a.kirinuki-link') ||
@@ -397,13 +389,15 @@ class JumpPlusAdapter(SiteAdapter):
             if rows:
                 return "content", rows
             state = await self._initial_viewer_state(page)
-            # The viewer can briefly expose the pre-content control state
-            # while the first main page-area is already mounted but its
-            # canvas has not become active.  Clicking forward in that
-            # window skips the first page on some long episodes.  Wait
-            # for the hinted content to render; only a genuine pre-content
-            # DOM without a main-page hint permits startup forward.
-            if state in {"start", "front_link_start"} and (
+            # The viewer can briefly expose the ordinary pre-content control
+            # state while the first main page-area is already mounted but its
+            # canvas has not become active.  Clicking forward in that window
+            # skips the first page on some long episodes.  Wait for the
+            # hinted content to render for that state; an explicit
+            # front-link_start state is independently actionable.
+            if state == "front_link_start":
+                return state, []
+            if state == "start" and (
                 await self._has_content_page_area_hint(page)
             ) is not True:
                 return state, []
@@ -541,7 +535,11 @@ class JumpPlusAdapter(SiteAdapter):
                     if unchanged_checks >= self.render_stable_checks:
                         self._first_content_page_index = self._page_index(previous_rows)
                         return self._first_content_page_index is not None
-                if not candidate and await self._initial_viewer_state(page) == "start":
+                if (
+                    not candidate
+                    and await self._initial_viewer_state(page)
+                    in {"start", "front_link_start"}
+                ):
                     break
                 await page.wait_for_timeout(100)
                 elapsed += 100
@@ -554,7 +552,10 @@ class JumpPlusAdapter(SiteAdapter):
             # Preserve the rows from before the backward click, restore them
             # through the validated viewer-forward control, and derive the
             # runtime index from the restored content rather than a threshold.
-            if await self._initial_viewer_state(page) != "start":
+            if (
+                await self._initial_viewer_state(page)
+                not in {"start", "front_link_start"}
+            ):
                 return False
             await self._click_forward(page)
             self._advance_pending = False

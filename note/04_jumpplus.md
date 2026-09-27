@@ -405,13 +405,17 @@ timeout despite successful document and page-image responses.
 
 The production classifier now recognizes `front_link_start` only when the
 front-link is visible, no main content canvas is visible, the forward/backward
-controls are unique, and the episode URL is unchanged. It permits exactly one
-viewer-forward action, then uses the existing render-stability wait and runtime
-rewind to derive the first content index. A front-link with a visible main
-canvas, a missing/ambiguous control, or a changed URL remains UNKNOWN and fails
-closed. Live verification observed 22 main pages for this episode and confirmed
-that the viewer-forward transition stayed on the same episode; no access or
-purchase control was used.
+controls are unique, and the episode URL is unchanged. This state is handled
+explicitly during initial readiness, without consulting the generic main
+content-area hint; a normal `start` state still waits when that hint indicates
+that mounted content is racing its canvas render. Both `start` and
+`front_link_start` are valid rewind boundaries, so a rewind that reaches either
+pre-content state restores rows through the validated viewer-forward control
+before committing the runtime first-content index. A front-link with a visible
+main canvas, a missing/ambiguous control, or a changed URL remains UNKNOWN and
+fails closed. Live verification observed 22 main pages for this episode and
+confirmed that the viewer-forward transition stayed on the same episode; no
+access or purchase control was used.
 
 Discovery, Site Policy, and Batch remain out of scope.
 
