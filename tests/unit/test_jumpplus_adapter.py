@@ -450,8 +450,11 @@ def test_initial_viewer_state_preserves_hidden_backward_start() -> None:
     assert JumpPlusAdapter._classify_initial_viewer_state(state) == "start"
 
 
+@pytest.mark.parametrize("state_name", ["start", "front_link_start"])
 @pytest.mark.asyncio
-async def test_initial_start_waits_for_mounted_content_hint(monkeypatch) -> None:
+async def test_initial_precontent_state_waits_for_mounted_content_hint(
+    monkeypatch, state_name
+) -> None:
     adapter = JumpPlusAdapter()
 
     class _MountedContentPage:
@@ -470,7 +473,7 @@ async def test_initial_start_waits_for_mounted_content_hint(monkeypatch) -> None
         return [] if calls == 1 else [{"pageIndex": 1}]
 
     async def initial_state(_page):
-        return "start"
+        return state_name
 
     monkeypatch.setattr(adapter, "_rows", rows)
     monkeypatch.setattr(adapter, "_initial_viewer_state", initial_state)
@@ -482,7 +485,9 @@ async def test_initial_start_waits_for_mounted_content_hint(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_initial_front_link_start_skips_mounted_content_hint(monkeypatch) -> None:
+async def test_initial_front_link_start_without_content_hint_preserves_startup_forward(
+    monkeypatch,
+) -> None:
     adapter = JumpPlusAdapter()
     page = _FakePage()
     hint_calls = 0
@@ -496,7 +501,7 @@ async def test_initial_front_link_start_skips_mounted_content_hint(monkeypatch) 
     async def content_hint(_page):
         nonlocal hint_calls
         hint_calls += 1
-        return True
+        return False
 
     monkeypatch.setattr(adapter, "_rows", rows)
     monkeypatch.setattr(adapter, "_initial_viewer_state", initial_state)
@@ -506,7 +511,62 @@ async def test_initial_front_link_start_skips_mounted_content_hint(monkeypatch) 
 
     assert state == "front_link_start"
     assert result == []
-    assert hint_calls == 0
+    assert hint_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_initialize_front_link_mount_does_not_startup_forward(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+
+    class _MountedContentPage:
+        url = "https://shonenjumpplus.com/episode/123"
+
+        async def evaluate(self, _script):
+            return True
+
+        async def wait_for_timeout(self, _milliseconds: int) -> None:
+            return None
+
+    page = _MountedContentPage()
+    rows = [{"pageIndex": 1}]
+    row_calls = 0
+    calls = []
+
+    async def page_count(_page):
+        return None
+
+    async def metadata(_page):
+        return None
+
+    async def current_rows(_page):
+        nonlocal row_calls
+        row_calls += 1
+        return [] if row_calls == 1 else rows
+
+    async def initial_state(_page):
+        return "front_link_start"
+
+    async def ready(_page):
+        return rows
+
+    async def rewind(_page):
+        calls.append("rewind")
+        return True
+
+    async def forward(_page):
+        calls.append("forward")
+
+    monkeypatch.setattr(adapter, "_read_content_page_count", page_count)
+    monkeypatch.setattr(adapter, "_read_output_metadata", metadata)
+    monkeypatch.setattr(adapter, "_rows", current_rows)
+    monkeypatch.setattr(adapter, "_initial_viewer_state", initial_state)
+    monkeypatch.setattr(adapter, "_wait_for_render_ready", ready)
+    monkeypatch.setattr(adapter, "_rewind_to_first", rewind)
+    monkeypatch.setattr(adapter, "go_next", forward)
+
+    await adapter.initialize(page)  # type: ignore[arg-type]
+
+    assert calls == ["rewind"]
 
 
 @pytest.mark.asyncio

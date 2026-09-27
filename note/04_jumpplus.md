@@ -403,19 +403,34 @@ backward control remained visible. The previous startup classifier required a
 hidden/disabled backward control, so it stayed UNKNOWN until the readiness
 timeout despite successful document and page-image responses.
 
-The production classifier now recognizes `front_link_start` only when the
+The production classifier recognizes `front_link_start` only when the
 front-link is visible, no main content canvas is visible, the forward/backward
-controls are unique, and the episode URL is unchanged. This state is handled
-explicitly during initial readiness, without consulting the generic main
-content-area hint; a normal `start` state still waits when that hint indicates
-that mounted content is racing its canvas render. Both `start` and
-`front_link_start` are valid rewind boundaries, so a rewind that reaches either
+controls are unique, and the episode URL is unchanged. During initial
+readiness, both `start` and `front_link_start` first use the existing bounded
+`page_change_timeout_ms` wait when the generic main content-area hint is
+present. The hint requires a content page-area itself to occupy at least 50%
+of the viewport; offscreen preloaded page areas in a front-link layout do not
+count. If rows mount during that wait, the state is treated as `content` and
+startup forward is skipped. If no hint is available, the state is returned to
+the existing initialization path, which permits at most one startup forward.
+Both states remain valid rewind boundaries, so a rewind that reaches either
 pre-content state restores rows through the validated viewer-forward control
 before committing the runtime first-content index. A front-link with a visible
 main canvas, a missing/ambiguous control, or a changed URL remains UNKNOWN and
 fails closed. Live verification observed 22 main pages for this episode and
 confirmed that the viewer-forward transition stayed on the same episode; no
 access or purchase control was used.
+
+The episode `10834108156641352935` (Batch item `14394`) reproduced the startup
+race: `front_link_start` was observable before the first content rows mounted,
+and an immediate forward left the canvas outside the active viewport. After
+the bounded wait change, the episode initialized from the mounted content path,
+saved its one content page, and reached `END` without a startup timeout.
+The existing front-link representative `10833519556325033258` (Batch item
+`14235`) retains its prior startup-forward path because its preloaded main
+areas remain offscreen; live verification saved 22 pages and reached `END`.
+The normal long representative `13932016480029111789` likewise saved 65 pages
+and reached `END`. These were manual shared-CDP checks, not CI dependencies.
 
 Discovery, Site Policy, and Batch remain out of scope.
 

@@ -361,17 +361,30 @@ class JumpPlusAdapter(SiteAdapter):
             value = await asyncio.wait_for(
                 page.evaluate(
                     """() => {
+                        const visible = (element) => {
+                            const rect = element.getBoundingClientRect();
+                            const visibleWidth = Math.max(
+                                0,
+                                Math.min(rect.right, innerWidth) - Math.max(rect.left, 0),
+                            );
+                            const visibleHeight = Math.max(
+                                0,
+                                Math.min(rect.bottom, innerHeight) - Math.max(rect.top, 0),
+                            );
+                            return rect.width > 0 && rect.height > 0 &&
+                                visibleWidth * visibleHeight / (rect.width * rect.height) >= 0.5;
+                        };
                         const container = document.querySelector(
                             'section.viewer.js-viewer .image-container.js-viewer-content'
                         );
                         if (!container) return null;
                         const areas = [...container.querySelectorAll('.page-area.js-page-area')];
-                        return areas.some(area =>
+                        return areas.some(area => visible(area) && (
                             area.querySelector('canvas.page-image.js-page-image') ||
                             area.querySelector('a.kirinuki-link') ||
                             area.querySelector('a[href*="/generator/"]') ||
                             area.tagName.toLowerCase() === 'p'
-                        );
+                        ));
                     }"""
                 ),
                 timeout=2,
@@ -389,15 +402,13 @@ class JumpPlusAdapter(SiteAdapter):
             if rows:
                 return "content", rows
             state = await self._initial_viewer_state(page)
-            # The viewer can briefly expose the ordinary pre-content control
-            # state while the first main page-area is already mounted but its
+            # The viewer can briefly expose either pre-content control state
+            # while the first main page-area is already mounted but its
             # canvas has not become active.  Clicking forward in that window
-            # skips the first page on some long episodes.  Wait for the
-            # hinted content to render for that state; an explicit
-            # front-link_start state is independently actionable.
-            if state == "front_link_start":
-                return state, []
-            if state == "start" and (
+            # skips the first page on some episodes.  Wait for the hinted
+            # content to render for both states; when there is no hint, the
+            # caller preserves the existing one-time startup-forward fallback.
+            if state in {"start", "front_link_start"} and (
                 await self._has_content_page_area_hint(page)
             ) is not True:
                 return state, []
