@@ -41,6 +41,15 @@ fixture scope変更・marker追加・pytest設定変更・scripts変更・produc
 cases** と、同じくunit配下の **4 Research/Probe files / 46 cases** である。現行の
 directory名だけでは、`pytest tests/unit` を高速なpure Unit suiteとして扱えない。
 
+### Phase 2B progress (2026-09-27)
+
+- **2B-1 completed**: Research / Probe 4 filesを`tests/research/`へ移動。
+- **2B-2 completed**: `test_access_guard.py`、`test_mangaone_discovery.py`、
+  `test_bookwalker_original_capture.py`をUnit / Integrationへ分割。
+- **2B-3 pending**: browser-heavy mixed 5 filesは未整理。
+- 移動・分割後のcollectionは Unit 711 / Integration 28 / Research 46 / Total 785。
+- 今回はfixture scope変更、browser起動回数削減、timeout短縮等の高速化を行っていない。
+
 ## 2. Current Test Inventory
 
 表中の `DB` はSQLite/Catalog、`FS` はfilesystem/temp path、`IMG` は画像・codec・

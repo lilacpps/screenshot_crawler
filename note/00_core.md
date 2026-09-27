@@ -36,7 +36,13 @@ read-only Batch planning and Manga ONE Policy. Phase
 - productionの実時間delay / timeoutそのものが検証対象でなければ、testではfake / injection /短いtest-specific timeoutを使う
 - 最終報告では実行testsに加え、Integration / Research / Live / full suiteを未実行なら理由を書く
 
-**現時点ではtest fileの移動・削除・pytest設定変更はまだ行っていない。** `tests/unit/` というpathだけでpure Unitと判断せず、Phase 2で現行testをtaxonomyに沿って整理する。
+Phase 2B-1/2B-2では、Research / Probe 4 filesを`tests/research/`へ移動し、browser部分が
+少ないmixed 3 filesをUnit / Integrationへ分割した。移動・分割後は785 cases
+（Unit 711 / Integration 28 / Research 46）をcollectionし、targeted / category / full
+pytestをpassした。
+
+残りのbrowser-heavy mixed 5 filesはPhase 2B-3で扱う。今回、高速化、fixture scope変更、
+test semantics変更、pytest設定変更、production code変更は行っていない。
 
 ## 1. Scope
 
