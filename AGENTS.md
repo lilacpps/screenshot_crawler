@@ -11,10 +11,11 @@
 5. `docs/MAGAPOKE_BATCH_ACCESS.md`（Magapoke固有のBatch / Work Ticket / Premium Ticket / resource rule変更時）
 6. `docs/ACCESS_CONTROL_AND_PACING_PLAN.md`（上記shared access仕様の実装Phase・受け入れテスト）
 7. `docs/DECISIONS.md`
-8. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
-9. 現在のコードとテスト
-10. Site Adapter固有README / probe出力
-11. `note/` の現行実装ノート
+8. `docs/TEST_STRATEGY.md`（テスト分類・選択・実行範囲）
+9. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
+10. 現在のコードとテスト
+11. Site Adapter固有README / probe出力
+12. `note/` の現行実装ノート
 
 `note/` は詳細な現行実装スナップショットとして常に更新する。ただし、上位authorityと競合する場合は上位authorityを優先し、note側を修正する。
 
@@ -57,7 +58,8 @@ shared profileでBookWalker/MANGA ONEのlogin・crawl・session共存と既存vi
 - UNKNOWN状態では無理に進行させない。
 - retryには必ず上限を設ける。
 - max_pages / same-content guardを外さない。
-- 実装変更には対応するテストを追加・更新する。
+- 実装変更には対応するテストを追加・更新する。新規test caseの追加自体を目的にせず、既存testの拡張・parameterize・置換で十分ならそれを優先する。
+- テスト分類・選択・実行範囲は `docs/TEST_STRATEGY.md` に従う。全変更でフル `pytest -q` を実行する必要はない。
 - 外部実サイトへの恒常的なCI依存は作らない。
 - fixtureには実サイトの著作物をそのまま保存しない。
 - Discovery AdapterからCatalogへ直接writeしない。
@@ -99,20 +101,31 @@ noteには少なくとも、現在の挙動、主要な判定ロジック、設�
 ## Before coding
 
 1. `docs/CODEX_IMPLEMENTATION_GUIDE.md` を読む。
-2. 変更対象に対応する `note/` を読む。
-3. Discovery / Catalog / Batchを変更する場合は `docs/DISCOVERY_AND_BATCH.md` を読む。
-4. shared runtime pacing / AccessGuard / metrics / generic access-resource selection / grant-onlyを変更する場合は `docs/ACCESS_CONTROL_AND_PACING.md` と `docs/ACCESS_CONTROL_AND_PACING_PLAN.md` を読む。
-5. Magapoke固有のWork Ticket / Premium Ticket / resource semanticsを変更する場合は `docs/MAGAPOKE_BATCH_ACCESS.md` を読む。
-6. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
-7. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
+2. `docs/TEST_STRATEGY.md` を読み、変更する契約に対するtargeted / affected / integration / live verificationの必要範囲を決める。
+3. 変更対象に対応する `note/` を読む。
+4. Discovery / Catalog / Batchを変更する場合は `docs/DISCOVERY_AND_BATCH.md` を読む。
+5. shared runtime pacing / AccessGuard / metrics / generic access-resource selection / grant-onlyを変更する場合は `docs/ACCESS_CONTROL_AND_PACING.md` と `docs/ACCESS_CONTROL_AND_PACING_PLAN.md` を読む。
+6. Magapoke固有のWork Ticket / Premium Ticket / resource semanticsを変更する場合は `docs/MAGAPOKE_BATCH_ACCESS.md` を読む。
+7. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
+8. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
 
 ## After coding
 
-最低限以下を実行する。
+`docs/TEST_STRATEGY.md` に従い、変更した契約に対して必要なテストを選択して実行する。
 
-```bash
-pytest -q
+基本順序:
+
+```text
+targeted tests
+→ 影響範囲のtests
+→ 必要なbrowser-backed Integration
+→ shared / large / uncertain changeではfull pytest
+→ 必要な場合だけlive verification
 ```
+
+小さいsite-local fixやparser / policy修正で関連testsが十分なら、フル `pytest -q` は必須ではない。逆にshared Core、共通data model、大規模refactor、複数領域変更、影響範囲が不明な変更ではfull suiteを実行する。
+
+現在は `tests/unit/` にbrowser-backed test、production test群にResearch / Probe相当のtestが一部混在しているため、directory名だけでtest categoryを判断しない。
 
 可能なら以下も実行する。
 
@@ -127,5 +140,7 @@ ruff check src tests
 - 変更したファイル
 - 更新したnote
 - 仕様上の判断
-- テスト結果
+- 実行したテストと結果
+- 重要な未実行カテゴリ（Integration / Research / Live / full suite）と未実行理由
+- skipped testがある場合は件数と理由
 - 未解決事項・実サイト確認が必要な事項
