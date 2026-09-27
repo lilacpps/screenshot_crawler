@@ -369,12 +369,13 @@ remains 128 responses.
 
 Initialization no longer treats an empty initial rows result as permission to
 advance. It first performs a bounded readiness wait. Startup forward is allowed
-only for the observed pre-content state: viewer visible, visible page-area index
-before `first_content_page_index`, one visible forward control, one visible
-unique hidden/disabled backward control, and unchanged episode URL. The startup
-forward is bounded to one action. If content is already present, bounded rewind
-is attempted first; initialization fails closed if the first content page cannot
-be guaranteed.
+only for one of the observed pre-content states: viewer visible, one visible
+forward control, one backward control, and unchanged episode URL, with either a
+hidden/disabled backward control or an explicit visible front-link while no
+main content canvas is visible. The startup forward is bounded to one action.
+If content is already present, bounded rewind is attempted first; unknown
+states fail closed and initialization fails if the first content page cannot be
+guaranteed.
 
 Unit coverage now includes used-source release with future cache retention,
 screenshot fallback retention, content-before-start race, explicit startup
@@ -392,6 +393,25 @@ to majority native JPEG capture after cache retention. The startup race run
 initially exposed that Jump+'s disabled backward control is hidden rather than
 visible; the final live run recognized that explicit start state and completed
 without skipping the first content page.
+
+## Front-link initial state fix (2026-09-27)
+
+The episode `10833519556325033258` (Batch item `14235`) exposed a valid
+pre-content layout where a visible front-link and the main page canvases were
+already mounted, but the main canvases were outside the viewport and the
+backward control remained visible. The previous startup classifier required a
+hidden/disabled backward control, so it stayed UNKNOWN until the readiness
+timeout despite successful document and page-image responses.
+
+The production classifier now recognizes `front_link_start` only when the
+front-link is visible, no main content canvas is visible, the forward/backward
+controls are unique, and the episode URL is unchanged. It permits exactly one
+viewer-forward action, then uses the existing render-stability wait and runtime
+rewind to derive the first content index. A front-link with a visible main
+canvas, a missing/ambiguous control, or a changed URL remains UNKNOWN and fails
+closed. Live verification observed 22 main pages for this episode and confirmed
+that the viewer-forward transition stayed on the same episode; no access or
+purchase control was used.
 
 Discovery, Site Policy, and Batch remain out of scope.
 

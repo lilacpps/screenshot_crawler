@@ -371,8 +371,11 @@ async def test_initialize_waits_for_content_without_startup_forward(monkeypatch)
     assert calls == ["rewind"]
 
 
+@pytest.mark.parametrize("state_name", ["start", "front_link_start"])
 @pytest.mark.asyncio
-async def test_initialize_start_state_forwards_once_and_guarantees_first_content(monkeypatch) -> None:
+async def test_initialize_start_state_forwards_once_and_guarantees_first_content(
+    monkeypatch, state_name
+) -> None:
     adapter = JumpPlusAdapter()
     page = _FakePage()
     rows = [{"pageIndex": 2}]
@@ -380,7 +383,7 @@ async def test_initialize_start_state_forwards_once_and_guarantees_first_content
     _patch_initialize_dependencies(monkeypatch, adapter, rows)
 
     async def initial_state(_page):
-        return "start", []
+        return state_name, []
 
     async def forward(_page):
         calls.append("forward")
@@ -397,6 +400,54 @@ async def test_initialize_start_state_forwards_once_and_guarantees_first_content
     await adapter.initialize(page)  # type: ignore[arg-type]
 
     assert calls == ["forward", "rewind"]
+
+
+def test_initial_viewer_state_classifies_front_link_start_without_visible_canvas() -> None:
+    state = {
+        "viewerVisible": True,
+        "forwardCount": 1,
+        "backwardCount": 1,
+        "backwardDisabled": False,
+        "frontLinkVisible": True,
+        "visibleContentCanvas": False,
+    }
+
+    assert JumpPlusAdapter._classify_initial_viewer_state(state) == "front_link_start"
+
+
+def test_initial_viewer_state_keeps_visible_content_and_unknown_states_fail_closed() -> None:
+    front_link_with_canvas = {
+        "viewerVisible": True,
+        "forwardCount": 1,
+        "backwardCount": 1,
+        "backwardDisabled": False,
+        "frontLinkVisible": True,
+        "visibleContentCanvas": True,
+    }
+    unknown = {
+        "viewerVisible": True,
+        "forwardCount": 1,
+        "backwardCount": 1,
+        "backwardDisabled": False,
+        "frontLinkVisible": False,
+        "visibleContentCanvas": False,
+    }
+
+    assert JumpPlusAdapter._classify_initial_viewer_state(front_link_with_canvas) == "unknown"
+    assert JumpPlusAdapter._classify_initial_viewer_state(unknown) == "unknown"
+
+
+def test_initial_viewer_state_preserves_hidden_backward_start() -> None:
+    state = {
+        "viewerVisible": True,
+        "forwardCount": 1,
+        "backwardCount": 1,
+        "backwardDisabled": True,
+        "frontLinkVisible": False,
+        "visibleContentCanvas": False,
+    }
+
+    assert JumpPlusAdapter._classify_initial_viewer_state(state) == "start"
 
 
 @pytest.mark.asyncio
@@ -440,7 +491,7 @@ async def test_initialize_unknown_state_fails_closed_without_forward(monkeypatch
         return None
 
     async def initial_state(_page):
-        raise PageChangeTimeoutError("unknown")
+        return "unknown", []
 
     async def forward(_page):
         calls.append("forward")
@@ -449,7 +500,7 @@ async def test_initialize_unknown_state_fails_closed_without_forward(monkeypatch
     monkeypatch.setattr(adapter, "_wait_for_initial_viewer_state", initial_state)
     monkeypatch.setattr(adapter, "go_next", forward)
 
-    with pytest.raises(PageChangeTimeoutError):
+    with pytest.raises(PageChangeTimeoutError, match="not actionable"):
         await adapter.initialize(page)  # type: ignore[arg-type]
     assert calls == []
 

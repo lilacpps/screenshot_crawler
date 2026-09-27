@@ -279,6 +279,25 @@ class JumpPlusAdapter(SiteAdapter):
             elapsed += 100
         raise PageChangeTimeoutError("Jump+ viewer did not finish loading within the timeout")
 
+    @staticmethod
+    def _classify_initial_viewer_state(state: dict[str, object]) -> str:
+        if (
+            state.get("viewerVisible") is True
+            and state.get("forwardCount") == 1
+            and state.get("backwardCount") == 1
+            and state.get("backwardDisabled") is True
+        ):
+            return "start"
+        if (
+            state.get("viewerVisible") is True
+            and state.get("forwardCount") == 1
+            and state.get("backwardCount") == 1
+            and state.get("frontLinkVisible") is True
+            and state.get("visibleContentCanvas") is False
+        ):
+            return "front_link_start"
+        return "unknown"
+
     async def _initial_viewer_state(self, page: Page) -> str:
         try:
             state = await asyncio.wait_for(
@@ -295,6 +314,14 @@ class JumpPlusAdapter(SiteAdapter):
                         const container = viewer?.querySelector('.image-container.js-viewer-content');
                         const areas = container ? [...container.querySelectorAll('.page-area.js-page-area')] : [];
                         const visibleIndex = areas.findIndex(visible);
+                        const frontLinkVisible = areas.some(area => {
+                            if (!visible(area)) return false;
+                            const link = area.querySelector('a[class*="gtm-front-page"]');
+                            return link ? visible(link) : false;
+                        });
+                        const visibleContentCanvas = [...(container?.querySelectorAll(
+                            'canvas.page-image.js-page-image'
+                        ) || [])].some(visible);
                         const forward = [...document.querySelectorAll('.page-navigation-forward.js-slide-forward')]
                             .filter(visible);
                         const backward = [...document.querySelectorAll('.page-navigation-backward.js-slide-backward')];
@@ -310,6 +337,8 @@ class JumpPlusAdapter(SiteAdapter):
                         return {
                             viewerVisible: visible(viewer),
                             visibleIndex,
+                            frontLinkVisible,
+                            visibleContentCanvas,
                             forwardCount: forward.length,
                             backwardCount: backward.length,
                             backwardDisabled,
@@ -325,14 +354,7 @@ class JumpPlusAdapter(SiteAdapter):
             return "unknown"
         if self._initial_url is not None and state.get("url") != self._initial_url:
             return "unsupported"
-        if (
-            state.get("viewerVisible") is True
-            and state.get("forwardCount") == 1
-            and state.get("backwardCount") == 1
-            and state.get("backwardDisabled") is True
-        ):
-            return "start"
-        return "unknown"
+        return self._classify_initial_viewer_state(state)
 
     async def _has_content_page_area_hint(self, page: Page) -> bool | None:
         try:
@@ -381,7 +403,9 @@ class JumpPlusAdapter(SiteAdapter):
             # window skips the first page on some long episodes.  Wait
             # for the hinted content to render; only a genuine pre-content
             # DOM without a main-page hint permits startup forward.
-            if state == "start" and (await self._has_content_page_area_hint(page)) is not True:
+            if state in {"start", "front_link_start"} and (
+                await self._has_content_page_area_hint(page)
+            ) is not True:
                 return state, []
             if state == "unsupported":
                 raise PageChangeTimeoutError("Jump+ initial viewer state changed or is unsupported")
@@ -557,11 +581,11 @@ class JumpPlusAdapter(SiteAdapter):
         if initial_state == "content":
             if not await self._rewind_to_first(page):
                 raise PageChangeTimeoutError("Jump+ could not rewind to the first content page")
-        else:
-            # The live target exposes a distinct pre-content page-area state:
-            # the first non-content area is visible, the unique backward
-            # control is hidden/disabled, and the unique viewer-forward control
-            # is visible.  Only this state permits one startup forward action.
+        elif initial_state in {"start", "front_link_start"}:
+            # The viewer can expose a pre-content page-area state with either
+            # a hidden/disabled backward control or an explicit visible
+            # front-link while the main canvases remain offscreen.  Only these
+            # states permit one startup forward action.
             # The resulting rows still go through the same rewind/boundary
             # resolution as a content-start state: a startup transition can
             # land on the second spread before the first main page renders.
@@ -572,6 +596,8 @@ class JumpPlusAdapter(SiteAdapter):
                 raise PageChangeTimeoutError("Jump+ active content was not found after startup forward")
             if not await self._rewind_to_first(page):
                 raise PageChangeTimeoutError("Jump+ could not resolve the first content page")
+        else:
+            raise PageChangeTimeoutError("Jump+ initial viewer state was not actionable")
         rows = await self._wait_for_render_ready(page)
         if not rows:
             raise PageChangeTimeoutError("Jump+ active content was not found")
