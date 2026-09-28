@@ -236,3 +236,424 @@ targets:
     url: https://pocket.shonenmagazine.com/title/02770/episode/411448
     enabled: true
     label: しゅごキャラ！
+
+  - key: nanatsu-no-taizai
+    work_key: nanatsu-no-taizai
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00002/episode/481
+    enabled: true
+    label: "七つの大罪"
+
+  - key: kanojo-okarishimasu
+    work_key: kanojo-okarishimasu
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00289/episode/169088
+    enabled: true
+    label: "彼女、お借りします"
+
+  - key: diamond-no-a
+    work_key: diamond-no-a
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00030/episode/742
+    enabled: false
+    label: "ダイヤのA"
+
+  - key: diamond-no-a-act2
+    work_key: diamond-no-a-act2
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00004/episode/912
+    enabled: true
+    label: "ダイヤのA actⅡ"
+
+  - key: days
+    work_key: days
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00009/episode/465
+    enabled: false
+    label: "DAYS"
+
+  - key: hajime-no-ippo
+    work_key: hajime-no-ippo
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01291/episode/315412
+    enabled: true
+    label: "はじめの一歩"
+
+  - key: blue-lock
+    work_key: blue-lock
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00617/episode/213491
+    enabled: true
+    label: "ブルーロック"
+
+  - key: isekai-walking
+    work_key: isekai-walking
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01915/episode/360275
+    enabled: true
+    label: "異世界ウォーキング"
+
+  - key: guilty-circle
+    work_key: guilty-circle
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01367/episode/319720
+    enabled: true
+    label: "ギルティサークル"
+
+  - key: kiyou-binbou
+    work_key: kiyou-binbou
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02050/episode/367385
+    enabled: true
+    label: "勇者パーティを追い出された器用貧乏　～パーティ事情で付与術士をやっていた剣士、万能へと至る～"
+
+  - key: tensei-kizoku-kantei-skill
+    work_key: tensei-kizoku-kantei-skill
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01152/episode/308806
+    enabled: true
+    label: "転生貴族、鑑定スキルで成り上がる～弱小領地を受け継いだので、優秀な人材を増やしていたら、最強領地になってた～"
+
+  - key: gorin-no-megami-sama
+    work_key: gorin-no-megami-sama
+
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01523/episode/329612
+    enabled: true
+    label: "五輪の女神さま 〜なでしこ寮のメダルごはん〜"
+
+  - key: runway-de-waratte
+    work_key: runway-de-waratte
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00276/episode/166505
+    enabled: false
+    label: "ランウェイで笑って"
+
+  - key: kyokou-suiri
+    work_key: kyokou-suiri
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00695/episode/244815
+    enabled: true
+    label: "虚構推理"
+
+  - key: hoshino-me-wo-tsubutte
+    work_key: hoshino-me-wo-tsubutte
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00133/episode/142388
+    enabled: false
+    label: "星野、目をつぶって。"
+
+  - key: narikawari
+    work_key: narikawari
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00431/episode/189162
+    enabled: true
+    label: "ナリカワリ"
+
+  - key: yankee-jk
+    work_key: yankee-jk
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00492/episode/193169
+    enabled: true
+    label: "ヤンキーＪＫの異常な愛情"
+
+  - key: hyakuemu
+    work_key: hyakuemu
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00647/episode/229648
+    enabled: true
+    label: "ひゃくえむ。"
+
+  - key: fuuka
+    work_key: fuuka
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00012/episode/468
+    enabled: true
+    label: "風夏"
+
+  - key: megami-no-cafe-terrace
+    work_key: megami-no-cafe-terrace
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01334/episode/317413
+    enabled: true
+    label: "女神のカフェテラス"
+
+  - key: kimi-no-iru-machi
+    work_key: kimi-no-iru-machi
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00049/episode/850
+    enabled: false
+    label: "君のいる町"
+
+  - key: suzuka
+    work_key: suzuka
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00100/episode/142259
+    enabled: false
+    label: "涼風"
+
+  - key: hitman
+    work_key: hitman
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00578/episode/207469
+    enabled: false
+    label: "ヒットマン"
+
+  - key: ano-shima-no-kaionsou
+    work_key: ano-shima-no-kaionsou
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/03071/episode/430660
+    enabled: true
+    label: "あの島の海音荘"
+
+  - key: cross-over
+    work_key: cross-over
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/03111/episode/430219
+    enabled: true
+    label: "CROSS OVER"
+
+  - key: kishuku-gakkou-no-juliet
+    work_key: kishuku-gakkou-no-juliet
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00070/episode/140484
+    enabled: false
+    label: "寄宿学校のジュリエット"
+
+  - key: kuroneko-to-majo-no-kyoushitsu
+    work_key: kuroneko-to-majo-no-kyoushitsu
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01724/episode/340377
+    enabled: true
+    label: "黒猫と魔女の教室"
+
+  - key: kaoru-hana-wa-rin-to-saku
+    work_key: kaoru-hana-wa-rin-to-saku
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01524/episode/329599
+    enabled: true
+    label: "薫る花は凛と咲く"
+
+  - key: akb49
+    work_key: akb49
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00016/episode/472
+    enabled: false
+    label: "AKB49～恋愛禁止条例～"
+
+  - key: kimi-no-yokogao-wo-miteita
+    work_key: kimi-no-yokogao-wo-miteita
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02583/episode/400098
+    enabled: true
+    label: "きみの横顔を見ていた"
+
+  - key: 8gatsu31nichi-no-long-summer
+    work_key: 8gatsu31nichi-no-long-summer
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02651/episode/403166
+    enabled: true
+    label: "8月31日のロングサマー"
+
+  - key: chinmoku-no-kantai
+    work_key: chinmoku-no-kantai
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00502/episode/350832
+    enabled: false
+    label: "沈黙の艦隊"
+
+  - key: zipang
+    work_key: zipang
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01263/episode/313586
+    enabled: true
+    label: "ジパング"
+
+  - key: boku-wa-beatles
+    work_key: boku-wa-beatles
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02375/episode/387271
+    enabled: true
+    label: "僕はビートルズ"
+
+  - key: zipang-shinsoukairyuu
+    work_key: zipang-shinsoukairyuu
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02376/episode/387456
+    enabled: true
+    label: "ジパング深蒼海流"
+
+  - key: kami-no-shizuku
+    work_key: kami-no-shizuku
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00503/episode/358007
+    enabled: false
+    label: "神の雫"
+
+  - key: world-is-dancing
+    work_key: world-is-dancing
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/03222/episode/437150
+    enabled: true
+    label: "ワールド イズ ダンシング"
+
+  - key: hanaori-san-tensei-kenka
+    work_key: hanaori-san-tensei-kenka
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01666/episode/339668
+    enabled: true
+    label: "花織さんは転生しても喧嘩がしたい"
+
+  - key: tsuihou-tensei-juukishi
+    work_key: tsuihou-tensei-juukishi
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01773/episode/348857
+    enabled: true
+    label: "追放された転生重騎士はゲーム知識で無双する"
+
+  - key: dame-skill-auto-mode
+    work_key: dame-skill-auto-mode
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01502/episode/326324
+    enabled: true
+    label: "ダメスキル〖自動機能〗が覚醒しました～あれ、ギルドのスカウトの皆さん、俺を「いらない」って言ってませんでした？～"
+
+  - key: hanabasu
+    work_key: hanabasu
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02674/episode/407983
+    enabled: true
+    label: "ハナバス　苔石花江のバスケ論"
+
+  - key: fairy-tail
+    work_key: fairy-tail
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00045/episode/458
+    enabled: false
+    label: "FAIRY TAIL"
+
+  - key: tonari-no-kurokawa-san
+    work_key: tonari-no-kurokawa-san
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02585/episode/399934
+    enabled: true
+    label: "となりの黒川さん"
+
+  - key: gurapara
+    work_key: gurapara
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02218/episode/380522
+    enabled: true
+    label: "グラぱらっ！"
+
+  - key: mugen-gacha
+    work_key: mugen-gacha
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01379/episode/320763
+    enabled: true
+    label: "信じていた仲間達にダンジョン奥地で殺されかけたがギフト『無限ガチャ』でレベル9999の仲間達を手に入れて元パーティーメンバーと世界に復讐＆『ざまぁ！』します！"
+
+  - key: nezumi-no-hatsukoi
+    work_key: nezumi-no-hatsukoi
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02352/episode/387854
+    enabled: true
+    label: "ねずみの初恋"
+
+  - key: shigatsu-wa-kimi-no-uso
+    work_key: shigatsu-wa-kimi-no-uso
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00403/episode/184318
+    enabled: false
+    label: "四月は君の嘘"
+
+  - key: banjou-no-orion
+    work_key: banjou-no-orion
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02455/episode/390740
+    enabled: true
+    label: "盤上のオリオン"
+
+  - key: runorita
+    work_key: runorita
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191254047172892
+    enabled: true
+    label: "ルノリータ"
+
+  - key: sachiroku
+    work_key: sachiroku
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/4856001361458130011
+    enabled: false
+    label: "サチ録～サチの黙示録～"
+
+  - key: tonkatsu-dj-agetaro
+    work_key: tonkatsu-dj-agetaro
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10833497643049550155
+    enabled: false
+    label: "とんかつＤＪアゲ太郎"
+
+  - key: a-akuma-chan
+    work_key: a-akuma-chan
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256637716472
+    enabled: true
+    label: "あっ、悪魔ちゃん"
+
+  - key: okaeri-suiheisen
+    work_key: okaeri-suiheisen
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106567264307963664
+    enabled: true
+    label: "おかえり水平線"
+
+  - key: summer-time-render
+    work_key: summer-time-render
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13932016480029133982
+    enabled: false
+    label: "サマータイムレンダ"
+
+  - key: houshin-engi
+    work_key: houshin-engi
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10833519556325021900
+    enabled: true
+    label: "封神演義"
+
+  - key: ruri-dragon
+    work_key: ruri-dragon
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/17106371853091617526
+    enabled: true
+    label: "ルリドラゴン"
+
+  - key: mayori-no-gakkou
+    work_key: mayori-no-gakkou
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672000621
+    enabled: true
+    label: "魔寄りの学校"
+
+  - key: seija-no-koushin
+    work_key: seija-no-koushin
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13932016480029130646
+    enabled: true
+    label: "生者の行進"
+
+  - key: nisekoi
+    work_key: nisekoi
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10833519556325021840
+    enabled: true
+    label: "ニセコイ"
+
+  - key: jigokuraku
+    work_key: jigokuraku
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13932016480029295972
+    enabled: true
+    label: "地獄楽"
