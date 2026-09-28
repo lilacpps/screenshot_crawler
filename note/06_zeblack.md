@@ -322,6 +322,40 @@ Z1ではdirect blob response bytesを対象chapter限定でconfirmedとしたが
    結論へ混ぜない。
 4. asset transport bytesの復号・scramble・tile解析は、blob direct captureが利用できる限り行わない。
 
+## Z2 live verification (2026-09-29)
+
+This section supersedes the preceding pre-Z2 statement that chapter-end behavior had not yet been observed. The older text is retained only as the Z0/Z1 investigation history; the current terminal understanding is the one below.
+
+The research-only Z2 probe was run against the same target chapter using the shared Crawler Chrome and bounded `ArrowLeft` navigation (`13` successful advances; hard cap `100`). No next-chapter, access, purchase, ticket, point, coin, advertisement, or login control was clicked. The target host/title/chapter/viewer identity stayed unchanged for every before/after operation.
+
+Observed page progression was:
+
+```text
+state_000: page_0, page_1, page_2       counter 1 / 26
+state_001: page_1, page_2, page_3, page_4 counter 2 / 26
+state_002: page_3, page_4, page_5, page_6 counter 4 / 26
+...
+state_011: page_19, page_20, page_21, page_22, page_23 counter 22 / 26
+state_012: page_21, page_22, page_23 counter 24 / 26
+state_013: page_23 (not in viewport) counter 26 / 26
+```
+
+The final content state was `state_012`: `page_23` was the only in-viewport `page_N` image and the counter was `24 / 26`. One further `ArrowLeft` transition produced `state_013`, where no `page_N` image was in the viewport and the counter remained visible as `26 / 26`. The terminal screenshot showed the end-of-viewer UI, including `次の話を読む` with `2話`, comment/favorite controls, and recommendation content. This is a NEXT_CONTENT candidate, not a click or an observed next-chapter navigation.
+
+The earlier partial Z1 artifact recorded a `1 / 25` counter, while this full Z2 run recorded `1 / 26` through `26 / 26`. That discrepancy was not resolved in this probe; the denominator is therefore evidence only and must not be treated as a standalone total-page authority.
+
+The first terminal transition was therefore the advance from `24 / 26` to `26 / 26`. The URL remained the target viewer URL; no automatic chapter change was observed. A next-content DOM button was observed without an `href`; no next-chapter identity was obtained from a clickable chapter link. Recommendation links were recorded as recommendation evidence only and were not treated as next-chapter authority.
+
+The Z2 report classification is:
+
+```text
+Zeblack terminal behavior: next_content_confirmed
+```
+
+The classifier is fail-closed: it does not treat a page counter or a no-change result alone as END. It requires current-chapter identity, stable transition evidence, disappearance of in-viewport page content, and explicit terminal evidence. `end_confirmed` was not observed in this run; the observed terminal signal was NEXT_CONTENT. This probe does not implement production PageState or click the next-content control.
+
+Production Adapter recommendation: retain `page_N` numeric tracking for content order, treat `26 / 26` as supporting evidence only, and classify the terminal state as `NEXT_CONTENT` only after the same current-chapter guard and explicit visible `次の話を読む`-type evidence. Keep the next-content action non-clicking. Behavior for other chapters, access states, login states, and a separate explicit END UI remains unknown.
+
 ## Known limitations
 
 - 対象はこの1 title/chapterだけで、他chapter・別title・別access stateは未確認。

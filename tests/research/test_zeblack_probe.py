@@ -24,6 +24,12 @@ from poc.zeblack_probe import (
     navigation_candidate_is_forbidden,
     navigation_succeeded,
 )
+from poc.zeblack_terminal_probe import (
+    aggregate_terminal_verdict,
+    classify_terminal_candidate,
+    classify_z2_url_change,
+    parse_page_counter,
+)
 
 TARGET = "https://zebrack-comic.shueisha.co.jp/title/118286/chapter/9265713/viewer"
 
@@ -295,3 +301,55 @@ async def test_z1_missing_blob_source_is_unavailable_without_guessing(tmp_path) 
     )
     assert result["equivalence"] == "unavailable"
     assert result["fetch_error"] == "malformed_page_alt_or_missing_blob_source"
+
+
+def test_z2_terminal_and_next_content_candidates_are_classified() -> None:
+    assert classify_terminal_candidate("next chapter") == "next_content"
+    assert classify_terminal_candidate("recommendation") == "terminal_ui"
+    assert classify_terminal_candidate("\u8aad\u307f\u7d42\u308f\u308a\u307e\u3057\u305f") == "end"
+    assert classify_terminal_candidate("\u6b21\u306e\u30da\u30fc\u30b8") is None
+
+
+def test_z2_page_counter_parser_is_strict() -> None:
+    assert parse_page_counter("1 / 25") == {
+        "text": "1 / 25",
+        "numerator": 1,
+        "denominator": 25,
+    }
+    assert parse_page_counter("page 1 / 25") is None
+    assert parse_page_counter(None) is None
+
+
+def test_z2_url_identity_change_detects_chapter_escape() -> None:
+    next_chapter = "https://zebrack-comic.shueisha.co.jp/title/118286/chapter/9265714/viewer"
+    other_title = "https://zebrack-comic.shueisha.co.jp/title/118287/chapter/9265713/viewer"
+    assert classify_z2_url_change(TARGET, TARGET, "118286", "9265713") == "unchanged"
+    assert classify_z2_url_change(TARGET, TARGET + "#page=2", "118286", "9265713") == "query_or_hash_changed"
+    assert classify_z2_url_change(TARGET, next_chapter, "118286", "9265713") == "next_chapter"
+    assert classify_z2_url_change(TARGET, other_title, "118286", "9265713") == "different_title"
+    assert classify_z2_url_change(TARGET, "https://example.test/", "118286", "9265713") == "other_escape"
+
+
+def test_z2_terminal_verdict_is_fail_closed() -> None:
+    content = {"content_present": True, "terminal_observed": False, "terminal_signal_kinds": []}
+    end = {"content_present": False, "terminal_observed": True, "terminal_signal_kinds": ["end"]}
+    next_content = {
+        "content_present": False,
+        "terminal_observed": True,
+        "terminal_signal_kinds": ["next_content"],
+    }
+    unknown = {
+        "content_present": False,
+        "terminal_observed": True,
+        "terminal_signal_kinds": ["terminal_ui"],
+    }
+    assert aggregate_terminal_verdict([content, end], [], stopped_reason="terminal_state_observed") == "end_confirmed"
+    assert aggregate_terminal_verdict([content, next_content], [], stopped_reason="terminal_state_observed") == "next_content_confirmed"
+    assert aggregate_terminal_verdict([content, unknown], [], stopped_reason="terminal_state_observed") == "terminal_but_type_unknown"
+    assert aggregate_terminal_verdict([content], [], stopped_reason="repeated_no_change_without_terminal") == "no_terminal_observed"
+    assert aggregate_terminal_verdict(
+        [content, end],
+        [{"url_change_kind": "next_chapter"}],
+        stopped_reason="automatic next-content navigation observed",
+    ) == "auto_next_navigation_observed"
+    assert aggregate_terminal_verdict([], [], stopped_reason="navigation_candidate_unavailable") == "inconclusive"
