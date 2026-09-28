@@ -54,6 +54,31 @@ browser依存で分類すると17 Unit / 26 Integrationとなる。この1 case�
 変更を行っていない。browser起動回数、実時間wait、timeout / pacingの最適化はPhase 3
 以降の課題である。
 
+### Phase 3A test runtime optimization (2026-09-28)
+
+Phase 3A removed real production inter-candidate pacing waits from the five
+resource-pass and grant-only orchestration tests in
+`tests/unit/test_cli.py`. Those tests now replace the CLI module's async sleep
+with a no-op async fake, while retaining their ordering, replan, limit,
+resource-exhaustion, and failure assertions. The existing pacing contract
+test remains responsible for checking the configured delay, seconds
+conversion, between-candidate placement, and no-delay-after-the-last-candidate
+behavior. The production default `inter_candidate_delay_ms = 3000` is
+unchanged.
+
+Measured runtime:
+
+| Scope | Before | After |
+| --- | ---: | ---: |
+| `tests/unit/test_cli.py` (63 cases) | 25.75s | 1.11s |
+| `tests/unit` (610 cases) | 52.48s | 31.10s |
+| full pytest, `-p no:warnings` (785 cases) | 223.66s | 198.89s |
+| full `pytest -q` (785 cases) | 250.67s | 205.04s |
+
+The full-suite slowest tests remain Integration/browser wait tests; Phase 3A
+did not change browser fixtures, Manga ONE timeouts, production runtime
+behavior, pytest configuration, or test counts.
+
 ## 1. Scope
 
 Coreはサイト固有DOMやページ送りを判断しない。共通処理を担当する。

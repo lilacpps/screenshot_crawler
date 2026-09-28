@@ -22,6 +22,10 @@ from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery.models import DiscoveryResult
 
 
+async def _no_cli_pacing_wait(_seconds: float) -> None:
+    return
+
+
 def test_crawl_uses_cdp_options() -> None:
     args = _parser().parse_args(
         [
@@ -646,6 +650,7 @@ def test_batch_run_continues_after_work_ticket_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     candidates = [
         SimpleNamespace(
             item_id=1, source_id=11, metadata={}, access_strategy="quota",
@@ -729,6 +734,7 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     initial = [
         SimpleNamespace(
             item_id=1, source_id=11, metadata={}, access_strategy="direct",
@@ -830,6 +836,7 @@ def test_batch_run_limit_spans_initial_and_premium_phases(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     initial = [
         SimpleNamespace(item_id=1, source_id=11, metadata={}, access_strategy="direct", quota_resource=None),
         SimpleNamespace(item_id=2, source_id=22, metadata={}, access_strategy="quota", quota_resource="work_ticket"),
@@ -911,6 +918,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     plans: list[str | None] = []
     executions: list[tuple[str, int]] = []
 
@@ -1017,6 +1025,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
 def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     executions: list[int] = []
 
     def candidate(resource: str, item_id: int) -> SimpleNamespace:
