@@ -424,16 +424,22 @@ The current implementation is no longer design-only. Phase 3C-1, Phase 3C-2,
 and Phase 3C-3 are complete. The shared integration fixture keeps Playwright
 and Browser module-scoped and Context/Page function-scoped.
 
-The BookWalker Adapter keeps its historical local viewport contract through a
-module-loop, function-scoped local `browser_page` fixture:
+The following three modules keep their historical 800 x 600 viewport through
+module-loop, function-scoped local `browser_page` fixtures:
 
-- viewport: 800 x 600
-- shared Browser: yes
-- fresh Context/Page per test: yes
+- `test_local_viewer_flows.py`
+- `test_magapoke_local_viewer.py`
+- `test_mangaone_adapter_browser.py`
 
-The generic `tests/integration/conftest.py` fixture remains at the Playwright
-default viewport. Discovery, Original Capture, and other Integration files are
-not forced to use the Adapter's 800 x 600 viewport.
+The following modules use the generic Playwright default viewport:
+
+- `test_access_guard_browser.py`
+- `test_magapoke_discovery_browser.py`
+- `test_mangaone_discovery_browser.py`
+
+All six use the shared module Browser and fresh Context/Page per test. BookWalker
+Adapter retains its own historical 800 x 600 local fixture, while BookWalker
+Discovery and Original Capture use the generic default viewport.
 
 Phase 3C-3 migrated the final six targeted browser-backed Integration modules:
 
@@ -445,10 +451,10 @@ Phase 3C-3 migrated the final six targeted browser-backed Integration modules:
 - `test_mangaone_discovery_browser.py`: 1 case
 
 The 37 cases use six module-scoped Playwright instances and six module-scoped
-Browsers. Each case receives a fresh Context and Page. The local-viewer and
-Manga ONE Adapter modules retain their historical 800 x 600 viewport through
-file-local fixtures; the other three modules use the generic Playwright-
-default viewport.
+Browsers. Each case receives a fresh Context and Page. The Local Viewer,
+Magapoke Local Viewer, and Manga ONE Adapter modules retain their historical
+800 x 600 viewport through file-local fixtures; AccessGuard, Magapoke
+Discovery, and Manga ONE Discovery use the generic Playwright-default viewport.
 
 Before -> after for this six-file group:
 

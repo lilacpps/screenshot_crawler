@@ -163,12 +163,13 @@ runs showed no order dependency, loop ownership error, browser crash, cleanup
 leak, or Chromium skip. The Original Capture extra Page is explicitly closed
 before its Context. Production code, pytest configuration, timeout/grace
 values, assertions, parametrization, and non-BookWalker Integration semantics
-were not changed. Phase 3C-3 remains pending.
+were not changed in the Phase 3C-2 snapshot; Phase 3C-3 is recorded below.
 
 The BookWalker Adapter retains its historical 800x600 viewport through a
 file-local function-scoped `browser_page` fixture backed by the shared module
-Browser. The generic integration fixture keeps the Playwright default viewport,
-so Discovery, Original Capture, and other Integration files are not affected.
+Browser. The generic integration fixture keeps the Playwright default viewport
+for BookWalker Discovery and Original Capture.
+
 No new test case was added for this follow-up; the existing Adapter tests and
 the 49-case BookWalker group pass with the restored viewport.
 
@@ -188,10 +189,16 @@ are:
 - Manga ONE Discovery browser: 1
 
 The 37 cases therefore use six module Playwright starts, six Chromium launches,
-and 37 fresh Context/Page pairs. The local-viewer and Manga ONE Adapter files
-retain their historical 800x600 viewport in file-local fixtures; the other
-three files use the generic Playwright-default viewport. No Context or Page is
-shared, and no session scope or pytest configuration change was introduced.
+and 37 fresh Context/Page pairs. The following three files retain their
+historical 800x600 viewport in file-local fixtures:
+
+- `test_local_viewer_flows.py`
+- `test_magapoke_local_viewer.py`
+- `test_mangaone_adapter_browser.py`
+
+AccessGuard, Magapoke Discovery, and Manga ONE Discovery use the generic
+Playwright-default viewport. No Context or Page is shared, and no session scope
+or pytest configuration change was introduced. Phase 3C is now complete.
 
 Measurements:
 
@@ -209,6 +216,16 @@ Integration, and full-suite runs showed no order dependency, event-loop
 ownership error, browser crash, cleanup leak, or Chromium skip. Phase 3C is now
 complete. The remaining Integration files were not changed, and no
 session-scoped or cross-module Browser fixture was introduced.
+
+### Phase 3D-0 runtime reassessment (2026-09-29)
+
+Phase 3C-complete Integration runtime was remeasured without changing test or
+production behavior. Three Integration runs were 81.83s, 90.72s, and 87.50s
+(median 87.50s) for 129 passed; the full warning-suppressed suite was 817
+passed in 120.47s. A temporary timing hook measured setup 11.298s, call
+65.966s, and teardown 1.954s, confirming that test-body call time now
+dominates. Phase 3D remains assessment-only; detailed slow-test and ROI
+analysis is recorded in `note/test_runtime_phase3d_assessment.md`.
 
 ## 1. Scope
 
