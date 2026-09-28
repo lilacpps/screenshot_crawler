@@ -235,6 +235,17 @@ unavailable: 0
 これは今回の対象chapter・対象state・対象page集合でのlive verificationであり、他chapterや
 別access stateへの一般化ではない。
 
+Z1 verdictの集約はfail-closedである。`confirmed`は、今回の検証対象として採用した全pageが
+`exact_pixel_match`で、minimum page数、stable ordering、spread、gapなしをすべて満たす場合
+だけにする。1件でも`unavailable`または`inconclusive`があれば全体を`inconclusive`とし、
+1件でも明確なpixel/dimension `mismatch`があれば`rejected`とする。empty、duplicate index、
+malformed index、ambiguous ordering、non-monotonic transitionもconfirmedにしない。
+
+`exact_pixel_match`には、JPEG decode dimensions、HTMLImageElementのnatural dimensions、
+canvas read時の`img_pixel_dimensions`の3者一致と、decoded RGB hash / HTMLImageElement RGB
+hashの一致をすべて要求する。dimensionsまたはhash等の必要metadata欠落はexactと推測せず、
+`inconclusive`として扱う。
+
 ### Page_N attribution / spread / reading order
 
 `page_N`の観測indexは`[0,1,2,3,4,5,6]`で、欠落・malformed alt・duplicate indexは

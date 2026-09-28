@@ -200,10 +200,13 @@ def test_page_metadata_order_is_numeric_and_rejects_malformed_or_duplicate() -> 
 
 
 def test_exact_pixel_match_requires_equal_native_dimensions_and_hashes() -> None:
-    assert is_exact_pixel_match("a", "a", [760, 1080], [760, 1080])
-    assert not is_exact_pixel_match("a", "b", [760, 1080], [760, 1080])
-    assert not is_exact_pixel_match("a", "a", [760, 1080], [380, 540])
-    assert not is_exact_pixel_match("a", "a", None, [760, 1080])
+    dimensions = [760, 1080]
+    assert is_exact_pixel_match("a", "a", dimensions, dimensions, dimensions)
+    assert not is_exact_pixel_match("a", "b", dimensions, dimensions, dimensions)
+    assert not is_exact_pixel_match("a", "a", dimensions, dimensions, [380, 540])
+    assert not is_exact_pixel_match("a", "a", None, dimensions, dimensions)
+    assert not is_exact_pixel_match("a", "a", dimensions, None, dimensions)
+    assert not is_exact_pixel_match("a", "a", dimensions, dimensions, None)
 
 
 def test_z1_comparison_classification_is_fail_closed() -> None:
@@ -212,12 +215,17 @@ def test_z1_comparison_classification_is_fail_closed() -> None:
         "decoded_format": "JPEG",
         "decoded_dimensions": [760, 1080],
         "natural_dimensions": [760, 1080],
+        "img_pixel_dimensions": [760, 1080],
         "decoded_pixel_sha256": "a",
         "img_pixel_sha256": "a",
         "canvas_error": None,
     }
     assert classify_z1_comparison(**common) == "exact_pixel_match"
     assert classify_z1_comparison(**{**common, "decoded_dimensions": [380, 540]}) == "mismatch"
+    assert classify_z1_comparison(**{**common, "natural_dimensions": None}) == "inconclusive"
+    assert classify_z1_comparison(**{**common, "img_pixel_dimensions": None}) == "inconclusive"
+    assert classify_z1_comparison(**{**common, "decoded_dimensions": None}) == "inconclusive"
+    assert classify_z1_comparison(**{**common, "img_pixel_dimensions": [380, 540]}) == "mismatch"
     assert classify_z1_comparison(**{**common, "img_pixel_sha256": "b"}) == "mismatch"
     assert classify_z1_comparison(**{**common, "canvas_error": "SecurityError"}) == "inconclusive"
     assert classify_z1_comparison(**{**common, "fetch_error": "missing_blob"}) == "unavailable"
@@ -238,12 +246,28 @@ def test_z1_verdict_does_not_confirm_dimension_mismatch_or_ambiguous_order() -> 
     assert classify_z1_verdict(
         [{"page_index": 0, "equivalence": "exact_pixel_match"}], stable_spread
     ) == "inconclusive"
+
+
+def test_z1_verdict_requires_all_pages_to_be_exact() -> None:
+    ordering = {"status": "stable", "spread_observed": True, "gaps": []}
+
+    def exact(*names: str) -> list[dict[str, object]]:
+        return [
+            {"page_index": index, "equivalence": name} for index, name in enumerate(names)
+        ]
+
+    assert classify_z1_verdict(exact("exact_pixel_match", "exact_pixel_match"), ordering) == "confirmed"
+    assert classify_z1_verdict(exact("exact_pixel_match", "exact_pixel_match", "unavailable"), ordering) == "inconclusive"
+    assert classify_z1_verdict(exact("exact_pixel_match", "exact_pixel_match", "inconclusive"), ordering) == "inconclusive"
+    assert classify_z1_verdict(exact("exact_pixel_match", "mismatch", "exact_pixel_match"), ordering) == "rejected"
+    assert classify_z1_verdict([], ordering) == "inconclusive"
     assert classify_z1_verdict(
-        [
-            {"page_index": 0, "equivalence": "exact_pixel_match"},
-            {"page_index": 1, "equivalence": "exact_pixel_match"},
-        ],
-        {**stable_spread, "status": "ambiguous"},
+        exact("exact_pixel_match", "exact_pixel_match"),
+        {**ordering, "status": "ambiguous"},
+    ) == "inconclusive"
+    assert classify_z1_verdict(
+        exact("exact_pixel_match", "exact_pixel_match"),
+        {**ordering, "gaps": [1]},
     ) == "inconclusive"
 
 

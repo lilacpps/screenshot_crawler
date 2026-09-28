@@ -101,16 +101,25 @@ def is_exact_pixel_match(
     img_pixel_sha256: str | None,
     decoded_dimensions: list[int] | tuple[int, int] | None,
     natural_dimensions: list[int] | tuple[int, int] | None,
+    img_pixel_dimensions: list[int] | tuple[int, int] | None,
 ) -> bool:
-    """Return true only for equal native dimensions and equal RGB hashes."""
+    """Return true only when all native dimensions and RGB hashes agree."""
 
+    dimensions = (decoded_dimensions, natural_dimensions, img_pixel_dimensions)
     return bool(
         decoded_pixel_sha256
         and img_pixel_sha256
-        and decoded_dimensions
-        and natural_dimensions
-        and list(decoded_dimensions) == list(natural_dimensions)
+        and all(_valid_dimensions(value) for value in dimensions)
+        and len({tuple(value) for value in dimensions if value is not None}) == 1
         and decoded_pixel_sha256 == img_pixel_sha256
+    )
+
+
+def _valid_dimensions(value: list[int] | tuple[int, int] | None) -> bool:
+    return bool(
+        isinstance(value, (list, tuple))
+        and len(value) == 2
+        and all(isinstance(item, int) and not isinstance(item, bool) and item > 0 for item in value)
     )
 
 
@@ -120,6 +129,7 @@ def classify_z1_comparison(
     decoded_format: str | None,
     decoded_dimensions: list[int] | tuple[int, int] | None,
     natural_dimensions: list[int] | tuple[int, int] | None,
+    img_pixel_dimensions: list[int] | tuple[int, int] | None,
     decoded_pixel_sha256: str | None,
     img_pixel_sha256: str | None,
     canvas_error: str | None,
@@ -128,15 +138,28 @@ def classify_z1_comparison(
 
     if fetch_error or not decoded_format:
         return "unavailable"
-    if decoded_format.upper() != "JPEG" or not decoded_dimensions:
+    if decoded_format.upper() != "JPEG":
         return "unavailable"
-    if natural_dimensions and list(decoded_dimensions) != list(natural_dimensions):
+    required_dimensions = (decoded_dimensions, natural_dimensions, img_pixel_dimensions)
+    if not all(_valid_dimensions(value) for value in required_dimensions):
+        return "inconclusive"
+    if len({tuple(value) for value in required_dimensions if value is not None}) != 1:
         return "mismatch"
-    if canvas_error or not img_pixel_sha256:
+    if canvas_error:
         return "inconclusive"
-    if not decoded_pixel_sha256:
+    if not decoded_pixel_sha256 or not img_pixel_sha256:
         return "inconclusive"
-    return "exact_pixel_match" if decoded_pixel_sha256 == img_pixel_sha256 else "mismatch"
+    return (
+        "exact_pixel_match"
+        if is_exact_pixel_match(
+            decoded_pixel_sha256,
+            img_pixel_sha256,
+            decoded_dimensions,
+            natural_dimensions,
+            img_pixel_dimensions,
+        )
+        else "mismatch"
+    )
 
 
 def classify_z1_verdict(
@@ -147,12 +170,17 @@ def classify_z1_verdict(
 ) -> str:
     """Aggregate page results using a fail-closed capture decision."""
 
+    if not pages:
+        return "inconclusive"
     if any(page.get("equivalence") == "mismatch" for page in pages):
         return "rejected"
-    exact = [page for page in pages if page.get("equivalence") == "exact_pixel_match"]
+    if any(page.get("equivalence") != "exact_pixel_match" for page in pages):
+        return "inconclusive"
+    page_indices = [page.get("page_index") for page in pages]
     if (
-        len(exact) >= minimum_pages
-        and len({page.get("page_index") for page in exact}) == len(exact)
+        len(pages) >= minimum_pages
+        and all(isinstance(index, int) and not isinstance(index, bool) and index >= 0 for index in page_indices)
+        and len(set(page_indices)) == len(page_indices)
         and ordering.get("status") == "stable"
         and ordering.get("spread_observed") is True
         and not ordering.get("gaps")
@@ -476,6 +504,7 @@ class ZebrackZ1Probe(ZebrackProbe):
             decoded_format=record.get("detected_format"),
             decoded_dimensions=record.get("decoded_dimensions"),
             natural_dimensions=record.get("natural_dimensions"),
+            img_pixel_dimensions=record.get("img_pixel_dimensions"),
             decoded_pixel_sha256=record.get("decoded_pixel_sha256"),
             img_pixel_sha256=record.get("img_pixel_sha256"),
             canvas_error=record.get("canvas_error"),
