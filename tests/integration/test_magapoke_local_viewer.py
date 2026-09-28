@@ -400,7 +400,8 @@ async def test_magapoke_runner_stops_at_terminal_card_without_opening_next_episo
         source_url=target_url,
         output_dir=tmp_path / "run",
         diagnostics_dir=tmp_path / "diagnostics",
-        page_change_timeout_ms=2_000,
+        page_change_timeout_ms=500,
+        page_turn_delay_ms=0,
     )
     result = await CrawlerRunner(config).run(browser_page, MagapokeAdapter())
 

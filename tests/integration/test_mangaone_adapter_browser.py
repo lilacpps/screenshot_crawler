@@ -263,6 +263,7 @@ async def test_mangaone_quota_entry_fails_if_viewer_does_not_appear(
         "<button>\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</button>"
     )
     adapter = MangaOneAdapter()
+    adapter.page_change_timeout_ms = 200
     await adapter.configure_run(browser_page, "quota")
 
     with pytest.raises(PageChangeTimeoutError, match="did not reveal the viewer"):

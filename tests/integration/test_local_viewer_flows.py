@@ -186,6 +186,7 @@ async def test_runner_local_dom_state_flows(
             source_url=url,
             output_dir=tmp_path / "run",
             diagnostics_dir=tmp_path / "diagnostics",
+            page_turn_delay_ms=0,
         )
     ).run(browser_page, LocalViewerAdapter())
 
@@ -216,6 +217,7 @@ async def test_runner_local_dom_saves_spread_parts_with_same_pixels(
             source_url=url,
             output_dir=tmp_path / "run",
             diagnostics_dir=tmp_path / "diagnostics",
+            page_turn_delay_ms=0,
         )
     ).run(browser_page, LocalViewerAdapter(spread=True))
 
@@ -247,6 +249,7 @@ async def test_runner_local_dom_same_identity_hits_same_content_guard(
                 source_url=url,
                 output_dir=tmp_path / "run",
                 diagnostics_dir=tmp_path / "diagnostics",
+                page_turn_delay_ms=0,
                 max_same_content=2,
             )
         ).run(browser_page, LocalViewerAdapter())
@@ -270,6 +273,7 @@ async def test_runner_local_dom_unknown_state_stops_without_capture(
                 source_url=url,
                 output_dir=tmp_path / "run",
                 diagnostics_dir=tmp_path / "diagnostics",
+                page_turn_delay_ms=0,
             )
         ).run(browser_page, LocalViewerAdapter())
 
@@ -294,6 +298,7 @@ async def test_runner_local_dom_unresolved_loading_times_out(
                 source_url=url,
                 output_dir=tmp_path / "run",
                 diagnostics_dir=tmp_path / "diagnostics",
+                page_turn_delay_ms=0,
                 retry_count=1,
             )
         ).run(browser_page, LocalViewerAdapter())
@@ -323,6 +328,7 @@ async def test_runner_local_dom_exact_max_pages_can_stop(
             source_url=url,
             output_dir=tmp_path / "run",
             diagnostics_dir=tmp_path / "diagnostics",
+            page_turn_delay_ms=0,
             max_pages=2,
         )
     ).run(browser_page, LocalViewerAdapter())
@@ -354,6 +360,7 @@ async def test_runner_local_dom_content_after_max_pages_fails(
                 source_url=url,
                 output_dir=tmp_path / "run",
                 diagnostics_dir=tmp_path / "diagnostics",
+                page_turn_delay_ms=0,
                 max_pages=1,
             )
         ).run(browser_page, LocalViewerAdapter())
@@ -492,7 +499,8 @@ async def test_mangaone_image_gap_becomes_end_after_grace_period(
     await install_route(browser_page, url, mangaone_html())
     await browser_page.goto(url)
     adapter = MangaOneAdapter()
-    adapter.page_change_timeout_ms = 3_100
+    adapter.page_change_timeout_ms = 500
+    adapter.end_grace_ms = 200
     await adapter.initialize(browser_page)
     identity = await adapter.get_content_identity(browser_page)
     await browser_page.locator("img[alt^='page_']").evaluate(
@@ -514,6 +522,7 @@ async def test_mangaone_graceful_end_and_chapter_change_are_distinct(
     await install_route(browser_page, second_url, mangaone_html())
     await browser_page.goto(first_url)
     adapter = MangaOneAdapter()
+    adapter.page_change_timeout_ms = 500
     await adapter.initialize(browser_page)
 
     await browser_page.goto(second_url)
@@ -521,6 +530,8 @@ async def test_mangaone_graceful_end_and_chapter_change_are_distinct(
 
     await browser_page.goto(first_url)
     adapter = MangaOneAdapter()
+    adapter.page_change_timeout_ms = 500
+    adapter.end_grace_ms = 200
     await adapter.initialize(browser_page)
     identity = await adapter.get_content_identity(browser_page)
     await browser_page.locator("img[alt^='page_']").evaluate(

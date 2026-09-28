@@ -79,6 +79,38 @@ The full-suite slowest tests remain Integration/browser wait tests; Phase 3A
 did not change browser fixtures, Manga ONE timeouts, production runtime
 behavior, pytest configuration, or test counts.
 
+### Phase 3B test-specific Integration wait optimization (2026-09-28)
+
+Phase 3B shortened only waits that are not themselves the contract under test.
+The changed Integration tests use existing test-side configuration seams:
+
+- Manga ONE viewer-missing failure uses `page_change_timeout_ms=200`.
+- Manga ONE grace-period tests use `page_change_timeout_ms=500` and
+  `end_grace_ms=200`.
+- Local viewer Runner tests use `page_turn_delay_ms=0` because page-turn pacing
+  is not their contract; state transitions, same-content guards, and max-page
+  assertions remain unchanged.
+- The Magapoke terminal-card Runner test uses
+  `page_change_timeout_ms=500` and `page_turn_delay_ms=0`; its 150 ms fixture
+  transition and terminal-card assertions remain unchanged.
+
+Production timeout/grace defaults, polling algorithms, browser fixture scope,
+Chromium launch count, and production code are unchanged. No pytest-only
+environment branch or global test mode was added.
+
+Direct Phase 3B measurements before the change were 129 Integration cases in
+177.83s and 785 full cases in 208.56s with `-p no:warnings`. After the change,
+Integration remained 129 cases and ran in 139.70s; the full warning-suppressed
+run was 790 cases in 181.43s, and standard `pytest -q` was 790 passed in
+168.58s with 2,774 warnings.
+
+The full collection became 790 during this work because a separate, user-owned
+five-case Research addition (`tests/research/test_jumpplus_vertical_probe.py`
+and `poc/jumpplus_vertical_probe.py`) appeared in the working tree. That
+addition and its `note/04_jumpplus.md` update are not part of Phase 3B and were
+not modified or staged. The Phase 3B changes themselves preserve the previous
+785-case taxonomy: Unit 610 / Integration 129 / Research 46.
+
 ## 1. Scope
 
 Coreはサイト固有DOMやページ送りを判断しない。共通処理を担当する。
