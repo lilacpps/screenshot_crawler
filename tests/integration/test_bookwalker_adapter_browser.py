@@ -1,5 +1,5 @@
 import pytest
-from playwright.async_api import Error, Page, async_playwright
+from playwright.async_api import Page
 
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     BookWalkerAdapter,
@@ -10,21 +10,7 @@ PRODUCT_ID = "6de7534d-7022-481d-b2d3-05f03f384454"
 PRODUCT_URL = f"https://bookwalker.jp/de{PRODUCT_ID}/"
 VIEWER_BASE = "https://viewer.bookwalker.jp/03/21/viewer.html"
 
-
-@pytest.fixture
-async def browser_page() -> Page:
-    playwright = await async_playwright().start()
-    try:
-        browser = await playwright.chromium.launch(headless=True)
-    except Error as exc:
-        await playwright.stop()
-        pytest.skip(f"Chromium is unavailable: {exc}")
-    page = await browser.new_page(viewport={"width": 800, "height": 600})
-    try:
-        yield page
-    finally:
-        await browser.close()
-        await playwright.stop()
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 
 def _viewer_html() -> str:
@@ -89,7 +75,6 @@ async def _initialize_strict(
     return adapter
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_quota_clicks_only_maruyomi(browser_page: Page) -> None:
     controls = """
     <a data-action-label="trial_reading" href="https://viewer.bookwalker.jp/trial">試し読み</a>
@@ -98,7 +83,6 @@ async def test_bookwalker_strict_quota_clicks_only_maruyomi(browser_page: Page) 
     assert "entry=quota" in browser_page.url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_direct_clicks_only_owned(browser_page: Page) -> None:
     controls = """
     <a data-action-label="trial_reading" href="https://viewer.bookwalker.jp/trial">試し読み</a>
@@ -107,7 +91,6 @@ async def test_bookwalker_strict_direct_clicks_only_owned(browser_page: Page) ->
     assert "entry=owned" in browser_page.url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_direct_clicks_purchased_owned_control(
     browser_page: Page,
 ) -> None:
@@ -118,7 +101,6 @@ async def test_bookwalker_strict_direct_clicks_purchased_owned_control(
     assert "entry=owned-purchased" in browser_page.url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_direct_allows_owned_without_control_uuid(
     browser_page: Page,
 ) -> None:
@@ -129,7 +111,6 @@ async def test_bookwalker_strict_direct_allows_owned_without_control_uuid(
     assert "entry=owned" in browser_page.url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_direct_rejects_maruyomi_only(
     browser_page: Page,
 ) -> None:
@@ -139,7 +120,6 @@ async def test_bookwalker_strict_direct_rejects_maruyomi_only(
     assert browser_page.url == PRODUCT_URL
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_direct_multiple_owned_controls_fail(
     browser_page: Page,
 ) -> None:
@@ -154,7 +134,6 @@ async def test_bookwalker_strict_direct_multiple_owned_controls_fail(
     assert browser_page.url == PRODUCT_URL
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", ["direct", "quota"])
 async def test_bookwalker_strict_trial_only_fails_before_click(
     browser_page: Page, strategy: str
@@ -165,7 +144,6 @@ async def test_bookwalker_strict_trial_only_fails_before_click(
     assert browser_page.url == PRODUCT_URL
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", ["direct", "quota"])
 async def test_bookwalker_strict_subscription_only_fails(
     browser_page: Page, strategy: str
@@ -178,7 +156,6 @@ async def test_bookwalker_strict_subscription_only_fails(
     assert browser_page.url == PRODUCT_URL
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", ["direct", "quota"])
 async def test_bookwalker_strict_generic_viewer_only_fails(
     browser_page: Page, strategy: str
@@ -189,7 +166,6 @@ async def test_bookwalker_strict_generic_viewer_only_fails(
     assert browser_page.url == PRODUCT_URL
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_wrong_strategy_does_not_fallback(browser_page: Page) -> None:
     controls = _control_html(action="reading", text="読む", entry="owned")
     with pytest.raises(BookWalkerStrictEntryError, match="expected kind='maruyomi'"):
@@ -197,7 +173,6 @@ async def test_bookwalker_strict_wrong_strategy_does_not_fallback(browser_page: 
     assert browser_page.url == PRODUCT_URL
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_multiple_matching_controls_fail(browser_page: Page) -> None:
     controls = (
         _control_html(action="read_maruyomi", text="10分まる読み", entry="quota-a")
@@ -210,7 +185,6 @@ async def test_bookwalker_strict_multiple_matching_controls_fail(browser_page: P
     assert browser_page.url == PRODUCT_URL
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_waits_for_transient_duplicate_to_settle(
     browser_page: Page,
 ) -> None:
@@ -235,7 +209,6 @@ async def test_bookwalker_strict_waits_for_transient_duplicate_to_settle(
     assert "entry=stable" in browser_page.url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_overlapping_scopes_count_same_element_once(
     browser_page: Page,
 ) -> None:
@@ -256,7 +229,6 @@ async def test_bookwalker_strict_overlapping_scopes_count_same_element_once(
     assert "entry=quota" in browser_page.url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_waits_for_delayed_maruyomi(browser_page: Page) -> None:
     controls = _control_html(action="trial_reading", text="試し読み", entry="trial")
     await _goto_product(browser_page, controls)
@@ -277,7 +249,6 @@ async def test_bookwalker_strict_waits_for_delayed_maruyomi(browser_page: Page) 
     assert "entry=quota" in browser_page.url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_uuid_mismatch_is_excluded(browser_page: Page) -> None:
     controls = _control_html(
         action="read_maruyomi",
@@ -290,7 +261,6 @@ async def test_bookwalker_strict_uuid_mismatch_is_excluded(browser_page: Page) -
     assert browser_page.url == PRODUCT_URL
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("strategy", "control"),
     [
@@ -321,7 +291,6 @@ async def test_bookwalker_strict_requires_product_identity_before_candidates(
     assert browser_page.url == invalid_product_url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_uuid_comparison_is_case_insensitive(
     browser_page: Page,
 ) -> None:
@@ -335,14 +304,12 @@ async def test_bookwalker_strict_uuid_comparison_is_case_insensitive(
     assert "entry=owned" in browser_page.url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_auto_trial_fallback_still_navigates(browser_page: Page) -> None:
     controls = _control_html(action="trial_reading", text="試し読み", entry="trial")
     await _initialize_strict(browser_page, "auto", controls, timeout_ms=300)
     assert "entry=trial" in browser_page.url
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_strict_rejects_already_viewer_url(browser_page: Page) -> None:
     async def fulfill_viewer(route) -> None:
         await route.fulfill(content_type="text/html", body=_viewer_html())
@@ -355,7 +322,6 @@ async def test_bookwalker_strict_rejects_already_viewer_url(browser_page: Page) 
         await adapter.initialize(browser_page)
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_keeps_first_page_cover_spread_as_one_target(
     browser_page: Page,
 ) -> None:
@@ -390,7 +356,6 @@ async def test_bookwalker_keeps_first_page_cover_spread_as_one_target(
     ) == {"width": 1600, "height": 1000}
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_crops_first_page_cover_to_draw_geometry(
     browser_page: Page,
 ) -> None:
@@ -424,7 +389,6 @@ async def test_bookwalker_crops_first_page_cover_to_draw_geometry(
     ) == {"width": 600, "height": 1000}
 
 
-@pytest.mark.asyncio
 async def test_bookwalker_crops_cover_from_pixels_when_geometry_is_missing(
     browser_page: Page,
 ) -> None:
@@ -452,4 +416,3 @@ async def test_bookwalker_crops_cover_from_pixels_when_geometry_is_missing(
     assert await targets[0].evaluate(
         "element => ({width: element.width, height: element.height})"
     ) == {"width": 600, "height": 1000}
-

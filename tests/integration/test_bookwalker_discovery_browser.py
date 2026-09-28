@@ -5,7 +5,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
-from playwright.async_api import Error, async_playwright
 
 from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, WorkInput
@@ -24,6 +23,8 @@ from screenshot_crawler.site_adapters.bookwalker.discovery import (
 from screenshot_crawler.site_policies import BookWalkerSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist import WatchlistTarget
 
+pytestmark = pytest.mark.asyncio(loop_scope="module")
+
 
 def _listed_product(
     number: int,
@@ -38,22 +39,6 @@ def _listed_product(
         title=title,
         special=special,
     )
-
-
-@pytest.fixture
-async def browser_page():
-    playwright = await async_playwright().start()
-    try:
-        browser = await playwright.chromium.launch(headless=True)
-    except Error as exc:
-        await playwright.stop()
-        pytest.skip(f"Chromium is unavailable: {exc}")
-    page = await browser.new_page()
-    try:
-        yield page
-    finally:
-        await browser.close()
-        await playwright.stop()
 
 
 def _series_listing_html() -> str:

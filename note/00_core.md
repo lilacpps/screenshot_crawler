@@ -133,6 +133,36 @@ current observed collection is Unit 610 / Integration 129 / Research 62 = 801;
 the Research count was not modified by this Phase. BookWalker rollout remains
 Phase 3C-2 and is pending.
 
+### Phase 3C-2 BookWalker browser lifecycle rollout (2026-09-28)
+
+The three BookWalker browser-backed Integration files now use the shared
+`tests/integration/conftest.py` lifecycle primitives. The fixture scopes remain
+module-scoped Playwright and Browser, with function-scoped fresh
+BrowserContext and Page. No Context or Page is shared. BookWalker-specific
+routes, HTML, Catalog setup, and capture helpers remain local to each test
+file.
+
+Before -> after measurements:
+
+- Adapter: 26 cases, 26 -> 1 Playwright/Chromium lifecycle, 32.30s -> 18.50s.
+- Discovery: 19 cases, 19 -> 1 Playwright/Chromium lifecycle, 27.11s -> 17.55s.
+- Original Capture: 4 cases, 4 -> 1 Playwright/Chromium lifecycle,
+  2.57s -> 0.98s; its three test-local extra Context/Page pairs were retained.
+- Combined target: 49 passed; repeated runs 36.74s and 36.37s.
+- Integration: 121.34s -> 90.79s in the first after run; the final
+  verification run was 109.52s for 129 passed due to unrelated local-viewer /
+  wait-test runtime variance.
+- Full: the current run was 802 passed in 125.01s with 1962 warnings. The
+  current count includes one unrelated Research file that was not modified.
+
+`--setup-show` confirmed three module Playwright fixtures, three module Browser
+fixtures, and 49 function Context/Page fixture invocations. Repeated and full
+runs showed no order dependency, loop ownership error, browser crash, cleanup
+leak, or Chromium skip. The Original Capture extra Page is explicitly closed
+before its Context. Production code, pytest configuration, timeout/grace
+values, assertions, parametrization, and non-BookWalker Integration semantics
+were not changed. Phase 3C-3 remains pending.
+
 ## 1. Scope
 
 Coreはサイト固有DOMやページ送りを判断しない。共通処理を担当する。

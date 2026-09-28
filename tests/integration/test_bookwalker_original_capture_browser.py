@@ -3,11 +3,13 @@ from __future__ import annotations
 import base64
 
 import pytest
-from playwright.async_api import Error, Page, async_playwright
+from playwright.async_api import Page
 
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
 from screenshot_crawler.site_adapters.bookwalker.adapter import BookWalkerAdapter
 from screenshot_crawler.site_adapters.bookwalker.original_capture import image_signature
+
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 
 class _PreparePage:
@@ -26,23 +28,6 @@ class _PreparePage:
         self.route_count += 1
 
 
-@pytest.fixture
-async def browser_page() -> Page:
-    playwright = await async_playwright().start()
-    try:
-        browser = await playwright.chromium.launch(headless=True)
-    except Error as exc:
-        await playwright.stop()
-        pytest.skip(f"Chromium is unavailable: {exc}")
-    page = await browser.new_page()
-    try:
-        yield page
-    finally:
-        await browser.close()
-        await playwright.stop()
-
-
-@pytest.mark.asyncio
 async def test_native_capture_mode_init_script_controls_trace(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,
@@ -73,6 +58,7 @@ async def test_native_capture_mode_init_script_controls_trace(
                 "installed: window.__bookwalkerDrawTraceInstalled })"
             )
         finally:
+            await page.close()
             await context.close()
 
     draw_script = adapter_module._DRAW_TRACE_SCRIPT
@@ -96,7 +82,6 @@ async def test_native_capture_mode_init_script_controls_trace(
     ) == {"mode": "canvas", "enabled": False, "installed": True}
 
 
-@pytest.mark.asyncio
 async def test_html_canvas_snapshot_is_pixel_stable_until_materialize(
     browser_page: Page,
 ) -> None:
@@ -166,7 +151,6 @@ async def test_html_canvas_snapshot_is_pixel_stable_until_materialize(
     assert result["pixel"][:3] == [0, 0, 0]
 
 
-@pytest.mark.asyncio
 async def test_same_image_jpeg_and_png_have_exact_browser_signature(
     browser_page: Page,
 ) -> None:
@@ -194,7 +178,6 @@ async def test_same_image_jpeg_and_png_have_exact_browser_signature(
     )
 
 
-@pytest.mark.asyncio
 async def test_different_images_have_different_browser_signature(
     browser_page: Page,
 ) -> None:

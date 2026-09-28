@@ -1,6 +1,6 @@
 # Browser Fixture Optimization Assessment
 
-Status: DESIGN / NOT YET IMPLEMENTED
+Status: IMPLEMENTED THROUGH PHASE 3C-2; PHASE 3C-3 PENDING
 
 調査日: 2026-09-28
 
@@ -180,10 +180,8 @@ Page share は URL、DOM、page route、listener、init script、JavaScript glob
 Phase 3C の初期設計は、次の境界を採用する。
 
 ```text
-session-scoped:
+module-scoped:
     Playwright
-
-module-scoped (initial rollout):
     Browser
 
 function-scoped:
@@ -335,6 +333,68 @@ modified by this Phase.
 
 Next: evaluate a separate BookWalker rollout (Phase 3C-2); no other
 Integration file was changed in Phase 3C-1.
+
+## Phase 3C-2 Result
+
+Phase 3C-2 is complete for the three BookWalker browser-backed Integration
+files. The lifecycle primitives are now in
+`tests/integration/conftest.py`; they are module-scoped per test module rather
+than session-scoped. Site-specific routes, HTML, Catalog fixtures, and capture
+helpers remain in their original test files.
+
+Current fixture architecture:
+
+- module-scoped `integration_playwright`
+- module-scoped `integration_browser`
+- function-scoped `browser_context`
+- function-scoped `browser_page`
+- module-level `pytest.mark.asyncio(loop_scope="module")` for all three target
+  files; no per-test async marker is needed
+
+Before (direct measurements before the Phase 3C-2 change):
+
+| file | cases | Playwright starts | Chromium launches | runtime |
+|---|---:|---:|---:|---:|
+| BookWalker Adapter | 26 | 26 | 26 | 32.30s |
+| BookWalker Discovery | 19 | 19 | 19 | 27.11s |
+| BookWalker Original Capture | 4 | 4 | 4 | 2.57s |
+
+Original Capture also retained its test-local three extra Context/Page pairs.
+
+After:
+
+| file | cases | Playwright starts | Chromium launches | fixture Context/Page | runtime |
+|---|---:|---:|---:|---:|---:|
+| BookWalker Adapter | 26 | 1 | 1 | 26 / 26 | 18.50s |
+| BookWalker Discovery | 19 | 1 | 1 | 19 / 19 | 17.55s |
+| BookWalker Original Capture | 4 | 1 | 1 | 4 / 4 | 0.98s |
+
+Original Capture still creates and closes the same three test-local extra
+Context/Page pairs. The combined setup measurement reported three module
+Playwright fixtures, three module Browser fixtures, and 49 function Context/Page
+fixture invocations. The combined 49-case run was 37.76s; repeated runs were
+36.74s and 36.37s.
+
+Integration changed from the Phase 3C-1 reference of 129 passed in 121.34s to
+129 passed in 90.79s in the first after run; the final verification run was
+129 passed in 109.52s. The difference is runtime variance in unrelated
+local-viewer/wait tests, while the repeated 49-case BookWalker run remained
+36.40s and 36.33s. The current full suite was 802 passed in 125.01s with
+1962 warnings. The full-suite count is one higher than the Phase 3C-1 note
+because an unrelated Research file was present in the working tree; it was not
+modified by this Phase.
+
+Isolation and cleanup were verified through the repeated runs and
+`--setup-show`: every test receives a fresh Context and Page, routes remain on
+the fresh Page/Context, and no order dependency, loop ownership error, browser
+crash, or Chromium skip was observed. All fixture owners use `finally` cleanup;
+the Original Capture extra Page is explicitly closed before its Context.
+
+The module-scoped Playwright/Browser arrangement is now the recommended
+standard. Session-scoped Playwright/Browser remains an optional future
+optimization only, pending separate loop-ownership and crash-blast-radius
+evidence. Phase 3C-3, including Manga ONE, generic local viewer, Magapoke
+local/discovery, and AccessGuard rollout, remains pending.
 
 ## Verification Status
 
