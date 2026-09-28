@@ -1530,3 +1530,109 @@ packaging behavior.
 Artifacts are under `output/jumpplus_vertical_j175/`:
 `report.json`, `summary.md`, `regions.json`, `association.json`,
 `validation.json`, `reconstructed/`, and per-region `diagnostics/`.
+
+## Vertical J2: production integration
+
+J2 integrates the validated vertical capture path into `JumpPlusAdapter`.
+The adapter now determines viewer mode from positive DOM evidence during
+`initialize()` and stores one of `paged`, `vertical`, or `unknown`.
+
+The signals are:
+
+```text
+vertical: #content.content-vertical
+          .content-inner.scroll-vertical.js-vertical-viewer
+paged:    section.viewer.js-viewer
+          exactly one .page-navigation-forward.js-slide-forward
+          exactly one .page-navigation-backward.js-slide-backward
+```
+
+Both signals or neither signal produce `unknown`; mode is never inferred from
+the episode URL. `unknown` fails closed before capture. This also avoids
+classifying an access/loading/transit state as a viewer mode.
+
+### Paged and vertical flow
+
+The existing paged path continues to use `getActiveRows()`, which requires the
+existing viewport visibility rule and preserves the current rewind/forward,
+spread, terminal, selector, and fallback behavior.
+
+The production canvas hook now also exposes `getVerticalRows()`. It selects
+only `canvas.page-image.js-page-image` elements inside
+`.image-container.js-viewer-content` and a `.page-area.js-page-area`, then
+returns every matching row without a viewport-visibility requirement. Rows are
+ordered by the stable page-area DOM index (`pageIndex`), with canvas index as a
+tie-breaker; current bounding-box `y` and scroll position are not used for
+capture ordering.
+
+Vertical initialization waits for all rows to stabilize, performs no rewind,
+forward, scroll, PageDown, wheel, or keyboard action, and leaves the existing
+source/candidate lifecycle intact. One `capture_page()` call passes all rows
+to the shared `_native_attempt()` path. That path still owns production
+candidate selection, strict mapping validation, lossless JPEG reconstruction,
+and PNG fallback. Used transport responses are retained until that complete
+multi-row native attempt returns. The existing all-native-or-all-screenshot
+fallback unit is preserved; vertical capture does not create mixed provenance.
+
+After vertical capture, `detect_state()` reports `END`; a later `go_next()` is
+also a no-op transition to `END`. It never scrolls. Metadata remains the
+existing Jump+ title/author/order/genre path, and output packaging remains in
+the generic runner.
+
+### Live validation
+
+The read-only adapter probe `poc/jumpplus_vertical_j2.py` was run against one
+fresh load of each representative URL:
+
+```text
+vertical episode: https://shonenjumpplus.com/episode/10834108156642491399
+paged episode:    https://shonenjumpplus.com/episode/13932016480029111789
+```
+
+The vertical result was:
+
+```text
+viewer mode:       vertical
+initial state:     CONTENT
+rows:              24, pageIndex 0..23
+captures:          24/24
+capture MIME:      image/jpeg for all 24
+capture method:    jpeg_dct for all 24
+after capture:     END
+scroll/navigation: none
+```
+
+The paged result was:
+
+```text
+viewer mode:       paged
+initial state:     CONTENT
+active rows:       2 (pageIndex 2 and 3)
+captures:          2/2 JPEG
+after capture:     CONTENT (paged navigation remains available)
+scroll/navigation: none during this validation
+```
+
+The live run confirms `production 24/24` vertical capture for this episode and
+the expected paged classification/capture behavior for the representative
+normal viewer. The J1/J1.5/J1.75 evidence still supports the current judgment
+that scrolling is not required for this observed vertical capture state.
+
+The generic production CLI crawl was also run once for the vertical URL with
+`max_pages=24` and no navigation action. It stopped at `end` after saving 24
+pages; the generated archive contained 24 JPEG entries. Thus the integrated
+adapter path, runner state machine, output naming, and archive handoff all
+worked for the observed episode.
+
+### Tests and remaining scope
+
+Unit/research coverage now includes positive vertical/paged mode signals,
+unknown and contradictory signals, visibility-independent vertical row
+ordering, all-row handoff to the shared native attempt, and the vertical
+CONTENT -> capture -> END transition. Existing Jump+ paged adapter tests pass.
+
+Production integration is now implemented for the observed DOM contract. Other
+vertical episode DOM variants, a second live vertical episode, source/runtime
+variants, and behavior when the site changes its viewer markers remain to be
+validated. No Discovery, Batch, DB, quota, archive, or other site adapter
+changes were made for J2.

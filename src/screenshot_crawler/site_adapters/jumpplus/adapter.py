@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
-from typing import Any
+from typing import Any, Literal
 
 from playwright.async_api import Locator, Page
 
@@ -94,18 +94,31 @@ _CANVAS_HOOK = r"""
     const digest = await crypto.subtle.digest('SHA-256', buffer);
     return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
   };
+  const rowForCanvas = (canvas, index, areas, requireVisible) => {
+    const rect = canvas.getBoundingClientRect();
+    if (requireVisible && !visible(rect)) return null;
+    const pageArea = canvas.closest('.page-area.js-page-area');
+    if (!pageArea || !pageArea.closest('.image-container.js-viewer-content')) return null;
+    const pageIndex = areas.indexOf(pageArea);
+    if (pageIndex < 0) return null;
+    const info=canvasInfo(canvas);
+    const all=state.draws.filter(item => item.canvas.id === info.id);
+    const full=all.filter(item => item.sx===0&&item.sy===0&&item.sw===item.sourceWidth&&item.sh===item.sourceHeight&&item.dx===0&&item.dy===0&&item.dw===item.canvasWidth&&item.dh===item.canvasHeight);
+    const base=full.length?full[full.length-1]:null;
+    const generation=base?all.filter(item=>item.sequence>=base.sequence):all;
+    return {index,canvasId:info.id,pageIndex,x:rect.x,y:rect.y,width:rect.width,height:rect.height,canvasWidth:canvas.width,canvasHeight:canvas.height,
+      source:base?base.source:null,base:base?mapping(base):null,visibleDraw:base?mapping(base):null,mapping:generation.filter(item=>item!==base).map(mapping),mutations:state.mutations.filter(item=>item.canvas.id===info.id&&item.sequence>= (base?base.sequence:0))};
+  };
+  const contentRows = (requireVisible) => {
+    const container = document.querySelector('section.viewer.js-viewer .image-container.js-viewer-content');
+    if (!container) return [];
+    const canvases = [...container.querySelectorAll('canvas.page-image.js-page-image')];
+    const areas = [...container.querySelectorAll('.page-area.js-page-area')];
+    return canvases.map((canvas,index) => rowForCanvas(canvas,index,areas,requireVisible)).filter(Boolean);
+  };
   window.__jumpplusProductionCapture = {
-    getActiveRows: () => {
-      const container = document.querySelector('section.viewer.js-viewer .image-container.js-viewer-content');
-      if (!container) return [];
-      const canvases = [...container.querySelectorAll('canvas.page-image.js-page-image')];
-      const areas = [...container.querySelectorAll('.page-area.js-page-area')];
-      return canvases.map((canvas,index) => { const rect = canvas.getBoundingClientRect(); if (!visible(rect)) return null; const info=canvasInfo(canvas);
-        const all=state.draws.filter(item => item.canvas.id === info.id); const full=all.filter(item => item.sx===0&&item.sy===0&&item.sw===item.sourceWidth&&item.sh===item.sourceHeight&&item.dx===0&&item.dy===0&&item.dw===item.canvasWidth&&item.dh===item.canvasHeight); const base=full.length?full[full.length-1]:null; const generation=base?all.filter(item=>item.sequence>=base.sequence):all; const pageArea=canvas.closest('.page-area.js-page-area');
-        return {index,canvasId:info.id,pageIndex:pageArea?areas.indexOf(pageArea):-1,x:rect.x,y:rect.y,width:rect.width,height:rect.height,canvasWidth:canvas.width,canvasHeight:canvas.height,
-          source:base?base.source:null,base:base?mapping(base):null,visibleDraw:base?mapping(base):null,mapping:generation.filter(item=>item!==base).map(mapping),mutations:state.mutations.filter(item=>item.canvas.id===info.id&&item.sequence>= (base?base.sequence:0))};
-      }).filter(Boolean).sort((a,b)=>b.x-a.x);
-    },
+    getActiveRows: () => contentRows(true).sort((a,b)=>b.x-a.x),
+    getVerticalRows: () => contentRows(false).sort((a,b)=>a.pageIndex-b.pageIndex || a.index-b.index),
     snapshotSources: async (wanted) => { const result=[]; for (const item of wanted || []) { const image=state.images.get(Number(item.sourceId)); if (!image) continue; const current=image.currentSrc||image.src||''; if (current !== item.sourceUrl) { result.push({sourceId:Number(item.sourceId),sourceUrl:current,drawUrl:item.sourceUrl,changed:true}); continue; }
         try { const canvas=document.createElement('canvas'); canvas.width=image.naturalWidth||image.width; canvas.height=image.naturalHeight||image.height; const ctx=canvas.getContext('2d'); ctx.drawImage(image,0,0); let rawSha256=null; try { const response=await fetch(current); if (response.ok) rawSha256=await sha256(await response.arrayBuffer()); } catch (_) {} result.push({sourceId:Number(item.sourceId),sourceUrl:current,rawSha256,dataUrl:canvas.toDataURL('image/png')}); } catch (error) { result.push({sourceId:Number(item.sourceId),sourceUrl:current,error:String(error)}); }
       } return result; },
@@ -115,6 +128,21 @@ _CANVAS_HOOK = r"""
 """
 
 _FORBIDDEN = re.compile(r"(?:購入|ポイント|レンタル|次の話|次話|next\s+episode|/episode/)", re.IGNORECASE)
+
+
+ViewerMode = Literal["paged", "vertical", "unknown"]
+
+
+def classify_viewer_mode(*, vertical_positive: bool, paged_positive: bool) -> ViewerMode:
+    """Classify only from positive DOM evidence, failing closed on contradictions."""
+
+    if vertical_positive and paged_positive:
+        return "unknown"
+    if vertical_positive:
+        return "vertical"
+    if paged_positive:
+        return "paged"
+    return "unknown"
 
 
 class JumpPlusAdapter(SiteAdapter):
@@ -132,10 +160,12 @@ class JumpPlusAdapter(SiteAdapter):
 
     def __init__(self) -> None:
         self._access_strategy: AccessStrategy = "auto"
+        self._viewer_mode: ViewerMode = "unknown"
         self._initial_url: str | None = None
         self._initial_parts = None
         self._advance_pending = False
         self._terminal_reached = False
+        self._vertical_capture_completed = False
         self._content_page_count: int | None = None
         self._first_content_page_index: int | None = None
         self._captured_content_page_count = 0
@@ -197,6 +227,39 @@ class JumpPlusAdapter(SiteAdapter):
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    async def _detect_viewer_mode(self, page: Page) -> ViewerMode:
+        try:
+            markers = await asyncio.wait_for(
+                page.evaluate(
+                    """() => {
+                        const vertical = Boolean(
+                            document.querySelector('#content.content-vertical') &&
+                            document.querySelector('.content-inner.scroll-vertical.js-vertical-viewer')
+                        );
+                        const viewer = document.querySelector('section.viewer.js-viewer');
+                        const forward = document.querySelectorAll(
+                            '.page-navigation-forward.js-slide-forward'
+                        );
+                        const backward = document.querySelectorAll(
+                            '.page-navigation-backward.js-slide-backward'
+                        );
+                        return {
+                            vertical,
+                            paged: Boolean(viewer && forward.length === 1 && backward.length === 1),
+                        };
+                    }"""
+                ),
+                timeout=2,
+            )
+        except Exception:  # noqa: BLE001 - mode is unknown during a render race
+            return "unknown"
+        if not isinstance(markers, dict):
+            return "unknown"
+        return classify_viewer_mode(
+            vertical_positive=markers.get("vertical") is True,
+            paged_positive=markers.get("paged") is True,
+        )
+
     async def _rows(self, page: Page) -> list[dict[str, object]]:
         try:
             rows = await asyncio.wait_for(page.evaluate("() => window.__jumpplusProductionCapture ? window.__jumpplusProductionCapture.getActiveRows() : []"), timeout=2)
@@ -216,12 +279,47 @@ class JumpPlusAdapter(SiteAdapter):
             self._last_active_max_page_index = max(page_indices)
         return result
 
+    @staticmethod
+    def _order_vertical_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                int(row.get("pageIndex", -1)),
+                int(row.get("index", -1)),
+            ),
+        )
+
+    async def _vertical_rows(self, page: Page) -> list[dict[str, object]]:
+        try:
+            rows = await asyncio.wait_for(
+                page.evaluate(
+                    "() => window.__jumpplusProductionCapture ? "
+                    "window.__jumpplusProductionCapture.getVerticalRows() : []"
+                ),
+                timeout=2,
+            )
+        except Exception:  # noqa: BLE001 - transient render state
+            return []
+        result = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        result = self._order_vertical_rows(result)
+        page_indices = [int(row.get("pageIndex", -1)) for row in result]
+        if page_indices:
+            self._last_active_max_page_index = max(page_indices)
+        return result
+
+    async def _capture_rows(self, page: Page) -> list[dict[str, object]]:
+        if self._viewer_mode == "vertical":
+            return await self._vertical_rows(page)
+        return await self._rows(page)
+
     def _content_end_index(self) -> int | None:
         if self._first_content_page_index is None or self._content_page_count is None:
             return None
         return self._first_content_page_index + self._content_page_count - 1
 
     def _all_main_content_captured(self) -> bool:
+        if self._viewer_mode == "vertical":
+            return self._vertical_capture_completed
         content_end_index = self._content_end_index()
         return (
             self._content_page_count is not None
@@ -266,7 +364,7 @@ class JumpPlusAdapter(SiteAdapter):
         stable = 0
         elapsed = 0
         while elapsed < self.page_change_timeout_ms:
-            rows = await self._rows(page)
+            rows = await self._capture_rows(page)
             signature = self._signature(rows)
             if rows and signature == previous:
                 stable += 1
@@ -583,12 +681,25 @@ class JumpPlusAdapter(SiteAdapter):
         self._initial_parts = parse_jumpplus_url(page.url)
         if self._initial_parts is None:
             raise ValueError("Jump+ page URL is not an episode URL")
+        self._viewer_mode = await self._detect_viewer_mode(page)
+        if self._viewer_mode == "unknown":
+            raise PageChangeTimeoutError("Jump+ viewer mode was not determinable")
         self._advance_pending = False
         self._terminal_reached = False
+        self._vertical_capture_completed = False
         self._captured_content_page_count = 0
         self._first_content_page_index = None
         self._last_active_max_page_index = None
         await self._read_content_page_count(page)
+        if self._viewer_mode == "vertical":
+            rows = await self._wait_for_render_ready(page)
+            if not rows:
+                raise PageChangeTimeoutError("Jump+ vertical content was not found")
+            self._first_content_page_index = self._page_index(rows)
+            if self._first_content_page_index is None:
+                raise PageChangeTimeoutError("Jump+ vertical page index was not observable")
+            await self._read_output_metadata(page)
+            return
         initial_state, _initial_rows = await self._wait_for_initial_viewer_state(page)
         if initial_state == "content":
             if not await self._rewind_to_first(page):
@@ -652,7 +763,9 @@ class JumpPlusAdapter(SiteAdapter):
             return PageState.NEXT_CONTENT
         if self._terminal_reached:
             return PageState.END
-        rows = await self._rows(page)
+        if self._viewer_mode == "vertical" and self._vertical_capture_completed:
+            return PageState.END
+        rows = await self._capture_rows(page)
         if rows:
             return PageState.CONTENT
         if self._all_main_content_captured():
@@ -667,9 +780,9 @@ class JumpPlusAdapter(SiteAdapter):
         return targets[0]
 
     async def get_capture_targets(self, page: Page) -> tuple[Locator, ...]:
-        rows = await self._rows(page)
+        rows = await self._capture_rows(page)
         if not rows:
-            raise LookupError("Jump+ active canvas is not visible")
+            raise LookupError("Jump+ capture canvas is not available")
         locator = page.locator(self.canvas_selector)
         return tuple(locator.nth(int(row["index"])) for row in rows)
 
@@ -783,7 +896,7 @@ class JumpPlusAdapter(SiteAdapter):
         used_source_urls: set[str] = set()
         try:
             for attempt in range(self.capture_retry_count + 1):
-                rows = await self._rows(page)
+                rows = await self._capture_rows(page)
                 page_indices = [int(row.get("pageIndex", -1)) for row in rows]
                 if page_indices:
                     self._last_active_max_page_index = max(page_indices)
@@ -799,6 +912,8 @@ class JumpPlusAdapter(SiteAdapter):
                     if captures is not None:
                         self._captured_content_page_count += len(rows)
                         self._capture_debug = {"capture_method": "jpeg_dct" if all(c.mime_type == "image/jpeg" for c in captures) else "png_reconstruction", "candidate_selection": selections, "canvas_count": len(rows), "source_count": len({(row.get("source") or {}).get("sourceId") for row in rows if isinstance(row.get("source"), dict)}), "fallback_reason": None}
+                        if self._viewer_mode == "vertical":
+                            self._vertical_capture_completed = True
                         return captures
                     last_reason = reason or last_reason
                 if attempt < self.capture_retry_count and last_reason in {"no_active_canvas", "draw_mapping_unavailable", "source_snapshot_unavailable_or_changed", "unmatched_transport_candidate"}:
@@ -814,10 +929,12 @@ class JumpPlusAdapter(SiteAdapter):
         self._capture_debug = {"capture_method": "screenshot", "candidate_selection": selections or ["unmatched"], "canvas_count": len(fallback_targets), "source_count": len(fallback_targets), "fallback_reason": last_reason}
         # A spread is intentionally all-fallback; native/screenshot provenance is never mixed.
         self._captured_content_page_count += len(fallback_targets)
+        if self._viewer_mode == "vertical":
+            self._vertical_capture_completed = True
         return tuple([await capture_locator(target) for target in fallback_targets])
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:
-        rows = await self._rows(page)
+        rows = await self._capture_rows(page)
         page_indices = [int(row.get("pageIndex", -1)) for row in rows]
         if page_indices:
             self._last_active_max_page_index = max(page_indices)
@@ -836,6 +953,10 @@ class JumpPlusAdapter(SiteAdapter):
         return ContentContext(content_id=parts.episode_id if parts else None, episode_id=parts.episode_id if parts else None, title=title)
 
     async def go_next(self, page: Page) -> None:
+        if self._viewer_mode == "vertical":
+            self._terminal_reached = True
+            self._advance_pending = False
+            return
         if self._all_main_content_captured():
             self._terminal_reached = True
             self._advance_pending = False
@@ -843,7 +964,7 @@ class JumpPlusAdapter(SiteAdapter):
         await self._click_forward(page)
 
     async def wait_for_change(self, page: Page, previous_identity: ContentIdentity | None) -> None:
-        if self._terminal_reached:
+        if self._terminal_reached or self._viewer_mode == "vertical":
             return
         if previous_identity is None:
             await self._wait_for_render_ready(page)
@@ -858,7 +979,7 @@ class JumpPlusAdapter(SiteAdapter):
             if self._initial_parts is not None and current_parts is not None and current_parts != self._initial_parts:
                 return
             current = await self.get_content_identity(page)
-            current_rows = await self._rows(page)
+            current_rows = await self._capture_rows(page)
             if (
                 self._advance_pending
                 and self._all_main_content_captured()

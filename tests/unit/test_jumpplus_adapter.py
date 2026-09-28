@@ -11,9 +11,14 @@ from screenshot_crawler import cli
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import PageChangeTimeoutError, UnsupportedAccessStrategyError
 from screenshot_crawler.core.models import ContentIdentity
+from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.jumpplus import adapter as jumpplus_adapter_module
 from screenshot_crawler.site_adapters.jumpplus.access import is_jumpplus_relevant_host
-from screenshot_crawler.site_adapters.jumpplus.adapter import _CANVAS_HOOK, JumpPlusAdapter
+from screenshot_crawler.site_adapters.jumpplus.adapter import (
+    _CANVAS_HOOK,
+    JumpPlusAdapter,
+    classify_viewer_mode,
+)
 from screenshot_crawler.site_adapters.jumpplus.native_capture import (
     dct_lossless_feasibility,
     is_jumpplus_jpeg_response,
@@ -238,7 +243,16 @@ def test_jumpplus_registry_entry_has_policy_without_resources() -> None:
 
 
 def test_jumpplus_renderer_hook_is_lightweight_and_tracks_mutations() -> None:
-    for marker in ("sourceId", "drawImage", "snapshotSources", "clearRect", "fillRect", "putImageData", "strokeText"):
+    for marker in (
+        "sourceId",
+        "drawImage",
+        "snapshotSources",
+        "getVerticalRows",
+        "clearRect",
+        "fillRect",
+        "putImageData",
+        "strokeText",
+    ):
         assert marker in _CANVAS_HOOK
     assert JumpPlusAdapter._native_candidate_status("unique")
     assert JumpPlusAdapter._native_candidate_status("equivalent_multiple")
@@ -257,6 +271,112 @@ class _FakePage:
 
     async def wait_for_timeout(self, _milliseconds: int) -> None:
         return None
+
+
+class _ModePage:
+    url = "https://shonenjumpplus.com/episode/123"
+
+    def __init__(self, markers: dict[str, bool]) -> None:
+        self.markers = markers
+
+    async def evaluate(self, _script):
+        return self.markers
+
+
+def test_viewer_mode_requires_positive_evidence_and_fails_closed_on_conflict() -> None:
+    assert classify_viewer_mode(vertical_positive=True, paged_positive=False) == "vertical"
+    assert classify_viewer_mode(vertical_positive=False, paged_positive=True) == "paged"
+    assert classify_viewer_mode(vertical_positive=False, paged_positive=False) == "unknown"
+    assert classify_viewer_mode(vertical_positive=True, paged_positive=True) == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("markers", "expected"),
+    [
+        ({"vertical": True, "paged": False}, "vertical"),
+        ({"vertical": False, "paged": True}, "paged"),
+        ({"vertical": False, "paged": False}, "unknown"),
+        ({"vertical": True, "paged": True}, "unknown"),
+    ],
+)
+async def test_detect_viewer_mode_uses_dom_markers(monkeypatch, markers, expected) -> None:
+    adapter = JumpPlusAdapter()
+    assert await adapter._detect_viewer_mode(_ModePage(markers)) == expected  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_vertical_rows_ignore_visibility_and_keep_page_order() -> None:
+    adapter = JumpPlusAdapter()
+
+    class _RowsPage:
+        async def evaluate(self, script):
+            assert "getVerticalRows" in script
+            return [
+                {"index": 2, "pageIndex": 2},
+                {"index": 0, "pageIndex": 0},
+                {"index": 1, "pageIndex": 1},
+            ]
+
+    rows = await adapter._vertical_rows(_RowsPage())  # type: ignore[arg-type]
+    assert [row["pageIndex"] for row in rows] == [0, 1, 2]
+    assert [row["index"] for row in rows] == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_vertical_capture_passes_all_rows_to_shared_native_attempt(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    adapter._viewer_mode = "vertical"
+    page = _FakePage()
+    rows = [
+        {"index": 0, "pageIndex": 0, "source": {"sourceId": 1}},
+        {"index": 1, "pageIndex": 1, "source": {"sourceId": 2}},
+        {"index": 2, "pageIndex": 2, "source": {"sourceId": 3}},
+    ]
+    native_rows = []
+
+    async def capture_rows(_page):
+        return rows
+
+    async def candidates():
+        return []
+
+    async def native(_page, received_rows, _candidates):
+        native_rows.extend(received_rows)
+        return (
+            tuple(CaptureResult(b"jpeg", 1, 1, "image/jpeg", ".jpg") for _ in received_rows),
+            None,
+            ["unique"] * len(received_rows),
+            set(),
+        )
+
+    monkeypatch.setattr(adapter, "_capture_rows", capture_rows)
+    monkeypatch.setattr(adapter, "_source_candidates", candidates)
+    monkeypatch.setattr(adapter, "_native_attempt", native)
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None and len(result) == 3
+    assert native_rows == rows
+    assert adapter._vertical_capture_completed
+
+
+@pytest.mark.asyncio
+async def test_vertical_state_becomes_end_after_capture_without_navigation(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    adapter._viewer_mode = "vertical"
+    adapter._initial_parts = parse_jumpplus_url("https://shonenjumpplus.com/episode/123")
+    page = _FakePage()
+
+    async def rows(_page):
+        return [{"index": 0, "pageIndex": 0}]
+
+    monkeypatch.setattr(adapter, "_capture_rows", rows)
+    assert await adapter.detect_state(page) == PageState.CONTENT
+    adapter._vertical_capture_completed = True
+    assert await adapter.detect_state(page) == PageState.END
+    await adapter.go_next(page)  # type: ignore[arg-type]
+    assert adapter._terminal_reached
 
 
 async def _completed_task(value: object = None) -> object:
@@ -342,6 +462,7 @@ def _patch_initialize_dependencies(monkeypatch, adapter: JumpPlusAdapter, rows):
     monkeypatch.setattr(adapter, "_read_content_page_count", page_count)
     monkeypatch.setattr(adapter, "_read_output_metadata", metadata)
     monkeypatch.setattr(adapter, "_wait_for_render_ready", ready)
+    monkeypatch.setattr(adapter, "_detect_viewer_mode", lambda _page: _completed_task("paged"))
 
 
 @pytest.mark.asyncio
@@ -558,6 +679,7 @@ async def test_initialize_front_link_mount_does_not_startup_forward(monkeypatch)
 
     monkeypatch.setattr(adapter, "_read_content_page_count", page_count)
     monkeypatch.setattr(adapter, "_read_output_metadata", metadata)
+    monkeypatch.setattr(adapter, "_detect_viewer_mode", lambda _page: _completed_task("paged"))
     monkeypatch.setattr(adapter, "_rows", current_rows)
     monkeypatch.setattr(adapter, "_initial_viewer_state", initial_state)
     monkeypatch.setattr(adapter, "_wait_for_render_ready", ready)
@@ -585,6 +707,7 @@ async def test_initialize_unknown_state_fails_closed_without_forward(monkeypatch
         calls.append("forward")
 
     monkeypatch.setattr(adapter, "_read_content_page_count", page_count)
+    monkeypatch.setattr(adapter, "_detect_viewer_mode", lambda _page: _completed_task("paged"))
     monkeypatch.setattr(adapter, "_wait_for_initial_viewer_state", initial_state)
     monkeypatch.setattr(adapter, "go_next", forward)
 
