@@ -1101,3 +1101,13 @@ Phase 3では、Site Policyがgeneric access resourceのsupported/order contract
 Plannerがexplicit `quota_resource`を検証する。Batchはnormal/default pass後にPolicy順でreplanし、
 requested resource以外へのsilent fallbackをしない。Phase 4/5では同じcontractをgrant-onlyにも使い、
 Work Ticket cooldown、Premium live balance、Policy順`all`を実装している。
+
+### Planned: Site-native bounded Discovery（NOT YET IMPLEMENTED）
+
+正式仕様は `docs/BOUNDED_DISCOVERY.md`。Watchlist targetへoptionalな `discovery_scope.from_url / through_url` を持たせ、各Discovery Adapterがsite-native external identityとcanonical listing orderだけでinclusive rangeを確定する。
+
+title、order、episode number、漢数字変換、cross-site fuzzy matchはscope判定に使わない。bounded scope内のrecordは通常のItem / Sourceとして同期し、cross-site Itemのautomatic mergeやcompleted伝播は行わない。重複crawlは安全側の挙動として許容する。
+
+Catalog schema、Batch Planner / Executor、CrawlerRunnerは変更しない。bounded fullではscope外Sourceを誤ってunavailableにしないためglobal missing-source reconciliationを実行しない。invalid / missing / reversed boundaryはfail closedとし、boundary成立確認前にscope recordをCatalogへyield/writeしない。
+
+将来cross-site dedupeが必要になった場合はphysical Item mergeより先にhuman approval付きnon-destructive equivalence mappingを検討する。physical mergeは現計画の対象外である。

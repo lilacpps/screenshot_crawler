@@ -1,5 +1,7 @@
 # Discovery / Catalog / Batch Design
 
+> Site-native bounded Discoveryの詳細な採用仕様は `docs/BOUNDED_DISCOVERY.md` とし、本書のDiscovery仕様の一部として扱う。
+
 ## Phase 4A status
 
 The Manga ONE Discovery adapter and minimal `discover` CLI are implemented.
