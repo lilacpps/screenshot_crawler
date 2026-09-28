@@ -17,7 +17,7 @@ read-only Batch planning and Manga ONE Policy. Phase
 
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
-最終同期: 2026-09-27
+最終同期: 2026-09-28
 
 
 ### Test execution policy（2026-09-27）
@@ -36,13 +36,23 @@ read-only Batch planning and Manga ONE Policy. Phase
 - productionの実時間delay / timeoutそのものが検証対象でなければ、testではfake / injection /短いtest-specific timeoutを使う
 - 最終報告では実行testsに加え、Integration / Research / Live / full suiteを未実行なら理由を書く
 
-Phase 2B-1/2B-2では、Research / Probe 4 filesを`tests/research/`へ移動し、browser部分が
-少ないmixed 3 filesをUnit / Integrationへ分割した。移動・分割後は785 cases
-（Unit 711 / Integration 28 / Research 46）をcollectionし、targeted / category / full
-pytestをpassした。
+Phase 2Bでは、Research / Probe 4 filesを`tests/research/`へ移動し、mixed 8 filesを
+Unit / Integrationへ分割した。Phase 2B-3完了後の実測collectionは785 cases
+（Unit 610 / Integration 129 / Research 46）で、targeted / category / full pytestを
+passした。`tests/unit/`には実Chromium起動testを残しておらず、browser / DOM boundaryは
+`tests/integration/`、`poc/` / probe実装の検証は`tests/research/`に配置している。
 
-残りのbrowser-heavy mixed 5 filesはPhase 2B-3で扱う。今回、高速化、fixture scope変更、
-test semantics変更、pytest設定変更、production code変更は行っていない。
+`pytest -q tests/unit tests/integration`はproduction regression、`pytest -q tests/research`
+はResearch / Probe regression、`pytest -q`はResearchを含むrepository-wide regression
+である。Phase 2B-3のruntime baseline（`-p no:warnings`）は Unit 52.48s、Integration
+169.99s、Research 0.46s、full 223.66s（通常の`pytest -q`はwarning込み250.67s）だった。
+BookWalker AdapterはPhase 2A計画の18 Unit / 25 Integrationに対し、現行testを実際の
+browser依存で分類すると17 Unit / 26 Integrationとなる。この1 case差分はtest semanticsを
+変えずに解消できないため、classification planのOpen Questionとして残している。
+
+今回は高速化、fixture scope変更、test semantics変更、pytest設定変更、production code
+変更を行っていない。browser起動回数、実時間wait、timeout / pacingの最適化はPhase 3
+以降の課題である。
 
 ## 1. Scope
 

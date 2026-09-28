@@ -1,10 +1,9 @@
 import asyncio
 
 import pytest
-from playwright.async_api import Error, Page, async_playwright
+from playwright.async_api import Page
 
 from screenshot_crawler.core.errors import (
-    PageChangeTimeoutError,
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import ContentIdentity
@@ -18,22 +17,6 @@ from screenshot_crawler.site_adapters.mangaone.adapter import (
 from screenshot_crawler.site_adapters.mangaone.native_capture import (
     capture_source_bytes,
 )
-
-
-@pytest.fixture
-async def browser_page() -> Page:
-    playwright = await async_playwright().start()
-    try:
-        browser = await playwright.chromium.launch(headless=True)
-    except Error as exc:
-        await playwright.stop()
-        pytest.skip(f"Chromium is unavailable: {exc}")
-    page = await browser.new_page(viewport={"width": 800, "height": 600})
-    try:
-        yield page
-    finally:
-        await browser.close()
-        await playwright.stop()
 
 
 def test_mangaone_chapter_parts_from_url() -> None:
@@ -390,165 +373,3 @@ async def test_mangaone_configure_run_accepts_all_mangaone_strategies() -> None:
 async def test_mangaone_configure_run_rejects_unknown_strategy() -> None:
     with pytest.raises(UnsupportedAccessStrategyError, match="access_strategy='invalid'"):
         await MangaOneAdapter().configure_run(object(), "invalid")  # type: ignore[arg-type]
-
-
-async def test_mangaone_quota_entry_clicks_observed_button_once(
-    browser_page: Page,
-) -> None:
-    await browser_page.set_content(
-        """
-        <button id="unrelated">\u306f\u3044</button>
-        <button id="quota-entry">
-          <span>\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</span>
-          <span>\u95b2\u89a7\u671f\u9650 \u3042\u3068\u0032\u0034\u6642\u9593</span>
-        </button>
-        <div class="viewer-container" hidden>
-          <img alt="page_0" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3C/svg%3E">
-        </div>
-        <script>
-          window.entryClicks = 0;
-          window.unrelatedClicks = 0;
-          document.querySelector('#unrelated').onclick = () => window.unrelatedClicks++;
-          document.querySelector('#quota-entry').onclick = () => {
-            window.entryClicks++;
-            document.querySelector('.viewer-container').hidden = false;
-          };
-        </script>
-        """
-    )
-    adapter = MangaOneAdapter()
-    await adapter.configure_run(browser_page, "quota")
-    await adapter.initialize(browser_page)
-
-    assert await browser_page.evaluate("window.entryClicks") == 1
-    assert await browser_page.evaluate("window.unrelatedClicks") == 0
-    assert await browser_page.locator('.viewer-container img[alt^="page_"]').count() == 1
-
-    with pytest.raises(PageChangeTimeoutError, match="already attempted"):
-        await adapter.initialize(browser_page)
-    assert await browser_page.evaluate("window.entryClicks") == 1
-
-
-async def test_mangaone_quota_entry_waits_for_async_button(
-    browser_page: Page,
-) -> None:
-    await browser_page.set_content(
-        """
-        <div id="quota-entry-host"></div>
-        <div class="viewer-container" hidden>
-          <img alt="page_0" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3C/svg%3E">
-        </div>
-        <script>
-          window.entryClicks = 0;
-          setTimeout(() => {
-            const entry = document.createElement('button');
-            entry.innerHTML = '<span>\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</span> <span>\u95b2\u89a7\u671f\u9650 \u3042\u306824\u6642\u9593</span>';
-            entry.onclick = () => {
-              window.entryClicks++;
-              document.querySelector('.viewer-container').hidden = false;
-            };
-            document.querySelector('#quota-entry-host').append(entry);
-          }, 650);
-        </script>
-        """
-    )
-    adapter = MangaOneAdapter()
-    await adapter.configure_run(browser_page, "quota")
-    await adapter.initialize(browser_page)
-
-    assert await browser_page.evaluate("window.entryClicks") == 1
-    assert await browser_page.locator('.viewer-container img[alt^="page_"]').count() == 1
-
-
-async def test_mangaone_auto_skips_quota_entry(
-    browser_page: Page,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    await browser_page.set_content(
-        """
-        <button id="quota-entry">\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</button>
-        <script>window.entryClicks = 0; document.querySelector('#quota-entry').onclick = () => window.entryClicks++;</script>
-        """
-    )
-    adapter = MangaOneAdapter()
-
-    async def fail_if_called(_page: Page) -> None:
-        raise AssertionError("auto must not enter the quota reader")
-
-    async def no_wait(_page: Page) -> None:
-        return None
-
-    monkeypatch.setattr(adapter, "_enter_quota_reader", fail_if_called)
-    monkeypatch.setattr(adapter, "_wait_for_render_ready", no_wait)
-    monkeypatch.setattr(adapter, "_enter_fullscreen_reader", no_wait)
-    await adapter.configure_run(browser_page, "auto")
-    await adapter.initialize(browser_page)
-
-    assert await browser_page.evaluate("window.entryClicks") == 0
-
-
-async def test_mangaone_direct_skips_quota_entry(
-    browser_page: Page,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    await browser_page.set_content(
-        """
-        <button id="quota-entry">\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</button>
-        <div class="viewer-container">
-          <img alt="page_0" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3C/svg%3E">
-        </div>
-        <script>window.entryClicks = 0; document.querySelector('#quota-entry').onclick = () => window.entryClicks++;</script>
-        """
-    )
-    adapter = MangaOneAdapter()
-
-    async def fail_if_called(_page: Page) -> None:
-        raise AssertionError("direct must not enter the quota reader")
-
-    monkeypatch.setattr(adapter, "_enter_quota_reader", fail_if_called)
-    await adapter.configure_run(browser_page, "direct")
-    await adapter.initialize(browser_page)
-
-    assert await browser_page.evaluate("window.entryClicks") == 0
-
-
-async def test_mangaone_quota_entry_fails_closed_without_button(
-    browser_page: Page,
-) -> None:
-    await browser_page.set_content("<div class='viewer-container' hidden></div>")
-    adapter = MangaOneAdapter()
-    adapter.quota_entry_wait_timeout_ms = 200
-    await adapter.configure_run(browser_page, "quota")
-
-    with pytest.raises(PageChangeTimeoutError, match="not observed safely"):
-        await adapter.initialize(browser_page)
-
-
-async def test_mangaone_quota_entry_fails_closed_with_multiple_buttons(
-    browser_page: Page,
-) -> None:
-    await browser_page.set_content(
-        """
-        <button>\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</button>
-        <button>\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</button>
-        """
-    )
-    adapter = MangaOneAdapter()
-    adapter.quota_entry_wait_timeout_ms = 200
-    await adapter.configure_run(browser_page, "quota")
-
-    with pytest.raises(PageChangeTimeoutError, match="not observed safely"):
-        await adapter.initialize(browser_page)
-
-
-async def test_mangaone_quota_entry_fails_if_viewer_does_not_appear(
-    browser_page: Page,
-) -> None:
-    await browser_page.set_content(
-        "<button>\u7121\u6599\u30e9\u30a4\u30d5\u3067\u8aad\u3080</button>"
-    )
-    adapter = MangaOneAdapter()
-    await adapter.configure_run(browser_page, "quota")
-
-    with pytest.raises(PageChangeTimeoutError, match="did not reveal the viewer"):
-        await adapter.initialize(browser_page)

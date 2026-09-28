@@ -1,22 +1,21 @@
 # Test Suite Classification Plan
 
-調査日: 2026-09-27
-対象: `screenshot_crawler` の Phase 2A 分類設計
+調査日: 2026-09-28
+対象: `screenshot_crawler` の Phase 2A 分類設計と Phase 2B 実施結果
 位置づけ: **設計・移行計画資料。テスト方針の authority ではない。**
 authority: [`docs/TEST_STRATEGY.md`](../docs/TEST_STRATEGY.md)
 
-この資料は、現行の pytest test file を `Unit` / `Integration` / `Research / Probe` に
-分類するための設計案である。今回のPhaseでは、test fileの移動・削除・統合・parameterize・
-fixture scope変更・marker追加・pytest設定変更・scripts変更・production code変更を行って
-いない。
+この資料は、pytest test fileを`Unit` / `Integration` / `Research / Probe`に分類した
+Phase 2Aの設計と、Phase 2Bで実施した物理配置整理の結果を記録する。これは現時点の
+調査・実装ノートであり、テスト方針のauthorityではない。
 
 ## 1. Executive Summary
 
-### 現在の収集結果
+### Phase 2A baseline（履歴）
 
-- 現行 `main` (`37da4e9`) で **785 cases** を collection した。
-- 現在の内訳は `tests/unit/` が **43 files / 763 cases**、
-  `tests/integration/` が **2 files / 22 cases**。その他のpytest test directoryはない。
+- Phase 2A時点のmainで**785 cases**をcollectionした。
+- 当時の内訳は`tests/unit/`が**43 files / 763 cases**、
+  `tests/integration/`が**2 files / 22 cases**。Research directoryはまだなかった。
 - 実測コマンドは、workspace rootをimport pathに明示した次のcollectionである。
 
   ```powershell
@@ -25,10 +24,9 @@ fixture scope変更・marker追加・pytest設定変更・scripts変更・produc
   ```
 
 - `note/test_suite_audit.md` のフルpytest時間（約4分）は777/782-case時点の測定
-  snapshotであり、今回の785 casesに対するフルpytest時間としては再利用しない。
-  今回は分類設計Phaseのため、フルpytestの再実行はしていない。
+  snapshotであり、現在のruntime baselineには使用しない。
 
-### 推奨分類の集計
+### Phase 2A proposed classification（履歴）
 
 | proposed category | cases | file shape | 根拠 |
 |---|---:|---:|---|
@@ -37,18 +35,29 @@ fixture scope変更・marker追加・pytest設定変更・scripts変更・produc
 | Research / Probe | **46** | `poc/`直接依存の4 files | production contractではなくprobe / reconstruction / observation手段の検証 |
 | **合計** | **785** | 既存45 filesを、移動4 + 分割8を経て53 files相当 | parametrize展開後 |
 
-特に優先すべき整理対象は、`tests/unit/` に残っている **8 mixed files / 106 browser
-cases** と、同じくunit配下の **4 Research/Probe files / 46 cases** である。現行の
-directory名だけでは、`pytest tests/unit` を高速なpure Unit suiteとして扱えない。
+Phase 2Aでは、`tests/unit/`に残っている**8 mixed files / 106 browser cases**と、
+同じくunit配下の**4 Research/Probe files / 46 cases**を整理対象とした。これは当時の
+分類案であり、BookWalker Adapterのbrowser case数はPhase 2B実測で1 case増えた。
 
-### Phase 2B progress (2026-09-27)
+### Phase 2B progress (2026-09-28)
 
 - **2B-1 completed**: Research / Probe 4 filesを`tests/research/`へ移動。
 - **2B-2 completed**: `test_access_guard.py`、`test_mangaone_discovery.py`、
   `test_bookwalker_original_capture.py`をUnit / Integrationへ分割。
-- **2B-3 pending**: browser-heavy mixed 5 filesは未整理。
-- 移動・分割後のcollectionは Unit 711 / Integration 28 / Research 46 / Total 785。
+- **2B-3 completed**: browser-heavy mixed 5 filesをUnit / Integrationへ分割。
+- 現在のcollectionは Unit 610 / Integration 129 / Research 46 / Total 785。
+- `tests/unit/`は実Chromiumを起動せず、`tests/integration/`にreal Page / DOM boundary、
+  `tests/research/`にpoc / probe testsを配置している。
+- `pytest -q tests/unit tests/integration`はproduction regression、
+  `pytest -q tests/research`はResearch / Probe regression、`pytest -q`はResearchを含む
+  repository-wide regressionとして実行できる。
 - 今回はfixture scope変更、browser起動回数削減、timeout短縮等の高速化を行っていない。
+
+Phase 2B-3の計画値ではBookWalker Adapterを18 Unit / 25 Integrationとしていたが、
+現行sourceをcollection case単位で実測すると17 Unit / 26 Integrationだった。他の4 filesは
+計画値どおりであり、全体はtest追加・削除なしの785 casesを維持している。browser依存caseを
+Unitへ残さず、parametrizeやassertionも変更しない条件ではこの差分を勝手に補正せず、Open
+Questionとして記録する。
 
 ## 2. Current Test Inventory
 
@@ -60,14 +69,14 @@ static scanでその依存を主対象として確認していないことを表
 `real Page` は実Chromiumを起動してPage/Locator/DOMを操作するもの、`fake Page` は
 browser-shaped fakeを使うもの、`—` は該当なしである。
 
-### 2.1 Existing integration files
+### 2.1 Existing integration files（Phase 2A baseline）
 
 | path | cases | current | proposed | browser / Page | PoC direct | prod import | local concern | 主な対象 / 方針 |
 |---|---:|---|---|---|---|---|---|---|
 | `tests/integration/test_local_viewer_flows.py` | 19 | Integration | Integration | real Page | — | Yes | FS / IMG / WAIT | local viewerとCore RunnerのCONTENT / LOADING / END / NEXT_CONTENT / UNKNOWN、spread、same-content、max_pages。維持。 |
 | `tests/integration/test_magapoke_local_viewer.py` | 3 | Integration | Integration | real Page | — | Yes | FS / IMG / WAIT | Magapoke + Core Runner、JPEG reconstruction / screenshot fallback、terminal card。維持。 |
 
-### 2.2 Current unit directory: file inventory
+### 2.2 Phase 2A unit directory inventory（履歴）
 
 | path | cases | current | proposed | browser / Page | PoC direct | prod import | local concern | 主な対象 |
 |---|---:|---|---|---|---|---|---|---|
@@ -117,7 +126,7 @@ browser-shaped fakeを使うもの、`—` は該当なしである。
 
 ### 2.3 Inventoryの読み方
 
-- `tests/unit/` 43 filesのうち、8 filesは実Chromiumを起動するmixed fileである。
+- Phase 2A時点の`tests/unit/` 43 filesのうち、8 filesは実Chromiumを起動するmixed fileであった。
 - 4 filesは`poc/`を直接importするResearch/Probe候補である。
 - したがって、unit配下の残りは **31 files / 470 cases** がfile単位でUnit維持候補、
   8 mixed fileのUnit部分は **141 cases** である。
@@ -127,18 +136,37 @@ browser-shaped fakeを使うもの、`—` は該当なしである。
 ## 3. Mixed File Breakdown
 
 以下のbrowser case数は、関数数ではなくparametrize展開後のcollection case数である。
-`Unit cases` と `Integration cases` の合計は各fileの現在のcase数に一致する。
+これはPhase 2B後の実測値であり、`Unit cases` と`Integration cases`の合計は各fileの
+元のcase数に一致する。BookWalker AdapterだけはPhase 2A計画値18/25から実測17/26へ
+差分が生じた。
 
 | file | Unit cases | Integration cases | browser portion | fixture / implementation observation | whole-file or split |
 |---|---:|---:|---|---|---|
 | `test_access_guard.py` | 6 | 1 | captcha providerのvisible DOM判定 | 1 testだけが`async_playwright()` / `chromium.launch()`を直接実行。runner / HTTP status / metricsはfake・local。 | split |
-| `test_bookwalker_adapter.py` | 18 | 25 | strict entry control、delayed DOM、viewer URL、canvas / capture target | `browser_page` fixtureは実Chromium。fake pageのnavigation / parser testも同一fileにある。 | split |
+| `test_bookwalker_adapter.py` | 17 | 26 | strict entry control、delayed DOM、viewer URL、canvas / capture target | `browser_page` fixtureは実Chromium。fake pageのnavigation / parser testも同一fileにある。Phase 2A計画は18/25。 | split |
 | `test_bookwalker_discovery.py` | 35 | 19 | series / product listing、control classification、full/incremental Catalog sync | `browser_page` fixtureで人工routeを使用。pure parser / inference / hookはfixture不要。 | split |
 | `test_bookwalker_original_capture.py` | 9 | 4 | canvas JS、PNG/JPEG browser signature、draw trace | `browser_page` fixture。magic bytes、cache、fallback、listener policyはfake/local。 | split |
 | `test_magapoke_adapter.py` | 33 | 43 | entry、viewer DOM、terminal card、premium/work control、canvas hook | `_new_page()`が35 source testの各所でPlaywrightを起動。単一shared fixtureではなく、browser部分の分離後も起動回数が大きいままになる点に注意。codec / mapping / fake retryはUnit。 | split |
 | `test_magapoke_discovery.py` | 11 | 6 | listing DOM、multiple containers、Catalog sync / incomplete | `browser_page` fixtureで人工HTML routeを利用。access mapping / date parserはUnit。 | split |
 | `test_mangaone_adapter.py` | 18 | 7 | quota entry、async button、viewer appearance、terminal boundary | `browser_page` fixture。URL parser、WebP/source capture、retry / fallbackはUnit。 | split |
 | `test_mangaone_discovery.py` | 11 | 1 | chapter listing DOM / card mapping | `browser_page` fixtureを使う1 testのみ。parser / access / titleはUnit。 | split |
+
+### 2.4 Current post-Phase 2B layout
+
+Phase 2B完了後の実ファイル配置とcollectionは次のとおりである。以下はPhase 2Aの
+分類案ではなく、2026-09-28に実行したcurrent collectionの結果である。
+
+| current group | Unit | Integration | Research | 備考 |
+|---|---:|---:|---:|---|
+| existing pure Unit files | 470 | — | — | file単位でUnit維持 |
+| small mixed files after split | 26 | 6 | — | AccessGuard 6/1、Manga ONE discovery 11/1、BookWalker original capture 9/4 |
+| browser-heavy mixed files after split | 114 | 101 | — | BookWalker Adapter 17/26、Discovery 35/19、Magapoke Adapter 33/43、Discovery 11/6、Manga ONE Adapter 18/7 |
+| existing Integration files | — | 22 | — | local viewer 2 files |
+| Research / Probe files | — | — | 46 | `tests/research/` 4 files |
+| **Total** | **610** | **129** | **46** | **785 cases** |
+
+`tests/unit/`の実Chromium起動・`async_playwright()`・`chromium.launch()`はPhase 2B後の
+対象範囲に残っていない。`Page`型注釈やfake browser-shaped objectの利用はUnitのままである。
 
 ### Mixed fileで特に分けるべき境界
 
@@ -182,16 +210,16 @@ workspace rootを`PYTHONPATH`に入れたcollectionでは785 casesを得た。�
 
 ## 5. Proposed Directory Layout
 
-### 5.1 推奨する最終形
+### 5.1 Phase 2B後の最終形
 
 ```text
 tests/
   unit/
     31 file-level Unit files
-    8 mixed filesから抽出したUnit tests
+    8 mixed filesに残したUnit tests
   integration/
     existing 2 files
-    8 mixed filesから抽出したbrowser tests
+    8 mixed filesから分離したbrowser tests
   research/
     test_jumpplus_discovery_probe.py
     test_jumpplus_probe.py
@@ -199,7 +227,7 @@ tests/
     test_zeblack_probe.py
 ```
 
-Phase 2Bでは、当面はflat layoutを推奨する。site別のsubdirectoryは、Integrationや
+Phase 2Bでは、当面はflat layoutを採用した。site別のsubdirectoryは、Integrationや
 Researchのfile数が増え、pathだけで対象範囲が明確になる規模になったときに再検討する。
 現時点で`tests/integration/bookwalker/`等を新設する必要性は、分類だけからは確認できない。
 
@@ -240,38 +268,40 @@ markerや除外設定はない。Phase 2Bの初期案ではdirectory commandで�
 追加しない方が変更面積は小さい。markerが必要になるのは、Researchの一部だけを頻繁に
 除外したい等、directoryで表せない選択要件が実測で出た場合に限る。
 
-## 7. Migration Steps (Phase 2B design)
+## 7. Migration Steps / Result (Phase 2B)
 
-実装順は次を推奨する。これは計画であり、今回のPhase 2Aでは実施しない。
+Phase 2Bでは次の手順を実施した。test behavior、assertion、parameterize数、fixture
+scope、pytest設定、production codeは変更していない。
 
 1. **Inventory freeze**
-   - 785 casesのbaseline collectionを保存する。
+   - 785 casesのbaseline collectionを保存した。
    - 4 Research filesのdirect importと、8 mixed filesのbrowser function listを固定する。
 2. **Research whole-file move**
-   - 4 filesを`tests/research/`へ移動する。
-   - collectionと`pytest -q tests/research`を実行し、46 casesを維持する。
+   - 4 filesを`tests/research/`へ移動し、`pytest -q tests/research`で46 casesを維持した。
 3. **Mixed split: smallest boundary first**
    - `test_access_guard.py`、`test_mangaone_discovery.py`、
-     `test_bookwalker_original_capture.py`のようなbrowser部分が少ないfileから分ける。
+     `test_bookwalker_original_capture.py`をUnit / Integrationへ分けた。
    - Unit側のfake/local helperとIntegration側のreal browser fixtureの依存を分離する。
 4. **Mixed split: adapter/discovery heavy files**
    - BookWalker adapter/discovery、Manga ONE adapter、Magapoke discovery、
-     Magapoke adapterの順で、test function単位に移す。
+     Magapoke adapterをtest function単位で分けた。
    - `test_magapoke_adapter.py`はbrowser launch helperの共有・scope変更を分類移行と
      同時に行わない。
 5. **Import / fixture cleanup**
    - move後に壊れたrelative import、root import、fixture名衝突だけを修正する。
    - production code、test contract、fixture scopeは変更しない。
 6. **Baseline comparison**
-   - total 785 cases、Unit 611、Integration 128、Research 46を基準に、意図しない
-     collection増減・skip・failureがないことを確認する。
+   - total 785 cases、Unit 610、Integration 129、Research 46をcollectionした。
+   - Unit / Integration / Research / fullの各suiteを実行し、全てpassした。
+   - BookWalker AdapterだけはPhase 2Aの18/25計画値と実測17/26に1 caseの差があり、
+     test改変なしでは補正できないためOpen Questionとして残した。
 7. **Separate optimization phase**
    - browser launch回数、実時間wait、fixture scope、画像処理時間の改善は、分類移行が
      安定した後の別Phaseで扱う。
 
 ## 8. Acceptance Tests for Phase 2B
 
-Phase 2B完了時に最低限、次を実行する。今回のPhase 2Aでは未実行である。
+Phase 2B完了時に次を実行した。Chromiumは利用可能で、Integrationのskipはなかった。
 
 ```powershell
 pytest --collect-only -q tests/unit
@@ -288,15 +318,62 @@ pytest -q
 
 - `tests/unit` に実Chromium起動testが残っていないこと。
 - `tests/research` が4 files / 46 casesを収集すること。
-- `tests/integration` が既存22 cases + browser-backed 106 casesを収集すること。
-- 全体collectionが意図せず785 casesから変化していないこと。
-- Chromium unavailable時はIntegrationのskip理由を記録し、Unit / Researchの失敗と
-  混同しないこと。
-- import pathを明示しない環境でresearch/scripts importが失敗する場合は、設定変更を
-  勝手に行わず、実行環境の前提をOpen Questionとして確定すること。
+- `tests/integration` が既存22 cases + browser-backed 107 casesを収集したこと。
+- 全体collectionが785 casesから変化していないこと。
+- `tests/unit` 610 passed、`tests/integration` 129 passed、`tests/research` 46 passed、
+  full `pytest -q` 785 passedを確認したこと。
+- `.venv`の標準invocationではResearch / scripts import errorは再現しなかったこと。
 
 markersは初期移行の受け入れ条件に含めない。directory単位の明示実行で不足する場合だけ、
 別途設計する。
+
+### Phase 2B-3 runtime baseline (2026-09-28)
+
+警告を抑制した実測（`pytest -q -p no:warnings`）は次のとおりである。これは高速化前の
+baselineであり、fixture scope、browser起動回数、timeout / pacingは変更していない。
+
+| suite | result | time |
+|---|---|---:|
+| `tests/unit` | 610 passed | 52.48s |
+| `tests/integration` | 129 passed | 169.99s |
+| `tests/research` | 46 passed | 0.46s |
+| full (`--durations=30`) | 785 passed | 223.66s |
+| full plain `pytest -q` | 785 passed / 2,774 warnings | 250.67s |
+
+slowest 30（full、`--durations=30`）:
+
+```text
+10.09s  tests/integration/test_mangaone_adapter_browser.py::test_mangaone_quota_entry_fails_if_viewer_does_not_appear
+6.60s   tests/integration/test_local_viewer_flows.py::test_runner_local_dom_same_identity_hits_same_content_guard
+6.04s   tests/unit/test_cli.py::test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance
+6.04s   tests/unit/test_cli.py::test_grant_only_all_uses_policy_order_replans_and_shares_limit
+6.04s   tests/unit/test_cli.py::test_batch_run_limit_spans_initial_and_premium_phases
+4.47s   tests/integration/test_magapoke_local_viewer.py::test_magapoke_runner_stops_at_terminal_card_without_opening_next_episode
+4.26s   tests/integration/test_local_viewer_flows.py::test_mangaone_graceful_end_and_chapter_change_are_distinct
+3.56s   tests/integration/test_local_viewer_flows.py::test_mangaone_image_gap_becomes_end_after_grace_period
+3.05s   tests/unit/test_cli.py::test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion
+3.03s   tests/unit/test_cli.py::test_batch_run_continues_after_work_ticket_unavailable
+2.51s   tests/integration/test_local_viewer_flows.py::test_runner_local_dom_state_flows[steps0-2-end]
+2.50s   tests/integration/test_local_viewer_flows.py::test_runner_local_dom_state_flows[steps1-2-end]
+2.49s   tests/integration/test_local_viewer_flows.py::test_runner_local_dom_state_flows[steps3-2-end]
+2.48s   tests/integration/test_local_viewer_flows.py::test_runner_local_dom_exact_max_pages_can_stop[end]
+2.45s   tests/integration/test_local_viewer_flows.py::test_runner_local_dom_exact_max_pages_can_stop[next_content]
+2.42s   tests/integration/test_local_viewer_flows.py::test_runner_local_dom_state_flows[steps2-2-next_content]
+2.15s   tests/integration/test_bookwalker_discovery_browser.py::test_bookwalker_full_clean_exhaustion_reconciles_missing_source
+2.11s   tests/integration/test_bookwalker_discovery_browser.py::test_bookwalker_full_reconciles_first_volume_after_later_release
+2.10s   tests/integration/test_magapoke_local_viewer.py::test_magapoke_reconstructs_jpeg_and_falls_back_to_screenshot
+1.64s   tests/integration/test_bookwalker_discovery_browser.py::test_bookwalker_incremental_stable_boundary_via_service[initial0-observed0]
+1.49s   tests/integration/test_bookwalker_adapter_browser.py::test_bookwalker_strict_waits_for_transient_duplicate_to_settle
+1.49s   tests/integration/test_bookwalker_adapter_browser.py::test_bookwalker_strict_waits_for_delayed_maruyomi
+1.43s   tests/integration/test_mangaone_adapter_browser.py::test_mangaone_quota_entry_waits_for_async_button
+1.41s   tests/unit/test_batch_executor.py::test_quota_state_remains_when_crawl_fails
+1.39s   tests/integration/test_bookwalker_adapter_browser.py::test_bookwalker_strict_overlapping_scopes_count_same_element_once
+1.37s   tests/integration/test_local_viewer_flows.py::test_runner_local_dom_saves_spread_parts_with_same_pixels
+1.37s   tests/integration/test_bookwalker_adapter_browser.py::test_bookwalker_strict_uuid_comparison_is_case_insensitive
+1.36s   tests/integration/test_bookwalker_adapter_browser.py::test_bookwalker_strict_direct_clicks_only_owned
+1.35s   tests/integration/test_bookwalker_adapter_browser.py::test_bookwalker_strict_direct_allows_owned_without_control_uuid
+1.34s   tests/integration/test_local_viewer_flows.py::test_mangaone_offscreen_terminal_marker_does_not_become_end
+```
 
 ## 9. Risks / Open Questions
 
@@ -306,8 +383,9 @@ markersは初期移行の受け入れ条件に含めない。directory単位の�
   test behavior変更に見える可能性がある。
 - `test_magapoke_adapter.py`は1 file内のbrowser launchが多く、Integrationへ移すだけでは
   実行時間は改善しない。
-- Researchを通常suiteから分けると、probeの変化がfull pytestで直ちに見えなくなるため、
-  probe変更時のtargeted executionを運用に明記する必要がある。
+- `tests/research/`をdirectory単位で選択できる一方、現在の`testpaths = ["tests"]`により
+  Researchは`pytest -q`にも含まれる。probe変更時のtargeted executionは追加の選択肢であり、
+  default full pytestからの除外ではない。
 - `poc` / `scripts`のroot import pathは、IDE、PowerShell、CI、uv実行で挙動が異なる
   可能性がある。
 
@@ -318,15 +396,22 @@ markersは初期移行の受け入れ条件に含めない。directory単位の�
 - `test_restore_bookwalker_quota.py`のutility script testをUnitに残すか、将来
   `tests/tools`等の別categoryを設けるか。
 - browser-backed Integrationをsite別subdirectoryへ分ける閾値。
-- full pytestの実行条件を、現在の約4分の測定snapshotではなく、分類後の実測値でどこに
-  設定するか。
+- BookWalker Adapterの18 Unit / 25 IntegrationというPhase 2A計画値と、実際の
+  browser-backed collectionで得た17 Unit / 26 Integrationの1 case差分を、次Phaseで
+  どの分類表へ反映するか。現在はbrowser依存caseをUnitに残さない実測結果を優先している。
+- full pytestの実行条件を、分類後の実測値（警告抑制219.34s、通常250.67s）を踏まえて
+  どこに設定するか。
 - 現在の実時間waitを契約として残すtestと、fake clock / timeout overrideでUnit化できる
   testの境界。
 
 ## 10. Change Record
 
-- 実施: current test collection、test file / import / fixture / browser usageの棚卸し、
-  分類・移行案の設計。
-- 未実施: test移動、削除、統合、parameterize、fixture scope変更、marker、pytest設定、
-  `scripts/run_tests.ps1`、production code、test codeの変更。
+- **2B-1 completed**: Research / Probe 4 filesを`tests/research/`へ移動し、46 casesを維持。
+- **2B-2 completed**: browser部分が少ない3 filesをUnit / Integrationへ分割。
+- **2B-3 completed**: browser-heavy mixed 5 filesをUnit / Integrationへ分割。
+- collectionは785 casesで不変。実測内訳はUnit 610 / Integration 129 / Research 46。
+- targeted / category / full pytestはpass。Chromium unavailableによるskipはなかった。
+- test移動・分割以外のtest削除、統合、assertion変更、parameterize変更、fixture scope変更、
+  marker、pytest設定、`scripts/run_tests.ps1`、production codeの変更は行っていない。
+- Phase 3のbrowser launch削減、fixture共有、timeout / pacing短縮は未実施。
 - 現在の作業treeにある`watchlist.yaml`の既存変更は、この資料作成の対象外として保持する。
