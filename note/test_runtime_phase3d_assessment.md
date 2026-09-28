@@ -291,8 +291,8 @@ counted individually.
   `strict_direct_allows_owned_without_control_uuid`,
   `strict_uuid_comparison_is_case_insensitive`, and
   `auto_trial_fallback_still_navigates`.
-- Selection/rejection semantics, retained at the helper's 250ms/100ms profile
-  after measurement: `strict_direct_rejects_maruyomi_only` (1),
+- Selection/rejection semantics, with no override so the adapter inherits its
+  current 250ms/100ms production defaults: `strict_direct_rejects_maruyomi_only` (1),
   `strict_direct_multiple_owned_controls_fail` (1),
   `strict_trial_only_fails_before_click` (2),
   `strict_subscription_only_fails` (2),
@@ -314,15 +314,26 @@ counted individually.
 - `strict_waits_for_delayed_maruyomi` (300ms delayed-control fixture).
 
 The two B cases keep their fixture delays and production-like timing
-relationship. The A cases that retain 250ms/100ms are still semantically
-timing-independent, but broad fast polling caused more DOM scans in persistent
-rejection paths and did not produce a safe saving.
+relationship. The A cases that leave both arguments unset are still
+semantically timing-independent, but broad fast polling caused more DOM scans
+in persistent rejection paths and did not produce a safe saving.
 
-The helper default remains `250ms` initial settle and `100ms` polling. An
-experiment applying the faster interval to all helper calls made persistent
+When no override is passed, the helper leaves the adapter's current defaults
+untouched (`250ms` initial settle and `100ms` polling). An experiment applying
+the faster interval to all helper calls made persistent
 rejection tests slower because it caused more DOM candidate scans. The final
 change therefore opts in only the successful selection tests, rather than
 using a hidden test mode or changing production defaults.
+
+The helper defaults are `None` so future production default changes are
+inherited automatically; only explicitly supplied fast-profile values are
+written to the adapter instance.
+
+This maintenance follow-up did not introduce a new performance claim. Its
+verification passed 26 BookWalker Adapter cases, the two timing-dependent
+cases, 129 Integration cases, and the current 822-case full suite. Current
+collection is Unit 624 / Integration 129 / Research 69 / Total 822; the
+Research-side increase is outside this follow-up.
 
 Before/after medians for the 26-case file were 17.98s and 16.32s
 respectively; the three after runs were 16.32s, 16.23s, and 17.36s. The

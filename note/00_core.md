@@ -233,8 +233,10 @@ The BookWalker Adapter browser test keeps its 26 cases, shared Browser
 lifecycle, production defaults, and two stable candidate samples. Six
 timing-independent successful selection tests explicitly use a test-side
 10ms initial settle and 20ms candidate poll interval. Persistent rejection
-cases retain the helper's production-like 250ms/100ms values because applying
-fast polling broadly increased repeated DOM scans rather than reducing runtime.
+cases leave the timing arguments unset and therefore inherit the adapter's
+production 250ms/100ms defaults because applying fast polling broadly increased
+repeated DOM scans rather than reducing runtime. The helper uses `None`
+defaults and writes instance attributes only for explicitly supplied overrides.
 The delayed-Maruyomi and transient-duplicate timing cases retain their
 300ms/350ms fixture delays and timing semantics.
 
@@ -247,6 +249,13 @@ configuration, fixture scope, or other browser-backed test was changed. The
 detailed classification and ROI decision are recorded in
 `note/test_runtime_phase3d_assessment.md`; no broader Phase 3D rollout is
 currently justified.
+
+The follow-up maintenance correction leaves `_initialize_strict()` timing
+arguments unset by default and applies instance overrides only when explicitly
+provided. The current verification passed 26 BookWalker Adapter cases, 129
+Integration cases, and 822 full-suite cases; collection is Unit 624 /
+Integration 129 / Research 69 / Total 822. This correction makes no new
+runtime claim and does not change production defaults or test semantics.
 
 ## 1. Scope
 

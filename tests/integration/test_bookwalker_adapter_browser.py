@@ -80,14 +80,16 @@ async def _initialize_strict(
     *,
     timeout_ms: int = 500,
     product_url: str = PRODUCT_URL,
-    initial_settle_ms: int = 250,
-    poll_interval_ms: int = 100,
+    initial_settle_ms: int | None = None,
+    poll_interval_ms: int | None = None,
 ) -> BookWalkerAdapter:
     await _goto_product(browser_page, controls, product_url=product_url)
     adapter = BookWalkerAdapter()
     adapter.read_link_wait_timeout_ms = timeout_ms
-    adapter.strict_entry_initial_settle_ms = initial_settle_ms
-    adapter.strict_candidate_poll_interval_ms = poll_interval_ms
+    if initial_settle_ms is not None:
+        adapter.strict_entry_initial_settle_ms = initial_settle_ms
+    if poll_interval_ms is not None:
+        adapter.strict_candidate_poll_interval_ms = poll_interval_ms
     await adapter.configure_run(browser_page, strategy)  # type: ignore[arg-type]
     await adapter.initialize(browser_page)
     return adapter
