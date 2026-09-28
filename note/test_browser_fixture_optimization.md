@@ -377,11 +377,12 @@ fixture invocations. The combined 49-case run was 37.76s; repeated runs were
 
 Integration changed from the Phase 3C-1 reference of 129 passed in 121.34s to
 129 passed in 90.79s in the first after run; the final verification run was
-129 passed in 109.52s. The difference is runtime variance in unrelated
-local-viewer/wait tests, while the repeated 49-case BookWalker run remained
-36.40s and 36.33s. The final full suite was 810 passed in 133.80s with 2025
-warnings. Final collection was Unit 618 / Integration 129 / Research 63 =
-810. Unit and Research counts changed during the work because unrelated
+129 passed in 109.52s; the latest follow-up verification was 101.65s. The
+difference is runtime variance in unrelated local-viewer/wait tests, while the
+repeated 49-case BookWalker run remained 36.40s and 36.33s. The latest full
+suite was 816 passed in 149.14s with 2079 warnings. Latest collection was Unit
+624 / Integration 129 / Research 63 = 816. Unit and Research counts changed
+during the work because unrelated
 user-owned changes appeared in the working tree; those paths were not modified
 by this Phase.
 
@@ -397,7 +398,7 @@ optimization only, pending separate loop-ownership and crash-blast-radius
 evidence. Phase 3C-3, including Manga ONE, generic local viewer, Magapoke
 local/discovery, and AccessGuard rollout, remains pending.
 
-## Verification Status
+## Historical Verification Status (pre-Phase 3C implementation)
 
 実行済み:
 
@@ -416,6 +417,35 @@ local/discovery, and AccessGuard rollout, remains pending.
 - Live verification: real-site behavior、login、quota、viewer session を変更していないため不要
 
 Skipped tests: 0。Chromium は利用可能で、Integration 実行時に skip は発生しなかった。
+
+## Current Verification Status (Phase 3C-2 follow-up)
+
+The current implementation is no longer design-only. Phase 3C-1 and Phase 3C-2
+are complete; Phase 3C-3 remains pending. The shared integration fixture keeps
+Playwright and Browser module-scoped and Context/Page function-scoped.
+
+The BookWalker Adapter keeps its historical local viewport contract through a
+module-loop, function-scoped local `browser_page` fixture:
+
+- viewport: 800 x 600
+- shared Browser: yes
+- fresh Context/Page per test: yes
+
+The generic `tests/integration/conftest.py` fixture remains at the Playwright
+default viewport. Discovery, Original Capture, and other Integration files are
+not forced to use the Adapter's 800 x 600 viewport.
+
+Latest verification:
+
+- BookWalker Adapter: 26 passed in 18.34s
+- BookWalker 3 files: 49 passed in 42.15s; prior repeated runs were 36.40s / 36.33s
+- Integration: 129 passed; final observed run 101.65s
+- Full pytest: 816 passed in 149.14s, 2079 warnings
+- Collection: Unit 624 / Integration 129 / Research 63 / Total 816
+- `ruff check src tests`: passed
+
+The collection count reflects unrelated user-owned Unit/Research changes that
+appeared during the work; Phase 3C-2 did not add or remove test cases.
 
 ## Final Decision Snapshot
 

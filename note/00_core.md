@@ -150,10 +150,10 @@ Before -> after measurements:
   2.57s -> 0.98s; its three test-local extra Context/Page pairs were retained.
 - Combined target: 49 passed; repeated runs 36.74s and 36.37s.
 - Integration: 121.34s -> 90.79s in the first after run; the final
-  verification run was 109.52s for 129 passed due to unrelated local-viewer /
+  verification run was 101.65s for 129 passed due to unrelated local-viewer /
   wait-test runtime variance.
-- Full: the final run was 810 passed in 133.80s with 2025 warnings. Final
-  collection was Unit 618 / Integration 129 / Research 63 = 810; Unit and
+- Full: the latest run was 816 passed in 149.14s with 2079 warnings. Latest
+  collection was Unit 624 / Integration 129 / Research 63 = 816; Unit and
   Research changed because unrelated user-owned changes appeared during the
   work and were not modified.
 
@@ -164,6 +164,13 @@ leak, or Chromium skip. The Original Capture extra Page is explicitly closed
 before its Context. Production code, pytest configuration, timeout/grace
 values, assertions, parametrization, and non-BookWalker Integration semantics
 were not changed. Phase 3C-3 remains pending.
+
+The BookWalker Adapter retains its historical 800x600 viewport through a
+file-local function-scoped `browser_page` fixture backed by the shared module
+Browser. The generic integration fixture keeps the Playwright default viewport,
+so Discovery, Original Capture, and other Integration files are not affected.
+No new test case was added for this follow-up; the existing Adapter tests and
+the 49-case BookWalker group pass with the restored viewport.
 
 ## 1. Scope
 

@@ -1,5 +1,6 @@
 import pytest
-from playwright.async_api import Page
+import pytest_asyncio
+from playwright.async_api import Browser, Page
 
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     BookWalkerAdapter,
@@ -11,6 +12,17 @@ PRODUCT_URL = f"https://bookwalker.jp/de{PRODUCT_ID}/"
 VIEWER_BASE = "https://viewer.bookwalker.jp/03/21/viewer.html"
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
+
+
+@pytest_asyncio.fixture(loop_scope="module")
+async def browser_page(integration_browser: Browser) -> Page:
+    context = await integration_browser.new_context(viewport={"width": 800, "height": 600})
+    page = await context.new_page()
+    try:
+        yield page
+    finally:
+        await page.close()
+        await context.close()
 
 
 def _viewer_html() -> str:
