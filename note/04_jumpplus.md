@@ -1445,3 +1445,88 @@ Artifacts are under `output/jumpplus_vertical_j15/`: `report.json`,
 `summary.md`, `regions.json`, `association.json`, `candidates.json`,
 `sources.json`, `network.json`, `draw_calls.json`, `initial/`,
 `diagnostics/`, and `reconstructed/`.
+
+## Vertical J1.75: production primitive validation
+
+J1.75 performed one fresh initial load for the same episode and did not run a
+timeline wait, scroll, keyboard operation, wheel operation, or viewer
+navigation. Production code was not changed. The probe built the observed
+vertical draw rows in the production native-capture input shape and called
+`JumpPlusAdapter._native_attempt()` directly. This uses the production
+`select_transport_candidate()`, strict draw/source validation,
+`reconstruct_jpeg_lossless()` first, and `reconstruct_jpeg_png()` only as the
+production fallback.
+
+Target:
+
+```text
+https://shonenjumpplus.com/episode/10834108156642491399
+```
+
+### Production primitive result
+
+```text
+content regions:              24/24
+candidate pool:               24 /public/page/ JPEGs
+candidate association:       24/24
+lossless JPEG/DCT capture:   24/24
+PNG fallback capture:         0/24
+failed:                       0/24
+```
+
+The complete retained `/public/page/` candidate pool was passed to the
+production selector without the J1.5 PoC dimension prefilter. Association
+reasons were the same as J1.5: 16 `single_pixel_match` and 8
+`single_decoder_tolerant_pixel_match`; no unmatched or ambiguous region was
+observed. The browser source snapshot was PNG and did not provide an original
+source raw SHA, so production was called with `source_raw_sha256=None`, as in
+the actual available evidence.
+
+Every region produced a production `CaptureResult` with:
+
+```text
+capture_method: jpeg_dct
+mime_type:     image/jpeg
+extension:     .jpg
+dimensions:    same as the 24 Canvas dimensions
+```
+
+All 24 validation records passed: base draw, visible draw, tile mappings,
+source identity, identity transform, `source-over`, `filter == none`,
+`globalAlpha == 1`, no unsupported canvas mutation, production mapping
+validation, and DCT MCU/coverage geometry. No PoC-only relaxed condition was
+used. Outputs are under `output/jumpplus_vertical_j175/reconstructed/` as
+`001.jpg` through `024.jpg`.
+
+### Rendered reference comparison
+
+The prior J1 rendered references were available for 17 regions. Their raw
+pixel dimensions were approximately 1.5x the Canvas dimensions because they
+were captured at device scale; J1.75 records this scale and compares after
+normalization. The generated output dimensions matched the Canvas dimensions
+for all 24 regions. Among the 17 available references, the normalized visual
+assessment was 4 `close` and 13 `visual_mismatch`; 7 regions had no stored
+reference. These screen-rendering assessments are diagnostic only and do not
+invalidate the production JPEG capture when strict mapping and DCT checks
+pass.
+
+### Conclusion and production readiness
+
+```text
+production primitive 24/24: yes
+24/24 capture:             yes
+scroll required:           no evidence; not re-investigated here
+conclusion:                A
+```
+
+For this episode and browser state, the vertical capture primitive is
+validated end-to-end. It is reasonable to proceed to a separately scoped
+production vertical-capture design review, but this task did not add a
+vertical branch to `JumpPlusAdapter`, viewer detection, or any production
+capture path. Before implementation, validate at least one more vertical
+episode and confirm source/runtime variants, reference coverage, and output
+packaging behavior.
+
+Artifacts are under `output/jumpplus_vertical_j175/`:
+`report.json`, `summary.md`, `regions.json`, `association.json`,
+`validation.json`, `reconstructed/`, and per-region `diagnostics/`.

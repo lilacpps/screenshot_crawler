@@ -4,6 +4,7 @@ import pytest
 
 from poc.jumpplus_vertical_j1 import build_region_states, classify_reconstruction, prefetch_bucket
 from poc.jumpplus_vertical_j15 import dimension_compatible_candidates, selection_bucket
+from poc.jumpplus_vertical_j175 import build_production_row
 from poc.jumpplus_vertical_probe import (
     geometry_order,
     loaded_content_count,
@@ -183,3 +184,37 @@ def test_j15_classifies_production_selector_output_without_reimplementing_it(
     selection: dict, expected: str
 ) -> None:
     assert selection_bucket(selection) == expected
+
+
+def test_j175_builds_production_row_with_base_visible_and_tiles() -> None:
+    region = {"index": 0, "canvas_id": 7, "canvas_dimensions": [100, 100]}
+    source = {"sourceId": 1, "url": "blob:1", "naturalWidth": 100, "naturalHeight": 100}
+    common = {
+        "canvas": {"id": 7},
+        "source": source,
+        "transform": {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+        "globalCompositeOperation": "source-over",
+        "filter": "none",
+        "globalAlpha": 1,
+    }
+    draws = [
+        {
+            **common,
+            "sequence": 1,
+            "sourceRect": {"sx": 0, "sy": 0, "sw": 100, "sh": 100},
+            "destinationRect": {"dx": 0, "dy": 0, "dw": 100, "dh": 100},
+        },
+        {
+            **common,
+            "sequence": 2,
+            "sourceRect": {"sx": 0, "sy": 0, "sw": 50, "sh": 50},
+            "destinationRect": {"dx": 50, "dy": 50, "dw": 50, "dh": 50},
+        },
+    ]
+
+    row = build_production_row(region, draws, [])
+
+    assert row["source"] == {"sourceId": 1, "sourceUrl": "blob:1", "type": "HTMLImageElement"}
+    assert row["base"]["sx"] == 0
+    assert row["visibleDraw"]["dw"] == 100
+    assert len(row["mapping"]) == 1
