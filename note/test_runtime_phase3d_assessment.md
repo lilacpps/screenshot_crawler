@@ -1,11 +1,13 @@
-# Phase 3D-0 Test Runtime Reassessment
+# Phase 3D Runtime Assessment
 
 Date: 2026-09-29
-Scope: measurement and analysis only
+Scope: Phase 3D-0 measurement and Phase 3D-1 targeted test-only timing assessment
 
-This note is an assessment snapshot, not a test-policy authority. No test,
-production code, pytest configuration, dependency, fixture scope, timeout,
-grace, polling interval, or browser lifecycle was changed for Phase 3D-0.
+This note is an assessment snapshot, not a test-policy authority. Phase 3D-0
+was measurement-only. Phase 3D-1 made only explicit test-side strict-entry
+settle/poll overrides in the BookWalker Adapter browser test; production code,
+pytest configuration, dependency, fixture scope, assertions, and parameterized
+cases remain unchanged.
 
 ## Executive Summary
 
@@ -15,10 +17,10 @@ grace, polling interval, or browser lifecycle was changed for Phase 3D-0.
 | Integration run 2 | 129 passed in 90.72s |
 | Integration run 3 | 129 passed in 87.50s |
 | Integration median / min / max | 87.50s / 81.83s / 90.72s |
-| Full runtime | 817 passed in 120.47s with `-p no:warnings` |
-| Current collection | Unit 624 / Integration 129 / Research 64 / Total 817 |
+| Phase 3D-0 full runtime | 817 passed in 120.47s with `-p no:warnings` |
+| Phase 3D-0 collection | Unit 624 / Integration 129 / Research 64 / Total 817 |
 | Dominant phase | `call`: 65.97s of 79.49s in the phase-instrumented Integration run |
-| Safely removable time | No demonstrated high-confidence saving; conservatively 0--5s total |
+| Safely removable time | 1.66s demonstrated in BookWalker Adapter; below High threshold |
 
 The previous 80.75s Integration result was a valid observation but not a stable
 baseline. The three-run median is 87.50s, with an 8.89s spread. Browser
@@ -26,12 +28,12 @@ lifecycle is no longer the dominant repeated cost. The largest file-level
 call costs are BookWalker Discovery (16.91s), BookWalker Adapter (15.95s), and
 Local Viewer (13.90s) in the phase-instrumented run.
 
-The current slow tests mostly exercise meaningful DOM transition, strict-entry
-settlement, end/grace behavior, image reconstruction, or filesystem capture.
-No candidate currently demonstrates a safe saving of at least 5s without
-changing a timing contract or increasing flakiness. The recommended action is
-to stop after Phase 3D-0 unless a narrowly targeted follow-up first proves a
-non-contract wait or I/O cost.
+The Phase 3D-0 slow tests mostly exercised meaningful DOM transition,
+strict-entry settlement, end/grace behavior, image reconstruction, or
+filesystem capture. Phase 3D-1 subsequently demonstrated a safe but modest
+1.66s median saving by opting six successful strict-entry selection tests into
+10ms initial settle / 20ms polling. This is below the 5s High threshold, so no
+broader rollout is currently justified.
 
 ## Runtime Measurements
 
@@ -254,19 +256,81 @@ large saving.
 |---|---:|---:|---|---|---|
 | Local Viewer wait/capture attribution | 15.873s | 0--2s | Medium | Medium | Instrument only if Phase 3D-1 is opened; do not shorten Phase 3B waits |
 | BookWalker Discovery wait decomposition | 18.623s | 1--3s | Medium | Medium | Conditional Phase 3D-2; preserve listing/product settlement |
-| BookWalker strict-entry decomposition | 17.861s | 1--2s | Medium | High | Only consider test-side non-contract setup; do not relax fail-closed timing |
+| BookWalker strict-entry test-side profile | 17.861s -> 16.32s median | 1.66s demonstrated | Low | Low for selected tests; high if applied broadly | Completed in Phase 3D-1; do not broaden without new evidence |
 | Magapoke Local Viewer image path | 5.876s | 0.5--1.5s | Medium | Medium/High | Low priority; retain JPEG/screenshot semantics |
 | Magapoke Adapter residual polling | 8.832s | 0--1s | Medium | High | Stop; browser lifecycle is already optimized |
 | Manga ONE Adapter / Discovery | 5.607s combined | <1s | Low/Medium | Medium | Stop; waits and DOM checks are contract coverage |
 | AccessGuard / Original Capture | 2.522s combined | <0.5s | Low | Medium | Stop |
 
 No candidate meets the Phase 3D High threshold of at least 5s safe saving
-without semantic change. The estimated safe total is therefore 0--5s, and even
-that is an upper estimate rather than a demonstrated result.
+without semantic change. Phase 3D-1 demonstrated 1.66s on the BookWalker
+Adapter file, which is useful but remains below the threshold for a wider
+optimization campaign.
 
 ## Recommended Phase 3D Plan
 
-### Phase 3D-1: Local Viewer targeted attribution (conditional)
+### Phase 3D-1: BookWalker strict-entry test-only timing (completed)
+
+The six successful, timing-independent strict-entry selection tests now pass
+explicit test-side values of `initial_settle_ms=10` and
+`poll_interval_ms=20`. The adapter still requires
+`strict_candidate_stability_samples=2`; only the initial settle and interval
+were overridden. The timing-dependent delayed-Maruyomi and transient-duplicate
+tests retain their 300ms/350ms fixture delays and production-like timing
+semantics.
+
+#### 26-case classification
+
+The classification is by expanded pytest case, so the parameterized groups are
+counted individually.
+
+**A. Timing-independent (24 cases)**
+
+- Fast profile, six successful selection cases: `strict_quota_clicks_only_maruyomi`,
+  `strict_direct_clicks_only_owned`, `strict_direct_clicks_purchased_owned_control`,
+  `strict_direct_allows_owned_without_control_uuid`,
+  `strict_uuid_comparison_is_case_insensitive`, and
+  `auto_trial_fallback_still_navigates`.
+- Selection/rejection semantics, retained at the helper's 250ms/100ms profile
+  after measurement: `strict_direct_rejects_maruyomi_only` (1),
+  `strict_direct_multiple_owned_controls_fail` (1),
+  `strict_trial_only_fails_before_click` (2),
+  `strict_subscription_only_fails` (2),
+  `strict_generic_viewer_only_fails` (2),
+  `strict_wrong_strategy_does_not_fallback` (1),
+  `strict_multiple_matching_controls_fail` (1),
+  `strict_overlapping_scopes_count_same_element_once` (1),
+  `strict_uuid_mismatch_is_excluded` (1),
+  `strict_requires_product_identity_before_candidates` (2), and
+  `strict_rejects_already_viewer_url` (1).
+- Cover/canvas and local byte behavior: `keeps_first_page_cover_spread_as_one_target`,
+  `crops_first_page_cover_to_draw_geometry`, and
+  `crops_cover_from_pixels_when_geometry_is_missing` (3).
+
+**B. Timing-dependent (2 cases)**
+
+- `strict_waits_for_transient_duplicate_to_settle` (350ms duplicate
+  replacement fixture).
+- `strict_waits_for_delayed_maruyomi` (300ms delayed-control fixture).
+
+The two B cases keep their fixture delays and production-like timing
+relationship. The A cases that retain 250ms/100ms are still semantically
+timing-independent, but broad fast polling caused more DOM scans in persistent
+rejection paths and did not produce a safe saving.
+
+The helper default remains `250ms` initial settle and `100ms` polling. An
+experiment applying the faster interval to all helper calls made persistent
+rejection tests slower because it caused more DOM candidate scans. The final
+change therefore opts in only the successful selection tests, rather than
+using a hidden test mode or changing production defaults.
+
+Before/after medians for the 26-case file were 17.98s and 16.32s
+respectively; the three after runs were 16.32s, 16.23s, and 17.36s. The
+Integration suite then passed 129 cases in 87.80s, and the current full suite
+passed 821 cases in 115.64s. The current collection is Unit 624 / Integration
+129 / Research 68 / Total 821; the Research increase is outside this Phase.
+
+### Phase 3D-2: Local Viewer targeted attribution (conditional)
 
 If further work is desired, first measure capture, filesystem, and
 `wait_for_change` separately for the two Local Viewer outlier groups. Only a
@@ -274,14 +338,14 @@ non-contract cost should be optimized. Keep `page_turn_delay_ms=0`, existing
 500ms/200ms Manga ONE settings, same-content guards, max-pages guards, and
 fresh BrowserContext/Page isolation unchanged.
 
-### Phase 3D-2: BookWalker wait decomposition (conditional)
+### Phase 3D-3: BookWalker Discovery wait decomposition (conditional)
 
 Measure strict-entry candidate polling separately from listing/product route and
 Catalog work. Any change must preserve delayed-control, duplicate settlement,
 stable candidate, UUID filtering, and fail-closed behavior. The current data
 does not yet justify implementation.
 
-### Phase 3D-3: Residual cleanup / stop
+### Phase 3D-4: Residual cleanup / stop
 
 Do not introduce session-scoped Browser, shared Context/Page, xdist, or parallel
 execution for this runtime range. If targeted attribution cannot demonstrate a
@@ -300,15 +364,22 @@ Stop runtime optimization when all of the following remain true:
 - Further savings require changing timeout/grace/polling semantics, browser
   isolation, or adding fixture complexity.
 
-The current measurements satisfy this stop condition provisionally. Phase 3D-0
-therefore ends with analysis only; no wait, timeout, polling, fixture, browser,
-test, or production optimization was implemented.
+The Phase 3D-0 measurements satisfied this stop condition provisionally.
+Phase 3D-1 then confirmed a narrow, contract-preserving 1.66s saving, but no
+High-threshold candidate. Stop after this targeted Phase 3D-1 result unless a
+future measurement demonstrates at least 5s of safe saving with comparable
+semantic and flakiness risk. Do not proceed to BookWalker Discovery or Local
+Viewer wait changes by default.
 
 ## Verification
 
-- `pytest -q -p no:warnings tests/integration --durations=50`: 3 runs, all 129 passed
-- `pytest -q -p no:warnings --durations=50`: 817 passed
-- `pytest --collect-only -q`: 817 collected
-- Collection breakdown: Unit 624 / Integration 129 / Research 64
+- Phase 3D-0: `pytest -q -p no:warnings tests/integration --durations=50`: 3 runs, all 129 passed
+- Phase 3D-1 target: 3 runs, 26 passed each; median 16.32s
+- Phase 3D-1 timing cases: delayed Maruyomi and transient duplicate passed individually
+- Phase 3D-1 Integration: 129 passed in 87.80s
+- Phase 3D-1 full: 821 passed in 115.64s
+- `pytest --collect-only -q`: 821 collected
+- Current collection breakdown: Unit 624 / Integration 129 / Research 68
+- `uv run ruff check src tests`: passed
 - Chromium unavailable skips: 0 observed
 - Temporary phase timing hook: not saved

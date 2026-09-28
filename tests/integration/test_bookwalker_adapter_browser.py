@@ -10,6 +10,8 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import (
 PRODUCT_ID = "6de7534d-7022-481d-b2d3-05f03f384454"
 PRODUCT_URL = f"https://bookwalker.jp/de{PRODUCT_ID}/"
 VIEWER_BASE = "https://viewer.bookwalker.jp/03/21/viewer.html"
+FAST_STRICT_SETTLE_MS = 10
+FAST_STRICT_POLL_INTERVAL_MS = 20
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -78,10 +80,14 @@ async def _initialize_strict(
     *,
     timeout_ms: int = 500,
     product_url: str = PRODUCT_URL,
+    initial_settle_ms: int = 250,
+    poll_interval_ms: int = 100,
 ) -> BookWalkerAdapter:
     await _goto_product(browser_page, controls, product_url=product_url)
     adapter = BookWalkerAdapter()
     adapter.read_link_wait_timeout_ms = timeout_ms
+    adapter.strict_entry_initial_settle_ms = initial_settle_ms
+    adapter.strict_candidate_poll_interval_ms = poll_interval_ms
     await adapter.configure_run(browser_page, strategy)  # type: ignore[arg-type]
     await adapter.initialize(browser_page)
     return adapter
@@ -91,7 +97,13 @@ async def test_bookwalker_strict_quota_clicks_only_maruyomi(browser_page: Page) 
     controls = """
     <a data-action-label="trial_reading" href="https://viewer.bookwalker.jp/trial">試し読み</a>
     """ + _control_html(action="read_maruyomi", text="10分まる読み", entry="quota")
-    await _initialize_strict(browser_page, "quota", controls)
+    await _initialize_strict(
+        browser_page,
+        "quota",
+        controls,
+        initial_settle_ms=FAST_STRICT_SETTLE_MS,
+        poll_interval_ms=FAST_STRICT_POLL_INTERVAL_MS,
+    )
     assert "entry=quota" in browser_page.url
 
 
@@ -99,7 +111,13 @@ async def test_bookwalker_strict_direct_clicks_only_owned(browser_page: Page) ->
     controls = """
     <a data-action-label="trial_reading" href="https://viewer.bookwalker.jp/trial">試し読み</a>
     """ + _control_html(action="reading", text="読む", entry="owned")
-    await _initialize_strict(browser_page, "direct", controls)
+    await _initialize_strict(
+        browser_page,
+        "direct",
+        controls,
+        initial_settle_ms=FAST_STRICT_SETTLE_MS,
+        poll_interval_ms=FAST_STRICT_POLL_INTERVAL_MS,
+    )
     assert "entry=owned" in browser_page.url
 
 
@@ -109,7 +127,13 @@ async def test_bookwalker_strict_direct_clicks_purchased_owned_control(
     controls = _control_html(
         action="read_purchased", text="読む", entry="owned-purchased"
     )
-    await _initialize_strict(browser_page, "direct", controls)
+    await _initialize_strict(
+        browser_page,
+        "direct",
+        controls,
+        initial_settle_ms=FAST_STRICT_SETTLE_MS,
+        poll_interval_ms=FAST_STRICT_POLL_INTERVAL_MS,
+    )
     assert "entry=owned-purchased" in browser_page.url
 
 
@@ -119,7 +143,13 @@ async def test_bookwalker_strict_direct_allows_owned_without_control_uuid(
     controls = _control_html(
         action="reading", text="読む", entry="owned", uuid=None
     )
-    await _initialize_strict(browser_page, "direct", controls)
+    await _initialize_strict(
+        browser_page,
+        "direct",
+        controls,
+        initial_settle_ms=FAST_STRICT_SETTLE_MS,
+        poll_interval_ms=FAST_STRICT_POLL_INTERVAL_MS,
+    )
     assert "entry=owned" in browser_page.url
 
 
@@ -311,14 +341,26 @@ async def test_bookwalker_strict_uuid_comparison_is_case_insensitive(
         action="reading", text="読む", entry="owned", uuid=PRODUCT_ID
     )
     await _initialize_strict(
-        browser_page, "direct", controls, product_url=uppercase_product_url
+        browser_page,
+        "direct",
+        controls,
+        product_url=uppercase_product_url,
+        initial_settle_ms=FAST_STRICT_SETTLE_MS,
+        poll_interval_ms=FAST_STRICT_POLL_INTERVAL_MS,
     )
     assert "entry=owned" in browser_page.url
 
 
 async def test_bookwalker_auto_trial_fallback_still_navigates(browser_page: Page) -> None:
     controls = _control_html(action="trial_reading", text="試し読み", entry="trial")
-    await _initialize_strict(browser_page, "auto", controls, timeout_ms=300)
+    await _initialize_strict(
+        browser_page,
+        "auto",
+        controls,
+        timeout_ms=300,
+        initial_settle_ms=FAST_STRICT_SETTLE_MS,
+        poll_interval_ms=FAST_STRICT_POLL_INTERVAL_MS,
+    )
     assert "entry=trial" in browser_page.url
 
 
