@@ -1123,3 +1123,99 @@ The production fix derived from this investigation is documented in the
 `Terminal timeout production fix` section above. This historical section
 records the pre-fix evidence and must not be read as the current adapter
 behavior.
+
+## Vertical Capture / Navigation J0 (2026-09-28)
+
+The target for this observation was:
+
+```text
+https://shonenjumpplus.com/episode/10834108156642491399
+```
+
+This is the vertical-reading episode `[1話]タテの国 - 田中空`. The existing
+horizontal/page-forward `poc/jumpplus_probe.py` was not sufficient because no
+viewer forward button was observed. A separate read-only
+`poc/jumpplus_vertical_probe.py` was added. It reuses the shared
+`BrowserSession` / `resolve_cdp_endpoint()` CDP path and does not launch Chrome,
+select a profile, change production code, click access controls, crawl the
+episode to an archive, or create a ZIP.
+
+### Viewer structure
+
+The viewer is `section.viewer.js-viewer` with `#content.content-vertical` as
+the scrollable element. Its child
+`.content-inner.scroll-vertical.js-vertical-viewer` and
+`.image-container.js-viewer-content` provide the long geometry. The target
+state contained 24 content `p.page-area.js-page-area` rows, each with a
+`canvas.page-image.js-page-image`, followed by non-content link/back-matter
+rows. Content canvas order matched increasing vertical geometry index `0..23`.
+The content canvas dimensions were `575px` wide with heights from `670px` to
+`1400px`; the total vertical content height was about `30830px`.
+
+All 24 content rows were already mounted and had rendered canvas dimensions at
+the initial state. The bounded operation checks observed no additional content
+canvas becoming loaded after one operation (`24 -> 24`). This is an observation
+for this episode/state, not a general claim that other vertical episodes have
+no lazy loading.
+
+### Capture observations
+
+The probe saved 20 bounded `/public/page/` JPEG response candidates and
+captured rendered locator screenshots for all 24 content canvases. Raw
+`canvas.toDataURL("image/png")` failed for all attempted content canvases due
+to the tainted canvas restriction, so screenshot capture is the confirmed
+rendered-output fallback in this run.
+
+The draw hook recorded 432 content-canvas draw calls. 384 calls used partial
+source rectangles; each observed canvas had a full-frame draw plus partial
+tile-like draws. The existing J1/J2 PoC was also run on the same target:
+
+```text
+output/jumpplus_vertical_j1/
+output/jumpplus_vertical_j2/
+```
+
+J1 found no exact CDN-JPEG-to-rendered-canvas matches and classified all 20
+sampled canvases as tiled. J2 proved JPEG-domain reconstruction for 6/20
+sampled canvases (`source=confirmed`, DCT `feasible`, reconstruction
+`successful`), while 14/20 were `inconclusive` because their source candidate
+was not present or could not be matched. Therefore the vertical target
+supports runtime draw mapping plus JPEG-domain reconstruction as a valid PoC
+path, but does not establish an all-pages capture contract. Directly emitting
+the raw transport JPEG remains rejected.
+
+### Navigation observations
+
+Each operation was executed once from a fresh initial state. The viewport was
+`1906x986`; the default wheel/DOM delta was 90% of viewport height (`887px`).
+
+| operation | observed movement | active content after | next content reached |
+| --- | ---: | --- | --- |
+| `ArrowDown` | window/document `+40px` | `[0]` | no |
+| `PageDown` | window/document `+862.67px` | `[0, 1]` | yes |
+| `Space` | window/document `+862.67px` | `[0, 1]` | yes |
+| `End` (diagnostic only) | window/document `+1382px` | `[0, 1]` | yes |
+| `page.mouse.wheel(0, 887)` | window/document `+887.33px` | `[0, 1]` | yes |
+| `window.scrollBy(0, 887)` | window/document `+887.33px` | `[0, 1]` | yes |
+| `#content.scrollBy(0, 887)` | `#content.scrollTop +887.33px` | `[0, 1]` | yes |
+| `target.scrollIntoView({block: "start"})` | `#content.scrollTop +1400px` | `[1]` | yes |
+
+All operations kept the target episode URL and reached a stable bounded state.
+`ArrowDown` is therefore not a one-content-image operation. The most explicit
+J0 primary candidate is geometry-driven `target.scrollIntoView()` with active
+region/visibility checks; `PageDown` is a practical fallback observed to move
+into the next content row. A production implementation must still derive the
+next target from live geometry and keep max-pages/same-content guards. No
+production navigation behavior was changed by this probe.
+
+### Artifacts and limitations
+
+The full vertical probe output is under `output/jumpplus_vertical_probe/` and
+contains `report.json`, `summary.md`, `navigation.json`, `network.json`,
+`candidate_images.json`, `initial/`, per-operation DOM/draw/network/screenshots,
+`content_captures.json`, `content_captures/`, `sources.json`, and `sources/`.
+The J1/J2 artifacts above are diagnostic only. This target used one episode,
+one browser/session condition, and one operation per fresh state; other
+vertical episodes, different JPEG sampling, complete lazy-load behavior, and
+END/NEXT_CONTENT semantics remain unverified. No production Adapter, Discovery,
+Batch, DB, or ZIP behavior was changed.
