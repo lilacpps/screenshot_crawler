@@ -50,34 +50,6 @@ MAX_NO_CHANGE_RECHECKS = 2
 Z2_OUTPUT_NAME = "zeblack_terminal_probe"
 PAGE_COUNTER_RE = re.compile(r"^\s*(?P<numerator>\d+)\s*/\s*(?P<denominator>\d+)\s*$")
 
-_END_TERMS = (
-    "読み終わりました",
-    "読み終わり",
-    "この話はここまで",
-    "読了",
-    "作品ページへ",
-)
-_NEXT_CONTENT_TERMS = (
-    "次の話を読む",
-    "次の話",
-    "次話を読む",
-    "次話",
-    "次のチャプター",
-    "次チャプター",
-    "続きはこちら",
-    "next chapter",
-    "next episode",
-    "next content",
-)
-_TERMINAL_UI_TERMS = (
-    "recommendation",
-    "おすすめ",
-    "share",
-    "シェア",
-    "感想",
-)
-
-
 # Keep the evidence vocabulary explicit even when this file is executed from
 # a console with a non-UTF-8 code page.
 _END_TERMS = (
@@ -161,8 +133,10 @@ def aggregate_terminal_verdict(
     navigation: list[dict[str, Any]],
     *,
     stopped_reason: str | None,
+    expected_title_id: str,
+    expected_chapter_id: str,
 ) -> str:
-    """Aggregate terminal evidence with no-change and missing-signal fail-closed."""
+    """Aggregate terminal evidence with step- and identity-checked transitions."""
 
     if any(record.get("url_change_kind") in {"next_chapter", "different_title", "other_escape"} for record in navigation):
         return "auto_next_navigation_observed"
@@ -170,9 +144,36 @@ def aggregate_terminal_verdict(
     if terminal_states:
         terminal = terminal_states[-1]
         signals = set(terminal.get("terminal_signal_kinds", []))
-        if "next_content" in signals and not terminal.get("content_present"):
+        terminal_url_is_current = is_target_viewer_url(
+            str(terminal.get("url") or ""),
+            expected_title_id,
+            expected_chapter_id,
+        )
+        terminal_step = terminal.get("step")
+        matching_navigation = [
+            record for record in navigation if record.get("step") == terminal_step
+        ]
+        successful_transition = (
+            len(matching_navigation) == 1
+            and matching_navigation[0].get("changed") is True
+            and matching_navigation[0].get("stable") is True
+            and matching_navigation[0].get("url_change_kind")
+            in {"unchanged", "query_or_hash_changed"}
+        )
+        if (
+            terminal_url_is_current
+            and successful_transition
+            and "next_content" in signals
+            and not terminal.get("content_present")
+        ):
             return "next_content_confirmed"
-        if "end" in signals and not terminal.get("content_present") and "next_content" not in signals:
+        if (
+            terminal_url_is_current
+            and successful_transition
+            and "end" in signals
+            and not terminal.get("content_present")
+            and "next_content" not in signals
+        ):
             return "end_confirmed"
         return "terminal_but_type_unknown"
     if stopped_reason in {"max_terminal_steps_reached", "repeated_no_change_without_terminal"}:
@@ -599,6 +600,8 @@ class ZebrackTerminalProbe(ZebrackProbe):
                 self.z2_states,
                 self.z2_navigation,
                 stopped_reason=self.z2_stopped_reason,
+                expected_title_id=self.expected_title_id,
+                expected_chapter_id=self.expected_chapter_id,
             ),
             "saved_network_images": self.saved_images,
             "errors": self.errors,

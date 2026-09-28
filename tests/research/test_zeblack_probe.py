@@ -330,26 +330,88 @@ def test_z2_url_identity_change_detects_chapter_escape() -> None:
     assert classify_z2_url_change(TARGET, "https://example.test/", "118286", "9265713") == "other_escape"
 
 
-def test_z2_terminal_verdict_is_fail_closed() -> None:
+def test_z2_terminal_verdict_requires_matching_successful_navigation() -> None:
     content = {"content_present": True, "terminal_observed": False, "terminal_signal_kinds": []}
-    end = {"content_present": False, "terminal_observed": True, "terminal_signal_kinds": ["end"]}
+    end = {
+        "step": 13,
+        "url": TARGET,
+        "content_present": False,
+        "terminal_observed": True,
+        "terminal_signal_kinds": ["end"],
+    }
     next_content = {
+        "step": 13,
+        "url": TARGET,
         "content_present": False,
         "terminal_observed": True,
         "terminal_signal_kinds": ["next_content"],
     }
-    unknown = {
+    successful_navigation = {
+        "step": 13,
+        "changed": True,
+        "stable": True,
+        "url_change_kind": "unchanged",
+    }
+
+    def verdict(states: list[dict[str, object]], navigation: list[dict[str, object]]) -> str:
+        return aggregate_terminal_verdict(
+            states,
+            navigation,
+            stopped_reason="terminal_state_observed",
+            expected_title_id="118286",
+            expected_chapter_id="9265713",
+        )
+
+    assert verdict([content, next_content], [successful_navigation]) == "next_content_confirmed"
+    assert verdict([content, end], [successful_navigation]) == "end_confirmed"
+    assert verdict(
+        [content, next_content],
+        [{**successful_navigation, "changed": False, "stable": False}],
+    ) == "terminal_but_type_unknown"
+    assert verdict(
+        [content, next_content],
+        [{**successful_navigation, "stable": False}],
+    ) == "terminal_but_type_unknown"
+    assert verdict([content, next_content], [{**successful_navigation, "step": 12}]) == "terminal_but_type_unknown"
+    assert verdict(
+        [content, {**next_content, "url": "https://zebrack-comic.shueisha.co.jp/title/118286/chapter/9265714/viewer"}],
+        [successful_navigation],
+    ) == "terminal_but_type_unknown"
+
+
+def test_z2_terminal_verdict_prioritizes_escape_and_next_content() -> None:
+    content = {"content_present": True, "terminal_observed": False, "terminal_signal_kinds": []}
+    terminal_with_both = {
+        "step": 13,
+        "url": TARGET,
         "content_present": False,
         "terminal_observed": True,
-        "terminal_signal_kinds": ["terminal_ui"],
+        "terminal_signal_kinds": ["end", "next_content"],
     }
-    assert aggregate_terminal_verdict([content, end], [], stopped_reason="terminal_state_observed") == "end_confirmed"
-    assert aggregate_terminal_verdict([content, next_content], [], stopped_reason="terminal_state_observed") == "next_content_confirmed"
-    assert aggregate_terminal_verdict([content, unknown], [], stopped_reason="terminal_state_observed") == "terminal_but_type_unknown"
-    assert aggregate_terminal_verdict([content], [], stopped_reason="repeated_no_change_without_terminal") == "no_terminal_observed"
+    successful_navigation = {
+        "step": 13,
+        "changed": True,
+        "stable": True,
+        "url_change_kind": "unchanged",
+    }
+    common = {
+        "stopped_reason": "terminal_state_observed",
+        "expected_title_id": "118286",
+        "expected_chapter_id": "9265713",
+    }
     assert aggregate_terminal_verdict(
-        [content, end],
-        [{"url_change_kind": "next_chapter"}],
-        stopped_reason="automatic next-content navigation observed",
+        [content, terminal_with_both], [successful_navigation], **common
+    ) == "next_content_confirmed"
+    assert aggregate_terminal_verdict(
+        [content, terminal_with_both],
+        [{**successful_navigation, "url_change_kind": "next_chapter"}],
+        **common,
     ) == "auto_next_navigation_observed"
-    assert aggregate_terminal_verdict([], [], stopped_reason="navigation_candidate_unavailable") == "inconclusive"
+    assert aggregate_terminal_verdict(
+        [content], [], stopped_reason="repeated_no_change_without_terminal",
+        expected_title_id="118286", expected_chapter_id="9265713",
+    ) == "no_terminal_observed"
+    assert aggregate_terminal_verdict(
+        [], [], stopped_reason="navigation_candidate_unavailable",
+        expected_title_id="118286", expected_chapter_id="9265713",
+    ) == "inconclusive"

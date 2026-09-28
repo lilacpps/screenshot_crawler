@@ -352,7 +352,7 @@ The Z2 report classification is:
 Zeblack terminal behavior: next_content_confirmed
 ```
 
-The classifier is fail-closed: it does not treat a page counter or a no-change result alone as END. It requires current-chapter identity, stable transition evidence, disappearance of in-viewport page content, and explicit terminal evidence. `end_confirmed` was not observed in this run; the observed terminal signal was NEXT_CONTENT. This probe does not implement production PageState or click the next-content control.
+The classifier is fail-closed: it does not treat a page counter or a no-change result alone as END. A confirmed verdict now requires all of the following: terminal state content is absent, an explicit END/NEXT_CONTENT signal exists, the terminal URL still matches the expected title/chapter/viewer identity, and the navigation record with the same `step` has `changed=true`, `stable=true`, and an in-chapter URL change kind (`unchanged` or `query_or_hash_changed`). If the transition is unstable or the matching navigation record is missing, the result is `terminal_but_type_unknown`; it is never confirmed. `end_confirmed` was not observed in this run; the observed terminal signal was NEXT_CONTENT. This probe does not implement production PageState or click the next-content control.
 
 Production Adapter recommendation: retain `page_N` numeric tracking for content order, treat `26 / 26` as supporting evidence only, and classify the terminal state as `NEXT_CONTENT` only after the same current-chapter guard and explicit visible `次の話を読む`-type evidence. Keep the next-content action non-clicking. Behavior for other chapters, access states, login states, and a separate explicit END UI remains unknown.
 
