@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from poc.jumpplus_vertical_j1 import build_region_states, classify_reconstruction, prefetch_bucket
+from poc.jumpplus_vertical_j15 import dimension_compatible_candidates, selection_bucket
 from poc.jumpplus_vertical_probe import (
     geometry_order,
     loaded_content_count,
@@ -156,3 +157,29 @@ def test_j1_prefetch_bucket_is_bounded_distance_classification() -> None:
     assert prefetch_bucket([500], 1000) == "viewport_or_within_one_screen"
     assert prefetch_bucket([2500], 1000) == "a_few_screens"
     assert prefetch_bucket([4000], 1000) == "far_prefetch"
+
+
+def test_j15_dimension_filter_is_only_an_association_precondition() -> None:
+    candidates = [
+        {"url": "https://cdn/a.jpg", "dimensions": [575, 1400]},
+        {"url": "https://cdn/b.jpg", "dimensions": [575, 670]},
+    ]
+    selected = dimension_compatible_candidates([575, 1400], candidates)
+    assert [item["url"] for item in selected] == ["https://cdn/a.jpg"]
+
+
+@pytest.mark.parametrize(
+    ("selection", "expected"),
+    [
+        ({"selection_status": "unique", "selection_reason": "single_raw_sha256"}, "raw_sha256"),
+        ({"selection_status": "unique", "selection_reason": "single_pixel_match"}, "exact_pixel_sha256"),
+        ({"selection_status": "unique", "selection_reason": "single_decoder_tolerant_pixel_match"}, "tolerant_pixel"),
+        ({"selection_status": "equivalent_multiple", "selection_reason": "identical_dct_image_content"}, "dct_equivalence"),
+        ({"selection_status": "ambiguous", "selection_reason": "candidate_equivalence_unproven"}, "ambiguous"),
+        ({"selection_status": "unmatched", "selection_reason": "no_pixel_sha_match"}, "unmatched"),
+    ],
+)
+def test_j15_classifies_production_selector_output_without_reimplementing_it(
+    selection: dict, expected: str
+) -> None:
+    assert selection_bucket(selection) == expected

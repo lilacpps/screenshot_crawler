@@ -1252,8 +1252,12 @@ stage counts were observed at every point:
 All 24 content Canvas elements were mounted with dimensions at T0. All 24
 had a meaningful blob source identity, and all 24 had the existing full-frame
 plus partial draw mapping. The 24 saved `/public/page/` response candidates
-were retained with the research-only bound of 64. The draw-call increase
-between timepoints was redraw activity, not new content-region loading.
+were retained with the research-only bound of 64. The raw draw-call increase
+between timepoints is not sufficient evidence of viewer redraw activity.
+`captureImageSources()` snapshots each source by creating a temporary Canvas
+and calling `drawImage()`, and those probe draws are recorded by the shared
+hook. J1.5 separates observed content-canvas IDs from probe-generated
+temporary-canvas IDs before interpreting draw evidence.
 
 Waiting alone did not increase source, draw-ready, transport-ready, or
 reconstructable counts.
@@ -1333,3 +1337,111 @@ Artifacts include `report.json`, `regions.json`, `timeline.json`,
 `network.json`, `draw_calls.json`, `sources.json`, per-timepoint snapshots,
 five bounded `scroll_probes/`, rendered `references/`, the J1 input under
 `j1/`, and existing-J2 output under `reconstructed/`.
+
+## Vertical J1.5: transport candidate association
+
+J1.5 re-ran the target episode with one fresh initial load and no scroll,
+timeline wait, keyboard operation, or viewer navigation. It reuses the
+research-only source/network/draw collection and calls the production
+`screenshot_crawler.site_adapters.jumpplus.native_capture.select_transport_candidate()`
+directly. The production adapter and all production capture paths were left
+unchanged.
+
+Target:
+
+```text
+https://shonenjumpplus.com/episode/10834108156642491399
+```
+
+### Initial evidence and association
+
+```text
+content regions:       24/24
+source snapshots:      24/24
+transport candidates:  24/24
+draw mappings:         24/24
+```
+
+The browser source snapshot is a PNG generated from the source image, so an
+original source JPEG raw SHA is unavailable. The source PNG hash is retained
+separately as `source_snapshot_raw_sha256`; it is not treated as a transport
+raw-SHA match. Association counts below are region counts:
+
+| association evidence | count |
+| --- | ---: |
+| old J1 / exact decoded pixel SHA | 16 |
+| production raw SHA | 0 |
+| production exact decoded pixel SHA | 16 |
+| production decoder-tolerant pixel match (`max <= 2`) | 8 |
+| DCT content equivalence | 0 |
+| unmatched | 0 |
+| ambiguous | 0 |
+
+The eight regions that were J1 `candidate_association_failed` were all
+resolved by the production selector as
+`single_decoder_tolerant_pixel_match`. Their minimum decoded max-channel
+difference was `1`; their minimum mean absolute difference ranged from about
+`0.0029` to `0.0504` in this run. This is decoder variation, not a missing
+network response or missing source identity. Candidate dimensions were
+filtered before selector invocation and every region retained its complete
+candidate/difference diagnostics.
+
+### Reconstruction result
+
+The existing Jump+ J2 DCT reconstruction was reused. For the eight tolerant
+associations, the selected production candidate was passed into the existing
+`reconstruct_jpeg_dct()` path; no new scramble or mapping algorithm was
+implemented.
+
+```text
+confirmed:     24/24
+inconclusive:   0/24
+failed:         0/24
+```
+
+All 24 selected candidates had valid existing DCT reconstruction with the
+observed draw mapping. The DCT output was compared against a pixel replay
+PNG made from the selected candidate and the same observed draw mapping; this
+is not a claim of byte identity with a rendered locator screenshot. J1's prior rendered locator
+references remain the available screen-rendering comparison artifacts; J1.5
+did not repeat per-region screenshot capture because doing so would require
+viewport movement outside this initial-load association experiment.
+
+### Probe draw contamination check
+
+Immediately after source snapshots, the hook contained 48 draw calls. All 48
+were on newly assigned temporary Canvas IDs `25..72`; none used the 24
+content Canvas IDs `1..24`. Therefore the post-snapshot increase is confirmed
+probe-generated source-snapshot activity and must not be interpreted as
+viewer redraw activity. J1/J1.5 content mapping uses the pre-snapshot
+content-canvas draw records.
+
+### Current lazy-load interpretation and production candidate
+
+J1 already found all 24 source identities and draw mappings without scroll,
+and its bounded wait/scroll checks added no source, draw, network, or mapping
+evidence. J1.5 did not repeat those checks; it only resolved association for
+the already captured initial state. Current evidence therefore does not
+indicate that scrolling is required for capture of this episode.
+
+The production candidate is:
+
+```text
+initial load
+→ enumerate all content canvases
+→ capture source snapshots
+→ associate transport JPEGs with production selector
+→ reuse existing Jump+ reconstruction
+→ no scrolling required for this observed capture state
+```
+
+The conclusion for this episode is **A: initial load alone is sufficient for
+24/24 confirmed reconstruction**. This remains episode/state evidence, not a
+general guarantee for every vertical viewer. Remaining unverified items are
+other episodes, source formats/decoders outside this sample, and whether a
+future viewer implementation changes the source snapshot or selector inputs.
+
+Artifacts are under `output/jumpplus_vertical_j15/`: `report.json`,
+`summary.md`, `regions.json`, `association.json`, `candidates.json`,
+`sources.json`, `network.json`, `draw_calls.json`, `initial/`,
+`diagnostics/`, and `reconstructed/`.
