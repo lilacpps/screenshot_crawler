@@ -3,8 +3,9 @@ from __future__ import annotations
 import io
 
 import pytest
+import pytest_asyncio
 from PIL import Image
-from playwright.async_api import Error, Page, async_playwright
+from playwright.async_api import Browser, Page
 
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.runner import CrawlerRunner
@@ -12,23 +13,20 @@ from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
 from screenshot_crawler.site_adapters.magapoke.native_capture import reconstruct_jpeg_png
 
+pytestmark = pytest.mark.asyncio(loop_scope="module")
+
 SOURCE_PATH = "/static/web_titles/695/episodes/244815/p1.jpg"
 
 
-@pytest.fixture
-async def browser_page() -> Page:
-    playwright = await async_playwright().start()
-    try:
-        browser = await playwright.chromium.launch(headless=True)
-    except Error as exc:
-        await playwright.stop()
-        pytest.skip(f"Chromium is unavailable: {exc}")
-    page = await browser.new_page(viewport={"width": 800, "height": 600})
+@pytest_asyncio.fixture(loop_scope="module")
+async def browser_page(integration_browser: Browser) -> Page:
+    context = await integration_browser.new_context(viewport={"width": 800, "height": 600})
+    page = await context.new_page()
     try:
         yield page
     finally:
-        await browser.close()
-        await playwright.stop()
+        await page.close()
+        await context.close()
 
 
 def _mapping(*, sx: int, sy: int, sw: int, sh: int, dx: int, dy: int) -> dict:

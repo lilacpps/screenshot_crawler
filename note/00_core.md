@@ -17,7 +17,7 @@ read-only Batch planning and Manga ONE Policy. Phase
 
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
-最終同期: 2026-09-28
+最終同期: 2026-09-29
 
 
 ### Test execution policy（2026-09-27）
@@ -171,6 +171,44 @@ Browser. The generic integration fixture keeps the Playwright default viewport,
 so Discovery, Original Capture, and other Integration files are not affected.
 No new test case was added for this follow-up; the existing Adapter tests and
 the 49-case BookWalker group pass with the restored viewport.
+
+### Phase 3C-3 remaining Integration browser lifecycle rollout (2026-09-29)
+
+The final six targeted browser-backed Integration modules now use the shared
+module-scoped Playwright/Browser lifecycle from
+`tests/integration/conftest.py`, while keeping fresh function-scoped
+BrowserContext and Page objects. The migrated files and current case counts
+are:
+
+- AccessGuard browser: 1
+- generic local viewer: 19
+- Magapoke Discovery browser: 6
+- Magapoke local viewer: 3
+- Manga ONE Adapter browser: 7
+- Manga ONE Discovery browser: 1
+
+The 37 cases therefore use six module Playwright starts, six Chromium launches,
+and 37 fresh Context/Page pairs. The local-viewer and Manga ONE Adapter files
+retain their historical 800x600 viewport in file-local fixtures; the other
+three files use the generic Playwright-default viewport. No Context or Page is
+shared, and no session scope or pytest configuration change was introduced.
+
+Measurements:
+
+- Before: 37 passed in 39.74s, with 37 per-case Playwright/Chromium starts.
+- After: 37 passed in 40.54s; repeated runs were 41.21s and 31.08s.
+- Integration: 129 passed in 80.75s in the final run.
+- Full: 816 passed in 115.95s, with 1770 warnings.
+- Collection: Unit 624 / Integration 129 / Research 63 / Total 816.
+
+The six-file aggregate is affected by existing test-body wait and local-viewer
+transition costs, so its direct runtime did not improve monotonically. The
+lifecycle proof is the reduction from 37 per-case browser owners to six module
+owners while preserving fresh Context/Page isolation. Repeated target,
+Integration, and full-suite runs showed no order dependency, event-loop
+ownership error, browser crash, cleanup leak, or Chromium skip. Phase 3C is now
+complete. The remaining Integration files were not changed, and no
+session-scoped or cross-module Browser fixture was introduced.
 
 ## 1. Scope
 

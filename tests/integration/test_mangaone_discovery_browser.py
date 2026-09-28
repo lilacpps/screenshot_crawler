@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from playwright.async_api import Error, async_playwright
 
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.discovery import (
@@ -15,6 +14,8 @@ from screenshot_crawler.site_adapters.mangaone.discovery import (
     MangaOneDiscoveryAdapter,
 )
 from screenshot_crawler.watchlist import WatchlistTarget
+
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 
 def _listing_html() -> str:
@@ -48,22 +49,6 @@ def _listing_html() -> str:
       }});
     </script>
     """
-
-
-@pytest.fixture
-async def browser_page():
-    playwright = await async_playwright().start()
-    try:
-        browser = await playwright.chromium.launch(headless=True)
-    except Error as exc:
-        await playwright.stop()
-        pytest.skip(f"Chromium is unavailable: {exc}")
-    page = await browser.new_page()
-    try:
-        yield page
-    finally:
-        await browser.close()
-        await playwright.stop()
 
 
 async def test_mangaone_discovery_scans_pages_and_maps_cards(browser_page, tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 # Browser Fixture Optimization Assessment
 
-Status: IMPLEMENTED THROUGH PHASE 3C-2; PHASE 3C-3 PENDING
+Status: PHASE 3C COMPLETED
 
 調査日: 2026-09-28
 
@@ -22,22 +22,22 @@ Authority:
 
 | 項目 | 実測・評価 |
 |---|---|
-| Current Integration runtime | 144.59s（129 passed、fixture phase 計測実行）。別の `--durations=50` 実行は 146.85s で、現環境の baseline は約 145s と扱う |
-| Current Chromium launches | 129 回。全て test case ごとに 1 回 |
-| Current Playwright starts/stops | 129 / 129 回 |
-| Current context/page creation | `browser.new_page()` による implicit context + page が 129 / 129。さらに BookWalker original-capture の 1 test が explicit context + page を 3 回作成 |
+| Current Integration runtime | 80.75s（129 passed、`-p no:warnings`）。Phase 3C開始時の約145sから短縮。 |
+| Current Chromium launches | 10 回。Integration moduleごとに1回（129 caseのper-case launchではない） |
+| Current Playwright starts/stops | 10 / 10 回。Integration moduleごとに1回 |
+| Current context/page creation | 129 test casesがfresh Context + Pageを各1組。さらにBookWalker original-captureの1 testがexplicit context + pageを3組作成 |
 | Estimated browser lifecycle cost | 1 case あたり、Playwright start 0.321s、Chromium launch 0.075s、Browser close 0.102s、Playwright stop 0.013s が中央値。start / close が launch 単体より大きい |
-| Recommended optimization | Playwright は session、Browser はまず module、Context / Page は function。Page は共有しない |
-| Estimated browser sharing savings | 約 60--65s。module Browser の予測は約 82s、session Browser の予測は約 80s |
+| Recommended optimization | Playwright / Browser は module、Context / Page は function。Page / Context は共有しない。session scopeはoptional future optimization |
+| Observed browser sharing savings | Phase 3C開始時の約145sから最終Integration実測80.75s。test-body waitやWindows varianceを含むため保証値ではない |
 | Expected runtime after optimization | まずは 80--85s の範囲を期待値とする。test body の wait、Windows の process variance、fixture cleanup を含む保証値ではない |
 
-現行の大きなコストは Chromium launch 単体だけではなく、test ごとの Playwright start、Browser close、
-Playwright stop を含む browser lifecycle の反復である。最も価値の高い対象は 43 case が各々
-`_new_page()` を呼ぶ `test_magapoke_adapter_browser.py` である。
+Phase 3C開始時の大きなコストは Chromium launch 単体だけではなく、test ごとの Playwright start、
+Browser close、Playwright stop を含む browser lifecycle の反復だった。Phase 3C完了後は、
+test-bodyのDOM wait、local-viewer transition、Windows/browser varianceが主な残存コストである。
 
-## Scope and Non-goals
+## Initial Scope and Non-goals (pre-Phase 3C implementation)
 
-今回行ったのは、現行 fixture の inventory、実測、state isolation の評価、Phase 3C の設計である。
+今回行ったのは、現行 fixture の inventory、実測、state isolation の評価、Phase 3C の設計と実装である。
 次は今回の対象外である。
 
 - session-scoped Chromium の実装
@@ -53,7 +53,7 @@ Playwright stop を含む browser lifecycle の反復である。最も価値の
 作業ツリーに存在する Jump+ Research 追加（`tests/research/test_jumpplus_vertical_probe.py`、
 `poc/jumpplus_vertical_j1.py`、`note/04_jumpplus.md`）はユーザー所有の対象外変更として触れていない。
 
-## Current Test Baseline
+## Initial Test Baseline (pre-Phase 3C)
 
 現在の collection は次の通りである。
 
@@ -259,7 +259,7 @@ Discovery は単独最適化の価値が低い。
 - product/listing route、canvas trace、init script、追加 context/page の cleanup を確認する
 - 3 file の local fixture で安定した低レベル lifecycle primitive を shared conftest に抽出する
 
-### Phase 3C-3: Manga ONE / generic Integration and remaining files
+### Phase 3C-3: Manga ONE / generic Integration and remaining files (completed 2026-09-29)
 
 - `test_mangaone_adapter_browser.py`、`test_mangaone_discovery_browser.py`、
   `test_local_viewer_flows.py`、`test_magapoke_local_viewer.py` を移行する
@@ -396,7 +396,7 @@ The module-scoped Playwright/Browser arrangement is now the recommended
 standard. Session-scoped Playwright/Browser remains an optional future
 optimization only, pending separate loop-ownership and crash-blast-radius
 evidence. Phase 3C-3, including Manga ONE, generic local viewer, Magapoke
-local/discovery, and AccessGuard rollout, remains pending.
+local/discovery, and AccessGuard rollout, is complete.
 
 ## Historical Verification Status (pre-Phase 3C implementation)
 
@@ -418,11 +418,11 @@ local/discovery, and AccessGuard rollout, remains pending.
 
 Skipped tests: 0。Chromium は利用可能で、Integration 実行時に skip は発生しなかった。
 
-## Current Verification Status (Phase 3C-2 follow-up)
+## Current Verification Status (Phase 3C-3 complete)
 
-The current implementation is no longer design-only. Phase 3C-1 and Phase 3C-2
-are complete; Phase 3C-3 remains pending. The shared integration fixture keeps
-Playwright and Browser module-scoped and Context/Page function-scoped.
+The current implementation is no longer design-only. Phase 3C-1, Phase 3C-2,
+and Phase 3C-3 are complete. The shared integration fixture keeps Playwright
+and Browser module-scoped and Context/Page function-scoped.
 
 The BookWalker Adapter keeps its historical local viewport contract through a
 module-loop, function-scoped local `browser_page` fixture:
@@ -435,29 +435,55 @@ The generic `tests/integration/conftest.py` fixture remains at the Playwright
 default viewport. Discovery, Original Capture, and other Integration files are
 not forced to use the Adapter's 800 x 600 viewport.
 
-Latest verification:
+Phase 3C-3 migrated the final six targeted browser-backed Integration modules:
 
-- BookWalker Adapter: 26 passed in 18.34s
-- BookWalker 3 files: 49 passed in 42.15s; prior repeated runs were 36.40s / 36.33s
-- Integration: 129 passed; final observed run 101.65s
-- Full pytest: 816 passed in 149.14s, 2079 warnings
-- Collection: Unit 624 / Integration 129 / Research 63 / Total 816
-- `ruff check src tests`: passed
+- `test_access_guard_browser.py`: 1 case
+- `test_local_viewer_flows.py`: 19 cases
+- `test_magapoke_discovery_browser.py`: 6 cases
+- `test_magapoke_local_viewer.py`: 3 cases
+- `test_mangaone_adapter_browser.py`: 7 cases
+- `test_mangaone_discovery_browser.py`: 1 case
 
-The collection count reflects unrelated user-owned Unit/Research changes that
-appeared during the work; Phase 3C-2 did not add or remove test cases.
+The 37 cases use six module-scoped Playwright instances and six module-scoped
+Browsers. Each case receives a fresh Context and Page. The local-viewer and
+Manga ONE Adapter modules retain their historical 800 x 600 viewport through
+file-local fixtures; the other three modules use the generic Playwright-
+default viewport.
+
+Before -> after for this six-file group:
+
+- Before: 37 passed in 39.74s; old fixtures started Playwright and Chromium
+  once per case (37 / 37).
+- After: 37 passed in 40.54s; repeated runs were 41.21s and 31.08s.
+- Lifecycle after: Playwright 6, Chromium 6, fresh Context/Page pairs 37.
+- Integration: 129 passed in 80.75s in the final run.
+- Full pytest: 816 passed in 115.95s, 1770 warnings.
+- Collection: Unit 624 / Integration 129 / Research 63 / Total 816.
+- `ruff check src tests`: passed.
+
+The direct six-file runtime is dominated by existing test-body waits and local
+viewer transitions, so it did not improve monotonically. The lifecycle proof
+is the reduction from 37 per-case browser owners to six module owners while
+preserving fresh Context/Page isolation. Repeated target runs, Integration,
+and full regression showed no order dependency, event-loop ownership error,
+browser crash, cleanup leak, or Chromium skip. Phase 3C did not add or remove
+test cases; Unit and Research counts reflect the current repository baseline.
 
 ## Final Decision Snapshot
 
 ```text
 Current:
-- Integration runtime: 90.79s / 109.52s observed for 129 passed after 3C-2
+- Integration runtime: 80.75s observed for 129 passed after 3C-3
+- Browser lifecycle: six migrated target modules use six module Playwright
+  starts and six Chromium launches; 37 fresh Context/Page pairs
 - BookWalker target: 3 module Playwright starts and 3 Chromium launches
 - dominant remaining cost: test-body DOM waits and local-viewer transitions
 
 Completed:
 - Phase 3C-1: Magapoke Adapter local fixture proof
 - Phase 3C-2: BookWalker browser tests + shared lifecycle primitive extraction
+- Phase 3C-3: AccessGuard, local viewer, Magapoke Discovery/local viewer, and
+  Manga ONE browser tests
 
 Recommended:
 - Playwright scope: module
@@ -468,17 +494,20 @@ Recommended:
 - session scope: optional future optimization, not current standard
 
 Highest-value target:
-- remaining Phase 3C-3 Integration files
+- no planned Phase 3C migration remains; evaluate any future rollout
+  separately
 
 Risks:
 - cleanup, browser crash blast radius, async event-loop compatibility, route/listener/storage leakage
 
 Pending:
-- Phase 3C-3: Manga ONE / generic / remaining Integration
+- no Phase 3C migration remains; session-scoped lifecycle is optional future
+  work only
 
 Changed:
 - tests/integration/conftest.py
 - three BookWalker browser test files
+- six Phase 3C-3 Integration test files
 - note/test_browser_fixture_optimization.md and note/00_core.md
 
 Not changed:
@@ -487,5 +516,6 @@ Not changed:
 - production code
 - pytest configuration
 - timeout / grace values
-- non-BookWalker Integration semantics
+- test semantics in the six migrated files
+- non-target Integration files
 ```

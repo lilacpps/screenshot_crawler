@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 
 import pytest
-from playwright.async_api import Error, Page, async_playwright
+import pytest_asyncio
+from playwright.async_api import Browser, Page
 
 from screenshot_crawler.core.errors import (
     MaxPagesExceededError,
@@ -15,6 +16,8 @@ from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.mangaone.adapter import MangaOneAdapter
 
+pytestmark = pytest.mark.asyncio(loop_scope="module")
+
 _IMAGE = (
     "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
     "width='200' height='300'%3E%3Crect width='200' height='300' fill='%23bada55'/%3E%3C/svg%3E"
@@ -22,20 +25,15 @@ _IMAGE = (
 _IMAGE_ALT = _IMAGE.replace("%23bada55", "%23255f9a")
 
 
-@pytest.fixture
-async def browser_page() -> Page:
-    playwright = await async_playwright().start()
-    try:
-        browser = await playwright.chromium.launch(headless=True)
-    except Error as exc:
-        await playwright.stop()
-        pytest.skip(f"Chromium is unavailable: {exc}")
-    page = await browser.new_page(viewport={"width": 800, "height": 600})
+@pytest_asyncio.fixture(loop_scope="module")
+async def browser_page(integration_browser: Browser) -> Page:
+    context = await integration_browser.new_context(viewport={"width": 800, "height": 600})
+    page = await context.new_page()
     try:
         yield page
     finally:
-        await browser.close()
-        await playwright.stop()
+        await page.close()
+        await context.close()
 
 
 class LocalViewerAdapter(SiteAdapter):

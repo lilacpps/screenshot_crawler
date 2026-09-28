@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from playwright.async_api import Error, async_playwright
 
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.discovery import (
@@ -14,6 +13,8 @@ from screenshot_crawler.site_adapters.magapoke.discovery import (
     MagapokeDiscoveryAdapter,
 )
 from screenshot_crawler.watchlist import WatchlistTarget
+
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 TARGET_URL = "https://pocket.shonenmagazine.com/title/00695/episode/244815"
 
@@ -126,22 +127,6 @@ def _listing_html(
       </script>
     </body></html>
     """
-
-
-@pytest.fixture
-async def browser_page():
-    playwright = await async_playwright().start()
-    try:
-        browser = await playwright.chromium.launch(headless=True)
-    except Error as exc:
-        await playwright.stop()
-        pytest.skip(f"Chromium is unavailable: {exc}")
-    page = await browser.new_page()
-    try:
-        yield page
-    finally:
-        await browser.close()
-        await playwright.stop()
 
 
 def _target() -> WatchlistTarget:

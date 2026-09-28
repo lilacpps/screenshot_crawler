@@ -1,7 +1,8 @@
 import asyncio
 
 import pytest
-from playwright.async_api import Error, Page, async_playwright
+import pytest_asyncio
+from playwright.async_api import Browser, Page
 
 from screenshot_crawler.core.errors import (
     PageChangeTimeoutError,
@@ -10,21 +11,18 @@ from screenshot_crawler.site_adapters.mangaone.adapter import (
     MangaOneAdapter,
 )
 
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
-@pytest.fixture
-async def browser_page() -> Page:
-    playwright = await async_playwright().start()
-    try:
-        browser = await playwright.chromium.launch(headless=True)
-    except Error as exc:
-        await playwright.stop()
-        pytest.skip(f"Chromium is unavailable: {exc}")
-    page = await browser.new_page(viewport={"width": 800, "height": 600})
+
+@pytest_asyncio.fixture(loop_scope="module")
+async def browser_page(integration_browser: Browser) -> Page:
+    context = await integration_browser.new_context(viewport={"width": 800, "height": 600})
+    page = await context.new_page()
     try:
         yield page
     finally:
-        await browser.close()
-        await playwright.stop()
+        await page.close()
+        await context.close()
 
 
 def _synthetic_webp(width: int, height: int) -> bytes:
