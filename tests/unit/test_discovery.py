@@ -21,7 +21,7 @@ from screenshot_crawler.discovery import (
     DiscoverySourceSnapshot,
     IncrementalStopDecision,
 )
-from screenshot_crawler.watchlist import WatchlistTarget
+from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
 
 
 class FakePage:
@@ -103,11 +103,13 @@ class FakeDiscoveryAdapter(DiscoveryAdapter):
         self.failure = failure
         self.reconciled_access_mode = reconciled_access_mode
         self.stop_decision = stop_decision
+        self.iter_records_calls = 0
         self.reconciliation_calls: list[tuple[str, DiscoverySourceSnapshot | None]] = []
         self.stop_calls: list[str] = []
 
     def iter_records(self, page: FakePage, target: WatchlistTarget, mode: str):
         del page, target, mode
+        self.iter_records_calls += 1
 
         async def generate():
             for discovered in self.records:
@@ -145,6 +147,7 @@ def target(
     site: str = "site-a",
     label: str = "作品A",
     enabled: bool = True,
+    discovery_scope: DiscoveryScope | None = None,
 ) -> WatchlistTarget:
     return WatchlistTarget(
         key=key,
@@ -153,6 +156,7 @@ def target(
         url=f"https://example.test/{key}",
         label=label,
         enabled=enabled,
+        discovery_scope=discovery_scope,
     )
 
 
@@ -176,6 +180,7 @@ async def test_first_discovery_creates_work_item_source_and_web_default(tmp_path
     result = await service.discover(FakePage(), watch_target, "full")
 
     assert result.complete is True
+    assert adapter.iter_records_calls == 1
     work = catalog.find_work("work-a")
     assert work is not None
     assert work.title == "作品A"
@@ -493,6 +498,33 @@ async def test_disabled_target_does_not_create_work(tmp_path: Path) -> None:
     result = await service.discover(FakePage(), watch_target, "full")
     assert result.stopped_reason == "disabled"
     assert catalog.list_works() == []
+
+
+async def test_bounded_scope_fails_closed_before_adapter_iteration_or_catalog_mutation(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record("should-not-be-observed")])
+    service, catalog, watch_target = setup_service(
+        tmp_path,
+        adapter,
+        watch_target=target(
+            discovery_scope=DiscoveryScope(from_url="https://example.test/from")
+        ),
+    )
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is False
+    assert result.stopped_reason == "incomplete"
+    assert result.observed_count == 0
+    assert result.new_count == 0
+    assert result.known_count == 0
+    assert adapter.iter_records_calls == 0
+    assert adapter.reconciliation_calls == []
+    assert catalog.list_works() == []
+    assert catalog.list_items() == []
+    assert catalog.list_sources() == []
+    assert catalog.list_source_targets() == []
 
 
 def test_discovered_graph_insert_is_atomic(tmp_path: Path) -> None:

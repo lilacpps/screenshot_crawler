@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from screenshot_crawler.watchlist import (
+    DiscoveryScope,
     DuplicateWatchlistKeyError,
     InvalidWatchlistError,
     WatchlistService,
@@ -32,6 +33,131 @@ def test_missing_watchlist_is_empty_and_add_roundtrips_v3_fields(tmp_path: Path)
     written = (tmp_path / "watchlist.yaml").read_text(encoding="utf-8")
     assert "work_key: work-one" in written
     assert "label: 作品A" in written
+    assert "discovery_scope" not in written
+
+
+def test_existing_scope_less_yaml_loads_as_unbounded(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    enabled: true\n"
+        "    label: 作品A\n",
+        encoding="utf-8",
+    )
+
+    loaded = WatchlistService(path).get("one")
+
+    assert loaded.discovery_scope is None
+
+
+@pytest.mark.parametrize(
+    ("scope_yaml", "expected"),
+    [
+        (
+            ("discovery_scope:\n"
+             "      from_url: https://example.invalid/from\n"),
+            DiscoveryScope(from_url="https://example.invalid/from"),
+        ),
+        (
+            ("discovery_scope:\n"
+             "      through_url: https://example.invalid/through\n"),
+            DiscoveryScope(through_url="https://example.invalid/through"),
+        ),
+        (
+            ("discovery_scope:\n"
+             "      from_url: https://example.invalid/from\n"
+             "      through_url: https://example.invalid/through\n"),
+            DiscoveryScope(
+                from_url="https://example.invalid/from",
+                through_url="https://example.invalid/through",
+            ),
+        ),
+    ],
+)
+def test_discovery_scope_forms_parse(
+    tmp_path: Path, scope_yaml: str, expected: DiscoveryScope
+) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    enabled: true\n"
+        "    label: 作品A\n"
+        f"    {scope_yaml}",
+        encoding="utf-8",
+    )
+
+    assert WatchlistService(path).get("one").discovery_scope == expected
+
+
+@pytest.mark.parametrize(
+    "scope_yaml",
+    [
+        "discovery_scope: []\n",
+        "discovery_scope: null\n",
+        "discovery_scope: {}\n",
+        "discovery_scope:\n      from_url: null\n",
+        "discovery_scope:\n      through_url: ''\n",
+        "discovery_scope:\n      from_url: '  '\n",
+        "discovery_scope:\n      through_url: 123\n",
+    ],
+)
+def test_invalid_discovery_scope_is_rejected(tmp_path: Path, scope_yaml: str) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    enabled: true\n"
+        "    label: 作品A\n"
+        f"    {scope_yaml}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InvalidWatchlistError, match="discovery_scope"):
+        WatchlistService(path).list_targets()
+
+
+def test_enable_disable_and_reload_preserve_discovery_scope(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    enabled: true\n"
+        "    label: 作品A\n"
+        "    discovery_scope:\n"
+        "      from_url: https://example.invalid/from\n"
+        "      through_url: https://example.invalid/through\n",
+        encoding="utf-8",
+    )
+    service = WatchlistService(path)
+
+    disabled = service.disable("one")
+    assert disabled.discovery_scope == DiscoveryScope(
+        from_url="https://example.invalid/from",
+        through_url="https://example.invalid/through",
+    )
+    service.enable("one")
+    reloaded = WatchlistService(path).get("one")
+
+    assert reloaded.enabled is True
+    assert reloaded.discovery_scope == disabled.discovery_scope
+    written = path.read_text(encoding="utf-8")
+    assert "discovery_scope:" in written
+    assert "from_url: https://example.invalid/from" in written
+    assert "through_url: https://example.invalid/through" in written
 
 
 def test_same_work_key_can_be_shared_but_key_must_be_unique(tmp_path: Path) -> None:

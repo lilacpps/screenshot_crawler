@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from screenshot_crawler.discovery.models import (
     DiscoveredRecord,
@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 class DiscoveryAdapter(ABC):
     """Enumerate site-specific listing results without knowing Catalog."""
+
+    supports_bounded_discovery: ClassVar[bool] = False
 
     @abstractmethod
     def iter_records(

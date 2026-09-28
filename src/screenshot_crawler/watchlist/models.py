@@ -6,6 +6,14 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
+class DiscoveryScope:
+    """Optional site-native boundaries for a bounded Discovery target."""
+
+    from_url: str | None = None
+    through_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WatchlistTarget:
     """One human-managed Discovery starting point."""
 
@@ -15,3 +23,4 @@ class WatchlistTarget:
     url: str
     label: str
     enabled: bool = True
+    discovery_scope: DiscoveryScope | None = None

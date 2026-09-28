@@ -62,6 +62,21 @@ class DiscoveryService:
                 warnings=(),
             )
 
+        adapter = None
+        if target.discovery_scope is not None:
+            adapter = self.registry.create(target.site)
+            if getattr(adapter, "supports_bounded_discovery", False) is not True:
+                return DiscoveryResult(
+                    mode=mode,
+                    target_key=target.key,
+                    observed_count=0,
+                    new_count=0,
+                    known_count=0,
+                    complete=False if mode == "full" else None,
+                    stopped_reason="incomplete",
+                    warnings=(),
+                )
+
         # The Watchlist label is only the initial title for a new Work.
         work = self.catalog.find_work(target.work_key)
         if work is None:
@@ -69,7 +84,8 @@ class DiscoveryService:
                 WorkInput(work_key=target.work_key, title=target.label)
             )
 
-        adapter = self.registry.create(target.site)
+        if adapter is None:
+            adapter = self.registry.create(target.site)
         initial_sources = {
             source.external_id: DiscoverySourceSnapshot(
                 external_id=source.external_id,

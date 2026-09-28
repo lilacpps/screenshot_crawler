@@ -1102,12 +1102,20 @@ Plannerがexplicit `quota_resource`を検証する。Batchはnormal/default pass
 requested resource以外へのsilent fallbackをしない。Phase 4/5では同じcontractをgrant-onlyにも使い、
 Work Ticket cooldown、Premium live balance、Policy順`all`を実装している。
 
-### Planned: Site-native bounded Discovery（NOT YET IMPLEMENTED）
+### Site-native bounded Discovery（B1 implemented / B2+ NOT YET IMPLEMENTED）
 
-正式仕様は `docs/BOUNDED_DISCOVERY.md`。Watchlist targetへoptionalな `discovery_scope.from_url / through_url` を持たせ、各Discovery Adapterがsite-native external identityとcanonical listing orderだけでinclusive rangeを確定する。
+正式仕様は `docs/BOUNDED_DISCOVERY.md`。現在のB1実装状況は次のとおり。
 
-title、order、episode number、漢数字変換、cross-site fuzzy matchはscope判定に使わない。bounded scope内のrecordは通常のItem / Sourceとして同期し、cross-site Itemのautomatic mergeやcompleted伝播は行わない。重複crawlは安全側の挙動として許容する。
+- Watchlistの`DiscoveryScope(from_url / through_url)` model、YAML parse、mapping / boundary存在 / non-empty string validation: **IMPLEMENTED**
+- scope付きtargetのenable / disable等のWatchlist rewrite preservation: **IMPLEMENTED**
+- scopeなしtargetの既存load / rewrite互換: **IMPLEMENTED**。scopeなしtargetは従来どおりunboundedとして扱い、scope専用CLI optionは追加していない
+- common Discovery capability gate: **IMPLEMENTED**。`DiscoveryAdapter.supports_bounded_discovery` のdefaultは`False`で、production Adapterはまだopt-inしていない
+- scope付きtargetを未対応Adapterへ渡した場合: **IMPLEMENTED**。Work作成前にincompleteとして停止し、`iter_records()`、unbounded fallback、Item / Source / SourceTarget同期を行わない
+- bounded rangeのboundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
+- bounded fullのscope外Source保護・global missing-source reconciliation抑止: **NOT YET IMPLEMENTED**
+- bounded incrementalのcommon regressionとsupported Adapter semantics: **NOT YET IMPLEMENTED**
+- production site Adapterのbounded range implementation: **NOT YET IMPLEMENTED**
 
-Catalog schema、Batch Planner / Executor、CrawlerRunnerは変更しない。bounded fullではscope外Sourceを誤ってunavailableにしないためglobal missing-source reconciliationを実行しない。invalid / missing / reversed boundaryはfail closedとし、boundary成立確認前にscope recordをCatalogへyield/writeしない。
+B1ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、production site-specific Discovery logicも変更していない。B2以降でbounded scope内recordを同期する際も、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 
 将来cross-site dedupeが必要になった場合はphysical Item mergeより先にhuman approval付きnon-destructive equivalence mappingを検討する。physical mergeは現計画の対象外である。

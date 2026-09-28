@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 
 class WatchlistError(ValueError):
@@ -103,6 +104,7 @@ class WatchlistService:
                     url=target.url,
                     label=target.label,
                     enabled=enabled,
+                    discovery_scope=target.discovery_scope,
                 )
                 targets[index] = updated
                 self._write(targets)
@@ -165,6 +167,7 @@ class WatchlistService:
             raise InvalidWatchlistError(f"targets[{index}].enabled must be a boolean")
         if not isinstance(label, str):
             raise InvalidWatchlistError(f"targets[{index}].label must be a string")
+        discovery_scope = self._parse_discovery_scope(raw_target, index)
         return self._validate_target(
             WatchlistTarget(
                 work_key=raw_target["work_key"],
@@ -173,9 +176,39 @@ class WatchlistService:
                 url=raw_target["url"],
                 label=label,
                 enabled=enabled,
+                discovery_scope=discovery_scope,
             ),
             source=f"targets[{index}]",
         )
+
+    @staticmethod
+    def _parse_discovery_scope(raw_target: Mapping[str, Any], index: int) -> DiscoveryScope | None:
+        if "discovery_scope" not in raw_target:
+            return None
+        raw_scope = raw_target["discovery_scope"]
+        if not isinstance(raw_scope, Mapping):
+            raise InvalidWatchlistError(f"targets[{index}].discovery_scope must be a mapping")
+
+        from_url = WatchlistService._parse_scope_url(raw_scope, "from_url", index)
+        through_url = WatchlistService._parse_scope_url(raw_scope, "through_url", index)
+        if from_url is None and through_url is None:
+            raise InvalidWatchlistError(
+                f"targets[{index}].discovery_scope must contain from_url or through_url"
+            )
+        return DiscoveryScope(from_url=from_url, through_url=through_url)
+
+    @staticmethod
+    def _parse_scope_url(
+        raw_scope: Mapping[str, Any], field: str, index: int
+    ) -> str | None:
+        if field not in raw_scope:
+            return None
+        value = raw_scope[field]
+        if not isinstance(value, str) or not value.strip():
+            raise InvalidWatchlistError(
+                f"targets[{index}].discovery_scope.{field} must be a non-empty string"
+            )
+        return value
 
     @staticmethod
     def _validate_target(target: WatchlistTarget, *, source: str) -> WatchlistTarget:
@@ -185,23 +218,42 @@ class WatchlistService:
                 raise InvalidWatchlistError(f"{source}.{name} must be a non-empty string")
         if not isinstance(target.enabled, bool):
             raise InvalidWatchlistError(f"{source}.enabled must be a boolean")
+        if target.discovery_scope is not None:
+            if not isinstance(target.discovery_scope, DiscoveryScope):
+                raise InvalidWatchlistError(f"{source}.discovery_scope must be a DiscoveryScope")
+            if target.discovery_scope.from_url is None and target.discovery_scope.through_url is None:
+                raise InvalidWatchlistError(
+                    f"{source}.discovery_scope must contain from_url or through_url"
+                )
+            for field in ("from_url", "through_url"):
+                value = getattr(target.discovery_scope, field)
+                if value is not None and (not isinstance(value, str) or not value.strip()):
+                    raise InvalidWatchlistError(
+                        f"{source}.discovery_scope.{field} must be a non-empty string"
+                    )
         return target
 
     def _write(self, targets: list[WatchlistTarget]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "targets": [
-                {
-                    "key": target.key,
-                    "work_key": target.work_key,
-                    "site": target.site,
-                    "url": target.url,
-                    "enabled": target.enabled,
-                    "label": target.label,
-                }
-                for target in targets
-            ]
-        }
+        serialized_targets: list[dict[str, Any]] = []
+        for target in targets:
+            serialized: dict[str, Any] = {
+                "key": target.key,
+                "work_key": target.work_key,
+                "site": target.site,
+                "url": target.url,
+                "enabled": target.enabled,
+                "label": target.label,
+            }
+            if target.discovery_scope is not None:
+                scope: dict[str, str] = {}
+                if target.discovery_scope.from_url is not None:
+                    scope["from_url"] = target.discovery_scope.from_url
+                if target.discovery_scope.through_url is not None:
+                    scope["through_url"] = target.discovery_scope.through_url
+                serialized["discovery_scope"] = scope
+            serialized_targets.append(serialized)
+        payload = {"targets": serialized_targets}
         temporary_path: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
