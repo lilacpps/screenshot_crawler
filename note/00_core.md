@@ -152,8 +152,10 @@ Before -> after measurements:
 - Integration: 121.34s -> 90.79s in the first after run; the final
   verification run was 109.52s for 129 passed due to unrelated local-viewer /
   wait-test runtime variance.
-- Full: the current run was 802 passed in 125.01s with 1962 warnings. The
-  current count includes one unrelated Research file that was not modified.
+- Full: the final run was 810 passed in 133.80s with 2025 warnings. Final
+  collection was Unit 618 / Integration 129 / Research 63 = 810; Unit and
+  Research changed because unrelated user-owned changes appeared during the
+  work and were not modified.
 
 `--setup-show` confirmed three module Playwright fixtures, three module Browser
 fixtures, and 49 function Context/Page fixture invocations. Repeated and full

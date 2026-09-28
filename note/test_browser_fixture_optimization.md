@@ -379,10 +379,11 @@ Integration changed from the Phase 3C-1 reference of 129 passed in 121.34s to
 129 passed in 90.79s in the first after run; the final verification run was
 129 passed in 109.52s. The difference is runtime variance in unrelated
 local-viewer/wait tests, while the repeated 49-case BookWalker run remained
-36.40s and 36.33s. The current full suite was 802 passed in 125.01s with
-1962 warnings. The full-suite count is one higher than the Phase 3C-1 note
-because an unrelated Research file was present in the working tree; it was not
-modified by this Phase.
+36.40s and 36.33s. The final full suite was 810 passed in 133.80s with 2025
+warnings. Final collection was Unit 618 / Integration 129 / Research 63 =
+810. Unit and Research counts changed during the work because unrelated
+user-owned changes appeared in the working tree; those paths were not modified
+by this Phase.
 
 Isolation and cleanup were verified through the repeated runs and
 `--setup-show`: every test receives a fresh Context and Page, routes remain on
@@ -420,38 +421,41 @@ Skipped tests: 0。Chromium は利用可能で、Integration 実行時に skip �
 
 ```text
 Current:
-- Integration runtime: ~145s (observed 144.59s / 146.85s)
-- Chromium launches: 129
-- dominant fixture cost: per-test Playwright + Browser lifecycle; Magapoke helper hides it in call
+- Integration runtime: 90.79s / 109.52s observed for 129 passed after 3C-2
+- BookWalker target: 3 module Playwright starts and 3 Chromium launches
+- dominant remaining cost: test-body DOM waits and local-viewer transitions
 
-Estimated:
-- browser sharing savings: ~60-65s
-- expected Integration runtime: ~80-85s
+Completed:
+- Phase 3C-1: Magapoke Adapter local fixture proof
+- Phase 3C-2: BookWalker browser tests + shared lifecycle primitive extraction
 
 Recommended:
-- Browser scope: module first; session only after stability evidence
+- Playwright scope: module
+- Browser scope: module
 - Context scope: function
 - Page scope: function
-- shared conftest: yes, lifecycle primitives only after 3C-1 local proof
+- shared conftest: lifecycle primitives only
+- session scope: optional future optimization, not current standard
 
 Highest-value target:
-- test_magapoke_adapter_browser.py (43 cases / 43 launches)
+- remaining Phase 3C-3 Integration files
 
 Risks:
 - cleanup, browser crash blast radius, async event-loop compatibility, route/listener/storage leakage
 
-Proposed implementation:
-- Phase 3C-1: Magapoke Adapter local fixture proof
-- Phase 3C-2: BookWalker browser tests + shared lifecycle primitive extraction
+Pending:
 - Phase 3C-3: Manga ONE / generic / remaining Integration
 
 Changed:
-- note/test_browser_fixture_optimization.md only
+- tests/integration/conftest.py
+- three BookWalker browser test files
+- note/test_browser_fixture_optimization.md and note/00_core.md
 
 Not changed:
 - test semantics
-- fixture scope
+- shared Context/Page
 - production code
 - pytest configuration
-- Research / Probe files
+- timeout / grace values
+- non-BookWalker Integration semantics
 ```
