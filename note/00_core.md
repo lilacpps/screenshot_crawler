@@ -111,6 +111,28 @@ addition and its `note/04_jumpplus.md` update are not part of Phase 3B and were
 not modified or staged. The Phase 3B changes themselves preserve the previous
 785-case taxonomy: Unit 610 / Integration 129 / Research 46.
 
+### Phase 3C-1 Magapoke browser lifecycle proof (2026-09-28)
+
+The Magapoke Adapter browser tests now use module-scoped Playwright and Browser
+fixtures, with a fresh function-scoped BrowserContext and Page for every test.
+The target file remains 43 cases. Direct measurement changed the target-file
+runtime from 29.15s to 8.39s; lifecycle instrumentation showed Playwright
+starts 43 -> 1, Chromium launches 43 -> 1, and Context/Page creation at 43 / 43.
+
+The repeated target-file runs were 9.08s and 9.11s, and the full Integration
+suite ran 129 passed in 121.34s. The standard full suite ran 801 passed in
+152.09s with 2391 warnings. No order dependency, browser crash, cleanup leak,
+or Chromium skip was observed. The target file uses an explicit module async
+loop scope to keep module-owned Playwright objects on the same loop; pytest
+configuration was not changed.
+
+Only `tests/integration/test_magapoke_adapter_browser.py` and this note were
+changed for Phase 3C-1. Production code, test semantics, timeout/grace values,
+other Integration files, and shared `conftest.py` were not changed. The
+current observed collection is Unit 610 / Integration 129 / Research 62 = 801;
+the Research count was not modified by this Phase. BookWalker rollout remains
+Phase 3C-2 and is pending.
+
 ## 1. Scope
 
 Coreはサイト固有DOMやページ送りを判断しない。共通処理を担当する。

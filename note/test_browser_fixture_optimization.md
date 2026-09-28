@@ -290,6 +290,52 @@ Discovery は単独最適化の価値が低い。
 | Magapoke helper semantics | `_new_page()` の API を一度に全 repository へ一般化せず、43 case の local boundary で確認する |
 | false runtime attribution | Magapoke の call 内 lifecycle を setup と混同しない。移行前後で同じ phase hook を使う |
 
+## Phase 3C-1 Result
+
+Phase 3C-1 is complete for `tests/integration/test_magapoke_adapter_browser.py`.
+Only the module-local fixture lifecycle in that file was changed. The test
+assertions, parametrization, timeouts, fake HTML, routes, and production code
+were not changed.
+
+Before (direct target-file measurement on the current main baseline):
+
+- cases: 43 passed
+- Playwright starts: 43
+- Chromium launches: 43
+- target-file runtime: 29.15s
+- Integration baseline from the Phase 3C measurement: 129 passed in 146.85s
+  (fixture measurement 144.59s)
+
+After:
+
+- cases: 43 passed in 8.39s
+- Playwright starts: 1
+- Chromium launches: 1
+- BrowserContexts: 43
+- Pages: 43
+- repeated target-file runs: 9.08s and 9.11s
+- Integration: 129 passed in 121.34s
+- full pytest: 801 passed in 152.09s, 2391 warnings
+
+The `--setup-show` measurement confirmed one module-scoped Playwright fixture,
+one module-scoped Browser fixture, and 43 function-scoped Context/Page fixture
+invocations. Each test receives a fresh Context and Page; only Browser is
+shared. No order dependency, browser crash, cleanup leak, or Chromium skip was
+observed in the repeated and suite-level runs.
+
+Because the repository uses function-scoped async test loops by default, the
+target file explicitly uses the module loop scope for its async tests and
+fixtures. No pytest configuration was changed. The first module-fixture trial
+without aligned loop scope did not complete normally; the explicit local loop
+scope resolved that ownership mismatch without introducing session scope.
+
+The current repository-wide collection is 801 cases: Unit 610, Integration
+129, Research 62. The Research count is reported as observed and was not
+modified by this Phase.
+
+Next: evaluate a separate BookWalker rollout (Phase 3C-2); no other
+Integration file was changed in Phase 3C-1.
+
 ## Verification Status
 
 実行済み:
