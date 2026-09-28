@@ -1219,3 +1219,117 @@ one browser/session condition, and one operation per fresh state; other
 vertical episodes, different JPEG sampling, complete lazy-load behavior, and
 END/NEXT_CONTENT semantics remain unverified. No production Adapter, Discovery,
 Batch, DB, or ZIP behavior was changed.
+
+## Vertical J1: initial load / lazy load / reconstruction
+
+The target was:
+
+```text
+https://shonenjumpplus.com/episode/10834108156642491399
+```
+
+The read-only J1 probe is `poc/jumpplus_vertical_j1.py`. It reuses the
+existing vertical DOM snapshot, draw hook, transport response collector, and
+`poc/jumpplus_reconstruct.py`. The run was saved under
+`output/jumpplus_vertical_j1_20260928_final/`. It did not change the
+production JumpPlus adapter or invoke purchase, point, rental, login,
+next-episode, ZIP, Discovery, Batch, or DB behavior.
+
+### Unscrolled timeline
+
+The probe performed a fresh load, waited for a stable viewer, and then did no
+scroll or keyboard operation at T0, T+2s, T+5s, T+10s, or T+20s. The same
+stage counts were observed at every point:
+
+| point | mounted | source identity | draw ready | transport ready | reconstructable evidence | draw calls | source identities | transport candidates |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| T0 | 24 | 24 | 24 | 16 | 16 | 432 | 24 | 24 |
+| T+2s | 24 | 24 | 24 | 16 | 16 | 480 | 24 | 24 |
+| T+5s | 24 | 24 | 24 | 16 | 16 | 528 | 24 | 24 |
+| T+10s | 24 | 24 | 24 | 16 | 16 | 576 | 24 | 24 |
+| T+20s | 24 | 24 | 24 | 16 | 16 | 624 | 24 | 24 |
+
+All 24 content Canvas elements were mounted with dimensions at T0. All 24
+had a meaningful blob source identity, and all 24 had the existing full-frame
+plus partial draw mapping. The 24 saved `/public/page/` response candidates
+were retained with the research-only bound of 64. The draw-call increase
+between timepoints was redraw activity, not new content-region loading.
+
+Waiting alone did not increase source, draw-ready, transport-ready, or
+reconstructable counts.
+
+### Region-level reconstruction result
+
+The existing J2 reconstruction was run against all 24 final region states.
+The result was:
+
+```text
+confirmed:     16/24  (lossless_mapping_complete)
+inconclusive:   8/24  (candidate_association_failed)
+failed:         0/24
+```
+
+The eight inconclusive regions had mounted Canvas, source identity, and
+draw mapping. Their source snapshots were available, but no retained
+transport candidate had the same decoded RGB pixel identity. This is
+classified as candidate association failure, not network response absence,
+source/blob absence, drawImage absence, or mapping absence. Because the
+transport candidate body exists but correspondence is unproven, these eight
+regions are `inconclusive`, not `failed`.
+
+The 16 confirmed regions generated the existing J2 lossless JPEG-domain
+reconstruction. Rendered locator references were saved for the confirmed
+regions plus the initial region-0 diagnostic reference. The reference is a
+screen-rendering comparison only; it is not expected to be byte-identical to
+the reconstructed JPEG. The J2 visual assessment recorded close and mismatch
+cases separately and was not used to convert an inconclusive candidate into a
+success.
+
+### Limited scroll probes
+
+Because the initial evidence was incomplete, the probe performed exactly five
+bounded `scrollIntoView({block: "start", inline: "nearest", behavior:
+"instant"})` probes at regions 0, 5, 12, 18, and 23. It did not traverse the
+episode from top to bottom. Before and after each probe:
+
+```text
+source count:              24 -> 24
+transport candidate count: 24 -> 24
+new source regions:        none
+new draw-ready regions:    none
+new transport-ready regions: none
+new reconstructable regions: none
+```
+
+No new `/public/page/` response was observed from these probes. The only
+draw-count changes were redraws of already observed Canvas elements. No
+viewport, one-screen, or multi-screen prefetch boundary was observed because
+there was no newly loaded region to measure.
+
+### J1 conclusion and production implication
+
+For this episode and shared-browser state:
+
+```text
+DOM mounted:                 24/24
+initial reconstructable:     16/24
+after waiting 20 seconds:    16/24
+after limited scroll probes: 16/24
+24/24 reconstruction:        not established (16 confirmed, 8 inconclusive)
+lazy load observed:          no
+wait-only loading:           no
+scroll-required loading:     no evidence
+```
+
+The required conclusion category is **C: still indeterminate**. The reason
+is not an observed lazy-load boundary. Scroll did not improve the result; the
+remaining uncertainty is transport-candidate association for eight regions.
+The current production candidate is therefore initial-load enumeration and
+reconstruction for evidence-complete regions, with candidate association
+resolution required before deciding whether a vertical scroll loop is needed.
+This J1 does not justify changing production capture behavior yet.
+
+Artifacts include `report.json`, `regions.json`, `timeline.json`,
+`network.json`, `draw_calls.json`, `sources.json`, per-timepoint snapshots,
+five bounded `scroll_probes/`, rendered `references/`, the J1 input under
+`j1/`, and existing-J2 output under `reconstructed/`.
