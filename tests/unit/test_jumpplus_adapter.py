@@ -306,6 +306,82 @@ async def test_detect_viewer_mode_uses_dom_markers(monkeypatch, markers, expecte
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sequence", "expected"),
+    [
+        (["unknown", "vertical", "vertical"], "vertical"),
+        (["unknown", "paged", "paged"], "paged"),
+        (["unknown", "unknown", "vertical", "vertical"], "vertical"),
+    ],
+)
+async def test_wait_for_viewer_mode_requires_two_consecutive_positive_results(
+    monkeypatch, sequence, expected
+) -> None:
+    adapter = JumpPlusAdapter()
+    observed = iter(sequence)
+
+    async def detect(_page):
+        return next(observed, sequence[-1])
+
+    monkeypatch.setattr(adapter, "_detect_viewer_mode", detect)
+
+    assert await adapter._wait_for_viewer_mode(_FakePage()) == expected  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sequence", [["unknown"], ["unknown", "unknown"]])
+async def test_wait_for_viewer_mode_times_out_for_unknown_or_contradictory_state(
+    monkeypatch, sequence
+) -> None:
+    adapter = JumpPlusAdapter()
+    adapter.page_change_timeout_ms = 250
+    observed = iter(sequence)
+
+    async def detect(_page):
+        return next(observed, sequence[-1])
+
+    monkeypatch.setattr(adapter, "_detect_viewer_mode", detect)
+
+    with pytest.raises(PageChangeTimeoutError, match="within the timeout"):
+        await adapter._wait_for_viewer_mode(_FakePage())  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_initialize_uses_wait_for_viewer_mode(monkeypatch) -> None:
+    adapter = JumpPlusAdapter()
+    page = _FakePage()
+    rows = [{"pageIndex": 0}]
+    calls = []
+
+    async def wait_for_mode(_page):
+        calls.append("wait")
+        return "vertical"
+
+    async def detect(_page):
+        raise AssertionError("initialize must not call _detect_viewer_mode directly")
+
+    async def page_count(_page):
+        return None
+
+    async def ready(_page):
+        return rows
+
+    async def metadata(_page):
+        return None
+
+    monkeypatch.setattr(adapter, "_wait_for_viewer_mode", wait_for_mode)
+    monkeypatch.setattr(adapter, "_detect_viewer_mode", detect)
+    monkeypatch.setattr(adapter, "_read_content_page_count", page_count)
+    monkeypatch.setattr(adapter, "_wait_for_render_ready", ready)
+    monkeypatch.setattr(adapter, "_read_output_metadata", metadata)
+
+    await adapter.initialize(page)  # type: ignore[arg-type]
+
+    assert calls == ["wait"]
+    assert adapter._viewer_mode == "vertical"
+
+
+@pytest.mark.asyncio
 async def test_vertical_rows_ignore_visibility_and_keep_page_order() -> None:
     adapter = JumpPlusAdapter()
 

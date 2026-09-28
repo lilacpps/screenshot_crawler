@@ -1548,8 +1548,11 @@ paged:    section.viewer.js-viewer
 ```
 
 Both signals or neither signal produce `unknown`; mode is never inferred from
-the episode URL. `unknown` fails closed before capture. This also avoids
-classifying an access/loading/transit state as a viewer mode.
+the episode URL. Because core calls `initialize()` immediately after
+`wait_until="commit"`, mode detection now uses bounded polling and requires
+two consecutive identical positive results. Unknown/contradictory observations
+reset the streak and fail closed at timeout. This also avoids classifying an
+access/loading/transit state as a viewer mode.
 
 ### Paged and vertical flow
 

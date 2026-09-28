@@ -148,6 +148,7 @@ def classify_viewer_mode(*, vertical_positive: bool, paged_positive: bool) -> Vi
 class JumpPlusAdapter(SiteAdapter):
     page_change_timeout_ms = 10_000
     render_stable_checks = 3
+    viewer_mode_stable_checks = 2
     capture_retry_count = 2
     capture_retry_interval_ms = 100
     source_response_wait_timeout_ms = 2_000
@@ -258,6 +259,29 @@ class JumpPlusAdapter(SiteAdapter):
         return classify_viewer_mode(
             vertical_positive=markers.get("vertical") is True,
             paged_positive=markers.get("paged") is True,
+        )
+
+    async def _wait_for_viewer_mode(self, page: Page) -> ViewerMode:
+        previous: ViewerMode | None = None
+        stable = 0
+        elapsed = 0
+        while elapsed < self.page_change_timeout_ms:
+            mode = await self._detect_viewer_mode(page)
+            if mode in {"paged", "vertical"}:
+                if mode == previous:
+                    stable += 1
+                else:
+                    previous = mode
+                    stable = 1
+                if stable >= self.viewer_mode_stable_checks:
+                    return mode
+            else:
+                previous = None
+                stable = 0
+            await page.wait_for_timeout(100)
+            elapsed += 100
+        raise PageChangeTimeoutError(
+            "Jump+ viewer mode was not determinable within the timeout"
         )
 
     async def _rows(self, page: Page) -> list[dict[str, object]]:
@@ -681,9 +705,7 @@ class JumpPlusAdapter(SiteAdapter):
         self._initial_parts = parse_jumpplus_url(page.url)
         if self._initial_parts is None:
             raise ValueError("Jump+ page URL is not an episode URL")
-        self._viewer_mode = await self._detect_viewer_mode(page)
-        if self._viewer_mode == "unknown":
-            raise PageChangeTimeoutError("Jump+ viewer mode was not determinable")
+        self._viewer_mode = await self._wait_for_viewer_mode(page)
         self._advance_pending = False
         self._terminal_reached = False
         self._vertical_capture_completed = False
