@@ -62,6 +62,19 @@ def test_batch_grant_only_accepts_explicit_resource_and_all_shape() -> None:
     assert all_args.grant_only == "all"
 
 
+def test_batch_adapter_registry_scopes_bookwalker_credentials() -> None:
+    registry = cli._batch_adapter_registry(
+        {
+            "BOOKWALKER_EMAIL": "reader@example.test",
+            "BOOKWALKER_PASSWORD": "password-not-logged",
+        }
+    )
+
+    adapter = registry.create("bookwalker")
+    assert adapter._auto_login_email == "reader@example.test"  # type: ignore[attr-defined]
+    assert adapter._auto_login_password == "password-not-logged"  # type: ignore[attr-defined]
+
+
 @pytest.mark.asyncio
 async def test_crawl_disconnects_browser_before_packaging(
     tmp_path: Path,

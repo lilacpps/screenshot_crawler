@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-09-20
+最終同期: 2026-09-30
 
 ## 1. 目的と現在のscope
 
@@ -91,6 +91,23 @@ strict runも、entry条件を検証できないためfailする。
 click後はURL changeを確認し、両方のcontent UUIDを取得できる場合は一致を確認する。
 delayed controlは既存`read_link_wait_timeout_ms`（default 5000ms）のbounded waitで待つ。
 quotaではtrial onlyやsubscription onlyの場合もtrialへfallbackせずfailする。
+
+Batchのstrict `quota` entryでは、まる読みcontrolのclick後にvisibleなemail/password fieldを
+login formの強いsignalとして確認する。login formへ遷移した場合だけ、Batch用にAdapterへ渡した
+optional credentialで既存のBookWalker form submit処理を1回実行する。login成功後は商品ページへ
+戻らず、同じ遷移先のviewer URLまたはviewer shellを確認して、そのまま既存のrender-ready待ちへ進む。
+viewer以外のredirect、login formの残存、validation error、CAPTCHA、MFA等は推測操作や再loginを
+行わずfail-safeで停止する。auto-loginは1 crawl runにつき最大1回であり、まる読みcontrolの再click
+は行わない。通常のsessionで最初からviewerへ入れた場合はauto-login処理を呼ばない。
+
+Batch開始時にBookWalker credentialは必須ではない。sessionが有効ならcredentialなしで従来どおり
+viewerへ入れる。session切れでlogin formが出た時にcredentialが不足している場合だけ、
+`BookWalker auto-login is required but BOOKWALKER_EMAIL / BOOKWALKER_PASSWORD are not configured`
+として停止する。credentialは`RunConfig`、`CrawlerRunner`、Catalog、BatchCandidate、DBへ渡さず、
+Batch CLIがBookWalker Adapterのoptional site-local設定として生成時に注入する。
+
+auto-loginを含むBookWalker initializeには、通常のCore defaultを変更せずAdapter側のbounded
+45秒timeoutを使う。通常のログイン済みrunへ固定sleepは追加していない。
 
 Phase 4のunit testsではstrict quota/direct成功、wrong strategy、trial/subscription/generic only、
 multiple candidate、scope overlapの同一DOM dedupe、delayed maruyomi、UUID mismatch、target blank、
@@ -353,6 +370,10 @@ BOOKWALKER_PASSWORD=<password>
 通常endpointは `CRAWLER_CDP_ENDPOINT` を使う。`BOOKWALKER_CDP_ENDPOINT` は例外overrideとして残せる。
 
 loginは共通Browser Sessionが作成する専用new Pageで実行し、既存の別site tabは再利用しない。login後はPageを閉じるが、shared Chrome/profileは残す。
+
+`login.py`はlogin formの安全な検出、現在表示中のformへのcredential入力・submit、従来の
+standalone login CLI用のCTA入口へ分離している。Batch quotaのsession切れ経路はform操作部分だけを
+再利用し、standalone login CLIの入口動作は維持する。
 
 shared launcherは指定portの既存listenerを、Chrome process command lineのremote debugging portと
 `--user-data-dir=.chrome-crawler` が一致する場合だけ再利用する。一致しない、または確認できない場合は
@@ -1111,6 +1132,11 @@ candidateが1件のときだけ、`target="_blank"`を除去して既存Pageか�
 確認する。viewer URLから始まるstrict runはentry条件を確認できないためfailする。
 
 quotaのlive clickによる実quota消費は未実施である。
+
+BookWalkerのBatch quotaでは、session切れ後のlogin form検出とauto-login分岐を実装済みである。
+login成功後に対象viewerへ直接遷移することを前提に、商品ページへ戻る再click処理は持たない。
+synthetic browser testでlogin redirect → form submit → viewer、credential未設定、login form残存時の
+fail-safeを確認する。実サイトでのquota消費を伴うauto-login live verificationは今回も実施していない。
 
 ### 20.6 初期非対象
 

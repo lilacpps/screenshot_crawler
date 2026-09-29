@@ -13,6 +13,7 @@ from typing import Any
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.auth.env import (
+    env_value,
     read_env_file,
     require_site_env_value,
 )
@@ -364,6 +365,30 @@ def _registry() -> AdapterRegistry:
     from screenshot_crawler.site_adapters.zeblack import ZeblackAdapter
 
     registry.register("bookwalker", BookWalkerAdapter)
+    registry.register("jumpplus", JumpPlusAdapter)
+    registry.register("magapoke", MagapokeAdapter)
+    registry.register("mangaone", MangaOneAdapter)
+    registry.register("zeblack", ZeblackAdapter)
+    return registry
+
+
+def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
+    """Build the Batch registry with BookWalker-only site-local credentials."""
+
+    registry = AdapterRegistry()
+    from screenshot_crawler.site_adapters.bookwalker import BookWalkerAdapter
+    from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
+    from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
+    from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
+    from screenshot_crawler.site_adapters.zeblack import ZeblackAdapter
+
+    registry.register(
+        "bookwalker",
+        lambda: BookWalkerAdapter(
+            auto_login_email=env_value("BOOKWALKER_EMAIL", values),
+            auto_login_password=env_value("BOOKWALKER_PASSWORD", values),
+        ),
+    )
     registry.register("jumpplus", JumpPlusAdapter)
     registry.register("magapoke", MagapokeAdapter)
     registry.register("mangaone", MangaOneAdapter)
@@ -928,7 +953,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             values=values,
         )
         session = await BrowserSession.connect(endpoint)
-        executor = BatchExecutor(catalog, policies, _registry())
+        executor = BatchExecutor(catalog, policies, _batch_adapter_registry(values))
         # Keep the orchestration input site-neutral and preserve compatibility with
         # lightweight test doubles that implement the pre-Phase-1 constructor.
         if hasattr(executor, "runtime_settings"):

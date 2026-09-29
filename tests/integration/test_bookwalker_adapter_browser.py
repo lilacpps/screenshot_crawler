@@ -2,9 +2,15 @@ import pytest
 import pytest_asyncio
 from playwright.async_api import Browser, Page
 
+import screenshot_crawler.site_adapters.bookwalker.adapter as bookwalker_adapter_module
+import screenshot_crawler.site_adapters.bookwalker.login as bookwalker_login_module
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     BookWalkerAdapter,
     BookWalkerStrictEntryError,
+)
+from screenshot_crawler.site_adapters.bookwalker.login import (
+    BookWalkerLoginError,
+    login_bookwalker,
 )
 
 PRODUCT_ID = "6de7534d-7022-481d-b2d3-05f03f384454"
@@ -107,6 +113,223 @@ async def test_bookwalker_strict_quota_clicks_only_maruyomi(browser_page: Page) 
         poll_interval_ms=FAST_STRICT_POLL_INTERVAL_MS,
     )
     assert "entry=quota" in browser_page.url
+
+
+async def _goto_login_redirect_product(
+    browser_page: Page,
+    *,
+    login_redirects_to_viewer: bool,
+    product_request_count: list[int],
+    login_destination: str | None = None,
+) -> None:
+    viewer_url = f"{VIEWER_BASE}?cid={PRODUCT_ID}&entry=quota"
+    destination = login_destination or viewer_url
+    login_form = """
+    <form id="login-form" onsubmit="event.preventDefault();">
+      <input type="email" name="email">
+      <input type="password" name="password">
+      <button type="submit">ログイン</button>
+    </form>
+    """
+    if login_redirects_to_viewer:
+        login_form = f"""
+        <form id="login-form" onsubmit="
+          event.preventDefault();
+          window.name = document.querySelector('[name=email]').value;
+          window.location.href = '{destination}';
+        ">
+          <input type="email" name="email">
+          <input type="password" name="password">
+          <button type="submit">ログイン</button>
+        </form>
+        """
+    product_html = f"""
+    <h1 class="t-c-product-main-data__title">作品</h1>
+    <div id="js-read-check">
+      <a data-action-label="read_maruyomi" data-uuid="{PRODUCT_ID}"
+         href="https://member.bookwalker.jp/login">10分まる読み</a>
+    </div>
+    <div id="js-subscription-check"></div>
+    """
+
+    async def fulfill_product(route) -> None:
+        product_request_count[0] += 1
+        await route.fulfill(content_type="text/html", body=product_html)
+
+    async def fulfill_login(route) -> None:
+        await route.fulfill(content_type="text/html", body=login_form)
+
+    async def fulfill_viewer(route) -> None:
+        await route.fulfill(content_type="text/html", body=_viewer_html())
+
+    await browser_page.route("https://bookwalker.jp/**", fulfill_product)
+    await browser_page.route("https://member.bookwalker.jp/**", fulfill_login)
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill_viewer)
+    await browser_page.goto(PRODUCT_URL)
+
+
+async def test_bookwalker_quota_login_redirect_submits_once_and_uses_viewer(
+    browser_page: Page,
+) -> None:
+    product_request_count = [0]
+    await _goto_login_redirect_product(
+        browser_page,
+        login_redirects_to_viewer=True,
+        product_request_count=product_request_count,
+    )
+    adapter = BookWalkerAdapter(
+        auto_login_email="reader@example.test",
+        auto_login_password="password-not-logged",
+    )
+    adapter.read_link_wait_timeout_ms = 500
+    adapter.strict_entry_initial_settle_ms = FAST_STRICT_SETTLE_MS
+    adapter.strict_candidate_poll_interval_ms = FAST_STRICT_POLL_INTERVAL_MS
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.initialize(browser_page)
+
+    assert browser_page.url == f"{VIEWER_BASE}?cid={PRODUCT_ID}&entry=quota"
+    assert await browser_page.evaluate("window.name") == "reader@example.test"
+    assert product_request_count == [1]
+    assert adapter._auto_login_attempted
+
+
+async def test_bookwalker_quota_login_redirect_without_credentials_fails_explicitly(
+    browser_page: Page,
+) -> None:
+    product_request_count = [0]
+    await _goto_login_redirect_product(
+        browser_page,
+        login_redirects_to_viewer=True,
+        product_request_count=product_request_count,
+    )
+    adapter = BookWalkerAdapter()
+    adapter.read_link_wait_timeout_ms = 500
+    adapter.strict_entry_initial_settle_ms = FAST_STRICT_SETTLE_MS
+    adapter.strict_candidate_poll_interval_ms = FAST_STRICT_POLL_INTERVAL_MS
+    await adapter.configure_run(browser_page, "quota")
+
+    with pytest.raises(
+        BookWalkerLoginError,
+        match="BookWalker auto-login is required but BOOKWALKER_EMAIL / BOOKWALKER_PASSWORD are not configured",
+    ):
+        await adapter.initialize(browser_page)
+    assert product_request_count == [1]
+
+
+async def test_bookwalker_quota_login_form_remaining_fails_without_retry(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bookwalker_login_module, "_LOGIN_RESULT_TIMEOUT_MS", 20)
+    product_request_count = [0]
+    await _goto_login_redirect_product(
+        browser_page,
+        login_redirects_to_viewer=False,
+        product_request_count=product_request_count,
+    )
+    adapter = BookWalkerAdapter(
+        auto_login_email="reader@example.test",
+        auto_login_password="password-not-logged",
+    )
+    adapter.read_link_wait_timeout_ms = 500
+    adapter.strict_entry_initial_settle_ms = FAST_STRICT_SETTLE_MS
+    adapter.strict_candidate_poll_interval_ms = FAST_STRICT_POLL_INTERVAL_MS
+    await adapter.configure_run(browser_page, "quota")
+
+    with pytest.raises(BookWalkerLoginError, match="login form is still visible"):
+        await adapter.initialize(browser_page)
+    assert product_request_count == [1]
+    assert adapter._auto_login_attempted
+
+
+async def test_bookwalker_quota_login_unexpected_redirect_fails_safe(
+    browser_page: Page,
+) -> None:
+    product_request_count = [0]
+    await _goto_login_redirect_product(
+        browser_page,
+        login_redirects_to_viewer=True,
+        product_request_count=product_request_count,
+        login_destination=PRODUCT_URL,
+    )
+    adapter = BookWalkerAdapter(
+        auto_login_email="reader@example.test",
+        auto_login_password="password-not-logged",
+    )
+    adapter.read_link_wait_timeout_ms = 500
+    adapter.strict_entry_initial_settle_ms = FAST_STRICT_SETTLE_MS
+    adapter.strict_candidate_poll_interval_ms = FAST_STRICT_POLL_INTERVAL_MS
+    await adapter.configure_run(browser_page, "quota")
+
+    with pytest.raises(BookWalkerStrictEntryError, match="did not reach the target viewer"):
+        await adapter.initialize(browser_page)
+    assert adapter._auto_login_attempted
+
+
+async def test_bookwalker_quota_without_login_form_does_not_call_auto_login(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unexpected_auto_login(*_args, **_kwargs) -> None:
+        pytest.fail("auto-login should not run for an active session")
+
+    monkeypatch.setattr(
+        bookwalker_adapter_module,
+        "submit_bookwalker_login_form",
+        unexpected_auto_login,
+    )
+    controls = _control_html(action="read_maruyomi", text="10分まる読み", entry="quota")
+    await _initialize_strict(
+        browser_page,
+        "quota",
+        controls,
+        initial_settle_ms=FAST_STRICT_SETTLE_MS,
+        poll_interval_ms=FAST_STRICT_POLL_INTERVAL_MS,
+    )
+    assert "entry=quota" in browser_page.url
+
+
+async def test_bookwalker_standalone_login_helper_keeps_cta_entry(
+    browser_page: Page,
+) -> None:
+    viewer_url = f"{VIEWER_BASE}?cid={PRODUCT_ID}"
+    home_html = '<a href="https://member.bookwalker.jp/login">ログイン</a>'
+    login_html = f"""
+    <form onsubmit="
+      event.preventDefault();
+      window.name = document.querySelector('[name=email]').value;
+      window.location.href = '{viewer_url}';
+    ">
+      <input type="email" name="email">
+      <input type="password" name="password">
+      <button type="submit">ログイン</button>
+    </form>
+    """
+
+    async def fulfill_home(route) -> None:
+        await route.fulfill(content_type="text/html", body=home_html)
+
+    async def fulfill_login(route) -> None:
+        await route.fulfill(content_type="text/html", body=login_html)
+
+    async def fulfill_viewer(route) -> None:
+        await route.fulfill(content_type="text/html", body=_viewer_html())
+
+    await browser_page.route("https://bookwalker.jp/", fulfill_home)
+    await browser_page.route("https://bookwalker.jp/**", fulfill_home)
+    await browser_page.route("https://member.bookwalker.jp/**", fulfill_login)
+    await browser_page.route("https://viewer.bookwalker.jp/**", fulfill_viewer)
+    await browser_page.goto("https://bookwalker.jp/")
+    await browser_page.set_content(home_html)
+    await login_bookwalker(
+        browser_page,
+        email="reader@example.test",
+        password="password-not-logged",
+        home_url="https://bookwalker.jp/",
+    )
+
+    assert browser_page.url == viewer_url
+    assert await browser_page.evaluate("window.name") == "reader@example.test"
 
 
 async def test_bookwalker_strict_direct_clicks_only_owned(browser_page: Page) -> None:

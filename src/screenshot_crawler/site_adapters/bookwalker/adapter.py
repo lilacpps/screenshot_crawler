@@ -29,7 +29,12 @@ from screenshot_crawler.core.models import AccessStrategy, ContentContext, Conte
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.bookwalker.access import bookwalker_access_profile
-from screenshot_crawler.site_adapters.bookwalker.login import login_bookwalker
+from screenshot_crawler.site_adapters.bookwalker.login import (
+    BookWalkerLoginError,
+    is_bookwalker_login_page,
+    login_bookwalker,
+    submit_bookwalker_login_form,
+)
 from screenshot_crawler.site_adapters.bookwalker.native_capture import (
     select_native_draw_calls,
 )
@@ -374,6 +379,7 @@ class BookWalkerAdapter(SiteAdapter):
     # matching in production. A failed match still returns the native PNG.
     enable_original_jpeg_capture = True
     page_change_timeout_ms = 14_000
+    initialize_timeout_ms = 45_000
     navigation_wait_timeout_ms = 5_000
     read_link_wait_timeout_ms = 5_000
     strict_entry_initial_settle_ms = 250
@@ -400,7 +406,12 @@ class BookWalkerAdapter(SiteAdapter):
         'a, button, [role="button"], [data-action-label]'
     )
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        auto_login_email: str | None = None,
+        auto_login_password: str | None = None,
+    ) -> None:
         self.capture_mode = os.environ.get("BOOKWALKER_CAPTURE_MODE", "native").strip().lower()
         if self.capture_mode not in {"native", "canvas"}:
             raise ValueError(
@@ -408,6 +419,9 @@ class BookWalkerAdapter(SiteAdapter):
                 f"got {self.capture_mode!r}"
             )
         self._access_strategy: AccessStrategy = "auto"
+        self._auto_login_email = auto_login_email
+        self._auto_login_password = auto_login_password
+        self._auto_login_attempted = False
         self._initial_content_id: str | None = None
         self._capture_run = 0
         self._output_title: str | None = None
@@ -440,6 +454,12 @@ class BookWalkerAdapter(SiteAdapter):
                 f"access_strategy={access_strategy!r}"
             )
         self._access_strategy = access_strategy
+        self._auto_login_attempted = False
+
+    def get_initialize_timeout_ms(self, default_ms: int) -> int:
+        """Allow the bounded BookWalker login navigation budget to complete."""
+
+        return max(default_ms, self.initialize_timeout_ms)
 
     async def login(
         self,
@@ -1019,10 +1039,47 @@ class BookWalkerAdapter(SiteAdapter):
             ) from exc
         await self._wait_for_url_change(page, previous_url)
 
+    async def _is_viewer_destination(self, page: Page) -> bool:
+        parsed = urlparse(page.url)
+        return parsed.netloc.lower() == "viewer.bookwalker.jp" or await self._has_viewer_shell(
+            page
+        )
+
     async def _open_strict_reader_from_product(self, page: Page) -> None:
         expected_kind = self._strict_expected_kind()
         link = await self._find_strict_read_link(page, expected_kind)
         await self._activate_reader_control(page, link)
+
+        if await is_bookwalker_login_page(page):
+            if self._access_strategy != "quota":
+                raise self._strict_entry_error(
+                    expected_kind=expected_kind,
+                    observed=[expected_kind],
+                    reason="strict entry reached a BookWalker login form",
+                )
+            if self._auto_login_attempted:
+                raise self._strict_entry_error(
+                    expected_kind=expected_kind,
+                    observed=[expected_kind],
+                    reason="BookWalker auto-login was already attempted in this run",
+                )
+            self._auto_login_attempted = True
+            if not self._auto_login_email or not self._auto_login_password:
+                raise BookWalkerLoginError(
+                    "BookWalker auto-login is required but "
+                    "BOOKWALKER_EMAIL / BOOKWALKER_PASSWORD are not configured"
+                )
+            await submit_bookwalker_login_form(
+                page,
+                email=self._auto_login_email,
+                password=self._auto_login_password,
+            )
+            if not await self._is_viewer_destination(page):
+                raise self._strict_entry_error(
+                    expected_kind=expected_kind,
+                    observed=[expected_kind],
+                    reason="BookWalker auto-login did not reach the target viewer",
+                )
         viewer_content_id = self.content_id_from_url(page.url)
         if (
             self._initial_content_id is not None
