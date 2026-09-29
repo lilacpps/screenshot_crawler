@@ -470,6 +470,128 @@ global fingerprint dedupe and JPEG-only source validation. That historical
 result remains recorded above; the corrected run stores all 24 logical pages
 and the source-native WebP artifact.
 
+## Z4-0 chapter-list / access-state probe (2026-09-30, research only)
+
+Z4-0 was run against the final requested target:
+
+```text
+https://zebrack-comic.shueisha.co.jp/title/5123/chapter/list
+```
+
+The probe used the shared Crawler Chrome through the existing `BrowserSession` /
+CDP path. It created no browser/profile lifecycle, did not inspect cookies or
+storage, and did not perform login. No chapter/access control was clicked. The
+live page showed a visible account indicator (`マイページ`); this is only an
+account-context observation, not an authentication proof.
+
+This phase is **Z4-0 research only**. `ZeblackDiscoveryAdapter`, Discovery
+registry registration, bounded Discovery support, Site Policy, Batch Policy,
+ticket consumption, rental start, and purchase remain **NOT YET IMPLEMENTED**.
+
+### Chapter-list structure and identity
+
+The list rendered all `250` chapter cards in the initial DOM. After one bounded
+scroll-to-bottom observation the count remained `250`; no pagination or
+"more" control was observed, and no lazy-load growth occurred. The card is not
+an anchor: the observed stable DOM identity was `id="chapter{chapter_id}"` on
+the card root. For example, the first card had `id="chapter132107"` and the
+active-rental card had `id="chapter224191"`.
+
+Every card produced a unique numeric `chapter_id`, `title_id=5123`, and a
+candidate viewer URL of the form
+`/title/5123/chapter/{chapter_id}/viewer`. The card did not expose a direct
+chapter href in this snapshot. This is sufficient evidence for a bounded
+boundary candidate, but no production parser has been added.
+
+The raw DOM order was `#1` through `#250`, therefore **oldest-first** based on
+the visible labels and preserved DOM index. This is separate from the future
+canonical Discovery order (`latest-first`) and from Web ticket-consumption
+order, which Z4-0 intentionally did not test.
+
+### Observed native access signals
+
+The current account snapshot yielded these raw DOM/icon classes:
+
+| raw site signal | count | observed meaning | Z4-0 derived hypothesis |
+| --- | ---: | --- | --- |
+| `Free` / `無料` text | 16 | campaign/free label | `ticket_now` |
+| `チケット利用可` icon alt | 2 | explicit ticket-eligible-looking icon | `ticket_eligible` candidate |
+| `ポイント画像` icon alt | 188 | point/P icon signal | `ticket_later` hypothesis only |
+| rental expiry text | 1 | `閲覧期限 残り2時間`-type active rental signal | `rental_active` |
+| `コイン画像` icon alt | 43 | coin-only signal | `coin_only` |
+
+The visible `Free` signal is stable to identify in this snapshot, but its
+campaign end date means it must not be promoted to a permanent chapter type.
+The point icon and coin icon are distinct and were stable across their DOM
+cards, so P/point and coin-only are distinguishable in this observation. The
+P mapping to `ticket_later` remains an explicit observation hypothesis, not a
+production semantic. The separate `チケット利用可` icon is a stronger
+candidate for a site-intrinsic ticket-eligibility signal, but Z4-0 did not
+prove whether it means current frontier eligibility or merely ticket
+eligibility.
+
+Chapter `224191` was the only observed rental-active row. Its DOM exposed a
+remaining-time/expiry display, but the origin of the rental (ticket, point, or
+coin) was not inferred. The probe did not click it or enter the viewer.
+
+The snapshot is not a simple permanent frontier property: the observed raw
+sequence was Free rows, ticket-icon row, P/point rows, rental-active row,
+ticket-icon row, more P/point rows, then coin rows. A ticket use can change the
+account-dependent `currently_ticket_available` boundary; this artifact must
+not be treated as a persistent chapter classification.
+
+### API / structured-data observation
+
+The page made a bounded request to:
+
+```text
+https://api2.zebrack-comic.com/api/v3/title_chapter_list
+```
+
+The response was `application/protobuf`, `20493` bytes, status `200`. The
+probe saved bounded metadata and a prefix hash artifact, but did not decode
+the protobuf schema. No JSON chapter listing or embedded hydration payload was
+found. Therefore the current authority recommendation is **DOM + explicit
+icon/alt signals**, with the protobuf API as the next structured-data
+investigation target; production should not rely on CSS module hashes.
+
+The final research artifact is under
+`output/zeblack_discovery_probe/`:
+
+```text
+report.json
+summary.md
+dom/listing.json
+network/responses.json
+network/relevant_payloads/api_001.json
+```
+
+The compact DOM snapshot removes query strings from stored `src`/`href` and
+subtree HTML so signed thumbnail parameters are not retained in the artifact.
+
+### Discovery and bounded-Discovery implications
+
+`chapter_id` is a viable external-id candidate and maps one-to-one to the
+candidate viewer boundary URL for all 250 observed cards. A future Discovery
+implementation should preserve the distinction below:
+
+```text
+site-intrinsic candidate: chapter_id, listing label/order, point-vs-coin-vs-ticket icon
+account-dependent state: currently ticket-available, rental_active, expiry/remaining time
+```
+
+The result does **not** yet justify a design that avoids all post-consumption
+refreshes. Such a design is plausible only if the protobuf or another stable
+signal separates `ticket_eligible` from a dynamic current-eligibility flag.
+Until that field is identified, a future access pass must reconcile dynamic
+state explicitly and must not persist `ticket_later` as permanent.
+
+### Z4-0 test status
+
+Pure research helpers are covered by
+`tests/research/test_zeblack_discovery_probe.py`; the live site is not a CI
+dependency. The probe itself remains outside the production Discovery tree.
+
 ## Known limitations
 
 - 対象はこの1 title/chapterだけで、他chapter・別title・別access stateは未確認。
