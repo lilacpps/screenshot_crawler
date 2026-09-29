@@ -5,22 +5,32 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
 from playwright.async_api import Locator, Page
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import (
+    AccessResourceUnavailableError,
     CaptureUnavailableError,
     PageChangeTimeoutError,
+    UnknownPageStateError,
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.base import AccessConsumption, SiteAdapter
 from screenshot_crawler.site_adapters.zeblack.access import zeblack_access_profile
+from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import ConsumptionStatus
+from screenshot_crawler.site_adapters.zeblack.live_access import (
+    ZeblackLiveAccessError,
+    ZeblackLiveAccessState,
+    observe_zeblack_live_access,
+)
 from screenshot_crawler.site_adapters.zeblack.native_capture import (
     capture_zeblack_source_image,
     is_zeblack_blob_response,
@@ -86,6 +96,34 @@ _NEXT_CONTENT_SCRIPT = r"""
 })
 """
 
+_TICKET_ENTRY_TEXT = "チケットを使って読む"
+_POINT_ENTRY_TEXT = "ポイントを使って読む"
+_COIN_ENTRY_TEXT = "コインを使って読む"
+_POINT_AND_COIN_ENTRY_TEXT = "アイテムを使って読む"
+_PURCHASE_ENTRY_TEXT = "コインを購入する"
+_TICKET_STATUS_VALUES = frozenset(
+    {
+        int(ConsumptionStatus.TICKET_UNAVAILABLE),
+        int(ConsumptionStatus.POINT),
+        int(ConsumptionStatus.COIN),
+        int(ConsumptionStatus.TICKET_UNAVAILABLE_COIN_ONLY),
+    }
+)
+
+
+def validate_zeblack_ticket_control_counts(
+    ticket_count: int,
+    *,
+    point_count: int = 0,
+    coin_count: int = 0,
+) -> None:
+    """Require one unambiguous ticket-only control and no paid controls."""
+
+    if ticket_count != 1 or point_count != 0 or coin_count != 0:
+        raise UnsupportedAccessStrategyError(
+            "Zeblack ticket entry UI is missing or ambiguous"
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ZeblackViewerIdentity:
@@ -138,6 +176,12 @@ class ZeblackAdapter(SiteAdapter):
 
     def __init__(self) -> None:
         self._access_strategy: AccessStrategy = "auto"
+        self._quota_resource: str | None = None
+        self._access_consumption = AccessConsumption()
+        self._live_access: ZeblackLiveAccessState | None = None
+        self._preexisting_accessible = False
+        self._ticket_click_attempted = False
+        self._ticket_confirmation_state: str | None = None
         self._initial_url: str | None = None
         self._initial_viewer: ZeblackViewerIdentity | None = None
         self._initial_context: ContentContext | None = None
@@ -160,22 +204,46 @@ class ZeblackAdapter(SiteAdapter):
     def get_access_profile(self) -> AccessProfile:
         return zeblack_access_profile()
 
+    def get_initialize_timeout_ms(self, default_ms: int) -> int:
+        # Quota entry may perform viewer -> chapter list -> viewer -> entry ->
+        # content confirmation. Keep this overall bound finite while allowing
+        # each bounded phase to use the existing page-change budget.
+        return max(default_ms, 4 * self.page_change_timeout_ms)
+
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
         del page
-        if access_strategy not in {"auto", "direct"}:
+        if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
                 f"ZeblackAdapter does not support access_strategy={access_strategy!r}"
             )
         self._access_strategy = access_strategy
+        self._quota_resource = None
+        self._access_consumption = AccessConsumption()
+        self._live_access = None
+        self._preexisting_accessible = False
+        self._ticket_click_attempted = False
+        self._ticket_confirmation_state = None
 
     async def configure_quota_resource(
         self, page: Page, quota_resource: str | None
     ) -> None:
         del page
-        if quota_resource is not None:
+        if quota_resource not in {None, "work_ticket"}:
             raise UnsupportedAccessStrategyError(
-                "ZeblackAdapter does not support quota_resource"
+                f"ZeblackAdapter does not support quota_resource={quota_resource!r}"
             )
+        if quota_resource is not None and self._access_strategy != "quota":
+            raise UnsupportedAccessStrategyError(
+                "Zeblack quota_resource requires access_strategy='quota'"
+            )
+        if self._access_strategy == "quota" and quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "Zeblack quota access requires quota_resource='work_ticket'"
+            )
+        self._quota_resource = quota_resource
+
+    def get_access_consumption(self) -> AccessConsumption:
+        return self._access_consumption
 
     async def prepare_page(self, page: Page) -> None:
         await self._clear_source_cache()
@@ -347,6 +415,209 @@ class ZeblackAdapter(SiteAdapter):
             "Zeblack viewer did not expose stable in-viewport page_N content"
         )
 
+    async def _has_preexisting_content(self, page: Page) -> bool:
+        """Return true only when content is already observable in the viewer."""
+
+        rows = await self._safe_active_page_rows(page)
+        if not rows:
+            return False
+        await self._wait_for_initial_content(page)
+        return True
+
+    @staticmethod
+    def _exact_text_locator(page: Page, text: str) -> Locator:
+        return page.get_by_text(text, exact=True)
+
+    async def _visible_exact_text_count(self, page: Page, text: str) -> int:
+        locator = self._exact_text_locator(page, text)
+        count = await locator.count()
+        visible = 0
+        for index in range(count):
+            if await locator.nth(index).is_visible():
+                visible += 1
+        return visible
+
+    async def _ticket_control(self, page: Page) -> Locator:
+        ticket = self._exact_text_locator(page, _TICKET_ENTRY_TEXT)
+        point_count = await self._visible_exact_text_count(page, _POINT_ENTRY_TEXT)
+        coin_count = await self._visible_exact_text_count(page, _COIN_ENTRY_TEXT)
+        point_count += await self._visible_exact_text_count(
+            page, _POINT_AND_COIN_ENTRY_TEXT
+        )
+        coin_count += await self._visible_exact_text_count(page, _PURCHASE_ENTRY_TEXT)
+        visible_ticket_count = await self._visible_exact_text_count(
+            page, _TICKET_ENTRY_TEXT
+        )
+        validate_zeblack_ticket_control_counts(
+            visible_ticket_count,
+            point_count=point_count,
+            coin_count=coin_count,
+        )
+        control = ticket
+        if await control.count() != 1:
+            raise UnsupportedAccessStrategyError(
+                "Zeblack ticket entry control is ambiguous"
+            )
+        if not await control.is_visible() or not await control.is_enabled():
+            raise UnsupportedAccessStrategyError(
+                "Zeblack ticket entry control is not visible and enabled"
+            )
+        tag_name = await control.evaluate("element => element.tagName.toLowerCase()")
+        # The bundle-observed control is a styled div. Keep the allowed set
+        # narrow and reject arbitrary text/container fallback clicks.
+        if tag_name not in {"button", "a", "div"}:
+            raise UnsupportedAccessStrategyError(
+                f"Zeblack ticket entry control has unsupported tag: {tag_name}"
+            )
+        return control
+
+    async def _wait_for_ticket_control(self, page: Page) -> Locator:
+        """Wait briefly for the exact entry control, never for a fallback UI."""
+
+        elapsed_ms = 0
+        while elapsed_ms < self.page_change_timeout_ms:
+            ticket_count = await self._visible_exact_text_count(page, _TICKET_ENTRY_TEXT)
+            point_count = await self._visible_exact_text_count(page, _POINT_ENTRY_TEXT)
+            point_count += await self._visible_exact_text_count(
+                page, _POINT_AND_COIN_ENTRY_TEXT
+            )
+            coin_count = await self._visible_exact_text_count(page, _COIN_ENTRY_TEXT)
+            coin_count += await self._visible_exact_text_count(page, _PURCHASE_ENTRY_TEXT)
+            if ticket_count == 1:
+                return await self._ticket_control(page)
+            if ticket_count > 1 or point_count or coin_count:
+                validate_zeblack_ticket_control_counts(
+                    ticket_count,
+                    point_count=point_count,
+                    coin_count=coin_count,
+                )
+            await page.wait_for_timeout(100)
+            elapsed_ms += 100
+        raise UnsupportedAccessStrategyError(
+            "Zeblack ticket entry UI did not expose one exact visible control"
+        )
+
+    async def _visible_dialog_count(self, page: Page) -> int:
+        dialogs = page.locator('[role="dialog"], dialog')
+        visible = 0
+        for index in range(await dialogs.count()):
+            if await dialogs.nth(index).is_visible():
+                visible += 1
+        return visible
+
+    async def _enter_with_work_ticket(self, page: Page) -> None:
+        if self._ticket_click_attempted:
+            raise UnsupportedAccessStrategyError(
+                "Zeblack ticket action was already attempted"
+            )
+        if self._initial_viewer is None:
+            raise UnknownPageStateError("Zeblack viewer identity is unavailable")
+        control = await self._wait_for_ticket_control(page)
+        current = parse_zeblack_viewer_url(str(page.url))
+        if current is None or current.key != self._initial_viewer.key:
+            raise UnsupportedAccessStrategyError(
+                "Zeblack ticket entry control is not in the target chapter"
+            )
+
+        self._ticket_click_attempted = True
+        self._ticket_confirmation_state = "click_attempted"
+        await control.click(timeout=self.page_change_timeout_ms)
+        if await self._visible_dialog_count(page):
+            # No ticket-specific confirmation dialog was found in the current
+            # frontend bundle. Never confirm an unrecognized dialog.
+            self._ticket_confirmation_state = "unknown_dialog"
+            raise UnsupportedAccessStrategyError(
+                "Zeblack ticket confirmation dialog is unknown"
+            )
+
+        try:
+            await self._wait_for_initial_content(page)
+            current = parse_zeblack_viewer_url(str(page.url))
+            if current is None or current.key != self._initial_viewer.key:
+                raise UnsupportedAccessStrategyError(
+                    "Zeblack ticket entry navigated to a different chapter"
+                )
+        except BaseException:
+            self._ticket_confirmation_state = "unconfirmed"
+            raise
+
+        self._ticket_confirmation_state = "confirmed"
+        self._access_consumption = AccessConsumption(
+            consumed=True,
+            resource="work_ticket",
+            consumed_at=datetime.now(UTC),
+        )
+
+    async def _initialize_quota_entry(
+        self, page: Page, *, entry_only: bool
+    ) -> None:
+        if self._quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "Zeblack quota initialization requires work_ticket"
+            )
+        if await self._has_preexisting_content(page):
+            self._preexisting_accessible = True
+            self._ticket_confirmation_state = "preexisting_accessible"
+            if entry_only:
+                raise AccessResourceUnavailableError("work_ticket_not_needed")
+            return
+
+        if self._initial_url is None or self._initial_viewer is None:
+            raise UnknownPageStateError("Zeblack initial viewer identity is unavailable")
+        await self._clear_source_cache()
+        try:
+            self._live_access = await observe_zeblack_live_access(
+                page,
+                title_id=self._initial_viewer.title_id,
+                chapter_id=self._initial_viewer.chapter_id,
+                timeout_ms=self.page_change_timeout_ms,
+            )
+        except ZeblackLiveAccessError as exc:
+            raise UnknownPageStateError(str(exc)) from exc
+
+        await self._clear_source_cache()
+        try:
+            await page.goto(
+                self._initial_url,
+                wait_until="commit",
+                timeout=self.page_change_timeout_ms,
+            )
+        except (PlaywrightTimeoutError, TimeoutError) as exc:
+            raise PageChangeTimeoutError(
+                "Zeblack viewer did not return after live access preflight"
+            ) from exc
+        current = parse_zeblack_viewer_url(str(page.url))
+        if current is None or current.key != self._initial_viewer.key:
+            raise UnknownPageStateError(
+                "Zeblack viewer identity changed after live access preflight"
+            )
+
+        assert self._live_access is not None
+        if self._live_access.status_value == int(ConsumptionStatus.TICKET_AVAILABLE):
+            await self._enter_with_work_ticket(page)
+            return
+        if self._live_access.status_value in {
+            int(ConsumptionStatus.FREE),
+            int(ConsumptionStatus.RENTAL),
+        }:
+            if entry_only:
+                raise AccessResourceUnavailableError("work_ticket_not_needed")
+            await self._wait_for_initial_content(page)
+            return
+        if self._live_access.status_value in _TICKET_STATUS_VALUES:
+            if self._live_access.ticket_available_ids:
+                raise AccessResourceUnavailableError(
+                    "work_ticket_not_available_for_chapter",
+                    stop_resource_pass=False,
+                )
+            raise AccessResourceUnavailableError(
+                "work_ticket_unavailable",
+                stop_resource_pass=True,
+            )
+        raise UnknownPageStateError(
+            f"Zeblack live access status is unknown: {self._live_access.status_value}"
+        )
+
     async def initialize(self, page: Page) -> None:
         current_url = str(page.url)
         viewer = parse_zeblack_viewer_url(current_url)
@@ -362,9 +633,32 @@ class ZeblackAdapter(SiteAdapter):
         self._capture_mode = "unavailable"
         self._direct_source_success = None
         self._direct_source_failure_reason = None
-        await self._wait_for_initial_content(page)
+        if self._access_strategy == "quota":
+            await self._initialize_quota_entry(page, entry_only=False)
+        else:
+            await self._wait_for_initial_content(page)
         self._initial_context = await self.get_content_context(page)
         self._output_title = self._initial_context.title
+
+    async def initialize_entry_only(self, page: Page) -> None:
+        """Confirm Zeblack access without entering full capture readiness."""
+
+        current_url = str(page.url)
+        viewer = parse_zeblack_viewer_url(current_url)
+        if viewer is None:
+            raise ValueError("Zeblack page URL is not a strict viewer URL")
+        self._initial_url = current_url
+        self._initial_viewer = viewer
+        self._transition_pending = False
+        self._transition_stable = False
+        self._transition_kind = "idle"
+        self._capture_mode = "unavailable"
+        self._initial_context = None
+        if self._access_strategy == "quota":
+            await self._initialize_quota_entry(page, entry_only=True)
+        else:
+            await self._wait_for_initial_content(page)
+        self._initial_context = await self.get_content_context(page)
 
     async def detect_state(self, page: Page) -> PageState:
         current = parse_zeblack_viewer_url(str(page.url))
@@ -601,7 +895,32 @@ class ZeblackAdapter(SiteAdapter):
             active_indices = [int(row["page_index"]) for row in rows] if rows else []
         except Exception:  # noqa: BLE001 - diagnostics must not replace crawl behavior
             active_indices = list(self._last_active_indices)
+        live_access = self._live_access
         return {
+            "access_strategy": self._access_strategy,
+            "quota_resource": self._quota_resource,
+            "live_access": {
+                "title_id": live_access.title_id,
+                "chapter_id": live_access.chapter_id,
+                "target_status": live_access.status_name,
+                "target_status_value": live_access.status_value,
+                "ticket_available_count": len(live_access.ticket_available_ids),
+                "target_ticket_available": live_access.target_ticket_available,
+            }
+            if live_access is not None
+            else None,
+            "preexisting_accessible": self._preexisting_accessible,
+            "ticket_click_attempted": self._ticket_click_attempted,
+            "ticket_confirmation_state": self._ticket_confirmation_state,
+            "access_consumption": {
+                "consumed": self._access_consumption.consumed,
+                "resource": self._access_consumption.resource,
+                "consumed_at": (
+                    self._access_consumption.consumed_at.isoformat()
+                    if self._access_consumption.consumed_at is not None
+                    else None
+                ),
+            },
             "capture_mode": self._capture_mode,
             "active_page_indices": active_indices,
             "direct_source_success": self._direct_source_success,

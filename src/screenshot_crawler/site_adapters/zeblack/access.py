@@ -9,6 +9,7 @@ from screenshot_crawler.core.access_guard import AccessProfile
 ZEBLACK_RELEVANT_HOSTS = frozenset(
     {
         "zebrack-comic.shueisha.co.jp",
+        "api2.zebrack-comic.com",
         "asset.zebrack-comic.com",
     }
 )

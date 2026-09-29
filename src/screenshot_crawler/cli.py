@@ -59,6 +59,7 @@ from screenshot_crawler.site_policies import (
     MagapokeSitePolicy,
     MangaOneSitePolicy,
     SitePolicyRegistry,
+    ZeblackSitePolicy,
 )
 from screenshot_crawler.site_policies.base import SitePolicyError
 from screenshot_crawler.watchlist.models import WatchlistTarget
@@ -420,6 +421,7 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("jumpplus", JumpPlusSitePolicy)
     registry.register("magapoke", MagapokeSitePolicy)
     registry.register("mangaone", MangaOneSitePolicy)
+    registry.register("zeblack", ZeblackSitePolicy)
     return registry
 
 

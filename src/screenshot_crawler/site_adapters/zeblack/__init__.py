@@ -5,6 +5,7 @@ from screenshot_crawler.site_adapters.zeblack.adapter import (
     ZeblackViewerIdentity,
     parse_zeblack_page_alt,
     parse_zeblack_viewer_url,
+    validate_zeblack_ticket_control_counts,
 )
 from screenshot_crawler.site_adapters.zeblack.discovery import (
     ZeblackDiscoveryAdapter,
@@ -13,15 +14,24 @@ from screenshot_crawler.site_adapters.zeblack.discovery import (
     parse_zeblack_chapter_list_url,
     parse_zeblack_order_label,
 )
+from screenshot_crawler.site_adapters.zeblack.live_access import (
+    ZeblackLiveAccessError,
+    ZeblackLiveAccessState,
+    observe_zeblack_live_access,
+)
 
 __all__ = [
     "ZeblackAdapter",
     "ZeblackDiscoveryAdapter",
     "ZeblackListIdentity",
+    "ZeblackLiveAccessError",
+    "ZeblackLiveAccessState",
     "ZeblackViewerIdentity",
     "canonical_zeblack_viewer_url",
+    "observe_zeblack_live_access",
     "parse_zeblack_chapter_list_url",
     "parse_zeblack_order_label",
     "parse_zeblack_page_alt",
     "parse_zeblack_viewer_url",
+    "validate_zeblack_ticket_control_counts",
 ]

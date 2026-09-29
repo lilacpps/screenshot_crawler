@@ -11,6 +11,7 @@ from screenshot_crawler.site_policies.jumpplus import JumpPlusSitePolicy
 from screenshot_crawler.site_policies.magapoke import MagapokeSitePolicy
 from screenshot_crawler.site_policies.mangaone import MangaOneSitePolicy
 from screenshot_crawler.site_policies.registry import SitePolicyRegistry
+from screenshot_crawler.site_policies.zeblack import ZeblackSitePolicy
 
 __all__ = [
     "BatchOrdering",
@@ -22,4 +23,5 @@ __all__ = [
     "SitePolicy",
     "SitePolicyError",
     "SitePolicyRegistry",
+    "ZeblackSitePolicy",
 ]

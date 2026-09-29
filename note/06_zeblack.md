@@ -1,11 +1,69 @@
-# Zebrack Z0/Z1/Z2 viewer probe と Z3 production adapter 現行ノート
+# Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
+
+## Z5 Site Policy / runtime Work Ticket status (2026-09-30)
+
+`ZeblackSitePolicy` is implemented and registered for Batch planning. The
+policy keeps one supported access resource, `work_ticket`, and uses:
+
+```text
+quota_scope=work
+quota_limit=None
+quota_commit_mode=after_observed_consumption
+resource_state_scope=None
+access_grant_until=None
+```
+
+`FREE` Catalog sources plan as `direct`. Broad Catalog `quota` sources plan
+as `quota` / `work_ticket`; `paid`, `unknown`, unavailable, and unverified
+`owned` sources are skipped. Work-scoped candidates are ordered oldest-first
+by the existing numeric item order fallback. No local 23-hour cooldown or
+work-wide ticket capacity is inferred, so multiple candidates in one Work
+remain in the plan.
+
+For an explicit Zeblack quota run, `ZeblackAdapter` performs a bounded,
+site-local live preflight by navigating the shared Playwright page to
+`/title/{title_id}/chapter/list` and observing the page-triggered
+`title_chapter_list` protobuf. It reuses the production ChapterV3 decoder,
+does not call DiscoveryService, and does not update Catalog. The target
+chapter must be present. The live `ConsumptionStatus` is authoritative, and
+the current `TICKET_AVAILABLE` chapter IDs are retained for pass-local skip
+decisions:
+
+```text
+target unavailable + another ticket available -> work_ticket_not_available_for_chapter
+target unavailable + no ticket available     -> work_ticket_unavailable, stop pass
+unknown status                                -> fail closed
+```
+
+Only the bundle-observed exact text `チケットを使って読む` is eligible for a
+ticket entry. The control must be the single visible/enabled exact-text
+control in the same target viewer, with no visible point/coin/purchase control.
+The current static bundle showed no ticket-specific confirmation dialog; an
+unexpected visible dialog is therefore rejected rather than guessed. A run
+sets `_ticket_click_attempted` before the single click and never retries it.
+`AccessConsumption(consumed=True, resource="work_ticket")` is recorded only
+after same-chapter viewer `page_N` content is stable, with a UTC-aware
+timestamp. Click, navigation, loading, timeout, unknown UI, and preexisting
+FREE/RENTAL content do not count as consumption.
+
+`--grant-only work_ticket` uses the generic entry-only path, persists only
+confirmed observed consumption, leaves the Item pending, and creates no
+content package. `--grant-only all` resolves to the single Work Ticket pass.
+`batch run --site zeblack` uses the existing generic Executor; no Zeblack
+branch was added to Batch Core.
+
+The exact ticket control and point/coin distinction are supported by
+read-only inspection of the current public frontend bundle. A signed-in
+browser/CDP session was not available for this turn, so current title `5123`
+status counts and live `batch plan` were not re-executed. No ticket was
+consumed. Controlled live read-only status and plan verification remain
+operator follow-up.
 
 ## Z4-1 production Discovery status (2026-09-30)
 
 `ZeblackDiscoveryAdapter` is implemented and registered under `zeblack` in
-the Discovery registry. It is intentionally not registered in the Batch
-Policy registry; Zeblack Site Policy, ticket consumption, cooldowns, and
-strict access entry remain Z5 work.
+the Discovery registry. Z5 additionally registers the Zeblack Site Policy
+for Batch planning; Discovery and Batch remain separate boundaries.
 
 The Watchlist target is the strict HTTPS URL
 `/title/{title_id}/chapter/list`. The adapter installs a response listener
@@ -72,18 +130,17 @@ not part of the repository change.
 
 ## Scope
 
-これはゼブラック（Zebrack）の対象chapter限定のread-only viewer probeとproduction
-Adapterの現行記録である。Discovery、Site Policy、Batch、access resource消費、login
-automationは未実装である。Z0/Z1では観測できた事実と
-未確認事項を分離し、毎日無料・ポイント・コイン・レンタル等のresource semanticsを
-決めていない。
+これはゼブラック（Zebrack）の対象chapter限定のread-only viewer probe、production
+Discovery、Viewer Adapter、Site Policy、Batch access entryの現行記録である。
+login automationと実ticket消費は対象外である。Z0/Z1では観測できた事実と
+未確認事項を分離し、POINT/COIN自動消費や23時間モデルを推測しない。
 
-## Z3 production status
+## Z3 production status (historical baseline)
 
-Z3では、Viewer Adapterだけをproduction実装した。site keyは`zeblack`で、通常の
-`crawl --site zeblack`から利用できる。Discovery、Site Policy、ticket/access acquisition、
-daily-free consumption、quota resource、login automation、next chapter clickは引き続き
-未実装である。
+Z3時点ではViewer Adapterだけをproduction実装した。site keyは`zeblack`で、通常の
+`crawl --site zeblack`から利用できた。Discovery、Site Policy、ticket/access acquisition、
+daily-free consumption、quota resource、login automation、next chapter clickはZ3時点では
+未実装であった。現在のDiscovery / Site Policy / runtime accessは本note上部のZ4-1/Z5を参照する。
 
 ### Viewer / page order
 
@@ -125,12 +182,13 @@ visible button/controlに「次の話を読む」系の明示signalがある場�
 page counterだけではterminalにしない。Z2で独立したEND UIは確認していないため、未確認の
 END文言から`END`を生成しない。
 
-### Access strategy / verification status
+### Z3 historical access strategy status
 
-`auto`と`direct`を受け付け、`quota`と`quota_resource != None`はrejectする。Z3ではaccess
-resource操作を行わず、minimal AccessProfileは`zebrack-comic.shueisha.co.jp`と
-`asset.zebrack-comic.com`を403/429 relevant hostとして扱うだけである。challenge/login
-detectorは追加していない。
+Z3時点では`auto`と`direct`だけを受け付け、access resource操作を行わなかった。
+Z5では明示的な`quota + work_ticket`だけを追加し、`auto`でticketを自動クリック
+しない。Z5のAccessProfileは`zebrack-comic.shueisha.co.jp`、
+`api2.zebrack-comic.com`、`asset.zebrack-comic.com`を403/429 relevant hostとして
+扱う。challenge/login detectorは追加していない。
 
 Production unit testsとlive production crawlを実行済みである。共有Chromeを使った指定chapter
 のproduction CLI runは、chapter URLを離れず`stop_state=NEXT_CONTENT`、
@@ -554,10 +612,10 @@ storage, and did not perform login. No chapter/access control was clicked. The
 live page showed a visible account indicator (`マイページ`); this is only an
 account-context observation, not an authentication proof.
 
-This section records the superseded **Z4-0 research-only** state. Z4-1 now
-implements `ZeblackDiscoveryAdapter`, Discovery registry registration, and
-bounded Discovery. Site Policy, Batch Policy, ticket consumption, rental
-start, and purchase remain outside the Z4-1 scope.
+This section records the superseded **Z4-0 research-only** state. At that
+point Z4-1 production Discovery existed, while Site Policy, Batch Policy,
+ticket consumption, rental start, and purchase were outside the Z4-1 scope.
+The current Z5 Site Policy/runtime status is recorded at the top of this note.
 
 ### Chapter-list structure and identity
 

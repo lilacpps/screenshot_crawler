@@ -1,10 +1,28 @@
 # 00. Core 現行実装ノート
 
-## Zeblack Z4-1 status (2026-09-30)
+## Zeblack Z5 current status (2026-09-30)
+
+Zeblack now has both production Discovery and a registered Batch Site Policy.
+Catalog `quota` remains a broad candidate class, while explicit quota runtime
+uses a site-local live `title_chapter_list` protobuf preflight. The Viewer
+Adapter only attempts a single exact ticket-only control when the target live
+status is `TICKET_AVAILABLE`; POINT/COIN/unknown states fail closed or return
+the generic resource-unavailable result. Confirmed same-chapter content is
+required before `AccessConsumption` is recorded. `work_ticket` is the only
+supported Zeblack resource, with no local cooldown/capacity inference and
+`after_observed_consumption` persistence. Grant-only reuses the generic
+entry-only path and leaves Items pending without packages.
+
+Current live ticket consumption has not been executed. The frontend control
+signal was checked read-only from the public bundle; no browser/CDP session
+was available to re-run current title status counts or a live batch plan.
+The existing direct Z3 capture path and Z4 Discovery boundary remain intact.
+
+## Zeblack Z4-1 status (historical baseline)
 
 Zeblack production Discovery is implemented. The adapter is registered in the
 Discovery registry, supports unbounded full/incremental and site-native
-bounded Discovery, and remains absent from `_batch_policy_registry()`.
+bounded Discovery. The current Z5 policy registration is described above.
 Discovery validates the chapter-list DOM and the exact
 `title_chapter_list` protobuf response before yielding. It uses
 `chapter_id` identity, latest-first canonical order, explicit access-mode
@@ -29,7 +47,7 @@ read-only Batch planning and Manga ONE Policy. Phase
 
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
-最終同期: 2026-09-29
+最終同期: 2026-09-30
 
 
 ### Test execution policy（2026-09-27）
@@ -1155,7 +1173,7 @@ and per-artifact capture fingerprint.
 - Jump+ bounded Discovery: **IMPLEMENTED**。既存のstrict episode URL parserで`episode_id`をboundary identityとし、全rangeのpagination・duplicate・network scope・total validationを完了した`records_by_id`のcanonical insertion order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。invalid / foreign / missing / reversed boundaryはyield前にincompleteとする
 - Jump+ bounded buffering: **IMPLEMENTED**。scope付きfull / incrementalとも全rangeをbufferしてからboundary sliceをyieldし、後続range失敗時にpartial recordをyieldしない。scopeなしincrementalの既存streamingとscopeなしfullの既存全件bufferは維持する
 - Jump+ / bounded cross-site no-merge regression: **IMPLEMENTED**。bounded対応Fakeを使った共通回帰で、同じ`work_key`でもsiteをまたぐItem自動mergeを行わないことを確認している
-- Zeblack production Adapter bounded support: **IMPLEMENTED**。strict chapter-list / viewer parser、DOM/protobuf exact-set validation、latest-first canonical order、chapter_id boundary slice、およびyield前bufferingを`ZeblackDiscoveryAdapter`で実装済み。ZeblackはDiscovery registryのみ登録し、Batch Policy registryには登録しない
+- Zeblack production Adapter bounded support: **IMPLEMENTED**。strict chapter-list / viewer parser、DOM/protobuf exact-set validation、latest-first canonical order、chapter_id boundary slice、およびyield前bufferingを`ZeblackDiscoveryAdapter`で実装済み。Z4-1時点ではDiscovery registryのみ登録し、Z5でBatch Policy registryにも登録した
 - 他siteのbounded range boundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
 
 The following historical summary predates Z4-1; the current production

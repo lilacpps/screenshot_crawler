@@ -8,8 +8,10 @@ from PIL import Image
 
 from screenshot_crawler import cli
 from screenshot_crawler.core.errors import (
+    AccessResourceUnavailableError,
     CaptureUnavailableError,
     PageChangeTimeoutError,
+    UnknownPageStateError,
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import ContentIdentity
@@ -18,10 +20,12 @@ from screenshot_crawler.site_adapters.zeblack import (
     ZeblackAdapter,
     parse_zeblack_page_alt,
     parse_zeblack_viewer_url,
+    validate_zeblack_ticket_control_counts,
 )
 from screenshot_crawler.site_adapters.zeblack.access import (
     is_zeblack_relevant_host,
 )
+from screenshot_crawler.site_adapters.zeblack.live_access import ZeblackLiveAccessState
 from screenshot_crawler.site_adapters.zeblack.native_capture import (
     capture_zeblack_source_image,
     is_zeblack_blob_response,
@@ -159,8 +163,9 @@ def test_strict_viewer_url_parse_and_page_alt_parse() -> None:
 def test_registry_and_minimal_access_profile() -> None:
     assert isinstance(cli._registry().create("zeblack"), ZeblackAdapter)
     assert "zeblack" in cli._discovery_registry().sites()
-    assert "zeblack" not in cli._batch_policy_registry().sites()
+    assert "zeblack" in cli._batch_policy_registry().sites()
     assert is_zeblack_relevant_host("https://zebrack-comic.shueisha.co.jp/page")
+    assert is_zeblack_relevant_host("https://api2.zebrack-comic.com/api/v3/title_chapter_list")
     assert is_zeblack_relevant_host("https://asset.zebrack-comic.com/page")
     assert is_zeblack_relevant_host(BLOB_0)
     assert not is_zeblack_relevant_host("https://example.test/page")
@@ -198,11 +203,181 @@ async def test_access_strategy_and_quota_resource_contract() -> None:
     adapter = ZeblackAdapter()
     await adapter.configure_run(object(), "auto")  # type: ignore[arg-type]
     await adapter.configure_run(object(), "direct")  # type: ignore[arg-type]
+    await adapter.configure_run(object(), "quota")  # type: ignore[arg-type]
     with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter.configure_run(object(), "quota")  # type: ignore[arg-type]
-    await adapter.configure_quota_resource(object(), None)  # type: ignore[arg-type]
+        await adapter.configure_quota_resource(object(), None)  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(object(), "work_ticket")  # type: ignore[arg-type]
     with pytest.raises(UnsupportedAccessStrategyError):
         await adapter.configure_quota_resource(object(), "ticket")  # type: ignore[arg-type]
+    await adapter.configure_run(object(), "direct")  # type: ignore[arg-type]
+    with pytest.raises(UnsupportedAccessStrategyError):
+        await adapter.configure_quota_resource(object(), "work_ticket")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("ticket_count", "point_count", "coin_count"),
+    [(0, 0, 0), (2, 0, 0), (1, 1, 0), (1, 0, 1)],
+)
+def test_ticket_only_control_is_fail_closed(
+    ticket_count: int, point_count: int, coin_count: int
+) -> None:
+    with pytest.raises(UnsupportedAccessStrategyError):
+        validate_zeblack_ticket_control_counts(
+            ticket_count,
+            point_count=point_count,
+            coin_count=coin_count,
+        )
+
+
+class _TicketLocator:
+    def __init__(self, page: _TicketPage, text: str) -> None:
+        self.page = page
+        self.text = text
+
+    async def count(self) -> int:
+        return self.page.counts.get(self.text, 0)
+
+    def nth(self, _index: int) -> _TicketLocator:
+        return self
+
+    async def is_visible(self) -> bool:
+        return True
+
+    async def is_enabled(self) -> bool:
+        return True
+
+    async def evaluate(self, _script: str) -> str:
+        return "div"
+
+    async def click(self, **_kwargs: object) -> None:
+        self.page.clicks += 1
+
+
+class _TicketPage:
+    def __init__(self, counts: dict[str, int]) -> None:
+        self.counts = counts
+        self.clicks = 0
+        self.url = TARGET
+
+    def get_by_text(self, text: str, *, exact: bool) -> _TicketLocator:
+        assert exact is True
+        return _TicketLocator(self, text)
+
+    def locator(self, _selector: str) -> _TicketLocator:
+        return _TicketLocator(self, "__dialog__")
+
+    async def goto(self, url: str, **_kwargs: object) -> None:
+        self.url = url
+
+    async def wait_for_timeout(self, _milliseconds: int) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_ticket_click_is_confirmed_once_and_never_retried(monkeypatch) -> None:
+    page = _TicketPage({"チケットを使って読む": 1})
+    adapter = ZeblackAdapter()
+    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+
+    async def stable_content(_page: object) -> None:
+        return None
+
+    monkeypatch.setattr(adapter, "_wait_for_initial_content", stable_content)
+    await adapter._enter_with_work_ticket(page)  # type: ignore[arg-type]
+
+    consumption = adapter.get_access_consumption()
+    assert page.clicks == 1
+    assert consumption.consumed is True
+    assert consumption.resource == "work_ticket"
+    assert consumption.consumed_at is not None
+    assert consumption.consumed_at.tzinfo is not None
+    with pytest.raises(UnsupportedAccessStrategyError):
+        await adapter._enter_with_work_ticket(page)  # type: ignore[arg-type]
+    assert page.clicks == 1
+
+
+def _live_state(status_value: int, ticket_available_ids: tuple[str, ...]) -> ZeblackLiveAccessState:
+    names = {
+        0: "FREE",
+        1: "RENTAL",
+        2: "TICKET_AVAILABLE",
+        3: "TICKET_UNAVAILABLE",
+        4: "POINT",
+        5: "COIN",
+        6: "TICKET_UNAVAILABLE_COIN_ONLY",
+    }
+    return ZeblackLiveAccessState(
+        title_id="118286",
+        chapter_id="9265713",
+        status_value=status_value,
+        status_name=names.get(status_value, "UNKNOWN"),
+        ticket_available_ids=ticket_available_ids,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "ticket_ids", "reason", "stop"),
+    [
+        (4, ("9265714",), "work_ticket_not_available_for_chapter", False),
+        (4, (), "work_ticket_unavailable", True),
+        (3, ("9265714",), "work_ticket_not_available_for_chapter", False),
+        (5, (), "work_ticket_unavailable", True),
+    ],
+)
+async def test_quota_live_state_skips_unavailable_without_click(
+    monkeypatch,
+    status: int,
+    ticket_ids: tuple[str, ...],
+    reason: str,
+    stop: bool,
+) -> None:
+    page = _TicketPage({})
+    adapter = ZeblackAdapter()
+    await adapter.configure_run(page, "quota")  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(page, "work_ticket")  # type: ignore[arg-type]
+    adapter._initial_url = TARGET
+    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    monkeypatch.setattr(adapter, "_has_preexisting_content", lambda _page: _false())
+
+    async def observe(_page: object, **_kwargs: object) -> ZeblackLiveAccessState:
+        return _live_state(status, ticket_ids)
+
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.zeblack.adapter.observe_zeblack_live_access",
+        observe,
+    )
+    with pytest.raises(AccessResourceUnavailableError) as error:
+        await adapter._initialize_quota_entry(page, entry_only=False)  # type: ignore[arg-type]
+    assert error.value.reason == reason
+    assert error.value.stop_resource_pass is stop
+    assert page.clicks == 0
+    assert adapter.get_access_consumption().consumed is False
+
+
+async def _false() -> bool:
+    return False
+
+
+@pytest.mark.asyncio
+async def test_unknown_quota_live_status_fails_closed(monkeypatch) -> None:
+    page = _TicketPage({})
+    adapter = ZeblackAdapter()
+    await adapter.configure_run(page, "quota")  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(page, "work_ticket")  # type: ignore[arg-type]
+    adapter._initial_url = TARGET
+    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    monkeypatch.setattr(adapter, "_has_preexisting_content", lambda _page: _false())
+
+    async def observe(_page: object, **_kwargs: object) -> ZeblackLiveAccessState:
+        return _live_state(99, ())
+
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.zeblack.adapter.observe_zeblack_live_access",
+        observe,
+    )
+    with pytest.raises(UnknownPageStateError, match="unknown"):
+        await adapter._initialize_quota_entry(page, entry_only=False)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

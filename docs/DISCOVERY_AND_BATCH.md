@@ -1,5 +1,33 @@
 # Discovery / Catalog / Batch Design
 
+## Zeblack Z5 Site Policy / runtime access status
+
+Zeblack Discovery deliberately keeps a broad Catalog classification:
+`POINT`, `TICKET_UNAVAILABLE`, `TICKET_AVAILABLE`, and `RENTAL` remain
+`access_mode=quota` where the production decoder observes those statuses.
+That Catalog classification is not proof that a Work Ticket is currently
+usable. Before an explicit Zeblack `quota` / `work_ticket` run, the Adapter
+performs a site-local live check against the current page-triggered
+`title_chapter_list` protobuf and uses the target `ConsumptionStatus` as the
+runtime authority. It does not call `DiscoveryService` or synchronize Catalog.
+
+Only live target `TICKET_AVAILABLE` may reach the exact ticket-only entry
+control. POINT, COIN, coin-only, and ambiguous/unknown states never trigger a
+point/coin/purchase fallback. The live check also returns all current
+`TICKET_AVAILABLE` chapter IDs: an unavailable target with another available
+chapter is a non-terminal `AccessResourceUnavailableError`, while zero
+available chapters stops only the explicit Work Ticket resource pass.
+
+Zeblack's Site Policy exposes only `work_ticket`, uses work-scoped oldest-first
+planning with `quota_limit=None`, does not infer a local 23-hour cooldown or
+work-wide state, and commits quota state only after confirmed same-chapter
+viewer content. Grant-only uses the generic entry-only contract; it records
+confirmed consumption, leaves the Item pending, and creates no package.
+
+Current ticket-consuming live verification is intentionally not part of the
+Z5 implementation change. Read-only frontend bundle evidence supports the
+exact control text `チケットを使って読む`; no ticket was clicked.
+
 > Site-native bounded Discoveryの詳細な採用仕様は `docs/BOUNDED_DISCOVERY.md` とし、本書のDiscovery仕様の一部として扱う。
 
 ## Zeblack Z4-1 production Discovery status
@@ -19,9 +47,10 @@ The DOM provides identity and observed listing order; the protobuf provides
 Unbounded full and incremental Discovery use the existing service semantics.
 Bounded Discovery is inclusive and matches `from_url` / `through_url` by
 viewer `chapter_id` only, with same-title validation and no partial yield.
-The adapter is registered in the Discovery registry but deliberately not in
-the Batch Policy registry. Dynamic ticket eligibility, ticket cooldown,
-consumption, and rental-time interpretation remain Site Policy work.
+The adapter is registered in the Discovery registry and the current Z5 Site
+Policy is also registered in the Batch Policy registry. Dynamic ticket
+eligibility remains runtime Adapter work; no ticket cooldown or rental-time
+unit is inferred.
 
 Z4-1 live verification on 2026-09-30 observed 250 Zeblack records with
 `complete=True` and `stopped_reason=exhausted`; the temporary Catalog had 250

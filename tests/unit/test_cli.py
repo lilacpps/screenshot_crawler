@@ -498,16 +498,17 @@ def test_batch_plan_parser_accepts_site_and_catalog() -> None:
     assert custom.catalog == Path("custom.sqlite")
 
 
-def test_batch_policy_registry_contains_bookwalker_jumpplus_magapoke_and_mangaone() -> None:
+def test_batch_policy_registry_contains_supported_sites() -> None:
     assert cli._batch_policy_registry().sites() == (
         "bookwalker",
         "jumpplus",
         "magapoke",
         "mangaone",
+        "zeblack",
     )
 
 
-def test_discovery_registry_contains_zeblack_but_batch_registry_does_not() -> None:
+def test_discovery_and_batch_registries_contain_zeblack() -> None:
     assert cli._discovery_registry().sites() == (
         "bookwalker",
         "jumpplus",
@@ -515,7 +516,7 @@ def test_discovery_registry_contains_zeblack_but_batch_registry_does_not() -> No
         "mangaone",
         "zeblack",
     )
-    assert "zeblack" not in cli._batch_policy_registry().sites()
+    assert "zeblack" in cli._batch_policy_registry().sites()
 
 
 def test_batch_run_parser_accepts_execution_options() -> None:

@@ -289,8 +289,6 @@ async def test_zeblack_invalid_boundaries_fail_closed_without_yield(
         ):
             yielded.append(record)
     assert yielded == []
-    # temporary patch marker
-    # temporary patch marker
 @pytest.mark.asyncio
 async def test_zeblack_conflicting_duplicate_responses_fail_closed() -> None:
     first = _payload(_chapter(101, label="#1"), _chapter(202, label="#2"))
