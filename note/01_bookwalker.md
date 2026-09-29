@@ -88,7 +88,12 @@ strictではtrial、subscription、generic viewer、wrong-kindへのfallbackは�
 観測して一意性を確認するまでclickせず、候補が複数の間も最初の観測だけで即failしない。strict
 errorにはstrategy、expected kind、observed kindsを含める。product page以外のalready-viewer
 strict runも、entry条件を検証できないためfailする。
-click後はURL changeを確認し、両方のcontent UUIDを取得できる場合は一致を確認する。
+click後はURL changeだけでentry完了とせず、strict entryのdestinationをAdapter内でbounded pollingする。
+viewer URLまたはviewer shellを確認できた場合は即座にviewerとして進み、visibleなemail/password
+fieldのlogin formを確認できた場合はloginとして扱う。待機総量は既存の
+`navigation_wait_timeout_ms`（default 5000ms）、poll intervalは`strict_entry_destination_poll_interval_ms`
+（default 100ms）である。期限までにviewer/login formのどちらも明確にならない場合は、render-ready待ちへ
+流さずstrict entry errorで停止する。viewer URLへの直接遷移に固定sleepは追加しない。
 delayed controlは既存`read_link_wait_timeout_ms`（default 5000ms）のbounded waitで待つ。
 quotaではtrial onlyやsubscription onlyの場合もtrialへfallbackせずfailする。
 
@@ -111,7 +116,9 @@ auto-loginを含むBookWalker initializeには、通常のCore defaultを変更�
 
 Phase 4のunit testsではstrict quota/direct成功、wrong strategy、trial/subscription/generic only、
 multiple candidate、scope overlapの同一DOM dedupe、delayed maruyomi、UUID mismatch、target blank、
-already-viewerをsynthetic product pageで確認している。quotaを消費するlive clickは未実施である。
+already-viewerをsynthetic product pageで確認している。Browser-backed integrationではstrict entry後の
+delayed login form mount、viewer即時判定、unknown destinationのentry fail-safeも確認している。
+quotaを消費するlive clickは未実施である。
 
 ## 3. Viewer / capture target
 

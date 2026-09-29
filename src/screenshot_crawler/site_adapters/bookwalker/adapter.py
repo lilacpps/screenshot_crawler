@@ -381,6 +381,7 @@ class BookWalkerAdapter(SiteAdapter):
     page_change_timeout_ms = 14_000
     initialize_timeout_ms = 45_000
     navigation_wait_timeout_ms = 5_000
+    strict_entry_destination_poll_interval_ms = 100
     read_link_wait_timeout_ms = 5_000
     strict_entry_initial_settle_ms = 250
     strict_candidate_poll_interval_ms = 100
@@ -1045,12 +1046,38 @@ class BookWalkerAdapter(SiteAdapter):
             page
         )
 
+    async def _wait_for_strict_entry_destination(self, page: Page) -> str | None:
+        """Wait until strict entry resolves to viewer or a login form."""
+
+        elapsed_ms = 0
+        while True:
+            if await self._is_viewer_destination(page):
+                return "viewer"
+            if await is_bookwalker_login_page(page):
+                return "login"
+
+            remaining_ms = self.navigation_wait_timeout_ms - elapsed_ms
+            if remaining_ms <= 0:
+                return None
+            poll_interval_ms = max(1, self.strict_entry_destination_poll_interval_ms)
+            wait_ms = min(poll_interval_ms, remaining_ms)
+            await page.wait_for_timeout(wait_ms)
+            elapsed_ms += wait_ms
+
     async def _open_strict_reader_from_product(self, page: Page) -> None:
         expected_kind = self._strict_expected_kind()
         link = await self._find_strict_read_link(page, expected_kind)
         await self._activate_reader_control(page, link)
 
-        if await is_bookwalker_login_page(page):
+        destination = await self._wait_for_strict_entry_destination(page)
+        if destination is None:
+            raise self._strict_entry_error(
+                expected_kind=expected_kind,
+                observed=[expected_kind],
+                reason="strict entry destination did not resolve to viewer or login form",
+            )
+
+        if destination == "login":
             if self._access_strategy != "quota":
                 raise self._strict_entry_error(
                     expected_kind=expected_kind,

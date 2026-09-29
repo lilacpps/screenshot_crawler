@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import pytest_asyncio
 from playwright.async_api import Browser, Page
@@ -121,6 +123,8 @@ async def _goto_login_redirect_product(
     login_redirects_to_viewer: bool,
     product_request_count: list[int],
     login_destination: str | None = None,
+    reader_destination: str = "https://member.bookwalker.jp/login",
+    login_mount_delay_ms: int = 0,
 ) -> None:
     viewer_url = f"{VIEWER_BASE}?cid={PRODUCT_ID}&entry=quota"
     destination = login_destination or viewer_url
@@ -147,7 +151,7 @@ async def _goto_login_redirect_product(
     <h1 class="t-c-product-main-data__title">作品</h1>
     <div id="js-read-check">
       <a data-action-label="read_maruyomi" data-uuid="{PRODUCT_ID}"
-         href="https://member.bookwalker.jp/login">10分まる読み</a>
+         href="{reader_destination}">10分まる読み</a>
     </div>
     <div id="js-subscription-check"></div>
     """
@@ -157,7 +161,15 @@ async def _goto_login_redirect_product(
         await route.fulfill(content_type="text/html", body=product_html)
 
     async def fulfill_login(route) -> None:
-        await route.fulfill(content_type="text/html", body=login_form)
+        body = login_form
+        if login_mount_delay_ms:
+            body = (
+                "<!doctype html><body><script>"
+                f"setTimeout(() => {{ document.body.innerHTML = {json.dumps(login_form)}; }}, "
+                f"{login_mount_delay_ms});"
+                "</script></body>"
+            )
+        await route.fulfill(content_type="text/html", body=body)
 
     async def fulfill_viewer(route) -> None:
         await route.fulfill(content_type="text/html", body=_viewer_html())
@@ -191,6 +203,32 @@ async def test_bookwalker_quota_login_redirect_submits_once_and_uses_viewer(
     assert await browser_page.evaluate("window.name") == "reader@example.test"
     assert product_request_count == [1]
     assert adapter._auto_login_attempted
+
+
+async def test_bookwalker_quota_waits_for_delayed_login_form_mount(
+    browser_page: Page,
+) -> None:
+    product_request_count = [0]
+    await _goto_login_redirect_product(
+        browser_page,
+        login_redirects_to_viewer=True,
+        product_request_count=product_request_count,
+        login_mount_delay_ms=300,
+    )
+    adapter = BookWalkerAdapter(
+        auto_login_email="reader@example.test",
+        auto_login_password="password-not-logged",
+    )
+    adapter.read_link_wait_timeout_ms = 500
+    adapter.strict_entry_initial_settle_ms = FAST_STRICT_SETTLE_MS
+    adapter.strict_candidate_poll_interval_ms = FAST_STRICT_POLL_INTERVAL_MS
+    adapter.strict_entry_destination_poll_interval_ms = 20
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.initialize(browser_page)
+
+    assert browser_page.url == f"{VIEWER_BASE}?cid={PRODUCT_ID}&entry=quota"
+    assert await browser_page.evaluate("window.name") == "reader@example.test"
+    assert product_request_count == [1]
 
 
 async def test_bookwalker_quota_login_redirect_without_credentials_fails_explicitly(
@@ -264,6 +302,32 @@ async def test_bookwalker_quota_login_unexpected_redirect_fails_safe(
     with pytest.raises(BookWalkerStrictEntryError, match="did not reach the target viewer"):
         await adapter.initialize(browser_page)
     assert adapter._auto_login_attempted
+
+
+async def test_bookwalker_quota_unknown_destination_fails_at_entry(
+    browser_page: Page,
+) -> None:
+    product_request_count = [0]
+    await _goto_login_redirect_product(
+        browser_page,
+        login_redirects_to_viewer=False,
+        product_request_count=product_request_count,
+        reader_destination="https://bookwalker.jp/unexpected/",
+    )
+    adapter = BookWalkerAdapter()
+    adapter.read_link_wait_timeout_ms = 500
+    adapter.strict_entry_initial_settle_ms = FAST_STRICT_SETTLE_MS
+    adapter.strict_candidate_poll_interval_ms = FAST_STRICT_POLL_INTERVAL_MS
+    adapter.navigation_wait_timeout_ms = 150
+    adapter.strict_entry_destination_poll_interval_ms = 20
+    await adapter.configure_run(browser_page, "quota")
+
+    with pytest.raises(
+        BookWalkerStrictEntryError,
+        match="destination did not resolve to viewer or login form",
+    ):
+        await adapter.initialize(browser_page)
+    assert product_request_count == [2]
 
 
 async def test_bookwalker_quota_without_login_form_does_not_call_auto_login(
