@@ -58,7 +58,7 @@ def _target(discovery_scope: DiscoveryScope | None = None) -> WatchlistTarget:
         work_key="juou-work",
         site="mangaone",
         url="https://manga-one.com/manga/2379/chapter/214131",
-        label="迯｣邇九→阮ｬ闕・",
+        label="獣王と薬草",
         discovery_scope=discovery_scope,
     )
 
@@ -66,22 +66,17 @@ def _target(discovery_scope: DiscoveryScope | None = None) -> WatchlistTarget:
 def _stalling_listing_html() -> str:
     card_classes = CARD_SELECTOR.removeprefix("div.").replace(".", " ")
     return f"""
-    <title>迯｣邇九→阮ｬ闕・隨ｬ1隧ｱ | 繝槭Φ繧ｬ繝ｯ繝ｳ</title>
+    <title>獣王と薬草 第1話 | マンガワン</title>
     <div id="chapterList">
       <div class="{card_classes}" id="card-3">
-        <img alt="隨ｬ80隧ｱ(蠕檎ｷｨ)" src="https://manga-one.com/chapter/3.webp">
-        <span>蜈郁ｪｭ</span>
+        <img alt="第80話(後編)" src="https://manga-one.com/chapter/3.webp">
+        <span>先読</span>
       </div>
-      <button type="button" id="next">谺｡縺ｸ</button>
+      <button type="button" id="next">次へ</button>
     </div>
     <script>
       document.querySelector('#next').addEventListener('click', () => {{
-        document.querySelector('#chapterList').innerHTML = `
-          <div class="{card_classes}" id="card-2">
-            <a href="/manga/2379/chapter/2"><img alt="隨ｬ80隧ｱ(蜑咲ｷｨ)" src="https://manga-one.com/chapter/2.webp"></a>
-            <span>辟｡譁・</span>
-          </div>
-          <button type="button" id="next">谺｡縺ｸ</button>`;
+        fetch('/__next-click');
       }});
     </script>
     """
@@ -252,8 +247,13 @@ async def test_mangaone_bounded_pagination_failure_does_not_write_partial_record
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(mangaone_discovery, "WAIT_TIMEOUT_MS", 200)
+    next_clicks = [0]
 
     async def fulfill(route) -> None:
+        if route.request.url.endswith("/__next-click"):
+            next_clicks[0] += 1
+            await route.fulfill(body="ok")
+            return
         await route.fulfill(
             body=_stalling_listing_html(),
             content_type="text/html; charset=utf-8",
@@ -280,6 +280,7 @@ async def test_mangaone_bounded_pagination_failure_does_not_write_partial_record
     assert catalog.list_items() == []
     assert catalog.list_sources() == []
     assert catalog.list_source_targets() == []
+    assert next_clicks == [1]
 
 
 async def test_mangaone_unbounded_pagination_failure_keeps_partial_refresh_behavior(
@@ -288,8 +289,13 @@ async def test_mangaone_unbounded_pagination_failure_keeps_partial_refresh_behav
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(mangaone_discovery, "WAIT_TIMEOUT_MS", 1_000)
+    next_clicks = [0]
 
     async def fulfill(route) -> None:
+        if route.request.url.endswith("/__next-click"):
+            next_clicks[0] += 1
+            await route.fulfill(body="ok")
+            return
         await route.fulfill(
             body=_stalling_listing_html(),
             content_type="text/html; charset=utf-8",
@@ -310,6 +316,7 @@ async def test_mangaone_unbounded_pagination_failure_keeps_partial_refresh_behav
     assert result.stopped_reason == "incomplete"
     assert result.observed_count == 1
     assert [source.external_id for source in catalog.list_sources()] == ["3"]
+    assert next_clicks == [1]
 
 
 async def test_mangaone_bounded_incremental_uses_common_known_streak_semantics(
