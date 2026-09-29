@@ -220,11 +220,12 @@ class DiscoveryService:
             )
 
         if mode == "full":
-            self.catalog.mark_sources_unavailable_except(
-                site=target.site,
-                discovery_key=target.key,
-                observed_external_ids=observed_external_ids,
-            )
+            if target.discovery_scope is None:
+                self.catalog.mark_sources_unavailable_except(
+                    site=target.site,
+                    discovery_key=target.key,
+                    observed_external_ids=observed_external_ids,
+                )
             complete: bool | None = True
         else:
             complete = None

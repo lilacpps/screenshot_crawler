@@ -140,6 +140,10 @@ class FakeDiscoveryAdapter(DiscoveryAdapter):
         return self.stop_decision
 
 
+class BoundedFakeDiscoveryAdapter(FakeDiscoveryAdapter):
+    supports_bounded_discovery = True
+
+
 def target(
     *,
     key: str = "scope-a",
@@ -407,11 +411,29 @@ async def test_full_reconciliation_only_happens_after_complete_exhaustion(tmp_pa
     assert catalog.get_source(missing.id).available is True
 
 
-async def test_incremental_known_streak_and_run_start_snapshot_are_preserved(tmp_path: Path) -> None:
-    adapter = FakeDiscoveryAdapter(
+@pytest.mark.parametrize(
+    ("adapter_factory", "discovery_scope"),
+    [
+        (FakeDiscoveryAdapter, None),
+        (
+            BoundedFakeDiscoveryAdapter,
+            DiscoveryScope(from_url="https://example.test/from"),
+        ),
+    ],
+)
+async def test_incremental_known_streak_and_run_start_snapshot_are_preserved(
+    tmp_path: Path,
+    adapter_factory,
+    discovery_scope: DiscoveryScope | None,
+) -> None:
+    adapter = adapter_factory(
         [record(external_id) for external_id in ("one", "two", "three", "four", "five", "six")]
     )
-    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    service, catalog, watch_target = setup_service(
+        tmp_path,
+        adapter,
+        watch_target=target(discovery_scope=discovery_scope),
+    )
     work = catalog.create_work(WorkInput(work_key="work-a", title="作品A"))
     for external_id in ("one", "two", "three", "four", "five"):
         item = catalog.create_item(work_id=work.id)
@@ -500,8 +522,12 @@ async def test_disabled_target_does_not_create_work(tmp_path: Path) -> None:
     assert catalog.list_works() == []
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected_complete"),
+    [("full", False), ("incremental", None)],
+)
 async def test_bounded_scope_fails_closed_before_adapter_iteration_or_catalog_mutation(
-    tmp_path: Path,
+    tmp_path: Path, mode: str, expected_complete: bool | None
 ) -> None:
     adapter = FakeDiscoveryAdapter([record("should-not-be-observed")])
     service, catalog, watch_target = setup_service(
@@ -512,9 +538,9 @@ async def test_bounded_scope_fails_closed_before_adapter_iteration_or_catalog_mu
         ),
     )
 
-    result = await service.discover(FakePage(), watch_target, "full")
+    result = await service.discover(FakePage(), watch_target, mode)
 
-    assert result.complete is False
+    assert result.complete is expected_complete
     assert result.stopped_reason == "incomplete"
     assert result.observed_count == 0
     assert result.new_count == 0
@@ -525,6 +551,72 @@ async def test_bounded_scope_fails_closed_before_adapter_iteration_or_catalog_mu
     assert catalog.list_items() == []
     assert catalog.list_sources() == []
     assert catalog.list_source_targets() == []
+
+
+async def test_bounded_full_syncs_records_without_global_reconciliation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = BoundedFakeDiscoveryAdapter([record("observed")])
+    service, catalog, watch_target = setup_service(
+        tmp_path,
+        adapter,
+        watch_target=target(
+            discovery_scope=DiscoveryScope(from_url="https://example.test/from")
+        ),
+    )
+    work = catalog.create_work(WorkInput(work_key="work-a", title="作品A"))
+    outside_item = catalog.create_item(work_id=work.id)
+    outside = catalog.create_source(
+        SourceInput(
+            site="site-a",
+            external_id="outside-scope",
+            discovery_key=watch_target.key,
+            available=True,
+        ),
+        item_id=outside_item.id,
+    )
+    reconciliation_calls: list[dict[str, object]] = []
+
+    def spy_mark_sources_unavailable_except(**kwargs: object) -> None:
+        reconciliation_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        catalog,
+        "mark_sources_unavailable_except",
+        spy_mark_sources_unavailable_except,
+    )
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is True
+    assert result.stopped_reason == "exhausted"
+    assert adapter.iter_records_calls == 1
+    assert catalog.find_source("site-a", "observed") is not None
+    assert catalog.get_source(outside.id).available is True
+    assert reconciliation_calls == []
+
+
+async def test_bounded_incremental_preserves_adapter_stop_hook_after_sync(
+    tmp_path: Path,
+) -> None:
+    adapter = BoundedFakeDiscoveryAdapter(
+        [record("one")], stop_decision=IncrementalStopDecision.STOP
+    )
+    service, catalog, watch_target = setup_service(
+        tmp_path,
+        adapter,
+        watch_target=target(
+            discovery_scope=DiscoveryScope(through_url="https://example.test/through")
+        ),
+    )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.complete is None
+    assert result.stopped_reason == "stable_boundary"
+    assert result.observed_count == 1
+    assert adapter.stop_calls == ["one"]
+    assert catalog.find_source("site-a", "one") is not None
 
 
 def test_discovered_graph_insert_is_atomic(tmp_path: Path) -> None:

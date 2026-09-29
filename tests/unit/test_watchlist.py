@@ -160,6 +160,30 @@ def test_enable_disable_and_reload_preserve_discovery_scope(tmp_path: Path) -> N
     assert "through_url: https://example.invalid/through" in written
 
 
+def test_add_rewrite_preserves_existing_discovery_scope(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    enabled: true\n"
+        "    label: 作品A\n"
+        "    discovery_scope:\n"
+        "      from_url: https://example.invalid/from\n",
+        encoding="utf-8",
+    )
+    service = WatchlistService(path)
+
+    add_target(service, key="two", work_key="work-two", label="作品B")
+
+    assert service.get("one").discovery_scope == DiscoveryScope(
+        from_url="https://example.invalid/from"
+    )
+    assert service.get("two").discovery_scope is None
+
+
 def test_same_work_key_can_be_shared_but_key_must_be_unique(tmp_path: Path) -> None:
     service = WatchlistService(tmp_path / "watchlist.yaml")
     first = add_target(service)
