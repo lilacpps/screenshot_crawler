@@ -316,7 +316,6 @@ targets:
 
   - key: gorin-no-megami-sama
     work_key: gorin-no-megami-sama
-
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/01523/episode/329612
     enabled: true
@@ -648,12 +647,124 @@ targets:
     work_key: nisekoi
     site: jumpplus
     url: https://shonenjumpplus.com/episode/10833519556325021840
-    enabled: true
+    enabled: false
     label: "ニセコイ"
 
   - key: jigokuraku
     work_key: jigokuraku
     site: jumpplus
     url: https://shonenjumpplus.com/episode/13932016480029295972
-    enabled: true
+    enabled: false
     label: "地獄楽"
+
+  - key: tate-no-kuni
+    work_key: tate-no-kuni
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10834108156642491399
+    enabled: false
+    label: "タテの国"
+
+  - key: 2-5jigen-no-ririsa
+    work_key: 2-5jigen-no-ririsa
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13933686331679642476
+    enabled: true
+    label: "2.5次元の誘惑"
+
+  - key: sankyu-pitch
+    work_key: sankyu-pitch
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256784141585
+    enabled: true
+    label: "サンキューピッチ"
+
+  - key: kurumizawa-yoshihiko-no-gukou
+    work_key: kurumizawa-yoshihiko-no-gukou
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672024828
+    enabled: true
+    label: "来見沢善彦の愚行"
+
+  - key: hatori-to-furuta-no-hinichijou-sahanji
+    work_key: hatori-to-furuta-no-hinichijou-sahanji
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672026054
+    enabled: true
+    label: "羽鳥と古田の非日常茶飯事"
+
+  - key: otona-taisen
+    work_key: otona-taisen
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672024113
+    enabled: true
+    label: "大人大戦"
+
+  - key: witchriv
+    work_key: witchriv
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672015654
+    enabled: true
+    label: "WITCHRIV"
+
+  - key: hitonaa
+    work_key: hitonaa
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672010607
+    enabled: true
+    label: "ヒトナー"
+
+  - key: harem-yuusha-densetsu
+    work_key: harem-yuusha-densetsu
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256637716501
+    enabled: true
+    label: "ハーレム勇者伝説"
+
+  - key: kami-yomu-futari
+    work_key: kami-yomu-futari
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672016369
+    enabled: true
+    label: "神ヨムふたり"
+
+  - key: awai-no-enjin
+    work_key: awai-no-enjin
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672011223
+    enabled: true
+    label: "あわいの焔刃"
+
+  - key: evangeline-wa-kutsu-wo-haku
+    work_key: evangeline-wa-kutsu-wo-haku
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672008555
+    enabled: true
+    label: "エヴァンジェリンは靴を履く"
+
+  - key: mikotohako
+    work_key: mikotohako
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672005369
+    enabled: true
+    label: "みことはこ"
+
+  - key: noise-ring
+    work_key: noise-ring
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256672004650
+    enabled: true
+    label: "ノイズリング"
+
+  - key: ippitsu-ayaru
+    work_key: ippitsu-ayaru
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256637716556
+    enabled: true
+    label: "イッピツアヤル"
+
+  - key: internet-miko
+    work_key: internet-miko
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256637716411
+    enabled: true
+    label: "世界を繋ぎ尽くすインターネット巫女"
