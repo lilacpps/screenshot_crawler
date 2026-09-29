@@ -361,11 +361,13 @@ def _registry() -> AdapterRegistry:
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
+    from screenshot_crawler.site_adapters.zeblack import ZeblackAdapter
 
     registry.register("bookwalker", BookWalkerAdapter)
     registry.register("jumpplus", JumpPlusAdapter)
     registry.register("magapoke", MagapokeAdapter)
     registry.register("mangaone", MangaOneAdapter)
+    registry.register("zeblack", ZeblackAdapter)
     return registry
 
 

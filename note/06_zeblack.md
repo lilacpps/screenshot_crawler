@@ -1,12 +1,91 @@
-# Zebrack Z0/Z1 viewer probe 現行観測ノート
+# Zebrack Z0/Z1/Z2 viewer probe と Z3 production adapter 現行ノート
 
 ## Scope
 
-これはゼブラック（Zebrack）の新規Site Adapter開発前に行う、対象chapter限定の
-read-only viewer probe記録である。Production Site Adapter、Discovery、Site Policy、
-Batch、access resource消費、login automationは未実装である。Z0/Z1では観測できた事実と
+これはゼブラック（Zebrack）の対象chapter限定のread-only viewer probeとproduction
+Adapterの現行記録である。Discovery、Site Policy、Batch、access resource消費、login
+automationは未実装である。Z0/Z1では観測できた事実と
 未確認事項を分離し、毎日無料・ポイント・コイン・レンタル等のresource semanticsを
 決めていない。
+
+## Z3 production status
+
+Z3では、Viewer Adapterだけをproduction実装した。site keyは`zeblack`で、通常の
+`crawl --site zeblack`から利用できる。Discovery、Site Policy、ticket/access acquisition、
+daily-free consumption、quota resource、login automation、next chapter clickは引き続き
+未実装である。
+
+### Viewer / page order
+
+対象viewer URLは、HTTPSの
+`/title/{numeric_title_id}/chapter/{numeric_chapter_id}/viewer`だけを受け付ける。
+query/hashは許容するが、host/path identityが変わった場合は自動操作を停止する。
+本文候補はCSS module hashに依存せず、`img`のexact `alt=page_N`、visible、viewport内、
+正の`naturalWidth`/`naturalHeight`、`blob:https://zebrack-comic.shueisha.co.jp/` sourceを
+要求する。active rowsは`page_N`数値昇順で処理し、DOM orderやscreen x座標からreading orderを
+補完しない。duplicate、malformed、invalid dimensions、blob欠落、ambiguous sourceはfail
+closedである。
+
+### Direct capture / fallback
+
+`prepare_page()`はnavigation前にexact viewer-origin blob response listenerを登録する。
+response bodyはasync taskとして最大128件のbounded cacheに保持する。asset transport
+(`asset.zebrack-comic.com`)はcapture sourceに使わない。direct captureではcurrent spreadの
+全rowについてexact blob URLのbodyを待ち、JPEG decode成功とDOM natural dimensions一致を
+全件確認してから、元JPEG bytesを再encodeせず`.jpg`の`CaptureResult`として返す。一件でも
+失敗すればspread全体を`CaptureUnavailableError`でfallbackへ渡し、mixed direct/locator
+spreadは作らない。direct成功後は使用済みblob entryをcacheから解放する。fallbackは同じ
+active `page_N` img locatorを数値昇順で返す。
+
+### Navigation / state / identity
+
+`go_next()`はsame-chapter URLとactive contentを再確認し、form input/textarea/select/
+contenteditableにfocusがある場合は停止する。その後に`ArrowLeft`だけを送る。next chapter
+button/controlはclickしない。`wait_for_change()`はURL、active page_N集合、blob source identity、
+visible terminal signalをpollし、changed後の連続stable checksを要求する。no-change timeout
+はENDと推測しない。
+
+`ContentIdentity`はcurrent in-viewport page_N集合を`page_0`または`page_1+page_2`のように
+数値順で表し、`page_number`は補助値である。`ContentContext`はtitle/chapter IDから
+`work_id=title_id`、`chapter_id=chapter_id`を返す。
+
+本文がactiveなら、同じDOM内に「次の話」候補があっても`CONTENT`を優先する。本文がなく、
+same chapter viewer URL、直前のArrowLeft transitionがchanged+stable、かつviewport内の
+visible button/controlに「次の話を読む」系の明示signalがある場合だけ`NEXT_CONTENT`とする。
+page counterだけではterminalにしない。Z2で独立したEND UIは確認していないため、未確認の
+END文言から`END`を生成しない。
+
+### Access strategy / verification status
+
+`auto`と`direct`を受け付け、`quota`と`quota_resource != None`はrejectする。Z3ではaccess
+resource操作を行わず、minimal AccessProfileは`zebrack-comic.shueisha.co.jp`と
+`asset.zebrack-comic.com`を403/429 relevant hostとして扱うだけである。challenge/login
+detectorは追加していない。
+
+Production unit testsとlive production crawlを実行済みである。共有Chromeを使った指定chapter
+のproduction CLI runは、chapter URLを離れず`stop_state=NEXT_CONTENT`、
+`stop_reason=next_content`で停止し、next chapter controlはclickしなかった。live artifactは
+23枚で、direct blob JPEGが22枚保存され、最後の`page_23`はexact blob response bodyが
+JPEGではなくWebP (`RIFF...WEBP`)だったため、設計どおりlocator PNG fallbackになった。
+`page_22`のdirect JPEG bytesは`page_1`と同一fingerprintで、Coreの既存fingerprint dedupeに
+より保存対象から除外された。このため今回のlive resultは、Z3の安全なfallback/terminal契約の
+検証には成功したが、受入目標の24枚全JPEG (`24 JPG`)には未達である。WebPをJPEGへre-encode
+したり、重複pageを保存するためにCoreを変更したりはしていない。
+実行コマンドは、指定outputが初回失敗runで非空になったためretry用outputを使った次のもの。
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli crawl `
+  --site zeblack `
+  --url "https://zebrack-comic.shueisha.co.jp/title/118286/chapter/9265713/viewer" `
+  --output-dir "output\test-zeblack-production-retry" `
+  --library-dir "output\test-books" `
+  --access-strategy direct --max-pages 100
+```
+
+保存画像はdirect JPEGが`760x1080`、fallback PNGが`782x1479`。最終URLは対象chapter viewer
+URLのままである。
+
+Z0/Z1/Z2のresearch-only観測と、Z3のproduction実装契約は混同しない。
 
 ## 対象URL / identity
 
