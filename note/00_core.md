@@ -1102,9 +1102,9 @@ Plannerがexplicit `quota_resource`を検証する。Batchはnormal/default pass
 requested resource以外へのsilent fallbackをしない。Phase 4/5では同じcontractをgrant-onlyにも使い、
 Work Ticket cooldown、Premium live balance、Policy順`all`を実装している。
 
-### Site-native bounded Discovery（B2 implemented / B3+ NOT YET IMPLEMENTED）
+### Site-native bounded Discovery（B3 Magapoke implemented / other sites NOT YET IMPLEMENTED）
 
-正式仕様は `docs/BOUNDED_DISCOVERY.md`。現在のB2実装状況は次のとおり。
+正式仕様は `docs/BOUNDED_DISCOVERY.md`。現在のB3実装状況は次のとおり。
 
 - Watchlistの`DiscoveryScope(from_url / through_url)` model、YAML parse、mapping / boundary存在 / non-empty string validation: **IMPLEMENTED**
 - scope付きtargetのenable / disable等のWatchlist rewrite preservation: **IMPLEMENTED**
@@ -1113,9 +1113,11 @@ Work Ticket cooldown、Premium live balance、Policy順`all`を実装してい�
 - scope付きtargetを未対応Adapterへ渡した場合: **IMPLEMENTED**。Work作成前にincompleteとして停止し、`iter_records()`、unbounded fallback、Item / Source / SourceTarget同期を行わない
 - bounded full: **IMPLEMENTED**。対応Adapterがyieldしたrecordは通常どおり同期し、正常終了時は`complete=True` / `stopped_reason="exhausted"`とする。global missing-source reconciliationは実行しない
 - bounded incremental common semantics: **IMPLEMENTED**。generic known-streak（5件の連続distinct known identity）と`incremental_stop_decision()`のstop hookをscopeなしと同じ順序・契約で適用する
-- bounded rangeのboundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
-- production site Adapterのbounded range implementation: **NOT YET IMPLEMENTED**
+- Magapoke bounded Discovery: **IMPLEMENTED**。既存strict parserで`title_id` / `episode_id`を検証し、parse済みlatest-first listing order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。invalid / foreign / different-title / missing / reversed boundaryはyield前にincompleteとする
+- Magapokeのboundary validation前yield防止: **IMPLEMENTED**。既存の全listing parse・buffer構造の後にrange確定してからyieldするため、invalid scopeでCatalog partial writeを行わない
+- BookWalker / Manga ONE / Jump+ / Zeblack等のproduction Adapter bounded support: **NOT YET IMPLEMENTED**
+- 他siteのbounded range boundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
 
-B1/B2ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、production site-specific Discovery logicも変更していない。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
+B1/B2/B3ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、Magapoke以外のproduction site-specific Discovery logicは変更していない。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 
 将来cross-site dedupeが必要になった場合はphysical Item mergeより先にhuman approval付きnon-destructive equivalence mappingを検討する。physical mergeは現計画の対象外である。

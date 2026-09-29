@@ -20,7 +20,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
-from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 MAGAPOKE_HOST = "pocket.shonenmagazine.com"
 EPISODE_SECTION_SELECTOR = "div.p-episode__sec"
@@ -136,6 +136,8 @@ def magapoke_rental_grant_until(
 class MagapokeDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate every episode from one Magapoke episode URL."""
 
+    supports_bounded_discovery = True
+
     async def iter_records(
         self,
         page: Page,
@@ -164,6 +166,12 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
                 target_parts,
                 canonical_title,
             )
+            if target.discovery_scope is not None:
+                records = self._apply_discovery_scope(
+                    records,
+                    target_parts,
+                    target.discovery_scope,
+                )
         except DiscoveryIncompleteError:
             raise
         except (PlaywrightError, TimeoutError) as exc:
@@ -173,6 +181,53 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
 
         for record in records:
             yield record
+
+    @staticmethod
+    def _apply_discovery_scope(
+        records: list[DiscoveredRecord],
+        target_parts: MagapokeEpisodeParts,
+        scope: DiscoveryScope,
+    ) -> list[DiscoveredRecord]:
+        """Select an inclusive range in the already-parsed listing order."""
+
+        if scope.from_url is None and scope.through_url is None:
+            raise DiscoveryIncompleteError(
+                "Magapoke bounded Discovery scope has no boundary"
+            )
+        boundary_indices: dict[str, int] = {}
+        record_indices = {
+            record.source.external_id: index for index, record in enumerate(records)
+        }
+        for boundary_name, boundary_url in (
+            ("from", scope.from_url),
+            ("through", scope.through_url),
+        ):
+            if boundary_url is None:
+                continue
+            boundary_parts = parse_magapoke_episode_url(boundary_url)
+            if boundary_parts is None:
+                raise DiscoveryIncompleteError(
+                    f"Magapoke bounded Discovery {boundary_name} boundary URL is invalid"
+                )
+            if boundary_parts.title_id != target_parts.title_id:
+                raise DiscoveryIncompleteError(
+                    "Magapoke bounded Discovery "
+                    f"{boundary_name} boundary belongs to a different title_id"
+                )
+            try:
+                boundary_indices[boundary_name] = record_indices[boundary_parts.episode_id]
+            except KeyError as exc:
+                raise DiscoveryIncompleteError(
+                    f"Magapoke bounded Discovery {boundary_name} boundary was not found"
+                ) from exc
+
+        from_index = boundary_indices.get("from", 0)
+        through_index = boundary_indices.get("through", len(records) - 1)
+        if from_index > through_index:
+            raise DiscoveryIncompleteError(
+                "Magapoke bounded Discovery boundaries are reversed"
+            )
+        return records[from_index : through_index + 1]
 
     async def _wait_for_episode_list(self, page: Page) -> Locator:
         elapsed = 0

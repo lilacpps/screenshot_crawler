@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from screenshot_crawler.discovery import (
 from screenshot_crawler.site_adapters.magapoke.discovery import (
     MagapokeDiscoveryAdapter,
 )
-from screenshot_crawler.watchlist import WatchlistTarget
+from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -56,6 +57,7 @@ def _listing_html(
     wrong_work: bool = False,
     no_progress: bool = False,
     split_list_containers: bool = False,
+    special_title: str | None = None,
 ) -> str:
     first = _row(
         "244819",
@@ -76,6 +78,7 @@ def _listing_html(
       </li>
     """
     duplicate_tail = tail if duplicate else ""
+    middle_title_literal = json.dumps(special_title or "【第３話】「三」(1)")
     second_list = ""
     if split_list_containers:
         second_list = f'''
@@ -99,7 +102,7 @@ def _listing_html(
         document.querySelector('#more').addEventListener('click', () => {
           if (expansion === 0) {
             tail.insertAdjacentHTML('beforebegin', makeRow('244818', '【第４話】「四」(1)', 'c-episode-item__ico--ticket-free'));
-            tail.insertAdjacentHTML('beforebegin', makeRow('244817', '【第３話】「三」(1)', 'c-episode-item__ico--renting', 'あと71時間'));
+            tail.insertAdjacentHTML('beforebegin', makeRow('244817', __MAGAPOKE_SPECIAL_TITLE__, 'c-episode-item__ico--renting', 'あと71時間'));
             expansion += 1;
           } else if (expansion === 1) {
             tail.insertAdjacentHTML('beforebegin', makeRow('244816', '【第２話】「二」(1)', 'c-episode-item__ico--free'));
@@ -108,6 +111,9 @@ def _listing_html(
           }
         });
     """
+    no_progress_script = no_progress_script.replace(
+        "__MAGAPOKE_SPECIAL_TITLE__", middle_title_literal
+    )
     return f"""
     <html><head><title>fixture</title></head><body>
       <h1 class="p-episode__comic-ttl">Fixture Work</h1>
@@ -129,13 +135,14 @@ def _listing_html(
     """
 
 
-def _target() -> WatchlistTarget:
+def _target(*, discovery_scope: DiscoveryScope | None = None) -> WatchlistTarget:
     return WatchlistTarget(
         key="magapoke-fixture",
         work_key="magapoke-work",
         site="magapoke",
         url=TARGET_URL,
         label="Fixture Work",
+        discovery_scope=discovery_scope,
     )
 
 
@@ -208,6 +215,153 @@ async def test_magapoke_incremental_uses_generic_known_streak(
     assert result.observed_count == 5
     assert result.known_count == 5
     assert result.stopped_reason == "known_streak"
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected_ids"),
+    [
+        (
+            DiscoveryScope(
+                from_url="https://pocket.shonenmagazine.com/title/00695/episode/244818",
+                through_url="https://pocket.shonenmagazine.com/title/00695/episode/244816",
+            ),
+            ["244818", "244817", "244816"],
+        ),
+        (
+            DiscoveryScope(
+                from_url="https://pocket.shonenmagazine.com/title/00695/episode/244817"
+            ),
+            ["244817", "244816", "244815"],
+        ),
+        (
+            DiscoveryScope(
+                through_url="https://pocket.shonenmagazine.com/title/00695/episode/244817"
+            ),
+            ["244819", "244818", "244817"],
+        ),
+        (
+            DiscoveryScope(
+                from_url="https://pocket.shonenmagazine.com/title/00695/episode/244817",
+                through_url="https://pocket.shonenmagazine.com/title/00695/episode/244817",
+            ),
+            ["244817"],
+        ),
+    ],
+)
+async def test_magapoke_bounded_scope_selects_inclusive_latest_first_range(
+    browser_page,
+    tmp_path: Path,
+    scope: DiscoveryScope,
+    expected_ids: list[str],
+) -> None:
+    await _install_route(browser_page, _listing_html())
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    registry = DiscoveryAdapterRegistry()
+    registry.register("magapoke", MagapokeDiscoveryAdapter)
+
+    result = await DiscoveryService(catalog, registry).discover(
+        browser_page, _target(discovery_scope=scope), "full"
+    )
+
+    assert result.complete is True
+    assert result.stopped_reason == "exhausted"
+    assert [source.external_id for source in catalog.list_sources()] == expected_ids
+
+
+async def test_magapoke_bounded_scope_includes_special_title_by_episode_identity(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    await _install_route(browser_page, _listing_html(special_title="番外編"))
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    registry = DiscoveryAdapterRegistry()
+    registry.register("magapoke", MagapokeDiscoveryAdapter)
+    scope = DiscoveryScope(
+        from_url="https://pocket.shonenmagazine.com/title/00695/episode/244818",
+        through_url="https://pocket.shonenmagazine.com/title/00695/episode/244816",
+    )
+
+    result = await DiscoveryService(catalog, registry).discover(
+        browser_page, _target(discovery_scope=scope), "full"
+    )
+
+    assert result.complete is True
+    assert [source.external_id for source in catalog.list_sources()] == [
+        "244818",
+        "244817",
+        "244816",
+    ]
+    assert [item.order_label for item in catalog.list_items()] == [
+        "【第４話】「四」(1)",
+        "番外編",
+        "【第２話】「二」(1)",
+    ]
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        DiscoveryScope(
+            from_url="https://example.test/title/00695/episode/244817"
+        ),
+        DiscoveryScope(
+            from_url="https://pocket.shonenmagazine.com/title/99999/episode/244817"
+        ),
+        DiscoveryScope(
+            from_url="https://pocket.shonenmagazine.com/title/00695/episode/999999"
+        ),
+        DiscoveryScope(
+            through_url="https://pocket.shonenmagazine.com/title/00695/episode/999999"
+        ),
+        DiscoveryScope(
+            from_url="https://pocket.shonenmagazine.com/title/00695/episode/244816",
+            through_url="https://pocket.shonenmagazine.com/title/00695/episode/244818",
+        ),
+    ],
+)
+async def test_magapoke_bounded_invalid_scope_fails_closed_without_partial_catalog_write(
+    browser_page,
+    tmp_path: Path,
+    scope: DiscoveryScope,
+) -> None:
+    await _install_route(browser_page, _listing_html())
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    registry = DiscoveryAdapterRegistry()
+    registry.register("magapoke", MagapokeDiscoveryAdapter)
+
+    result = await DiscoveryService(catalog, registry).discover(
+        browser_page, _target(discovery_scope=scope), "full"
+    )
+
+    assert result.complete is False
+    assert result.stopped_reason == "incomplete"
+    assert catalog.list_items() == []
+    assert catalog.list_sources() == []
+    assert catalog.list_source_targets() == []
+
+
+async def test_magapoke_bounded_incremental_yields_only_scope_before_generic_streak(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    await _install_route(browser_page, _listing_html())
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    registry = DiscoveryAdapterRegistry()
+    registry.register("magapoke", MagapokeDiscoveryAdapter)
+    service = DiscoveryService(catalog, registry)
+
+    await service.discover(browser_page, _target(), "full")
+    scope = DiscoveryScope(
+        through_url="https://pocket.shonenmagazine.com/title/00695/episode/244817"
+    )
+    result = await service.discover(
+        browser_page, _target(discovery_scope=scope), "incremental"
+    )
+
+    assert result.complete is None
+    assert result.observed_count == 3
+    assert result.known_count == 3
+    assert result.stopped_reason == "exhausted"
 
 
 async def test_magapoke_handles_multiple_list_containers_in_one_section(
