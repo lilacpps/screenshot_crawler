@@ -56,6 +56,22 @@ def test_lossless_webp_roundtrip_preserves_rgba_pixels() -> None:
     assert (results[0].width, results[0].height, results[0].mode) == (4, 3, "RGBA")
 
 
+def test_lossless_webp_preserves_hidden_rgb_in_transparent_pixels() -> None:
+    image = Image.new("RGBA", (2, 1))
+    image.putdata([(10, 20, 30, 0), (200, 100, 50, 255)])
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    png = output.getvalue()
+    member = benchmark.SampledMember(Path("book.zip"), "transparent.png", 0, 1, len(png))
+
+    results = benchmark.benchmark_image(
+        png, member, settings=(benchmark.WebPSetting(quality=80, method=4),)
+    )
+
+    assert len(results) == 1
+    assert results[0].pixel_equal is True
+
+
 def test_sampling_is_deterministic_and_spans_each_archive() -> None:
     inventories = (
         benchmark.ArchiveInventory(

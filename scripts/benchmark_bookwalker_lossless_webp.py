@@ -382,6 +382,9 @@ def encode_lossless_webp(image: Image.Image, setting: WebPSetting) -> bytes:
         lossless=True,
         quality=setting.quality,
         method=setting.method,
+        # Keep hidden RGB values in fully transparent pixels for exact RGBA
+        # round-trip verification.
+        exact=True,
     )
     return output.getvalue()
 
