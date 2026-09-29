@@ -252,81 +252,201 @@ def _wire_scalar_values(node: dict[str, Any]) -> list[int | str]:
     return values
 
 
-def chapter_id_wire_correlation(
-    wire: dict[str, Any], chapter_ids: set[str]
-) -> dict[str, Any]:
-    """Find chapter IDs without guessing which numeric field is chapter_id."""
+def _field_by_number(node: dict[str, Any], field_number: int) -> list[dict[str, Any]]:
+    return [
+        field
+        for field in node.get("fields") or []
+        if int(field.get("field_number", -1)) == field_number
+    ]
 
-    wanted = {str(value) for value in chapter_ids}
-    matches: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+def _chapter_v3_candidate(
+    node: dict[str, Any], *, expected_title_id: str | None = None
+) -> tuple[str, dict[str, Any]] | None:
+    """Recognize a ChapterV3-shaped message without generic field-1 guessing.
+
+    The wire parser remains schema-agnostic.  This narrow recognizer is only
+    used after the frontend generated-decoder evidence identifies ChapterV3.
+    Requiring id, titleId, mainName, and additional ChapterV3 fields prevents
+    unrelated protobuf messages with a numeric field 1 from becoming chapter
+    records.
+    """
+
+    id_fields = _field_by_number(node, 1)
+    title_fields = _field_by_number(node, 2)
+    name_fields = _field_by_number(node, 3)
+    if not id_fields or not title_fields or not name_fields:
+        return None
+    id_field = next((field for field in id_fields if "varint" in field), None)
+    title_field = next((field for field in title_fields if "varint" in field), None)
+    name_field = next((field for field in name_fields if field.get("utf8")), None)
+    if id_field is None or title_field is None or name_field is None:
+        return None
+    chapter_id = int(id_field["varint"])
+    title_id = str(int(title_field["varint"]))
+    if chapter_id <= 0 or (expected_title_id is not None and title_id != str(expected_title_id)):
+        return None
+    field_numbers = {
+        int(field.get("field_number", -1)) for field in node.get("fields") or []
+    }
+    recognized = field_numbers & set(CHAPTER_V3_FIELD_NAMES)
+    if not {1, 2, 3}.issubset(recognized) or len(recognized) < 4:
+        return None
+    if not recognized & set(CHAPTER_V3_FIELD_NAMES) - {1, 2, 3}:
+        return None
+    return str(chapter_id), {
+        "chapter_id": str(chapter_id),
+        "title_id": title_id,
+        "field_numbers": sorted(recognized),
+    }
+
+
+def _project_wire_node(
+    node: dict[str, Any], path: tuple[tuple[int, int], ...], *, schema_recovered: bool
+) -> dict[str, Any]:
+    fields = []
+    for field in node.get("fields") or []:
+        projected = {
+            "field_number": field.get("field_number"),
+            "wire_type": field.get("wire_type"),
+        }
+        field_number = int(field.get("field_number", -1))
+        if schema_recovered and field_number in CHAPTER_V3_FIELD_NAMES:
+            projected["field_name"] = CHAPTER_V3_FIELD_NAMES[field_number]
+        for key in ("varint", "length", "utf8", "fixed32_hex", "fixed64_hex", "hex_preview"):
+            if key in field:
+                projected[key] = field[key]
+        if schema_recovered and field_number == 11 and "varint" in field:
+            projected["enum_name"] = CONSUMPTION_STATUS_NAMES.get(
+                int(field["varint"]), "UNKNOWN"
+            )
+        fields.append(projected)
+    return {"path": [list(item) for item in path], "fields": fields}
+
+
+def extract_chapter_v3_records(
+    wire: dict[str, Any],
+    *,
+    expected_title_id: str | None = None,
+    schema_recovered: bool = False,
+) -> dict[str, Any]:
+    """Extract only messages that pass the bounded ChapterV3 shape check."""
+
+    candidates: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    candidate_details: list[dict[str, Any]] = []
     for path, node in _walk_wire_messages(wire):
-        for field in node.get("fields") or []:
-            values: list[str] = []
-            if "varint" in field:
-                values.append(str(field["varint"]))
-            if field.get("utf8") is not None and str(field["utf8"]).isdigit():
-                values.append(str(field["utf8"]))
-            for value in values:
-                if value not in wanted:
-                    continue
-                projection = {
-                    "path": [list(item) for item in path],
-                    "field_number": field.get("field_number"),
-                    "wire_type": field.get("wire_type"),
-                    "offset": field.get("offset"),
-                    "value_kind": "varint" if "varint" in field else "utf8",
-                    "container_field_numbers": [
-                        item.get("field_number") for item in node.get("fields") or []
-                    ],
-                }
-                matches[value].append(projection)
+        candidate = _chapter_v3_candidate(node, expected_title_id=expected_title_id)
+        if candidate is None:
+            continue
+        chapter_id, shape = candidate
+        candidates[chapter_id].append(
+            {
+                "path": path,
+                "node": node,
+                "shape": shape,
+            }
+        )
+        candidate_details.append({**shape, "path": [list(item) for item in path]})
     selected = {
-        chapter_id: max(candidates, key=lambda item: len(item["path"]))
-        for chapter_id, candidates in matches.items()
+        chapter_id: max(values, key=lambda item: len(item["path"]))
+        for chapter_id, values in candidates.items()
+    }
+    records = {
+        chapter_id: _project_wire_node(
+            value["node"], value["path"], schema_recovered=schema_recovered
+        )
+        for chapter_id, value in selected.items()
     }
     return {
-        "known_chapter_count": len(wanted),
-        "matched_chapter_ids": sorted(selected),
-        "matched_count": len(selected),
-        "unmatched_chapter_ids": sorted(wanted - set(selected)),
-        "matches": selected,
-        "duplicate_match_ids": sorted(chapter_id for chapter_id, values in matches.items() if len(values) > 1),
+        "records_by_chapter": records,
+        "matches": {
+            chapter_id: {
+                "path": [list(item) for item in value["path"]],
+                "field_number": 1,
+                "wire_type": 0,
+                "value_kind": "varint",
+                "container_field_numbers": value["shape"]["field_numbers"],
+            }
+            for chapter_id, value in selected.items()
+        },
+        "candidate_count": len(candidate_details),
+        "candidate_details": candidate_details,
+        "duplicate_chapter_ids": sorted(
+            chapter_id for chapter_id, values in candidates.items() if len(values) > 1
+        ),
+    }
+
+
+def chapter_id_wire_correlation(
+    wire: dict[str, Any],
+    chapter_ids: set[str],
+    *,
+    expected_title_id: str | None = None,
+    schema_recovered: bool = False,
+) -> dict[str, Any]:
+    """Compare DOM and fail-closed ChapterV3 ID sets in both directions."""
+
+    dom_ids = {str(value) for value in chapter_ids}
+    extracted = extract_chapter_v3_records(
+        wire,
+        expected_title_id=expected_title_id,
+        schema_recovered=schema_recovered,
+    )
+    protobuf_ids = set(extracted["records_by_chapter"])
+    intersection = dom_ids & protobuf_ids
+    dom_only = dom_ids - protobuf_ids
+    protobuf_only = protobuf_ids - dom_ids
+    return {
+        "known_chapter_count": len(dom_ids),
+        "dom_chapter_ids": sorted(dom_ids),
+        "protobuf_chapter_ids": sorted(protobuf_ids),
+        "intersection": sorted(intersection),
+        "matched_chapter_ids": sorted(intersection),
+        "matched_count": len(intersection),
+        "dom_only": sorted(dom_only),
+        "dom_only_count": len(dom_only),
+        "dom_only_ids": sorted(dom_only),
+        "protobuf_only": sorted(protobuf_only),
+        "protobuf_only_count": len(protobuf_only),
+        "protobuf_only_ids": sorted(protobuf_only),
+        "unmatched_chapter_ids": sorted(dom_only),
+        "matches": extracted["matches"],
+        "duplicate_match_ids": extracted["duplicate_chapter_ids"],
+        "chapter_record_count": len(protobuf_ids),
+        "chapter_candidate_count": extracted["candidate_count"],
+        "chapter_candidate_details": extracted["candidate_details"],
+        "schema_recovered": schema_recovered,
     }
 
 
 def wire_records_by_chapter(
-    wire: dict[str, Any], correlation: dict[str, Any]
+    wire: dict[str, Any], correlation: dict[str, Any], *, schema_recovered: bool | None = None
 ) -> dict[str, dict[str, Any]]:
-    """Project the closest generic message around each correlated ID."""
+    """Project extracted ChapterV3 messages with optional semantic names."""
 
+    if schema_recovered is None:
+        schema_recovered = bool(correlation.get("schema_recovered", False))
     result: dict[str, dict[str, Any]] = {}
     for chapter_id, match in (correlation.get("matches") or {}).items():
         target_path = [tuple(int(value) for value in item) for item in match.get("path") or []]
         node: dict[str, Any] = wire
         for field_number, field_index in target_path:
-            field = (node.get("fields") or [])[field_index] if field_index < len(node.get("fields") or []) else None
-            nested = field.get("message") if isinstance(field, dict) and int(field.get("field_number", -1)) == field_number else None
+            field = (
+                (node.get("fields") or [])[field_index]
+                if field_index < len(node.get("fields") or [])
+                else None
+            )
+            nested = (
+                field.get("message")
+                if isinstance(field, dict) and int(field.get("field_number", -1)) == field_number
+                else None
+            )
             if not isinstance(nested, dict):
                 break
             node = nested
-        fields = []
-        for field in node.get("fields") or []:
-            projected = {
-                "field_number": field.get("field_number"),
-                "wire_type": field.get("wire_type"),
-            }
-            field_number = int(field.get("field_number", -1))
-            if field_number in CHAPTER_V3_FIELD_NAMES:
-                projected["field_name"] = CHAPTER_V3_FIELD_NAMES[field_number]
-            for key in ("varint", "length", "utf8", "fixed32_hex", "fixed64_hex", "hex_preview"):
-                if key in field:
-                    projected[key] = field[key]
-            if field_number == 11 and "varint" in field:
-                projected["enum_name"] = CONSUMPTION_STATUS_NAMES.get(
-                    int(field["varint"]), "UNKNOWN"
-                )
-            fields.append(projected)
-        result[str(chapter_id)] = {"path": [list(item) for item in target_path], "fields": fields}
+        result[str(chapter_id)] = _project_wire_node(
+            node, tuple(target_path), schema_recovered=bool(schema_recovered)
+        )
     return result
 
 
@@ -504,63 +624,162 @@ def _frontend_evidence(records: list[dict[str, Any]]) -> dict[str, Any]:
         for match in script.get("matches", [])
     )
     has_list_decoder = "TitleChapterListViewV3.decode" in matching_text
+    has_chapter_message = "ChapterV3" in matching_text
+    has_chapter_fields = any(
+        term in matching_text
+        for term in (
+            "prototype.status",
+            "case 11:{l.status",
+            "prototype.remainingRentalTime",
+            "case 12:{l.price",
+        )
+    )
+    has_chapter_schema = has_list_decoder and has_chapter_message and has_chapter_fields
     has_status_enum = "ConsumptionStatus" in matching_text and "TICKET_AVAILABLE" in matching_text
+    semantic_mapping = {
+        "message": "Proto.ChapterV3" if has_chapter_schema else None,
+        "fields": (
+            {str(number): name for number, name in CHAPTER_V3_FIELD_NAMES.items()}
+            if has_chapter_schema
+            else {}
+        ),
+        "status_enum": (
+            {str(number): name for number, name in CONSUMPTION_STATUS_NAMES.items()}
+            if has_status_enum
+            else {}
+        ),
+        "list_message": "Proto.TitleChapterListViewV3" if has_list_decoder else None,
+        "list_fields_observed": {
+            "1": "titleId",
+            "2": "lastChapterId",
+            "3": "advertisements",
+            "4": "groups",
+            "5": "indexGroups",
+        }
+        if has_list_decoder
+        else {},
+        "evidence": [
+            "ChapterV3 generated encode/decode snippet names field 5 remainingRentalTime and field 11 status.",
+            "ChapterV3 generated encode/decode snippet names field 12 price and field 15 consumptionDialog.",
+            "ConsumptionStatus generated enum snippet names values 0 through 6.",
+        ],
+    }
     return {
-        "schema_recovered": has_list_decoder and has_status_enum,
+        "schema_recovered": has_chapter_schema,
+        "chapter_schema_recovered": has_chapter_schema,
+        "frontend_decoder_observed": has_list_decoder,
         "generated_decoder_found": has_list_decoder,
+        "consumption_status_enum_recovered": has_status_enum,
         "identified_message": "Proto.TitleChapterListViewV3" if has_list_decoder else None,
         "identified_enum": "ConsumptionStatus" if has_status_enum else None,
-        "semantic_field_mapping": {
-            "message": "Proto.ChapterV3",
-            "fields": {str(number): name for number, name in CHAPTER_V3_FIELD_NAMES.items()},
-            "status_enum": {str(number): name for number, name in CONSUMPTION_STATUS_NAMES.items()},
-            "list_message": "Proto.TitleChapterListViewV3",
-            "list_fields_observed": {
-                "1": "titleId",
-                "2": "lastChapterId",
-                "3": "advertisements",
-                "4": "groups",
-                "5": "indexGroups",
-            },
-            "evidence": [
-                "ChapterV3 generated encode/decode snippet names field 5 remainingRentalTime and field 11 status.",
-                "ChapterV3 generated encode/decode snippet names field 12 price and field 15 consumptionDialog.",
-                "ConsumptionStatus generated enum snippet names values 0 through 6.",
-            ],
-        },
+        "semantic_field_mapping": semantic_mapping,
         "schema_terms": list(SCHEMA_TERMS),
         "matching_bundles": scripts,
         "note": "Field names and enum values are treated as recovered only where bounded frontend generated-decoder snippets explicitly identify them.",
     }
 
 
-def _load_protobuf_artifact(output_dir: Path, chapter_ids: set[str]) -> dict[str, Any]:
+def _empty_correlation(chapter_ids: set[str], *, schema_recovered: bool) -> dict[str, Any]:
+    dom_ids = sorted({str(value) for value in chapter_ids})
+    return {
+        "known_chapter_count": len(dom_ids),
+        "dom_chapter_ids": dom_ids,
+        "protobuf_chapter_ids": [],
+        "intersection": [],
+        "matched_chapter_ids": [],
+        "matched_count": 0,
+        "dom_only": dom_ids,
+        "dom_only_count": len(dom_ids),
+        "dom_only_ids": dom_ids,
+        "protobuf_only": [],
+        "protobuf_only_count": 0,
+        "protobuf_only_ids": [],
+        "unmatched_chapter_ids": dom_ids,
+        "matches": {},
+        "duplicate_match_ids": [],
+        "chapter_record_count": 0,
+        "chapter_candidate_count": 0,
+        "chapter_candidate_details": [],
+        "schema_recovered": schema_recovered,
+    }
+
+
+def _load_protobuf_artifact(
+    output_dir: Path,
+    chapter_ids: set[str],
+    *,
+    expected_title_id: str | None,
+    frontend_schema_evidence: dict[str, Any],
+) -> dict[str, Any]:
     path = output_dir / "protobuf" / "response.bin"
+    frontend_decoder_observed = bool(frontend_schema_evidence.get("frontend_decoder_observed"))
+    consumption_status_enum_recovered = bool(
+        frontend_schema_evidence.get("consumption_status_enum_recovered")
+    )
+    chapter_schema_evidence = bool(
+        frontend_schema_evidence.get("chapter_schema_recovered")
+    )
+    protobuf_body_observed = path.exists() and path.stat().st_size > 0
+    chapter_schema_recovered = protobuf_body_observed and chapter_schema_evidence
     if not path.exists():
+        correlation = _empty_correlation(chapter_ids, schema_recovered=False)
         return {
             "endpoint": None,
             "bytes": 0,
             "raw_sha256": None,
+            "protobuf_body_observed": False,
+            "frontend_decoder_observed": frontend_decoder_observed,
+            "chapter_schema_recovered": False,
+            "consumption_status_enum_recovered": consumption_status_enum_recovered,
             "schema_recovered": False,
             "decode_method": "not_available",
             "decoded_chapter_count": 0,
-            "correlation": {"matched_count": 0, "unmatched_chapter_ids": sorted(chapter_ids)},
+            "chapter_record_count": 0,
+            "dom_chapter_count": len(chapter_ids),
+            "matched_count": 0,
+            "dom_only_count": len(chapter_ids),
+            "dom_only_ids": sorted(chapter_ids),
+            "protobuf_only_count": 0,
+            "protobuf_only_ids": [],
+            "correlation": correlation,
+            "records_by_chapter": {},
         }
     body = path.read_bytes()
     wire = parse_protobuf_wire(body)
-    correlation = chapter_id_wire_correlation(wire, chapter_ids)
-    records = wire_records_by_chapter(wire, correlation)
+    if chapter_schema_recovered and protobuf_body_observed:
+        correlation = chapter_id_wire_correlation(
+            wire,
+            chapter_ids,
+            expected_title_id=expected_title_id,
+            schema_recovered=True,
+        )
+        records = wire_records_by_chapter(wire, correlation, schema_recovered=True)
+    else:
+        correlation = _empty_correlation(chapter_ids, schema_recovered=False)
+        records = {}
     (output_dir / "protobuf" / "wire.json").write_text(
         json.dumps(wire, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     decoded = {
         "decode_method": "bounded_generic_protobuf_wire_parser",
-        "schema_recovered": True,
+        "schema_recovered": chapter_schema_recovered,
         "chapter_id_correlation": correlation,
         "records_by_chapter": records,
-        "field_names": {str(number): name for number, name in CHAPTER_V3_FIELD_NAMES.items()},
-        "status_enum": {str(number): name for number, name in CONSUMPTION_STATUS_NAMES.items()},
-        "warning": "Decoded with a bounded wire parser and frontend-generated schema evidence; the frontend decoder itself was not executed by this Python probe.",
+        "field_names": (
+            {str(number): name for number, name in CHAPTER_V3_FIELD_NAMES.items()}
+            if chapter_schema_recovered
+            else {}
+        ),
+        "status_enum": (
+            {str(number): name for number, name in CONSUMPTION_STATUS_NAMES.items()}
+            if consumption_status_enum_recovered
+            else {}
+        ),
+        "warning": (
+            "Decoded with a bounded wire parser and frontend-generated ChapterV3 schema evidence; the frontend decoder itself was not executed by this Python probe."
+            if chapter_schema_recovered
+            else "Generic protobuf wire observed, but ChapterV3 frontend evidence was not recovered; no chapter records or semantic field names are authoritative."
+        ),
     }
     (output_dir / "protobuf" / "decoded.json").write_text(
         json.dumps(decoded, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -572,15 +791,38 @@ def _load_protobuf_artifact(output_dir: Path, chapter_ids: set[str]) -> dict[str
         "endpoint": CHAPTER_LIST_PATH,
         "bytes": len(body),
         "raw_sha256": sha256_bytes(body),
-        "schema_recovered": True,
-        "decode_method": "bounded_generic_wire_parser_with_frontend_ChapterV3_schema",
-        "decoded_chapter_count": correlation.get("matched_count", 0),
+        "protobuf_body_observed": protobuf_body_observed,
+        "frontend_decoder_observed": frontend_decoder_observed,
+        "chapter_schema_recovered": chapter_schema_recovered,
+        "consumption_status_enum_recovered": consumption_status_enum_recovered,
+        "schema_recovered": chapter_schema_recovered,
+        "decode_method": (
+            "bounded_generic_wire_parser_with_frontend_ChapterV3_schema"
+            if chapter_schema_recovered
+            else "bounded_generic_wire_parser_without_recovered_ChapterV3_schema"
+        ),
+        "decoded_chapter_count": correlation.get("chapter_record_count", 0),
+        "chapter_record_count": correlation.get("chapter_record_count", 0),
+        "dom_chapter_count": len(chapter_ids),
+        "matched_count": correlation.get("matched_count", 0),
+        "dom_only_count": correlation.get("dom_only_count", 0),
+        "dom_only_ids": correlation.get("dom_only_ids", []),
+        "protobuf_only_count": correlation.get("protobuf_only_count", 0),
+        "protobuf_only_ids": correlation.get("protobuf_only_ids", []),
         "correlation": correlation,
         "records_by_chapter": records,
         "wire_complete": wire.get("complete"),
         "wire_top_level_field_count": len(wire.get("fields") or []),
-        "field_names": {str(number): name for number, name in CHAPTER_V3_FIELD_NAMES.items()},
-        "status_enum": {str(number): name for number, name in CONSUMPTION_STATUS_NAMES.items()},
+        "field_names": (
+            {str(number): name for number, name in CHAPTER_V3_FIELD_NAMES.items()}
+            if chapter_schema_recovered
+            else {}
+        ),
+        "status_enum": (
+            {str(number): name for number, name in CONSUMPTION_STATUS_NAMES.items()}
+            if consumption_status_enum_recovered
+            else {}
+        ),
     }
 
 
@@ -590,6 +832,7 @@ def _state_correlation(
     groups = _state_groups(chapters)
     field_shapes = compare_field_shapes(protobuf.get("records_by_chapter", {}), groups)
     records = protobuf.get("records_by_chapter", {})
+    schema_recovered = bool(protobuf.get("chapter_schema_recovered"))
     return {
         group: {
             "chapter_ids": chapter_ids,
@@ -599,13 +842,15 @@ def _state_correlation(
             "field_names": {
                 str(number): name for number, name in CHAPTER_V3_FIELD_NAMES.items()
                 if number in field_shapes.get(group, {}).get("common_field_numbers", [])
-            },
+            }
+            if schema_recovered
+            else {},
             "status_values": {
                 str(chapter_id): next(
                     (
                         field.get("enum_name", f"UNKNOWN({field.get('varint')})")
                         for field in records.get(str(chapter_id), {}).get("fields", [])
-                        if field.get("field_name") == "status"
+                        if schema_recovered and field.get("field_name") == "status"
                     ),
                     "FREE_DEFAULT_OR_ABSENT",
                 )
@@ -659,10 +904,6 @@ def build_report(
         for record in records
         if CHAPTER_LIST_PATH in str(record.get("url") or "")
     ]
-    matched_dom = len(
-        set(protobuf.get("correlation", {}).get("matched_chapter_ids", []))
-        & {str(chapter.get("chapter_id")) for chapter in chapters}
-    )
     unknowns = [
         "The frontend generated decoder was identified, but this Python probe did not execute that JavaScript decoder directly.",
         "P and blue Free share no confirmed stable structured ticket-capability field in this snapshot.",
@@ -709,12 +950,13 @@ def build_report(
         "authority_recommendation": "title_chapter_list protobuf ChapterV3 identity/order/status, with DOM icon/text cross-check; no production authority selected in research phase",
         "protobuf": {
             **protobuf,
-            "dom_chapter_count": len(chapters),
-            "dom_matched_count": matched_dom,
-            "dom_unmatched_count": len(chapters) - matched_dom,
-            "protobuf_unmatched_count": len(
-                protobuf.get("correlation", {}).get("unmatched_chapter_ids", [])
-            ),
+            "dom_chapter_count": len({str(chapter.get("chapter_id")) for chapter in chapters}),
+            "chapter_record_count": len(records_by_chapter),
+            "matched_count": protobuf.get("correlation", {}).get("matched_count", 0),
+            "dom_only_count": protobuf.get("correlation", {}).get("dom_only_count", 0),
+            "dom_only_ids": protobuf.get("correlation", {}).get("dom_only_ids", []),
+            "protobuf_only_count": protobuf.get("correlation", {}).get("protobuf_only_count", 0),
+            "protobuf_only_ids": protobuf.get("correlation", {}).get("protobuf_only_ids", []),
         },
         "state_correlations": state_correlation,
         "stable_vs_dynamic": {
@@ -788,13 +1030,15 @@ def make_summary(report: dict[str, Any]) -> str:
         "",
         f"- Endpoint: `{report['network']['relevant_endpoints']}`.",
         f"- Bytes: `{protobuf.get('bytes')}`; raw SHA-256: `{protobuf.get('raw_sha256')}`.",
-        f"- Schema recovered: `{protobuf.get('schema_recovered')}`; decode method: `{protobuf.get('decode_method')}`.",
+        f"- Body observed: `{protobuf.get('protobuf_body_observed')}`; frontend decoder observed: `{protobuf.get('frontend_decoder_observed')}`; ChapterV3 schema recovered: `{protobuf.get('chapter_schema_recovered')}`; ConsumptionStatus enum recovered: `{protobuf.get('consumption_status_enum_recovered')}`.",
+        f"- Decode method: `{protobuf.get('decode_method')}`; raw SHA-256: `{protobuf.get('raw_sha256')}`.",
         "- Frontend bundle identified `Proto.TitleChapterListViewV3.decode`, `Proto.ChapterV3`, and the `ConsumptionStatus` enum. Python uses a bounded wire parser with those evidenced field names; it does not execute the site decoder.",
         f"- ChapterV3 status field: `11`; price: `12`; remainingRentalTime: `5`; campaignLabel: `6`; enum: `{json.dumps(protobuf.get('status_enum', {}), ensure_ascii=False)}`.",
         "",
         "## 5. DOM ↔ protobuf correlation",
         "",
-        f"- Decoded/correlated chapter IDs: `{protobuf.get('decoded_chapter_count')}`; DOM matched: `{protobuf.get('dom_matched_count')}`; DOM unmatched: `{protobuf.get('dom_unmatched_count')}`; protobuf unmatched: `{protobuf.get('protobuf_unmatched_count')}`.",
+        f"- ChapterV3 records: `{protobuf.get('chapter_record_count')}`; DOM IDs: `{protobuf.get('dom_chapter_count')}`; intersection: `{protobuf.get('matched_count')}`; DOM-only: `{protobuf.get('dom_only_count')}` `{protobuf.get('dom_only_ids')}`; protobuf-only: `{protobuf.get('protobuf_only_count')}` `{protobuf.get('protobuf_only_ids')}`.",
+        "- The correlation is directional: a zero unmatched count is claimed only when both `dom_only_ids` and `protobuf_only_ids` are empty.",
         "- ChapterV3 field names and ConsumptionStatus enum values are recovered from the frontend generated decoder evidence; Python wire decoding remains bounded and schema-aware only for those evidenced fields.",
         f"- Recommended research authority candidate: `{report.get('authority_recommendation')}`.",
         "",
@@ -929,7 +1173,12 @@ async def run_probe(url: str, output_dir: Path, cdp_endpoint: str | None) -> dic
         frontend = _frontend_evidence(records)
         frontend_path = output_dir / "network" / "frontend_schema_evidence.json"
         write_json(frontend_path, frontend)
-        protobuf = _load_protobuf_artifact(output_dir, {str(chapter["chapter_id"]) for chapter in chapters})
+        protobuf = _load_protobuf_artifact(
+            output_dir,
+            {str(chapter["chapter_id"]) for chapter in chapters},
+            expected_title_id=target["title_id"],
+            frontend_schema_evidence=frontend,
+        )
         api_urls = [record.get("url") for record in records if CHAPTER_LIST_PATH in str(record.get("url") or "")]
         if api_urls:
             protobuf["endpoint"] = api_urls[0]

@@ -514,13 +514,13 @@ The current account snapshot yielded these raw DOM/icon classes:
 
 | raw site signal | count | observed meaning | Z4-0 derived hypothesis |
 | --- | ---: | --- | --- |
-| `Free` / `無料` text | 16 | campaign/free label | `ticket_now` |
-| `チケット利用可` icon alt | 2 | explicit ticket-eligible-looking icon | `ticket_eligible` candidate |
-| `ポイント画像` icon alt | 188 | point/P icon signal | `ticket_later` hypothesis only |
+| `無料` text | 16 | campaign/free label | `free_unconditional` |
+| blue `Free` / `チケット利用可` icon alt | 2 | current ticket-available-looking icon | `ticket_available_now` |
+| `ポイント画像` icon alt | 188 | point/P icon signal | `ticket_candidate_later` hypothesis only |
 | rental expiry text | 1 | `閲覧期限 残り2時間`-type active rental signal | `rental_active` |
 | `コイン画像` icon alt | 43 | coin-only signal | `coin_only` |
 
-The visible `Free` signal is stable to identify in this snapshot, but its
+The visible `無料` signal is stable to identify in this snapshot, but its
 campaign end date means it must not be promoted to a permanent chapter type.
 The point icon and coin icon are distinct and were stable across their DOM
 cards, so P/point and coin-only are distinguishable in this observation. The
@@ -638,7 +638,7 @@ and index `26` / chapter `226849` / `#27`. Both expose the same ticket-image
 signal (`img` alt `チケット利用可`, research-observed class
 `sc-jptKe hfdkkM`); the image `src` is a data URI and is omitted from the
 artifact. Their neighboring rows and complete icon metadata are in
-`output/zeblack_access_semantics_probe/report.json`.
+`output/zeblack_access_semantics_probe_v2/report.json`.
 
 ### Frontend and protobuf schema evidence
 
@@ -689,11 +689,34 @@ ticket stock, next recovery time, or recovery interval field was identified in
 the captured list schema or DOM. The current status is therefore a chapter
 record field, not a recovered global account-ticket object.
 
-The list response was `application/protobuf`, 20,493 bytes. The bounded wire
-parser correlated all `250 / 250` DOM chapter IDs with protobuf records, with
-zero unmatched DOM IDs and zero unmatched protobuf chapter IDs. The final raw
-body SHA-256 is stored in the report; the probe now stores raw-byte and text
-hashes separately and treats the raw hash as authoritative.
+The list response was `application/protobuf`, 20,493 bytes. In the hardened
+v2 artifact, the bounded ChapterV3 extractor found `250` records and compared
+the sets in both directions:
+
+```text
+DOM chapter IDs:          250
+protobuf ChapterV3 IDs:   250
+intersection:             250
+DOM-only IDs:                0  []
+protobuf-only IDs:           0  []
+duplicate ChapterV3 IDs:    0  []
+```
+
+This is an exact bidirectional set match, not merely evidence that each DOM ID
+appeared somewhere as a generic protobuf scalar. The extractor requires the
+ChapterV3 shape (`id`, `titleId`, `mainName`, plus another evidenced field) and
+the expected `titleId=5123`; unrelated protobuf messages with numeric field 1
+are excluded. The final v2 raw body SHA-256 is
+`3241317c8688a3cdae0b36ebced37ad1f919aad789350589bcb94042a84f6b9a`.
+The probe stores raw-byte and text hashes separately and treats the raw hash as
+authoritative.
+
+The v2 artifact also records separate evidence states:
+`protobuf_body_observed=true`, `frontend_decoder_observed=true`,
+`chapter_schema_recovered=true`, and
+`consumption_status_enum_recovered=true`. If frontend ChapterV3 evidence is
+absent, the probe fails closed and does not publish semantic field names or
+ChapterV3 records merely because a protobuf body exists.
 
 Structured state correlation for this snapshot was:
 
@@ -714,7 +737,7 @@ this read-only phase. `TICKET_UNAVAILABLE` and
 `TICKET_UNAVAILABLE_COIN_ONLY` were present in the frontend enum but were not
 observed among the 250 current records.
 
-The rental record had `status=RENTAL` and `remainingRentalTime=5305` in the
+The rental record had `status=RENTAL` and `remainingRentalTime` in the
 final snapshot. The frontend formats this value into the displayed remaining
 time; the exact unit was not independently confirmed. The original grant
 source (ticket, point, or coin) remains unknown.
@@ -748,7 +771,8 @@ adapter was added.
 
 ### Z4-0.5 artifacts and tests
 
-The research artifact is under `output/zeblack_access_semantics_probe/`:
+The hardened live research artifact is under
+`output/zeblack_access_semantics_probe_v2/`:
 
 ```text
 report.json
@@ -764,10 +788,11 @@ network/frontend_schema_evidence.json
 
 `response.bin` is a local research artifact and is not a repository fixture.
 Data URI image bodies are omitted from DOM snapshots. The pure research tests
-cover the corrected five-state classifier, conflicting signals, raw protobuf
-wire correlation, frontend-evidenced field mapping, group field comparison,
-raw-byte hashing, and before/after report comparison. The live site is not a
-CI dependency.
+cover the corrected five-state classifier, conflicting signals, ChapterV3
+fail-closed extraction, exact/protobuf-only/DOM-only bidirectional set
+correlation, unrelated numeric field rejection, frontend-evidence schema
+gating, field-shape comparison, raw-byte hashing, and before/after report
+comparison. The live site is not a CI dependency.
 
 ## Known limitations
 

@@ -1102,8 +1102,6 @@ Plannerがexplicit `quota_resource`を検証する。Batchはnormal/default pass
 requested resource以外へのsilent fallbackをしない。Phase 4/5では同じcontractをgrant-onlyにも使い、
 Work Ticket cooldown、Premium live balance、Policy順`all`を実装している。
 
-### Site-native bounded Discovery（B6 Jump+ implemented / Zeblack and other sites NOT YET IMPLEMENTED）
-
 ### Capture dedupe semantics (current)
 
 Capture fingerprints are artifact evidence, not global logical-page identity.
@@ -1124,6 +1122,8 @@ fingerprints remains subject to the existing `max_same_content` guard.
 The change is generic Core behavior; it is not a Zeblack-specific exception.
 The persisted manifest continues to record the logical identity, part metadata,
 and per-artifact capture fingerprint.
+
+### Site-native bounded Discovery（B6 Jump+ implemented / Zeblack and other sites NOT YET IMPLEMENTED）
 
 正式仕様は `docs/BOUNDED_DISCOVERY.md`。現在のB6実装状況は次のとおり。
 

@@ -4,6 +4,7 @@ import hashlib
 import json
 
 from poc.zeblack_access_semantics_probe import (
+    _load_protobuf_artifact,
     chapter_id_wire_correlation,
     compare_field_shapes,
     compare_reports,
@@ -29,28 +30,145 @@ def _message(field_number: int, payload: bytes) -> bytes:
     return _varint((field_number << 3) | 2) + _varint(len(payload)) + payload
 
 
-def test_raw_protobuf_wire_parser_correlates_known_chapter_ids_without_schema_names() -> None:
-    payload = _message(1, _field(1, 132107) + _field(2, 5123)) + _message(1, _field(1, 224191))
+def _string_field(field_number: int, value: str) -> bytes:
+    encoded = value.encode("utf-8")
+    return _varint((field_number << 3) | 2) + _varint(len(encoded)) + encoded
+
+
+def _chapter(chapter_id: int, title_id: int = 5123, label: str = "#1") -> bytes:
+    return b"".join(
+        (
+            _field(1, chapter_id),
+            _field(2, title_id),
+            _string_field(3, label),
+            _field(7, 1),
+            _field(8, 1),
+        )
+    )
+
+
+def test_raw_protobuf_wire_parser_correlates_known_chapter_ids_with_chapter_shape() -> None:
+    payload = _message(1, _chapter(132107)) + _message(1, _chapter(224191, label="#26"))
     wire = parse_protobuf_wire(payload)
-    correlation = chapter_id_wire_correlation(wire, {"132107", "224191", "999999"})
+    correlation = chapter_id_wire_correlation(
+        wire, {"132107", "224191", "999999"}, expected_title_id="5123"
+    )
 
     assert wire["complete"] is True
     assert correlation["matched_chapter_ids"] == ["132107", "224191"]
     assert correlation["unmatched_chapter_ids"] == ["999999"]
+    assert correlation["dom_only_ids"] == ["999999"]
+    assert correlation["protobuf_only_ids"] == []
     records = wire_records_by_chapter(wire, correlation)
     assert records["132107"]["fields"][0]["varint"] == 132107
 
 
 def test_wire_projection_applies_only_frontend_evidenced_field_names() -> None:
-    payload = _message(1, _field(1, 132107) + _field(11, 2) + _field(12, 40))
+    payload = _message(
+        1,
+        _chapter(132107)
+        + _field(11, 2)
+        + _field(12, 40),
+    )
     wire = parse_protobuf_wire(payload)
-    correlation = chapter_id_wire_correlation(wire, {"132107"})
-    records = wire_records_by_chapter(wire, correlation)
+    correlation = chapter_id_wire_correlation(
+        wire, {"132107"}, expected_title_id="5123", schema_recovered=True
+    )
+    records = wire_records_by_chapter(wire, correlation, schema_recovered=True)
 
     fields = {field["field_number"]: field for field in records["132107"]["fields"]}
     assert fields[11]["field_name"] == "status"
     assert fields[11]["enum_name"] == "TICKET_AVAILABLE"
     assert fields[12]["field_name"] == "price"
+
+
+def test_protobuf_only_ids_are_reported_directionally() -> None:
+    payload = _message(1, _chapter(132107)) + _message(1, _chapter(224191)) + _message(
+        1, _chapter(999999, label="#99")
+    )
+    correlation = chapter_id_wire_correlation(
+        parse_protobuf_wire(payload), {"132107", "224191"}, expected_title_id="5123"
+    )
+
+    assert correlation["intersection"] == ["132107", "224191"]
+    assert correlation["dom_only_ids"] == []
+    assert correlation["protobuf_only_ids"] == ["999999"]
+    assert correlation["matched_count"] == 2
+
+
+def test_dom_only_ids_are_reported_directionally() -> None:
+    payload = _message(1, _chapter(132107)) + _message(1, _chapter(224191))
+    correlation = chapter_id_wire_correlation(
+        parse_protobuf_wire(payload),
+        {"132107", "224191", "999999"},
+        expected_title_id="5123",
+    )
+
+    assert correlation["intersection"] == ["132107", "224191"]
+    assert correlation["dom_only_ids"] == ["999999"]
+    assert correlation["protobuf_only_ids"] == []
+
+
+def test_exact_dom_and_protobuf_sets_have_no_directional_unmatched_ids() -> None:
+    payload = _message(1, _chapter(132107)) + _message(1, _chapter(224191))
+    correlation = chapter_id_wire_correlation(
+        parse_protobuf_wire(payload), {"132107", "224191"}, expected_title_id="5123"
+    )
+
+    assert correlation["chapter_record_count"] == 2
+    assert correlation["matched_count"] == 2
+    assert correlation["dom_only_count"] == 0
+    assert correlation["protobuf_only_count"] == 0
+
+
+def test_unrelated_numeric_field_one_message_is_not_a_chapter_v3_record() -> None:
+    unrelated = _message(1, _field(1, 132107) + _field(2, 5123))
+    valid = _message(1, _chapter(224191))
+    correlation = chapter_id_wire_correlation(
+        parse_protobuf_wire(unrelated + valid),
+        {"132107", "224191"},
+        expected_title_id="5123",
+    )
+
+    assert correlation["matched_chapter_ids"] == ["224191"]
+    assert correlation["dom_only_ids"] == ["132107"]
+
+
+def test_schema_evidence_gates_chapter_record_extraction(tmp_path) -> None:
+    output_dir = tmp_path / "probe"
+    (output_dir / "protobuf").mkdir(parents=True)
+    (output_dir / "protobuf" / "response.bin").write_bytes(_message(1, _chapter(132107)))
+
+    without_schema = _load_protobuf_artifact(
+        output_dir,
+        {"132107"},
+        expected_title_id="5123",
+        frontend_schema_evidence={
+            "frontend_decoder_observed": False,
+            "chapter_schema_recovered": False,
+            "consumption_status_enum_recovered": False,
+        },
+    )
+    assert without_schema["protobuf_body_observed"] is True
+    assert without_schema["chapter_schema_recovered"] is False
+    assert without_schema["chapter_record_count"] == 0
+    assert without_schema["dom_only_ids"] == ["132107"]
+
+    with_schema = _load_protobuf_artifact(
+        output_dir,
+        {"132107"},
+        expected_title_id="5123",
+        frontend_schema_evidence={
+            "frontend_decoder_observed": True,
+            "chapter_schema_recovered": True,
+            "consumption_status_enum_recovered": True,
+        },
+    )
+    assert with_schema["chapter_schema_recovered"] is True
+    assert with_schema["chapter_record_count"] == 1
+    assert with_schema["matched_count"] == 1
+    assert with_schema["dom_only_ids"] == []
+    assert with_schema["protobuf_only_ids"] == []
 
 
 def test_state_field_shape_comparison_keeps_group_boundaries() -> None:
