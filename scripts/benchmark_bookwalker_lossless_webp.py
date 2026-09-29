@@ -45,10 +45,11 @@ class WebPSetting:
 
 
 DEFAULT_SETTINGS = (
+    WebPSetting(quality=40, method=2),
+    WebPSetting(quality=20, method=2),
+    WebPSetting(quality=40, method=1),
+    WebPSetting(quality=20, method=1),
     WebPSetting(quality=80, method=4),
-    WebPSetting(quality=100, method=4),
-    WebPSetting(quality=80, method=6),
-    WebPSetting(quality=100, method=6),
 )
 
 

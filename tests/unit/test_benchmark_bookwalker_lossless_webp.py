@@ -72,6 +72,16 @@ def test_lossless_webp_preserves_hidden_rgb_in_transparent_pixels() -> None:
     assert results[0].pixel_equal is True
 
 
+def test_default_settings_cover_lightweight_comparison() -> None:
+    assert tuple(setting.label for setting in benchmark.DEFAULT_SETTINGS) == (
+        "q40/m2",
+        "q20/m2",
+        "q40/m1",
+        "q20/m1",
+        "q80/m4",
+    )
+
+
 def test_sampling_is_deterministic_and_spans_each_archive() -> None:
     inventories = (
         benchmark.ArchiveInventory(
