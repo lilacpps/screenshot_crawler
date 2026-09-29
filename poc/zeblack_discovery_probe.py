@@ -48,7 +48,8 @@ NUMERIC_LABEL_RE = re.compile(
     r"(?:第\s*)?(?P<number>\d+(?:\.\d+)?)\s*(?:話|回|話目|episode|Episode|#)?"
 )
 P_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])P(?![A-Za-z0-9])")
-FREE_RE = re.compile(r"(?:^|[\s|/()[\]<>])(?:free|無料)(?:$|[\s|/()[\]<>])", re.IGNORECASE)
+FREE_TEXT_RE = re.compile(r"(?:^|[\s|/()[\]<>])無料(?:$|[\s|/()[\]<>])")
+FREE_IMAGE_RE = re.compile(r"(?:^|[\s|/()[\]<>])free(?:$|[\s|/()[\]<>])", re.IGNORECASE)
 COIN_RE = re.compile(r"(?:coin|コイン|コインのみ|coin_only)", re.IGNORECASE)
 RENTAL_RE = re.compile(r"(?:rental|レンタル|has_rented|rented)", re.IGNORECASE)
 ACTIVE_RE = re.compile(r"(?:中|残り|期限|まで|expiry|expires|active)", re.IGNORECASE)
@@ -76,6 +77,10 @@ def now_iso() -> str:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
 
 
 def sha256_text(value: str) -> str:
@@ -149,34 +154,47 @@ def _flatten_signal_values(evidence: dict[str, Any]) -> list[str]:
 
 
 def classify_raw_access_state(evidence: dict[str, Any]) -> str:
-    """Classify only explicit native-looking signals; conflicting signals stay unknown."""
+    """Classify native signals while keeping free text and Free imagery distinct."""
 
     values = _flatten_signal_values(evidence)
-    text = " | ".join(values)
+    text_values = [
+        normalize_text(item)
+        for key in ("texts", "labels", "structured_values")
+        for item in (evidence.get(key) or [])
+        if normalize_text(item)
+    ]
+    icon_values = [
+        normalize_text(item)
+        for key in ("icon_alts", "icon_classes", "icon_attributes")
+        for item in (evidence.get(key) or [])
+        if normalize_text(item)
+    ]
+    text = " | ".join(text_values or values)
+    icon_text = " | ".join(icon_values)
     classes = " ".join(normalize_text(item) for item in evidence.get("classes", []))
     attributes = " ".join(normalize_text(item) for item in evidence.get("attributes", []))
-    all_signals = f"{text} | {classes} | {attributes}"
+    all_signals = f"{text} | {icon_text} | {classes} | {attributes}"
 
     rental_active = bool(
         (RENTAL_RE.search(all_signals) or "閲覧期限" in all_signals or "閲覧中" in all_signals)
         and ACTIVE_RE.search(all_signals)
     )
     if rental_active or "レンタル中" in all_signals:
-        return "rental-active"
+        return "rental_active"
 
     has_coin = bool(COIN_RE.search(all_signals))
     has_p = bool(P_TOKEN_RE.search(text)) or bool(
-        POINT_RE.search(all_signals) and not COIN_RE.search(all_signals)
+        POINT_RE.search(icon_text) and not COIN_RE.search(all_signals)
     )
-    has_ticket = bool(TICKET_RE.search(all_signals))
-    has_free = bool(FREE_RE.search(text))
+    has_ticket = bool(TICKET_RE.search(all_signals)) or bool(FREE_IMAGE_RE.search(icon_text))
+    has_free = bool(FREE_TEXT_RE.search(text))
     candidates = [
         state
         for state, present in (
-            ("coin-only", has_coin),
-            ("P", has_p),
-            ("ticket-eligible", has_ticket),
-            ("Free", has_free),
+            ("coin_only", has_coin),
+            ("ticket_candidate_later", has_p),
+            ("ticket_available_now", has_ticket),
+            ("free_unconditional", has_free),
         )
         if present
     ]
@@ -184,14 +202,14 @@ def classify_raw_access_state(evidence: dict[str, Any]) -> str:
 
 
 def derive_current_access(raw_site_state: str) -> str:
-    """Z4-0 observation hypothesis, not a production Site Policy mapping."""
+    """Z4-0.5 observation mapping, not a production Site Policy mapping."""
 
     return {
-        "Free": "ticket_now",
-        "P": "ticket_later",
-        "coin-only": "coin_only",
-        "rental-active": "rental_active",
-        "ticket-eligible": "ticket_eligible",
+        "free_unconditional": "free_unconditional",
+        "ticket_available_now": "ticket_available_now",
+        "ticket_candidate_later": "ticket_candidate_later",
+        "coin_only": "coin_only",
+        "rental_active": "rental_active",
     }.get(raw_site_state, "unknown")
 
 
@@ -212,26 +230,31 @@ def classify_frontier(states: list[dict[str, Any]]) -> dict[str, Any]:
                     "indices": [row.get("index")],
                 }
             )
-    allowed = {"ticket_now", "ticket_later", "ticket_eligible", "coin_only", "rental_active"}
+    allowed = {
+        "free_unconditional",
+        "ticket_available_now",
+        "ticket_candidate_later",
+        "coin_only",
+        "rental_active",
+    }
     observed_ids = [row.get("chapter_id") for row in states if row.get("derived_current_access") in allowed]
     return {
         "observed": bool(observed_ids),
         "segments": segments,
-        "ticket_now_chapter_ids": [
-            row.get("chapter_id") for row in states if row.get("derived_current_access") == "ticket_now"
+        "free_unconditional_chapter_ids": [
+            row.get("chapter_id") for row in states if row.get("derived_current_access") == "free_unconditional"
         ],
-        "ticket_later_chapter_ids": [
-            row.get("chapter_id") for row in states if row.get("derived_current_access") == "ticket_later"
+        "ticket_available_now_chapter_ids": [
+            row.get("chapter_id") for row in states if row.get("derived_current_access") == "ticket_available_now"
         ],
-        "coin_only_chapter_ids": [
-            row.get("chapter_id") for row in states if row.get("derived_current_access") == "coin_only"
+        "ticket_candidate_later_chapter_ids": [
+            row.get("chapter_id") for row in states if row.get("derived_current_access") == "ticket_candidate_later"
         ],
+        "coin_only_chapter_ids": [row.get("chapter_id") for row in states if row.get("derived_current_access") == "coin_only"],
         "rental_active_chapter_ids": [
             row.get("chapter_id") for row in states if row.get("derived_current_access") == "rental_active"
         ],
-        "ticket_eligible_chapter_ids": [
-            row.get("chapter_id") for row in states if row.get("derived_current_access") == "ticket_eligible"
-        ],
+        "unknown_chapter_ids": [row.get("chapter_id") for row in states if row.get("derived_current_access") == "unknown"],
         "note": "Frontier is a snapshot of account-dependent observation; it is not a chapter attribute.",
     }
 
@@ -394,10 +417,15 @@ def _dom_chapter_snapshot_script() -> str:
         const rect = el.getBoundingClientRect();
         return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
       };
-      const attrs = el => Object.fromEntries([...el.attributes].map(attr => [attr.name, ['src', 'href'].includes(attr.name) ? attr.value.split('?')[0] : attr.value]));
+      const sanitizeAttr = (name, value) => {
+        if (name === 'src' && value.startsWith('data:')) return '[data-uri omitted]';
+        if (name === 'src' && value.startsWith('blob:')) return '[blob-uri omitted]';
+        return ['src', 'href'].includes(name) ? value.split('?')[0] : value;
+      };
+      const attrs = el => Object.fromEntries([...el.attributes].map(attr => [attr.name, sanitizeAttr(attr.name, attr.value)]));
       const classes = el => typeof el.className === 'string' ? el.className : (el.getAttribute('class') || '');
       const text = el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-      const compactHtml = el => el.outerHTML.replace(/\s+/g, ' ').replace(/(https?:\/\/[^\s"']+)\?[^\s"']*/g, '$1').slice(0, 16000);
+      const compactHtml = el => el.outerHTML.replace(/\s+/g, ' ').replace(/(https?:\/\/[^\s"']+)\?[^\s"']*/g, '$1').replace(/data:[^"']+/g, '[data-uri omitted]').replace(/blob:[^"']+/g, '[blob-uri omitted]').slice(0, 16000);
       const chapterLinks = [...document.querySelectorAll('a[href]')]
         .map((el, domOrder) => ({el, domOrder, href: el.getAttribute('href') || '', absolute: el.href || ''}))
         .filter(item => chapterRe.test(item.absolute || item.href));
@@ -483,7 +511,14 @@ def _dom_chapter_snapshot_script() -> str:
           ancestors: ancestors.slice(1).map(candidate => ({tag: candidate.tagName.toLowerCase(), id: candidate.id || null, class: classes(candidate), attrs: attrs(candidate), text: text(candidate).slice(0, 700)})),
           row_root: {tag: root.tagName.toLowerCase(), id: root.id || null, class: classes(root), attrs: attrs(root), text: text(root), inner_text: root.innerText || '', compact_subtree: compactHtml(root)},
           state_descendants: stateDescendants.map(child => ({tag: child.tagName.toLowerCase(), text: text(child), class: classes(child), aria_label: child.getAttribute('aria-label'), title: child.getAttribute('title'), attrs: attrs(child)})),
-          icon_metadata: [...root.querySelectorAll('img,svg')].slice(0, 40).map(icon => ({tag: icon.tagName.toLowerCase(), alt: icon.getAttribute('alt'), src_kind: (icon.getAttribute('src') || '').startsWith('data:') ? 'data' : (icon.getAttribute('src') || '').startsWith('blob:') ? 'blob' : 'url', class: classes(icon), attrs: attrs(icon)})),
+          icon_metadata: [...root.querySelectorAll('img,svg')].slice(0, 40).map(icon => ({
+            tag: icon.tagName.toLowerCase(),
+            alt: icon.getAttribute('alt'),
+            src_kind: (icon.getAttribute('src') || '').startsWith('data:') ? 'data' : (icon.getAttribute('src') || '').startsWith('blob:') ? 'blob' : 'url',
+            src_path: ['data:', 'blob:'].some(prefix => (icon.getAttribute('src') || '').startsWith(prefix)) ? null : ((icon.getAttribute('src') || '').split('?')[0] || null),
+            class: classes(icon),
+            attrs: attrs(icon),
+          })),
           buttons: [...root.querySelectorAll('a,button,[role="button"]')].slice(0, 20).map(child => ({
             tag: child.tagName.toLowerCase(), text: text(child), href: child.getAttribute('href'),
             aria_label: child.getAttribute('aria-label'), title: child.getAttribute('title'), class: classes(child),
@@ -575,7 +610,9 @@ async def install_network_observer(page: Page) -> tuple[list[dict[str, Any]], li
         if "protobuf" in content_type:
             record["body_prefix_hex"] = body[:256].hex()
         text = body.decode("utf-8", errors="replace")
-        record["body_sha256"] = sha256_text(text)
+        record["body_sha256_raw"] = sha256_bytes(body)
+        record["body_sha256_text"] = sha256_text(text)
+        record["body_sha256"] = record["body_sha256_raw"]
         if "json" in content_type or text.lstrip().startswith(("{", "[")):
             try:
                 parsed = json.loads(text)
@@ -637,6 +674,9 @@ def _row_to_chapter(row: dict[str, Any], *, expected_title_id: str) -> dict[str,
         "classes": row.get("badge_class") or [],
         "attributes": row.get("state_attributes") or [],
         "labels": labels,
+        "icon_metadata": row.get("icon_metadata") or [],
+        "icon_alts": [item.get("alt") for item in row.get("icon_metadata") or [] if item.get("alt")],
+        "icon_classes": [item.get("class") for item in row.get("icon_metadata") or [] if item.get("class")],
     }
     raw_site_state = classify_raw_access_state(evidence)
     return {
@@ -658,6 +698,7 @@ def _row_to_chapter(row: dict[str, Any], *, expected_title_id: str) -> dict[str,
         "disabled": bool(row.get("disabled")),
         "visible": bool(row.get("visible")),
         "badge_metadata": row.get("badge_metadata") or [],
+        "icon_metadata": row.get("icon_metadata") or [],
         "badge_text": row.get("badge_text") or [],
         "badge_class": row.get("badge_class") or [],
         "price_metadata": row.get("price_metadata") or [],
@@ -730,7 +771,15 @@ def _generic_candidate_to_row(candidate: dict[str, Any], *, expected_title_id: s
         state_attributes.extend(f"{key}={value}" for key, value in (ancestor.get("attrs") or {}).items())
     labels = [line.strip() for line in re.split(r"\n| {2,}", str(candidate.get("text") or "")) if line.strip()]
     labels = labels or [str(raw_text).strip()]
-    evidence = {"texts": state_texts, "classes": state_classes, "attributes": state_attributes, "labels": labels}
+    evidence = {
+        "texts": state_texts,
+        "classes": state_classes,
+        "attributes": state_attributes,
+        "labels": labels,
+        "icon_metadata": icon_metadata,
+        "icon_alts": [item.get("alt") for item in icon_metadata if item.get("alt")],
+        "icon_classes": [item.get("class") for item in icon_metadata if item.get("class")],
+    }
     raw_state = classify_raw_access_state(evidence)
     price_metadata = [item for item in state_descendants if re.search(r"price|cost|coin|point|\bP\b|コイン|ポイント", f"{item.get('text', '')} {item.get('class', '')}", re.IGNORECASE)]
     rental_metadata = [item for item in state_descendants if re.search(r"rental|レンタル|期限|残り|まで|expiry|active", f"{item.get('text', '')} {item.get('class', '')}", re.IGNORECASE)]
@@ -754,6 +803,7 @@ def _generic_candidate_to_row(candidate: dict[str, Any], *, expected_title_id: s
         "disabled": any(bool(button.get("disabled")) for button in candidate.get("buttons") or []),
         "visible": bool(candidate.get("visible")),
         "badge_metadata": [{"kind": "icon", **item} for item in icon_metadata] + state_descendants,
+        "icon_metadata": icon_metadata,
         "badge_text": state_texts,
         "badge_class": state_classes,
         "price_metadata": price_metadata,
@@ -815,21 +865,21 @@ def build_question_answers(
         any(term in " ".join(str(value).lower() for value in record.values()) for term in ("eligible", "ticket_eligible", "ticketeligible"))
         for record in structured
     )
-    ticket_icon_observed = "ticket-eligible" in {row.get("raw_site_state") for row in chapters}
-    rental_rows = [row for row in chapters if row.get("raw_site_state") == "rental-active"]
+    ticket_icon_observed = "ticket_available_now" in {row.get("raw_site_state") for row in chapters}
+    rental_rows = [row for row in chapters if row.get("raw_site_state") == "rental_active"]
     rental_metadata_observed = any(row.get("rental_metadata") for row in rental_rows)
     return {
         "Q1_all_chapters_one_list_load": "yes" if complete_initial else "no_or_not_proven",
         "Q2_chapter_id_stable_external_id": "yes" if identity_ok else "no_or_not_proven",
         "Q3_dom_order": listing.get("dom_order", {}).get("value", "unknown"),
-        "Q4_Free_stable_signal": "yes" if "Free" in {row.get("raw_site_state") for row in chapters} else "not_observed",
-        "Q5_P_stable_signal": "yes" if "P" in {row.get("raw_site_state") for row in chapters} else "not_observed",
-        "Q6_P_vs_coin_only_stable": "yes" if {"P", "coin-only"}.issubset({row.get("raw_site_state") for row in chapters}) and not any(row.get("raw_site_state") == "unknown" for row in chapters) else "not_proven",
-        "Q7_rental_active_stable": "yes" if "rental-active" in {row.get("raw_site_state") for row in chapters} else "not_observed",
+        "Q4_free_unconditional_signal": "yes" if "free_unconditional" in {row.get("raw_site_state") for row in chapters} else "not_observed",
+        "Q5_ticket_candidate_later_signal": "yes" if "ticket_candidate_later" in {row.get("raw_site_state") for row in chapters} else "not_observed",
+        "Q6_P_vs_coin_only_stable": "yes" if {"ticket_candidate_later", "coin_only"}.issubset({row.get("raw_site_state") for row in chapters}) and not any(row.get("raw_site_state") == "unknown" for row in chapters) else "not_proven",
+        "Q7_rental_active_stable": "yes" if "rental_active" in {row.get("raw_site_state") for row in chapters} else "not_observed",
         "Q8_rental_expiry_or_remaining_time": "yes" if rental_metadata_observed else "not_observed",
         "Q9_non_DOM_structured_access": "yes" if structured_access_fields else "not_found",
         "Q10_P_stable_ticket_eligible_type": (
-            "partial: explicit ticket-eligible icon is stable-looking, but P/point icon equivalence is not proven"
+            "partial: blue Free/ticket icon is explicit, but P/point equivalence is not proven"
             if ticket_icon_observed
             else "yes" if stable_eligible else "not_proven"
         ),
@@ -900,11 +950,11 @@ def make_summary(report: dict[str, Any]) -> str:
         "",
         "## 8. Free observation",
         "",
-        f"- `Free` rows: `{questions.get('Q4_Free_stable_signal')}`; raw `Free` is only mapped to `ticket_now` as a Z4-0 hypothesis.",
+        f"- `無料` rows: `{questions.get('Q4_free_unconditional_signal')}`; English `Free` imagery is classified separately as current ticket availability.",
         "",
         "## 9. P observation",
         "",
-        f"- `P` rows: `{questions.get('Q5_P_stable_signal')}`; raw `P` is only mapped to `ticket_later` as a Z4-0 hypothesis.",
+        f"- `P` / point-image rows: `{questions.get('Q5_ticket_candidate_later_signal')}`; future ticket candidacy remains a Z4-0.5 hypothesis.",
         "",
         "## 10. Coin-only observation",
         "",
@@ -918,13 +968,13 @@ def make_summary(report: dict[str, Any]) -> str:
         "## 12. Ticket frontier",
         "",
         f"- observed: `{frontier.get('observed')}`; segments: `{json.dumps(frontier.get('segments', []), ensure_ascii=False)}`",
-        f"- ticket_now: `{frontier.get('ticket_now_chapter_ids', [])}`; ticket_later: `{frontier.get('ticket_later_chapter_ids', [])}`",
-        f"- explicit ticket-eligible icon candidates: `{frontier.get('ticket_eligible_chapter_ids', [])}`",
+        f"- free_unconditional: `{frontier.get('free_unconditional_chapter_ids', [])}`",
+        f"- ticket_available_now: `{frontier.get('ticket_available_now_chapter_ids', [])}`; ticket_candidate_later: `{frontier.get('ticket_candidate_later_chapter_ids', [])}`",
         "- Any ticket frontier is account-dependent and can change after one ticket is consumed; it is not persisted as a chapter-intrinsic property.",
         "",
         "## 13. Stable vs dynamic state",
         "",
-        "- Candidate stable attributes: chapter_id, label/order, viewer URL, explicit ticket-eligible icon, point icon, and coin icon.",
+        "- Candidate stable attributes: chapter_id, label/order, viewer URL, ticket/point/coin image signal.",
         "- Candidate dynamic attributes: current ticket availability, rental-active, and expiry/remaining time.",
         f"- Stable ticket-eligibility flag observed: `{questions.get('Q10_P_stable_ticket_eligible_type')}`; separate current flag: `{questions.get('Q11_ticket_now_account_dependent_flag_separate')}`.",
         "",

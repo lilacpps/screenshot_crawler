@@ -592,6 +592,183 @@ Pure research helpers are covered by
 `tests/research/test_zeblack_discovery_probe.py`; the live site is not a CI
 dependency. The probe itself remains outside the production Discovery tree.
 
+## Z4-0.5 access semantics / protobuf investigation (2026-09-30, research only)
+
+Z4-0.5 followed up the Z4-0 artifact for title `5123`:
+
+```text
+https://zebrack-comic.shueisha.co.jp/title/5123/chapter/list
+```
+
+This is **research only**. `ZeblackDiscoveryAdapter`, Discovery registry
+registration, bounded Discovery support, Site Policy, Batch Policy, Catalog
+changes, and access consumption remain **NOT YET IMPLEMENTED**. The probe used
+the existing shared Crawler Chrome/CDP path, opened only the chapter-list page,
+and did not inspect cookies/storage or perform login.
+
+### Corrected state model
+
+The previous Z4-0 `Free -> ticket_now` mapping was only a research hypothesis
+and is superseded. `無料` and the blue Free/ticket image are separate signals:
+
+```text
+無料 text/badge           -> free_unconditional
+blue Free / チケット利用可 -> ticket_available_now
+P / ポイント画像          -> ticket_candidate_later (hypothesis only)
+rental expiry display     -> rental_active
+コイン画像                -> coin_only
+```
+
+The classifier does not treat English `Free` as unconditional free. The live
+snapshot produced:
+
+```text
+free_unconditional       16
+ticket_available_now      2
+ticket_candidate_later  188
+rental_active             1
+coin_only                43
+unknown                   0
+```
+
+The verification anchors matched the user observation: the blue
+`チケット利用可` image was found on exactly two rows, and rental-active on
+exactly one row. The two ticket rows were index `16` / chapter `198365` / `#17`
+and index `26` / chapter `226849` / `#27`. Both expose the same ticket-image
+signal (`img` alt `チケット利用可`, research-observed class
+`sc-jptKe hfdkkM`); the image `src` is a data URI and is omitted from the
+artifact. Their neighboring rows and complete icon metadata are in
+`output/zeblack_access_semantics_probe/report.json`.
+
+### Frontend and protobuf schema evidence
+
+The frontend bundles provided bounded generated-code evidence:
+
+```text
+fetchChapterListV3 -> Proto.TitleChapterListViewV3.decode
+record message    -> Proto.ChapterV3
+status enum       -> Proto.ConsumptionStatus
+```
+
+The `ChapterV3` field mapping recovered from generated encode/decode snippets
+is:
+
+```text
+1 id
+2 titleId
+3 mainName
+4 alreadyViewed
+5 remainingRentalTime
+6 campaignLabel
+7 canComment
+8 numberOfComments
+9 isUpdated
+10 isAdvanced
+11 status
+12 price
+13 canUseVideoReward
+14 publishedDeadline
+15 consumptionDialog
+```
+
+The recovered `ConsumptionStatus` enum is:
+
+```text
+0 FREE
+1 RENTAL
+2 TICKET_AVAILABLE
+3 TICKET_UNAVAILABLE
+4 POINT
+5 COIN
+6 TICKET_UNAVAILABLE_COIN_ONLY
+```
+
+`Proto.TitleChapterListViewV3` top-level evidence includes `titleId`,
+`lastChapterId`, `advertisements`, `groups`, and `indexGroups`. No global
+ticket stock, next recovery time, or recovery interval field was identified in
+the captured list schema or DOM. The current status is therefore a chapter
+record field, not a recovered global account-ticket object.
+
+The list response was `application/protobuf`, 20,493 bytes. The bounded wire
+parser correlated all `250 / 250` DOM chapter IDs with protobuf records, with
+zero unmatched DOM IDs and zero unmatched protobuf chapter IDs. The final raw
+body SHA-256 is stored in the report; the probe now stores raw-byte and text
+hashes separately and treats the raw hash as authoritative.
+
+Structured state correlation for this snapshot was:
+
+```text
+無料                 status absent/default 0 (FREE)
+blue Free            status 2 (TICKET_AVAILABLE)
+P / point image      status 4 (POINT)
+rental_active       status 1 (RENTAL), remainingRentalTime field 5 present
+coin image           status 5 (COIN)
+```
+
+This confirms that current ticket availability is represented as a dynamic
+structured status. It does **not** confirm a stable `ticket_capable` field for
+P rows. P is currently `POINT`, and the frontend's consumption logic treats
+`POINT` as point/coin consumption. The hypothesis that a P row later changes
+to `TICKET_AVAILABLE` after earlier ticket consumption remains unproven in
+this read-only phase. `TICKET_UNAVAILABLE` and
+`TICKET_UNAVAILABLE_COIN_ONLY` were present in the frontend enum but were not
+observed among the 250 current records.
+
+The rental record had `status=RENTAL` and `remainingRentalTime=5305` in the
+final snapshot. The frontend formats this value into the displayed remaining
+time; the exact unit was not independently confirmed. The original grant
+source (ticket, point, or coin) remains unknown.
+
+### Stable versus dynamic state
+
+The evidence supports keeping these separate in future design:
+
+```text
+relatively stable: chapter id, title id, main name, listing order, viewer URL shape
+dynamic/account:   status, alreadyViewed, remainingRentalTime, isUpdated
+time/campaign:     campaignLabel and free presentation
+```
+
+No stable future-ticket capability flag was found in the recovered `ChapterV3`
+schema. Therefore Candidate design A (`P + ticket_available_now -> quota`) is
+**not adopted** by this phase. P and blue Free should not yet be persisted as
+one quota class without a before/after account-state observation or another
+endpoint/schema field proving the relationship.
+
+Full Discovery is not needed to preserve chapter identity/order after each
+ticket use, but the current dynamic `status` still needs a live refresh. No
+separate lightweight access-state endpoint was found in this probe. The
+natural future responsibility is a lightweight status check at Site Policy
+planning or strict-entry time, falling back to the bounded list API if no
+smaller endpoint exists.
+
+The `chapter_id -> /title/{title_id}/chapter/{chapter_id}/viewer` boundary
+candidate remains one-to-one for bounded Discovery. No production parser or
+adapter was added.
+
+### Z4-0.5 artifacts and tests
+
+The research artifact is under `output/zeblack_access_semantics_probe/`:
+
+```text
+report.json
+summary.md
+dom/states.json
+protobuf/response.bin
+protobuf/wire.json
+protobuf/decoded.json
+protobuf/field_correlation.json
+network/responses.json
+network/frontend_schema_evidence.json
+```
+
+`response.bin` is a local research artifact and is not a repository fixture.
+Data URI image bodies are omitted from DOM snapshots. The pure research tests
+cover the corrected five-state classifier, conflicting signals, raw protobuf
+wire correlation, frontend-evidenced field mapping, group field comparison,
+raw-byte hashing, and before/after report comparison. The live site is not a
+CI dependency.
+
 ## Known limitations
 
 - 対象はこの1 title/chapterだけで、他chapter・別title・別access stateは未確認。
