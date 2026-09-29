@@ -607,10 +607,11 @@ and `80 - 1`. The first eleven contain 100 rows each without more clicks; the
 last contains 10 initially and expands to 80 with one progress click. Its
 initial selected range is `80 - 1`, again not latest.
 
-The manual-rental-containing series has one direct range (`1話から`) and 10
-initial rows, then 13 after one `もっと見る` progress click. The normal
-sample has one direct range, two rows, and no more control. A direct single
-range control is recorded but is not clicked as a range switch.
+The manual-rental-containing series has one nonnumeric direct control
+(`1話から`) and 10 initial rows, then 13 after one `もっと見る` progress click.
+The normal sample has one direct range, two rows, and no more control. A
+nonnumeric direct control is recorded but is not clicked as a range switch;
+numeric single labels are handled as one-item ranges by production discovery.
 
 The probe now treats more controls fail-closed: zero visible enabled controls
 is `no_more` and complete; exactly one is clickable; more than one is
@@ -755,12 +756,14 @@ control is clicked.
 For numeric range controls, the adapter re-reads and revalidates controls
 before every click, rejects episode links or forbidden access controls, keeps
 DOM order as the traversal order, and requires descending numeric upper bounds.
-It does not hardcode range count or labels. A direct one-range display such as
-`1話から` is not clicked as a range switch. Each range is fully expanded with a
-maximum of 20 `もっと見る` clicks; progress requires a growth in episode-id
-identity. Zero enabled controls is complete, while multiple or disabled visible
-controls, no-progress clicks, target navigation, and range-count mismatches are
-fail-closed.
+It does not hardcode range count or labels. A label containing only one number,
+such as `1`, is parsed as the one-item range `(1, 1)` and is traversed like any
+other numeric range. A non-range label such as `1話から` remains outside the
+numeric range controls and is not clicked as a range switch. Each range is fully
+expanded with a maximum of 20 `もっと見る` clicks; progress requires a growth
+in episode-id identity. Zero enabled controls is complete, while multiple or
+disabled visible controls, no-progress clicks, target navigation, and
+range-count mismatches are fail-closed.
 
 `full` collects and validates every range before yielding any record. It
 deduplicates by episode id and rejects conflicting duplicate metadata. Numeric

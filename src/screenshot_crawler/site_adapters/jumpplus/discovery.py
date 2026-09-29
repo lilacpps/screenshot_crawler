@@ -42,7 +42,10 @@ _DATE = re.compile(
     r"(?P<year>\d{4})(?:年|/|-)(?P<month>\d{1,2})(?:月|/|-)(?P<day>\d{1,2})日?"
 )
 _ORDER = re.compile(r"^(?:第\s*)?(?P<number>\d+)\s*話(?:\s|$)")
-_RANGE = re.compile(r"^\s*(?P<first>\d+)\s*[-–—〜～]\s*(?P<last>\d+)\s*$")
+# Jump+ renders the final one-episode range as a standalone number.
+_RANGE = re.compile(
+    r"^\s*(?:(?P<first>\d+)\s*[-–—〜～]\s*(?P<last>\d+)|(?P<single>\d+))\s*$"
+)
 _DOM_EXPIRY = re.compile(
     r"(?P<year>\d{4})[年/-](?P<month>\d{1,2})[月/-](?P<day>\d{1,2})日?"
     r"\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*まで"
@@ -85,11 +88,15 @@ def canonical_jumpplus_episode_url(url: str) -> str:
 
 
 def parse_jumpplus_range_label(label: str) -> tuple[int, int] | None:
-    """Parse a numeric range without assuming any fixed range values."""
+    """Parse a numeric range, including a single episode as a one-item range."""
 
     match = _RANGE.fullmatch(" ".join(label.split()))
     if match is None:
         return None
+    single = match.group("single")
+    if single is not None:
+        value = int(single)
+        return value, value
     return int(match.group("first")), int(match.group("last"))
 
 
@@ -780,7 +787,7 @@ _LISTING_SNAPSHOT_SCRIPT = r"""
       current: el.getAttribute('aria-current') || null, selector: selectorFor(el),
       is_episode_link: !!episodeId(href),
       is_more: label.includes('もっと見る'),
-      is_range: /^\s*\d+\s*[-–—〜～]\s*\d+\s*$/.test(label)};
+      is_range: /^\s*(?:\d+\s*[-–—〜～]\s*\d+|\d+)\s*$/.test(label)};
   }).filter(x => x.visible || x.text) : [];
   const seriesIds = new Set();
   const addSeries = value => { if (value) seriesIds.add(String(value)); };

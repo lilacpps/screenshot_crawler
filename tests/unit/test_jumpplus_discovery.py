@@ -45,6 +45,8 @@ def test_jumpplus_dates_and_order_labels_are_conservative() -> None:
 def test_jumpplus_range_label_has_no_fixed_values() -> None:
     assert parse_jumpplus_range_label("1180 - 1081") == (1180, 1081)
     assert parse_jumpplus_range_label("86 - 1") == (86, 1)
+    assert parse_jumpplus_range_label("1") == (1, 1)
+    assert parse_jumpplus_range_label("42") == (42, 42)
     assert parse_jumpplus_range_label("1話から") is None
 
 
@@ -94,8 +96,21 @@ def test_jumpplus_active_dom_evidence_does_not_require_structured_state() -> Non
 def test_jumpplus_range_order_validation_is_latest_first() -> None:
     adapter = JumpPlusDiscoveryAdapter()
     ranges = adapter._ranges(
-        {"range_controls": [{"text": "286 - 187"}, {"text": "186 - 87"}]}
+        {
+            "range_controls": [
+                {"text": "286 - 187"},
+                {"text": "186 - 87"},
+                {"text": "86 - 2"},
+                {"text": "1"},
+            ]
+        }
     )
+    assert [(item.first, item.last) for item in ranges] == [
+        (286, 187),
+        (186, 87),
+        (86, 2),
+        (1, 1),
+    ]
     adapter._validate_range_order(ranges)
     with pytest.raises(DiscoveryIncompleteError):
         adapter._validate_range_order(list(reversed(ranges)))
