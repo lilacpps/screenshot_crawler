@@ -28,6 +28,22 @@ def test_mangaone_chapter_identity_is_path_based() -> None:
 
 
 @pytest.mark.parametrize(
+    "url",
+    [
+        "http://manga-one.com/manga/2379/chapter/214131",
+        "https://www.manga-one.com/manga/2379/chapter/214131",
+        "https://example.test/manga/2379/chapter/214131",
+        "/manga/2379/chapter/214131",
+        "https://manga-one.com/manga/2379",
+    ],
+)
+def test_mangaone_chapter_url_parser_requires_canonical_https_host_and_path(
+    url: str,
+) -> None:
+    assert parse_mangaone_chapter_url(url) is None
+
+
+@pytest.mark.parametrize(
     ("label", "order_key", "order_label"),
     [
         ("第80話", "80", "第80話"),

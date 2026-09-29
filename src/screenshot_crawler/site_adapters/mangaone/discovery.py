@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -23,7 +23,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
-from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 LISTING_SELECTOR = "#chapterList"
 CARD_SELECTOR = "div.cursor-pointer.block.border-b-1.border-primary.p-3"
@@ -51,9 +51,12 @@ class MangaOneChapterParts:
 
 
 def parse_mangaone_chapter_url(url: str) -> MangaOneChapterParts | None:
-    """Parse only the canonical Manga ONE chapter path shape."""
+    """Parse only the canonical absolute Manga ONE chapter URL shape."""
 
-    match = _CHAPTER_PATH.fullmatch(urlparse(url).path)
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "https" or parsed.hostname != "manga-one.com":
+        return None
+    match = _CHAPTER_PATH.fullmatch(parsed.path)
     if match is None:
         return None
     return MangaOneChapterParts(match.group("work_id"), match.group("chapter_id"))
@@ -112,6 +115,8 @@ def mangaone_title_from_page_title(raw_title: str | None) -> str | None:
 class MangaOneDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate Manga ONE chapters from the chapter listing."""
 
+    supports_bounded_discovery = True
+
     async def iter_records(
         self,
         page: Page,
@@ -134,6 +139,7 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
         seen_ids: set[str] = set()
         previous_signature: tuple[str, ...] | None = None
         page_number = 0
+        buffered_records: list[DiscoveredRecord] = []
 
         while page_number < MAX_PAGES:
             page_number += 1
@@ -141,14 +147,18 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
             if await cards.count() == 0:
                 raise DiscoveryIncompleteError("Manga ONE chapter listing has no cards")
 
-            signature = await self._card_signature(cards)
+            signature = await self._card_signature(cards, page.url)
             if not signature or signature == previous_signature:
                 raise DiscoveryIncompleteError("Manga ONE chapter listing did not advance")
             previous_signature = signature
 
             for index in range(await cards.count()):
                 card = cards.nth(index)
-                parts = await self._card_chapter_parts(card, target_parts.work_id)
+                parts = await self._card_chapter_parts(
+                    card,
+                    target_parts.work_id,
+                    page.url,
+                )
                 if parts is None:
                     raise DiscoveryIncompleteError(
                         "Manga ONE chapter listing contains a card without a valid identity"
@@ -161,7 +171,7 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
                 label = await self._card_episode_label(card)
                 order_key, order_label = parse_mangaone_episode_label(label)
                 text = await card.inner_text()
-                yield DiscoveredRecord(
+                record = DiscoveredRecord(
                     item=DiscoveredItem(
                         canonical_title=canonical_title,
                         author=None,
@@ -181,6 +191,10 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
                         available=True,
                     ),
                 )
+                if target.discovery_scope is None:
+                    yield record
+                else:
+                    buffered_records.append(record)
 
             next_button = await self._next_button(page)
             if next_button is None:
@@ -188,6 +202,13 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
                     "Manga ONE chapter listing has no unambiguous next button"
                 )
             if await self._is_disabled(next_button):
+                if target.discovery_scope is not None:
+                    for record in self._apply_discovery_scope(
+                        buffered_records,
+                        target_parts,
+                        target.discovery_scope,
+                    ):
+                        yield record
                 return
 
             try:
@@ -213,12 +234,16 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
                 matches.append(button)
         return matches[0] if len(matches) == 1 else None
 
-    async def _card_signature(self, cards: Locator) -> tuple[str, ...]:
+    async def _card_signature(
+        self,
+        cards: Locator,
+        page_url: str,
+    ) -> tuple[str, ...]:
         count = await cards.count()
         signature: list[str] = []
         for index in range(count):
             card = cards.nth(index)
-            parts = await self._card_chapter_parts(card, None)
+            parts = await self._card_chapter_parts(card, None, page_url)
             if parts is None:
                 signature.append(f"invalid:{index}")
             else:
@@ -233,7 +258,7 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
         elapsed = 0
         cards = page.locator(f"{LISTING_SELECTOR} {CARD_SELECTOR}")
         while elapsed < WAIT_TIMEOUT_MS:
-            signature = await self._card_signature(cards)
+            signature = await self._card_signature(cards, page.url)
             if signature and signature != previous:
                 return
             await page.wait_for_timeout(POLL_INTERVAL_MS)
@@ -244,12 +269,13 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
         self,
         card: Locator,
         expected_work_id: str | None,
+        page_url: str,
     ) -> MangaOneChapterParts | None:
         anchors = card.locator("a")
         if await anchors.count():
             href = await anchors.first.get_attribute("href")
             if href:
-                parts = parse_mangaone_chapter_url(href)
+                parts = parse_mangaone_chapter_url(urljoin(page_url, href))
                 if parts is None:
                     return None
                 return parts
@@ -264,6 +290,54 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
                         return MangaOneChapterParts("", chapter_id)
                     return MangaOneChapterParts(expected_work_id, chapter_id)
         return None
+
+    @staticmethod
+    def _apply_discovery_scope(
+        records: list[DiscoveredRecord],
+        target_parts: MangaOneChapterParts,
+        scope: DiscoveryScope,
+    ) -> list[DiscoveredRecord]:
+        """Select an inclusive range after the complete listing is validated."""
+
+        if scope.from_url is None and scope.through_url is None:
+            raise DiscoveryIncompleteError(
+                "Manga ONE bounded Discovery scope has no boundary"
+            )
+
+        record_indices = {
+            record.source.external_id: index
+            for index, record in enumerate(records)
+        }
+        boundary_indices: dict[str, int] = {}
+        for boundary_name, boundary_url in (
+            ("from", scope.from_url),
+            ("through", scope.through_url),
+        ):
+            if boundary_url is None:
+                continue
+            boundary = parse_mangaone_chapter_url(boundary_url)
+            if boundary is None:
+                raise DiscoveryIncompleteError(
+                    f"Manga ONE bounded Discovery {boundary_name} boundary URL is invalid"
+                )
+            if boundary.work_id != target_parts.work_id:
+                raise DiscoveryIncompleteError(
+                    f"Manga ONE bounded Discovery {boundary_name} boundary belongs to a different work_id"
+                )
+            boundary_index = record_indices.get(boundary.chapter_id)
+            if boundary_index is None:
+                raise DiscoveryIncompleteError(
+                    f"Manga ONE bounded Discovery {boundary_name} boundary was not found"
+                )
+            boundary_indices[boundary_name] = boundary_index
+
+        from_index = boundary_indices.get("from", 0)
+        through_index = boundary_indices.get("through", len(records) - 1)
+        if from_index > through_index:
+            raise DiscoveryIncompleteError(
+                "Manga ONE bounded Discovery boundaries are reversed"
+            )
+        return records[from_index : through_index + 1]
 
     async def _card_episode_label(self, card: Locator) -> str | None:
         images = card.locator("img")

@@ -1102,7 +1102,7 @@ Plannerがexplicit `quota_resource`を検証する。Batchはnormal/default pass
 requested resource以外へのsilent fallbackをしない。Phase 4/5では同じcontractをgrant-onlyにも使い、
 Work Ticket cooldown、Premium live balance、Policy順`all`を実装している。
 
-### Site-native bounded Discovery（B4 BookWalker + Magapoke implemented / other sites NOT YET IMPLEMENTED）
+### Site-native bounded Discovery（B5 Manga ONE + BookWalker + Magapoke implemented / other sites NOT YET IMPLEMENTED）
 
 ### Capture dedupe semantics (current)
 
@@ -1125,7 +1125,7 @@ The change is generic Core behavior; it is not a Zeblack-specific exception.
 The persisted manifest continues to record the logical identity, part metadata,
 and per-artifact capture fingerprint.
 
-正式仕様は `docs/BOUNDED_DISCOVERY.md`。現在のB4実装状況は次のとおり。
+正式仕様は `docs/BOUNDED_DISCOVERY.md`。現在のB5実装状況は次のとおり。
 
 - Watchlistの`DiscoveryScope(from_url / through_url)` model、YAML parse、mapping / boundary存在 / non-empty string validation: **IMPLEMENTED**
 - scope付きtargetのenable / disable等のWatchlist rewrite preservation: **IMPLEMENTED**
@@ -1138,9 +1138,11 @@ and per-artifact capture fingerprint.
 - Magapokeのboundary validation前yield防止: **IMPLEMENTED**。既存の全listing parse・buffer構造の後にrange確定してからyieldするため、invalid scopeでCatalog partial writeを行わない
 - BookWalker bounded Discovery: **IMPLEMENTED**。strict `/deUUID/` parserでproduct UUIDをboundary identityとし、full collected series-list membershipと既存のcollect order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。invalid / foreign / missing / reversed boundaryはproduct observation前にincompleteとする
 - BookWalkerのfirst-volume inference: **IMPLEMENTED**。scope slice前にfull productsで候補を算出するため、bounded sliceの外側にある後続巻を文脈として維持する
-- Manga ONE / Jump+ / Zeblack等のproduction Adapter bounded support: **NOT YET IMPLEMENTED**
+- Manga ONE bounded Discovery: **IMPLEMENTED**。strict HTTPS / `manga-one.com` chapter parserで`work_id` / `chapter_id`をboundary identityとし、既存のlisting order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。relative hrefはpage URLとの`urljoin()`後にparseし、foreign hostはrejectする
+- Manga ONEのbounded buffering: **IMPLEMENTED**。scopeなしは既存のpage/card単位streamingとpartial-refreshを維持し、scope付きだけ全listingをbufferしてpagination完了・boundary validation後にyieldする。invalid / foreign / different-work / missing / reversed boundaryやbounded pagination failureではCatalog partial writeを行わない
+- Jump+ / Zeblack等のproduction Adapter bounded support: **NOT YET IMPLEMENTED**
 - 他siteのbounded range boundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
 
-B1/B2/B3/B4ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、BookWalkerとMagapoke以外のproduction site-specific Discovery logicは変更していない。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
+B1/B2/B3/B4/B5ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、BookWalker、Magapoke、Manga ONE以外のproduction site-specific Discovery logicは変更していない。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 
 将来cross-site dedupeが必要になった場合はphysical Item mergeより先にhuman approval付きnon-destructive equivalence mappingを検討する。physical mergeは現計画の対象外である。
