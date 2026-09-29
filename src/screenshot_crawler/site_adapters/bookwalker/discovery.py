@@ -30,7 +30,7 @@ from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     ReaderControlKind,
     classify_reader_control,
 )
-from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 # BookWalker has used both the legacy synthetic-fixture shape and the current
 # server-rendered tile list. Keep the compatibility selector narrow so that a
@@ -287,6 +287,8 @@ def map_bookwalker_access_mode(controls: list[dict[str, object]]) -> str:
 class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate products from one explicit BookWalker series list."""
 
+    supports_bounded_discovery = True
+
     async def iter_records(
         self,
         page: Page,
@@ -313,8 +315,14 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
             products,
             series_title,
         )
+        selected_products = products
+        if target.discovery_scope is not None:
+            selected_products = self._apply_discovery_scope(
+                products,
+                target.discovery_scope,
+            )
 
-        for product in products:
+        for product in selected_products:
             try:
                 product_data = await self._observe_product(page, product)
             except (PlaywrightError, TimeoutError) as exc:
@@ -348,6 +356,48 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
                     available=True,
                 ),
             )
+
+    @staticmethod
+    def _apply_discovery_scope(
+        products: list[BookWalkerListedProduct],
+        scope: DiscoveryScope,
+    ) -> list[BookWalkerListedProduct]:
+        """Select an inclusive range from the complete series listing."""
+
+        if scope.from_url is None and scope.through_url is None:
+            raise DiscoveryIncompleteError(
+                "BookWalker bounded Discovery scope has no boundary"
+            )
+
+        product_indices = {
+            product.external_id: index for index, product in enumerate(products)
+        }
+        boundary_indices: dict[str, int] = {}
+        for boundary_name, boundary_url in (
+            ("from_url", scope.from_url),
+            ("through_url", scope.through_url),
+        ):
+            if boundary_url is None:
+                continue
+            boundary = parse_bookwalker_product_url(boundary_url)
+            if boundary is None:
+                raise DiscoveryIncompleteError(
+                    f"BookWalker {boundary_name} is not a product URL"
+                )
+            boundary_index = product_indices.get(boundary.external_id)
+            if boundary_index is None:
+                raise DiscoveryIncompleteError(
+                    f"BookWalker {boundary_name} was not found in target series listing"
+                )
+            boundary_indices[boundary_name] = boundary_index
+
+        from_index = boundary_indices.get("from_url", 0)
+        through_index = boundary_indices.get("through_url", len(products) - 1)
+        if from_index > through_index:
+            raise DiscoveryIncompleteError(
+                "BookWalker bounded Discovery boundaries are reversed"
+            )
+        return products[from_index : through_index + 1]
 
     def reconcile_access_mode(
         self,

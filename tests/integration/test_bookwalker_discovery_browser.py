@@ -21,7 +21,7 @@ from screenshot_crawler.site_adapters.bookwalker.discovery import (
     parse_bookwalker_product_url,
 )
 from screenshot_crawler.site_policies import BookWalkerSitePolicy, SitePolicyRegistry
-from screenshot_crawler.watchlist import WatchlistTarget
+from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -183,6 +183,7 @@ async def _install_route(
     product_titles: dict[str, str] | None = None,
     delayed_ids: set[str] | None = None,
     click_endpoint_counter: list[int] | None = None,
+    product_observed_ids: list[str] | None = None,
     redirect: dict[str, str] | None = None,
     product_header: str = "",
 ) -> None:
@@ -209,6 +210,8 @@ async def _install_route(
         if product is None:
             await route.fulfill(status=404, body="not found")
             return
+        if product_observed_ids is not None:
+            product_observed_ids.append(product.external_id)
         if product.external_id in redirect:
             await route.fulfill(
                 status=302,
@@ -437,13 +440,18 @@ async def test_bookwalker_discovery_supports_current_tile_listing_dom(
     assert records[2].item.order_key == "1"
 
 
-def _series_target(key: str = "series-one") -> WatchlistTarget:
+def _series_target(
+    key: str = "series-one",
+    *,
+    discovery_scope: DiscoveryScope | None = None,
+) -> WatchlistTarget:
     return WatchlistTarget(
         key=key,
         work_key="series-work",
         site="bookwalker",
         url="https://bookwalker.jp/series/123/list/",
         label="表示用シリーズ名",
+        discovery_scope=discovery_scope,
     )
 
 
@@ -639,6 +647,188 @@ async def test_bookwalker_special_card_does_not_use_hash_number_as_order_and_nev
 
 
 @pytest.mark.parametrize(
+    ("scope", "expected"),
+    [
+        (
+            DiscoveryScope(
+                from_url=_product_url(_uuid(15)),
+                through_url=_product_url(_uuid(13)),
+            ),
+            [_uuid(15), _uuid(14), _uuid(13)],
+        ),
+        (
+            DiscoveryScope(from_url=_product_url(_uuid(14))),
+            [_uuid(14), _uuid(13)],
+        ),
+        (
+            DiscoveryScope(through_url=_product_url(_uuid(14))),
+            [_uuid(16), _uuid(15), _uuid(14)],
+        ),
+        (
+            DiscoveryScope(
+                from_url=_product_url(_uuid(15)),
+                through_url=_product_url(_uuid(15)),
+            ),
+            [_uuid(15)],
+        ),
+    ],
+)
+async def test_bookwalker_bounded_scope_selects_inclusive_listing_range(
+    browser_page,
+    tmp_path: Path,
+    scope: DiscoveryScope,
+    expected: list[str],
+) -> None:
+    products = [
+        (_uuid(number), f"作品名 #{number}", False)
+        for number in (16, 15, 14, 13)
+    ]
+    observed_ids: list[str] = []
+    await _install_route(
+        browser_page,
+        products,
+        {external_id: "paid" for external_id, _title, _special in products},
+        product_observed_ids=observed_ids,
+    )
+
+    result, catalog = await _run_service(
+        browser_page,
+        tmp_path,
+        _series_target(discovery_scope=scope),
+        "full",
+    )
+
+    assert result.complete is True
+    assert observed_ids == expected
+    assert [
+        source.external_id for source in catalog.list_sources(site="bookwalker")
+    ] == expected
+
+
+async def test_bookwalker_bounded_scope_preserves_special_product_semantics(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    products = [
+        (_uuid(16), "作品名 #16", False),
+        (_uuid(15), "【購入特典】作品名 #16", True),
+        (_uuid(14), "作品名 #14", False),
+    ]
+    observed_ids: list[str] = []
+    await _install_route(
+        browser_page,
+        products,
+        {external_id: "paid" for external_id, _title, _special in products},
+        product_observed_ids=observed_ids,
+    )
+
+    result, catalog = await _run_service(
+        browser_page,
+        tmp_path,
+        _series_target(
+            discovery_scope=DiscoveryScope(
+                from_url=_product_url(_uuid(16)),
+                through_url=_product_url(_uuid(14)),
+            )
+        ),
+        "full",
+    )
+
+    special_source = catalog.get_source_by_external_id("bookwalker", _uuid(15))
+    special_item = catalog.get_item(special_source.item_id)
+    assert result.complete is True
+    assert observed_ids == [_uuid(16), _uuid(15), _uuid(14)]
+    assert special_source.access_mode == "unknown"
+    assert special_item.order_key is None
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        DiscoveryScope(from_url="https://example.test/de00000000-0000-0000-0000-000000000015/"),
+        DiscoveryScope(through_url="https://bookwalker.jp/series/999/list/"),
+        DiscoveryScope(from_url=_product_url(_uuid(99))),
+        DiscoveryScope(
+            from_url=_product_url(_uuid(14)),
+            through_url=_product_url(_uuid(16)),
+        ),
+    ],
+)
+async def test_bookwalker_invalid_bounded_scope_fails_before_product_observation(
+    browser_page,
+    tmp_path: Path,
+    scope: DiscoveryScope,
+) -> None:
+    products = [
+        (_uuid(number), f"作品名 #{number}", False)
+        for number in (16, 15, 14)
+    ]
+    observed_ids: list[str] = []
+    await _install_route(
+        browser_page,
+        products,
+        {external_id: "paid" for external_id, _title, _special in products},
+        product_observed_ids=observed_ids,
+    )
+
+    result, catalog = await _run_service(
+        browser_page,
+        tmp_path,
+        _series_target(discovery_scope=scope),
+        "full",
+    )
+
+    assert result.complete is False
+    assert result.stopped_reason == "incomplete"
+    assert result.observed_count == 0
+    assert observed_ids == []
+    assert catalog.list_sources() == []
+
+
+async def test_bookwalker_bounded_scope_keeps_full_listing_first_volume_context(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    first = _uuid(1)
+    second = _uuid(2)
+    products = [
+        (second, "Series #2", False),
+        (first, "Series", False),
+    ]
+
+    async def fulfill(route) -> None:
+        if "/series/123/list/" in route.request.url:
+            cards = "".join(
+                f'<article><h3>{title}</h3><a href="/de{external_id}/">{title}</a></article>'
+                for external_id, title, _special in products
+            )
+            body = f'<div id="js-series-list"><h1>Series</h1>{cards}</div>'
+        else:
+            product = parse_bookwalker_product_url(route.request.url)
+            assert product is not None
+            body = _product_page_html(product.external_id, "paid")
+        await route.fulfill(body=body, content_type="text/html; charset=utf-8")
+
+    await browser_page.route("https://bookwalker.jp/**", fulfill)
+    result, catalog = await _run_service(
+        browser_page,
+        tmp_path,
+        _series_target(
+            discovery_scope=DiscoveryScope(
+                from_url=_product_url(first),
+                through_url=_product_url(first),
+            )
+        ),
+        "full",
+    )
+
+    source = catalog.get_source_by_external_id("bookwalker", first)
+    item = catalog.get_item(source.item_id)
+    assert result.complete is True
+    assert item.order_key == "1"
+
+
+@pytest.mark.parametrize(
     ("initial", "observed"),
     [
         ({"16": "paid", "15": "paid", "14": "quota"}, {"16": "paid", "15": "paid", "14": "quota"}),
@@ -674,6 +864,42 @@ async def test_bookwalker_incremental_stable_boundary_via_service(
     assert result.observed_count == (3 if "14" in initial else 1)
     if "15" in initial and initial["15"] == "paid" and observed["15"] == "quota":
         assert catalog.get_source_by_external_id("bookwalker", _uuid(15)).access_mode == "quota"
+
+
+async def test_bookwalker_bounded_incremental_keeps_existing_stable_boundary_hook(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    products = [
+        (_uuid(number), f"作品名 #{number}", False)
+        for number in (16, 15, 14)
+    ]
+    observed_ids: list[str] = []
+    await _install_route(
+        browser_page,
+        products,
+        {external_id: "paid" for external_id, _title, _special in products},
+        product_observed_ids=observed_ids,
+    )
+    target = _series_target(
+        discovery_scope=DiscoveryScope(
+            from_url=_product_url(_uuid(16)),
+            through_url=_product_url(_uuid(14)),
+        )
+    )
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    _seed_source(catalog, target, _uuid(15), "quota")
+    registry = DiscoveryAdapterRegistry()
+    registry.register("bookwalker", BookWalkerDiscoveryAdapter)
+
+    result = await DiscoveryService(catalog, registry).discover(
+        browser_page, target, "incremental"
+    )
+
+    assert result.stopped_reason == "stable_boundary"
+    assert result.observed_count == 2
+    assert observed_ids == [_uuid(16), _uuid(15)]
+    assert catalog.find_source("bookwalker", _uuid(14)) is None
 
 
 async def test_bookwalker_scope_conflict_is_incomplete_without_catalog_mutation(
