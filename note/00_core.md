@@ -1,5 +1,17 @@
 # 00. Core 現行実装ノート
 
+## Zeblack Z4-1 status (2026-09-30)
+
+Zeblack production Discovery is implemented. The adapter is registered in the
+Discovery registry, supports unbounded full/incremental and site-native
+bounded Discovery, and remains absent from `_batch_policy_registry()`.
+Discovery validates the chapter-list DOM and the exact
+`title_chapter_list` protobuf response before yielding. It uses
+`chapter_id` identity, latest-first canonical order, explicit access-mode
+mapping, and inclusive viewer URL boundaries. The existing Zeblack Viewer
+Adapter and crawl lifecycle are unchanged. Zeblack Site Policy and access
+resource consumption are not implemented in this phase.
+
 ## Phase 4A Discovery status
 
 `MangaOneDiscoveryAdapter` is now registered for `mangaone`. It reads an
@@ -1123,7 +1135,7 @@ The change is generic Core behavior; it is not a Zeblack-specific exception.
 The persisted manifest continues to record the logical identity, part metadata,
 and per-artifact capture fingerprint.
 
-### Site-native bounded Discovery（B6 Jump+ implemented / Zeblack and other sites NOT YET IMPLEMENTED）
+### Site-native bounded Discovery（B6 Jump+ / Z4-1 Zeblack implemented）
 
 正式仕様は `docs/BOUNDED_DISCOVERY.md`。現在のB6実装状況は次のとおり。
 
@@ -1143,8 +1155,12 @@ and per-artifact capture fingerprint.
 - Jump+ bounded Discovery: **IMPLEMENTED**。既存のstrict episode URL parserで`episode_id`をboundary identityとし、全rangeのpagination・duplicate・network scope・total validationを完了した`records_by_id`のcanonical insertion order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。invalid / foreign / missing / reversed boundaryはyield前にincompleteとする
 - Jump+ bounded buffering: **IMPLEMENTED**。scope付きfull / incrementalとも全rangeをbufferしてからboundary sliceをyieldし、後続range失敗時にpartial recordをyieldしない。scopeなしincrementalの既存streamingとscopeなしfullの既存全件bufferは維持する
 - Jump+ / bounded cross-site no-merge regression: **IMPLEMENTED**。bounded対応Fakeを使った共通回帰で、同じ`work_key`でもsiteをまたぐItem自動mergeを行わないことを確認している
-- Zeblack等のproduction Adapter bounded support: **NOT YET IMPLEMENTED**
+- Zeblack production Adapter bounded support: **IMPLEMENTED**。strict chapter-list / viewer parser、DOM/protobuf exact-set validation、latest-first canonical order、chapter_id boundary slice、およびyield前bufferingを`ZeblackDiscoveryAdapter`で実装済み。ZeblackはDiscovery registryのみ登録し、Batch Policy registryには登録しない
 - 他siteのbounded range boundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
+
+The following historical summary predates Z4-1; the current production
+bounded adapters include both Jump+ and Zeblack. Site Policy and Batch
+changes remain outside the Zeblack Discovery phase.
 
 B1/B2/B3/B4/B5/B6ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、BookWalker、Magapoke、Manga ONE以外ではJump+だけproduction bounded Discoveryを実装している。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 

@@ -2,6 +2,35 @@
 
 > Site-native bounded Discoveryの詳細な採用仕様は `docs/BOUNDED_DISCOVERY.md` とし、本書のDiscovery仕様の一部として扱う。
 
+## Zeblack Z4-1 production Discovery status
+
+Zeblack Discovery is implemented for the strict chapter-list target
+`https://zebrack-comic.shueisha.co.jp/title/{title_id}/chapter/list`.
+The adapter captures the page-triggered
+`https://api2.zebrack-comic.com/api/v3/title_chapter_list` protobuf response,
+decodes title-correlated `ChapterV3` records, and requires an exact,
+duplicate-free bidirectional match with DOM `id="chapter{chapter_id}"` rows.
+The DOM provides identity and observed listing order; the protobuf provides
+`mainName`, `status`, `remainingRentalTime`, and `price`. Discovery emits
+`chapter_id` external identities in canonical latest-first order and maps
+`FREE` to `free`, ticket/rental/point states to `quota`, coin states to
+`paid`, and unknown enum values to `unknown`.
+
+Unbounded full and incremental Discovery use the existing service semantics.
+Bounded Discovery is inclusive and matches `from_url` / `through_url` by
+viewer `chapter_id` only, with same-title validation and no partial yield.
+The adapter is registered in the Discovery registry but deliberately not in
+the Batch Policy registry. Dynamic ticket eligibility, ticket cooldown,
+consumption, and rental-time interpretation remain Site Policy work.
+
+Z4-1 live verification on 2026-09-30 observed 250 Zeblack records with
+`complete=True` and `stopped_reason=exhausted`; the temporary Catalog had 250
+unique sources and web/default targets. The observed access-mode counts were
+`free=16`, `quota=191`, `paid=43`, and `unknown=0`. Incremental mode preserved
+the generic five-known-streak stop (`observed=5`, `new=0`, `known=5`). The
+bounded #27 through #17 run emitted the 11-record inclusive slice, while the
+reversed run failed closed with zero observed records.
+
 ## Phase 4A status
 
 The Manga ONE Discovery adapter and minimal `discover` CLI are implemented.

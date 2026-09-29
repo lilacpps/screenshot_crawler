@@ -158,7 +158,7 @@ def test_strict_viewer_url_parse_and_page_alt_parse() -> None:
 
 def test_registry_and_minimal_access_profile() -> None:
     assert isinstance(cli._registry().create("zeblack"), ZeblackAdapter)
-    assert "zeblack" not in cli._discovery_registry().sites()
+    assert "zeblack" in cli._discovery_registry().sites()
     assert "zeblack" not in cli._batch_policy_registry().sites()
     assert is_zeblack_relevant_host("https://zebrack-comic.shueisha.co.jp/page")
     assert is_zeblack_relevant_host("https://asset.zebrack-comic.com/page")

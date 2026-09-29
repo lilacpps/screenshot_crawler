@@ -403,12 +403,14 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusDiscoveryAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeDiscoveryAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneDiscoveryAdapter
+    from screenshot_crawler.site_adapters.zeblack import ZeblackDiscoveryAdapter
 
     registry = DiscoveryAdapterRegistry()
     registry.register("bookwalker", BookWalkerDiscoveryAdapter)
     registry.register("jumpplus", JumpPlusDiscoveryAdapter)
     registry.register("magapoke", MagapokeDiscoveryAdapter)
     registry.register("mangaone", MangaOneDiscoveryAdapter)
+    registry.register("zeblack", ZeblackDiscoveryAdapter)
     return registry
 
 

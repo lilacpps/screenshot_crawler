@@ -1,6 +1,15 @@
 # Site-native Bounded Discovery
 
-Status: **ADOPTED SPECIFICATION / NOT YET IMPLEMENTED**
+Status: **ADOPTED SPECIFICATION / CORE IMPLEMENTED; SITE COVERAGE VARIES**
+
+Current implementation note: Zeblack Z4-1 now implements site-native
+bounded Discovery in `ZeblackDiscoveryAdapter`. Its boundaries are strict
+viewer URLs and are matched by the site-native `chapter_id` only. The adapter
+buffers the complete validated listing before yielding, so invalid/missing/
+reversed boundaries and DOM/protobuf set mismatches cannot produce partial
+Discovery writes. This document remains the cross-site specification; see
+`docs/DISCOVERY_AND_BATCH.md` and `note/06_zeblack.md` for the Zeblack
+implementation snapshot.
 
 この文書は `docs/DISCOVERY_AND_BATCH.md` のDiscovery仕様を補足する詳細仕様である。
 

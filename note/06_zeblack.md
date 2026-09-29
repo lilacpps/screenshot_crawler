@@ -1,5 +1,75 @@
 # Zebrack Z0/Z1/Z2 viewer probe と Z3 production adapter 現行ノート
 
+## Z4-1 production Discovery status (2026-09-30)
+
+`ZeblackDiscoveryAdapter` is implemented and registered under `zeblack` in
+the Discovery registry. It is intentionally not registered in the Batch
+Policy registry; Zeblack Site Policy, ticket consumption, cooldowns, and
+strict access entry remain Z5 work.
+
+The Watchlist target is the strict HTTPS URL
+`/title/{title_id}/chapter/list`. The adapter installs a response listener
+before navigation and accepts only the exact
+`api2.zebrack-comic.com/api/v3/title_chapter_list` response with status 200,
+`application/protobuf`, and a body no larger than 4 MiB. Duplicate responses
+are accepted only when their raw bytes or decoded ChapterV3 content agree;
+conflicting or malformed responses fail closed.
+
+DOM `id="chapter{chapter_id}"` rows provide identity and observed order.
+The production decoder recognizes only title-correlated ChapterV3 messages
+with numeric `id`, expected `titleId`, non-empty `mainName`, and at least one
+additional evidenced ChapterV3 field. It decodes `remainingRentalTime`,
+`status`, and `price`; an absent status is protobuf default `FREE` (0), and
+unknown status values remain `unknown` at the Catalog boundary. DOM and
+protobuf IDs must be duplicate-free and exactly equal in both directions.
+
+Validated DOM order is reversed to the canonical latest-first Discovery
+order. Numeric `mainName` labels are used only as an oldest-first sanity
+check; special/non-numeric labels retain `order_key=None` and their raw
+`order_label`. Sources use `chapter_id` as `external_id` and canonical,
+query/fragment-free viewer URLs. `FREE` maps to `free`; rental, ticket, and
+point statuses map to `quota`; coin and coin-only statuses map to `paid`;
+unknown enum values map to `unknown`. `POINT -> quota` is a Catalog access
+class only and does not consume points or infer future ticket capability.
+
+Full and incremental Discovery use the generic service semantics. Bounded
+Discovery supports inclusive `from_url` / `through_url` viewer boundaries,
+validates the same `title_id`, matches boundaries by `chapter_id` only, and
+buffers the complete result until listing/protobuf/set/order/boundary
+validation has passed. Thus invalid scope or DOM/protobuf mismatch yields no
+partial records. Dynamic POINT-to-ticket changes and rental-time units remain
+unresolved live-state questions for Z5.
+
+### Z4-1 live verification (2026-09-30)
+
+Using the shared Crawler Chrome/CDP session and a temporary
+`output/zeblack_z4_live/` Watchlist/Catalog for title `5123`:
+
+```text
+full:
+  observed=250, complete=True, stopped_reason=exhausted
+  sources=250, distinct external_id=250, web/default targets=250
+  free=16, quota=191, paid=43, unknown=0
+
+incremental against the full Catalog:
+  observed=5, new=0, known=5
+  complete=None, stopped_reason=known_streak
+
+bounded from chapter 226849 (#27) through chapter 198365 (#17):
+  observed=11, complete=True, stopped_reason=exhausted
+  actual external-id slice was 226849, 224191, 220222, 218317,
+  216130, 212824, 210415, 207986, 204233, 200528, 198365
+
+reversed bounded boundaries (#17 -> #27):
+  observed=0, complete=False, stopped_reason=incomplete
+```
+
+Sampled Catalog web targets were canonical query/fragment-free viewer URLs
+of the form
+`https://zebrack-comic.shueisha.co.jp/title/5123/chapter/{chapter_id}/viewer`.
+The temporary live Catalog and Watchlist are operator artifacts only and are
+not part of the repository change.
+
 ## Scope
 
 これはゼブラック（Zebrack）の対象chapter限定のread-only viewer probeとproduction
@@ -484,9 +554,10 @@ storage, and did not perform login. No chapter/access control was clicked. The
 live page showed a visible account indicator (`マイページ`); this is only an
 account-context observation, not an authentication proof.
 
-This phase is **Z4-0 research only**. `ZeblackDiscoveryAdapter`, Discovery
-registry registration, bounded Discovery support, Site Policy, Batch Policy,
-ticket consumption, rental start, and purchase remain **NOT YET IMPLEMENTED**.
+This section records the superseded **Z4-0 research-only** state. Z4-1 now
+implements `ZeblackDiscoveryAdapter`, Discovery registry registration, and
+bounded Discovery. Site Policy, Batch Policy, ticket consumption, rental
+start, and purchase remain outside the Z4-1 scope.
 
 ### Chapter-list structure and identity
 
@@ -600,9 +671,8 @@ Z4-0.5 followed up the Z4-0 artifact for title `5123`:
 https://zebrack-comic.shueisha.co.jp/title/5123/chapter/list
 ```
 
-This is **research only**. `ZeblackDiscoveryAdapter`, Discovery registry
-registration, bounded Discovery support, Site Policy, Batch Policy, Catalog
-changes, and access consumption remain **NOT YET IMPLEMENTED**. The probe used
+This is **research only** and predates the Z4-1 production adapter. The probe
+used
 the existing shared Crawler Chrome/CDP path, opened only the chapter-list page,
 and did not inspect cookies/storage or perform login.
 
@@ -766,8 +836,8 @@ planning or strict-entry time, falling back to the bounded list API if no
 smaller endpoint exists.
 
 The `chapter_id -> /title/{title_id}/chapter/{chapter_id}/viewer` boundary
-candidate remains one-to-one for bounded Discovery. No production parser or
-adapter was added.
+candidate remains one-to-one for bounded Discovery. The production parser and
+adapter are now implemented in the Z4-1 section at the top of this note.
 
 ### Z4-0.5 artifacts and tests
 
