@@ -17,7 +17,7 @@ sites:
     stop_on_captcha: true
 
   bookwalker:
-    page_turn_delay_ms: 1000
+    page_turn_delay_ms: 200
     inter_candidate_delay_ms: 3000
     stop_on_http_403: true
     stop_on_http_429: true

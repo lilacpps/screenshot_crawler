@@ -768,3 +768,10 @@ targets:
     url: https://shonenjumpplus.com/episode/9253191256637716411
     enabled: true
     label: "世界を繋ぎ尽くすインターネット巫女"
+
+  - key: kaiju-no-8
+    work_key: kaiju-no-8
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13933686331674116123
+    enabled: true
+    label: "怪獣８号"

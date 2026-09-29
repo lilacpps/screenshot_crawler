@@ -275,6 +275,44 @@ async def test_same_work_key_shares_work_but_never_merges_items_cross_site(tmp_p
     assert "Possible duplicate on another site" in result.warnings[0]
 
 
+async def test_bounded_same_work_key_still_never_merges_items_cross_site(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    registry = DiscoveryAdapterRegistry()
+    registry.register(
+        "site-a",
+        lambda: BoundedFakeDiscoveryAdapter([record("a", order_key="1")]),
+    )
+    registry.register(
+        "site-b",
+        lambda: BoundedFakeDiscoveryAdapter([record("b", order_key="1")]),
+    )
+    service = DiscoveryService(catalog, registry)
+    scope = DiscoveryScope(from_url="https://example.test/from")
+    target_a = target(
+        key="scope-a",
+        work_key="shared",
+        site="site-a",
+        discovery_scope=scope,
+    )
+    target_b = target(
+        key="scope-b",
+        work_key="shared",
+        site="site-b",
+        discovery_scope=scope,
+    )
+
+    await service.discover(FakePage(), target_a, "full")
+    result = await service.discover(FakePage(), target_b, "full")
+
+    assert len(catalog.list_works()) == 1
+    assert len(catalog.list_items()) == 2
+    assert len(catalog.list_sources()) == 2
+    assert len(result.warnings) == 1
+    assert "Possible duplicate on another site" in result.warnings[0]
+
+
 async def test_different_work_keys_do_not_merge_by_same_label(tmp_path: Path) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     registry = DiscoveryAdapterRegistry()

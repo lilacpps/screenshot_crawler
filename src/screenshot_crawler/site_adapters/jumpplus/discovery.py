@@ -28,7 +28,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
-from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 JST = timezone(timedelta(hours=9), name="JST")
 ALLOWED_HOSTS = frozenset({"shonenjumpplus.com", "www.shonenjumpplus.com"})
@@ -262,6 +262,8 @@ class _StructuredStateObserver:
 class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate Jump+ episode rows safely in latest-first order."""
 
+    supports_bounded_discovery = True
+
     async def iter_records(
         self,
         page: Page,
@@ -275,6 +277,7 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
         observer = _StructuredStateObserver()
         observer.attach(page)
         records_by_id: dict[str, DiscoveredRecord] = {}
+        bounded = target.discovery_scope is not None
         try:
             try:
                 await page.goto(
@@ -327,7 +330,7 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
                             )
                         continue
                     records_by_id[record.source.external_id] = record
-                    if mode == "incremental":
+                    if mode == "incremental" and not bounded:
                         yield record
 
             if not records_by_id:
@@ -339,11 +342,62 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
                         f"Jump+ pagination total {expected_total} disagrees with "
                         f"DOM count {len(records_by_id)}"
                     )
-            if mode == "full":
-                for record in records_by_id.values():
+            records = list(records_by_id.values())
+            if bounded:
+                selected_records = self._apply_discovery_scope(
+                    records,
+                    target.discovery_scope,
+                )
+                for record in selected_records:
+                    yield record
+            elif mode == "full":
+                for record in records:
                     yield record
         finally:
             await observer.close()
+
+    @staticmethod
+    def _apply_discovery_scope(
+        records: list[DiscoveredRecord],
+        scope: DiscoveryScope,
+    ) -> list[DiscoveredRecord]:
+        """Select an inclusive range from the validated canonical records."""
+
+        if scope.from_url is None and scope.through_url is None:
+            raise DiscoveryIncompleteError(
+                "Jump+ bounded Discovery scope has no boundary"
+            )
+
+        record_indices = {
+            record.source.external_id: index
+            for index, record in enumerate(records)
+        }
+        boundary_indices: dict[str, int] = {}
+        for boundary_name, boundary_url in (
+            ("from", scope.from_url),
+            ("through", scope.through_url),
+        ):
+            if boundary_url is None:
+                continue
+            episode_id = parse_jumpplus_episode_url(boundary_url)
+            if episode_id is None:
+                raise DiscoveryIncompleteError(
+                    f"Jump+ bounded Discovery {boundary_name} boundary URL is invalid"
+                )
+            boundary_index = record_indices.get(episode_id)
+            if boundary_index is None:
+                raise DiscoveryIncompleteError(
+                    f"Jump+ bounded Discovery {boundary_name} boundary was not found in target series listing"
+                )
+            boundary_indices[boundary_name] = boundary_index
+
+        from_index = boundary_indices.get("from", 0)
+        through_index = boundary_indices.get("through", len(records) - 1)
+        if from_index > through_index:
+            raise DiscoveryIncompleteError(
+                "Jump+ bounded Discovery boundaries are reversed"
+            )
+        return records[from_index : through_index + 1]
 
     @staticmethod
     def _ranges(snapshot: dict[str, Any]) -> list[JumpPlusRange]:

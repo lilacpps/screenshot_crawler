@@ -14,6 +14,7 @@ from screenshot_crawler.site_adapters.jumpplus.discovery import (
     parse_jumpplus_range_label,
     parse_jumpplus_structured_expiry,
 )
+from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
 
 
 def row(*, text: list[str], classes: list[str] | None = None, title: str | None = None):
@@ -146,9 +147,19 @@ class _FakePage:
 
     def __init__(self):
         self.clicks = 0
+        self.range_index = 0
+
+    def on(self, _event, _listener):
+        return None
+
+    def remove_listener(self, _event, _listener):
+        return None
 
     def locator(self, _selector):
         return _FakeLocator(self)
+
+    async def goto(self, *_args, **_kwargs):
+        return None
 
     async def wait_for_timeout(self, _milliseconds):
         return None
@@ -196,3 +207,231 @@ async def test_jumpplus_multiple_or_disabled_more_fails_closed(monkeypatch) -> N
         monkeypatch.setattr(adapter, "_snapshot", snapshot)
         with pytest.raises(DiscoveryIncompleteError):
             await adapter._expand_range(page, "123", "s")
+
+
+def _jump_record(episode_id: str):
+    from screenshot_crawler.discovery import (
+        DiscoveredItem,
+        DiscoveredRecord,
+        DiscoveredSource,
+    )
+
+    return DiscoveredRecord(
+        item=DiscoveredItem(canonical_title="Work", kind="episode"),
+        source=DiscoveredSource(
+            external_id=episode_id,
+            url=f"https://shonenjumpplus.com/episode/{episode_id}",
+            access_mode="free",
+            available=True,
+        ),
+    )
+
+
+def _jump_snapshot(episode_ids: list[str]) -> dict:
+    return {
+        "scope": {"variant": "direct-pagination"},
+        "series_ids": ["series-1"],
+        "listing_count": 1,
+        "episodes": [
+            {
+                "episode_id": episode_id,
+                "href": f"/episode/{episode_id}",
+                "title_text": "Special",
+                "access_text": [],
+                "access_class": [],
+                "access_title": None,
+            }
+            for episode_id in episode_ids
+        ],
+        "work": {"title": "Work", "author": None},
+    }
+
+
+def _configure_jumpplus_traversal(
+    monkeypatch,
+    adapter: JumpPlusDiscoveryAdapter,
+    page: _FakePage,
+    snapshots: list[dict],
+    ranges,
+    *,
+    failing_range: int | None = None,
+) -> None:
+    async def load_initial(*_args):
+        return snapshots[0]
+
+    async def switch_range(_page, _target_episode_id, desired, _series_id):
+        page.range_index = desired.dom_index
+
+    async def wait_for_listing(*_args):
+        return snapshots[page.range_index]
+
+    async def expand_range(*_args):
+        if page.range_index == failing_range:
+            raise DiscoveryIncompleteError("later range failed")
+        return snapshots[page.range_index]["episodes"]
+
+    monkeypatch.setattr(adapter, "_load_initial_listing", load_initial)
+    monkeypatch.setattr(adapter, "_switch_range", switch_range)
+    monkeypatch.setattr(adapter, "_wait_for_listing", wait_for_listing)
+    monkeypatch.setattr(adapter, "_expand_range", expand_range)
+    monkeypatch.setattr(adapter, "_ranges", lambda _snapshot: ranges)
+
+
+def _jump_target(scope: DiscoveryScope | None) -> WatchlistTarget:
+    return WatchlistTarget(
+        key="jumpplus-scope",
+        work_key="jumpplus-work",
+        site="jumpplus",
+        url="https://shonenjumpplus.com/episode/123",
+        label="Work",
+        discovery_scope=scope,
+    )
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected"),
+    [
+        (
+            DiscoveryScope(
+                from_url="https://shonenjumpplus.com/episode/300",
+                through_url="https://shonenjumpplus.com/episode/100",
+            ),
+            ["300", "200", "100"],
+        ),
+        (
+            DiscoveryScope(from_url="https://shonenjumpplus.com/episode/200"),
+            ["200", "100"],
+        ),
+        (
+            DiscoveryScope(through_url="https://shonenjumpplus.com/episode/200"),
+            ["400", "300", "200"],
+        ),
+        (
+            DiscoveryScope(
+                from_url="https://shonenjumpplus.com/episode/300",
+                through_url="https://shonenjumpplus.com/episode/300",
+            ),
+            ["300"],
+        ),
+    ],
+)
+def test_jumpplus_bounded_scope_selects_by_episode_identity(scope, expected) -> None:
+    records = [_jump_record(episode_id) for episode_id in ["400", "300", "200", "100"]]
+    selected = JumpPlusDiscoveryAdapter._apply_discovery_scope(records, scope)
+    assert [item.source.external_id for item in selected] == expected
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        DiscoveryScope(from_url="https://example.test/episode/300"),
+        DiscoveryScope(from_url="https://shonenjumpplus.com/not-episode/300"),
+        DiscoveryScope(from_url="https://shonenjumpplus.com/episode/999"),
+        DiscoveryScope(through_url="https://shonenjumpplus.com/episode/999"),
+        DiscoveryScope(
+            from_url="https://shonenjumpplus.com/episode/200",
+            through_url="https://shonenjumpplus.com/episode/400",
+        ),
+    ],
+)
+def test_jumpplus_bounded_scope_rejects_invalid_or_missing_boundaries(scope) -> None:
+    records = [_jump_record(episode_id) for episode_id in ["400", "300", "200", "100"]]
+    with pytest.raises(DiscoveryIncompleteError):
+        JumpPlusDiscoveryAdapter._apply_discovery_scope(records, scope)
+
+
+def test_jumpplus_bounded_capability_is_explicit() -> None:
+    assert JumpPlusDiscoveryAdapter.supports_bounded_discovery is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["full", "incremental"])
+async def test_jumpplus_bounded_buffers_all_ranges_before_yielding(monkeypatch, mode) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    page = _FakePage()
+    snapshots = [_jump_snapshot(["4", "3"]), _jump_snapshot(["2", "1"])]
+    ranges = [
+        adapter._ranges({"range_controls": [{"text": "4 - 3"}, {"text": "2 - 1"}]})[0],
+        adapter._ranges({"range_controls": [{"text": "4 - 3"}, {"text": "2 - 1"}]})[1],
+    ]
+    _configure_jumpplus_traversal(monkeypatch, adapter, page, snapshots, ranges)
+
+    observed = [
+        record
+        async for record in adapter.iter_records(
+            page,
+            _jump_target(
+                DiscoveryScope(
+                    from_url="https://shonenjumpplus.com/episode/3",
+                    through_url="https://shonenjumpplus.com/episode/2",
+                )
+            ),
+            mode,
+        )
+    ]
+
+    assert [item.source.external_id for item in observed] == ["3", "2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["full", "incremental"])
+async def test_jumpplus_bounded_later_range_failure_yields_no_records(
+    monkeypatch, mode
+) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    page = _FakePage()
+    snapshots = [_jump_snapshot(["2", "1"]), _jump_snapshot(["0"])]
+    ranges = [
+        adapter._ranges({"range_controls": [{"text": "2 - 1"}, {"text": "1"}]})[0],
+        adapter._ranges({"range_controls": [{"text": "2 - 1"}, {"text": "1"}]})[1],
+    ]
+    _configure_jumpplus_traversal(
+        monkeypatch,
+        adapter,
+        page,
+        snapshots,
+        ranges,
+        failing_range=1,
+    )
+
+    observed = []
+    with pytest.raises(DiscoveryIncompleteError):
+        async for record in adapter.iter_records(
+            page,
+            _jump_target(
+                DiscoveryScope(
+                    from_url="https://shonenjumpplus.com/episode/2",
+                    through_url="https://shonenjumpplus.com/episode/1",
+                )
+            ),
+            mode,
+        ):
+            observed.append(record)
+    assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_jumpplus_unbounded_incremental_keeps_prior_yields_on_later_failure(
+    monkeypatch,
+) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    page = _FakePage()
+    snapshots = [_jump_snapshot(["2", "1"]), _jump_snapshot(["0"])]
+    ranges = [
+        adapter._ranges({"range_controls": [{"text": "2 - 1"}, {"text": "1"}]})[0],
+        adapter._ranges({"range_controls": [{"text": "2 - 1"}, {"text": "1"}]})[1],
+    ]
+    _configure_jumpplus_traversal(
+        monkeypatch,
+        adapter,
+        page,
+        snapshots,
+        ranges,
+        failing_range=1,
+    )
+
+    observed = []
+    with pytest.raises(DiscoveryIncompleteError):
+        async for record in adapter.iter_records(page, _jump_target(None), "incremental"):
+            observed.append(record)
+    assert [item.source.external_id for item in observed] == ["2", "1"]
