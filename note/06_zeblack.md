@@ -435,6 +435,41 @@ The classifier is fail-closed: it does not treat a page counter or a no-change r
 
 Production Adapter recommendation: retain `page_N` numeric tracking for content order, treat `26 / 26` as supporting evidence only, and classify the terminal state as `NEXT_CONTENT` only after the same current-chapter guard and explicit visible `次の話を読む`-type evidence. Keep the next-content action non-clicking. Behavior for other chapters, access states, login states, and a separate explicit END UI remains unknown.
 
+## Z3 follow-up corrections (2026-09-29)
+
+The production adapter now treats exact Zeblack blob response bytes as
+source-native when Pillow can decode them as either JPEG or WebP and the
+decoded dimensions match the visible `HTMLImageElement` natural dimensions.
+The original bytes are preserved without re-encoding; JPEG is saved as `.jpg`
+and WebP as `.webp`. Unsupported, corrupt, or dimension-mismatched bodies use
+the existing all-or-none direct-capture failure and locator fallback path.
+
+`ContentIdentity.page_number` is the one-based logical first page number:
+`page_0` is `1`, `page_1+page_2` is `2`, `page_3+page_4` is `4`, and `page_23`
+is `24`.
+
+Core duplicate detection is generic. It uses the complete logical identity,
+spread part count, spread part index, and encoded capture fingerprint. A later
+logical page may therefore reuse identical bytes without being dropped, while
+the same logical spread repeated unchanged still triggers `max_same_content`.
+
+Follow-up live verification against the target chapter completed successfully:
+
+```text
+Saved 24 pages; stopped at next_content
+archive: page-0001.jpg ... page-0023.jpg, page-0024.webp
+decoded formats: JPEG=23, WebP=1, PNG fallback=0
+JPEG dimensions: 760x1080
+WebP dimensions: 960x1817
+final URL: same target chapter viewer (no chapter navigation)
+next chapter click: no
+```
+
+The prior Z3 result of 23 saved pages / 22 JPEG + 1 PNG was caused by the
+global fingerprint dedupe and JPEG-only source validation. That historical
+result remains recorded above; the corrected run stores all 24 logical pages
+and the source-native WebP artifact.
+
 ## Known limitations
 
 - 対象はこの1 title/chapterだけで、他chapter・別title・別access stateは未確認。

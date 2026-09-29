@@ -239,6 +239,15 @@ class NativeSpreadAdapter(NativeCaptureAdapter):
         )
 
 
+class NativeSameBytesSpreadAdapter(NativeCaptureAdapter):
+    async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...] | None:
+        self.native_calls += 1
+        return (
+            CaptureResult(data=b"same", width=1303, height=2048),
+            CaptureResult(data=b"same", width=1303, height=2048),
+        )
+
+
 class NativeWebPAdapter(NativeCaptureAdapter):
     async def capture_page(self, page: FakePage) -> tuple[CaptureResult, ...] | None:
         self.native_calls += 1
@@ -1027,7 +1036,7 @@ async def test_runner_rejects_content_after_max_pages(
         ).run(FakePage(), adapter)
 
 
-async def test_runner_keeps_fingerprint_as_duplicate_authority(
+async def test_runner_allows_same_fingerprint_for_different_identity(
     tmp_path: Path,
     fake_capture: None,
 ) -> None:
@@ -1039,17 +1048,42 @@ async def test_runner_keeps_fingerprint_as_duplicate_authority(
         ],
     )
 
-    with pytest.raises(PageChangeTimeoutError, match="same content"):
-        await CrawlerRunner(
-            RunConfig(
-                site="test",
-                source_url="https://example.test/viewer",
-                output_dir=tmp_path / "run",
-                diagnostics_dir=tmp_path / "diagnostics",
-            )
-        ).run(FakePage(), adapter)
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+        )
+    ).run(FakePage(), adapter)
 
-    assert len(json.loads((tmp_path / "run" / "manifest.json").read_text())["pages"]) == 1
+    assert len(result.pages) == 2
+    assert [page.identity.page_number for page in result.pages] == [1, 2]
+    assert len(json.loads((tmp_path / "run" / "manifest.json").read_text())["pages"]) == 2
+
+
+async def test_runner_saves_same_fingerprint_for_each_spread_part(
+    tmp_path: Path,
+) -> None:
+    adapter = NativeSameBytesSpreadAdapter(
+        [PageState.CONTENT, PageState.END],
+        [ContentIdentity(page_id="page_1+page_2", page_number=2, source_id="work-1")],
+    )
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url="https://example.test/viewer",
+            output_dir=tmp_path / "run",
+            diagnostics_dir=tmp_path / "diagnostics",
+        )
+    ).run(FakePage(), adapter)
+
+    assert len(result.pages) == 2
+    assert [page.metadata for page in result.pages] == [
+        {"part": 1, "parts": 2},
+        {"part": 2, "parts": 2},
+    ]
 
 
 async def test_runner_uses_fingerprint_when_identity_is_unavailable(

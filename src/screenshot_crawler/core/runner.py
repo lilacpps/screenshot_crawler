@@ -52,6 +52,24 @@ def _identity_key(identity: ContentIdentity) -> tuple[object, ...]:
     )
 
 
+def _capture_key(
+    identity_key: tuple[object, ...],
+    *,
+    part_index: int,
+    part_count: int,
+    fingerprint: str,
+) -> tuple[object, ...]:
+    """Identify one captured part within one logical page or spread.
+
+    Encoded bytes are not globally unique page identity. Two logical pages can
+    legitimately share the same source bytes, and two parts of one spread can
+    also share them. The logical identity and spread position therefore form
+    part of the duplicate key.
+    """
+
+    return (identity_key, part_count, part_index, fingerprint)
+
+
 _STRONG_CONTEXT_FIELDS = ("content_id", "work_id", "episode_id", "chapter_id")
 
 
@@ -278,8 +296,7 @@ class CrawlerRunner:
             raise
 
         saved_pages: list[CapturedPage] = []
-        seen_identities: set[tuple[object, ...]] = set()
-        seen_fingerprints: set[str] = set()
+        seen_capture_keys: set[tuple[object, ...]] = set()
         same_content_count = 0
         previous_identity: ContentIdentity | None = None
 
@@ -365,10 +382,27 @@ class CrawlerRunner:
                 if not isinstance(capture_debug, dict):
                     capture_debug = {}
                 fingerprints = [fingerprint_bytes(capture.data) for capture in captures]
+                part_count = len(captures)
                 new_captures = [
-                    (index, capture, fingerprints[index])
+                    (
+                        index,
+                        capture,
+                        fingerprints[index],
+                        _capture_key(
+                            identity_key,
+                            part_index=index,
+                            part_count=part_count,
+                            fingerprint=fingerprints[index],
+                        ),
+                    )
                     for index, capture in enumerate(captures)
-                    if fingerprints[index] not in seen_fingerprints
+                    if _capture_key(
+                        identity_key,
+                        part_index=index,
+                        part_count=part_count,
+                        fingerprint=fingerprints[index],
+                    )
+                    not in seen_capture_keys
                 ]
                 if not new_captures:
                     same_content_count += 1
@@ -386,10 +420,10 @@ class CrawlerRunner:
                     continue
 
                 same_content_count = 0
-                part_count = len(captures)
                 captured_pages: list[CapturedPage] = []
                 captured_fingerprints: list[str] = []
-                for part_index, capture, fingerprint in new_captures:
+                captured_keys: list[tuple[object, ...]] = []
+                for part_index, capture, fingerprint, capture_key in new_captures:
                     if len(saved_pages) + len(captured_pages) >= self.config.max_pages:
                         raise MaxPagesExceededError(
                             f"max_pages exceeded: {self.config.max_pages}"
@@ -419,10 +453,10 @@ class CrawlerRunner:
                     )
                     captured_pages.append(captured)
                     captured_fingerprints.append(fingerprint)
+                    captured_keys.append(capture_key)
                 store.add_pages(captured_pages, captured_fingerprints)
                 saved_pages.extend(captured_pages)
-                seen_fingerprints.update(captured_fingerprints)
-                seen_identities.add(identity_key)
+                seen_capture_keys.update(captured_keys)
                 previous_identity = identity
 
                 await self._pace_before_page_turn(page)

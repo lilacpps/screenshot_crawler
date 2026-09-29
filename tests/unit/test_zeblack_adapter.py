@@ -23,6 +23,7 @@ from screenshot_crawler.site_adapters.zeblack.access import (
     is_zeblack_relevant_host,
 )
 from screenshot_crawler.site_adapters.zeblack.native_capture import (
+    capture_zeblack_source_image,
     is_zeblack_blob_response,
     select_zeblack_active_rows,
 )
@@ -35,6 +36,12 @@ BLOB_1 = "blob:https://zebrack-comic.shueisha.co.jp/11111111-1111-1111-1111-1111
 def _jpeg(color: tuple[int, int, int], size: tuple[int, int] = (760, 1080)) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", size, color).save(buffer, format="JPEG", quality=92)
+    return buffer.getvalue()
+
+
+def _webp(color: tuple[int, int, int], size: tuple[int, int] = (760, 1080)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format="WEBP", quality=92)
     return buffer.getvalue()
 
 
@@ -214,6 +221,58 @@ async def test_direct_jpeg_capture_is_unchanged_and_releases_used_sources(monkey
     assert captures[0].data.startswith(b"\xff\xd8\xff")
 
 
+def test_source_native_webp_capture_is_unchanged() -> None:
+    source = _webp((0, 0, 255))
+    capture = capture_zeblack_source_image(
+        source,
+        expected_width=760,
+        expected_height=1080,
+    )
+
+    assert capture.data == source
+    assert capture.mime_type == "image/webp"
+    assert capture.file_extension == ".webp"
+    assert (capture.width, capture.height) == (760, 1080)
+
+
+@pytest.mark.asyncio
+async def test_direct_capture_supports_mixed_jpeg_and_webp_spread(monkeypatch) -> None:
+    page = _FakePage(
+        [_row("page_1", BLOB_1, dom_order=0), _row("page_0", BLOB_0, dom_order=1)]
+    )
+    adapter = ZeblackAdapter()
+    _patch_rows(monkeypatch, adapter, page)
+    jpeg = _jpeg((255, 0, 0))
+    webp = _webp((0, 255, 0))
+    adapter._handle_source_response(_BodyResponse(BLOB_0, jpeg))
+    adapter._handle_source_response(_BodyResponse(BLOB_1, webp))
+
+    captures = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert captures is not None
+    assert [capture.mime_type for capture in captures] == ["image/jpeg", "image/webp"]
+    assert [capture.file_extension for capture in captures] == [".jpg", ".webp"]
+    assert [capture.data for capture in captures] == [jpeg, webp]
+
+
+def test_source_native_webp_dimension_mismatch_is_rejected() -> None:
+    with pytest.raises(ValueError, match="dimensions"):
+        capture_zeblack_source_image(
+            _webp((0, 0, 255), size=(100, 100)),
+            expected_width=760,
+            expected_height=1080,
+        )
+
+
+def test_source_native_corrupt_body_is_rejected() -> None:
+    with pytest.raises(ValueError, match="supported decodable image"):
+        capture_zeblack_source_image(
+            b"not an image",
+            expected_width=760,
+            expected_height=1080,
+        )
+
+
 @pytest.mark.asyncio
 async def test_direct_spread_is_all_or_none_and_fallback_is_numeric(monkeypatch) -> None:
     page = _FakePage([_row("page_1", BLOB_1, dom_order=0), _row("page_0", BLOB_0, dom_order=1)])
@@ -254,6 +313,21 @@ async def test_content_identity_context_and_state_priority(monkeypatch) -> None:
     assert context.chapter_id == "9265713"
     page.next_signal = True
     assert await adapter.detect_state(page) == PageState.CONTENT  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_content_identity_page_number_is_first_logical_page(monkeypatch) -> None:
+    page = _FakePage(
+        [_row("page_4", BLOB_1, dom_order=0), _row("page_3", BLOB_0, dom_order=1)]
+    )
+    adapter = ZeblackAdapter()
+    _patch_rows(monkeypatch, adapter, page)
+    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+
+    assert (await adapter.get_content_identity(page)).page_number == 4  # type: ignore[arg-type]
+
+    page.rows = [_row("page_23", BLOB_0)]
+    assert (await adapter.get_content_identity(page)).page_number == 24  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

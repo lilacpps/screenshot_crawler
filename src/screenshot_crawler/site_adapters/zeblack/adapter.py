@@ -22,7 +22,7 @@ from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.zeblack.access import zeblack_access_profile
 from screenshot_crawler.site_adapters.zeblack.native_capture import (
-    capture_zeblack_jpeg,
+    capture_zeblack_source_image,
     is_zeblack_blob_response,
     select_zeblack_active_rows,
 )
@@ -439,7 +439,7 @@ class ZeblackAdapter(SiteAdapter):
                     )
                 try:
                     captures.append(
-                        capture_zeblack_jpeg(
+                        capture_zeblack_source_image(
                             body,
                             expected_width=int(row["natural_width"]),
                             expected_height=int(row["natural_height"]),
@@ -458,7 +458,7 @@ class ZeblackAdapter(SiteAdapter):
 
         self._direct_source_success = True
         self._direct_source_failure_reason = None
-        self._capture_mode = "blob_jpeg"
+        self._capture_mode = "blob_source_native"
         await self._release_source_urls(used_source_urls)
         return tuple(captures)
 
@@ -467,7 +467,7 @@ class ZeblackAdapter(SiteAdapter):
         chapter_id = self._initial_viewer.chapter_id if self._initial_viewer else None
         return ContentIdentity(
             page_id=self._page_id(rows),
-            page_number=len(rows) if rows else None,
+            page_number=(int(rows[0]["page_index"]) + 1) if rows else None,
             source_id=chapter_id,
         )
 

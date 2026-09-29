@@ -1,4 +1,4 @@
-"""Pure helpers for Zeblack page attribution and direct JPEG capture."""
+"""Pure helpers for Zeblack page attribution and source-native capture."""
 
 from __future__ import annotations
 
@@ -125,20 +125,66 @@ def select_zeblack_active_rows(rows: object) -> list[dict[str, object]]:
     return sorted(selected, key=lambda row: int(row["page_index"]))
 
 
-def jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
-    """Decode and validate JPEG bytes without changing them."""
+def source_image_info(data: bytes) -> tuple[str, tuple[int, int]] | None:
+    """Decode a supported source image and return its format and dimensions."""
 
     if not isinstance(data, bytes) or not data:
         return None
     try:
         with Image.open(io.BytesIO(data)) as image:
-            if image.format != "JPEG" or image.width <= 0 or image.height <= 0:
+            image_format = image.format
+            if image_format not in {"JPEG", "WEBP"}:
+                return None
+            if image.width <= 0 or image.height <= 0:
                 return None
             dimensions = (int(image.width), int(image.height))
             image.load()
     except (UnidentifiedImageError, OSError, ValueError):
         return None
-    return dimensions
+    return image_format, dimensions
+
+
+def jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
+    """Decode and validate JPEG bytes without changing them.
+
+    Keep this narrow helper for callers that specifically need to assert JPEG
+    input. Zeblack production capture uses :func:`source_image_info` because
+    the viewer can expose either JPEG or WebP blob bodies.
+    """
+
+    info = source_image_info(data)
+    if info is None or info[0] != "JPEG":
+        return None
+    return info[1]
+
+
+def capture_zeblack_source_image(
+    data: bytes,
+    *,
+    expected_width: int,
+    expected_height: int,
+) -> CaptureResult:
+    """Build a source-native result when format and DOM dimensions agree."""
+
+    info = source_image_info(data)
+    if info is None:
+        raise ValueError("blob response is not a supported decodable image")
+    image_format, dimensions = info
+    if dimensions != (expected_width, expected_height):
+        raise ValueError(
+            "blob image dimensions do not match HTMLImageElement natural dimensions"
+        )
+    mime_type, file_extension = {
+        "JPEG": ("image/jpeg", ".jpg"),
+        "WEBP": ("image/webp", ".webp"),
+    }[image_format]
+    return CaptureResult(
+        data=data,
+        width=dimensions[0],
+        height=dimensions[1],
+        mime_type=mime_type,
+        file_extension=file_extension,
+    )
 
 
 def capture_zeblack_jpeg(
@@ -147,19 +193,13 @@ def capture_zeblack_jpeg(
     expected_width: int,
     expected_height: int,
 ) -> CaptureResult:
-    """Build a JPEG result only when decoded dimensions match the DOM image."""
+    """Build a JPEG-only result for backwards-compatible helper callers."""
 
-    dimensions = jpeg_dimensions(data)
-    if dimensions is None:
-        raise ValueError("blob response is not a decodable JPEG")
-    if dimensions != (expected_width, expected_height):
-        raise ValueError(
-            "blob JPEG dimensions do not match HTMLImageElement natural dimensions"
-        )
-    return CaptureResult(
-        data=data,
-        width=dimensions[0],
-        height=dimensions[1],
-        mime_type="image/jpeg",
-        file_extension=".jpg",
+    result = capture_zeblack_source_image(
+        data,
+        expected_width=expected_width,
+        expected_height=expected_height,
     )
+    if result.mime_type != "image/jpeg":
+        raise ValueError("blob response is not a decodable JPEG")
+    return result

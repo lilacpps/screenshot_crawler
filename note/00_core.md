@@ -1104,6 +1104,27 @@ Work Ticket cooldown、Premium live balance、Policy順`all`を実装してい�
 
 ### Site-native bounded Discovery（B3 Magapoke implemented / other sites NOT YET IMPLEMENTED）
 
+### Capture dedupe semantics (current)
+
+Capture fingerprints are artifact evidence, not global logical-page identity.
+The runner now deduplicates a captured part only when all of these match:
+
+```text
+ContentIdentity
+spread part count
+spread part index
+capture fingerprint
+```
+
+This preserves distinct logical pages that happen to have identical encoded
+bytes, and preserves both parts when a spread uses the same bytes on both
+sides. A repeated capture with the same logical identity, part structure, and
+fingerprints remains subject to the existing `max_same_content` guard.
+
+The change is generic Core behavior; it is not a Zeblack-specific exception.
+The persisted manifest continues to record the logical identity, part metadata,
+and per-artifact capture fingerprint.
+
 正式仕様は `docs/BOUNDED_DISCOVERY.md`。現在のB3実装状況は次のとおり。
 
 - Watchlistの`DiscoveryScope(from_url / through_url)` model、YAML parse、mapping / boundary存在 / non-empty string validation: **IMPLEMENTED**
