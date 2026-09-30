@@ -57,6 +57,68 @@ content package. `--grant-only all` resolves to the single Work Ticket pass.
 `batch run --site zeblack` uses the existing generic Executor; no Zeblack
 branch was added to Batch Core.
 
+### Z5-3 controlled live verification: title 66 / chapter 6077 (2026-09-30)
+
+The latest `main` was reviewed at commit `e990c97`. The shared Crawler Chrome
+was used through `http://127.0.0.1:9222`; no credentials, cookies, or storage
+state were read or saved. A read-only `title_chapter_list` observation for
+title `66` decoded 229 chapters:
+
+```text
+FREE=3, RENTAL=0, TICKET_AVAILABLE=1,
+TICKET_UNAVAILABLE=0, POINT=193, COIN=32,
+TICKET_UNAVAILABLE_COIN_ONLY=0, UNKNOWN=0
+oldest/current ticket candidate: chapter 6077 / viewer
+  https://zebrack-comic.shueisha.co.jp/title/66/chapter/6077/viewer
+```
+
+The title-top ticket indicator was recorded as a diagnostic signal only. The
+temporary singleton Discovery used the chapter-list URL with identical
+`from_url` and `through_url` viewer boundaries and completed with
+`observed=1`, `complete=True`, `external_id=6077`, and `access_mode=quota`.
+The read-only Batch plan contained exactly one candidate:
+`eligible=1`, `quota=1`, `quota_resource=work_ticket`, and
+`quota_commit_mode=after_observed_consumption`. The initial Catalog state was
+`Item=pending`, `quota_started_at=NULL`, `access_granted_until=NULL`, with no
+CrawlRun or Artifact.
+
+The final read-only preflight immediately before execution still observed
+target `6077=TICKET_AVAILABLE` and `TICKET_AVAILABLE=[6077]`. The production
+command was run with `--grant-only work_ticket --limit 1`. It did not click the
+ticket control. The Adapter debug record instead shows:
+
+```text
+live target status=RENTAL
+TICKET_AVAILABLE count=0
+preexisting_accessible=true
+ticket_click_attempted=false
+ticket_confirmation_state=preexisting_accessible
+AccessConsumption.consumed=false
+```
+
+The grant-only CrawlRun was therefore safely skipped as
+`work_ticket_not_needed`; no quota timestamp or Artifact was persisted, and
+the Item remained pending at that point. Relevant run diagnostics contained
+viewer/list loading and source-image requests only; no ticket click was
+attempted and no point, coin, item, or purchase fallback was used. The
+transition from the immediate preflight `TICKET_AVAILABLE` state to the
+grant-run `RENTAL` state cannot be attributed to an exact ticket action in
+this run, so Work Ticket consumption is **NOT VERIFIED**.
+
+After that live state transition, a separate normal Batch run was performed
+against the same temporary Catalog. It observed the target as `RENTAL`, did
+not click a ticket, captured 19 source-native JPEG pages at `760x1200`, and
+stopped at `next_content`. The ZIP Artifact is present under
+`output/zeblack_z5_title66/Books/`; the Item is `completed`, while
+`quota_started_at` remains NULL because no confirmed Work Ticket consumption
+was reported. The post-attempt protobuf snapshot is
+`FREE=3, RENTAL=1, TICKET_AVAILABLE=0, POINT=193, COIN=32`.
+
+Title 66 therefore verifies singleton Discovery, Batch planning, safe
+grant-only fail-closed behavior, and normal RENTAL capture, but does not meet
+the Z5 completion criterion for exact Work Ticket consumption. Final status:
+**BLOCKED / Work Ticket consumption not verified**.
+
 ### Z5-2 controlled live verification: title 53 / chapter 4844 (2026-09-30)
 
 This is the current title-53 result and supersedes neither the generic

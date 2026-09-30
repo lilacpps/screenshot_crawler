@@ -24,6 +24,30 @@ work-wide state, and commits quota state only after confirmed same-chapter
 viewer content. Grant-only uses the generic entry-only contract; it records
 confirmed consumption, leaves the Item pending, and creates no package.
 
+### Current title-66 live verification (2026-09-30)
+
+Title `66` was checked through the shared CDP browser. Read-only protobuf
+observation decoded 229 chapters with `FREE=3`, `RENTAL=0`,
+`TICKET_AVAILABLE=1`, `POINT=193`, and `COIN=32`. The oldest/current candidate
+was chapter `6077`. A bounded singleton Discovery and read-only Batch plan
+completed with one `quota` candidate using `work_ticket` and
+`after_observed_consumption`; Catalog started as pending with no quota state,
+CrawlRun, or Artifact.
+
+The immediate preflight still observed `6077=TICKET_AVAILABLE`, but the
+production `batch run --grant-only work_ticket --limit 1` safely skipped with
+`work_ticket_not_needed` after its live preflight observed `RENTAL` and
+preexisting same-chapter content. `ticket_click_attempted=false`,
+`AccessConsumption.consumed=false`, no point/coin/purchase fallback was used,
+and no quota timestamp was committed. This run does not verify Work Ticket
+consumption, so the Z5 completion status remains blocked.
+
+The subsequent normal RENTAL run completed independently with no additional
+ticket click, 19 source-native JPEG pages, `next_content`, a ZIP Artifact, and
+`Item=completed`. The post protobuf state was `RENTAL=1` and
+`TICKET_AVAILABLE=0`. The temporary operator artifacts are under
+`output/zeblack_z5_title66/` and are not repository fixtures.
+
 The 2026-09-30 Z5-1 live check did not click the exact control
 `チケットを使って読む`, and therefore did not consume a Work Ticket. Human
 observation confirms that selecting/opening a `TICKET_AVAILABLE` chapter only

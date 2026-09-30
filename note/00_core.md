@@ -2,6 +2,27 @@
 
 ## Zeblack Z5 current status (2026-09-30)
 
+### Current live verification: title 66 / chapter 6077
+
+The latest `main` commit `e990c97` was reviewed. Shared-CDP read-only
+observation decoded 229 title-66 protobuf records with
+`FREE=3`, `RENTAL=0`, `TICKET_AVAILABLE=1`, `POINT=193`, and `COIN=32`; the
+oldest/current ticket candidate was chapter `6077`. Bounded singleton
+Discovery and Batch planning completed with one `work_ticket` quota candidate,
+and the temporary Catalog initially had a pending Item with no quota state,
+CrawlRun, or Artifact.
+
+The final preflight immediately before grant-only still saw
+`TICKET_AVAILABLE`, but the production `--grant-only work_ticket --limit 1`
+run observed `RENTAL` with preexisting same-chapter content and safely skipped
+as `work_ticket_not_needed`. No exact ticket click, point/coin/purchase
+fallback, `AccessConsumption`, or quota timestamp occurred. A separate normal
+run then verified the RENTAL path: no additional ticket click, 19 source-native
+JPEG pages at `760x1200`, `next_content`, ZIP Artifact, and `Item=completed`.
+Post protobuf state was `RENTAL=1`, `TICKET_AVAILABLE=0`; the transition is
+not attributed to an exact ticket action by this run. Work Ticket consumption
+remains unverified, so Zeblack Z5 is **BLOCKED**, not COMPLETED.
+
 ### Current live verification: title 53 / chapter 4844
 
 The current shared-CDP verification observed 411 title-53 protobuf records.
