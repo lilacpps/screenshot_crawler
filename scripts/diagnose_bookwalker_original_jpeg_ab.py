@@ -26,6 +26,80 @@ URL_DEFAULT = "https://bookwalker.jp/dea0961d33-6ef8-4673-a455-0ec0ecd5de47/"
 MAX_RESET_STEPS = 400
 MAX_TRACE_RECORDS = 10_000
 
+_INDEPENDENT_DRAW_TRACE_SCRIPT = f"""
+(() => {{
+  if (window.__bookwalkerAbTraceInstalled) return;
+  window.__bookwalkerAbTraceInstalled = true;
+  window.__bookwalkerAbTrace = {{operations: [], traceOverflow: false}};
+  const previous = CanvasRenderingContext2D.prototype.drawImage;
+  const canvasIds = new WeakMap();
+  let nextCanvasId = 1;
+  const canvasId = canvas => {{
+    let id = canvasIds.get(canvas);
+    if (!id) {{
+      id = String(nextCanvasId++);
+      canvasIds.set(canvas, id);
+    }}
+    return id;
+  }};
+  const sourceInfo = source => ({{
+    constructor: source?.constructor?.name || null,
+    width: Number.isFinite(source?.width) ? Number(source.width) : null,
+    height: Number.isFinite(source?.height) ? Number(source.height) : null,
+  }});
+  const geometry = (source, values) => {{
+    const width = Number.isFinite(source?.width) ? Number(source.width) : null;
+    const height = Number.isFinite(source?.height) ? Number(source.height) : null;
+    if (values.length === 2 && width !== null && height !== null) return {{
+      sourceRect: {{x: 0, y: 0, width, height}},
+      destination: {{x: values[0], y: values[1], width, height}},
+    }};
+    if (values.length === 4 && width !== null && height !== null) return {{
+      sourceRect: {{x: 0, y: 0, width, height}},
+      destination: {{x: values[0], y: values[1], width: values[2], height: values[3]}},
+    }};
+    if (values.length === 8) return {{
+      sourceRect: {{x: values[0], y: values[1], width: values[2], height: values[3]}},
+      destination: {{x: values[4], y: values[5], width: values[6], height: values[7]}},
+    }};
+    return {{sourceRect: null, destination: null}};
+  }};
+  CanvasRenderingContext2D.prototype.drawImage = function(...args) {{
+    try {{
+      const target = this.canvas;
+      const values = args.slice(1).map(value => Number(value));
+      const shape = geometry(args[0], values);
+      const trace = window.__bookwalkerAbTrace;
+      if (target && target.width >= 500 && target.height >= 500 && trace) {{
+        if (trace.operations.length >= {MAX_TRACE_RECORDS}) {{
+          trace.traceOverflow = true;
+        }} else {{
+          let transform = null;
+          try {{
+            const matrix = this.getTransform();
+            transform = {{a: matrix.a, b: matrix.b, c: matrix.c, d: matrix.d, e: matrix.e, f: matrix.f}};
+          }} catch (error) {{}}
+          trace.operations.push({{
+            index: trace.operations.length + 1,
+            canvasId: canvasId(target),
+            canvasWidth: Number(target.width),
+            canvasHeight: Number(target.height),
+            source: sourceInfo(args[0]),
+            sourceRect: shape.sourceRect,
+            destination: shape.destination,
+            transform,
+            alpha: Number.isFinite(this.globalAlpha) ? Number(this.globalAlpha) : null,
+            composite: this.globalCompositeOperation || null,
+            filter: this.filter || null,
+          }});
+        }}
+      }}
+    }} catch (error) {{}}
+    return previous.apply(this, args);
+  }};
+}})();
+"""
+
 
 def _positive_int(value: str) -> int:
     result = int(value)
@@ -169,6 +243,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         await adapter.configure_run(page, args.access_strategy)
         await adapter.prepare_page(page)
+        await page.add_init_script(_INDEPENDENT_DRAW_TRACE_SCRIPT)
         await page.goto(args.url, wait_until="commit")
         await adapter.initialize(page)
         observations["entry_url"] = page.url
@@ -340,6 +415,9 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         }
         observations["original_matcher"] = matcher_observation
         observations["trace_at_cleanup"] = trace_observation
+        observations["independent_trace"] = _json_safe(
+            await page.evaluate("() => window.__bookwalkerAbTrace || null")
+        )
         observations["wrapper_errors"] = wrapper_errors
         observations["candidates"] = [
             _candidate_summary(candidate)

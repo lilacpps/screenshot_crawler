@@ -1473,6 +1473,143 @@ run remains unresolved because the existing native source-crop observation can
 retain very large canvas snapshots; this is a probe resource limitation, not
 a production behavior change.
 
+### 20.13 Purchased p.1 original-JPEG A/B investigation (2026-09-30)
+
+This investigation uses
+`scripts/diagnose_bookwalker_original_jpeg_ab.py`. The script calls the
+production `BookWalkerAdapter` methods, wraps selection/materialization/matcher
+calls read-only, and adds a bounded independent draw trace so older revisions
+can be compared with the current trace fields. It resets the persisted viewer
+position to p.1 before each observation. It writes only redacted metadata;
+candidate query strings, cookies, credentials, and image bodies are not saved.
+Production `adapter.py`, `original_capture.py`, and `native_capture.py` were
+not changed by this investigation.
+
+#### Reproduced facts
+
+- The latest `main` authority for this run was `ae3f7df` (`Add BookWalker
+  original JPEG A/B diagnostic`). Production CLI was run with the requested
+  product URL, `direct`, `BOOKWALKER_CAPTURE_MODE=native`, the shared Crawler
+  Chrome/CDP/profile, and `--max-pages 1`. The intentional stop raises the
+  existing `MaxPagesExceededError` after saving p.1.
+- Six fresh-page current-main CLI runs all saved PNG p.1 artifacts. Five
+  returned `native_png` at `722x1024`, 1,383,320 bytes, SHA-256
+  `b3a388bf46c2aee65291d7f568f4677033afdbd74cc8ebfcf74db3b3c5c5d3ef`.
+  One run used the existing rendered-canvas fallback and saved `666x944` PNG;
+  it was still p.1 (`1/314`). This is a separate initial-frame native-capture
+  availability race, not a JPEG match.
+- On successful native p.1 capture, the visible renderer canvas is
+  `1904x944`. The selected native call is one renderer draw from an
+  `HTMLCanvasElement` of `722x1024`; `sourceRect=721.5x1024`,
+  `destination=666x942`, identity transform, alpha 1, `source-over`, and
+  `filter=none`. The materialized native PNG is `722x1024`.
+- The independent trace shows the same chain in every compared revision:
+  `ImageBitmap 1443x2048 -> HTMLCanvasElement 722x1024 -> renderer`. The
+  intermediate canvas receives the full ImageBitmap with destination
+  `722x1024`; the renderer then crops/scales that canvas into `666x942`.
+- The current production original matcher receives native dimensions
+  `722x1024`. Its p.1 stages are: candidate pool `7`, dimension matches `0`,
+  signature matches `0`, unique matches `0`, returned JPEG `none`. The
+  purchased shadow has the same candidate pool and also stops at dimension
+  matching.
+- The redacted p.1 JPEG candidate pool was identical across all compared
+  revisions: 7 candidates, all from `bw-bv-epubs.bookwalker.jp`, with matching
+  paths, sequences, dimensions, byte sizes, and SHA-256 values. The relevant
+  full-resolution candidates included `p-cover.xhtml` at `1443x2048`,
+  567,074 bytes, SHA-256
+  `4618b01fd0b726f88e1632d0c27f8888202fffcb26d68d45971b90ad662ba918`, and
+  `p-fmatter-001.xhtml` at `1448x2048`, 656,033 bytes, SHA-256
+  `4dbc98638f1d8b5fcbbc2f59a4e7761a5b9af48142efc83e675b87c7229e061f`.
+
+#### Revision comparison
+
+| revision | production p.1 result in current viewer state | native source | matcher split |
+| --- | --- | --- | --- |
+| `c118464` | PNG in the new run | `HTMLCanvasElement 722x1024` | `0` dimension / `0` signature |
+| `8c84b5a` | PNG | `HTMLCanvasElement 722x1024` | `0` dimension / `0` signature |
+| `a1bd5d9` | PNG | `HTMLCanvasElement 722x1024` | `0` dimension / `0` signature |
+| `6331eed` | PNG | `HTMLCanvasElement 722x1024` | `0` dimension / `0` signature |
+| latest `main` (`ae3f7df`) | PNG | `HTMLCanvasElement 722x1024` | `0` dimension / `0` signature |
+
+The selected native call list, renderer geometry, candidate bytes, and
+matcher decision were stable across three diagnostic p.1 observations for
+each revision. The current CLI repeat additionally exposed one native-capture
+fallback among six runs; the successful native observations remained the same.
+
+Static diff from `8c84b5a` to latest `main` found no change in
+`native_capture.py`. The original matcher in `adapter.py` remains the same
+dimension-plus-64x64-signature authority. `a1bd5d9` adds purchased shadow
+diagnostics after the ordinary matcher fails, and `6331eed` bounds that shadow
+matching; neither changes a successful ordinary JPEG return or native source
+selection. `3f4a564` adds the separate transform probe only.
+
+#### Root cause
+
+This is not a Phase P1 code regression from `8c84b5a` to latest `main`:
+`8c84b5a` itself produces PNG for p.1 under the current viewer state, and the
+same intermediate-canvas chain is present there. The current production path
+selects the final visible native draw source, not the upstream full-resolution
+ImageBitmap. The existing matcher therefore correctly fails closed at the
+dimension stage (`722x1024` versus the full-resolution JPEG candidates such as
+`1443x2048`/`1448x2048`). No unconditional dimension relaxation is justified.
+
+The earlier live note for `c118464` reported an original-JPEG first artifact
+at `1/349`. Re-running that same code against the current target now observes
+`1/314`, the intermediate-canvas chain, and PNG. The historical note does not
+retain the exact URL or JPEG body, so the old byte-level JPEG result cannot be
+replayed or compared directly. The evidence supports a viewer/content
+delivery change between the historical run and the current run, rather than a
+production source-selection change in the Phase P1 commits.
+
+#### Regression classification
+
+Primary classification: **VIEWER_BEHAVIOR_CHANGE**. The same pre-P1 code
+(`c118464`) is PNG under the current viewer response/render chain, while the
+historical live note recorded a JPEG first artifact. Secondary operational
+finding: **INITIAL_FRAME_RACE** is present for native availability only (one
+of six current CLI attempts used the rendered-canvas PNG fallback); it does
+not explain the successful native `722x1024` versus JPEG-candidate mismatch.
+
+This is not `CONFIRMED_PHASE_P1_REGRESSION`: `8c84b5a` is PNG in the current
+environment. It is also not evidence that the current JPEG candidate bytes
+changed; those bytes were identical across the revision A/B runs.
+
+#### Unresolved points
+
+- The exact historical `c118464` live-run URL, response set, and original JPEG
+  body were not stored, so the historical `1/349` artifact cannot be matched
+  byte-for-byte against today’s `1/314` response set.
+- The server/viewer reason for the change from the historical full-resolution
+  JPEG-matching state to the current intermediate-canvas state is not exposed
+  by the repository or the redacted browser observations.
+- The one current native-capture fallback should be investigated separately if
+  native-path stability becomes a requirement; it is not a reason to loosen
+  original-JPEG matching.
+
+#### Recommended minimal fix (not implemented)
+
+Keep the capture priority unchanged:
+
+```text
+verified original JPEG
+    -> verified lossless reconstruction
+    -> native PNG
+    -> rendered canvas
+```
+
+If a future production fix is needed, add a purchased-viewer-specific
+original-JPEG authority that can move from the selected intermediate canvas
+to its upstream `ImageBitmap` only after proving, for the exact visible page,
+candidate identity, pixel equality, source-to-canvas transformation, and
+page geometry. A full-resolution candidate must not be returned merely because
+its dimensions are related to `722x1024`; otherwise the current fail-closed
+PNG path remains correct. The new proof must run after the existing ordinary
+original-JPEG path, so verified trial pages, trial covers, and purchased
+direct-original covers keep their existing JPEG path unchanged. Unsupported,
+ambiguous, or geometry-mismatched cases must continue to native PNG; no
+lossless reconstruction should be used as a substitute for an unverified
+original JPEG.
+
 ### Phase 1 runtime pacing
 
 BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を
