@@ -349,7 +349,14 @@ async def test_ticket_click_is_confirmed_once_and_never_retried(monkeypatch) -> 
         return None
 
     monkeypatch.setattr(adapter, "_wait_for_initial_content", stable_content)
-    await adapter._enter_with_work_ticket(page)  # type: ignore[arg-type]
+    modal_scope = object()
+
+    async def validate(scope: object) -> _TicketLocator:
+        assert scope is modal_scope
+        return _TicketLocator(page, "チケットを使って読む")
+
+    monkeypatch.setattr(adapter, "_validate_ticket_control", validate)
+    await adapter._enter_with_work_ticket(page, modal_scope=modal_scope)  # type: ignore[arg-type]
 
     consumption = adapter.get_access_consumption()
     assert page.clicks == 1
@@ -358,17 +365,19 @@ async def test_ticket_click_is_confirmed_once_and_never_retried(monkeypatch) -> 
     assert consumption.consumed_at is not None
     assert consumption.consumed_at.tzinfo is not None
     with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter._enter_with_work_ticket(page)  # type: ignore[arg-type]
+        await adapter._enter_with_work_ticket(page, modal_scope=modal_scope)  # type: ignore[arg-type]
     assert page.clicks == 1
 
 
 @pytest.mark.asyncio
-async def test_point_entry_control_is_rejected_without_click() -> None:
-    page = _TicketPage({"ポイントを使って読む": 1})
+async def test_work_ticket_entry_requires_modal_scope() -> None:
+    page = _TicketPage({"チケットを使って読む": 1})
     adapter = ZeblackAdapter()
 
-    with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter._wait_for_ticket_control(page)  # type: ignore[arg-type]
+    with pytest.raises(UnsupportedAccessStrategyError, match="without a modal scope"):
+        await adapter._enter_with_work_ticket(  # type: ignore[arg-type]
+            page, modal_scope=None
+        )
 
     assert page.clicks == 0
 

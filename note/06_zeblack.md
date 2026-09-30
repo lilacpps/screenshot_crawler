@@ -41,11 +41,15 @@ unknown status                                -> fail closed
 For `TICKET_AVAILABLE`, only the bundle-observed exact text
 `チケットを使って読む` is eligible. The Adapter validates one visible target
 row and one exact visible `mainName` descendant, clicks that chapter control
-once, requires the URL to remain the exact chapter-list URL, and then finds a
-visible common DOM ancestor containing the exact target mainName, ticket control,
-and exact `キャンセル` control. CSS-module modal class fragments remain
-diagnostic only. The ticket control must be the single visible/enabled exact
-control in that bounded scope, with no visible point/item/coin/purchase control.
+only when the control itself and its ancestors contain no `a[href]` direct-link
+ancestor (relative hrefs are rejected too). After that click it requires the
+URL to remain the exact chapter-list URL, then finds a visible common DOM
+ancestor containing the exact target mainName, ticket control, and exact
+`キャンセル` control. CSS-module modal class fragments remain diagnostic only.
+Work Ticket entry accepts only that modal scope; the former page-global ticket
+control fallback is not supported. The ticket control must be the single
+visible/enabled exact control in that bounded scope, with no visible
+point/item/coin/purchase control.
 The Adapter sets `_ticket_click_attempted` before the consuming click and never
 retries it. After the click, it requires navigation to the same target viewer
 and stable same-chapter `page_N` content before recording

@@ -570,41 +570,7 @@ class ZeblackAdapter(SiteAdapter):
                 matches.append(candidate)
         return matches
 
-    async def _ticket_control(self, page: Page) -> Locator:
-        ticket = self._exact_text_locator(page, _TICKET_ENTRY_TEXT)
-        point_count = await self._visible_exact_text_count(page, _POINT_ENTRY_TEXT)
-        coin_count = await self._visible_exact_text_count(page, _COIN_ENTRY_TEXT)
-        point_count += await self._visible_exact_text_count(
-            page, _POINT_AND_COIN_ENTRY_TEXT
-        )
-        coin_count += await self._visible_exact_text_count(page, _PURCHASE_ENTRY_TEXT)
-        visible_ticket_count = await self._visible_exact_text_count(
-            page, _TICKET_ENTRY_TEXT
-        )
-        validate_zeblack_ticket_control_counts(
-            visible_ticket_count,
-            point_count=point_count,
-            coin_count=coin_count,
-        )
-        control = ticket
-        if await control.count() != 1:
-            raise UnsupportedAccessStrategyError(
-                "Zeblack ticket entry control is ambiguous"
-            )
-        if not await control.is_visible() or not await control.is_enabled():
-            raise UnsupportedAccessStrategyError(
-                "Zeblack ticket entry control is not visible and enabled"
-            )
-        tag_name = await control.evaluate("element => element.tagName.toLowerCase()")
-        # The bundle-observed control is a styled div. Keep the allowed set
-        # narrow and reject arbitrary text/container fallback clicks.
-        if tag_name not in {"button", "a", "div"}:
-            raise UnsupportedAccessStrategyError(
-                f"Zeblack ticket entry control has unsupported tag: {tag_name}"
-            )
-        return control
-
-    async def _validate_ticket_control(self, scope: Page | Locator) -> Locator:
+    async def _validate_ticket_control(self, scope: Locator) -> Locator:
         """Validate one exact ticket control inside a bounded DOM scope."""
 
         matches = await self._exact_leaf_text_matches(scope, _TICKET_ENTRY_TEXT)
@@ -623,32 +589,6 @@ class ZeblackAdapter(SiteAdapter):
                 f"Zeblack ticket entry control has unsupported tag: {tag_name}"
             )
         return ticket
-
-    async def _wait_for_ticket_control(self, page: Page) -> Locator:
-        """Wait briefly for the exact entry control, never for a fallback UI."""
-
-        elapsed_ms = 0
-        while elapsed_ms < self.page_change_timeout_ms:
-            ticket_count = await self._visible_exact_text_count(page, _TICKET_ENTRY_TEXT)
-            point_count = await self._visible_exact_text_count(page, _POINT_ENTRY_TEXT)
-            point_count += await self._visible_exact_text_count(
-                page, _POINT_AND_COIN_ENTRY_TEXT
-            )
-            coin_count = await self._visible_exact_text_count(page, _COIN_ENTRY_TEXT)
-            coin_count += await self._visible_exact_text_count(page, _PURCHASE_ENTRY_TEXT)
-            if ticket_count == 1:
-                return await self._ticket_control(page)
-            if ticket_count > 1 or point_count or coin_count:
-                validate_zeblack_ticket_control_counts(
-                    ticket_count,
-                    point_count=point_count,
-                    coin_count=coin_count,
-                )
-            await page.wait_for_timeout(100)
-            elapsed_ms += 100
-        raise UnsupportedAccessStrategyError(
-            "Zeblack ticket entry UI did not expose one exact visible control"
-        )
 
     async def _visible_dialog_count(self, page: Page) -> int:
         dialogs = page.locator('[role="dialog"], dialog')
@@ -755,6 +695,12 @@ class ZeblackAdapter(SiteAdapter):
                 "Zeblack target chapter mainName is missing or ambiguous"
             )
         control = controls[0]
+        if await control.evaluate(
+            "element => Boolean(element.closest('a[href]'))"
+        ):
+            raise UnsupportedAccessStrategyError(
+                "Zeblack target chapter control is a direct navigation link"
+            )
         self._chapter_click_attempted = True
         await control.click(timeout=self.page_change_timeout_ms)
         return await self._wait_for_ticket_modal(
@@ -807,8 +753,12 @@ class ZeblackAdapter(SiteAdapter):
         await self._wait_for_target_viewer_content(page)
 
     async def _enter_with_work_ticket(
-        self, page: Page, *, modal_scope: Locator | None = None
+        self, page: Page, *, modal_scope: Locator
     ) -> None:
+        if modal_scope is None:
+            raise UnsupportedAccessStrategyError(
+                "Zeblack Work Ticket entry cannot proceed without a modal scope"
+            )
         if self._ticket_click_attempted:
             raise UnsupportedAccessStrategyError(
                 "Zeblack ticket action was already attempted"
@@ -817,11 +767,7 @@ class ZeblackAdapter(SiteAdapter):
             raise UnknownPageStateError("Zeblack viewer identity is unavailable")
         if self._live_access is None:
             raise UnknownPageStateError("Zeblack live access state is unavailable")
-        control = (
-            await self._validate_ticket_control(modal_scope)
-            if modal_scope is not None
-            else await self._wait_for_ticket_control(page)
-        )
+        control = await self._validate_ticket_control(modal_scope)
         current_url = canonical_zeblack_chapter_list_url(self._target_viewer.title_id)
         if str(page.url) != current_url:
             raise UnsupportedAccessStrategyError(
