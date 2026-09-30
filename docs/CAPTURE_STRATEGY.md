@@ -388,6 +388,14 @@ blocks with `jpeglib.read_dct()` / `write_dct()`, reads the coefficients back,
 and verifies zero mismatches plus unchanged quantization tables. A full-size
 browser pixel comparison against the current native PNG is also required.
 
+Before any full-size candidate comparison, purchased candidates are bounded
+by exact `mapping.source_dimensions`, then by the existing deterministic 64x64
+browser signature. The retained `ImageBitmap` is hashed with the same
+`image_signature()` algorithm; no separate hash contract is introduced. Only
+signature matches reach full-resolution comparison. Zero signature matches
+leave the shadow unavailable, one exact full-resolution match is accepted, and
+two or more exact matches remain ambiguous.
+
 This reconstruction is recorded only in BookWalker adapter debug metadata in
 Phase P1; it is not returned as a crawl artifact. The output remains the
 existing native PNG, or the rendered-canvas fallback when native capture is

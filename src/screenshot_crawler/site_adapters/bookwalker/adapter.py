@@ -48,6 +48,7 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     candidate_from_jpeg,
     image_signature,
     imagebitmap_pixel_exact_match,
+    imagebitmap_signature,
     is_purchased_jpeg_candidate,
 )
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
@@ -1682,8 +1683,13 @@ class BookWalkerAdapter(SiteAdapter):
         }
 
     @staticmethod
-    def _shadow_part_defaults() -> dict[str, Any]:
+    def _shadow_part_defaults(candidate_count_total: int = 0) -> dict[str, Any]:
         return {
+            "candidate_count_total": candidate_count_total,
+            "candidate_count_dimension_match": 0,
+            "candidate_count_signature_match": 0,
+            "candidate_count_full_exact": 0,
+            "full_resolution_comparison_count": 0,
             "mapping_proven": False,
             "raw_jpeg_exact": False,
             "jpeg_supported": False,
@@ -1729,17 +1735,28 @@ class BookWalkerAdapter(SiteAdapter):
             "spread_ready": False,
             "parts": [],
         }
+        purchased_candidates = tuple(
+            candidate
+            for candidate in self._original_candidates.values()
+            if is_purchased_jpeg_candidate(candidate)
+        )
         try:
             trace = await page.evaluate("() => window.__bookwalkerTransformTrace || null")
         except Exception:  # noqa: BLE001 - missing trace means unavailable
             trace = None
         if not isinstance(trace, dict):
             shadow["reason"] = "trace unavailable"
-            shadow["parts"] = [self._shadow_part_defaults() for _ in native_captures]
+            shadow["parts"] = [
+                self._shadow_part_defaults(len(purchased_candidates))
+                for _ in native_captures
+            ]
             return shadow
         if trace.get("traceOverflow") or len(trace.get("operations") or []) > TRACE_OPERATION_LIMIT:
             shadow["reason"] = "trace_overflow"
-            parts = [self._shadow_part_defaults() for _ in native_captures]
+            parts = [
+                self._shadow_part_defaults(len(purchased_candidates))
+                for _ in native_captures
+            ]
             for part in parts:
                 part["trace_overflow"] = True
             shadow["parts"] = parts
@@ -1747,17 +1764,15 @@ class BookWalkerAdapter(SiteAdapter):
 
         if len(selected_draw_calls) != len(native_captures):
             shadow["reason"] = "native capture and renderer draw counts differ"
-            shadow["parts"] = [self._shadow_part_defaults() for _ in native_captures]
+            shadow["parts"] = [
+                self._shadow_part_defaults(len(purchased_candidates))
+                for _ in native_captures
+            ]
             return shadow
 
-        purchased_candidates = tuple(
-            candidate
-            for candidate in self._original_candidates.values()
-            if is_purchased_jpeg_candidate(candidate)
-        )
         parts: list[dict[str, Any]] = []
         for native, draw_call in zip(native_captures, selected_draw_calls, strict=False):
-            part = self._shadow_part_defaults()
+            part = self._shadow_part_defaults(len(purchased_candidates))
             analysis: MappingAnalysis = analyze_purchased_mapping(trace, draw_call)
             part["mapping_proven"] = analysis.proven
             part["mapping_status"] = analysis.status
@@ -1782,15 +1797,48 @@ class BookWalkerAdapter(SiteAdapter):
                 part["reason"] = "ImageBitmap source identity unavailable"
                 parts.append(part)
                 continue
+            dimension_candidates = tuple(
+                candidate
+                for candidate in purchased_candidates
+                if (candidate.width, candidate.height) == mapping.source_dimensions
+            )
+            part["candidate_count_dimension_match"] = len(dimension_candidates)
+            if not dimension_candidates:
+                part["reason"] = "no purchased JPEG candidate has matching dimensions"
+                parts.append(part)
+                continue
+            source_signature = await imagebitmap_signature(page, source_id)
+            part["imagebitmap_signature_available"] = source_signature is not None
+            if source_signature is None:
+                part["reason"] = "ImageBitmap signature unavailable"
+                parts.append(part)
+                continue
+            signature_candidates: list[Any] = []
+            for candidate in dimension_candidates:
+                if candidate.signature is None:
+                    candidate.signature = await image_signature(
+                        page,
+                        candidate.data,
+                        candidate.mime_type,
+                    )
+                if candidate.signature == source_signature:
+                    signature_candidates.append(candidate)
+            part["candidate_count_signature_match"] = len(signature_candidates)
+            if not signature_candidates:
+                part["reason"] = "no purchased JPEG candidate has matching signature"
+                parts.append(part)
+                continue
             matches: list[Any] = []
-            for candidate in purchased_candidates:
+            for candidate in signature_candidates:
                 comparison = await imagebitmap_pixel_exact_match(
                     page,
                     candidate.data,
                     source_id,
                 )
+                part["full_resolution_comparison_count"] += 1
                 if comparison.get("available") and comparison.get("exact"):
                     matches.append(candidate)
+            part["candidate_count_full_exact"] = len(matches)
             part["raw_jpeg_match_count"] = len(matches)
             if len(matches) != 1:
                 part["reason"] = "raw JPEG match unavailable or ambiguous"

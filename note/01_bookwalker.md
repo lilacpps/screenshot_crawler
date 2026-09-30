@@ -1378,6 +1378,18 @@ dimensions, complete uniform strict-MCU bijections, and no partial edge MCU.
 Read-back must report zero coefficient mismatches and unchanged quantization
 tables.
 
+Purchased candidate matching is bounded in this order: exact
+`mapping.source_dimensions`, the existing 64x64 browser signature, then
+full-resolution `ImageBitmap` exact comparison. The retained ImageBitmap uses
+the same deterministic hash algorithm as `image_signature()`; no new hash
+contract is introduced. Zero signature matches are unavailable, one full-size
+exact match is accepted, and multiple full-size exact matches remain
+ambiguous. The per-part shadow metadata records
+`candidate_count_total`, `candidate_count_dimension_match`,
+`candidate_count_signature_match`, `candidate_count_full_exact`, and
+`full_resolution_comparison_count`; candidate URLs, hashes, and full trace
+contents are not emitted as generic debug metadata.
+
 Phase P1 performs a second full-resolution browser pixel comparison against
 the current native PNG. Debug metadata records per-part mapping proof, raw JPEG
 exactness, JPEG support, strict MCU alignment, coefficient exactness, and

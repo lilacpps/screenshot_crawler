@@ -7,7 +7,10 @@ from playwright.async_api import Page
 
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
 from screenshot_crawler.site_adapters.bookwalker.adapter import BookWalkerAdapter
-from screenshot_crawler.site_adapters.bookwalker.original_capture import image_signature
+from screenshot_crawler.site_adapters.bookwalker.original_capture import (
+    image_signature,
+    imagebitmap_signature,
+)
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -175,6 +178,33 @@ async def test_same_image_jpeg_and_png_have_exact_browser_signature(
 
     assert await image_signature(browser_page, png_data, "image/png") == await image_signature(
         browser_page, jpeg_data, "image/jpeg"
+    )
+
+
+async def test_retained_imagebitmap_uses_the_same_signature_contract(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    data_url = await browser_page.evaluate(
+        """
+        async () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 128;
+          canvas.height = 64;
+          const context = canvas.getContext('2d');
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, 128, 64);
+          const bitmap = await createImageBitmap(canvas);
+          window.__bookwalkerNativeSourceObjects.set('signature-bitmap', bitmap);
+          return canvas.toDataURL('image/png');
+        }
+        """
+    )
+    png_data = base64.b64decode(data_url.split(",", 1)[1])
+
+    assert await image_signature(browser_page, png_data, "image/png") == (
+        await imagebitmap_signature(browser_page, "signature-bitmap")
     )
 
 

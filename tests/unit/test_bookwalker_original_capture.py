@@ -12,6 +12,7 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     candidate_capture,
     candidate_from_jpeg,
     imagebitmap_pixel_exact_match,
+    imagebitmap_signature,
     is_jpeg_bytes,
     jpeg_dimensions,
 )
@@ -80,6 +81,32 @@ async def test_full_resolution_imagebitmap_match_does_not_resize_candidate() -> 
     assert result["exact"] is True
     assert "64" not in page.script
     assert "getImageData(0, 0, source.width, source.height)" in page.script
+
+
+@pytest.mark.asyncio
+async def test_imagebitmap_signature_uses_existing_64x64_hash_contract() -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.script = ""
+            self.payload: dict[str, object] | None = None
+
+        async def evaluate(
+            self,
+            script: str,
+            payload: dict[str, object],
+        ) -> str:
+            self.script = script
+            self.payload = payload
+            return "signature"
+
+    page = FakePage()
+    result = await imagebitmap_signature(page, "bitmap-1")
+
+    assert result == "signature"
+    assert page.payload == {"sourceId": "bitmap-1"}
+    assert "canvas.width = 64" in page.script
+    assert "createImageBitmap" not in page.script
+    assert "2246822519" in page.script
 
 
 def test_original_jpeg_cache_deduplicates_and_evicts_old_entries() -> None:

@@ -319,6 +319,46 @@ async def test_existing_original_jpeg_wins_before_lossless_shadow(
 
 
 @pytest.mark.asyncio
+async def test_purchased_direct_original_jpeg_is_returned_byte_for_byte(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    candidate = candidate_from_jpeg(
+        JPEG_1X1,
+        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        sequence=1,
+    )
+    assert candidate is not None
+    adapter._original_candidates.add(candidate)
+
+    async def fake_signature(
+        _page: object,
+        _data: bytes,
+        _mime_type: str,
+    ) -> str:
+        return "same-image"
+
+    shadow_called = False
+
+    async def shadow(*_args: object) -> dict[str, object]:
+        nonlocal shadow_called
+        shadow_called = True
+        return {}
+
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", shadow)
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result[0].data == candidate.data
+    assert result[0].mime_type == "image/jpeg"
+    assert result[0].file_extension == ".jpg"
+    assert shadow_called is False
+
+
+@pytest.mark.asyncio
 async def test_lossless_shadow_spread_readiness_is_all_or_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -353,6 +393,9 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
     async def fake_match(*_args: object, **_kwargs: object) -> dict[str, object]:
         return {"available": True, "exact": True}
 
+    async def fake_signature(*_args: object, **_kwargs: object) -> str:
+        return "signature"
+
     async def fake_pixels(*_args: object, **_kwargs: object) -> dict[str, object]:
         return {"available": True, "exact": True}
 
@@ -373,6 +416,8 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
         )
 
     monkeypatch.setattr(adapter_module, "analyze_purchased_mapping", fake_analysis)
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    monkeypatch.setattr(adapter_module, "imagebitmap_signature", fake_signature)
     monkeypatch.setattr(adapter_module, "imagebitmap_pixel_exact_match", fake_match)
     monkeypatch.setattr(adapter_module, "reconstruct_lossless_jpeg", fake_reconstruct)
     adapter = BookWalkerAdapter()
@@ -383,6 +428,8 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
         sequence=1,
     )
     assert candidate is not None
+    candidate.width = 8
+    candidate.height = 8
     adapter._original_candidates.add(candidate)
 
     result = await adapter._evaluate_lossless_reconstruction(
@@ -394,6 +441,268 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
     assert len(result["parts"]) == 2
     assert result["parts"][0]["native_pixel_exact"] is True
     assert result["parts"][1]["mapping_proven"] is False
+    assert result["spread_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ShadowPage:
+        async def evaluate(self, _expression: str) -> dict[str, object]:
+            return {"operations": []}
+
+    mapping = PurchasedMapping(
+        mapping=(
+            {
+                "source_x": 0,
+                "source_y": 0,
+                "destination_x": 0,
+                "destination_y": 0,
+                "width": 8,
+                "height": 8,
+            },
+        ),
+        source_dimensions=(8, 8),
+        destination_dimensions=(8, 8),
+        tile_dimensions=(8, 8),
+        imagebitmap_source_id="bitmap-1",
+        mapping_sha256="mapping-1",
+    )
+    ready = MappingAnalysis(MAPPING_PROVEN, "ready", mapping)
+    full_resolution_calls: list[bytes] = []
+
+    def fake_analysis(_trace: object, _draw: object) -> MappingAnalysis:
+        return ready
+
+    async def fake_signature(_page: object, data: bytes, _mime_type: str) -> str:
+        return "match" if data.endswith(b"candidate-31") else "other"
+
+    async def fake_imagebitmap_signature(_page: object, _source_id: str) -> str:
+        return "match"
+
+    async def fake_full_match(_page: object, data: bytes, _source_id: str) -> dict[str, object]:
+        full_resolution_calls.append(data)
+        return {"available": True, "exact": data.endswith(b"candidate-31")}
+
+    async def fake_native_pixels(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"available": True, "exact": True}
+
+    def fake_reconstruct(*_args: object, **_kwargs: object) -> LosslessJpegResult:
+        return LosslessJpegResult(
+            data=b"reconstructed",
+            width=8,
+            height=8,
+            tile_dimensions=(8, 8),
+            mcu_dimensions=(8, 8),
+            mapping_sha256="mapping-1",
+            coefficient_validation={
+                "mismatched_blocks": 0,
+                "mismatched_coefficients": 0,
+                "quantization_tables_equal": True,
+            },
+            available=True,
+        )
+
+    monkeypatch.setattr(adapter_module, "analyze_purchased_mapping", fake_analysis)
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    monkeypatch.setattr(
+        adapter_module,
+        "imagebitmap_signature",
+        fake_imagebitmap_signature,
+    )
+    monkeypatch.setattr(
+        adapter_module,
+        "imagebitmap_pixel_exact_match",
+        fake_full_match,
+    )
+    monkeypatch.setattr(adapter_module, "reconstruct_lossless_jpeg", fake_reconstruct)
+    adapter = BookWalkerAdapter()
+    adapter._browser_pixel_exact = fake_native_pixels  # type: ignore[method-assign]
+
+    for index in range(32):
+        candidate = candidate_from_jpeg(
+            JPEG_1X1 + f"candidate-{index:02d}".encode(),
+            url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+            sequence=index + 1,
+        )
+        assert candidate is not None
+        if index >= 30:
+            candidate.width = 8
+            candidate.height = 8
+        else:
+            candidate.width = 2
+            candidate.height = 2
+        adapter._original_candidates.add(candidate)
+
+    result = await adapter._evaluate_lossless_reconstruction(
+        ShadowPage(),
+        (CaptureResult(PNG_1X1, 8, 8),),
+        [{"part": 1}],
+    )
+
+    part = result["parts"][0]
+    assert part["candidate_count_total"] == 32
+    assert part["candidate_count_dimension_match"] == 2
+    assert part["candidate_count_signature_match"] == 1
+    assert part["full_resolution_comparison_count"] == 1
+    assert part["candidate_count_full_exact"] == 1
+    assert len(full_resolution_calls) == 1
+    assert result["spread_ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_lossless_shadow_full_resolution_ambiguity_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ShadowPage:
+        async def evaluate(self, _expression: str) -> dict[str, object]:
+            return {"operations": []}
+
+    mapping = PurchasedMapping(
+        mapping=(
+            {
+                "source_x": 0,
+                "source_y": 0,
+                "destination_x": 0,
+                "destination_y": 0,
+                "width": 8,
+                "height": 8,
+            },
+        ),
+        source_dimensions=(8, 8),
+        destination_dimensions=(8, 8),
+        tile_dimensions=(8, 8),
+        imagebitmap_source_id="bitmap-1",
+        mapping_sha256="mapping-1",
+    )
+    ready = MappingAnalysis(MAPPING_PROVEN, "ready", mapping)
+    reconstruct_called = False
+
+    def fake_reconstruct(*_args: object, **_kwargs: object) -> LosslessJpegResult:
+        nonlocal reconstruct_called
+        reconstruct_called = True
+        raise AssertionError("ambiguous candidates must not reconstruct")
+
+    async def fake_signature(*_args: object, **_kwargs: object) -> str:
+        return "same"
+
+    async def fake_full_match(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"available": True, "exact": True}
+
+    monkeypatch.setattr(adapter_module, "analyze_purchased_mapping", lambda *_args: ready)
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    monkeypatch.setattr(adapter_module, "imagebitmap_signature", fake_signature)
+    monkeypatch.setattr(adapter_module, "imagebitmap_pixel_exact_match", fake_full_match)
+    monkeypatch.setattr(adapter_module, "reconstruct_lossless_jpeg", fake_reconstruct)
+    adapter = BookWalkerAdapter()
+    candidate_one = candidate_from_jpeg(
+        JPEG_1X1 + b"one",
+        url="https://bw-bv-epubs.bookwalker.jp/one.jpeg",
+        sequence=1,
+    )
+    candidate_two = candidate_from_jpeg(
+        JPEG_1X1 + b"two",
+        url="https://bw-bv-epubs.bookwalker.jp/two.jpeg",
+        sequence=2,
+    )
+    assert candidate_one is not None and candidate_two is not None
+    candidate_one.width = candidate_two.width = 8
+    candidate_one.height = candidate_two.height = 8
+    adapter._original_candidates.add(candidate_one)
+    adapter._original_candidates.add(candidate_two)
+
+    result = await adapter._evaluate_lossless_reconstruction(
+        ShadowPage(),
+        (CaptureResult(PNG_1X1, 8, 8),),
+        [{"part": 1}],
+    )
+
+    part = result["parts"][0]
+    assert part["candidate_count_signature_match"] == 2
+    assert part["full_resolution_comparison_count"] == 2
+    assert part["candidate_count_full_exact"] == 2
+    assert part["raw_jpeg_exact"] is False
+    assert result["spread_ready"] is False
+    assert reconstruct_called is False
+
+
+@pytest.mark.asyncio
+async def test_lossless_shadow_signature_mismatch_skips_full_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ShadowPage:
+        async def evaluate(self, _expression: str) -> dict[str, object]:
+            return {"operations": []}
+
+    mapping = PurchasedMapping(
+        mapping=(
+            {
+                "source_x": 0,
+                "source_y": 0,
+                "destination_x": 0,
+                "destination_y": 0,
+                "width": 8,
+                "height": 8,
+            },
+        ),
+        source_dimensions=(8, 8),
+        destination_dimensions=(8, 8),
+        tile_dimensions=(8, 8),
+        imagebitmap_source_id="bitmap-1",
+        mapping_sha256="mapping-1",
+    )
+    candidate = candidate_from_jpeg(
+        JPEG_1X1 + b"candidate",
+        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        sequence=1,
+    )
+    assert candidate is not None
+    candidate.width = 8
+    candidate.height = 8
+    adapter = BookWalkerAdapter()
+    adapter._original_candidates.add(candidate)
+    full_resolution_calls = 0
+
+    async def fake_signature(*_args: object, **_kwargs: object) -> str:
+        return "candidate-signature"
+
+    async def fake_imagebitmap_signature(*_args: object, **_kwargs: object) -> str:
+        return "different-imagebitmap-signature"
+
+    async def fake_full_match(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal full_resolution_calls
+        full_resolution_calls += 1
+        return {"available": True, "exact": True}
+
+    monkeypatch.setattr(
+        adapter_module,
+        "analyze_purchased_mapping",
+        lambda *_args: MappingAnalysis(MAPPING_PROVEN, "ready", mapping),
+    )
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    monkeypatch.setattr(
+        adapter_module,
+        "imagebitmap_signature",
+        fake_imagebitmap_signature,
+    )
+    monkeypatch.setattr(
+        adapter_module,
+        "imagebitmap_pixel_exact_match",
+        fake_full_match,
+    )
+
+    result = await adapter._evaluate_lossless_reconstruction(
+        ShadowPage(),
+        (CaptureResult(PNG_1X1, 8, 8),),
+        [{"part": 1}],
+    )
+
+    part = result["parts"][0]
+    assert part["candidate_count_dimension_match"] == 1
+    assert part["candidate_count_signature_match"] == 0
+    assert part["full_resolution_comparison_count"] == 0
+    assert full_resolution_calls == 0
     assert result["spread_ready"] is False
 
 

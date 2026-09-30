@@ -4,7 +4,9 @@ BookWalker viewer responses on the ``viewer-epubs*.bookwalker.jp`` and
 ``bw-bv-epubs.bookwalker.jp`` hosts are already complete JPEG images in the
 currently observed viewer. This module keeps that optimization deliberately
 conservative: bytes must be valid JPEG, their dimensions must match the native
-source PNG, and a browser-side 64x64 RGBA signature must match exactly.
+source PNG, and a browser-side 64x64 RGBA signature must match exactly. The
+same signature contract is also available for a retained ImageBitmap used by
+the purchased-JPEG shadow path.
 """
 
 from __future__ import annotations
@@ -79,6 +81,38 @@ async ({encoded, mimeType}) => {
   } finally {
     bitmap.close();
   }
+}
+"""
+
+_IMAGEBITMAP_SIGNATURE_SCRIPT = """
+async ({sourceId}) => {
+  const source = window.__bookwalkerNativeSourceObjects?.get(String(sourceId));
+  if (!source || source.constructor?.name !== 'ImageBitmap') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext('2d', {willReadFrequently: true});
+  if (!context) return null;
+  context.clearRect(0, 0, 64, 64);
+  context.drawImage(
+    source,
+    0, 0, source.width, source.height,
+    0, 0, 64, 64,
+  );
+  const rgba = context.getImageData(0, 0, 64, 64).data;
+  // This is intentionally the same deterministic hash as _SIGNATURE_SCRIPT.
+  let first = 2166136261;
+  let second = 2246822519;
+  let third = 3266489917;
+  let fourth = 668265263;
+  for (const value of rgba) {
+    first = Math.imul(first ^ value, 16777619);
+    second = Math.imul(second ^ first, 2246822519);
+    third = Math.imul(third ^ second, 3266489917);
+    fourth = Math.imul(fourth ^ third, 668265263);
+  }
+  const word = value => (value >>> 0).toString(16).padStart(8, '0');
+  return word(first) + word(second) + word(third) + word(fourth);
 }
 """
 
@@ -295,6 +329,19 @@ async def image_signature(page: object, data: bytes, mime_type: str) -> str | No
         result = await page.evaluate(  # type: ignore[attr-defined]
             _SIGNATURE_SCRIPT,
             {"encoded": encoded, "mimeType": mime_type},
+        )
+    except Exception:  # noqa: BLE001 - signature failure must use PNG fallback
+        return None
+    return result if isinstance(result, str) and result else None
+
+
+async def imagebitmap_signature(page: object, source_id: str) -> str | None:
+    """Hash a retained ImageBitmap with the existing 64x64 signature contract."""
+
+    try:
+        result = await page.evaluate(  # type: ignore[attr-defined]
+            _IMAGEBITMAP_SIGNATURE_SCRIPT,
+            {"sourceId": source_id},
         )
     except Exception:  # noqa: BLE001 - signature failure must use PNG fallback
         return None
