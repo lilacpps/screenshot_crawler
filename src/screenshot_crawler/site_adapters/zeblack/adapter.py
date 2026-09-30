@@ -95,6 +95,25 @@ _NEXT_CONTENT_SCRIPT = r"""
   return /次の話\s*を\s*読む|次の話\s*へ|next\s+(?:chapter|episode|content)/i.test(text);
 })
 """
+_ADVERTISEMENT_SCRIPT = r"""
+(elements) => elements.some((element) => {
+  const style = getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  if (style.display === "none" || style.visibility === "hidden" ||
+      style.visibility === "collapse" || style.opacity === "0" ||
+      rect.width <= 0 || rect.height <= 0 || rect.right <= 0 ||
+      rect.left >= window.innerWidth || rect.bottom <= 0 ||
+      rect.top >= window.innerHeight) return false;
+  return Boolean(element.closest(".-KWKsa_spread"));
+})
+"""
+_LAST_PAGE_SCRIPT = r"""
+(elements) => elements.some((element) => {
+  const text = (element.innerText || '').replace(/\s+/g, ' ').trim();
+  return text.includes("続きの巻購入で、何度でも読み返し！") ||
+    text.includes("次の話を読む");
+})
+"""
 
 _TICKET_ENTRY_TEXT = "チケットを使って読む"
 _POINT_ENTRY_TEXT = "ポイントを使って読む"
@@ -370,11 +389,40 @@ class ZeblackAdapter(SiteAdapter):
             return False
         return result is True
 
+    async def _visible_advertisement_signal(self, page: Page) -> bool:
+        """Detect a visible ad spread without treating unrelated frames as AD."""
+
+        try:
+            controls = page.locator(
+                ".-KWKsa_spread [data-fluct-ad-script-already-reserved], "
+                ".-KWKsa_spread iframe"
+            )
+            result = await asyncio.wait_for(
+                controls.evaluate_all(_ADVERTISEMENT_SCRIPT), timeout=2
+            )
+        except Exception:  # noqa: BLE001 - ad evidence must fail closed
+            return False
+        return result is True
+
+    async def _last_page_signal(self, page: Page) -> bool:
+        """Detect Zeblack's non-content volume/next-story spreads."""
+
+        try:
+            spreads = page.locator(".-KWKsa_spread")
+            result = await asyncio.wait_for(
+                spreads.evaluate_all(_LAST_PAGE_SCRIPT), timeout=2
+            )
+        except Exception:  # noqa: BLE001 - interstitial evidence must fail closed
+            return False
+        return result is True
+
     async def _snapshot(self, page: Page) -> dict[str, object]:
         current_url = str(page.url)
         viewer = parse_zeblack_viewer_url(current_url)
         rows = await self._safe_active_page_rows(page)
         terminal_signal = await self._visible_next_content_signal(page)
+        advertisement_signal = await self._visible_advertisement_signal(page)
+        last_page_signal = await self._last_page_signal(page)
         row_signature = self._row_signature(rows) if rows is not None else ()
         return {
             "url": current_url,
@@ -382,11 +430,15 @@ class ZeblackAdapter(SiteAdapter):
             "rows": rows,
             "page_id": self._page_id(rows) if rows is not None else None,
             "terminal_signal": terminal_signal,
+            "advertisement_signal": advertisement_signal,
+            "last_page_signal": last_page_signal,
             "fingerprint": (
                 current_url,
                 row_signature,
                 tuple(item[1] for item in row_signature),
                 terminal_signal,
+                advertisement_signal,
+                last_page_signal,
                 self._last_detection_failure,
             ),
         }
@@ -414,6 +466,21 @@ class ZeblackAdapter(SiteAdapter):
         raise PageChangeTimeoutError(
             "Zeblack viewer did not expose stable in-viewport page_N content"
         )
+
+    async def _wait_for_viewer_ready(self, page: Page) -> None:
+        """Wait for viewer hydration before a same-page live-access preflight."""
+
+        elapsed_ms = 0
+        while elapsed_ms < self.page_change_timeout_ms:
+            rows = await self._safe_active_page_rows(page)
+            if rows:
+                await self._wait_for_initial_content(page)
+                return
+            if await self._visible_exact_text_count(page, _TICKET_ENTRY_TEXT) == 1:
+                return
+            await page.wait_for_timeout(100)
+            elapsed_ms += 100
+        raise PageChangeTimeoutError("Zeblack viewer did not become ready")
 
     async def _has_preexisting_content(self, page: Page) -> bool:
         """Return true only when content is already observable in the viewer."""
@@ -560,16 +627,10 @@ class ZeblackAdapter(SiteAdapter):
             raise UnsupportedAccessStrategyError(
                 "Zeblack quota initialization requires work_ticket"
             )
-        if await self._has_preexisting_content(page):
-            self._preexisting_accessible = True
-            self._ticket_confirmation_state = "preexisting_accessible"
-            if entry_only:
-                raise AccessResourceUnavailableError("work_ticket_not_needed")
-            return
-
         if self._initial_url is None or self._initial_viewer is None:
             raise UnknownPageStateError("Zeblack initial viewer identity is unavailable")
         await self._clear_source_cache()
+        await self._wait_for_viewer_ready(page)
         try:
             self._live_access = await observe_zeblack_live_access(
                 page,
@@ -596,6 +657,7 @@ class ZeblackAdapter(SiteAdapter):
             raise UnknownPageStateError(
                 "Zeblack viewer identity changed after live access preflight"
             )
+        await self._wait_for_viewer_ready(page)
 
         assert self._live_access is not None
         if self._live_access.status_value == int(ConsumptionStatus.TICKET_AVAILABLE):
@@ -605,6 +667,17 @@ class ZeblackAdapter(SiteAdapter):
             int(ConsumptionStatus.FREE),
             int(ConsumptionStatus.RENTAL),
         }:
+            # A locked TICKET_AVAILABLE viewer can already contain stable
+            # page_N placeholders before the ticket action.  Live protobuf
+            # state is authoritative, so only treat preexisting content as
+            # an already-granted entry after the live status says that no
+            # Work Ticket is needed.
+            if await self._has_preexisting_content(page):
+                self._preexisting_accessible = True
+                self._ticket_confirmation_state = "preexisting_accessible"
+                if entry_only:
+                    raise AccessResourceUnavailableError("work_ticket_not_needed")
+                return
             if entry_only:
                 raise AccessResourceUnavailableError("work_ticket_not_needed")
             await self._wait_for_initial_content(page)
@@ -677,6 +750,18 @@ class ZeblackAdapter(SiteAdapter):
             return PageState.UNKNOWN
         if rows:
             return PageState.CONTENT
+        if (
+            self._transition_stable
+            and self._transition_kind in {"advertisement", "last_page"}
+            and self._initial_viewer is not None
+            and current.key == self._initial_viewer.key
+            and (
+                await self._visible_advertisement_signal(page)
+                if self._transition_kind == "advertisement"
+                else await self._last_page_signal(page)
+            )
+        ):
+            return PageState.AD
         if (
             self._transition_stable
             and self._transition_kind == "terminal_next_content"
@@ -797,8 +882,17 @@ class ZeblackAdapter(SiteAdapter):
         ):
             raise PageChangeTimeoutError("Zeblack next-page guard rejected the current URL")
         rows = await self._active_page_rows(page)
-        if not rows or self._transition_pending or (
-            self._transition_stable and self._transition_kind == "terminal_next_content"
+        advertisement_ready = (
+            self._transition_stable
+            and self._transition_kind in {"advertisement", "last_page"}
+        )
+        if (
+            (not rows and not advertisement_ready)
+            or self._transition_pending
+            or (
+                self._transition_stable
+                and self._transition_kind == "terminal_next_content"
+            )
         ):
             raise PageChangeTimeoutError("Zeblack next-page guard rejected the current state")
         try:
@@ -872,6 +966,13 @@ class ZeblackAdapter(SiteAdapter):
             return False
         if isinstance(rows, list) and rows:
             return self._page_id(rows) != previous_identity.page_id
+        if (
+            snapshot.get("advertisement_signal") is True
+            or snapshot.get("last_page_signal") is True
+        ):
+            return viewer.key == (
+                self._initial_viewer.key if self._initial_viewer else viewer.key
+            )
         return (
             viewer.key == (self._initial_viewer.key if self._initial_viewer else viewer.key)
             and snapshot.get("terminal_signal") is True
@@ -892,6 +993,10 @@ class ZeblackAdapter(SiteAdapter):
             return "content"
         if snapshot.get("terminal_signal") is True:
             return "terminal_next_content"
+        if snapshot.get("advertisement_signal") is True:
+            return "advertisement"
+        if snapshot.get("last_page_signal") is True:
+            return "last_page"
         return "unknown"
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:

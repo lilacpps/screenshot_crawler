@@ -33,6 +33,31 @@ click it or fall back to it. The later `TICKET_AVAILABLE -> RENTAL` observation
 is not attributed to this read-only check. A follow-up live experiment should
 use the separate account/address while preserving this two-step distinction.
 
+### Current title-53 live verification (2026-09-30)
+
+The shared-CDP read-only observation for title `53` decoded 411 chapters:
+`FREE=3`, `TICKET_AVAILABLE=1`, `POINT=377`, `COIN=30`, `RENTAL=0`. The
+oldest/current candidate was chapter `4844`, `標的4 退学クライシス`. Title-top
+`チケットでさっそく読もう！ × 1` was retained as diagnostic evidence only;
+the page-triggered protobuf remained runtime authority.
+
+Full Discovery and bounded singleton Discovery completed without Catalog
+side effects beyond the explicitly requested temporary Catalog. The singleton
+Batch plan contained exactly one eligible `quota` candidate with the generic
+resource `work_ticket`. The grant-only path did not click the ticket control:
+the target changed to `RENTAL` before a safe consuming action was available,
+and no `AccessConsumption` or local quota timestamp was recorded. The later
+protobuf state was `FREE=3`, `RENTAL=1`, `TICKET_AVAILABLE=0`, `POINT=377`,
+`COIN=30`; the transition is not attributed to the read-only checks.
+
+The subsequent normal RENTAL Batch completed through the Zebrack ad and
+last-page interstitial spreads using bounded, site-local `ArrowLeft` actions.
+The explicit in-viewport `次の話を読む` signal still gates terminal
+`NEXT_CONTENT`; counters and offscreen DOM markers alone are not terminal
+authority. The resulting Item is `completed` with a `next_content` CrawlRun,
+19 source-native JPEG entries, and a ZIP Artifact. Work Ticket consumption for
+this title remains unverified.
+
 > Site-native bounded Discoveryの詳細な採用仕様は `docs/BOUNDED_DISCOVERY.md` とし、本書のDiscovery仕様の一部として扱う。
 
 ## Zeblack Z4-1 production Discovery status

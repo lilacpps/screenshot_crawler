@@ -92,6 +92,10 @@ class _FakeLocator:
     async def evaluate_all(self, _script: str) -> object:
         if self.selector == "img":
             return self.page.rows
+        if "iframe" in self.selector:
+            return self.page.ad_signal
+        if "-KWKsa_spread" in self.selector:
+            return self.page.last_page_signal
         return self.page.next_signal
 
     def nth(self, index: int) -> _FakeLocator:
@@ -108,10 +112,19 @@ class _FakeKeyboard:
 
 
 class _FakePage:
-    def __init__(self, rows: list[dict[str, object]], *, next_signal: bool = False) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]],
+        *,
+        next_signal: bool = False,
+        ad_signal: bool = False,
+        last_page_signal: bool = False,
+    ) -> None:
         self.url = TARGET
         self.rows = rows
         self.next_signal = next_signal
+        self.ad_signal = ad_signal
+        self.last_page_signal = last_page_signal
         self.nth_calls: list[int] = []
         self.keyboard = _FakeKeyboard()
         self.listeners: list[tuple[str, object]] = []
@@ -351,6 +364,11 @@ async def test_quota_live_state_skips_unavailable_without_click(
     adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
     monkeypatch.setattr(adapter, "_has_preexisting_content", lambda _page: _false())
 
+    async def ready(_page: object) -> None:
+        return None
+
+    monkeypatch.setattr(adapter, "_wait_for_viewer_ready", ready)
+
     async def observe(_page: object, **_kwargs: object) -> ZeblackLiveAccessState:
         return _live_state(status, ticket_ids)
 
@@ -366,8 +384,62 @@ async def test_quota_live_state_skips_unavailable_without_click(
     assert adapter.get_access_consumption().consumed is False
 
 
+@pytest.mark.asyncio
+async def test_ticket_available_status_wins_over_preexisting_page_placeholders(
+    monkeypatch,
+) -> None:
+    page = _TicketPage({"チケットを使って読む": 1})
+    adapter = ZeblackAdapter()
+    await adapter.configure_run(page, "quota")  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(page, "work_ticket")  # type: ignore[arg-type]
+    adapter._initial_url = TARGET
+    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    monkeypatch.setattr(adapter, "_has_preexisting_content", lambda _page: _true())
+
+    async def ready(_page: object) -> None:
+        return None
+
+    monkeypatch.setattr(adapter, "_wait_for_viewer_ready", ready)
+
+    async def observe(_page: object, **_kwargs: object) -> ZeblackLiveAccessState:
+        return _live_state(2, ("9265713",))
+
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.zeblack.adapter.observe_zeblack_live_access",
+        observe,
+    )
+
+    async def stable_content(_page: object) -> None:
+        return None
+
+    monkeypatch.setattr(adapter, "_wait_for_initial_content", stable_content)
+    await adapter._initialize_quota_entry(page, entry_only=True)  # type: ignore[arg-type]
+
+    assert page.clicks == 1
+    assert adapter.get_access_consumption().consumed is True
+
+
+@pytest.mark.asyncio
+async def test_viewer_ready_waits_for_stable_page_before_live_preflight(monkeypatch) -> None:
+    page = _FakePage([_row("page_0", BLOB_0)])
+    adapter = ZeblackAdapter()
+    _patch_rows(monkeypatch, adapter, page)
+    calls: list[str] = []
+
+    async def stable(_page: object) -> None:
+        calls.append("stable")
+
+    monkeypatch.setattr(adapter, "_wait_for_initial_content", stable)
+    await adapter._wait_for_viewer_ready(page)  # type: ignore[arg-type]
+    assert calls == ["stable"]
+
+
 async def _false() -> bool:
     return False
+
+
+async def _true() -> bool:
+    return True
 
 
 @pytest.mark.asyncio
@@ -379,6 +451,11 @@ async def test_unknown_quota_live_status_fails_closed(monkeypatch) -> None:
     adapter._initial_url = TARGET
     adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
     monkeypatch.setattr(adapter, "_has_preexisting_content", lambda _page: _false())
+
+    async def ready(_page: object) -> None:
+        return None
+
+    monkeypatch.setattr(adapter, "_wait_for_viewer_ready", ready)
 
     async def observe(_page: object, **_kwargs: object) -> ZeblackLiveAccessState:
         return _live_state(99, ())
@@ -531,6 +608,20 @@ async def test_terminal_requires_stable_transition_and_visible_control(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_visible_advertisement_spread_is_an_intermediate_state(monkeypatch) -> None:
+    page = _FakePage([], ad_signal=True)
+    adapter = ZeblackAdapter()
+    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    _patch_rows(monkeypatch, adapter, page)
+    adapter._transition_stable = True
+    adapter._transition_kind = "advertisement"
+
+    assert await adapter.detect_state(page) == PageState.AD  # type: ignore[arg-type]
+    await adapter.go_next(page)  # type: ignore[arg-type]
+    assert page.keyboard.presses == ["ArrowLeft"]
+
+
+@pytest.mark.asyncio
 async def test_changed_chapter_is_next_content_but_foreign_url_is_unknown() -> None:
     adapter = ZeblackAdapter()
     adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
@@ -578,6 +669,30 @@ async def test_wait_for_change_requires_changed_and_stable(monkeypatch) -> None:
     await adapter.wait_for_change(page, previous)  # type: ignore[arg-type]
     assert adapter._transition_stable
     assert adapter._transition_kind == "content"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_change_accepts_a_stable_advertisement_spread(monkeypatch) -> None:
+    page = _FakePage([])
+    adapter = ZeblackAdapter()
+    adapter._transition_before_signature = ("before",)
+    previous = ContentIdentity(page_id="page_0", page_number=1, source_id="9265713")
+    snapshot = {
+        "fingerprint": ("ad",),
+        "viewer": parse_zeblack_viewer_url(TARGET),
+        "rows": [],
+        "page_id": None,
+        "terminal_signal": False,
+        "advertisement_signal": True,
+    }
+
+    async def ad_snapshot(_page: object) -> dict[str, object]:
+        return snapshot
+
+    monkeypatch.setattr(adapter, "_snapshot", ad_snapshot)
+    await adapter.wait_for_change(page, previous)  # type: ignore[arg-type]
+    assert adapter._transition_stable
+    assert adapter._transition_kind == "advertisement"
 
 
 @pytest.mark.asyncio

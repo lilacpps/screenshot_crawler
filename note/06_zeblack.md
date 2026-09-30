@@ -57,9 +57,71 @@ content package. `--grant-only all` resolves to the single Work Ticket pass.
 `batch run --site zeblack` uses the existing generic Executor; no Zeblack
 branch was added to Batch Core.
 
+### Z5-2 controlled live verification: title 53 / chapter 4844 (2026-09-30)
+
+This is the current title-53 result and supersedes neither the generic
+two-step Work Ticket semantics above nor the earlier title-5123 history below.
+The shared Crawler Chrome was used through
+`http://127.0.0.1:9222`; no credentials, cookies, or storage state were read
+or saved.
+
+The read-only title-53 protobuf observation contained 411 chapters. Before
+the grant-only attempt the status counts were:
+
+```text
+FREE=3, TICKET_AVAILABLE=1, POINT=377, COIN=30, RENTAL=0
+oldest/current ticket candidate: chapter 4844 / #4 標的4 退学クライシス
+```
+
+The title top independently showed the diagnostic CTA
+`チケットでさっそく読もう！` and `× 1`. This CTA/count is diagnostic only;
+the chapter-list protobuf remained the runtime authority. Full read-only
+Discovery observed 411 records. A bounded singleton Discovery for chapter
+4844 observed one record with `complete=True`; the read-only Batch plan was
+`eligible=1`, `quota=1`, resource `work_ticket`.
+
+The first grant-only run exposed a production bug: locked viewer `page_N`
+placeholders were being treated as preexisting readable content before the
+live protobuf status was consulted. The adapter now waits for viewer hydration,
+consults live status first, and only then considers preexisting content for
+`FREE`/`RENTAL`. Unit coverage asserts that `TICKET_AVAILABLE` wins over those
+placeholders. The exact ticket control was never clicked in this verification:
+both the adapter debug metadata and the run records show
+`ticket_click_attempted=false` and `AccessConsumption.consumed=false`.
+
+After the read-only/preflight sequence, the post-observation was:
+
+```text
+FREE=3, RENTAL=1, TICKET_AVAILABLE=0, POINT=377, COIN=30
+target 4844: RENTAL / 標的4 退学クライシス
+```
+
+The transition `TICKET_AVAILABLE -> RENTAL` is not attributed to the
+read-only checks or the skipped grant-only runs because no exact ticket click
+was recorded. No point, coin, or purchase fallback was used, and no local
+quota timestamp was committed.
+
+With the target now `RENTAL`, a normal `batch run --site zeblack --limit 1`
+completed without another ticket action. The viewer needed two site-local
+bounded interstitial states: a visible ad spread and the volume-purchase /
+next-story spreads. These are advanced with the existing non-clicking
+`ArrowLeft` AD path. The explicit in-viewport `次の話を読む` signal remains
+required for terminal `NEXT_CONTENT`; page counters or DOM-only offscreen
+markers are not sufficient. The successful output contains 19 source-native
+JPEG entries, all `760x1200`, and a ZIP Artifact. Catalog `Item=completed`,
+the successful CrawlRun stop reason is `next_content`, and the ZIP is at
+`output/zeblack_z5_title53/Books/漫画/Zeblack Z5 title 53  chapter 4/`.
+
+The title-top post-check showed the target chapter with an active rental
+remaining-time label and the diagnostic ticket balance `× 0`; it did not
+override the protobuf result. Production-ready normal RENTAL capture is
+verified. Production Work Ticket consumption for title 53 remains
+**NOT VERIFIED**, because the live target changed before the exact consuming
+control could be safely reached.
+
 The exact ticket control and point/coin distinction are supported by
 read-only inspection of the current public frontend bundle. On 2026-09-30,
-the shared Crawler Chrome/CDP session was available and the current title
+the earlier title
 `5123` protobuf status was observed. Before the preflight, the counts were
 `FREE=16`, `TICKET_AVAILABLE=3`, `POINT=188`, `COIN=43`, and `RENTAL=0`.
 The oldest-first candidate was chapter `198365` (`#17 問題ないです`). Its

@@ -2,6 +2,29 @@
 
 ## Zeblack Z5 current status (2026-09-30)
 
+### Current live verification: title 53 / chapter 4844
+
+The current shared-CDP verification observed 411 title-53 protobuf records.
+Before the controlled attempt, counts were `FREE=3`, `TICKET_AVAILABLE=1`,
+`POINT=377`, `COIN=30`, `RENTAL=0`; the oldest/current candidate was chapter
+`4844` (`標的4 退学クライシス`). Title-top UI independently showed
+`チケットでさっそく読もう！ × 1`, but this remains diagnostic only.
+
+Full Discovery and a bounded singleton Discovery completed read-only. The
+singleton Batch plan had one eligible quota candidate using `work_ticket`.
+The Adapter was corrected so live protobuf status is consulted before locked
+viewer `page_N` placeholders are considered preexisting content; viewer
+hydration is also bounded before and after the same-page live preflight.
+
+No exact Work Ticket control was clicked. The later post-observation reported
+`FREE=3`, `RENTAL=1`, `TICKET_AVAILABLE=0`, `POINT=377`, `COIN=30`, with target
+`4844` now `RENTAL`. This transition is not attributed to the read-only or
+skipped grant-only checks. The normal RENTAL run then completed with the
+site-local ad and last-page interstitial handling, `next_content` stop, 19
+source-native JPEG entries, and a present ZIP Artifact. The Item is
+`completed`; Work Ticket consumption remains unverified and no quota timestamp
+was committed.
+
 Zeblack now has both production Discovery and a registered Batch Site Policy.
 Catalog `quota` remains a broad candidate class, while explicit quota runtime
 uses a site-local live `title_chapter_list` protobuf preflight. The Viewer
