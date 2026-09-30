@@ -63,12 +63,16 @@ mainName control could still be missing; shortly afterward the same row and a
 trim-equivalent `個人指導3 ` control appeared. The production entry failed
 before the chapter click, so no Work Ticket was consumed.
 
-The cause was a chapter-list/mainName hydration race, not an identity mismatch.
-`_click_target_chapter()` now performs bounded 100 ms polling up to
-`page_change_timeout_ms`: row count/visibility and the row-scoped exact
-mainName leaf must become ready, while row or mainName ambiguity fails
-immediately. The direct-link guard and chapter-click flag timing remain
-unchanged; the flag is set only immediately before the single click.
+The failure was exposed by a chapter-list/mainName hydration race and then
+identified as a presentation-whitespace mismatch: the ChapterV3 decoder can
+return a `mainName` with trailing whitespace while the rendered control is
+matched after trimming DOM text. `_click_target_chapter()` now performs
+bounded 100 ms polling up to `page_change_timeout_ms`, trims surrounding
+whitespace from the observed mainName once at the identity boundary, and
+requires the row-scoped exact mainName leaf to become ready. Row or mainName
+ambiguity still fails immediately. The direct-link guard and chapter-click
+flag timing remain unchanged; the flag is set only immediately before the
+single click.
 
 ## Z5 Site Policy / runtime Work Ticket status (2026-09-30)
 

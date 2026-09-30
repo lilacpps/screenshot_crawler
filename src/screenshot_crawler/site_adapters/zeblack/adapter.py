@@ -737,6 +737,11 @@ class ZeblackAdapter(SiteAdapter):
             raise UnknownPageStateError(
                 "Zeblack chapter-list identity changed before chapter selection"
             )
+        # The ChapterV3 decoder may preserve presentation whitespace in
+        # mainName, while the rendered chapter control is matched after
+        # trimming DOM text. Normalize the observed label once at this
+        # boundary so both the row and the later modal use the same identity.
+        target_main_name = self._live_access.target_main_name.strip()
         row = page.locator(f"#chapter{self._target_viewer.chapter_id}")
         elapsed_ms = 0
         while elapsed_ms < self.page_change_timeout_ms:
@@ -747,7 +752,7 @@ class ZeblackAdapter(SiteAdapter):
                 )
             if row_count == 1 and await row.is_visible():
                 controls = await self._exact_leaf_text_matches(
-                    row, self._live_access.target_main_name
+                    row, target_main_name
                 )
                 if len(controls) > 1:
                     raise UnsupportedAccessStrategyError(
@@ -780,7 +785,7 @@ class ZeblackAdapter(SiteAdapter):
         await control.click(timeout=self.page_change_timeout_ms)
         return await self._wait_for_ticket_modal(
             page,
-            target_main_name=self._live_access.target_main_name,
+            target_main_name=target_main_name,
             chapter_list_url=chapter_list_url,
         )
 

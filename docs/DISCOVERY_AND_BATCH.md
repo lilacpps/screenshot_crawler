@@ -36,7 +36,9 @@ implicit fallback. The selected candidate may still perform the existing
 production preflight before the exact ticket entry flow.
 
 The production pre-click entry path also uses bounded polling for asynchronously
-hydrated chapter rows and mainName controls; this does not change resolver,
+hydrated chapter rows and mainName controls. It trims only surrounding
+presentation whitespace from the decoder-observed mainName at the identity
+boundary before the row-scoped exact match; this does not change resolver,
 Discovery, or ticket-modal semantics.
 
 Normal Zeblack Batch is one bounded cycle:

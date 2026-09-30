@@ -245,6 +245,37 @@ async def test_zeblack_target_chapter_waits_for_delayed_main_name_hydration(
     assert adapter._chapter_click_attempted is True
 
 
+async def test_zeblack_target_chapter_trims_observed_main_name_whitespace(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = browser_page
+
+    async def fulfill(route) -> None:  # type: ignore[no-untyped-def]
+        await route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body=_hydrating_chapter_list_html(row_mode="present", main_mode="present"),
+        )
+
+    await page.route("https://zebrack-comic.shueisha.co.jp/**", fulfill)
+    await page.goto(HYDRATION_LIST_URL)
+    adapter = await _hydration_adapter(page, monkeypatch)
+    adapter._live_access = ZeblackLiveAccessState(
+        title_id="11551",
+        chapter_id="630652",
+        target_main_name=f"{HYDRATION_MAIN_NAME} ",
+        status_value=2,
+        status_name="TICKET_AVAILABLE",
+        ticket_available_ids=("630652",),
+    )
+
+    await adapter._click_target_chapter(page)
+
+    assert await page.evaluate("window.chapterClicks") == 1
+    assert adapter._chapter_click_attempted is True
+
+
 async def test_zeblack_target_chapter_missing_main_name_fails_closed(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,
