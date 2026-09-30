@@ -11,6 +11,10 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     image_signature,
     imagebitmap_signature,
 )
+from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
+    MAPPING_PROVEN,
+    analyze_purchased_mapping,
+)
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -233,3 +237,69 @@ async def test_different_images_have_different_browser_signature(
     assert await image_signature(browser_page, white, "image/png") != await image_signature(
         browser_page, black, "image/png"
     )
+
+
+async def test_completed_segment_freeze_survives_large_post_render_prefetch(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+
+    trace = await browser_page.evaluate(
+        """
+        async () => {
+          const source = document.createElement('canvas');
+          source.width = 64;
+          source.height = 64;
+          const sourceContext = source.getContext('2d');
+          sourceContext.fillStyle = '#123456';
+          sourceContext.fillRect(0, 0, 64, 64);
+          const bitmap = await createImageBitmap(source);
+
+          const intermediate = document.createElement('canvas');
+          intermediate.width = 64;
+          intermediate.height = 64;
+          const intermediateContext = intermediate.getContext('2d');
+          intermediateContext.clearRect(0, 0, 64, 64);
+          const tiles = [
+            [0, 0, 32, 32], [32, 0, 0, 32],
+            [0, 32, 32, 0], [32, 32, 0, 0],
+          ];
+          for (const [sx, sy, dx, dy] of tiles) {
+            intermediateContext.drawImage(bitmap, sx, sy, 32, 32, dx, dy, 32, 32);
+          }
+
+          const renderer = document.createElement('canvas');
+          renderer.width = 64;
+          renderer.height = 64;
+          renderer.getContext('2d').drawImage(intermediate, 0, 0);
+
+          const prefetch = document.createElement('canvas');
+          prefetch.width = 64;
+          prefetch.height = 64;
+          const prefetchContext = prefetch.getContext('2d');
+          for (let index = 0; index < 6001; index += 1) {
+            prefetchContext.drawImage(bitmap, 0, 0, 1, 1, 0, 0, 1, 1);
+          }
+          return window.__bookwalkerTransformTrace;
+        }
+        """
+    )
+
+    assert trace["nextOperationIndex"] > 5000
+    assert "operations" not in trace
+    assert len(trace["completedMappings"]) == 1
+    record = trace["completedMappings"][0]
+    assert record["segmentTileCount"] == 4
+    assert record["segmentOverflow"] is False
+    result = analyze_purchased_mapping(
+        trace,
+        {
+            "mappingId": record["mappingId"],
+            "traceOperationIndex": record["rendererOperationIndex"],
+            "sourceCanvasId": record["sourceCanvas"]["canvasId"],
+        },
+    )
+    assert result.status == MAPPING_PROVEN
+    assert result.mapping is not None
+    assert result.mapping.segment_tile_count == 4

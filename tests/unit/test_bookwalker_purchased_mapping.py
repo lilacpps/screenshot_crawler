@@ -151,3 +151,166 @@ def test_additional_pixel_operation_and_overflow_fail_closed() -> None:
     overflow_result = analyze_purchased_mapping(overflow_trace, overflow_renderer)
     assert not overflow_result.proven
     assert overflow_result.trace_overflow
+
+
+def _completed_record(
+    *,
+    mapping_id: str = "mapping-106",
+    renderer_index: int = 106,
+    clear_index: int = 101,
+    destination: dict[str, float | int] | None = None,
+    source_rect: dict[str, float | int] | None = None,
+    tile_draws: list[dict] | None = None,
+    **overrides: object,
+) -> dict:
+    tiles = tile_draws or [
+        {
+            "operationIndex": 102,
+            "source": {"sourceId": "bitmap-a", "constructor": "ImageBitmap", "width": 32, "height": 32},
+            "target": {"canvasId": "source-canvas", "width": 32, "height": 32},
+            "sourceRect": {"x": 0, "y": 0, "width": 16, "height": 16},
+            "destination": {"x": 16, "y": 0, "width": 16, "height": 16},
+            "transform": dict(IDENTITY), "globalAlpha": 1,
+            "globalCompositeOperation": "source-over", "filter": "none",
+        },
+        {
+            "operationIndex": 103,
+            "source": {"sourceId": "bitmap-a", "constructor": "ImageBitmap", "width": 32, "height": 32},
+            "target": {"canvasId": "source-canvas", "width": 32, "height": 32},
+            "sourceRect": {"x": 16, "y": 0, "width": 16, "height": 16},
+            "destination": {"x": 0, "y": 0, "width": 16, "height": 16},
+            "transform": dict(IDENTITY), "globalAlpha": 1,
+            "globalCompositeOperation": "source-over", "filter": "none",
+        },
+        {
+            "operationIndex": 104,
+            "source": {"sourceId": "bitmap-a", "constructor": "ImageBitmap", "width": 32, "height": 32},
+            "target": {"canvasId": "source-canvas", "width": 32, "height": 32},
+            "sourceRect": {"x": 0, "y": 16, "width": 16, "height": 16},
+            "destination": {"x": 0, "y": 16, "width": 16, "height": 16},
+            "transform": dict(IDENTITY), "globalAlpha": 1,
+            "globalCompositeOperation": "source-over", "filter": "none",
+        },
+        {
+            "operationIndex": 105,
+            "source": {"sourceId": "bitmap-a", "constructor": "ImageBitmap", "width": 32, "height": 32},
+            "target": {"canvasId": "source-canvas", "width": 32, "height": 32},
+            "sourceRect": {"x": 16, "y": 16, "width": 16, "height": 16},
+            "destination": {"x": 16, "y": 16, "width": 16, "height": 16},
+            "transform": dict(IDENTITY), "globalAlpha": 1,
+            "globalCompositeOperation": "source-over", "filter": "none",
+        },
+    ]
+    record = {
+        "mappingId": mapping_id,
+        "rendererOperationIndex": renderer_index,
+        "rendererTarget": {"canvasId": "renderer", "width": 32, "height": 32},
+        "sourceCanvas": {"canvasId": "source-canvas", "width": 32, "height": 32},
+        "rendererSourceRect": source_rect or {"x": 0, "y": 0, "width": 32, "height": 32},
+        "rendererDestination": destination or {"x": 0, "y": 0, "width": 32, "height": 32},
+        "rendererTransform": dict(IDENTITY),
+        "rendererAlpha": 1,
+        "rendererComposite": "source-over",
+        "rendererFilter": "none",
+        "segmentClearOperationIndex": clear_index,
+        "segmentClearRectangle": {"x": 0, "y": 0, "width": 32, "height": 32},
+        "segmentFirstTileOperationIndex": tiles[0]["operationIndex"] if tiles else None,
+        "segmentLastTileOperationIndex": tiles[-1]["operationIndex"] if tiles else None,
+        "segmentTileCount": len(tiles),
+        "segmentExpectedTileCount": 4,
+        "tileDraws": tiles,
+        "sourceIds": ["bitmap-a"],
+        "unsafeOperationCount": 0,
+        "firstUnsafeOperationIndex": None,
+        "unsafeOperationTypes": [],
+        "segmentOverflow": False,
+    }
+    record.update(overrides)
+    return record
+
+
+def _completed_draw(record: dict) -> dict:
+    return {
+        "mappingId": record["mappingId"],
+        "traceOperationIndex": record["rendererOperationIndex"],
+        "sourceCanvasId": record["sourceCanvas"]["canvasId"],
+    }
+
+
+def test_completed_segment_is_production_authority_past_global_operation_count() -> None:
+    record = _completed_record()
+    trace = {
+        "completedMappings": [record],
+        "nextOperationIndex": 9001,
+        "traceOverflow": True,
+        "droppedCompletedMappingCount": 0,
+    }
+
+    result = analyze_purchased_mapping(trace, _completed_draw(record))
+
+    assert result.proven
+    assert result.mapping is not None
+    assert result.mapping.mapping_id == "mapping-106"
+    assert result.mapping.renderer_geometry_classification == "DIRECT_RENDERER_DRAW"
+
+
+def test_completed_segment_freezes_separate_repeated_passes() -> None:
+    first = _completed_record()
+    second = _completed_record(mapping_id="mapping-212", renderer_index=212, clear_index=207)
+    second["tileDraws"] = [dict(tile, operationIndex=tile["operationIndex"] + 106) for tile in first["tileDraws"]]
+    second["segmentFirstTileOperationIndex"] = 208
+    second["segmentLastTileOperationIndex"] = 211
+    trace = {"completedMappings": [first, second]}
+
+    first_result = analyze_purchased_mapping(trace, _completed_draw(first))
+    second_result = analyze_purchased_mapping(trace, _completed_draw(second))
+
+    assert first_result.proven and second_result.proven
+    assert first_result.mapping is not None and second_result.mapping is not None
+    assert first_result.mapping.clear_boundary_operation_index == 101
+    assert second_result.mapping.clear_boundary_operation_index == 207
+    assert first_result.mapping.mapping_sha256 == second_result.mapping.mapping_sha256
+
+
+def test_completed_segment_allows_pure_renderer_scale_but_rejects_crop() -> None:
+    scaled = _completed_record(
+        destination={"x": 0, "y": 0, "width": 24, "height": 24},
+        rendererTarget={"canvasId": "renderer", "width": 24, "height": 24},
+    )
+    scaled_result = analyze_purchased_mapping({"completedMappings": [scaled]}, _completed_draw(scaled))
+    assert scaled_result.proven
+    assert scaled_result.renderer_geometry_classification == "PURE_RENDERER_SCALE"
+
+    cropped = _completed_record(
+        source_rect={"x": 0, "y": 0, "width": 31.5, "height": 32},
+    )
+    cropped_result = analyze_purchased_mapping({"completedMappings": [cropped]}, _completed_draw(cropped))
+    assert not cropped_result.proven
+    assert cropped_result.renderer_geometry_classification == "CROP_OR_PIXEL_PROCESSING"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("segmentOverflow", True),
+        ("unsafeOperationCount", 1),
+        ("unsafeOperationTypes", ["partial_clear"]),
+    ],
+)
+def test_completed_segment_unsafe_metadata_fails_closed(field: str, value: object) -> None:
+    record = _completed_record(**{field: value})
+
+    result = analyze_purchased_mapping({"completedMappings": [record]}, _completed_draw(record))
+
+    assert not result.proven
+
+
+def test_evicted_completed_mapping_is_not_reconstructed_from_dimensions() -> None:
+    record = _completed_record()
+    draw = _completed_draw(record)
+    draw["mappingId"] = "mapping-evicted"
+
+    result = analyze_purchased_mapping({"completedMappings": []}, draw)
+
+    assert not result.proven
+    assert result.completed_mapping_evicted

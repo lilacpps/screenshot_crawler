@@ -1358,13 +1358,26 @@ candidate is returned byte-for-byte, and the purchased lossless helper is not
 called after that path succeeds. When the original path fails, native source
 PNG remains the returned output.
 
-In `native` mode only, the production trace records bounded operation index,
-renderer/source canvas identity, source constructor and dimensions,
-source/destination rectangles, transform, alpha, composite operation, filter,
-and relevant `clearRect`, `fillRect`, and `putImageData` operations. The latest
-source-canvas clear boundary is used, earlier prefetch groups are ignored, and
-overflow, ambiguous source identity, additional pixel writes, non-identity
-drawing, duplicate tiles, gaps, and out-of-bounds rectangles fail closed.
+In `native` mode only, the production trace uses a monotonic absolute
+operation counter and does not retain a global operations list. Each source
+canvas has a bounded active segment beginning at a verified full-canvas
+`clearRect`; the segment retains only tile metadata, source identity, geometry,
+and bounded unsafe-operation counters. A renderer draw from an
+`HTMLCanvasElement` freezes the current segment into a bounded completed
+mapping record. The record retains its renderer identity, clear/tile operation
+indexes, tile records, unsafe flags, and overflow state. Completed mappings are
+bounded to 12 records and 20,000 retained tile records; active segments are
+bounded to eight canvases and each segment to 16,384 tile records. Eviction is
+not reconstructed later.
+
+Post-render prefetch operations therefore do not invalidate an already frozen
+mapping. Repeated passes on the same canvas are separated by their full-clear
+boundaries. Partial clears, unsafe writes, non-ImageBitmap sources, non-identity
+drawing, duplicate tiles, gaps, out-of-bounds rectangles, and segment overflow
+fail closed. A pure renderer destination scale is allowed when the source
+rectangle is the complete source canvas and renderer geometry remains within
+the target bounds; source crops and partial-edge source/target dimensions
+remain unsupported.
 
 For purchased responses, `site_adapters/bookwalker/purchased_mapping.py`
 requires one proven renderer -> source `HTMLCanvasElement` -> one `ImageBitmap`
@@ -1395,8 +1408,10 @@ the current native PNG. Debug metadata records per-part mapping proof, raw JPEG
 exactness, JPEG support, strict MCU alignment, coefficient exactness, and
 native-pixel exactness, with all-or-none spread readiness. The reconstructed
 JPEG is not returned, written to the artifact directory, or added to the
-generic Core/DB/packaging contract. Unsupported, ambiguous, overflow, backend,
-coefficient, and browser-comparison failures preserve native PNG fallback.
+generic Core/DB/packaging contract. Unsupported, ambiguous, segment-overflow,
+backend, coefficient, and browser-comparison failures preserve native PNG
+fallback. The current completed-segment authority is production-only; the old
+operations-array shape remains a bounded unit/probe compatibility fallback.
 
 Trace source objects and snapshot canvases are bounded and cleared at the end
 of each capture window. `BOOKWALKER_CAPTURE_MODE=canvas` bypasses original,
@@ -1609,6 +1624,38 @@ direct-original covers keep their existing JPEG path unchanged. Unsupported,
 ambiguous, or geometry-mismatched cases must continue to native PNG; no
 lossless reconstruction should be used as a substitute for an unverified
 original JPEG.
+
+### 20.14 Phase P1 completed-segment production trace (2026-10-01)
+
+Production now uses the clear-bounded completed-segment trace described in
+20.11. The previous global 5,000-operation list and global overflow rejection
+are no longer production authorities. A monotonic `nextOperationIndex` is
+assigned to observed operations; each source canvas keeps a bounded active
+segment after its latest exact full-canvas `clearRect`, and an
+`HTMLCanvasElement` renderer draw freezes that segment into a completed
+mapping. The selected native draw carries `mappingId`,
+`traceOperationIndex`, and `sourceCanvasId`, so Python selects the exact frozen
+record rather than inferring a mapping from dimensions or a later prefetch.
+
+The active-segment bound is eight canvases and 16,384 tile records per segment.
+Completed mappings are bounded to 12 records and 20,000 retained tile records;
+evicted records are unavailable and are never reconstructed. Unsafe writes
+(`putImageData`, partial clear, content-changing fill, non-ImageBitmap draw,
+transform changes, alpha/composite/filter changes) are summarized in counters
+and types, then rejected. A pure renderer destination scale is accepted only
+for a full source rectangle, identity/source-over/alpha-1/filter-none, positive
+destination dimensions, and an in-bounds renderer target. Crop geometry,
+partial-edge source/target dimensions, and unsupported p.1 intermediate-canvas
+geometry remain native-PNG fallback cases.
+
+The Phase P1 order is unchanged: the existing byte-preserving original JPEG
+matcher runs first; only when it fails does the purchased shadow run; the
+returned artifact remains native PNG. Reconstructed JPEG bytes are not returned
+or saved. Shadow metadata records the completed-segment source, mapping and
+segment indexes, bounded counts/overflow/eviction state, renderer geometry
+classification, candidate matching, coefficient validation, and browser pixel
+comparison. Spread readiness remains all-or-none. `canvas` mode continues to
+bypass native/original/shadow capture and use rendered-canvas fallback.
 
 ### Phase 1 runtime pacing
 

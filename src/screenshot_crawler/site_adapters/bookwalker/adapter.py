@@ -52,7 +52,6 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     is_purchased_jpeg_candidate,
 )
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
-    TRACE_OPERATION_LIMIT,
     MappingAnalysis,
     analyze_purchased_mapping,
 )
@@ -73,22 +72,47 @@ _DRAW_TRACE_SCRIPT = """
   window.__bookwalkerNativeDrawCalls = [];
   window.__bookwalkerNativeSourceObjects = new Map();
   window.__bookwalkerNativeSnapshots = new Map();
-  window.__bookwalkerTransformTrace = {
-    operations: [],
-    traceOverflow: false,
-  };
+
+  // These bounds replace the old global operation-list limit.  16,384 tile
+  // records cover normal pages and 4K-class 32x32 tile grids with room for
+  // renderer variation; pathological segments fail closed instead of growing
+  // renderer-critical memory without bound.
+  const MAX_ACTIVE_SEGMENTS = 8;
+  const MAX_TILE_DRAWS_PER_SEGMENT = 16384;
+  const MAX_COMPLETED_MAPPINGS = 12;
+  const MAX_COMPLETED_TILE_RECORDS = 20000;
+  const FULL_CLEAR_EPSILON = 1e-7;
   const original = CanvasRenderingContext2D.prototype.drawImage;
   let nextCanvasId = 1;
   let nextSourceId = 1;
-  const maxTransformOperations = 5000;
   const canvasIds = new WeakMap();
   const sourceIds = new WeakMap();
+
+  const newTrace = () => ({
+    nextOperationIndex: 0,
+    activeSegments: {},
+    completedMappings: [],
+    droppedActiveSegmentCount: 0,
+    droppedCompletedMappingCount: 0,
+    evictedCanvasIds: [],
+    diagnostics: {
+      observedOperationCount: 0,
+      drawImageCount: 0,
+      clearRectCount: 0,
+      unsafeOperationCount: 0,
+    },
+  });
+  window.__bookwalkerTransformTrace = newTrace();
+  window.__bookwalkerResetTransformTrace = () => {
+    window.__bookwalkerTransformTrace = newTrace();
+  };
+
   const getCanvasId = canvas => {
     let id = canvasIds.get(canvas);
     if (!id) {
       id = String(nextCanvasId++);
       canvasIds.set(canvas, id);
-      canvas.dataset.bookwalkerTraceId = id;
+      try { canvas.dataset.bookwalkerTraceId = id; } catch (error) {}
     }
     return id;
   };
@@ -135,6 +159,17 @@ _DRAW_TRACE_SCRIPT = """
     }
     return {sourceRect: null, destination: null};
   };
+  const readTransform = context => {
+    try {
+      const matrix = context.getTransform();
+      return {
+        a: matrix.a, b: matrix.b, c: matrix.c,
+        d: matrix.d, e: matrix.e, f: matrix.f,
+      };
+    } catch (error) {
+      return null;
+    }
+  };
   const traceSourceInfo = source => {
     if (!source) return null;
     const constructor = source?.constructor?.name || null;
@@ -150,40 +185,221 @@ _DRAW_TRACE_SCRIPT = """
     }
     return info;
   };
-  const recordTransformOperation = (operation, context, details) => {
+  const targetInfo = canvas => ({
+    canvasId: getCanvasId(canvas),
+    constructor: canvas?.constructor?.name || null,
+    width: Number(canvas?.width),
+    height: Number(canvas?.height),
+  });
+  const recordOperation = (operation, context, details = {}) => {
     const trace = window.__bookwalkerTransformTrace;
-    if (!trace || trace.traceOverflow) return null;
-    if (trace.operations.length >= maxTransformOperations) {
-      trace.traceOverflow = true;
-      return null;
-    }
+    if (!trace || window.__bookwalkerCaptureMode !== 'native') return null;
     const canvas = context?.canvas;
-    if (!canvas || canvas.width < 500 || canvas.height < 500) return null;
-    let transform = null;
-    try {
-      const matrix = context.getTransform();
-      transform = {
-        a: matrix.a, b: matrix.b, c: matrix.c,
-        d: matrix.d, e: matrix.e, f: matrix.f,
-      };
-    } catch (error) {}
-    const index = trace.operations.length + 1;
-    trace.operations.push({
+    if (!canvas) return null;
+    const index = ++trace.nextOperationIndex;
+    trace.diagnostics.observedOperationCount = index;
+    trace.diagnostics[`${operation}Count`] =
+      (trace.diagnostics[`${operation}Count`] || 0) + 1;
+    return {
       index,
       operation,
-      target: {
-        canvasId: getCanvasId(canvas),
-        constructor: canvas?.constructor?.name || null,
-        width: Number(canvas.width),
-        height: Number(canvas.height),
-      },
-      transform,
-      globalAlpha: Number.isFinite(context.globalAlpha) ? Number(context.globalAlpha) : null,
+      target: targetInfo(canvas),
+      transform: readTransform(context),
+      globalAlpha: Number.isFinite(context.globalAlpha)
+        ? Number(context.globalAlpha) : null,
       globalCompositeOperation: context.globalCompositeOperation || null,
       filter: context.filter || null,
       ...details,
+    };
+  };
+  const isSafeDraw = operation => {
+    const transform = operation?.transform;
+    return !!transform
+      && transform.a === 1 && transform.b === 0
+      && transform.c === 0 && transform.d === 1
+      && transform.e === 0 && transform.f === 0
+      && (operation.globalAlpha === 1 || operation.globalAlpha === 1.0)
+      && operation.globalCompositeOperation === 'source-over'
+      && operation.filter === 'none';
+  };
+  const isFullClear = (canvas, rectangle) => {
+    if (!rectangle || !canvas) return false;
+    const close = (left, right) => Math.abs(Number(left) - Number(right)) <= FULL_CLEAR_EPSILON;
+    return close(rectangle.x, 0) && close(rectangle.y, 0)
+      && close(rectangle.width, canvas.width)
+      && close(rectangle.height, canvas.height);
+  };
+  const markUnsafe = (canvas, operationIndex, type) => {
+    const trace = window.__bookwalkerTransformTrace;
+    const segment = trace?.activeSegments?.[getCanvasId(canvas)];
+    if (!segment) return;
+    segment.unsafeOperationCount += 1;
+    segment.firstUnsafeOperationIndex ??= operationIndex;
+    if (!segment.unsafeOperationTypes.includes(type)) {
+      segment.unsafeOperationTypes.push(type);
+    }
+    if (trace?.diagnostics) trace.diagnostics.unsafeOperationCount += 1;
+  };
+  const newSegment = (canvas, operationIndex, rectangle) => {
+    const trace = window.__bookwalkerTransformTrace;
+    const canvasId = getCanvasId(canvas);
+    const active = trace.activeSegments;
+    if (!active[canvasId] && Object.keys(active).length >= MAX_ACTIVE_SEGMENTS) {
+      let oldestId = null;
+      let oldestIndex = Infinity;
+      for (const [id, candidate] of Object.entries(active)) {
+        if (candidate.clearOperationIndex < oldestIndex) {
+          oldestId = id;
+          oldestIndex = candidate.clearOperationIndex;
+        }
+      }
+      if (oldestId !== null) {
+        delete active[oldestId];
+        trace.droppedActiveSegmentCount += 1;
+        trace.evictedCanvasIds.push(oldestId);
+        if (trace.evictedCanvasIds.length > 32) trace.evictedCanvasIds.shift();
+      }
+    }
+    active[canvasId] = {
+      clearOperationIndex: operationIndex,
+      clearRectangle: rectangle,
+      target: targetInfo(canvas),
+      tileDraws: [],
+      sourceIds: [],
+      unsafeOperationCount: 0,
+      firstUnsafeOperationIndex: null,
+      unsafeOperationTypes: [],
+      overflow: false,
+      expectedTileCount: null,
+    };
+    return active[canvasId];
+  };
+  const updateExpectedTileCount = (segment, tile) => {
+    if (segment.expectedTileCount !== null) return;
+    const source = tile.source;
+    const sourceRect = tile.sourceRect;
+    const target = segment.target;
+    if (!source || !sourceRect || !target
+        || source.width !== target.width || source.height !== target.height
+        || sourceRect.width <= 0 || sourceRect.height <= 0
+        || sourceRect.width !== tile.destination.width
+        || sourceRect.height !== tile.destination.height) return;
+    if (target.width % sourceRect.width || target.height % sourceRect.height) return;
+    segment.expectedTileCount =
+      (target.width / sourceRect.width) * (target.height / sourceRect.height);
+  };
+  const retainCompletedMapping = mapping => {
+    const trace = window.__bookwalkerTransformTrace;
+    const tileCount = mapping.tileDraws.length;
+    if (tileCount > MAX_COMPLETED_TILE_RECORDS) {
+      trace.droppedCompletedMappingCount += 1;
+      return;
+    }
+    let retainedTiles = trace.completedMappings.reduce(
+      (total, item) => total + item.tileDraws.length, 0,
+    );
+    while (trace.completedMappings.length >= MAX_COMPLETED_MAPPINGS
+        || retainedTiles + tileCount > MAX_COMPLETED_TILE_RECORDS) {
+      const dropped = trace.completedMappings.shift();
+      if (!dropped) break;
+      retainedTiles -= dropped.tileDraws.length;
+      trace.droppedCompletedMappingCount += 1;
+    }
+    trace.completedMappings.push(mapping);
+  };
+  const freezeCompletedMapping = (operation, sourceInfo, geometry) => {
+    if (sourceInfo?.constructor !== 'HTMLCanvasElement' || !sourceInfo.canvasId) {
+      return null;
+    }
+    const trace = window.__bookwalkerTransformTrace;
+    const segment = trace?.activeSegments?.[sourceInfo.canvasId];
+    if (!segment) return null;
+    const mappingId = `mapping-${operation.index}`;
+    const mapping = {
+      mappingId,
+      rendererOperationIndex: operation.index,
+      rendererTarget: operation.target,
+      sourceCanvas: segment.target,
+      rendererSourceRect: geometry.sourceRect,
+      rendererDestination: geometry.destination,
+      rendererTransform: operation.transform,
+      rendererAlpha: operation.globalAlpha,
+      rendererComposite: operation.globalCompositeOperation,
+      rendererFilter: operation.filter,
+      segmentClearOperationIndex: segment.clearOperationIndex,
+      segmentClearRectangle: segment.clearRectangle,
+      segmentFirstTileOperationIndex: segment.tileDraws.length
+        ? segment.tileDraws[0].operationIndex : null,
+      segmentLastTileOperationIndex: segment.tileDraws.length
+        ? segment.tileDraws[segment.tileDraws.length - 1].operationIndex : null,
+      segmentTileCount: segment.tileDraws.length,
+      segmentExpectedTileCount: segment.expectedTileCount,
+      tileDraws: segment.tileDraws.map(tile => ({...tile, source: {...tile.source}, target: {...tile.target}})),
+      sourceIds: [...segment.sourceIds],
+      unsafeOperationCount: segment.unsafeOperationCount,
+      firstUnsafeOperationIndex: segment.firstUnsafeOperationIndex,
+      unsafeOperationTypes: [...segment.unsafeOperationTypes],
+      segmentOverflow: segment.overflow,
+    };
+    retainCompletedMapping(mapping);
+    return {mappingId, sourceCanvasId: sourceInfo.canvasId};
+  };
+  const recordDraw = (context, source, geometry) => {
+    const operation = recordOperation('drawImage', context, {
+      source: traceSourceInfo(source),
+      sourceRect: geometry.sourceRect,
+      destination: geometry.destination,
     });
-    return index;
+    if (!operation) return null;
+    const canvas = context.canvas;
+    const sourceInfo = operation.source;
+    const canvasId = getCanvasId(canvas);
+    const segment = window.__bookwalkerTransformTrace?.activeSegments?.[canvasId];
+    if (segment) {
+      const safe = isSafeDraw(operation);
+      if (sourceInfo?.constructor !== 'ImageBitmap') {
+        markUnsafe(canvas, operation.index, 'non_image_bitmap_draw');
+      } else if (!safe) {
+        if (operation.transform && (
+            operation.transform.a !== 1 || operation.transform.b !== 0
+            || operation.transform.c !== 0 || operation.transform.d !== 1
+            || operation.transform.e !== 0 || operation.transform.f !== 0)) {
+          markUnsafe(canvas, operation.index, 'transform_change');
+        }
+        if (operation.globalAlpha !== 1 && operation.globalAlpha !== 1.0) {
+          markUnsafe(canvas, operation.index, 'alpha');
+        }
+        if (operation.globalCompositeOperation !== 'source-over') {
+          markUnsafe(canvas, operation.index, 'composite');
+        }
+        if (operation.filter !== 'none') markUnsafe(canvas, operation.index, 'filter');
+      } else if (!geometry.sourceRect || !geometry.destination) {
+        markUnsafe(canvas, operation.index, 'draw_geometry_unavailable');
+      } else if (segment.tileDraws.length >= MAX_TILE_DRAWS_PER_SEGMENT) {
+        segment.overflow = true;
+      } else {
+        const tile = {
+          operationIndex: operation.index,
+          source: sourceInfo,
+          target: operation.target,
+          sourceRect: geometry.sourceRect,
+          destination: geometry.destination,
+          transform: operation.transform,
+          globalAlpha: operation.globalAlpha,
+          globalCompositeOperation: operation.globalCompositeOperation,
+          filter: operation.filter,
+        };
+        segment.tileDraws.push(tile);
+        if (!segment.sourceIds.includes(sourceInfo.sourceId)) {
+          segment.sourceIds.push(sourceInfo.sourceId);
+        }
+        updateExpectedTileCount(segment, tile);
+      }
+    }
+    return {
+      operation,
+      completed: freezeCompletedMapping(operation, sourceInfo, geometry),
+    };
   };
   const snapshotSourceCrop = (source, sourceRect) => {
     if (!sourceRect || sourceRect.width <= 0 || sourceRect.height <= 0) {
@@ -245,18 +461,12 @@ _DRAW_TRACE_SCRIPT = """
   };
   window.__bookwalkerMaterializeNativeSourceCrop = materializeNativeCrop;
   CanvasRenderingContext2D.prototype.drawImage = function(...args) {
+    let recorded = null;
     try {
-      const canvas = this.canvas;
       const values = args.slice(1).map(value => Number(value));
       const geometry = sourceRectAndDestination(args[0], values);
-      const traceOperationIndex = window.__bookwalkerCaptureMode === 'native'
-        ? recordTransformOperation('drawImage', this, {
-            source: traceSourceInfo(args[0]),
-            sourceRect: geometry.sourceRect,
-            destination: geometry.destination,
-            argumentForm: values.length + 1,
-          })
-        : null;
+      recorded = recordDraw(this, args[0], geometry);
+      const canvas = this.canvas;
       if (canvas && canvas.width > 1000 && canvas.height > 500) {
         const destination = values.length >= 8
           ? values.slice(4, 8)
@@ -279,32 +489,21 @@ _DRAW_TRACE_SCRIPT = """
         }
         if (window.__bookwalkerNativeCaptureEnabled && args[0] && geometry.destination) {
           const source = args[0];
-          let transform = null;
-          try {
-            const matrix = this.getTransform();
-            transform = {
-              a: matrix.a, b: matrix.b, c: matrix.c,
-              d: matrix.d, e: matrix.e, f: matrix.f,
-            };
-          } catch (error) {}
+          const sourceInfo = recorded?.operation?.source || traceSourceInfo(source);
           const nativeCall = {
             timestamp: performance.now(),
             canvasId: getCanvasId(canvas),
             canvasWidth: canvas.width,
             canvasHeight: canvas.height,
-            sourceId: getSourceId(source),
-            source: {
-              constructor: source?.constructor?.name || null,
-              width: Number.isFinite(source?.width) ? Number(source.width) : null,
-              height: Number.isFinite(source?.height) ? Number(source.height) : null,
-              sourceCanvasId: source?.constructor?.name === 'HTMLCanvasElement'
-                ? getCanvasId(source) : null,
-            },
+            sourceId: sourceInfo?.sourceId || getSourceId(source),
+            source: sourceInfo,
+            sourceCanvasId: sourceInfo?.canvasId || null,
             sourceRect: geometry.sourceRect,
             destination: geometry.destination,
             argumentForm: values.length + 1,
-            traceOperationIndex,
-            transform,
+            traceOperationIndex: recorded?.operation?.index || null,
+            mappingId: recorded?.completed?.mappingId || null,
+            transform: recorded?.operation?.transform || readTransform(this),
             globalAlpha: this.globalAlpha,
             globalCompositeOperation: this.globalCompositeOperation,
             filter: this.filter,
@@ -332,29 +531,47 @@ _DRAW_TRACE_SCRIPT = """
         : null,
     };
   };
-  for (const [name, details] of [
-    ['clearRect', rectangleDetails],
-    ['fillRect', rectangleDetails],
-    ['putImageData', args => ({
-      source: traceSourceInfo(args[0]),
-      arguments: args.slice(1).map(value => Number(value)),
-      relevantRectangle: args[0] && Number.isFinite(args[0].width)
-        && Number.isFinite(args[0].height)
-        ? {
-            x: Number(args[1]), y: Number(args[2]),
-            width: Number(args[0].width), height: Number(args[0].height),
-          }
-        : null,
-    })],
-  ]) {
+  const clearRect = CanvasRenderingContext2D.prototype.clearRect;
+  const fillRect = CanvasRenderingContext2D.prototype.fillRect;
+  const putImageData = CanvasRenderingContext2D.prototype.putImageData;
+  if (typeof clearRect === 'function') {
+    CanvasRenderingContext2D.prototype.clearRect = function(...args) {
+      let operation = null;
+      try {
+        const details = rectangleDetails(args);
+        operation = recordOperation('clearRect', this, details);
+        if (operation && isFullClear(this.canvas, details.relevantRectangle)) {
+          newSegment(this.canvas, operation.index, details.relevantRectangle);
+        } else if (operation) {
+          markUnsafe(this.canvas, operation.index, 'partial_clear');
+        }
+      } catch (error) {}
+      return clearRect.apply(this, args);
+    };
+  }
+  if (typeof fillRect === 'function') {
+    CanvasRenderingContext2D.prototype.fillRect = function(...args) {
+      let operation = null;
+      try { operation = recordOperation('fillRect', this, rectangleDetails(args)); } catch (error) {}
+      if (operation) markUnsafe(this.canvas, operation.index, 'fill_rect');
+      return fillRect.apply(this, args);
+    };
+  }
+  if (typeof putImageData === 'function') {
+    CanvasRenderingContext2D.prototype.putImageData = function(...args) {
+      let operation = null;
+      try { operation = recordOperation('putImageData', this, {arguments: args.slice(1).map(value => Number(value))}); } catch (error) {}
+      if (operation) markUnsafe(this.canvas, operation.index, 'put_image_data');
+      return putImageData.apply(this, args);
+    };
+  }
+  for (const name of ['setTransform', 'resetTransform', 'transform', 'translate', 'rotate', 'scale']) {
     const originalMethod = CanvasRenderingContext2D.prototype[name];
     if (typeof originalMethod !== 'function') continue;
     CanvasRenderingContext2D.prototype[name] = function(...args) {
-      try {
-        if (window.__bookwalkerCaptureMode === 'native') {
-          recordTransformOperation(name, this, details(args));
-        }
-      } catch (error) {}
+      let operation = null;
+      try { operation = recordOperation('transformChange', this, {method: name}); } catch (error) {}
+      if (operation) markUnsafe(this.canvas, operation.index, 'transform_change');
       return originalMethod.apply(this, args);
     };
   }
@@ -1696,6 +1913,16 @@ class BookWalkerAdapter(SiteAdapter):
             "strict_mcu_aligned": False,
             "coefficient_exact": False,
             "native_pixel_exact": False,
+            "mapping_source": None,
+            "mapping_id": None,
+            "segment_clear_operation_index": None,
+            "segment_first_tile_operation_index": None,
+            "segment_last_tile_operation_index": None,
+            "segment_tile_count": 0,
+            "segment_expected_tile_count": None,
+            "segment_overflow": False,
+            "completed_mapping_evicted": False,
+            "renderer_geometry_classification": "GEOMETRY_UNAVAILABLE",
         }
 
     async def _browser_pixel_exact(
@@ -1751,17 +1978,6 @@ class BookWalkerAdapter(SiteAdapter):
                 for _ in native_captures
             ]
             return shadow
-        if trace.get("traceOverflow") or len(trace.get("operations") or []) > TRACE_OPERATION_LIMIT:
-            shadow["reason"] = "trace_overflow"
-            parts = [
-                self._shadow_part_defaults(len(purchased_candidates))
-                for _ in native_captures
-            ]
-            for part in parts:
-                part["trace_overflow"] = True
-            shadow["parts"] = parts
-            return shadow
-
         if len(selected_draw_calls) != len(native_captures):
             shadow["reason"] = "native capture and renderer draw counts differ"
             shadow["parts"] = [
@@ -1774,9 +1990,28 @@ class BookWalkerAdapter(SiteAdapter):
         for native, draw_call in zip(native_captures, selected_draw_calls, strict=False):
             part = self._shadow_part_defaults(len(purchased_candidates))
             analysis: MappingAnalysis = analyze_purchased_mapping(trace, draw_call)
+            analysis_debug = analysis.to_debug()
+            for key in (
+                "mapping_source",
+                "mapping_id",
+                "segment_clear_operation_index",
+                "segment_first_tile_operation_index",
+                "segment_last_tile_operation_index",
+                "segment_tile_count",
+                "segment_expected_tile_count",
+                "segment_overflow",
+                "completed_mapping_evicted",
+                "renderer_geometry_classification",
+                "unsafe_operation_count",
+                "first_unsafe_operation_index",
+                "unsafe_operation_types",
+            ):
+                if key in analysis_debug:
+                    part[key] = analysis_debug[key]
             part["mapping_proven"] = analysis.proven
             part["mapping_status"] = analysis.status
             part["mapping_reason"] = analysis.reason
+            part["trace_overflow"] = analysis.trace_overflow
             if not analysis.proven or analysis.mapping is None:
                 parts.append(part)
                 continue
@@ -1913,10 +2148,7 @@ class BookWalkerAdapter(SiteAdapter):
                 """
                 () => {
                   window.__bookwalkerDrawCalls = [];
-                  if (window.__bookwalkerTransformTrace) {
-                    window.__bookwalkerTransformTrace.operations = [];
-                    window.__bookwalkerTransformTrace.traceOverflow = false;
-                  }
+                  window.__bookwalkerResetTransformTrace?.();
                 }
                 """
             )
@@ -1933,10 +2165,7 @@ class BookWalkerAdapter(SiteAdapter):
                   window.__bookwalkerNativeDrawCalls = [];
                   window.__bookwalkerNativeSourceObjects?.clear();
                   window.__bookwalkerNativeSnapshots?.clear();
-                  if (window.__bookwalkerTransformTrace) {
-                    window.__bookwalkerTransformTrace.operations = [];
-                    window.__bookwalkerTransformTrace.traceOverflow = false;
-                  }
+                  window.__bookwalkerResetTransformTrace?.();
                   window.__bookwalkerNativeCaptureEnabled = true;
                 }
                 """
@@ -2414,7 +2643,10 @@ class BookWalkerAdapter(SiteAdapter):
         await page.locator("canvas[data-bookwalker-capture-run]").evaluate_all(
             "elements => elements.forEach(element => element.remove())"
         )
-        await page.evaluate("window.__bookwalkerDrawCalls = []")
+        await page.evaluate(
+            "() => { window.__bookwalkerDrawCalls = []; "
+            "window.__bookwalkerResetTransformTrace?.(); }"
+        )
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:
         counter = page.locator("#pageSliderCounter")

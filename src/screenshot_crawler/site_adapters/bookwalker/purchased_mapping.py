@@ -16,9 +16,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+# Kept for the legacy operations-array compatibility path used by old probes
+# and unit fixtures. Production authority is the bounded completed-mapping
+# store, which has no global operation-list limit.
 TRACE_OPERATION_LIMIT = 5_000
+MAX_TILE_DRAW_RECORDS = 16_384
+MAX_COMPLETED_MAPPINGS = 12
+MAX_COMPLETED_TILE_RECORDS = 20_000
 MAPPING_PROVEN = "MAPPING_PROVEN"
 MAPPING_UNAVAILABLE = "MAPPING_UNAVAILABLE"
+
+DIRECT_RENDERER_DRAW = "DIRECT_RENDERER_DRAW"
+PURE_RENDERER_SCALE = "PURE_RENDERER_SCALE"
+CROP_OR_PIXEL_PROCESSING = "CROP_OR_PIXEL_PROCESSING"
+GEOMETRY_UNAVAILABLE = "GEOMETRY_UNAVAILABLE"
 
 _IDENTITY_TRANSFORM = {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0}
 
@@ -40,6 +51,17 @@ class PurchasedMapping:
     last_operation_index: int | None = None
     clear_boundary_operation_index: int | None = None
     mapping_sha256: str = ""
+    mapping_id: str | None = None
+    renderer_geometry_classification: str = GEOMETRY_UNAVAILABLE
+    renderer_source_rect: dict[str, float] | None = None
+    renderer_destination: dict[str, float] | None = None
+    renderer_target_dimensions: tuple[int, int] | None = None
+    segment_tile_count: int = 0
+    segment_expected_tile_count: int | None = None
+    segment_overflow: bool = False
+    unsafe_operation_count: int = 0
+    first_unsafe_operation_index: int | None = None
+    unsafe_operation_types: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         """Return the small JSON-compatible contract used by diagnostics."""
@@ -70,6 +92,17 @@ class PurchasedMapping:
             "last_operation_index": self.last_operation_index,
             "clear_boundary_operation_index": self.clear_boundary_operation_index,
             "mapping_sha256": self.mapping_sha256,
+            "mapping_id": self.mapping_id,
+            "renderer_geometry_classification": self.renderer_geometry_classification,
+            "renderer_source_rect": self.renderer_source_rect,
+            "renderer_destination": self.renderer_destination,
+            "renderer_target_dimensions": self.renderer_target_dimensions,
+            "segment_tile_count": self.segment_tile_count,
+            "segment_expected_tile_count": self.segment_expected_tile_count,
+            "segment_overflow": self.segment_overflow,
+            "unsafe_operation_count": self.unsafe_operation_count,
+            "first_unsafe_operation_index": self.first_unsafe_operation_index,
+            "unsafe_operation_types": list(self.unsafe_operation_types),
             "complete_bijection": True,
         }
 
@@ -89,6 +122,19 @@ class MappingAnalysis:
     destination_out_of_bounds_count: int = 0
     trace_overflow: bool = False
     additional_pixel_processing: bool = False
+    mapping_source: str | None = None
+    mapping_id: str | None = None
+    segment_clear_operation_index: int | None = None
+    segment_first_tile_operation_index: int | None = None
+    segment_last_tile_operation_index: int | None = None
+    segment_tile_count: int = 0
+    segment_expected_tile_count: int | None = None
+    segment_overflow: bool = False
+    completed_mapping_evicted: bool = False
+    renderer_geometry_classification: str = GEOMETRY_UNAVAILABLE
+    unsafe_operation_count: int = 0
+    first_unsafe_operation_index: int | None = None
+    unsafe_operation_types: tuple[str, ...] = ()
 
     @property
     def proven(self) -> bool:
@@ -107,6 +153,19 @@ class MappingAnalysis:
             "destination_out_of_bounds_count": self.destination_out_of_bounds_count,
             "trace_overflow": self.trace_overflow,
             "additional_pixel_processing": self.additional_pixel_processing,
+            "mapping_source": self.mapping_source,
+            "mapping_id": self.mapping_id,
+            "segment_clear_operation_index": self.segment_clear_operation_index,
+            "segment_first_tile_operation_index": self.segment_first_tile_operation_index,
+            "segment_last_tile_operation_index": self.segment_last_tile_operation_index,
+            "segment_tile_count": self.segment_tile_count,
+            "segment_expected_tile_count": self.segment_expected_tile_count,
+            "segment_overflow": self.segment_overflow,
+            "completed_mapping_evicted": self.completed_mapping_evicted,
+            "renderer_geometry_classification": self.renderer_geometry_classification,
+            "unsafe_operation_count": self.unsafe_operation_count,
+            "first_unsafe_operation_index": self.first_unsafe_operation_index,
+            "unsafe_operation_types": list(self.unsafe_operation_types),
         }
         if self.mapping is not None:
             result.update({
@@ -122,6 +181,7 @@ class MappingAnalysis:
                 "source_canvas_id": self.mapping.source_canvas_id,
                 "imagebitmap_source_id": self.mapping.imagebitmap_source_id,
                 "renderer_canvas_id": self.mapping.renderer_canvas_id,
+                "mapping_id": self.mapping.mapping_id,
             })
         return result
 
@@ -185,6 +245,66 @@ def _rect(value: object) -> tuple[int, int, int, int] | None:
         )
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _numeric_rect(value: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return tuple(_number(value[key]) for key in ("x", "y", "width", "height"))  # type: ignore[return-value]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _first(value: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in value:
+            return value[key]
+    return None
+
+
+def _dimensions(value: object) -> tuple[int, int] | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        width = _integer(_first(value, "width"))
+        height = _integer(_first(value, "height"))
+    except (TypeError, ValueError):
+        return None
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def _record_segment_value(record: Mapping[str, Any], segment: Mapping[str, Any], *keys: str) -> Any:
+    value = _first(record, *keys)
+    if value is not None:
+        return value
+    return _first(segment, *keys)
+
+
+def _geometry_classification(
+    source_dimensions: tuple[int, int] | None,
+    source_rect: tuple[float, float, float, float] | None,
+    destination: tuple[float, float, float, float] | None,
+    renderer_dimensions: tuple[int, int] | None,
+    safe: bool,
+) -> str:
+    if (
+        source_dimensions is None
+        or source_rect is None
+        or destination is None
+        or renderer_dimensions is None
+    ):
+        return GEOMETRY_UNAVAILABLE
+    full_source = source_rect == (0.0, 0.0, float(source_dimensions[0]), float(source_dimensions[1]))
+    dx, dy, dw, dh = destination
+    in_bounds = dx >= 0 and dy >= 0 and dw > 0 and dh > 0 and (
+        dx + dw <= renderer_dimensions[0] and dy + dh <= renderer_dimensions[1]
+    )
+    if not full_source or not in_bounds or not safe:
+        return CROP_OR_PIXEL_PROCESSING
+    if dw == source_dimensions[0] and dh == source_dimensions[1]:
+        return DIRECT_RENDERER_DRAW
+    return PURE_RENDERER_SCALE
 
 
 def _canvas_id(operation: Mapping[str, Any], key: str = "target") -> str:
@@ -266,7 +386,7 @@ def _reject_result(reason: str, **kwargs: Any) -> MappingAnalysis:
     return MappingAnalysis(status=MAPPING_UNAVAILABLE, reason=reason, **kwargs)
 
 
-def analyze_purchased_mapping(
+def _analyze_legacy_operations(
     trace: Mapping[str, Any],
     renderer_draw: Mapping[str, Any],
     *,
@@ -308,18 +428,16 @@ def analyze_purchased_mapping(
     if not renderer_canvas_id or not source_canvas_id or renderer_canvas_id == source_canvas_id:
         return _reject_result("renderer/source canvas identity is unavailable or invalid")
     source_dimensions = _source_dimensions(renderer_source)
-    source_rect = _rect(renderer.get("sourceRect"))
-    destination = _rect(renderer.get("destination"))
+    source_rect = _numeric_rect(renderer.get("sourceRect"))
+    destination = _numeric_rect(renderer.get("destination"))
     if source_dimensions is None or source_rect is None or destination is None:
         return _reject_result("renderer geometry is unavailable")
-    if source_rect != (0, 0, *source_dimensions):
+    if source_rect != (0.0, 0.0, float(source_dimensions[0]), float(source_dimensions[1])):
         return _reject_result("renderer draw crops or resizes the source canvas")
-    if destination[2:] != source_dimensions:
-        return _reject_result("renderer draw destination differs from source dimensions")
     renderer_dimensions = _source_dimensions(renderer.get("target", {}))
     if renderer_dimensions is not None:
         dx, dy, dw, dh = destination
-        if dx < 0 or dy < 0 or dx + dw > renderer_dimensions[0] or dy + dh > renderer_dimensions[1]:
+        if dx < 0 or dy < 0 or dw <= 0 or dh <= 0 or dx + dw > renderer_dimensions[0] or dy + dh > renderer_dimensions[1]:
             return _reject_result("renderer draw is cropped by the target canvas")
     if not _safe_draw_operation(renderer):
         return _reject_result("renderer draw has non-identity pixel processing")
@@ -486,6 +604,401 @@ def _safe_draw_operation(operation: Mapping[str, Any]) -> bool:
     if operation.get("globalCompositeOperation") != "source-over":
         return False
     return operation.get("filter") == "none"
+
+
+def _completed_mapping_match(
+    record: Mapping[str, Any],
+    renderer_draw: Mapping[str, Any],
+) -> bool:
+    requested_mapping_id = _first(renderer_draw, "mappingId", "mapping_id")
+    record_mapping_id = _first(record, "mappingId", "mapping_id")
+    if requested_mapping_id is not None:
+        return (
+            record_mapping_id is not None
+            and str(record_mapping_id) == str(requested_mapping_id)
+        )
+
+    requested_index = _first(
+        renderer_draw,
+        "traceOperationIndex",
+        "rendererOperationIndex",
+        "renderer_operation_index",
+        "index",
+    )
+    record_index = _first(
+        record,
+        "rendererOperationIndex",
+        "renderer_operation_index",
+    )
+    requested_source_canvas = _first(renderer_draw, "sourceCanvasId", "source_canvas_id")
+    source = _first(record, "sourceCanvas", "source_canvas")
+    record_source_canvas = _first(record, "sourceCanvasId", "source_canvas_id")
+    if isinstance(source, Mapping):
+        record_source_canvas = _first(source, "canvasId", "canvas_id") or record_source_canvas
+    if requested_index is None or record_index is None or requested_source_canvas is None:
+        return False
+    try:
+        return (
+            _integer(requested_index) == _integer(record_index)
+            and str(requested_source_canvas) == str(record_source_canvas or "")
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _completed_record_identity(
+    record: Mapping[str, Any],
+) -> tuple[str | None, int | None, str | None]:
+    mapping_id = _first(record, "mappingId", "mapping_id")
+    renderer_index_value = _first(
+        record,
+        "rendererOperationIndex",
+        "renderer_operation_index",
+    )
+    try:
+        renderer_index = (
+            None if renderer_index_value is None else _integer(renderer_index_value)
+        )
+    except (TypeError, ValueError):
+        renderer_index = None
+    source = _first(record, "sourceCanvas", "source_canvas")
+    source_canvas_id = _first(record, "sourceCanvasId", "source_canvas_id")
+    if isinstance(source, Mapping):
+        source_canvas_id = _first(source, "canvasId", "canvas_id") or source_canvas_id
+    return (
+        None if mapping_id is None else str(mapping_id),
+        renderer_index,
+        None if source_canvas_id is None else str(source_canvas_id),
+    )
+
+
+def _analyze_completed_mapping(
+    trace: Mapping[str, Any],
+    renderer_draw: Mapping[str, Any],
+) -> MappingAnalysis:
+    records_value = _first(trace, "completedMappings", "completed_mappings")
+    if not isinstance(records_value, list):
+        return _reject_result(
+            "completed mappings are unavailable",
+            mapping_source="completed_segment",
+        )
+    records = [record for record in records_value if isinstance(record, Mapping)]
+    matches = [record for record in records if _completed_mapping_match(record, renderer_draw)]
+    if len(matches) != 1:
+        requested_mapping_id = _first(renderer_draw, "mappingId", "mapping_id")
+        reason = (
+            "completed mapping was evicted or unavailable"
+            if requested_mapping_id is not None
+            else "completed mapping identity is missing or unavailable"
+        )
+        return _reject_result(
+            reason,
+            mapping_source="completed_segment",
+            mapping_id=None if requested_mapping_id is None else str(requested_mapping_id),
+            completed_mapping_evicted=requested_mapping_id is not None,
+        )
+    record = matches[0]
+    mapping_id, renderer_index, record_source_canvas_id = _completed_record_identity(record)
+    segment_value = _first(record, "segment")
+    segment: Mapping[str, Any] = segment_value if isinstance(segment_value, Mapping) else record
+    source_canvas_value = _first(record, "sourceCanvas", "source_canvas")
+    source_canvas: Mapping[str, Any] = (
+        source_canvas_value if isinstance(source_canvas_value, Mapping) else {}
+    )
+    renderer_target_value = _first(record, "rendererTarget", "renderer_target")
+    renderer_target: Mapping[str, Any] = (
+        renderer_target_value if isinstance(renderer_target_value, Mapping) else {}
+    )
+    source_dimensions = _dimensions(source_canvas)
+    renderer_dimensions = _dimensions(renderer_target)
+    source_rect_value = _record_segment_value(
+        record, segment, "rendererSourceRect", "renderer_source_rect", "sourceRect", "source_rect"
+    )
+    destination_value = _record_segment_value(
+        record, segment, "rendererDestination", "renderer_destination", "destination"
+    )
+    source_rect = _numeric_rect(source_rect_value)
+    destination = _numeric_rect(destination_value)
+    renderer_operation = {
+        "transform": _record_segment_value(
+            record, segment, "rendererTransform", "renderer_transform", "transform"
+        ),
+        "globalAlpha": _record_segment_value(
+            record, segment, "rendererAlpha", "renderer_alpha", "globalAlpha", "global_alpha"
+        ),
+        "globalCompositeOperation": _record_segment_value(
+            record,
+            segment,
+            "rendererComposite",
+            "renderer_composite",
+            "globalCompositeOperation",
+            "global_composite_operation",
+        ),
+        "filter": _record_segment_value(record, segment, "rendererFilter", "renderer_filter", "filter"),
+    }
+    classification = _geometry_classification(
+        source_dimensions,
+        source_rect,
+        destination,
+        renderer_dimensions,
+        _safe_draw_operation(renderer_operation),
+    )
+    base = {
+        "mapping_source": "completed_segment",
+        "mapping_id": mapping_id,
+        "renderer_geometry_classification": classification,
+        "segment_clear_operation_index": _record_segment_value(
+            record, segment, "segmentClearOperationIndex", "segment_clear_operation_index", "clearOperationIndex", "clear_operation_index"
+        ),
+        "segment_first_tile_operation_index": _record_segment_value(
+            record, segment, "segmentFirstTileOperationIndex", "segment_first_tile_operation_index", "firstTileOperationIndex", "first_tile_operation_index"
+        ),
+        "segment_last_tile_operation_index": _record_segment_value(
+            record, segment, "segmentLastTileOperationIndex", "segment_last_tile_operation_index", "lastTileOperationIndex", "last_tile_operation_index"
+        ),
+        "segment_tile_count": 0,
+        "segment_expected_tile_count": _record_segment_value(
+            record, segment, "segmentExpectedTileCount", "segment_expected_tile_count", "expectedTileCount", "expected_tile_count"
+        ),
+        "segment_overflow": bool(_record_segment_value(record, segment, "segmentOverflow", "segment_overflow", "overflow")),
+        "first_unsafe_operation_index": _record_segment_value(record, segment, "firstUnsafeOperationIndex", "first_unsafe_operation_index"),
+        "unsafe_operation_types": (),
+    }
+    unsafe_count_value = _record_segment_value(
+        record, segment, "unsafeOperationCount", "unsafe_operation_count"
+    )
+    try:
+        base["unsafe_operation_count"] = 0 if unsafe_count_value is None else _integer(unsafe_count_value)
+    except (TypeError, ValueError):
+        return _reject_result("completed segment unsafe-operation metadata is invalid", **base)
+    unsafe_types_value = _record_segment_value(
+        record, segment, "unsafeOperationTypes", "unsafe_operation_types"
+    )
+    if unsafe_types_value is not None and not isinstance(unsafe_types_value, list):
+        return _reject_result("completed segment unsafe-operation metadata is invalid", **base)
+    base["unsafe_operation_types"] = tuple(
+        str(item) for item in (unsafe_types_value or []) if item is not None
+    )
+    if classification == GEOMETRY_UNAVAILABLE:
+        return _reject_result(
+            "renderer geometry is unavailable",
+            **base,
+        )
+    if classification == CROP_OR_PIXEL_PROCESSING:
+        return _reject_result(
+            "renderer geometry crops or applies pixel processing",
+            **base,
+        )
+    if source_dimensions is None or renderer_dimensions is None or source_rect is None or destination is None:
+        return _reject_result("renderer geometry is unavailable", **base)
+    if renderer_index is None or record_source_canvas_id is None:
+        return _reject_result("source canvas identity is unavailable", **base)
+    if source_rect != (0.0, 0.0, float(source_dimensions[0]), float(source_dimensions[1])):
+        return _reject_result("renderer draw crops the source canvas", **base)
+
+    tile_draws_value = _record_segment_value(record, segment, "tileDraws", "tile_draws")
+    if not isinstance(tile_draws_value, list):
+        return _reject_result("completed segment tile records are unavailable", **base)
+    base["segment_tile_count"] = len(tile_draws_value)
+    if base["segment_overflow"]:
+        return _reject_result("completed segment overflow", trace_overflow=True, **base)
+    if len(tile_draws_value) == 0:
+        return _reject_result("completed segment has no tile draws", **base)
+    if len(tile_draws_value) > MAX_TILE_DRAW_RECORDS:
+        return _reject_result("completed segment exceeds tile record bound", trace_overflow=True, **base)
+    if base["unsafe_operation_count"] or base["unsafe_operation_types"]:
+        return _reject_result("completed segment contains unsafe operations", additional_pixel_processing=True, **base)
+
+    clear_index_value = base["segment_clear_operation_index"]
+    try:
+        clear_index = _integer(clear_index_value)
+    except (TypeError, ValueError):
+        return _reject_result("completed segment clear boundary is unavailable", **base)
+    clear_rectangle = _record_segment_value(
+        record, segment, "segmentClearRectangle", "segment_clear_rectangle", "clearRectangle", "clear_rectangle"
+    )
+    clear_rect = _rect(clear_rectangle)
+    if clear_rect is None:
+        return _reject_result("completed segment clear boundary geometry is unavailable", **base)
+    if clear_rect != (0, 0, *source_dimensions):
+        return _reject_result("completed segment clear boundary is partial", additional_pixel_processing=True, **base)
+
+    source_ids: set[str] = set()
+    tile_dimensions: set[tuple[int, int]] = set()
+    mappings: list[dict[str, int]] = []
+    source_positions: list[tuple[int, int]] = []
+    destination_positions: list[tuple[int, int]] = []
+    operation_indices: list[int] = []
+    source_out_of_bounds = 0
+    destination_out_of_bounds = 0
+    for tile in tile_draws_value:
+        if not isinstance(tile, Mapping):
+            return _reject_result("completed segment contains an invalid tile record", **base)
+        source = _first(tile, "source")
+        target = _first(tile, "target")
+        if not isinstance(source, Mapping) or source.get("constructor") != "ImageBitmap":
+            return _reject_result("completed segment has a non-ImageBitmap source", **base)
+        source_id = str(_first(source, "sourceId", "source_id") or "")
+        if not source_id:
+            return _reject_result("ImageBitmap source identity is unavailable", **base)
+        source_ids.add(source_id)
+        if _dimensions(source) != source_dimensions:
+            return _reject_result("ImageBitmap dimensions differ from source canvas", **base)
+        if not isinstance(target, Mapping) or str(_first(target, "canvasId", "canvas_id") or "") != record_source_canvas_id:
+            return _reject_result("tile target canvas identity is invalid", **base)
+        if _dimensions(target) != source_dimensions:
+            return _reject_result("tile target dimensions are invalid", **base)
+        if not _safe_draw_operation({
+            "transform": _first(tile, "transform"),
+            "globalAlpha": _first(tile, "globalAlpha", "global_alpha"),
+            "globalCompositeOperation": _first(tile, "globalCompositeOperation", "global_composite_operation"),
+            "filter": _first(tile, "filter"),
+        }):
+            return _reject_result("tile draw has non-identity pixel processing", **base)
+        source_rect_tile = _rect(_first(tile, "sourceRect", "source_rect"))
+        destination_tile = _rect(_first(tile, "destination"))
+        if source_rect_tile is None or destination_tile is None:
+            return _reject_result("tile geometry is unavailable", **base)
+        sx, sy, sw, sh = source_rect_tile
+        dx, dy, dw, dh = destination_tile
+        if sw <= 0 or sh <= 0 or (sw, sh) != (dw, dh):
+            return _reject_result("tile dimensions are invalid", **base)
+        tile_dimensions.add((sw, sh))
+        source_positions.append((sx, sy))
+        destination_positions.append((dx, dy))
+        source_out_of_bounds += int(sx < 0 or sy < 0 or sx + sw > source_dimensions[0] or sy + sh > source_dimensions[1])
+        destination_out_of_bounds += int(dx < 0 or dy < 0 or dx + dw > source_dimensions[0] or dy + dh > source_dimensions[1])
+        try:
+            operation_indices.append(_integer(_first(tile, "operationIndex", "operation_index")))
+        except (TypeError, ValueError):
+            return _reject_result("tile operation identity is unavailable", **base)
+        mappings.append({
+            "source_x": sx,
+            "source_y": sy,
+            "destination_x": dx,
+            "destination_y": dy,
+            "width": sw,
+            "height": sh,
+        })
+    if len(source_ids) != 1:
+        return _reject_result("completed segment maps multiple ImageBitmap sources", **base)
+    if len(tile_dimensions) != 1:
+        return _reject_result("tile dimensions are not uniform", **base)
+    tile_width, tile_height = next(iter(tile_dimensions))
+    if source_dimensions[0] % tile_width or source_dimensions[1] % tile_height:
+        return _reject_result("tile grid does not cover complete source dimensions", **base)
+    expected_positions = {
+        (x, y)
+        for y in range(0, source_dimensions[1], tile_height)
+        for x in range(0, source_dimensions[0], tile_width)
+    }
+    expected_count = base["segment_expected_tile_count"]
+    if expected_count is not None:
+        try:
+            expected_count = _integer(expected_count)
+        except (TypeError, ValueError):
+            return _reject_result("completed segment expected tile count is invalid", **base)
+        if expected_count != len(expected_positions):
+            return _reject_result("completed segment expected tile count is invalid", **base)
+    else:
+        expected_count = len(expected_positions)
+    source_counts = {position: source_positions.count(position) for position in set(source_positions)}
+    destination_counts = {position: destination_positions.count(position) for position in set(destination_positions)}
+    source_duplicates = sum(max(0, count - 1) for count in source_counts.values())
+    destination_duplicates = sum(max(0, count - 1) for count in destination_counts.values())
+    source_gaps = len(expected_positions - set(source_positions))
+    destination_gaps = len(expected_positions - set(destination_positions))
+    if (
+        source_out_of_bounds
+        or destination_out_of_bounds
+        or source_duplicates
+        or destination_duplicates
+        or source_gaps
+        or destination_gaps
+        or len(mappings) != expected_count
+    ):
+        return _reject_result(
+            "tile mapping is not a complete bijection",
+            source_duplicate_tile_count=source_duplicates,
+            destination_duplicate_tile_count=destination_duplicates,
+            source_tile_gap_count=source_gaps,
+            destination_tile_gap_count=destination_gaps,
+            source_out_of_bounds_count=source_out_of_bounds,
+            destination_out_of_bounds_count=destination_out_of_bounds,
+            **base,
+        )
+    first_tile = min(operation_indices)
+    last_tile = max(operation_indices)
+    if len(set(operation_indices)) != len(operation_indices):
+        return _reject_result("completed segment tile operation identity is duplicated", **base)
+    try:
+        if base["segment_first_tile_operation_index"] is not None and _integer(base["segment_first_tile_operation_index"]) != first_tile:
+            return _reject_result("completed segment first tile identity is invalid", **base)
+        if base["segment_last_tile_operation_index"] is not None and _integer(base["segment_last_tile_operation_index"]) != last_tile:
+            return _reject_result("completed segment last tile identity is invalid", **base)
+    except (TypeError, ValueError):
+        return _reject_result("completed segment tile identity is invalid", **base)
+    if not all(clear_index < index < (renderer_index or index + 1) for index in operation_indices):
+        return _reject_result("completed segment operation ordering is invalid", **base)
+    ordered = tuple(_canonical_mapping(mappings))
+    proven = PurchasedMapping(
+        mapping=ordered,
+        source_dimensions=source_dimensions,
+        destination_dimensions=source_dimensions,
+        tile_dimensions=(tile_width, tile_height),
+        renderer_canvas_id=str(_first(renderer_target, "canvasId", "canvas_id") or "") or None,
+        source_canvas_id=record_source_canvas_id,
+        imagebitmap_source_id=next(iter(source_ids)),
+        renderer_draw_operation_index=renderer_index,
+        first_operation_index=first_tile,
+        last_operation_index=last_tile,
+        clear_boundary_operation_index=clear_index,
+        mapping_sha256=mapping_sha256(ordered),
+        mapping_id=mapping_id,
+        renderer_geometry_classification=classification,
+        renderer_source_rect={key: float(value) for key, value in zip(("x", "y", "width", "height"), source_rect, strict=True)},
+        renderer_destination={key: float(value) for key, value in zip(("x", "y", "width", "height"), destination, strict=True)},
+        renderer_target_dimensions=renderer_dimensions,
+        segment_tile_count=len(mappings),
+        segment_expected_tile_count=expected_count,
+        segment_overflow=False,
+        unsafe_operation_count=0,
+        first_unsafe_operation_index=None,
+        unsafe_operation_types=(),
+    )
+    return MappingAnalysis(
+        status=MAPPING_PROVEN,
+        reason="completed segment source/destination bijection",
+        mapping=proven,
+        mapping_source="completed_segment",
+        mapping_id=mapping_id,
+        segment_clear_operation_index=clear_index,
+        segment_first_tile_operation_index=first_tile,
+        segment_last_tile_operation_index=last_tile,
+        segment_tile_count=len(mappings),
+        segment_expected_tile_count=expected_count,
+        segment_overflow=False,
+        renderer_geometry_classification=classification,
+    )
+
+
+def analyze_purchased_mapping(
+    trace: Mapping[str, Any],
+    renderer_draw: Mapping[str, Any],
+    *,
+    max_operations: int = TRACE_OPERATION_LIMIT,
+) -> MappingAnalysis:
+    """Analyze a completed segment; retain the old operations fallback for probes."""
+
+    if isinstance(trace, Mapping) and (
+        "completedMappings" in trace or "completed_mappings" in trace
+    ):
+        return _analyze_completed_mapping(trace, renderer_draw)
+    return _analyze_legacy_operations(
+        trace,
+        renderer_draw,
+        max_operations=max_operations,
+    )
 
 
 def build_purchased_mapping(
