@@ -40,6 +40,41 @@ from screenshot_crawler.site_policies.base import SitePolicy
 
 RunnerFactory = Callable[[RunConfig], CrawlerRunner]
 PackageFunction = Callable[..., PackageResult]
+_RESOLVER_CLEANUP_TIMEOUT_SECONDS = 5
+
+
+def _consume_finished_task(task: asyncio.Task[object]) -> None:
+    """Retrieve a detached task result so cleanup cannot leak warnings."""
+
+    try:
+        task.exception()
+    except BaseException:  # noqa: BLE001 - cancellation/failure is already handled
+        return
+
+
+async def _cancel_task_bounded(
+    task: asyncio.Task[object],
+    *,
+    timeout_seconds: float = _RESOLVER_CLEANUP_TIMEOUT_SECONDS,
+) -> None:
+    """Cancel and join a task without allowing unbounded Playwright cleanup."""
+
+    if not task.done():
+        task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
+    except TimeoutError:
+        if not task.done():
+            task.cancel()
+        task.add_done_callback(_consume_finished_task)
+    except asyncio.CancelledError:
+        if task.done():
+            return
+        task.cancel()
+        task.add_done_callback(_consume_finished_task)
+        raise
+    except BaseException:  # noqa: BLE001 - failed cleanup must not replace the cause
+        return
 
 
 class BatchExecutor:
@@ -358,10 +393,10 @@ class BatchExecutor:
                 )
             return result
         finally:
-            if not stop.done():
-                stop.cancel()
-            await asyncio.gather(stop, return_exceptions=True)
-            await guard.close()
+            await _cancel_task_bounded(operation)
+            await _cancel_task_bounded(stop)
+            guard_close = asyncio.create_task(guard.close())
+            await _cancel_task_bounded(guard_close)
 
     async def execute_grant_only_candidate(
         self,

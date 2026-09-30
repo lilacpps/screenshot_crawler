@@ -53,9 +53,11 @@ Resolver observability and timeout behavior are also bounded: chapter-list
 navigation, exact protobuf response-body reads, and same-load duplicate
 draining share one observation deadline. A stalled response body produces a
 resolver timeout rather than an unbounded wait, and cancellation propagates
-immediately. Generic Batch prints resolver snapshot start, completion, and
-failure messages; the read-only snapshot remains outside the grant attempt
-limit and does not consume a ticket.
+immediately. Resolver operation, AccessGuard stop, and cleanup joins are also
+bounded, with best-effort detachment if a Playwright task ignores cancellation.
+Generic Batch prints resolver snapshot start, completion, and failure messages;
+the read-only snapshot remains outside the grant attempt limit and does not
+consume a ticket.
 
 The former Z5 behavior and live verification records below are retained as
 history. This Z6 implementation was validated with synthetic/unit and

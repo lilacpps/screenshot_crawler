@@ -38,7 +38,8 @@ production preflight before the exact ticket entry flow.
 The resolver's chapter-list navigation, protobuf response-body reads, and
 same-load duplicate drain share one bounded observation deadline. A stalled
 response body therefore ends as an explicit resolver timeout instead of an
-unbounded wait, and cancellation propagates immediately. Batch prints resolver
+unbounded wait, and cancellation propagates immediately. Resolver operation,
+AccessGuard stop, and cleanup joins are bounded as well. Batch prints resolver
 start, completion, and failure status so the empty direct phase is not confused
 with a stalled direct crawl.
 

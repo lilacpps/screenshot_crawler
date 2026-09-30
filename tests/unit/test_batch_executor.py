@@ -13,6 +13,7 @@ from screenshot_crawler.batch import (
     BatchExecutor,
     BatchInterruptedError,
 )
+from screenshot_crawler.batch.executor import _cancel_task_bounded
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -915,6 +916,23 @@ async def test_grant_only_cancellation_is_recorded_as_interrupted(
         resource="work_ticket",
     ) is None
     assert service.list_artifacts() == []
+
+
+async def test_resolver_task_cleanup_is_bounded_when_cancellation_is_ignored() -> None:
+    async def cancellation_resistant_operation() -> None:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            await asyncio.sleep(3600)
+
+    operation = asyncio.create_task(cancellation_resistant_operation())
+    await asyncio.sleep(0)
+
+    await _cancel_task_bounded(operation, timeout_seconds=0.01)
+
+    operation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
 
 
 async def test_unavailable_and_already_accessible_do_not_record_consumption(

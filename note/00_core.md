@@ -24,6 +24,8 @@ the explicit-pass pacing state, while local-only skips do not. Catalog
 schema/version and the shared browser/CDP session model are unchanged.
 Resolver navigation and protobuf body reads share one bounded observation
 deadline, and resolver cancellation is propagated rather than swallowed.
+Resolver operation and AccessGuard cleanup joins are bounded and detached
+best-effort when a Playwright task does not respond to cancellation.
 The generic Batch CLI reports resolver start, completion, and failure so a
 deferred-resource phase remains observable while its read-only snapshot runs.
 
