@@ -23,7 +23,11 @@ from screenshot_crawler.core.errors import (
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import AccessConsumption, SiteAdapter
+from screenshot_crawler.site_adapters.base import (
+    AccessConsumption,
+    AccessResourceResolution,
+    SiteAdapter,
+)
 from screenshot_crawler.site_adapters.zeblack.access import zeblack_access_profile
 from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import ConsumptionStatus
 from screenshot_crawler.site_adapters.zeblack.live_access import (
@@ -290,6 +294,28 @@ class ZeblackAdapter(SiteAdapter):
                 "Zeblack quota access requires quota_resource='work_ticket'"
             )
         self._quota_resource = quota_resource
+
+    async def resolve_access_resource_candidates(
+        self,
+        page: Page,
+        candidates: tuple[object, ...],
+        quota_resource: str,
+        *,
+        timeout_ms: int = 15_000,
+    ) -> AccessResourceResolution | None:
+        if quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                f"ZeblackAdapter does not support quota_resource={quota_resource!r}"
+            )
+        from screenshot_crawler.site_adapters.zeblack.access_resolver import (
+            resolve_zeblack_work_ticket_candidates,
+        )
+
+        return await resolve_zeblack_work_ticket_candidates(
+            page,
+            candidates,  # type: ignore[arg-type]
+            timeout_ms=timeout_ms,
+        )
 
     def get_access_consumption(self) -> AccessConsumption:
         return self._access_consumption

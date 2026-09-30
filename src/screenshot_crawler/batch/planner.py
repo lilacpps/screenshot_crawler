@@ -280,6 +280,8 @@ def _candidate_from_selection(
         quota_scope=decision.quota_scope,
         quota_limit=decision.quota_limit,
         quota_commit_mode=decision.quota_commit_mode,
+        external_id=source.external_id,
+        work_id=item.work_id,
     )
 
 

@@ -1,5 +1,21 @@
 # 00. Core 現行実装ノート
 
+## Current shared Batch extension (2026-09-30)
+
+Batch retains the generic planner/executor and existing non-Zeblack behavior.
+Site Policies may opt into a small site-owned access-resource resolver. The
+resolver runs under the shared AccessGuard, receives already-planned pending
+candidates, returns selected source IDs plus expected local skip reasons, and
+does not count its read-only site snapshot as a candidate attempt. This is an
+optional extension point, not a site-name branch or YAML rule DSL.
+
+Zeblack is the current consumer: its Work Ticket resolver reads one native
+chapter/list snapshot per Work/title, matches live availability to Catalog
+external IDs, and then reuses the existing grant-only Executor. Its normal
+Batch phases are direct, grant-access, and one post-grant direct replan.
+Catalog schema/version and the shared browser/CDP session model are
+unchanged.
+
 ## Zeblack Z5 current status (2026-09-30)
 
 ### Z5-6 production initial-navigation and Work Ticket flow

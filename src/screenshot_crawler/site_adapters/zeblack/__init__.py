@@ -15,19 +15,23 @@ from screenshot_crawler.site_adapters.zeblack.discovery import (
     parse_zeblack_order_label,
 )
 from screenshot_crawler.site_adapters.zeblack.live_access import (
+    ZeblackChapterListSnapshot,
     ZeblackLiveAccessError,
     ZeblackLiveAccessState,
+    observe_zeblack_chapter_list,
     observe_zeblack_live_access,
 )
 
 __all__ = [
     "ZeblackAdapter",
+    "ZeblackChapterListSnapshot",
     "ZeblackDiscoveryAdapter",
     "ZeblackListIdentity",
     "ZeblackLiveAccessError",
     "ZeblackLiveAccessState",
     "ZeblackViewerIdentity",
     "canonical_zeblack_viewer_url",
+    "observe_zeblack_chapter_list",
     "observe_zeblack_live_access",
     "parse_zeblack_chapter_list_url",
     "parse_zeblack_order_label",

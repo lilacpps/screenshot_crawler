@@ -1,5 +1,56 @@
 # Discovery / Catalog / Batch Design
 
+## Z6 Zeblack site-native Work Ticket orchestration (2026-09-30)
+
+Zeblack keeps the broad Catalog classification: `POINT`,
+`TICKET_UNAVAILABLE`, `TICKET_AVAILABLE`, and `RENTAL` remain
+`sources.access_mode=quota`. Catalog schema version 5 is unchanged; no
+migration or new table/column is introduced.
+
+Discovery treats a protobuf `RENTAL` observation with
+`remainingRentalTime > 0` as an explicit observed local grant. It stores
+`observed_at + remainingRentalTime` in the existing
+`sources.access_granted_until` field and marks the observation through the
+existing `access_granted_until_observed=True` contract. A non-RENTAL status is
+also an explicit live grant-state observation, so a stale existing grant is
+cleared safely. Item status is never changed by Discovery, including for a
+completed Item. Existing latest-first ordering, exact DOM/protobuf set
+validation, bounded Discovery, and incremental stopping remain unchanged.
+
+Zeblack policy evaluates an active, future `access_granted_until` as
+`direct` with reason `active_rental` and `consumes_quota=False`. A confirmed
+Work Ticket consumption persists a conservative local grant of
+`consumed_at + 71 hours`; `resource_state_scope("work_ticket")` remains
+unchanged and no Catalog schema change is required.
+
+For the Work Ticket resource, Batch uses a small site-owned resolver. It
+groups the pending quota/work-ticket candidates by Work/title, loads the
+site-native chapter/list once per title, and reuses the production ChapterV3
+decoder. The resolver intersects live `TICKET_AVAILABLE` chapter IDs with
+Catalog `sources.external_id`, preserves live list order, and selects the
+first matching pending candidate. Completed Items are not resolver input. A
+live ticket with no Catalog match fails closed with
+`work_ticket_target_not_in_catalog`; an empty live ticket set ends the pass
+with `work_ticket_unavailable`. It never probes another candidate as an
+implicit fallback. The selected candidate may still perform the existing
+production preflight before the exact ticket entry flow.
+
+Normal Zeblack Batch is one bounded cycle:
+
+```text
+Phase A: direct FREE / active RENTAL crawl and package
+Phase B: one live resolver snapshot per Work/title, then grant-only Work Ticket
+Phase C: one Catalog replan and direct crawl of newly active RENTAL sources
+```
+
+Phase B does not capture, package, or complete Items. Phase C is not followed
+by another grant loop. Normal `--limit` counts final crawl/package slots: a
+completed Phase A slot leaves no ticket to consume; otherwise only the
+remaining slots may be granted and crawled. Grant-only `--limit` counts
+selected grant attempts; resolver snapshots are read-only and do not consume
+the limit. The shared AccessGuard, pacing, metrics, exact entry flow, and
+non-Zeblack/Magapoke resource orchestration remain unchanged.
+
 ## Z5-6 Zeblack production Work Ticket entry flow
 
 `SourceTarget.locator`と`RunConfig.source_url`はcanonical viewer URLのまま保持する。

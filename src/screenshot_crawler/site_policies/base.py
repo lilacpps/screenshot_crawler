@@ -42,6 +42,11 @@ class SitePolicy(ABC):
 
         return "catalog"
 
+    def defer_quota_access_to_grant_phase(self) -> bool:
+        """Opt into a site-owned live resolver before quota entry attempts."""
+
+        return False
+
     def available_quota(self, sources: Collection[Source], now: datetime) -> int | None:
         """Return local quota slots, or ``None`` for policies without quota."""
 

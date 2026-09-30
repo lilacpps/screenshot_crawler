@@ -7,6 +7,7 @@ import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from urllib.parse import urlsplit
 
@@ -27,6 +28,7 @@ from screenshot_crawler.site_adapters.zeblack.adapter import (
 )
 from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import (
     MAX_PROTOBUF_BODY_BYTES,
+    ConsumptionStatus,
     ZeblackChapterV3,
     ZeblackProtobufError,
     decode_zeblack_chapter_records,
@@ -382,6 +384,7 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
         target_identity: ZeblackListIdentity,
     ) -> list[DiscoveredRecord]:
         records: list[DiscoveredRecord] = []
+        observed_at = datetime.now(UTC)
         for row in reversed(dom_rows):
             chapter = protobuf_records.get(row.chapter_id)
             if chapter is None or chapter.title_id != target_identity.title_id:
@@ -403,6 +406,16 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
                             target_identity.title_id, chapter.chapter_id
                         ),
                         access_mode=map_zeblack_access_mode(chapter.status_value),
+                        access_granted_until=(
+                            observed_at
+                            + timedelta(seconds=chapter.remaining_rental_time)
+                            if chapter.status_value
+                            == int(ConsumptionStatus.RENTAL)
+                            and chapter.remaining_rental_time is not None
+                            and chapter.remaining_rental_time > 0
+                            else None
+                        ),
+                        access_granted_until_observed=True,
                         available=True,
                     ),
                 )

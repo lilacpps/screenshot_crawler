@@ -1,7 +1,7 @@
 import asyncio
 import builtins
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -11,12 +11,14 @@ import pytest
 from screenshot_crawler import cli
 from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import (
+    ArtifactInput,
     CatalogService,
     ItemInput,
     SourceInput,
     SourceTargetInput,
     WorkInput,
 )
+from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.cli import _parser
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery.models import DiscoveryResult
@@ -928,6 +930,240 @@ def test_batch_run_limit_spans_initial_and_premium_phases(
     assert "item=5" not in output.out
     assert "FAILED" not in output.out
     assert "FAILED" not in output.err
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [None, 1], ids=["unlimited", "limit_one"])
+async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    limit: int | None,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="zeblack-work", title="Zeblack"))
+    direct_candidates: list[SimpleNamespace] = []
+    for index, access_until in enumerate(
+        (None, (datetime.now(JST) + timedelta(hours=1)).isoformat()), start=1
+    ):
+        item = catalog.create_item(ItemInput(order_label=f"#{index}"), work_id=work.id)
+        source = catalog.create_source(
+            SourceInput(
+                site="zeblack",
+                external_id=str(index),
+                access_mode="free" if index == 1 else "quota",
+                access_granted_until=access_until,
+            ),
+            item_id=item.id,
+        )
+        target = catalog.create_source_target(
+            SourceTargetInput(
+                backend="web",
+                locator=(
+                    "https://zebrack-comic.shueisha.co.jp/title/5123/"
+                    f"chapter/{index}/viewer"
+                ),
+            ),
+            source_id=source.id,
+        )
+        direct_candidates.append(
+            SimpleNamespace(
+                item_id=item.id,
+                source_id=source.id,
+                target_id=target.id,
+                site="zeblack",
+                metadata={"order": f"#{index}"},
+                access_strategy="direct",
+                access_mode=source.access_mode,
+                consumes_quota=False,
+                quota_resource=None,
+                external_id=source.external_id,
+                work_id=work.id,
+            )
+        )
+    quota_item = catalog.create_item(ItemInput(order_label="#3"), work_id=work.id)
+    quota_source = catalog.create_source(
+        SourceInput(site="zeblack", external_id="3", access_mode="quota"),
+        item_id=quota_item.id,
+    )
+    quota_target = catalog.create_source_target(
+        SourceTargetInput(
+            backend="web",
+            locator="https://zebrack-comic.shueisha.co.jp/title/5123/chapter/3/viewer",
+        ),
+        source_id=quota_source.id,
+    )
+    quota_candidate = SimpleNamespace(
+        item_id=quota_item.id,
+        source_id=quota_source.id,
+        target_id=quota_target.id,
+        site="zeblack",
+        metadata={"order": "#3"},
+        access_strategy="quota",
+        access_mode="quota",
+        consumes_quota=True,
+        quota_resource="work_ticket",
+        external_id="3",
+        work_id=work.id,
+    )
+    post_candidate = SimpleNamespace(
+        **{**vars(quota_candidate), "access_strategy": "direct", "consumes_quota": False, "quota_resource": None}
+    )
+    initial_plan = SimpleNamespace(
+        candidates=[*direct_candidates, quota_candidate],
+        skipped=[],
+        direct_count=2,
+        quota_count=1,
+    )
+    post_plan = SimpleNamespace(candidates=[post_candidate], skipped=[], direct_count=1, quota_count=0)
+    plans: list[str | None] = []
+    events: list[str] = []
+    status_during_grant: list[str] = []
+
+    class FakePlanner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+            assert site == "zeblack"
+            plans.append(quota_resource)
+            return initial_plan if len(plans) == 1 else post_plan
+
+    class FakePolicy:
+        def defer_quota_access_to_grant_phase(self) -> bool:
+            return True
+
+    class FakeMetrics:
+        path = tmp_path / "metrics.jsonl"
+
+        def record_planned_skips(self, _skips: object) -> None:
+            pass
+
+        def record_local_skip(self, _candidate: object, *, reason: str) -> None:
+            events.append(f"skip:{reason}")
+
+        def start_candidate(self, _candidate: object) -> None:
+            pass
+
+        def finish_candidate(self, **_kwargs: object) -> None:
+            pass
+
+        def record_access_event(self, _event: object) -> None:
+            pass
+
+        def finish(self, **_kwargs: object) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class FakeSession:
+        @classmethod
+        async def connect(cls, _endpoint: str) -> "FakeSession":
+            return cls()
+
+        async def new_page(self) -> object:
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    class FakeExecutor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
+            return None
+
+        async def resolve_access_resource_candidates(
+            self, _page: object, _candidates: object, _resource: str
+        ) -> object:
+            events.append("resolve")
+            return SimpleNamespace(selected_source_ids=(quota_source.id,), skipped_source_reasons=())
+
+        async def execute_candidate(self, _page: object, candidate: object, **_kwargs: object) -> object:
+            events.append(f"crawl:{candidate.item_id}")
+            if candidate.item_id == quota_item.id:
+                run = catalog.create_crawl_run(
+                    item_id=candidate.item_id,
+                    source_id=candidate.source_id,
+                    target_id=candidate.target_id,
+                    access_strategy="direct",
+                    started_at=datetime.now(JST),
+                )
+                catalog.finalize_successful_crawl(
+                    run.id,
+                    artifact=ArtifactInput(
+                        kind="archive",
+                        format="zip",
+                        sha256="0" * 64,
+                        byte_size=1,
+                        storage_backend="test",
+                        locator="artifact.zip",
+                        state="present",
+                    ),
+                    page_count=1,
+                    stop_reason="end",
+                )
+            else:
+                catalog.mark_item_completed(candidate.item_id)
+            return SimpleNamespace(archive_path=Path(f"item-{candidate.item_id}.zip"), stop_reason="end")
+
+        async def execute_grant_only_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            events.append("grant")
+            status_during_grant.append(catalog.get_item(candidate.item_id).status)
+            catalog.record_quota_access(
+                candidate.source_id,
+                quota_started_at=datetime.now(JST),
+                access_granted_until=datetime.now(JST) + timedelta(hours=71),
+            )
+            return SimpleNamespace(resource="work_ticket", resource_consumed=True, stop_reason="entry_confirmed")
+
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: catalog)
+    monkeypatch.setattr(cli, "_batch_policy_registry", lambda: SimpleNamespace(create=lambda _site: FakePolicy()))
+    monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
+    monkeypatch.setattr(cli, "BatchMetricsWriter", lambda *_args, **_kwargs: FakeMetrics())
+    monkeypatch.setattr(cli, "BrowserSession", FakeSession)
+    monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_batch_adapter_registry", lambda _values: object())
+    monkeypatch.setattr(cli, "resolve_cdp_endpoint", lambda **_kwargs: "http://example.test:9222")
+    argv = [
+        "batch",
+        "run",
+        "--site",
+        "zeblack",
+        "--catalog",
+        str(tmp_path / "catalog.sqlite"),
+    ]
+    if limit is not None:
+        argv.extend(["--limit", str(limit)])
+    args = _parser().parse_args(argv)
+    await cli._run_batch_run(args)
+
+    if limit is None:
+        assert events == [
+            f"crawl:{direct_candidates[0].item_id}",
+            f"crawl:{direct_candidates[1].item_id}",
+            "resolve",
+            "grant",
+            f"crawl:{quota_item.id}",
+        ]
+        assert plans == [None, None]
+        assert status_during_grant == ["pending"]
+        assert catalog.get_item(quota_item.id).status == "completed"
+        assert catalog.get_source(quota_source.id).quota_started_at is not None
+        assert len(catalog.list_artifacts(item_id=quota_item.id)) == 1
+        assert catalog.list_crawl_runs(item_id=quota_item.id)[0].status == "succeeded"
+    else:
+        assert events == [f"crawl:{direct_candidates[0].item_id}"]
+        assert plans == [None]
+        assert status_during_grant == []
+        assert catalog.get_item(quota_item.id).status == "pending"
+        assert catalog.get_source(quota_source.id).quota_started_at is None
 
 
 def test_grant_only_all_uses_policy_order_replans_and_shares_limit(

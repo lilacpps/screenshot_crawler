@@ -46,10 +46,31 @@ class ZeblackLiveAccessState:
     status_value: int
     status_name: str
     ticket_available_ids: tuple[str, ...]
+    target_remaining_rental_time: int | None = None
 
     @property
     def target_ticket_available(self) -> bool:
         return self.status_value == int(ConsumptionStatus.TICKET_AVAILABLE)
+
+
+@dataclass(frozen=True, slots=True)
+class ZeblackChapterListSnapshot:
+    """One site-native ChapterV3 observation in wire/list order."""
+
+    title_id: str
+    chapters: tuple[ZeblackChapterV3, ...]
+
+    @property
+    def by_id(self) -> dict[str, ZeblackChapterV3]:
+        return {chapter.chapter_id: chapter for chapter in self.chapters}
+
+    @property
+    def ticket_available_ids(self) -> tuple[str, ...]:
+        return tuple(
+            chapter.chapter_id
+            for chapter in self.chapters
+            if chapter.status_value == int(ConsumptionStatus.TICKET_AVAILABLE)
+        )
 
 
 def canonical_zeblack_chapter_list_url(title_id: str) -> str:
@@ -219,6 +240,35 @@ async def observe_zeblack_live_access(
 
     if not str(title_id).isdecimal() or not str(chapter_id).isdecimal():
         raise ZeblackLiveAccessError("Zeblack live access identity must be numeric")
+    snapshot = await observe_zeblack_chapter_list(
+        page, title_id=title_id, timeout_ms=timeout_ms
+    )
+    target = snapshot.by_id.get(str(chapter_id))
+    if target is None:
+        raise ZeblackLiveAccessError(
+            "Zeblack live chapter-list did not contain the target chapter"
+        )
+    return ZeblackLiveAccessState(
+        title_id=str(title_id),
+        chapter_id=str(chapter_id),
+        target_main_name=target.main_name,
+        status_value=target.status_value,
+        status_name=CONSUMPTION_STATUS_NAMES.get(target.status_value, "UNKNOWN"),
+        ticket_available_ids=snapshot.ticket_available_ids,
+        target_remaining_rental_time=target.remaining_rental_time,
+    )
+
+
+async def observe_zeblack_chapter_list(
+    page: Page,
+    *,
+    title_id: str,
+    timeout_ms: int = ZEBLACK_LIVE_ACCESS_TIMEOUT_MS,
+) -> ZeblackChapterListSnapshot:
+    """Load one bounded chapter/list protobuf snapshot for a title."""
+
+    if not str(title_id).isdecimal():
+        raise ZeblackLiveAccessError("Zeblack title_id must be numeric")
     if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
         raise ValueError("timeout_ms must be a positive integer")
 
@@ -245,36 +295,19 @@ async def observe_zeblack_live_access(
         observer.close()
 
     records = _decode_consistent_payloads(payloads, title_id=str(title_id))
-    target = records.get(str(chapter_id))
-    if target is None:
-        raise ZeblackLiveAccessError(
-            "Zeblack live chapter-list did not contain the target chapter"
-        )
-    ticket_available_ids = tuple(
-        sorted(
-            (
-                record.chapter_id
-                for record in records.values()
-                if record.status_value == int(ConsumptionStatus.TICKET_AVAILABLE)
-            ),
-            key=int,
-        )
-    )
-    return ZeblackLiveAccessState(
+    return ZeblackChapterListSnapshot(
         title_id=str(title_id),
-        chapter_id=str(chapter_id),
-        target_main_name=target.main_name,
-        status_value=target.status_value,
-        status_name=CONSUMPTION_STATUS_NAMES.get(target.status_value, "UNKNOWN"),
-        ticket_available_ids=ticket_available_ids,
+        chapters=tuple(records.values()),
     )
 
 
 __all__ = [
     "ZEBLACK_LIVE_ACCESS_TIMEOUT_MS",
+    "ZeblackChapterListSnapshot",
     "ZeblackLiveAccessError",
     "ZeblackLiveAccessState",
     "canonical_zeblack_chapter_list_url",
+    "observe_zeblack_chapter_list",
     "observe_zeblack_live_access",
     "parse_zeblack_chapter_list_title_id",
 ]

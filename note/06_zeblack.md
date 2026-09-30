@@ -1,5 +1,51 @@
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 
+## Z6 current implementation snapshot (2026-09-30)
+
+This section is the current authority for the implementation after the Z6
+Batch orchestration change. Older Z5 live-verification sections below remain
+historical observations and are superseded where they describe the former
+`access_granted_until=NULL` policy or candidate-by-candidate planning.
+
+Catalog schema version 5 is unchanged. No migration, table, or column was
+added. Discovery still keeps broad Zeblack `quota` classification for POINT,
+TICKET_UNAVAILABLE, TICKET_AVAILABLE, and RENTAL. For an observed RENTAL
+ChapterV3 with `remainingRentalTime > 0`, it stores the current observation
+time plus that remaining duration in the existing
+`access_granted_until` field and sets the existing observed-grant contract.
+For every explicitly observed non-RENTAL status it clears a stale observed
+grant through the same Discovery refresh contract. Item status is preserved,
+including completed Items. Latest-first ordering, bounded boundaries, exact
+DOM/protobuf set validation, and incremental behavior are unchanged.
+
+`ZeblackSitePolicy` treats a future `access_granted_until` on a quota Source
+as `direct / active_rental / consumes_quota=False`. Confirmed Work Ticket
+consumption uses `consumed_at + 71 hours` for the local grant deadline. The
+existing `resource_state_scope("work_ticket")` remains `None`.
+
+The site-owned Work Ticket resolver receives only pending quota/work-ticket
+Batch candidates. It groups by Work/title, loads one live chapter/list
+protobuf snapshot per title, reuses `discovery_protobuf.py`, and intersects
+live `TICKET_AVAILABLE` IDs with Catalog `Source.external_id` values. It
+preserves snapshot order and selects the first matching pending candidate.
+Completed or missing Catalog targets are never used as an implicit fallback;
+missing matches return `work_ticket_target_not_in_catalog`, while an empty
+ticket set returns `work_ticket_unavailable`. The selected candidate retains
+the existing production preflight and bounded modal/direct-viewer guards.
+
+Normal Zeblack Batch now runs `direct -> grant-access -> one replan direct`.
+Grant-access uses the existing grant-only executor and creates no capture,
+package, Artifact, or Item completion. The post-grant direct phase crawls
+only newly active Sources, and no further grant loop runs. Normal `--limit`
+is a final crawl/package Item-slot limit; grant-only `--limit` counts selected
+grant attempts, not read-only resolver snapshots. `inter_candidate_delay_ms`,
+page pacing, AccessGuard, 403/429/challenge/CAPTCHA handling, and metrics are
+kept active for resolver and production attempts.
+
+The former Z5 behavior and live verification records below are retained as
+history. This Z6 implementation was validated with synthetic/unit and
+browser-backed existing tests only; no real Work Ticket was consumed.
+
 ## Z5 Site Policy / runtime Work Ticket status (2026-09-30)
 
 `ZeblackSitePolicy` is implemented and registered for Batch planning. The

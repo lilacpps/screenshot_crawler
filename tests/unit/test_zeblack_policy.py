@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,7 +52,7 @@ def test_zeblack_policy_access_mapping(
 def test_zeblack_policy_quota_is_work_ticket_without_local_cap_or_cooldown() -> None:
     policy = ZeblackSitePolicy()
     decision = policy.evaluate(
-        SimpleNamespace(access_mode="quota", available=True),
+        SimpleNamespace(access_mode="quota", available=True, access_granted_until=None),
         now=NOW,
         quota_available=None,
     )
@@ -64,13 +64,32 @@ def test_zeblack_policy_quota_is_work_ticket_without_local_cap_or_cooldown() -> 
     assert decision.quota_commit_mode == "after_observed_consumption"
     assert policy.available_quota((), NOW) is None
     assert policy.resource_state_scope("work_ticket") is None
-    assert policy.access_grant_until(NOW) is None
+    assert policy.access_grant_until(NOW) == NOW + timedelta(hours=71)
     assert policy.grant_only_skip_reason(
         resource="work_ticket",
         last_consumed_at=NOW,
         now=NOW,
         cooldown_hours=23,
     ) is None
+
+
+def test_zeblack_policy_active_rental_is_direct() -> None:
+    decision = ZeblackSitePolicy().evaluate(
+        SimpleNamespace(
+            access_mode="quota",
+            available=True,
+            access_granted_until=(NOW + timedelta(hours=1)).isoformat(),
+        ),
+        now=NOW,
+        quota_available=None,
+    )
+    assert (decision.eligible, decision.access_strategy, decision.reason) == (
+        True,
+        "direct",
+        "active_rental",
+    )
+    assert decision.consumes_quota is False
+    assert ZeblackSitePolicy().defer_quota_access_to_grant_phase() is True
 
 
 def test_zeblack_policy_supports_only_work_ticket() -> None:

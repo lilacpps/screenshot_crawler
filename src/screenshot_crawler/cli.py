@@ -864,6 +864,53 @@ def _additional_access_resource_passes(policy: object) -> tuple[str, ...]:
     return ()
 
 
+def _policy_defers_quota_access(policy: object) -> bool:
+    """Read the optional site-owned direct -> grant -> replan contract."""
+
+    method = getattr(policy, "defer_quota_access_to_grant_phase", None)
+    return bool(method()) if callable(method) else False
+
+
+async def _resolve_access_resource_candidates(
+    session: BrowserSession,
+    executor: BatchExecutor,
+    candidates: list[BatchCandidate],
+    *,
+    resource: str,
+    metrics: BatchMetricsWriter | None = None,
+) -> list[BatchCandidate]:
+    """Resolve site-native candidates without counting the snapshot as an attempt."""
+
+    if not candidates:
+        return []
+    page = await session.new_page()
+    try:
+        resolver = getattr(executor, "resolve_access_resource_candidates", None)
+        if not callable(resolver):
+            raise BatchPlanningError(
+                "Selected site does not provide the access-resource resolver contract"
+            )
+        resolution = await resolver(page, candidates, resource)
+    finally:
+        await _best_effort_cleanup(session.close_page(page))
+
+    if metrics is not None:
+        for source_id, reason in resolution.skipped_source_reasons:
+            candidate = next(
+                (item for item in candidates if item.source_id == source_id), None
+            )
+            if candidate is not None:
+                metrics.record_local_skip(candidate, reason=reason)
+    selected_ids = set(resolution.selected_source_ids)
+    return [candidate for candidate in candidates if candidate.source_id in selected_ids]
+
+
+def _completed_candidate_count(
+    catalog: CatalogService, candidates: list[BatchCandidate]
+) -> int:
+    return sum(catalog.get_item(candidate.item_id).status == "completed" for candidate in candidates)
+
+
 def _candidate_failure_reason(error: BaseException) -> str:
     """Keep the original site/crawler error visible in Batch metrics."""
 
@@ -905,14 +952,16 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
     grant_only = getattr(args, "grant_only", None)
     grant_only_all = grant_only == "all"
+    limit = getattr(args, "limit", None)
+    policy = policies.create(args.site)
+    defer_quota = _policy_defers_quota_access(policy)
+    deferred_candidates: list[BatchCandidate] = []
     if grant_only_all:
-        policy = policies.create(args.site)
         grant_only_resources = _grant_only_resource_passes(policy)
         plan = None
         candidates: list[BatchCandidate] = []
         metrics_mode = "grant-only:all"
     elif grant_only is not None:
-        policy = policies.create(args.site)
         try:
             policy.validate_grant_only_resource(grant_only)
         except SitePolicyError as exc:
@@ -922,7 +971,16 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         metrics_mode = "grant-only"
     else:
         plan = planner.plan(site=args.site)
-        candidates = plan.candidates[: args.limit] if args.limit is not None else plan.candidates
+        if defer_quota:
+            deferred_candidates = [
+                candidate for candidate in plan.candidates if candidate.consumes_quota
+            ]
+            direct_candidates = [
+                candidate for candidate in plan.candidates if not candidate.consumes_quota
+            ]
+            candidates = direct_candidates[:limit] if limit is not None else direct_candidates
+        else:
+            candidates = plan.candidates[:limit] if limit is not None else plan.candidates
         metrics_mode = "normal"
     metrics = BatchMetricsWriter("output/metrics", site=args.site, mode=metrics_mode)
     if plan is not None:
@@ -941,7 +999,10 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         print(f"  quota: {sum(item.access_strategy == 'quota' for item in candidates)}")
     if plan is not None and plan.skipped:
         print(f"  skipped: {len(plan.skipped)}")
-    if not grant_only_all and not candidates:
+    has_deferred_normal_work = (
+        grant_only is None and not grant_only_all and bool(deferred_candidates)
+    )
+    if not grant_only_all and not candidates and not has_deferred_normal_work:
         metrics.finish(stop_reason="no_candidates")
         metrics.close()
         print(f"  metrics: {metrics.path}")
@@ -968,9 +1029,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             attempts = 0
             previous_phase_had_site_access = False
             for resource in grant_only_resources:
-                remaining_limit = (
-                    None if args.limit is None else max(0, args.limit - attempts)
-                )
+                remaining_limit = None if limit is None else max(0, limit - attempts)
                 if remaining_limit == 0:
                     break
                 resource_plan = planner.plan(
@@ -979,6 +1038,14 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                 )
                 metrics.record_planned_skips(resource_plan.skipped)
                 resource_candidates = resource_plan.candidates
+                if defer_quota:
+                    resource_candidates = await _resolve_access_resource_candidates(
+                        session,
+                        executor,
+                        resource_candidates,
+                        resource=resource,
+                        metrics=metrics,
+                    )
                 print(
                     f"Batch grant-only resource pass ({resource}); "
                     f"planned={len(resource_candidates)}"
@@ -1008,6 +1075,96 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             if args.keep_open:
                 print("Browser is open. Press Enter here to disconnect.")
                 await asyncio.to_thread(input)
+        elif grant_only is not None:
+            if defer_quota:
+                candidates = await _resolve_access_resource_candidates(
+                    session,
+                    executor,
+                    candidates,
+                    resource=grant_only,
+                    metrics=metrics,
+                )
+            processed, should_continue = await _execute_batch_candidates(
+                args,
+                session,
+                executor,
+                candidates,
+                phase=(f"{args.site} grant-only:{grant_only}" if defer_quota else f"grant-only:{grant_only}"),
+                inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                metrics=metrics,
+                grant_only=True,
+                attempt_limit=limit,
+            )
+            if processed == 0 and not candidates:
+                metrics.finish(stop_reason="no_candidates")
+        elif defer_quota:
+            print(f"Batch phase: {args.site} direct")
+            _phase_a_processed, should_continue = await _execute_batch_candidates(
+                args,
+                session,
+                executor,
+                candidates,
+                phase=f"{args.site} direct",
+                inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                metrics=metrics,
+            )
+            phase_a_completed = _completed_candidate_count(catalog, candidates)
+            remaining_limit = (
+                None if limit is None else max(0, limit - phase_a_completed)
+            )
+            if should_continue and remaining_limit != 0 and deferred_candidates:
+                selected = await _resolve_access_resource_candidates(
+                    session,
+                    executor,
+                    deferred_candidates,
+                    resource="work_ticket",
+                    metrics=metrics,
+                )
+                if selected:
+                    print(f"Batch phase: {args.site} grant-access")
+                    await _execute_batch_candidates(
+                        args,
+                        session,
+                        executor,
+                        selected,
+                        phase=f"{args.site} grant-access",
+                        inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                        metrics=metrics,
+                        grant_only=True,
+                        attempt_limit=remaining_limit,
+                    )
+                    granted_source_ids = {
+                        candidate.source_id
+                        for candidate in selected
+                        if catalog.get_source(candidate.source_id).quota_started_at is not None
+                    }
+                    if granted_source_ids:
+                        post_plan = planner.plan(site=args.site)
+                        post_candidates = [
+                            candidate
+                            for candidate in post_plan.candidates
+                            if candidate.access_strategy == "direct"
+                            and candidate.source_id in granted_source_ids
+                        ]
+                        post_completed = _completed_candidate_count(catalog, candidates)
+                        post_remaining_limit = (
+                            None
+                            if limit is None
+                            else max(0, limit - post_completed)
+                        )
+                        if post_remaining_limit != 0 and post_candidates:
+                            if post_remaining_limit is not None:
+                                post_candidates = post_candidates[:post_remaining_limit]
+                            print(f"Batch phase: {args.site} post-grant direct")
+                            await _execute_batch_candidates(
+                                args,
+                                session,
+                                executor,
+                                post_candidates,
+                                phase=f"{args.site} post-grant direct",
+                                inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                                metrics=metrics,
+                            )
         else:
             initial_complete = len(candidates) == len(plan.candidates)
             processed, should_continue = await _execute_batch_candidates(
@@ -1018,15 +1175,20 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                 phase=(f"grant-only:{grant_only}" if grant_only is not None else "default"),
                 inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
                 metrics=metrics,
-                grant_only=grant_only is not None,
-                attempt_limit=args.limit if grant_only is not None else None,
+                grant_only=False,
+                attempt_limit=None,
             )
-        if not grant_only_all and grant_only is None and should_continue and initial_complete:
+        if (
+            not grant_only_all
+            and grant_only is None
+            and not defer_quota
+            and should_continue
+            and initial_complete
+        ):
             previous_phase_had_site_access = processed > 0
             remaining_limit = (
-                None if args.limit is None else max(0, args.limit - processed)
+                None if limit is None else max(0, limit - processed)
             )
-            policy = policies.create(args.site)
             for quota_resource in _additional_access_resource_passes(policy):
                 if remaining_limit == 0:
                     break

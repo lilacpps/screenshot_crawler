@@ -22,7 +22,7 @@ from screenshot_crawler.batch.models import (
 )
 from screenshot_crawler.catalog import ArtifactInput, CatalogError, CatalogService
 from screenshot_crawler.catalog.service import JST, now_jst
-from screenshot_crawler.core.access_guard import AccessEvent
+from screenshot_crawler.core.access_guard import AccessEvent, AccessGuard
 from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult, package_crawl_output
@@ -33,7 +33,7 @@ from screenshot_crawler.runtime_settings import (
     DEFAULT_PAGE_TURN_DELAY_MS,
     SiteRuntimeSettings,
 )
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.base import AccessResourceResolution, SiteAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import SitePolicy
@@ -269,6 +269,99 @@ class BatchExecutor:
             )
         except (CatalogError, SitePolicyError, ValueError) as exc:
             raise BatchExecutionError(f"Could not evaluate grant-only state: {exc}") from exc
+
+    async def resolve_access_resource_candidates(
+        self,
+        page: Page,
+        candidates: list[BatchCandidate] | tuple[BatchCandidate, ...],
+        quota_resource: str,
+        *,
+        timeout_ms: int = 15_000,
+    ) -> AccessResourceResolution:
+        """Run one site-owned read-only resolver under the shared AccessGuard."""
+
+        pending_candidates = tuple(candidates)
+        if not pending_candidates:
+            return AccessResourceResolution()
+        sites = {candidate.site for candidate in pending_candidates}
+        if len(sites) != 1:
+            raise BatchExecutionError("access-resource resolution requires one site")
+        adapter = self.adapters.create(next(iter(sites)))
+        guard = AccessGuard.from_profile(
+            site=next(iter(sites)),
+            profile=adapter.get_access_profile(),
+            stop_on_http_403=(
+                self.runtime_settings.stop_on_http_403
+                if self.runtime_settings is not None
+                else True
+            ),
+            stop_on_http_429=(
+                self.runtime_settings.stop_on_http_429
+                if self.runtime_settings is not None
+                else True
+            ),
+            stop_on_challenge=(
+                self.runtime_settings.stop_on_challenge
+                if self.runtime_settings is not None
+                else True
+            ),
+            stop_on_captcha=(
+                self.runtime_settings.stop_on_captcha
+                if self.runtime_settings is not None
+                else True
+            ),
+            event_sink=self.access_event_sink,
+        )
+        guard.start(page)
+        operation = asyncio.create_task(
+            adapter.resolve_access_resource_candidates(
+                page,
+                pending_candidates,
+                quota_resource,
+                timeout_ms=timeout_ms,
+            )
+        )
+        stop = asyncio.create_task(guard.wait_for_stop())
+        try:
+            done, _pending = await asyncio.wait(
+                {operation, stop},
+                timeout=(timeout_ms + 2_000) / 1000,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if stop in done:
+                error = stop.result()
+                if error is not None:
+                    operation.cancel()
+                    await asyncio.gather(operation, return_exceptions=True)
+                    raise error
+            if operation not in done:
+                operation.cancel()
+                await asyncio.gather(operation, return_exceptions=True)
+                raise BatchExecutionError(
+                    f"Access-resource resolver timed out for {next(iter(sites))}"
+                )
+            try:
+                result = operation.result()
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                raise
+            except (AccessStopError, BatchExecutionError):
+                raise
+            except BaseException as exc:
+                raise BatchExecutionError(
+                    f"Access-resource resolver failed for {next(iter(sites))}: {exc}"
+                ) from exc
+            guard.raise_if_stopped()
+            if result is None:
+                raise BatchExecutionError(
+                    f"Site adapter {type(adapter).__name__} does not provide "
+                    "an access-resource resolver"
+                )
+            return result
+        finally:
+            if not stop.done():
+                stop.cancel()
+            await asyncio.gather(stop, return_exceptions=True)
+            await guard.close()
 
     async def execute_grant_only_candidate(
         self,

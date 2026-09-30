@@ -22,6 +22,14 @@ class AccessConsumption:
     consumed_at: datetime | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class AccessResourceResolution:
+    """Read-only selection result for one site-owned resource resolver."""
+
+    selected_source_ids: tuple[int, ...] = ()
+    skipped_source_reasons: tuple[tuple[int, str], ...] = ()
+
+
 class SiteAdapter(ABC):
     """Contract implemented by each supported site.
 
@@ -80,6 +88,24 @@ class SiteAdapter(ABC):
                 f"{type(self).__name__} does not support "
                 f"quota_resource={quota_resource!r}"
             )
+
+    async def resolve_access_resource_candidates(
+        self,
+        page: Page,
+        candidates: tuple[object, ...],
+        quota_resource: str,
+        *,
+        timeout_ms: int = 15_000,
+    ) -> AccessResourceResolution | None:
+        """Optionally select candidates from a site-native access snapshot.
+
+        The default keeps existing sites on the generic candidate path. A site
+        integration may override this small hook when one live observation can
+        resolve several Catalog candidates without trying them one by one.
+        """
+
+        del page, candidates, quota_resource, timeout_ms
+        return None
 
     def get_access_consumption(self) -> AccessConsumption:
         """Report any resource use observed by this adapter during the run."""

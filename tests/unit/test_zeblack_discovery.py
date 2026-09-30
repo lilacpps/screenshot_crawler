@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
-from screenshot_crawler.discovery import DiscoveryIncompleteError
+from screenshot_crawler.catalog import CatalogService
+from screenshot_crawler.discovery import (
+    DiscoveryAdapterRegistry,
+    DiscoveryIncompleteError,
+    DiscoveryService,
+)
 from screenshot_crawler.site_adapters.zeblack.discovery import (
     ZeblackDiscoveryAdapter,
     parse_zeblack_chapter_list_url,
@@ -45,6 +52,7 @@ def _chapter(
     title_id: int = 5123,
     label: str = "#1",
     status: int | None = None,
+    remaining_rental_time: int | None = None,
     price: int | None = None,
 ) -> bytes:
     fields = [
@@ -55,6 +63,8 @@ def _chapter(
     ]
     if status is not None:
         fields.append(_field(11, status))
+    if remaining_rental_time is not None:
+        fields.append(_field(5, remaining_rental_time))
     if price is not None:
         fields.append(_field(12, price))
     return b"".join(fields)
@@ -236,6 +246,73 @@ async def test_zeblack_full_discovery_is_latest_first_and_buffered() -> None:
     assert [record.source.external_id for record in records] == ["303", "202", "101"]
     assert [record.item.order_key for record in records] == [None, "2", "1"]
     assert [record.source.access_mode for record in records] == ["paid", "quota", "free"]
+
+
+@pytest.mark.asyncio
+async def test_zeblack_rental_discovery_persists_observed_grant_deadline() -> None:
+    records = [
+        record
+        async for record in ZeblackDiscoveryAdapter().iter_records(
+            _FakePage(
+                ["101"],
+                [
+                    _FakeResponse(
+                        _payload(
+                            _chapter(
+                                101,
+                                status=int(ConsumptionStatus.RENTAL),
+                                remaining_rental_time=3600,
+                            )
+                        )
+                    )
+                ],
+            ),
+            _target(),
+            "full",
+        )
+    ]
+
+    source = records[0].source
+    assert source.access_mode == "quota"
+    assert source.access_granted_until_observed is True
+    assert source.access_granted_until is not None
+    observed = datetime.fromisoformat(str(source.access_granted_until))
+    assert observed > datetime.now(UTC)
+
+
+@pytest.mark.asyncio
+async def test_zeblack_non_rental_observation_clears_stale_grant_and_preserves_item(
+    tmp_path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    registry = DiscoveryAdapterRegistry()
+    registry.register("zeblack", ZeblackDiscoveryAdapter)
+    service = DiscoveryService(catalog, registry)
+    target = _target()
+
+    rental_payload = _payload(
+        _chapter(
+            101,
+            status=int(ConsumptionStatus.RENTAL),
+            remaining_rental_time=3600,
+        )
+    )
+    await service.discover(
+        _FakePage(["101"], [_FakeResponse(rental_payload)]), target, "full"
+    )
+    source = catalog.list_sources(site="zeblack")[0]
+    item = catalog.get_item(source.item_id)
+    assert source.access_granted_until is not None
+    catalog.mark_item_completed(item.id)
+
+    free_payload = _payload(_chapter(101, status=int(ConsumptionStatus.FREE)))
+    await service.discover(
+        _FakePage(["101"], [_FakeResponse(free_payload)]), target, "full"
+    )
+
+    refreshed = catalog.get_source(source.id)
+    assert refreshed.access_granted_until is None
+    assert catalog.get_item(item.id).status == "completed"
 
 
 @pytest.mark.asyncio
