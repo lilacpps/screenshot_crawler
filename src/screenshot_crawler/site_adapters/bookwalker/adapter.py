@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import os
 import re
 from binascii import Error as BinasciiError
@@ -35,15 +36,24 @@ from screenshot_crawler.site_adapters.bookwalker.login import (
     login_bookwalker,
     submit_bookwalker_login_form,
 )
-from screenshot_crawler.site_adapters.bookwalker.native_capture import (
-    select_native_draw_calls,
+from screenshot_crawler.site_adapters.bookwalker.lossless_jpeg import (
+    LosslessJpegResult,
+    reconstruct_lossless_jpeg,
 )
+from screenshot_crawler.site_adapters.bookwalker.native_capture import select_native_draw_calls
 from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     MAX_RESPONSE_BODY_BYTES,
     OriginalJpegCache,
     candidate_capture,
     candidate_from_jpeg,
     image_signature,
+    imagebitmap_pixel_exact_match,
+    is_purchased_jpeg_candidate,
+)
+from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
+    TRACE_OPERATION_LIMIT,
+    MappingAnalysis,
+    analyze_purchased_mapping,
 )
 from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     ReaderControlKind,
@@ -62,9 +72,14 @@ _DRAW_TRACE_SCRIPT = """
   window.__bookwalkerNativeDrawCalls = [];
   window.__bookwalkerNativeSourceObjects = new Map();
   window.__bookwalkerNativeSnapshots = new Map();
+  window.__bookwalkerTransformTrace = {
+    operations: [],
+    traceOverflow: false,
+  };
   const original = CanvasRenderingContext2D.prototype.drawImage;
   let nextCanvasId = 1;
   let nextSourceId = 1;
+  const maxTransformOperations = 5000;
   const canvasIds = new WeakMap();
   const sourceIds = new WeakMap();
   const getCanvasId = canvas => {
@@ -118,6 +133,56 @@ _DRAW_TRACE_SCRIPT = """
       };
     }
     return {sourceRect: null, destination: null};
+  };
+  const traceSourceInfo = source => {
+    if (!source) return null;
+    const constructor = source?.constructor?.name || null;
+    const info = {
+      sourceId: getSourceId(source),
+      constructor,
+      width: Number.isFinite(source?.width) ? Number(source.width) : null,
+      height: Number.isFinite(source?.height) ? Number(source.height) : null,
+    };
+    if (constructor === 'HTMLCanvasElement') {
+      info.canvasId = getCanvasId(source);
+      info.sourceCanvasId = info.canvasId;
+    }
+    return info;
+  };
+  const recordTransformOperation = (operation, context, details) => {
+    const trace = window.__bookwalkerTransformTrace;
+    if (!trace || trace.traceOverflow) return null;
+    if (trace.operations.length >= maxTransformOperations) {
+      trace.traceOverflow = true;
+      return null;
+    }
+    const canvas = context?.canvas;
+    if (!canvas || canvas.width < 500 || canvas.height < 500) return null;
+    let transform = null;
+    try {
+      const matrix = context.getTransform();
+      transform = {
+        a: matrix.a, b: matrix.b, c: matrix.c,
+        d: matrix.d, e: matrix.e, f: matrix.f,
+      };
+    } catch (error) {}
+    const index = trace.operations.length + 1;
+    trace.operations.push({
+      index,
+      operation,
+      target: {
+        canvasId: getCanvasId(canvas),
+        constructor: canvas?.constructor?.name || null,
+        width: Number(canvas.width),
+        height: Number(canvas.height),
+      },
+      transform,
+      globalAlpha: Number.isFinite(context.globalAlpha) ? Number(context.globalAlpha) : null,
+      globalCompositeOperation: context.globalCompositeOperation || null,
+      filter: context.filter || null,
+      ...details,
+    });
+    return index;
   };
   const snapshotSourceCrop = (source, sourceRect) => {
     if (!sourceRect || sourceRect.width <= 0 || sourceRect.height <= 0) {
@@ -183,6 +248,14 @@ _DRAW_TRACE_SCRIPT = """
       const canvas = this.canvas;
       const values = args.slice(1).map(value => Number(value));
       const geometry = sourceRectAndDestination(args[0], values);
+      const traceOperationIndex = window.__bookwalkerCaptureMode === 'native'
+        ? recordTransformOperation('drawImage', this, {
+            source: traceSourceInfo(args[0]),
+            sourceRect: geometry.sourceRect,
+            destination: geometry.destination,
+            argumentForm: values.length + 1,
+          })
+        : null;
       if (canvas && canvas.width > 1000 && canvas.height > 500) {
         const destination = values.length >= 8
           ? values.slice(4, 8)
@@ -223,11 +296,15 @@ _DRAW_TRACE_SCRIPT = """
               constructor: source?.constructor?.name || null,
               width: Number.isFinite(source?.width) ? Number(source.width) : null,
               height: Number.isFinite(source?.height) ? Number(source.height) : null,
+              sourceCanvasId: source?.constructor?.name === 'HTMLCanvasElement'
+                ? getCanvasId(source) : null,
             },
             sourceRect: geometry.sourceRect,
             destination: geometry.destination,
             argumentForm: values.length + 1,
+            traceOperationIndex,
             transform,
+            globalAlpha: this.globalAlpha,
             globalCompositeOperation: this.globalCompositeOperation,
             filter: this.filter,
           };
@@ -245,6 +322,41 @@ _DRAW_TRACE_SCRIPT = """
     } catch (error) {}
     return original.apply(this, args);
   };
+  const rectangleDetails = args => {
+    const values = args.slice(0, 4).map(value => Number(value));
+    return {
+      arguments: values,
+      relevantRectangle: values.length === 4
+        ? {x: values[0], y: values[1], width: values[2], height: values[3]}
+        : null,
+    };
+  };
+  for (const [name, details] of [
+    ['clearRect', rectangleDetails],
+    ['fillRect', rectangleDetails],
+    ['putImageData', args => ({
+      source: traceSourceInfo(args[0]),
+      arguments: args.slice(1).map(value => Number(value)),
+      relevantRectangle: args[0] && Number.isFinite(args[0].width)
+        && Number.isFinite(args[0].height)
+        ? {
+            x: Number(args[1]), y: Number(args[2]),
+            width: Number(args[0].width), height: Number(args[0].height),
+          }
+        : null,
+    })],
+  ]) {
+    const originalMethod = CanvasRenderingContext2D.prototype[name];
+    if (typeof originalMethod !== 'function') continue;
+    CanvasRenderingContext2D.prototype[name] = function(...args) {
+      try {
+        if (window.__bookwalkerCaptureMode === 'native') {
+          recordTransformOperation(name, this, details(args));
+        }
+      } catch (error) {}
+      return originalMethod.apply(this, args);
+    };
+  }
 })();
 """
 
@@ -260,6 +372,53 @@ items => items.map(item => {
     return {dataUrl: null, error: String(error)};
   }
 })
+"""
+
+_PIXEL_EXACT_COMPARISON_SCRIPT = """
+async ({reconstructed, native}) => {
+  async function load(dataUrl) {
+    const response = await fetch(dataUrl);
+    return await createImageBitmap(await response.blob());
+  }
+  const left = await load(reconstructed);
+  const right = await load(native);
+  try {
+    if (left.width !== right.width || left.height !== right.height) {
+      return {available: true, dimensions_equal: false, exact: false};
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = left.width;
+    canvas.height = left.height;
+    const context = canvas.getContext('2d', {willReadFrequently: true});
+    if (!context) return {available: false, exact: false, reason: '2d context unavailable'};
+    context.drawImage(left, 0, 0);
+    const leftData = context.getImageData(0, 0, left.width, left.height).data;
+    context.clearRect(0, 0, left.width, left.height);
+    context.drawImage(right, 0, 0);
+    const rightData = context.getImageData(0, 0, right.width, right.height).data;
+    let differingPixels = 0;
+    let maxChannelDifference = 0;
+    for (let index = 0; index < leftData.length; index += 4) {
+      let different = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const difference = Math.abs(leftData[index + channel] - rightData[index + channel]);
+        maxChannelDifference = Math.max(maxChannelDifference, difference);
+        different ||= difference !== 0;
+      }
+      if (different) differingPixels += 1;
+    }
+    return {
+      available: true,
+      dimensions_equal: true,
+      exact: differingPixels === 0,
+      differing_pixel_count: differingPixels,
+      max_channel_difference: maxChannelDifference,
+    };
+  } finally {
+    left.close();
+    right.close();
+  }
+}
 """
 
 _CAMPAIGN_TAG = re.compile(r"【[^】]*】")
@@ -341,6 +500,8 @@ def _native_call_is_safe(call: dict[str, Any]) -> bool:
     ):
         return False
     return (
+        call.get("globalAlpha", 1) in (1, 1.0)
+        and
         call.get("globalCompositeOperation") == "source-over"
         and call.get("filter") == "none"
         and call.get("snapshotError") in (None, "")
@@ -439,6 +600,16 @@ class BookWalkerAdapter(SiteAdapter):
             tuple[tuple[int | None, int | None, str], ...],
             tuple[str, ...] | None,
         ] = {}
+        self._capture_debug: dict[str, Any] = {
+            "bookwalker_capture": {
+                "returned_path": "rendered_canvas",
+                "lossless_shadow": {
+                    "attempted": False,
+                    "spread_ready": False,
+                    "parts": [],
+                },
+            }
+        }
 
     def get_access_profile(self) -> AccessProfile:
         return bookwalker_access_profile()
@@ -1498,6 +1669,181 @@ class BookWalkerAdapter(SiteAdapter):
             return None
         return None
 
+    def _reset_capture_debug(self) -> None:
+        self._capture_debug = {
+            "bookwalker_capture": {
+                "returned_path": "native_png",
+                "lossless_shadow": {
+                    "attempted": False,
+                    "spread_ready": False,
+                    "parts": [],
+                },
+            }
+        }
+
+    @staticmethod
+    def _shadow_part_defaults() -> dict[str, Any]:
+        return {
+            "mapping_proven": False,
+            "raw_jpeg_exact": False,
+            "jpeg_supported": False,
+            "strict_mcu_aligned": False,
+            "coefficient_exact": False,
+            "native_pixel_exact": False,
+        }
+
+    async def _browser_pixel_exact(
+        self,
+        page: Page,
+        reconstructed: bytes,
+        native: bytes,
+    ) -> dict[str, object]:
+        encoded_reconstructed = base64.b64encode(reconstructed).decode("ascii")
+        encoded_native = base64.b64encode(native).decode("ascii")
+        try:
+            result = await page.evaluate(
+                _PIXEL_EXACT_COMPARISON_SCRIPT,
+                {
+                    "reconstructed": f"data:image/jpeg;base64,{encoded_reconstructed}",
+                    "native": f"data:image/png;base64,{encoded_native}",
+                },
+            )
+        except Exception:  # noqa: BLE001 - shadow validation must fail closed
+            return {"available": False, "exact": False, "reason": "browser comparison failed"}
+        return result if isinstance(result, dict) else {
+            "available": False,
+            "exact": False,
+            "reason": "browser comparison returned invalid data",
+        }
+
+    async def _evaluate_lossless_reconstruction(
+        self,
+        page: Page,
+        native_captures: tuple[CaptureResult, ...],
+        selected_draw_calls: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Evaluate purchased JPEG reconstruction without changing output."""
+
+        shadow: dict[str, Any] = {
+            "attempted": True,
+            "spread_ready": False,
+            "parts": [],
+        }
+        try:
+            trace = await page.evaluate("() => window.__bookwalkerTransformTrace || null")
+        except Exception:  # noqa: BLE001 - missing trace means unavailable
+            trace = None
+        if not isinstance(trace, dict):
+            shadow["reason"] = "trace unavailable"
+            shadow["parts"] = [self._shadow_part_defaults() for _ in native_captures]
+            return shadow
+        if trace.get("traceOverflow") or len(trace.get("operations") or []) > TRACE_OPERATION_LIMIT:
+            shadow["reason"] = "trace_overflow"
+            parts = [self._shadow_part_defaults() for _ in native_captures]
+            for part in parts:
+                part["trace_overflow"] = True
+            shadow["parts"] = parts
+            return shadow
+
+        if len(selected_draw_calls) != len(native_captures):
+            shadow["reason"] = "native capture and renderer draw counts differ"
+            shadow["parts"] = [self._shadow_part_defaults() for _ in native_captures]
+            return shadow
+
+        purchased_candidates = tuple(
+            candidate
+            for candidate in self._original_candidates.values()
+            if is_purchased_jpeg_candidate(candidate)
+        )
+        parts: list[dict[str, Any]] = []
+        for native, draw_call in zip(native_captures, selected_draw_calls, strict=False):
+            part = self._shadow_part_defaults()
+            analysis: MappingAnalysis = analyze_purchased_mapping(trace, draw_call)
+            part["mapping_proven"] = analysis.proven
+            part["mapping_status"] = analysis.status
+            part["mapping_reason"] = analysis.reason
+            if not analysis.proven or analysis.mapping is None:
+                parts.append(part)
+                continue
+            mapping = analysis.mapping
+            part["mapping_sha256"] = mapping.mapping_sha256
+            part["tile_dimensions"] = list(mapping.tile_dimensions)
+            part["mcu_dimensions"] = list(mapping.mcu_dimensions)
+            part["strict_mcu_aligned"] = all(
+                value % 8 == 0
+                for item in mapping.mapping
+                for value in (
+                    item["source_x"], item["source_y"], item["destination_x"],
+                    item["destination_y"], item["width"], item["height"],
+                )
+            )
+            source_id = mapping.imagebitmap_source_id
+            if not source_id:
+                part["reason"] = "ImageBitmap source identity unavailable"
+                parts.append(part)
+                continue
+            matches: list[Any] = []
+            for candidate in purchased_candidates:
+                comparison = await imagebitmap_pixel_exact_match(
+                    page,
+                    candidate.data,
+                    source_id,
+                )
+                if comparison.get("available") and comparison.get("exact"):
+                    matches.append(candidate)
+            part["raw_jpeg_match_count"] = len(matches)
+            if len(matches) != 1:
+                part["reason"] = "raw JPEG match unavailable or ambiguous"
+                parts.append(part)
+                continue
+            candidate = matches[0]
+            part["raw_jpeg_exact"] = True
+            result: LosslessJpegResult = await asyncio.to_thread(
+                reconstruct_lossless_jpeg,
+                candidate.data,
+                mapping,
+            )
+            part["jpeg_supported"] = result.available
+            part["coefficient_validation"] = result.coefficient_validation
+            part["coefficient_exact"] = bool(
+                result.available
+                and result.coefficient_validation.get("mismatched_blocks") == 0
+                and result.coefficient_validation.get("mismatched_coefficients") == 0
+                and result.coefficient_validation.get("quantization_tables_equal") is True
+            )
+            part["reconstruction_reason"] = result.reason
+            if result.available and result.data is not None:
+                comparison = await self._browser_pixel_exact(page, result.data, native.data)
+                part["native_pixel_exact"] = bool(
+                    comparison.get("available") and comparison.get("exact")
+                )
+                part["native_pixel_comparison"] = {
+                    key: value
+                    for key, value in comparison.items()
+                    if key in {
+                        "available", "exact", "dimensions_equal",
+                        "differing_pixel_count", "max_channel_difference", "reason",
+                    }
+                }
+            parts.append(part)
+        shadow["parts"] = parts
+        shadow["spread_ready"] = bool(parts) and all(
+            part.get("mapping_proven")
+            and part.get("raw_jpeg_exact")
+            and part.get("jpeg_supported")
+            and part.get("strict_mcu_aligned")
+            and part.get("coefficient_exact")
+            and part.get("native_pixel_exact")
+            for part in parts
+        )
+        if not shadow["spread_ready"]:
+            shadow["reason"] = "one or more parts are not reconstruction-ready"
+        return shadow
+
+    async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
+        del page
+        return copy.deepcopy(self._capture_debug)
+
     async def _clear_native_capture(self, page: Page) -> None:
         try:
             await page.evaluate(
@@ -1515,7 +1861,17 @@ class BookWalkerAdapter(SiteAdapter):
 
     async def _clear_geometry_trace(self, page: Page) -> None:
         try:
-            await page.evaluate("window.__bookwalkerDrawCalls = []")
+            await page.evaluate(
+                """
+                () => {
+                  window.__bookwalkerDrawCalls = [];
+                  if (window.__bookwalkerTransformTrace) {
+                    window.__bookwalkerTransformTrace.operations = [];
+                    window.__bookwalkerTransformTrace.traceOverflow = false;
+                  }
+                }
+                """
+            )
         except (PlaywrightError, PlaywrightTimeoutError, TimeoutError):
             return
 
@@ -1529,6 +1885,10 @@ class BookWalkerAdapter(SiteAdapter):
                   window.__bookwalkerNativeDrawCalls = [];
                   window.__bookwalkerNativeSourceObjects?.clear();
                   window.__bookwalkerNativeSnapshots?.clear();
+                  if (window.__bookwalkerTransformTrace) {
+                    window.__bookwalkerTransformTrace.operations = [];
+                    window.__bookwalkerTransformTrace.traceOverflow = false;
+                  }
                   window.__bookwalkerNativeCaptureEnabled = true;
                 }
                 """
@@ -1578,7 +1938,11 @@ class BookWalkerAdapter(SiteAdapter):
         """Prefer native source crops and return None for the legacy fallback."""
 
         if self.capture_mode == "canvas":
+            self._reset_capture_debug()
+            self._capture_debug["bookwalker_capture"]["returned_path"] = "rendered_canvas"
             return None
+        self._reset_capture_debug()
+        selected_draw_calls: list[dict[str, Any]] = []
         try:
             canvas = await self.get_capture_target(page)
             trace_id = await canvas.get_attribute("data-bookwalker-trace-id")
@@ -1616,6 +1980,7 @@ class BookWalkerAdapter(SiteAdapter):
                 raise CaptureUnavailableError(
                     "BookWalker native source calls did not match page geometry"
                 )
+            selected_draw_calls = selected
             selected = await self._materialize_native_source_crops(page, selected)
 
             captures: list[CaptureResult] = []
@@ -1667,8 +2032,32 @@ class BookWalkerAdapter(SiteAdapter):
             original_captures = await self._capture_original_jpegs(
                 page, native_captures
             )
+            if original_captures is not None:
+                self._capture_debug["bookwalker_capture"]["returned_path"] = "original_jpeg"
+                self._capture_debug["bookwalker_capture"]["lossless_shadow"] = {
+                    "attempted": False,
+                    "spread_ready": False,
+                    "parts": [],
+                    "reason": "existing original JPEG exact match",
+                }
+                await self._clear_geometry_trace(page)
+                return original_captures
+            purchased_candidates = tuple(
+                candidate
+                for candidate in self._original_candidates.values()
+                if is_purchased_jpeg_candidate(candidate)
+            )
+            if purchased_candidates:
+                self._capture_debug["bookwalker_capture"]["lossless_shadow"] = (
+                    await self._evaluate_lossless_reconstruction(
+                        page,
+                        native_captures,
+                        selected_draw_calls,
+                    )
+                )
             await self._clear_geometry_trace(page)
-            return original_captures or native_captures
+            self._capture_debug["bookwalker_capture"]["returned_path"] = "native_png"
+            return native_captures
         except CaptureUnavailableError:
             return None
         except (
@@ -1897,6 +2286,7 @@ class BookWalkerAdapter(SiteAdapter):
         geometry is used to remove the viewer margins before Core captures.
         """
 
+        self._capture_debug["bookwalker_capture"]["returned_path"] = "rendered_canvas"
         canvas = await self.get_capture_target(page)
         size = await canvas.evaluate(
             "element => ({width: element.width, height: element.height})"

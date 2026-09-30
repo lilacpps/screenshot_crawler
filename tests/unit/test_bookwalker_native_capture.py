@@ -4,8 +4,9 @@ import base64
 
 import pytest
 
-from screenshot_crawler.core.capture import capture_png_bytes
+from screenshot_crawler.core.capture import CaptureResult, capture_png_bytes
 from screenshot_crawler.core.errors import CaptureUnavailableError
+from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _DRAW_TRACE_SCRIPT,
     _MATERIALIZE_NATIVE_SOURCE_SCRIPT,
@@ -13,8 +14,15 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _capture_from_data_url,
     _native_call_is_safe,
 )
+from screenshot_crawler.site_adapters.bookwalker.lossless_jpeg import LosslessJpegResult
 from screenshot_crawler.site_adapters.bookwalker.native_capture import (
     select_native_draw_calls,
+)
+from screenshot_crawler.site_adapters.bookwalker.original_capture import candidate_from_jpeg
+from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
+    MAPPING_PROVEN,
+    MappingAnalysis,
+    PurchasedMapping,
 )
 
 PNG_1X1 = (
@@ -22,6 +30,11 @@ PNG_1X1 = (
     b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00\xb5\x1c\x0c\x02"
     b"\x00\x00\x00\x0bIDAT\x08\xd7c\x9a\xc0\xf0\x1f\x00\x05\x01\x01\x02"
     b"\x1b\xc9\x8d\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+JPEG_1X1 = (
+    b"\xff\xd8\xff\xe0\x00\x04\x00\x00"
+    b"\xff\xc0\x00\x11\x08\x00\x01\x00\x01\x03"
+    b"\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9"
 )
 
 
@@ -99,6 +112,10 @@ def test_deferred_materialization_materializes_snapshot_or_source_reference() ->
     assert "__bookwalkerMaterializeNativeSourceCrop" in _MATERIALIZE_NATIVE_SOURCE_SCRIPT
     assert "snapshotId" in _DRAW_TRACE_SCRIPT
     assert "sourceConstructor" in _DRAW_TRACE_SCRIPT
+    assert "sourceCanvasId" in _DRAW_TRACE_SCRIPT
+    assert "globalAlpha" in _DRAW_TRACE_SCRIPT
+    assert "clearRect" in _DRAW_TRACE_SCRIPT
+    assert "putImageData" in _DRAW_TRACE_SCRIPT
 
 
 def test_native_selection_rejects_one_source_for_two_spread_parts() -> None:
@@ -271,6 +288,113 @@ async def test_canvas_mode_returns_none_without_touching_native_capture(
 
     assert result is None
     assert page.materialize_count == 0
+
+
+@pytest.mark.asyncio
+async def test_existing_original_jpeg_wins_before_lossless_shadow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    original = CaptureResult(b"original-jpeg", 1, 1, "image/jpeg", ".jpg")
+    shadow_called = False
+
+    async def original_capture(_page: object, _native: tuple[CaptureResult, ...]) -> tuple[CaptureResult, ...]:
+        return (original,)
+
+    async def shadow(*_args: object) -> dict[str, object]:
+        nonlocal shadow_called
+        shadow_called = True
+        return {}
+
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", original_capture)
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", shadow)
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result == (original,)
+    assert shadow_called is False
+    debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
+    assert debug["bookwalker_capture"]["returned_path"] == "original_jpeg"
+
+
+@pytest.mark.asyncio
+async def test_lossless_shadow_spread_readiness_is_all_or_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ShadowPage:
+        async def evaluate(self, _expression: str) -> dict[str, object]:
+            return {"operations": []}
+
+    mapping = PurchasedMapping(
+        mapping=(
+            {
+                "source_x": 0,
+                "source_y": 0,
+                "destination_x": 0,
+                "destination_y": 0,
+                "width": 8,
+                "height": 8,
+            },
+        ),
+        source_dimensions=(8, 8),
+        destination_dimensions=(8, 8),
+        tile_dimensions=(8, 8),
+        imagebitmap_source_id="bitmap-1",
+        mapping_sha256="mapping-1",
+    )
+    ready = MappingAnalysis(MAPPING_PROVEN, "ready", mapping)
+    unsupported = MappingAnalysis("MAPPING_UNAVAILABLE", "unsupported")
+    analyses = iter((ready, unsupported))
+
+    def fake_analysis(_trace: object, _draw: object) -> MappingAnalysis:
+        return next(analyses)
+
+    async def fake_match(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"available": True, "exact": True}
+
+    async def fake_pixels(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"available": True, "exact": True}
+
+    def fake_reconstruct(*_args: object, **_kwargs: object) -> LosslessJpegResult:
+        return LosslessJpegResult(
+            data=b"reconstructed",
+            width=8,
+            height=8,
+            tile_dimensions=(8, 8),
+            mcu_dimensions=(8, 8),
+            mapping_sha256="mapping-1",
+            coefficient_validation={
+                "mismatched_blocks": 0,
+                "mismatched_coefficients": 0,
+                "quantization_tables_equal": True,
+            },
+            available=True,
+        )
+
+    monkeypatch.setattr(adapter_module, "analyze_purchased_mapping", fake_analysis)
+    monkeypatch.setattr(adapter_module, "imagebitmap_pixel_exact_match", fake_match)
+    monkeypatch.setattr(adapter_module, "reconstruct_lossless_jpeg", fake_reconstruct)
+    adapter = BookWalkerAdapter()
+    adapter._browser_pixel_exact = fake_pixels  # type: ignore[method-assign]
+    candidate = candidate_from_jpeg(
+        JPEG_1X1,
+        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        sequence=1,
+    )
+    assert candidate is not None
+    adapter._original_candidates.add(candidate)
+
+    result = await adapter._evaluate_lossless_reconstruction(
+        ShadowPage(),
+        (CaptureResult(PNG_1X1, 1, 1), CaptureResult(PNG_1X1, 1, 1)),
+        [{"part": 1}, {"part": 2}],
+    )
+
+    assert len(result["parts"]) == 2
+    assert result["parts"][0]["native_pixel_exact"] is True
+    assert result["parts"][1]["mapping_proven"] is False
+    assert result["spread_ready"] is False
 
 
 def test_invalid_capture_mode_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

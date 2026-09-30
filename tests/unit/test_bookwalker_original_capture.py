@@ -11,6 +11,7 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     OriginalJpegCache,
     candidate_capture,
     candidate_from_jpeg,
+    imagebitmap_pixel_exact_match,
     is_jpeg_bytes,
     jpeg_dimensions,
 )
@@ -60,6 +61,25 @@ def test_invalid_jpeg_magic_or_dimensions_is_rejected() -> None:
         url="https://viewer-epubs-trial.bookwalker.jp/page.jpeg",
         sequence=1,
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_full_resolution_imagebitmap_match_does_not_resize_candidate() -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.script = ""
+
+        async def evaluate(self, script: str, payload: dict[str, object]) -> dict[str, object]:
+            self.script = script
+            assert payload["sourceId"] == "bitmap-1"
+            return {"available": True, "dimensions_equal": True, "exact": True}
+
+    page = FakePage()
+    result = await imagebitmap_pixel_exact_match(page, JPEG_1X1, "bitmap-1")
+
+    assert result["exact"] is True
+    assert "64" not in page.script
+    assert "getImageData(0, 0, source.width, source.height)" in page.script
 
 
 def test_original_jpeg_cache_deduplicates_and_evicts_old_entries() -> None:

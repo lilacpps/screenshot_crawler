@@ -661,7 +661,9 @@ part returns source-native PNG and no JPEG/PNG mixture is emitted.
 
 The final Core fallback remains unchanged: if source-native capture itself is
 unavailable, `capture_page()` returns `None` and Core uses the existing Canvas
-crop PNG path.  Production does not perform full-pixel comparison; the
+crop PNG path.  The ordinary original-JPEG match uses the existing browser
+signature; the Phase P1 purchased shadow additionally performs a full-
+resolution comparison against the retained ImageBitmap and native PNG.  The
 current native PNG is intentionally retained as the conservative comparison
 basis.  `.jpg` is now accepted by manifest/package/ZIP validation alongside
 `.png` and `.webp`.
@@ -1282,7 +1284,8 @@ The final readiness is LOSSLESS_JPEG_REARRANGEMENT_READY and the part
 classification is TILE_REARRANGEMENT. The complete part mapping is written to
 page-level part-mappings.json and the run-level aggregation to
 part_mapping_summary.json. This remains diagnostic-only; no production
-capture, JPEG/PNG selection, or output behavior is changed.
+capture selection, JPEG/PNG output choice, or Core/DB/packaging behavior is
+changed by the probe itself.
 
 ### 20.10 Lossless JPEG coefficient rearrangement PoC (2026-09-30)
 
@@ -1333,21 +1336,60 @@ Unsupported / fail-closed:
 - progressive or non-SOF0 JPEGs, non-3-component layouts, non-4:4:4
   sampling, partial edge MCU/tile layouts, incomplete mappings, and any
   unproven probe evidence;
-- production integration, capture selection, packaging, Batch, DB, and
-  fallback behavior remain unchanged;
+- broader JPEG layouts and artifact selection remain unsupported; the Phase P1
+  production integration below keeps the existing native PNG output and all
+  Core/DB/packaging behavior unchanged;
 - the PoC does not establish that every purchased BookWalker JPEG uses this
   layout or that a different account/session has the same mapping.
 
-Future production work, if authorized, must be a separate change: retain the
-current production fallback, add broader JPEG-layout handling only with new
-evidence and tests, and decide explicitly whether normalized JPEG marker
-metadata/component IDs are acceptable for the production artifact contract.
-The generated reconstructed JPEGs and summaries are local diagnostic output
-and are not repository fixtures.
+Broader JPEG layouts, normalized marker output, and artifact selection remain
+separate future work. The generated reconstructed JPEGs and summaries are
+local diagnostic output and are not repository fixtures.
 
 BookWalker exposes no additional named access resource in the Phase 3 Policy
 contract. Explicit resource planning therefore fails closed for unsupported
 resource names; normal direct/quota planning remains unchanged.
+
+### 20.11 Phase P1 production shadow integration
+
+The current adapter keeps the existing original JPEG path first for trial
+pages, trial covers, and purchased covers. A unique full-resolution exact
+candidate is returned byte-for-byte, and the purchased lossless helper is not
+called after that path succeeds. When the original path fails, native source
+PNG remains the returned output.
+
+In `native` mode only, the production trace records bounded operation index,
+renderer/source canvas identity, source constructor and dimensions,
+source/destination rectangles, transform, alpha, composite operation, filter,
+and relevant `clearRect`, `fillRect`, and `putImageData` operations. The latest
+source-canvas clear boundary is used, earlier prefetch groups are ignored, and
+overflow, ambiguous source identity, additional pixel writes, non-identity
+drawing, duplicate tiles, gaps, and out-of-bounds rectangles fail closed.
+
+For purchased responses, `site_adapters/bookwalker/purchased_mapping.py`
+requires one proven renderer -> source `HTMLCanvasElement` -> one `ImageBitmap`
+chain and a unique full-resolution browser pixel match between the raw JPEG
+candidate and retained `ImageBitmap`. The synchronous
+`site_adapters/bookwalker/lossless_jpeg.py` helper runs inside
+`asyncio.to_thread()`, uses internal temporary files for the jpeglib DCT API,
+and returns dimensions, tile/MCU geometry, mapping SHA-256, and coefficient
+validation. It supports only baseline SOF0, three-component 4:4:4, equal
+dimensions, complete uniform strict-MCU bijections, and no partial edge MCU.
+Read-back must report zero coefficient mismatches and unchanged quantization
+tables.
+
+Phase P1 performs a second full-resolution browser pixel comparison against
+the current native PNG. Debug metadata records per-part mapping proof, raw JPEG
+exactness, JPEG support, strict MCU alignment, coefficient exactness, and
+native-pixel exactness, with all-or-none spread readiness. The reconstructed
+JPEG is not returned, written to the artifact directory, or added to the
+generic Core/DB/packaging contract. Unsupported, ambiguous, overflow, backend,
+coefficient, and browser-comparison failures preserve native PNG fallback.
+
+Trace source objects and snapshot canvases are bounded and cleared at the end
+of each capture window. `BOOKWALKER_CAPTURE_MODE=canvas` bypasses original,
+native, and lossless shadow processing and preserves the rendered-canvas
+fallback.
 
 ### Phase 1 runtime pacing
 

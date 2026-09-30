@@ -82,6 +82,62 @@ async ({encoded, mimeType}) => {
 }
 """
 
+_FULL_RESOLUTION_IMAGEBITMAP_MATCH_SCRIPT = """
+async ({encoded, mimeType, sourceId}) => {
+  const source = window.__bookwalkerNativeSourceObjects?.get(String(sourceId));
+  if (!source || source.constructor?.name !== 'ImageBitmap') {
+    return {available: false, exact: false, reason: 'ImageBitmap source unavailable'};
+  }
+  const binary = atob(encoded);
+  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+  let candidate = null;
+  try {
+    candidate = await createImageBitmap(new Blob([bytes], {type: mimeType}));
+    if (candidate.width !== source.width || candidate.height !== source.height) {
+      return {
+        available: true,
+        dimensions_equal: false,
+        exact: false,
+        source_dimensions: [source.width, source.height],
+        candidate_dimensions: [candidate.width, candidate.height],
+      };
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = source.width;
+    canvas.height = source.height;
+    const context = canvas.getContext('2d', {willReadFrequently: true});
+    if (!context) return {available: false, exact: false, reason: '2d context unavailable'};
+    context.drawImage(source, 0, 0);
+    const sourceData = context.getImageData(0, 0, source.width, source.height).data;
+    context.clearRect(0, 0, source.width, source.height);
+    context.drawImage(candidate, 0, 0);
+    const candidateData = context.getImageData(0, 0, candidate.width, candidate.height).data;
+    let differingPixels = 0;
+    let maxChannelDifference = 0;
+    for (let index = 0; index < sourceData.length; index += 4) {
+      let different = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const difference = Math.abs(sourceData[index + channel] - candidateData[index + channel]);
+        maxChannelDifference = Math.max(maxChannelDifference, difference);
+        different ||= difference !== 0;
+      }
+      if (different) differingPixels += 1;
+    }
+    return {
+      available: true,
+      dimensions_equal: true,
+      exact: differingPixels === 0,
+      width: source.width,
+      height: source.height,
+      differing_pixel_count: differingPixels,
+      max_channel_difference: maxChannelDifference,
+    };
+  } finally {
+    candidate?.close();
+  }
+}
+"""
+
 
 def is_jpeg_bytes(data: bytes) -> bool:
     """Return whether bytes have the JPEG SOI magic prefix."""
@@ -148,6 +204,12 @@ class OriginalJpegCandidate:
     sequence: int
     fetched_at: float
     signature: str | None = None
+
+
+def is_purchased_jpeg_candidate(candidate: OriginalJpegCandidate) -> bool:
+    """Return whether a cached candidate came from the purchased image host."""
+
+    return urlsplit(candidate.redacted_url).netloc.lower() == "bw-bv-epubs.bookwalker.jp"
 
 
 def candidate_from_jpeg(
@@ -237,6 +299,33 @@ async def image_signature(page: object, data: bytes, mime_type: str) -> str | No
     except Exception:  # noqa: BLE001 - signature failure must use PNG fallback
         return None
     return result if isinstance(result, str) and result else None
+
+
+async def imagebitmap_pixel_exact_match(
+    page: object,
+    data: bytes,
+    source_id: str,
+    mime_type: str = "image/jpeg",
+) -> dict[str, object]:
+    """Compare a candidate JPEG to a retained ImageBitmap at full resolution.
+
+    This deliberately does not resize either image.  It is used only by the
+    purchased shadow path after the ordinary original-JPEG match has failed.
+    """
+
+    encoded = base64.b64encode(data).decode("ascii")
+    try:
+        result = await page.evaluate(  # type: ignore[attr-defined]
+            _FULL_RESOLUTION_IMAGEBITMAP_MATCH_SCRIPT,
+            {"encoded": encoded, "mimeType": mime_type, "sourceId": source_id},
+        )
+    except Exception:  # noqa: BLE001 - shadow validation must fail closed
+        return {"available": False, "exact": False, "reason": "browser comparison failed"}
+    return result if isinstance(result, dict) else {
+        "available": False,
+        "exact": False,
+        "reason": "browser comparison returned invalid data",
+    }
 
 
 def candidate_capture(candidate: OriginalJpegCandidate) -> CaptureResult:

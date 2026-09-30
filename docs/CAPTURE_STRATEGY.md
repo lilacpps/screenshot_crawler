@@ -376,6 +376,27 @@ verified original JPEG
         -> rendered canvas PNG
 ```
 
+BookWalker's Phase P1 purchased-JPEG integration is shadow-only. The existing
+byte-preserving original-JPEG candidate path remains first priority. When that
+path does not produce a unique exact match, the adapter may validate a bounded
+renderer trace containing the visible renderer draw, its intermediate
+`HTMLCanvasElement`, a unique `ImageBitmap` tile permutation, and a matching
+purchased raw JPEG. The supported shadow contract is baseline sequential SOF0,
+three-component 4:4:4 JPEG, equal source/destination dimensions, uniform
+strict-MCU tiles, and a complete bijection. The helper moves quantized DCT
+blocks with `jpeglib.read_dct()` / `write_dct()`, reads the coefficients back,
+and verifies zero mismatches plus unchanged quantization tables. A full-size
+browser pixel comparison against the current native PNG is also required.
+
+This reconstruction is recorded only in BookWalker adapter debug metadata in
+Phase P1; it is not returned as a crawl artifact. The output remains the
+existing native PNG, or the rendered-canvas fallback when native capture is
+unavailable. Unsupported JPEG layouts, ambiguous mappings or candidates,
+trace overflow, coefficient mismatch, and browser comparison failure are all
+non-fatal shadow failures. Spread readiness is all-or-none, and the trace and
+retained browser source references are bounded and cleared after the capture
+window. `BOOKWALKER_CAPTURE_MODE=canvas` bypasses this machinery.
+
 For mutable purchased-viewer canvas sources, draw-time pixel snapshots are allowed, but PNG encoding occurs only after the selected draw calls are known.
 
 The BookWalker `BOOKWALKER_CAPTURE_MODE=canvas` mode is retained as a diagnostic lower-level control and bypasses native/original capture.
