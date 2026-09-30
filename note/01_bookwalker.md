@@ -1195,6 +1195,52 @@ HTMLCanvasElement and the bounded JPEG/native comparison does not produce a
 unique exact match. This is diagnostic evidence only; production fallback
 and filter behavior were not changed.
 
+### 20.8 Purchased JPEG transformation probe (2026-09-30)
+
+The diagnostic-only transformation probe is
+scripts/probe_bookwalker_purchased_transform.py. It accepts a purchased
+product URL, uses the existing adapter entry/navigation and native draw
+selection, and does not call production capture_page() or change production
+JPEG/PNG selection. It saves raw JPEG candidates, native source crop PNGs,
+mutable source-canvas snapshots, ImageBitmap snapshots, diff images, bounded
+canvas-operation traces, and redacted JPEG-marker metadata.
+
+The final live check used the purchased URL with access_strategy=direct,
+max-pages 1, and two reloads in the shared Crawler Chrome session. Both runs
+observed page 23/314 and two spread parts.
+
+- The selected raw JPEG candidates were each an exact decoded-pixel match to
+  their corresponding ImageBitmap snapshot. This confirms the network JPEG
+  is the ImageBitmap input for the observed parts.
+- The purchased source canvas was an HTMLCanvasElement of 960x1280. It
+  received two complete 32x32 tile permutations from ImageBitmap sources:
+  1200 operations, 1200 unique source tiles, 1200 unique destination tiles,
+  and 1199 moved tiles for each visible part.
+- The source canvas was then drawn to the renderer canvas with
+  source-over, identity transform, and filter none. No putImageData or
+  getImageData operation was observed on the large source/renderer canvases.
+  fillRect operations were limited to renderer/background or edge rectangles,
+  not source-canvas image content.
+- Direct raw/native decoded-pixel comparison was not equal. Part 1 had a
+  30.6635 percent differing-pixel ratio, PSNR 11.4947 dB, and SSIM
+  0.01685. Part 2 had a 28.0673 percent differing-pixel ratio, PSNR
+  12.0109 dB, and SSIM 0.01699. Both diff bounding boxes covered the full
+  960x1280 image, and exhaustive same-dimension crop offsets did not match.
+- The raw JPEGs were quality 90, 4:4:4, and contained only a JFIF APP0
+  marker among the inspected metadata markers. No EXIF, XMP, or COM marker
+  was observed. Printable marker facts are stored only as boolean/count/hash
+  metadata.
+- Reload comparison was RAW_SAME_NATIVE_SAME for both spread parts. This
+  supports deterministic behavior in the same account/session; it does not
+  prove that no user-specific deterministic data exists.
+
+Current classification for the observed purchased parts is
+TILE_REARRANGEMENT. The evidence confirms a tile reconstruction step
+between the network JPEG/ImageBitmap and the source HTMLCanvasElement. It
+does not establish purchaser watermarking, randomized session modification,
+or the server-side reason for the tile permutation. Generated artifacts are
+local diagnostic output and are not repository fixtures.
+
 BookWalker exposes no additional named access resource in the Phase 3 Policy
 contract. Explicit resource planning therefore fails closed for unsupported
 resource names; normal direct/quota planning remains unchanged.
