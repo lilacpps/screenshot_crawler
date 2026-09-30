@@ -1085,7 +1085,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         print("    selection: live resolver")
         print("  executing: resolver-selected candidates")
     elif defer_quota:
-        print(f"  direct: {len(candidates)}")
+        print(f"  direct: {len(direct_candidates)}")
         deferred_summary = f"  deferred: {len(deferred_candidates)}"
         if deferred_resource is not None:
             deferred_summary += f" resource={deferred_resource}"

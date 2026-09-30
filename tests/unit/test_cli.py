@@ -1236,10 +1236,15 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     await cli._run_batch_run(args)
     output = capsys.readouterr().out
     assert f"  planned: {len(direct_candidates) + 1}" in output
-    expected_direct = min(len(direct_candidates), limit) if limit is not None else len(direct_candidates)
+    expected_direct = len(direct_candidates)
+    expected_executing_direct = (
+        min(len(direct_candidates), limit)
+        if limit is not None
+        else len(direct_candidates)
+    )
     assert f"  direct: {expected_direct}" in output
     assert "  deferred: 1 resource=resource_x" in output
-    assert f"  executing direct: {expected_direct}" in output
+    assert f"  executing direct: {expected_executing_direct}" in output
     assert "  executing: 2" not in output
 
     if limit is None or not phase_a_has_direct:
