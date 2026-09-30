@@ -57,6 +57,77 @@ content package. `--grant-only all` resolves to the single Work Ticket pass.
 `batch run --site zeblack` uses the existing generic Executor; no Zeblack
 branch was added to Batch Core.
 
+### Z5-5 controlled live verification: title 3890 / chapter 58493 (2026-09-30)
+
+The latest `main` was reviewed at commit `f475a75`. The shared Crawler Chrome
+was used through `http://127.0.0.1:9222`; no credentials, cookies, storage
+state, request bodies, or tokens were read or saved. This was a research-only
+check and did not modify the production implementation.
+
+The read-only `title_chapter_list` observation for title `3890` decoded 201
+chapters:
+
+```text
+FREE=24, RENTAL=0, TICKET_AVAILABLE=1,
+TICKET_UNAVAILABLE=0, POINT=150, COIN=26,
+TICKET_UNAVAILABLE_COIN_ONLY=0, UNKNOWN=0
+oldest/current ticket candidate: chapter 58493
+mainName: 第25話 プロの実力
+chapter-list: https://zebrack-comic.shueisha.co.jp/title/3890/chapter/list
+```
+
+The target `#chapter58493` existed once and was visible. Its root was a
+pointer-cursor `div` with no semantic link/button descendant. Clicking the root
+once kept the page on chapter-list and did not open the expected modal. DOM
+inspection showed the visible chapter-title `<p>` as the user-facing pointer
+target. Clicking `#chapter58493 p` once opened the modal while keeping the URL
+on chapter-list.
+
+The modal has no `role=dialog`, `alertdialog`, native `dialog`, or
+`aria-modal=true`; its observed container was the visible CSS-module element
+`div[class*="_modalBase_"]`, with nested `_animation_`, `_container_`, and
+`_inner_` elements. The modal text was:
+
+```text
+支払い・提供時期
+キャンセル・申込期限について
+第25話 プロの実力
+所持チケット
+× 1枚
+チケットを使って読む
+コメントを見る
+キャンセル
+```
+
+The exact ticket control was one visible `div` with text
+`チケットを使って読む`, pointer cursor, and an `onclick` function. The
+exact cancel control was one visible `button` with text `キャンセル`. POINT,
+ITEM, COIN, and coin-purchase controls were all absent. The CSS-module class
+names were recorded as diagnostics only; a production selector should use the
+exact text within the selected chapter modal and fail closed on ambiguity.
+
+The exact cancel control was clicked once. The modal disappeared, the URL
+remained `/title/3890/chapter/list`, and the subsequent read-only protobuf was
+unchanged: `58493=TICKET_AVAILABLE`, `TICKET_AVAILABLE=[58493]`, with the
+same status counts. No `POST /api/v3/chapter_viewer` was observed. No ticket,
+point, item, coin, or purchase control was clicked, and Work Ticket consumption
+remained zero.
+
+This verifies the safe UI sequence for this title as:
+
+```text
+chapter/list
+-> #chapter58493 p
+-> confirmation modal
+-> exact ticket control (consuming action, not clicked here)
+-> viewer
+```
+
+The title-402 direct-navigation result remains the separate warning: direct
+viewer navigation can consume a ticket, while opening this chapter-list modal
+and cancelling it did not. The production adapter was intentionally left
+unchanged; hashed CSS classes are not approved as production selectors.
+
 ### Z5-4 controlled live verification: title 402 / chapter 341029 (2026-09-30)
 
 The latest `main` was reviewed at commit `8c84b5a`. The shared Crawler Chrome

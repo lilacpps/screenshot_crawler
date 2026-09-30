@@ -55,6 +55,40 @@ check. The production implementation was intentionally not changed in this
 research run; until a new adapter flow is implemented and verified, production
 quota entry must not begin from a direct viewer URL.
 
+### Current title-3890 confirmation modal verification (2026-09-30)
+
+The latest `main` was reviewed at commit `f475a75`. The shared Crawler Chrome/CDP
+read-only observation for title `3890` decoded 201 chapters:
+`FREE=24`, `RENTAL=0`, `TICKET_AVAILABLE=1`, `TICKET_UNAVAILABLE=0`,
+`POINT=150`, `COIN=26`, `TICKET_UNAVAILABLE_COIN_ONLY=0`, and `UNKNOWN=0`.
+The candidate was chapter `58493`, `第25話 プロの実力`.
+
+The row `#chapter58493` was inspected without using viewer navigation. The root
+is a pointer-cursor `div` with no semantic descendant; one root click did not
+open a modal. The visible chapter-title paragraph is the actual user-facing
+click target observed in this run: `#chapter58493 p`. Clicking it once kept the
+URL on `/title/3890/chapter/list` and opened a confirmation modal.
+
+The modal has no `role=dialog`, `alertdialog`, native `dialog`, or
+`aria-modal=true`. Its observed container was the CSS-module
+`div[class*="_modalBase_"]`, with `_animation_`, `_container_`, and `_inner_`
+ancestors. Its chapter identity was `第25話 プロの実力`, and its ticket area
+showed `所持チケット` / `× 1枚`. There was exactly one visible exact-text
+`チケットを使って読む` control and exactly one visible exact-text
+`キャンセル` button. POINT, ITEM, COIN, and purchase controls were absent.
+The exact ticket control was not clicked.
+
+Clicking the exact `キャンセル` button once removed the modal and left the URL
+on chapter-list. A fresh read-only protobuf still reported
+`58493=TICKET_AVAILABLE` and `TICKET_AVAILABLE=[58493]`, with unchanged status
+counts. No `POST /api/v3/chapter_viewer` occurred during the modal/cancel flow,
+and Work Ticket consumption remained zero.
+
+The observed safe flow is therefore `chapter/list -> #chapter58493 p -> modal`;
+the exact ticket control is the later consuming step. CSS-module classes are
+diagnostic evidence only and are not approved as production selectors. This
+research run did not modify the production implementation.
+
 ### Current title-66 live verification (2026-09-30)
 
 Title `66` was checked through the shared CDP browser. Read-only protobuf
