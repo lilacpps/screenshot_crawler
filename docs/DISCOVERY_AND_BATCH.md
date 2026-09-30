@@ -48,8 +48,20 @@ by another grant loop. Normal `--limit` counts final crawl/package slots: a
 completed Phase A slot leaves no ticket to consume; otherwise only the
 remaining slots may be granted and crawled. Grant-only `--limit` counts
 selected grant attempts; resolver snapshots are read-only and do not consume
-the limit. The shared AccessGuard, pacing, metrics, exact entry flow, and
-non-Zeblack/Magapoke resource orchestration remain unchanged.
+the limit.
+
+The generic deferred Batch path derives its resource from the planned
+candidate `quota_resource`; it has no Zeblack or `work_ticket` resource branch.
+An incomplete candidate resource or a mixed deferred resource set fails closed.
+The resolver is site access for pacing purposes. When there was a previous
+site access, the sequence is `inter_candidate_delay_ms -> resolver ->
+inter_candidate_delay_ms -> selected grant`; a successful grant is followed
+by the same delay before Phase C. With no Phase A site access there is no
+leading delay before the resolver. A resolver that reaches the site but
+selects no candidate still establishes the pacing state for a subsequent
+explicit resource pass; local-only skips do not add a delay. The shared
+AccessGuard, metrics, exact entry flow, and non-Zeblack/Magapoke resource
+orchestration remain unchanged.
 
 ## Z5-6 Zeblack production Work Ticket entry flow
 

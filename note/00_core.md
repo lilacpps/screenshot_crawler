@@ -13,8 +13,15 @@ Zeblack is the current consumer: its Work Ticket resolver reads one native
 chapter/list snapshot per Work/title, matches live availability to Catalog
 external IDs, and then reuses the existing grant-only Executor. Its normal
 Batch phases are direct, grant-access, and one post-grant direct replan.
-Catalog schema/version and the shared browser/CDP session model are
-unchanged.
+The generic deferred path derives the resolver resource from the planned
+candidate `quota_resource`; missing or mixed deferred resources fail closed and
+no site-specific resource name is interpreted by the CLI. The resolver is a
+site access for `inter_candidate_delay_ms`: a previous site access is followed
+by a delay before resolution, resolution is followed by a delay before the
+selected grant, and a confirmed grant is followed by a delay before the
+post-grant direct phase. A resolver with no selected candidate still updates
+the explicit-pass pacing state, while local-only skips do not. Catalog
+schema/version and the shared browser/CDP session model are unchanged.
 
 ## Zeblack Z5 current status (2026-09-30)
 

@@ -64,6 +64,24 @@ def test_batch_grant_only_accepts_explicit_resource_and_all_shape() -> None:
     assert all_args.grant_only == "all"
 
 
+def test_deferred_resource_contract_is_candidate_owned() -> None:
+    assert cli._single_deferred_quota_resource(
+        [SimpleNamespace(quota_resource="resource_x")]
+    ) == "resource_x"
+
+    with pytest.raises(cli.BatchPlanningError, match="exactly one access resource"):
+        cli._single_deferred_quota_resource(
+            [
+                SimpleNamespace(quota_resource="resource_x"),
+                SimpleNamespace(quota_resource="resource_y"),
+            ]
+        )
+    with pytest.raises(cli.BatchPlanningError, match="exactly one access resource"):
+        cli._single_deferred_quota_resource(
+            [SimpleNamespace(quota_resource=None)]
+        )
+
+
 def test_batch_adapter_registry_scopes_bookwalker_credentials() -> None:
     registry = cli._batch_adapter_registry(
         {
@@ -933,17 +951,27 @@ def test_batch_run_limit_spans_initial_and_premium_phases(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("limit", [None, 1], ids=["unlimited", "limit_one"])
+@pytest.mark.parametrize(
+    ("limit", "phase_a_has_direct"),
+    [(None, True), (1, True), (1, False)],
+    ids=["unlimited", "limit_one", "phase_a_empty_limit_one"],
+)
 async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     limit: int | None,
+    phase_a_has_direct: bool,
 ) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(WorkInput(work_key="zeblack-work", title="Zeblack"))
     direct_candidates: list[SimpleNamespace] = []
     for index, access_until in enumerate(
-        (None, (datetime.now(JST) + timedelta(hours=1)).isoformat()), start=1
+        (
+            (None, (datetime.now(JST) + timedelta(hours=1)).isoformat())
+            if phase_a_has_direct
+            else ()
+        ),
+        start=1,
     ):
         item = catalog.create_item(ItemInput(order_label=f"#{index}"), work_id=work.id)
         source = catalog.create_source(
@@ -1001,7 +1029,7 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         access_strategy="quota",
         access_mode="quota",
         consumes_quota=True,
-        quota_resource="work_ticket",
+        quota_resource="resource_x",
         external_id="3",
         work_id=work.id,
     )
@@ -1011,13 +1039,17 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     initial_plan = SimpleNamespace(
         candidates=[*direct_candidates, quota_candidate],
         skipped=[],
-        direct_count=2,
+        direct_count=len(direct_candidates),
         quota_count=1,
     )
     post_plan = SimpleNamespace(candidates=[post_candidate], skipped=[], direct_count=1, quota_count=0)
     plans: list[str | None] = []
     events: list[str] = []
     status_during_grant: list[str] = []
+    resolver_resources: list[str] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        events.append(f"sleep:{seconds}")
 
     class FakePlanner:
         def __init__(self, *_args: object) -> None:
@@ -1078,9 +1110,10 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
             return None
 
         async def resolve_access_resource_candidates(
-            self, _page: object, _candidates: object, _resource: str
+            self, _page: object, _candidates: object, resource: str
         ) -> object:
             events.append("resolve")
+            resolver_resources.append(resource)
             return SimpleNamespace(selected_source_ids=(quota_source.id,), skipped_source_reasons=())
 
         async def execute_candidate(self, _page: object, candidate: object, **_kwargs: object) -> object:
@@ -1121,7 +1154,7 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
                 quota_started_at=datetime.now(JST),
                 access_granted_until=datetime.now(JST) + timedelta(hours=71),
             )
-            return SimpleNamespace(resource="work_ticket", resource_consumed=True, stop_reason="entry_confirmed")
+            return SimpleNamespace(resource="resource_x", resource_consumed=True, stop_reason="entry_confirmed")
 
     monkeypatch.setattr(cli, "CatalogService", lambda *_args: catalog)
     monkeypatch.setattr(cli, "_batch_policy_registry", lambda: SimpleNamespace(create=lambda _site: FakePolicy()))
@@ -1131,6 +1164,14 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
     monkeypatch.setattr(cli, "_batch_adapter_registry", lambda _values: object())
     monkeypatch.setattr(cli, "resolve_cdp_endpoint", lambda **_kwargs: "http://example.test:9222")
+    monkeypatch.setattr(cli.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        cli,
+        "load_runtime_settings",
+        lambda *_args: SimpleNamespace(
+            for_site=lambda _site: SimpleNamespace(inter_candidate_delay_ms=17)
+        ),
+    )
     argv = [
         "batch",
         "run",
@@ -1144,15 +1185,26 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     args = _parser().parse_args(argv)
     await cli._run_batch_run(args)
 
-    if limit is None:
-        assert events == [
-            f"crawl:{direct_candidates[0].item_id}",
-            f"crawl:{direct_candidates[1].item_id}",
-            "resolve",
-            "grant",
-            f"crawl:{quota_item.id}",
-        ]
+    if limit is None or not phase_a_has_direct:
+        expected_events: list[str] = []
+        for index, candidate in enumerate(direct_candidates):
+            expected_events.append(f"crawl:{candidate.item_id}")
+            if index < len(direct_candidates) - 1:
+                expected_events.append("sleep:0.017")
+        if direct_candidates:
+            expected_events.append("sleep:0.017")
+        expected_events.extend(
+            [
+                "resolve",
+                "sleep:0.017",
+                "grant",
+                "sleep:0.017",
+                f"crawl:{quota_item.id}",
+            ]
+        )
+        assert events == expected_events
         assert plans == [None, None]
+        assert resolver_resources == ["resource_x"]
         assert status_during_grant == ["pending"]
         assert catalog.get_item(quota_item.id).status == "completed"
         assert catalog.get_source(quota_source.id).quota_started_at is not None
@@ -1161,9 +1213,95 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     else:
         assert events == [f"crawl:{direct_candidates[0].item_id}"]
         assert plans == [None]
+        assert resolver_resources == []
         assert status_during_grant == []
         assert catalog.get_item(quota_item.id).status == "pending"
         assert catalog.get_source(quota_source.id).quota_started_at is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_deferred_grant_only_paces_resolver_before_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        events.append(f"sleep:{seconds}")
+
+    class FakeSession:
+        async def new_page(self) -> object:
+            page = object()
+            events.append("new")
+            return page
+
+        async def close_page(self, _page: object) -> None:
+            events.append("close")
+
+    class FakeExecutor:
+        async def resolve_access_resource_candidates(
+            self, _page: object, _candidates: object, resource: str
+        ) -> object:
+            events.append(f"resolve:{resource}")
+            return SimpleNamespace(selected_source_ids=(11,), skipped_source_reasons=())
+
+        def grant_only_skip_reason(self, _candidate: object) -> None:
+            return None
+
+        async def execute_grant_only_candidate(
+            self, _page: object, _candidate: object, **_kwargs: object
+        ) -> object:
+            events.append("grant")
+            return SimpleNamespace(
+                resource="resource_x",
+                resource_consumed=True,
+                stop_reason="entry_confirmed",
+            )
+
+    monkeypatch.setattr(cli.asyncio, "sleep", fake_sleep)
+    candidate = SimpleNamespace(
+        item_id=1,
+        source_id=11,
+        metadata={},
+        access_strategy="quota",
+        quota_resource="resource_x",
+    )
+    session = FakeSession()
+    executor = FakeExecutor()
+    selected = await cli._resolve_access_resource_candidates(
+        session,
+        executor,  # type: ignore[arg-type]
+        [candidate],
+        resource="resource_x",
+    )
+    assert selected == [candidate]
+
+    args = SimpleNamespace(
+        output_root=Path("output/batch"),
+        library_dir=Path("output/Books"),
+        max_pages=1000,
+        max_same_content=3,
+        keep_open=False,
+    )
+    await cli._execute_batch_candidates(
+        args,
+        session,  # type: ignore[arg-type]
+        executor,  # type: ignore[arg-type]
+        selected,
+        phase="grant-only",
+        inter_candidate_delay_ms=17,
+        delay_before_first_ms=17,
+        grant_only=True,
+    )
+
+    assert events == [
+        "new",
+        "resolve:resource_x",
+        "close",
+        "sleep:0.017",
+        "new",
+        "grant",
+        "close",
+    ]
 
 
 def test_grant_only_all_uses_policy_order_replans_and_shares_limit(

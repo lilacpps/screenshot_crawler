@@ -871,18 +871,46 @@ def _policy_defers_quota_access(policy: object) -> bool:
     return bool(method()) if callable(method) else False
 
 
+def _single_deferred_quota_resource(
+    candidates: list[BatchCandidate],
+) -> str | None:
+    """Return the one resource owned by a deferred quota phase.
+
+    Deferred candidates are already policy-selected.  The generic CLI may carry
+    their resource through the resolver contract, but it must not infer a site
+    resource name or silently discard an incomplete/mixed plan.
+    """
+
+    if not candidates:
+        return None
+    resources = {candidate.quota_resource for candidate in candidates}
+    if None in resources or len(resources) != 1:
+        raise BatchPlanningError(
+            "Deferred quota candidates must share exactly one access resource"
+        )
+    resource = next(iter(resources))
+    if not isinstance(resource, str) or not resource:
+        raise BatchPlanningError(
+            "Deferred quota candidates must provide a non-empty access resource"
+        )
+    return resource
+
+
 async def _resolve_access_resource_candidates(
     session: BrowserSession,
     executor: BatchExecutor,
     candidates: list[BatchCandidate],
     *,
     resource: str,
+    delay_before_first_ms: int | None = None,
     metrics: BatchMetricsWriter | None = None,
 ) -> list[BatchCandidate]:
     """Resolve site-native candidates without counting the snapshot as an attempt."""
 
     if not candidates:
         return []
+    if delay_before_first_ms is not None:
+        await asyncio.sleep(delay_before_first_ms / 1000)
     page = await session.new_page()
     try:
         resolver = getattr(executor, "resolve_access_resource_candidates", None)
@@ -956,6 +984,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     policy = policies.create(args.site)
     defer_quota = _policy_defers_quota_access(policy)
     deferred_candidates: list[BatchCandidate] = []
+    deferred_resource: str | None = None
     if grant_only_all:
         grant_only_resources = _grant_only_resource_passes(policy)
         plan = None
@@ -975,6 +1004,7 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             deferred_candidates = [
                 candidate for candidate in plan.candidates if candidate.consumes_quota
             ]
+            deferred_resource = _single_deferred_quota_resource(deferred_candidates)
             direct_candidates = [
                 candidate for candidate in plan.candidates if not candidate.consumes_quota
             ]
@@ -1039,12 +1069,21 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                 metrics.record_planned_skips(resource_plan.skipped)
                 resource_candidates = resource_plan.candidates
                 if defer_quota:
+                    resolver_had_candidates = bool(resource_candidates)
                     resource_candidates = await _resolve_access_resource_candidates(
                         session,
                         executor,
                         resource_candidates,
                         resource=resource,
+                        delay_before_first_ms=(
+                            runtime_settings.inter_candidate_delay_ms
+                            if previous_phase_had_site_access
+                            else None
+                        ),
                         metrics=metrics,
+                    )
+                    previous_phase_had_site_access = (
+                        previous_phase_had_site_access or resolver_had_candidates
                     )
                 print(
                     f"Batch grant-only resource pass ({resource}); "
@@ -1059,7 +1098,8 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                     inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
                     delay_before_first_ms=(
                         runtime_settings.inter_candidate_delay_ms
-                        if previous_phase_had_site_access
+                        if resource_candidates
+                        and (defer_quota or previous_phase_had_site_access)
                         else None
                     ),
                     metrics=metrics,
@@ -1091,6 +1131,9 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                 candidates,
                 phase=(f"{args.site} grant-only:{grant_only}" if defer_quota else f"grant-only:{grant_only}"),
                 inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                delay_before_first_ms=(
+                    runtime_settings.inter_candidate_delay_ms if defer_quota else None
+                ),
                 metrics=metrics,
                 grant_only=True,
                 attempt_limit=limit,
@@ -1113,22 +1156,32 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                 None if limit is None else max(0, limit - phase_a_completed)
             )
             if should_continue and remaining_limit != 0 and deferred_candidates:
+                if deferred_resource is None:
+                    raise BatchPlanningError(
+                        "Deferred quota candidates have no access resource"
+                    )
                 selected = await _resolve_access_resource_candidates(
                     session,
                     executor,
                     deferred_candidates,
-                    resource="work_ticket",
+                    resource=deferred_resource,
+                    delay_before_first_ms=(
+                        runtime_settings.inter_candidate_delay_ms
+                        if _phase_a_processed > 0
+                        else None
+                    ),
                     metrics=metrics,
                 )
                 if selected:
                     print(f"Batch phase: {args.site} grant-access")
-                    await _execute_batch_candidates(
+                    grant_processed, _grant_should_continue = await _execute_batch_candidates(
                         args,
                         session,
                         executor,
                         selected,
                         phase=f"{args.site} grant-access",
                         inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                        delay_before_first_ms=runtime_settings.inter_candidate_delay_ms,
                         metrics=metrics,
                         grant_only=True,
                         attempt_limit=remaining_limit,
@@ -1163,6 +1216,11 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                                 post_candidates,
                                 phase=f"{args.site} post-grant direct",
                                 inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                                delay_before_first_ms=(
+                                    runtime_settings.inter_candidate_delay_ms
+                                    if grant_processed > 0
+                                    else None
+                                ),
                                 metrics=metrics,
                             )
         else:

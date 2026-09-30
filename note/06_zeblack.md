@@ -40,7 +40,14 @@ only newly active Sources, and no further grant loop runs. Normal `--limit`
 is a final crawl/package Item-slot limit; grant-only `--limit` counts selected
 grant attempts, not read-only resolver snapshots. `inter_candidate_delay_ms`,
 page pacing, AccessGuard, 403/429/challenge/CAPTCHA handling, and metrics are
-kept active for resolver and production attempts.
+kept active for resolver and production attempts. Generic Batch derives the
+deferred resolver resource from candidate `quota_resource`; the CLI does not
+hard-code `work_ticket`, and missing or mixed deferred resources fail closed.
+The resolver counts as site access for pacing: previous site access delays the
+resolver, the selected grant is delayed after the resolver, and post-grant
+direct is delayed after a confirmed grant. Phase A with zero site attempts has
+no leading resolver delay, and a resolver-only pass still affects the next
+explicit resource pass. Local Catalog skips do not create pacing delays.
 
 The former Z5 behavior and live verification records below are retained as
 history. This Z6 implementation was validated with synthetic/unit and
