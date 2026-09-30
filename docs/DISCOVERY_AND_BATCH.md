@@ -79,6 +79,25 @@ explicit resource pass; local-only skips do not add a delay. The shared
 AccessGuard, metrics, exact entry flow, and non-Zeblack/Magapoke resource
 orchestration remain unchanged.
 
+## Z7 deferred access candidate representation (2026-10-01)
+
+Planner semantics and `BatchPlan.candidates` remain unchanged: deferred sites
+still retain the broad quota candidate pool so the site-owned live resolver can
+intersect it with current availability. The CLI uses a generic
+`consumes_quota` partition helper to present immediate candidates separately
+from the deferred pool; it does not branch on a site name or resource name.
+
+For a deferred site, `batch plan` and the normal `batch run` summary show the
+total broad plan, immediate/direct count, and deferred pool count/resource.
+Only immediate candidates are listed individually; deferred candidate
+order/title/URL details are kept out of normal output. The resolver diagnostic
+still reports its pool size, and only the resolver-selected candidate(s) enter
+grant execution. Explicit deferred `--grant-only` uses the same pool summary
+and reports live resolver selection instead of presenting the whole pool as
+immediately executable. Non-deferred sites retain their existing output and
+execution representation. No Catalog schema, migration, or version change is
+required.
+
 ## Z5-6 Zeblack production Work Ticket entry flow
 
 `SourceTarget.locator`と`RunConfig.source_url`はcanonical viewer URLのまま保持する。

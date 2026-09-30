@@ -82,6 +82,52 @@ def test_deferred_resource_contract_is_candidate_owned() -> None:
         )
 
 
+def test_deferred_batch_plan_prints_pool_summary_without_candidate_details(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    immediate = SimpleNamespace(
+        item_id=1,
+        source_id=11,
+        metadata={"order": "#1"},
+        access_mode="free",
+        access_strategy="direct",
+        consumes_quota=False,
+        locator="https://example.invalid/direct",
+    )
+    deferred = [
+        SimpleNamespace(
+            item_id=index,
+            source_id=index,
+            metadata={"order": f"#{index}"},
+            access_mode="quota",
+            access_strategy="quota",
+            consumes_quota=True,
+            quota_resource="resource_x",
+            locator=f"https://example.invalid/deferred/{index}",
+        )
+        for index in range(2, 102)
+    ]
+    plan = SimpleNamespace(
+        candidates=[immediate, *deferred],
+        skipped=[],
+        quota_remaining=None,
+        quota_count=len(deferred),
+    )
+
+    cli._print_batch_plan(plan, site="zeblack", defer_quota=True)
+
+    output = capsys.readouterr().out
+    assert "  eligible: 101" in output
+    assert "  direct: 1" in output
+    assert "  deferred: 100 resource=resource_x" in output
+    assert "Deferred access-resource pool:" in output
+    assert "  candidates: 100" in output
+    assert "  availability: checked during batch run" in output
+    assert "item=1 source=11" in output
+    assert "item=2 source=2" not in output
+    assert "deferred/101" not in output
+
+
 def test_batch_adapter_registry_scopes_bookwalker_credentials() -> None:
     registry = cli._batch_adapter_registry(
         {
@@ -642,6 +688,9 @@ def test_batch_plan_magapoke_shows_potential_premium_pass_without_browser(
 
     output = capsys.readouterr().out
     assert calls == [None, "premium_ticket"]
+    assert "  eligible: 6" in output
+    assert "  direct: 5" in output
+    assert "  quota: 1" in output
     assert "Potential resource pass (premium_ticket):" in output
     assert "  candidates: 135" in output
     assert "  availability: checked during batch run" in output
@@ -961,6 +1010,7 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     tmp_path: Path,
     limit: int | None,
     phase_a_has_direct: bool,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(WorkInput(work_key="zeblack-work", title="Zeblack"))
@@ -1184,6 +1234,13 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         argv.extend(["--limit", str(limit)])
     args = _parser().parse_args(argv)
     await cli._run_batch_run(args)
+    output = capsys.readouterr().out
+    assert f"  planned: {len(direct_candidates) + 1}" in output
+    expected_direct = min(len(direct_candidates), limit) if limit is not None else len(direct_candidates)
+    assert f"  direct: {expected_direct}" in output
+    assert "  deferred: 1 resource=resource_x" in output
+    assert f"  executing direct: {expected_direct}" in output
+    assert "  executing: 2" not in output
 
     if limit is None or not phase_a_has_direct:
         expected_events: list[str] = []
@@ -1217,6 +1274,153 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         assert status_during_grant == []
         assert catalog.get_item(quota_item.id).status == "pending"
         assert catalog.get_source(quota_source.id).quota_started_at is None
+
+
+@pytest.mark.asyncio
+async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = SimpleNamespace(
+        item_id=1,
+        source_id=11,
+        metadata={"order": "#1"},
+        access_strategy="quota",
+        access_mode="quota",
+        consumes_quota=True,
+        quota_resource="work_ticket",
+        external_id="58493",
+    )
+    events: list[str] = []
+
+    class FakePlanner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+            assert site == "zeblack"
+            assert quota_resource == "work_ticket"
+            return SimpleNamespace(candidates=[candidate], skipped=[])
+
+    class FakePolicy:
+        def validate_grant_only_resource(self, resource: str) -> None:
+            assert resource == "work_ticket"
+
+        def defer_quota_access_to_grant_phase(self) -> bool:
+            return True
+
+    class FakeMetrics:
+        path = tmp_path / "metrics.jsonl"
+
+        def record_planned_skips(self, _skips: object) -> None:
+            pass
+
+        def record_local_skip(self, _candidate: object, *, reason: str) -> None:
+            events.append(f"skip:{reason}")
+
+        def start_candidate(self, _candidate: object) -> None:
+            pass
+
+        def finish_candidate(self, **_kwargs: object) -> None:
+            pass
+
+        def record_access_event(self, _event: object) -> None:
+            pass
+
+        def finish(self, **_kwargs: object) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class FakeSession:
+        @classmethod
+        async def connect(cls, _endpoint: str) -> "FakeSession":
+            return cls()
+
+        async def new_page(self) -> object:
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    class FakeExecutor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
+            return None
+
+        async def resolve_access_resource_candidates(
+            self, _page: object, candidates: object, resource: str
+        ) -> object:
+            assert list(candidates) == [candidate]
+            assert resource == "work_ticket"
+            events.append("resolve")
+            return SimpleNamespace(
+                selected_source_ids=(candidate.source_id,),
+                skipped_source_reasons=(),
+            )
+
+        async def execute_grant_only_candidate(
+            self, _page: object, selected: object, **_kwargs: object
+        ) -> object:
+            assert selected is candidate
+            events.append("grant")
+            return SimpleNamespace(
+                resource="work_ticket",
+                resource_consumed=True,
+                stop_reason="entry_confirmed",
+            )
+
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(
+        cli,
+        "_batch_policy_registry",
+        lambda: SimpleNamespace(create=lambda _site: FakePolicy()),
+    )
+    monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
+    monkeypatch.setattr(cli, "BatchMetricsWriter", lambda *_args, **_kwargs: FakeMetrics())
+    monkeypatch.setattr(cli, "BrowserSession", FakeSession)
+    monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_batch_adapter_registry", lambda _values: object())
+    monkeypatch.setattr(
+        cli, "resolve_cdp_endpoint", lambda **_kwargs: "http://example.test:9222"
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_runtime_settings",
+        lambda *_args: SimpleNamespace(
+            for_site=lambda _site: SimpleNamespace(inter_candidate_delay_ms=0)
+        ),
+    )
+
+    args = _parser().parse_args(
+        [
+            "batch",
+            "run",
+            "--site",
+            "zeblack",
+            "--grant-only",
+            "work_ticket",
+            "--catalog",
+            str(tmp_path / "catalog.sqlite"),
+        ]
+    )
+    await cli._run_batch_run(args)
+
+    output = capsys.readouterr().out
+    assert events == ["resolve", "grant"]
+    assert "deferred candidate pool:" in output
+    assert "    resource: work_ticket" in output
+    assert "    candidates: 1" in output
+    assert "    selection: live resolver" in output
+    assert "  executing: resolver-selected candidates" in output
+    assert "  executing: 1" not in output
 
 
 @pytest.mark.asyncio

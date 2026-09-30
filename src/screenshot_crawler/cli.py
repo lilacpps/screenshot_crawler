@@ -808,39 +808,65 @@ def _run_catalog(args: argparse.Namespace) -> None:
         )
 
 
-def _print_batch_plan(plan: BatchPlan, *, site: str) -> None:
+def _print_batch_plan(
+    plan: BatchPlan, *, site: str, defer_quota: bool = False
+) -> None:
     """Print the stable, human-readable plan summary."""
 
+    immediate_candidates, deferred_candidates, deferred_resource = (
+        _partition_deferred_candidates(plan.candidates, defer_quota=defer_quota)
+    )
     print("Batch plan:")
     print(f"  site: {site}")
     print(f"  eligible: {len(plan.candidates)}")
-    print(f"  direct: {plan.direct_count}")
-    print(f"  quota: {plan.quota_count}")
+    direct_count = len(immediate_candidates) if defer_quota else plan.direct_count
+    print(f"  direct: {direct_count}")
+    if defer_quota:
+        deferred_summary = f"  deferred: {len(deferred_candidates)}"
+        if deferred_resource is not None:
+            deferred_summary += f" resource={deferred_resource}"
+        print(deferred_summary)
+    else:
+        print(f"  quota: {plan.quota_count}")
     if plan.quota_remaining is not None:
         print(f"  quota_available: {plan.quota_available}")
         print(f"  quota_remaining: {plan.quota_remaining} (after in-memory reservations)")
     print(f"  skipped: {len(plan.skipped)}")
-    if plan.candidates:
+    visible_candidates = immediate_candidates if defer_quota else plan.candidates
+    if visible_candidates:
         print("Candidates:")
-        for candidate in plan.candidates:
-            order = candidate.metadata.get("order", "-")
-            print(
-                f"  item={candidate.item_id} source={candidate.source_id} "
-                f"{order} {candidate.access_mode} -> "
-                f"{candidate.access_strategy} {candidate.locator}"
-            )
+        for candidate in visible_candidates:
+            _print_batch_candidate(candidate)
+    if defer_quota and deferred_candidates:
+        print("Deferred access-resource pool:")
+        print(f"  resource: {deferred_resource}")
+        print(f"  candidates: {len(deferred_candidates)}")
+        print("  availability: checked during batch run")
     if plan.skipped:
         print("Skipped:")
         for reason, count in sorted(Counter(item.reason for item in plan.skipped).items()):
             print(f"  {reason}: {count}")
 
 
+def _print_batch_candidate(candidate: BatchCandidate) -> None:
+    order = candidate.metadata.get("order", "-")
+    print(
+        f"  item={candidate.item_id} source={candidate.source_id} "
+        f"{order} {candidate.access_mode} -> "
+        f"{candidate.access_strategy} {candidate.locator}"
+    )
+
+
 def _run_batch_plan(args: argparse.Namespace) -> None:
     policies = _batch_policy_registry()
     planner = BatchPlanner(CatalogService(args.catalog), policies)
     plan = planner.plan(site=args.site)
-    _print_batch_plan(plan, site=args.site)
     policy = policies.create(args.site)
+    _print_batch_plan(
+        plan,
+        site=args.site,
+        defer_quota=_policy_defers_quota_access(policy),
+    )
     for resource in _additional_access_resource_passes(policy):
         resource_plan = planner.plan(site=args.site, quota_resource=resource)
         print(f"Potential resource pass ({resource}):")
@@ -894,6 +920,20 @@ def _single_deferred_quota_resource(
             "Deferred quota candidates must provide a non-empty access resource"
         )
     return resource
+
+
+def _partition_deferred_candidates(
+    candidates: list[BatchCandidate],
+    *,
+    defer_quota: bool,
+) -> tuple[list[BatchCandidate], list[BatchCandidate], str | None]:
+    """Partition a plan without changing the planner-owned candidate pool."""
+
+    if not defer_quota:
+        return list(candidates), [], None
+    immediate = [candidate for candidate in candidates if not candidate.consumes_quota]
+    deferred = [candidate for candidate in candidates if candidate.consumes_quota]
+    return immediate, deferred, _single_deferred_quota_resource(deferred)
 
 
 async def _resolve_access_resource_candidates(
@@ -1013,17 +1053,17 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             raise BatchPlanningError(str(exc)) from exc
         plan = planner.plan(site=args.site, quota_resource=grant_only)
         candidates = plan.candidates
+        if defer_quota:
+            _immediate_candidates, candidates, _deferred_resource = (
+                _partition_deferred_candidates(candidates, defer_quota=True)
+            )
         metrics_mode = "grant-only"
     else:
         plan = planner.plan(site=args.site)
         if defer_quota:
-            deferred_candidates = [
-                candidate for candidate in plan.candidates if candidate.consumes_quota
-            ]
-            deferred_resource = _single_deferred_quota_resource(deferred_candidates)
-            direct_candidates = [
-                candidate for candidate in plan.candidates if not candidate.consumes_quota
-            ]
+            direct_candidates, deferred_candidates, deferred_resource = (
+                _partition_deferred_candidates(plan.candidates, defer_quota=True)
+            )
             candidates = direct_candidates[:limit] if limit is not None else direct_candidates
         else:
             candidates = plan.candidates[:limit] if limit is not None else plan.candidates
@@ -1036,13 +1076,29 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     print(
         f"  planned: {len(plan.candidates) if plan is not None else 'policy resource passes'}"
     )
-    print(
-        f"  executing: {len(candidates)}"
-        + (f" resource={grant_only}" if grant_only is not None else "")
-    )
-    if plan is not None:
-        print(f"  direct: {sum(item.access_strategy == 'direct' for item in candidates)}")
-        print(f"  quota: {sum(item.access_strategy == 'quota' for item in candidates)}")
+    if grant_only_all and defer_quota:
+        print("  executing: policy resource passes")
+    elif defer_quota and grant_only is not None:
+        print("  deferred candidate pool:")
+        print(f"    resource: {grant_only}")
+        print(f"    candidates: {len(candidates)}")
+        print("    selection: live resolver")
+        print("  executing: resolver-selected candidates")
+    elif defer_quota:
+        print(f"  direct: {len(candidates)}")
+        deferred_summary = f"  deferred: {len(deferred_candidates)}"
+        if deferred_resource is not None:
+            deferred_summary += f" resource={deferred_resource}"
+        print(deferred_summary)
+        print(f"  executing direct: {len(candidates)}")
+    else:
+        print(
+            f"  executing: {len(candidates)}"
+            + (f" resource={grant_only}" if grant_only is not None else "")
+        )
+        if plan is not None:
+            print(f"  direct: {sum(item.access_strategy == 'direct' for item in candidates)}")
+            print(f"  quota: {sum(item.access_strategy == 'quota' for item in candidates)}")
     if plan is not None and plan.skipped:
         print(f"  skipped: {len(plan.skipped)}")
     has_deferred_normal_work = (
@@ -1084,7 +1140,14 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                 )
                 metrics.record_planned_skips(resource_plan.skipped)
                 resource_candidates = resource_plan.candidates
+                deferred_pool_count = len(resource_candidates)
                 if defer_quota:
+                    _immediate_candidates, resource_candidates, _resource = (
+                        _partition_deferred_candidates(
+                            resource_candidates,
+                            defer_quota=True,
+                        )
+                    )
                     resolver_had_candidates = bool(resource_candidates)
                     resource_candidates = await _resolve_access_resource_candidates(
                         session,
@@ -1101,10 +1164,20 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                     previous_phase_had_site_access = (
                         previous_phase_had_site_access or resolver_had_candidates
                     )
-                print(
-                    f"Batch grant-only resource pass ({resource}); "
-                    f"planned={len(resource_candidates)}"
-                )
+                if defer_quota:
+                    print("Deferred access-resource pool:")
+                    print(f"  resource: {resource}")
+                    print(f"  candidates: {deferred_pool_count}")
+                    print("  selection: live resolver")
+                    print(
+                        f"Batch grant-only resource pass ({resource}); "
+                        f"selected={len(resource_candidates)}"
+                    )
+                else:
+                    print(
+                        f"Batch grant-only resource pass ({resource}); "
+                        f"planned={len(resource_candidates)}"
+                    )
                 pass_attempts, _pass_continue = await _execute_batch_candidates(
                     args,
                     session,

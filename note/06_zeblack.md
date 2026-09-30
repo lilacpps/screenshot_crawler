@@ -59,6 +59,20 @@ Generic Batch prints resolver snapshot start, completion, and failure messages;
 the read-only snapshot remains outside the grant attempt limit and does not
 consume a ticket.
 
+### Z7 deferred candidate representation (2026-10-01)
+
+The broad quota `BatchPlan.candidates` pool remains intact for the live
+resolver. Generic CLI partitioning separates `consumes_quota=False` immediate
+candidates from the deferred pool without interpreting a site or resource
+name. `batch plan` and normal `batch run` show the total plan, direct count,
+and deferred pool count/resource; only immediate candidates are listed with
+individual order/title/URL details. Deferred candidates remain observable as
+a pool, and the resolver diagnostic reports its pool size before only selected
+candidate(s) enter grant execution. Explicit deferred `--grant-only` uses the
+same pool summary and reports live resolver selection. Non-deferred site
+representation and execution semantics are unchanged. Catalog schema,
+migrations, and Catalog version are unchanged.
+
 The former Z5 behavior and live verification records below are retained as
 history. A completed controlled live verification for title `11551`, chapter
 `630652`, mainName `個人指導3` confirmed exact candidate selection, exactly one

@@ -28,6 +28,11 @@ Resolver operation and AccessGuard cleanup joins are bounded and detached
 best-effort when a Playwright task does not respond to cancellation.
 The generic Batch CLI reports resolver start, completion, and failure so a
 deferred-resource phase remains observable while its read-only snapshot runs.
+For policies that defer quota access, the CLI also partitions the unchanged
+plan by `candidate.consumes_quota`: immediate candidates remain individually
+visible, while deferred candidates are shown only as a pool summary with their
+candidate count and policy-owned resource. The generic partition has no site
+or resource-name branch, and non-deferred site output remains unchanged.
 
 ## Zeblack Z5 current status (2026-09-30)
 
