@@ -291,4 +291,3 @@ def test_progressive_jpeg_is_rejected_without_output(tmp_path: Path) -> None:
 
     assert summary["final_status"] == "UNSUPPORTED_JPEG_LAYOUT"
     assert not output_path.exists()
-
