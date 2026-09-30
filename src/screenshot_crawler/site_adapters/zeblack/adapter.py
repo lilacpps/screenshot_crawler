@@ -129,6 +129,7 @@ _COIN_ENTRY_TEXT = "コインを使って読む"
 _POINT_AND_COIN_ENTRY_TEXT = "アイテムを使って読む"
 _PURCHASE_ENTRY_TEXT = "コインを購入する"
 _CANCEL_TEXT = "キャンセル"
+MAX_MODAL_ANCESTOR_DEPTH = 12
 _TICKET_STATUS_VALUES = frozenset(
     {
         int(ConsumptionStatus.TICKET_UNAVAILABLE),
@@ -570,6 +571,26 @@ class ZeblackAdapter(SiteAdapter):
                 matches.append(candidate)
         return matches
 
+    async def _visible_exact_leaf_matches(
+        self, scope: Page | Locator, text: str
+    ) -> list[Locator]:
+        """Find visible exact-text leaves without enumerating the DOM."""
+
+        locator = self._exact_text_locator(scope, text)
+        matches: list[Locator] = []
+        for index in range(await locator.count()):
+            candidate = locator.nth(index)
+            if not await candidate.is_visible():
+                continue
+            has_exact_child = await candidate.evaluate(
+                """element => Array.from(element.children).some(
+                    child => (child.textContent || '').trim() === element.textContent.trim()
+                )"""
+            )
+            if not has_exact_child:
+                matches.append(candidate)
+        return matches
+
     async def _validate_ticket_control(self, scope: Locator) -> Locator:
         """Validate one exact ticket control inside a bounded DOM scope."""
 
@@ -601,49 +622,57 @@ class ZeblackAdapter(SiteAdapter):
     async def _find_ticket_modal_scope(
         self, page: Page, target_main_name: str
     ) -> Locator | None:
-        """Find the smallest visible ancestor containing the modal identity."""
+        """Find the smallest visible ticket-anchored modal scope."""
 
-        ticket_matches = await self._exact_leaf_text_matches(page, _TICKET_ENTRY_TEXT)
-        cancel_matches = await self._exact_leaf_text_matches(page, _CANCEL_TEXT)
-        ticket_count = len(ticket_matches)
-        cancel_count = len(cancel_matches)
-        if ticket_count == 0 or cancel_count == 0:
+        ticket_matches = await self._visible_exact_leaf_matches(
+            page, _TICKET_ENTRY_TEXT
+        )
+        if not ticket_matches:
             return None
-        if ticket_count != 1 or cancel_count != 1:
+        if len(ticket_matches) != 1:
             raise UnsupportedAccessStrategyError(
                 "Zeblack confirmation modal controls are ambiguous"
             )
 
         ticket = ticket_matches[0]
-        ancestors = ticket.locator("xpath=ancestor::*")
-        for index in range(await ancestors.count()):
-            scope = ancestors.nth(index)
-            if not await scope.is_visible():
-                continue
-            scoped_target = await self._exact_leaf_text_matches(scope, target_main_name)
-            scoped_ticket = await self._exact_leaf_text_matches(scope, _TICKET_ENTRY_TEXT)
-            scoped_cancel = await self._exact_leaf_text_matches(scope, _CANCEL_TEXT)
-            if (
-                len(scoped_target) != 1
-                or len(scoped_ticket) != 1
-                or len(scoped_cancel) != 1
-            ):
-                continue
-            point_count = await self._visible_exact_text_count(
-                scope, _POINT_ENTRY_TEXT
-            ) + await self._visible_exact_text_count(
-                scope, _POINT_AND_COIN_ENTRY_TEXT
-            )
-            coin_count = await self._visible_exact_text_count(
-                scope, _COIN_ENTRY_TEXT
-            ) + await self._visible_exact_text_count(scope, _PURCHASE_ENTRY_TEXT)
-            validate_zeblack_ticket_control_counts(
-                1,
-                point_count=point_count,
-                coin_count=coin_count,
-            )
-            await self._validate_ticket_control(scope)
-            return scope
+        scope = ticket.locator("xpath=..")
+        for _ in range(MAX_MODAL_ANCESTOR_DEPTH):
+            tag_name = (await scope.evaluate("element => element.tagName")).lower()
+            if tag_name in {"body", "html"}:
+                return None
+            if await scope.is_visible():
+                scoped_target = await self._visible_exact_leaf_matches(
+                    scope, target_main_name
+                )
+                scoped_ticket = await self._visible_exact_leaf_matches(
+                    scope, _TICKET_ENTRY_TEXT
+                )
+                scoped_cancel = await self._visible_exact_leaf_matches(
+                    scope, _CANCEL_TEXT
+                )
+                if (
+                    len(scoped_target) == 1
+                    and len(scoped_ticket) == 1
+                    and len(scoped_cancel) == 1
+                ):
+                    point_count = await self._visible_exact_text_count(
+                        scope, _POINT_ENTRY_TEXT
+                    ) + await self._visible_exact_text_count(
+                        scope, _POINT_AND_COIN_ENTRY_TEXT
+                    )
+                    coin_count = await self._visible_exact_text_count(
+                        scope, _COIN_ENTRY_TEXT
+                    ) + await self._visible_exact_text_count(
+                        scope, _PURCHASE_ENTRY_TEXT
+                    )
+                    validate_zeblack_ticket_control_counts(
+                        1,
+                        point_count=point_count,
+                        coin_count=coin_count,
+                    )
+                    await self._validate_ticket_control(scope)
+                    return scope
+            scope = scope.locator("xpath=..")
         raise UnsupportedAccessStrategyError(
             "Zeblack confirmation modal identity is ambiguous"
         )

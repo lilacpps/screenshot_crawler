@@ -69,6 +69,29 @@ content package. `--grant-only all` resolves to the single Work Ticket pass.
 `batch run --site zeblack` uses the existing generic Executor; no Zeblack
 branch was added to Batch Core.
 
+### Z5 confirmation-modal lookup performance fix (2026-09-30)
+
+The first final production `grant-only work_ticket` attempt for title `3890`,
+chapter `58493` reached the confirmation modal after one target chapter click,
+but ticket consumption remained zero. The production modal validation timed out
+because `_find_ticket_modal_scope()` used `_exact_leaf_text_matches(page, ...)`
+and enumerated the full live DOM; the failure occurred around
+`locator("*").nth(1652)`.
+
+The Adapter now starts from one visible exact `チケットを使って読む`
+candidate obtained through Playwright's exact-text locator, then walks only
+that element's ancestors with a maximum depth of 12. Each bounded ancestor
+must contain exactly one visible target `mainName`, ticket control, and
+`キャンセル`, and must contain no point/item/coin/purchase control. `BODY` and
+`HTML` are never accepted as modal scopes. The existing direct-link guard,
+single-click guards, exact ticket validation, and stable viewer-content
+consumption rule remain unchanged.
+
+The fix is covered by browser-backed normal and 2,500-node large-DOM flows,
+ambiguous ticket, missing modal identity, paid-control contamination, and
+direct-link rejection cases. Live Work Ticket consumption verification remains
+pending and was not retried in this code-fix phase.
+
 ### Z5-5 controlled live verification: title 3890 / chapter 58493 (2026-09-30)
 
 The latest `main` was reviewed at commit `f475a75`. The shared Crawler Chrome
