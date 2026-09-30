@@ -1284,6 +1284,67 @@ page-level part-mappings.json and the run-level aggregation to
 part_mapping_summary.json. This remains diagnostic-only; no production
 capture, JPEG/PNG selection, or output behavior is changed.
 
+### 20.10 Lossless JPEG coefficient rearrangement PoC (2026-09-30)
+
+The diagnostic-only PoC is
+`scripts/poc_bookwalker_lossless_jpeg_rearrange.py`. It consumes only the
+local output of the transformation probe and requires the complete proven
+part evidence, strict MCU alignment, equal source/destination dimensions,
+and a uniform complete tile bijection. It uses the installed `jpeglib`
+coefficient API (`read_dct` / `write_dct`) and never uses Pillow to write the
+reconstructed JPEG. Every component DCT block is copied through a full
+temporary coefficient-array copy; no coefficient, including DC values, is
+re-quantized or recomputed.
+
+The local PoC was run for both proven purchased parts from
+`output/probe-bookwalker-transform-final-part-mapping/run-a/page-0001/`.
+Both inputs are baseline SOF0, 3-component 4:4:4 JPEGs at 960x1280 with
+8x8 MCUs and 32x32 tiles (1200 tiles / 19200 MCUs). Both parts produced
+`LOSSLESS_JPEG_RECONSTRUCTION_PROVEN`:
+
+- coefficient validation: 3,686,400 coefficient values checked per part,
+  zero mismatched blocks and zero mismatched coefficient values;
+- dimensions, component count, sampling factors, and quantization tables:
+  exact;
+- Pillow RGB comparison against the native PNG: exact, zero differing
+  pixels, RMSE 0, SSIM 1;
+- browser `createImageBitmap` plus 1:1 canvas `getImageData` comparison:
+  exact RGBA, zero differing pixels, 960x1280.
+
+The output JPEG byte stream is not expected to equal the scrambled input:
+entropy coding and marker layout can differ, and `jpeglib/libjpeg` normalized
+component IDs from 1/2/3 to 0/1/2 while preserving component order. The
+quantized DCT coefficients and quantization tables are the relevant lossless
+proof contract. The output also records marker type, length, printable-string
+presence, and hashes only; marker string contents are not emitted.
+
+Verified:
+
+- a coefficient backend is available in the current `.venv`;
+- identity, two-tile swap, and four-tile cycle synthetic cases reconstruct
+  without in-place permutation corruption or coefficient changes;
+- duplicate, gap, out-of-bounds, non-MCU, mixed/partial tile, dimension
+  mismatch, and progressive JPEG inputs fail closed without output;
+- actual local purchased part 1 and part 2 reconstruction is proven at both
+  coefficient and browser pixel levels.
+
+Unsupported / fail-closed:
+
+- progressive or non-SOF0 JPEGs, non-3-component layouts, non-4:4:4
+  sampling, partial edge MCU/tile layouts, incomplete mappings, and any
+  unproven probe evidence;
+- production integration, capture selection, packaging, Batch, DB, and
+  fallback behavior remain unchanged;
+- the PoC does not establish that every purchased BookWalker JPEG uses this
+  layout or that a different account/session has the same mapping.
+
+Future production work, if authorized, must be a separate change: retain the
+current production fallback, add broader JPEG-layout handling only with new
+evidence and tests, and decide explicitly whether normalized JPEG marker
+metadata/component IDs are acceptable for the production artifact contract.
+The generated reconstructed JPEGs and summaries are local diagnostic output
+and are not repository fixtures.
+
 BookWalker exposes no additional named access resource in the Phase 3 Policy
 contract. Explicit resource planning therefore fails closed for unsupported
 resource names; normal direct/quota planning remains unchanged.
