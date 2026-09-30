@@ -1403,6 +1403,76 @@ of each capture window. `BOOKWALKER_CAPTURE_MODE=canvas` bypasses original,
 native, and lossless shadow processing and preserves the rendered-canvas
 fallback.
 
+### 20.12 Phase P1 live shadow investigation (2026-09-30)
+
+This investigation changed only
+`scripts/probe_bookwalker_purchased_transform.py` and its unit tests. Production
+BookWalker capture, purchased matching, and the 5,000-operation production
+trace limit were not changed.
+
+The diagnostic trace now uses a probe-only rolling operation window of 10,000
+records. Each retained operation has a monotonic absolute index; the trace
+also records the first overflow index, observed count, retained index range,
+dropped count, operation categories after overflow, and whether the selected
+renderer/mapping window was fully retained. ImageBitmap snapshots are bounded
+to eight snapshots and 8 MiB per data URL, HTMLCanvasElement pixel snapshots
+are not retained, and source/canvas inventories have explicit caps. The
+`--metadata-only` option keeps decoded comparisons in memory but writes no
+JPEG/PNG artifacts. Tile groups are segmented at `clearRect` boundaries so a
+second render pass is not incorrectly combined with the current mapping.
+
+The shared-CDP live run for the requested purchased URL completed 20 pages in
+transform-only (`BOOKWALKER_CAPTURE_MODE=canvas`) mode. The visible bitmap was
+1904x944. Diagnostic operation counts ranged from 3,627 to 9,656 on content
+pages; the pages corresponding to counters 5/314, 6/314, 8/314, 11/314, and
+37/314 exceeded the unchanged production limit of 5,000. The 10,000-record
+diagnostic trace did not overflow in this run. The largest observed page had
+9,616 `drawImage`, 8 `clearRect`, and 32 `fillRect` operations. This is
+evidence that the production 5,000 limit can be reached before the viewer
+finishes a page, but it does not by itself establish that every mapping on an
+overflowed page is invalid.
+
+The same run showed two distinct mapping cases. On 960x1280 pages, a
+clear-bounded group contains 1,200 32x32 tile draws and is a complete
+bijection; the previous aggregate view counted two render passes together as
+2,400 operations and therefore reported an incomplete mapping. On a large
+spread, the observed groups contain 2,944 draws but are not strict lossless
+permutations: one source/target pair is 1448x2048 to 1443x2048 with a partial
+horizontal edge, and another is 2048x1456 to 2048x1453 with a partial vertical
+edge. Those dimension/edge mismatches remain fail-closed and must not be
+accepted by the current coefficient-level JPEG rearrangement helper.
+
+The native metadata run reached p.1 and p.2 before the existing native
+source-crop retention made the long run impractical. On p.1 the viewer bitmap
+was 1904x944, the selected native source was 722x1024, and the bounded JPEG
+pool contained an exact-route candidate at 1448x2048. There were 84 unique
+JPEG candidates (7 in the current filter), but zero candidate dimension
+matches and zero signature matches for the 722x1024 native part. The selected
+renderer draw was at operation 2963 after the latest source-canvas clear at
+2956; the source canvas was 722x1024. Its source rectangle was 721.5x1024 and
+its destination was 666x942, with identity transform, alpha 1, `source-over`,
+and `filter=none`. This is renderer scaling/cropping evidence, not a proof of
+pixel-preserving equal-dimension drawing. The source canvas also received a
+1443x2048 ImageBitmap, while the route JPEG candidate was 1448x2048.
+
+Likely causes are therefore separate: (1) p.1's current original-JPEG
+diagnostic evidence is a native-dimension mismatch, so the existing bounded
+candidate matcher cannot prove the 1448x2048 JPEG from the 722x1024 native
+part; (2) several pages exceed the production trace bound; (3) repeated tile
+passes must be separated by the latest clear boundary; and (4) some large
+spreads have genuine source/target dimension and partial-edge differences.
+The probe intentionally does not call production `capture_page()`, so it does
+not prove whether the production original-JPEG path was invoked or why p.1
+changed from the earlier JPEG result. Production changes should first add the
+same absolute-counter/segment evidence and verify the original-response
+selection path, without relaxing dimension or partial-edge fail-closed rules.
+
+Live output was metadata-only in a temporary directory; no repository image
+fixtures, cookies, tokens, or credentials were saved. A full 20-page native
+run remains unresolved because the existing native source-crop observation can
+retain very large canvas snapshots; this is a probe resource limitation, not
+a production behavior change.
+
 ### Phase 1 runtime pacing
 
 BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を

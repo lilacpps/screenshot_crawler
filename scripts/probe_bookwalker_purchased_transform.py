@@ -4,7 +4,8 @@ This is a diagnostic-only probe. It follows the normal BookWalker adapter
 entry/navigation flow, but never calls production capture_page() and never
 changes production JPEG/PNG selection. It stores bounded raw JPEG/native
 artifacts locally so that decoded pixels, canvas operations, reload stability,
-and metadata markers can be inspected together.
+and metadata markers can be inspected together. ``--metadata-only`` keeps the
+same in-memory comparisons while writing no image bytes to the output.
 """
 
 from __future__ import annotations
@@ -55,7 +56,10 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import BookWalkerAdapte
 DEFAULT_MAX_PAGES = 2
 DEFAULT_RUNS = 2
 PAGE_SETTLE_MS = 350
-MAX_OPERATION_RECORDS = 3_000
+# This is intentionally a probe-only retention bound. Production keeps its
+# separate 5,000-operation fail-closed trace unchanged until this investigation
+# establishes which retention policy is appropriate.
+MAX_OPERATION_RECORDS = 10_000
 MAX_SOURCE_SNAPSHOT_DATA_URL_LENGTH = 40 * 1024 * 1024
 MAX_CROP_OFFSETS = 4_096
 TILE_GRIDS = (2, 4, 8, 16)
@@ -74,9 +78,27 @@ _TRANSFORM_TRACE_SCRIPT = r"""
     sourceIds: new WeakMap(),
     nextCanvasId: 1,
     nextSourceId: 1,
+    nextOperationIndex: 1,
+    observedOperationCount: 0,
+    traceOverflow: false,
+    overflowOperationIndex: null,
+    droppedOperationCount: 0,
+    postOverflowOperationCounts: {},
+    imageBitmapSnapshotCount: 0,
+    imageBitmapSnapshotSkippedCount: 0,
+    sourceInventoryCount: 0,
+    canvasInventoryCount: 0,
+    sourceInventoryTruncatedCount: 0,
+    canvasInventoryTruncatedCount: 0,
   };
-  const maxOperations = 3000;
-  const maxSnapshotLength = 40 * 1024 * 1024;
+  // Diagnostic-only rolling retention. The absolute operation index continues
+  // after the ring starts dropping old records, so overflow can be located
+  // relative to a renderer draw instead of being mistaken for index reuse.
+  const maxOperations = 10000;
+  const maxSnapshotLength = 8 * 1024 * 1024;
+  const maxImageBitmapSnapshots = 8;
+  const maxSourceInventory = 2000;
+  const maxCanvasInventory = 200;
 
   const constructorName = value => value?.constructor?.name || null;
   const numberOrNull = value => Number.isFinite(value) ? Number(value) : null;
@@ -86,14 +108,25 @@ _TRANSFORM_TRACE_SCRIPT = r"""
     if (!id) {
       id = String(state.nextCanvasId++);
       state.canvasIds.set(canvas, id);
-      state.canvases[id] = {
-        canvasId: id,
-        constructor: constructorName(canvas),
-        width: numberOrNull(canvas.width),
-        height: numberOrNull(canvas.height),
-      };
+      if (state.canvasInventoryCount < maxCanvasInventory) {
+        state.canvases[id] = {
+          canvasId: id,
+          constructor: constructorName(canvas),
+          width: numberOrNull(canvas.width),
+          height: numberOrNull(canvas.height),
+        };
+        state.canvasInventoryCount += 1;
+      } else {
+        state.canvasInventoryTruncatedCount += 1;
+      }
     }
-    return state.canvases[id];
+    return state.canvases[id] || {
+      canvasId: id,
+      constructor: constructorName(canvas),
+      width: numberOrNull(canvas.width),
+      height: numberOrNull(canvas.height),
+      inventoryTruncated: true,
+    };
   };
   const sourceInfo = source => {
     if (!source) return null;
@@ -112,19 +145,30 @@ _TRANSFORM_TRACE_SCRIPT = r"""
       const canvas = canvasInfo(source);
       if (canvas) info.canvasId = canvas.canvasId;
     }
-    state.sources[id] = state.sources[id] || info;
-    return {...state.sources[id]};
+    if (!state.sources[id]) {
+      if (state.sourceInventoryCount < maxSourceInventory) {
+        state.sources[id] = info;
+        state.sourceInventoryCount += 1;
+      } else {
+        state.sourceInventoryTruncatedCount += 1;
+      }
+    }
+    return {...(state.sources[id] || {...info, inventoryTruncated: true})};
+  };
+  const traceContext = context => {
+    const canvas = context?.canvas;
+    return canvas && !(
+      Number(canvas.width) < 500 && Number(canvas.height) < 500
+    );
   };
   const sourceSnapshot = source => {
     const constructor = constructorName(source);
+    // Native source-canvas pixels are already materialized by the existing
+    // bounded probe. Avoid retaining a full PNG for every renderer draw here;
+    // this trace is for object/geometry evidence, not image artifact output.
     if (constructor === 'HTMLCanvasElement'
         && typeof source.toDataURL === 'function') {
-      try {
-        const dataUrl = source.toDataURL('image/png');
-        return dataUrl.length <= maxSnapshotLength ? dataUrl : null;
-      } catch (error) {
-        return null;
-      }
+      return null;
     }
     if (constructor !== 'ImageBitmap'
         || state.snapshotSources.has(source)
@@ -132,7 +176,12 @@ _TRANSFORM_TRACE_SCRIPT = r"""
         || !Number.isFinite(source?.height)) {
       return null;
     }
+    if (state.imageBitmapSnapshotCount >= maxImageBitmapSnapshots) {
+      state.imageBitmapSnapshotSkippedCount += 1;
+      return null;
+    }
     state.snapshotSources.add(source);
+    state.imageBitmapSnapshotCount += 1;
     try {
       const target = document.createElement('canvas');
       target.width = Math.round(source.width);
@@ -177,10 +226,19 @@ _TRANSFORM_TRACE_SCRIPT = r"""
     return {sourceRect: null, destination: null};
   };
   const record = (operation, context, details) => {
-    if (state.operations.length >= maxOperations) return;
     const canvas = canvasInfo(context?.canvas);
     if (!canvas) return;
     if (canvas.width < 500 && canvas.height < 500) return;
+    const operationIndex = state.nextOperationIndex++;
+    state.observedOperationCount = operationIndex;
+    if (operationIndex > maxOperations) {
+      state.traceOverflow = true;
+      if (state.overflowOperationIndex === null) {
+        state.overflowOperationIndex = operationIndex;
+      }
+      state.postOverflowOperationCounts[operation] =
+        (state.postOverflowOperationCounts[operation] || 0) + 1;
+    }
     let transform = null;
     try {
       const matrix = context.getTransform();
@@ -190,7 +248,7 @@ _TRANSFORM_TRACE_SCRIPT = r"""
       };
     } catch (error) {}
     state.operations.push({
-      index: state.operations.length + 1,
+      index: operationIndex,
       timestamp: performance.now(),
       operation,
       target: canvas,
@@ -201,6 +259,10 @@ _TRANSFORM_TRACE_SCRIPT = r"""
       imageSmoothingEnabled: Boolean(context.imageSmoothingEnabled),
       ...details,
     });
+    if (state.operations.length > maxOperations) {
+      state.operations.shift();
+      state.droppedOperationCount += 1;
+    }
   };
   const proto = window.CanvasRenderingContext2D?.prototype;
   if (!proto) return;
@@ -208,6 +270,7 @@ _TRANSFORM_TRACE_SCRIPT = r"""
   const originalDrawImage = proto.drawImage;
   if (typeof originalDrawImage === 'function') {
     const wrappedDrawImage = function(...args) {
+      if (!traceContext(this)) return originalDrawImage.apply(this, args);
       try {
         const values = args.slice(1).map(value => Number(value));
         const source = sourceInfo(args[0]);
@@ -242,6 +305,7 @@ _TRANSFORM_TRACE_SCRIPT = r"""
     const original = proto[name];
     if (typeof original !== 'function') continue;
     const wrapped = function(...args) {
+      if (!traceContext(this)) return original.apply(this, args);
       try {
         record(name, this, detailsFor(args));
       } catch (error) {}
@@ -252,14 +316,54 @@ _TRANSFORM_TRACE_SCRIPT = r"""
   }
 
   window.__bookwalkerTakeTransformTrace = () => {
+    const firstRetained = state.operations[0]?.index ?? null;
+    const lastRetained = state.operations[state.operations.length - 1]?.index ?? null;
     const result = {
       operations: state.operations.slice(),
       canvases: {...state.canvases},
       sources: {...state.sources},
+      max_operations: maxOperations,
+      trace_overflow: state.traceOverflow,
+      overflow_operation_index: state.overflowOperationIndex,
+      observed_operation_count: state.observedOperationCount,
+      operations_before_overflow: state.overflowOperationIndex === null
+        ? state.observedOperationCount
+        : state.overflowOperationIndex - 1,
+      retained_operation_count: state.operations.length,
+      retained_first_operation_index: firstRetained,
+      retained_last_operation_index: lastRetained,
+      dropped_operation_count: state.droppedOperationCount,
+      post_overflow_operation_counts: {...state.postOverflowOperationCounts},
+      imagebitmap_snapshot_count: state.imageBitmapSnapshotCount,
+      imagebitmap_snapshot_skipped_count: state.imageBitmapSnapshotSkippedCount,
+      max_imagebitmap_snapshots: maxImageBitmapSnapshots,
+      source_snapshot_policy: 'ImageBitmap_only_bounded',
+      source_inventory_count: state.sourceInventoryCount,
+      source_inventory_truncated_count: state.sourceInventoryTruncatedCount,
+      canvas_inventory_count: state.canvasInventoryCount,
+      canvas_inventory_truncated_count: state.canvasInventoryTruncatedCount,
+      retention_policy: 'rolling_operation_window',
     };
     state.operations = [];
     state.canvases = {};
     state.sources = {};
+    state.snapshotSources = new WeakSet();
+    state.canvasIds = new WeakMap();
+    state.sourceIds = new WeakMap();
+    state.nextCanvasId = 1;
+    state.nextSourceId = 1;
+    state.nextOperationIndex = 1;
+    state.observedOperationCount = 0;
+    state.traceOverflow = false;
+    state.overflowOperationIndex = null;
+    state.droppedOperationCount = 0;
+    state.postOverflowOperationCounts = {};
+    state.imageBitmapSnapshotCount = 0;
+    state.imageBitmapSnapshotSkippedCount = 0;
+    state.sourceInventoryCount = 0;
+    state.canvasInventoryCount = 0;
+    state.sourceInventoryTruncatedCount = 0;
+    state.canvasInventoryTruncatedCount = 0;
     return result;
   };
 })();
@@ -927,16 +1031,27 @@ def _public_trace_operation(operation: dict[str, Any]) -> dict[str, Any]:
 
 
 def trace_tile_rearrangement_report(trace: dict[str, Any]) -> dict[str, Any]:
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+    observed_groups: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+    target_segments: dict[str, int] = {}
     for operation in trace.get("operations", []):
+        target = operation.get("target") or {}
+        target_id = str(target.get("canvasId"))
+        if operation.get("operation") == "clearRect":
+            target_segments[target_id] = target_segments.get(target_id, 0) + 1
         if operation.get("operation") != "drawImage":
             continue
-        target = operation.get("target") or {}
         source = operation.get("source") or {}
         source_rect = operation.get("sourceRect") or {}
         destination = operation.get("destination") or {}
         if source.get("constructor") != "ImageBitmap":
             continue
+        key = (
+            target_id,
+            str(source.get("sourceId")),
+            target_segments.get(target_id, 0),
+        )
+        observed_groups.setdefault(key, []).append(operation)
         try:
             target_width = int(target["width"])
             target_height = int(target["height"])
@@ -963,13 +1078,12 @@ def trace_tile_rearrangement_report(trace: dict[str, Any]) -> dict[str, Any]:
             int(destination["y"])
         except (KeyError, TypeError, ValueError):
             continue
-        key = (str(target.get("canvasId")), str(source.get("sourceId")))
         groups.setdefault(key, []).append(operation)
 
     public_groups: list[dict[str, Any]] = []
     detected = False
     for key, operations in groups.items():
-        target_id, source_id = key
+        target_id, source_id, segment = key
         first_target = operations[0].get("target") or {}
         first_source = operations[0].get("source") or {}
         target_width = int(first_target["width"])
@@ -1088,6 +1202,7 @@ def trace_tile_rearrangement_report(trace: dict[str, Any]) -> dict[str, Any]:
             {
                 "target_canvas_id": target_id,
                 "source_id": source_id,
+                "target_segment": segment,
                 "target_dimensions": {"width": target_width, "height": target_height},
                 "source_dimensions": {"width": source_width, "height": source_height},
                 "tile_dimensions": {"width": tile_width, "height": tile_height},
@@ -1143,9 +1258,125 @@ def trace_tile_rearrangement_report(trace: dict[str, Any]) -> dict[str, Any]:
                 "mapping": canonical_mapping,
             }
         )
+    rejected_groups: list[dict[str, Any]] = []
+    accepted_keys = set(groups)
+    for key, operations in observed_groups.items():
+        if key in accepted_keys:
+            continue
+        target_id, source_id, segment = key
+        first_target = operations[0].get("target") or {}
+        first_source = operations[0].get("source") or {}
+        source_rects = [operation.get("sourceRect") or {} for operation in operations]
+        destinations = [operation.get("destination") or {} for operation in operations]
+        target_width = target_height = source_width = source_height = None
+        tile_width = tile_height = None
+        source_columns = source_rows = target_columns = target_rows = None
+        source_edge_width = source_edge_height = None
+        target_edge_width = target_edge_height = None
+        try:
+            target_width = int(first_target.get("width"))
+            target_height = int(first_target.get("height"))
+            source_width = int(first_source.get("width"))
+            source_height = int(first_source.get("height"))
+            tile_shapes = Counter(
+                (int(rect["width"]), int(rect["height"]))
+                for rect in source_rects
+                if "width" in rect and "height" in rect
+            )
+            tile_width, tile_height = tile_shapes.most_common(1)[0][0]
+            source_columns = math.ceil(source_width / tile_width) if tile_width else None
+            source_rows = math.ceil(source_height / tile_height) if tile_height else None
+            target_columns = math.ceil(target_width / tile_width) if tile_width else None
+            target_rows = math.ceil(target_height / tile_height) if tile_height else None
+            source_edge_width = (
+                source_width - (source_columns - 1) * tile_width
+                if source_columns
+                else None
+            )
+            target_edge_width = (
+                target_width - (target_columns - 1) * tile_width
+                if target_columns
+                else None
+            )
+            source_edge_height = (
+                source_height - (source_rows - 1) * tile_height
+                if source_rows
+                else None
+            )
+            target_edge_height = (
+                target_height - (target_rows - 1) * tile_height
+                if target_rows
+                else None
+            )
+        except (IndexError, KeyError, TypeError, ValueError, ZeroDivisionError):
+            pass
+        reasons: list[str] = []
+        if (
+            isinstance(target_width, int)
+            and isinstance(source_width, int)
+            and (target_width != source_width or target_height != source_height)
+        ):
+            reasons.append("target_source_dimension_mismatch")
+        if any(
+            rect.get("width") != destination.get("width")
+            or rect.get("height") != destination.get("height")
+            for rect, destination in zip(source_rects, destinations, strict=True)
+        ):
+            reasons.append("source_destination_tile_size_mismatch")
+        if tile_width is None or tile_height is None:
+            reasons.append("tile_geometry_unavailable")
+        else:
+            if source_edge_width != tile_width or target_edge_width != tile_width:
+                reasons.append("partial_horizontal_edge_tile")
+            if source_edge_height != tile_height or target_edge_height != tile_height:
+                reasons.append("partial_vertical_edge_tile")
+        rejected_groups.append({
+            "target_canvas_id": key[0],
+            "source_id": key[1],
+            "target_segment": segment,
+            "target_dimensions": {
+                "width": first_target.get("width"),
+                "height": first_target.get("height"),
+            },
+            "source_dimensions": {
+                "width": first_source.get("width"),
+                "height": first_source.get("height"),
+            },
+            "tile_dimensions": {
+                "width": tile_width,
+                "height": tile_height,
+            },
+            "operations": len(operations),
+            "first_operation_index": min(
+                int(operation.get("index", 0)) for operation in operations
+            ),
+            "last_operation_index": max(
+                int(operation.get("index", 0)) for operation in operations
+            ),
+            "expected_source_tile_count": (
+                source_columns * source_rows
+                if source_columns is not None and source_rows is not None
+                else None
+            ),
+            "expected_destination_tile_count": (
+                target_columns * target_rows
+                if target_columns is not None and target_rows is not None
+                else None
+            ),
+            "source_edge_dimensions": {
+                "width": source_edge_width,
+                "height": source_edge_height,
+            },
+            "destination_edge_dimensions": {
+                "width": target_edge_width,
+                "height": target_edge_height,
+            },
+            "rejection_reasons": reasons or ["strict_geometry_not_satisfied"],
+        })
     return {
         "detected": detected,
         "groups": public_groups,
+        "rejected_groups": rejected_groups,
     }
 
 
@@ -1343,6 +1574,10 @@ def build_part_mapping_records(
             "part": part_index,
             "renderer": {
                 "canvas_id": renderer_canvas_id or None,
+                "target_dimensions": {
+                    "width": renderer.get("width"),
+                    "height": renderer.get("height"),
+                },
                 "draw_operation_index": (
                     selected_operation.get("index") if selected_operation else None
                 ),
@@ -1363,6 +1598,10 @@ def build_part_mapping_records(
                 ),
                 "filter": (
                     selected_operation.get("filter") if selected_operation else None
+                ),
+                "global_alpha": (
+                    selected_operation.get("globalAlpha")
+                    if selected_operation else None
                 ),
                 "global_composite_operation": (
                     selected_operation.get("globalCompositeOperation")
@@ -1394,6 +1633,15 @@ def build_part_mapping_records(
             "mapping_status": status,
             "mapping_reason": reason,
         }
+        record["trace_diagnostic"] = trace_mapping_window_diagnostic(
+            trace,
+            record,
+            groups,
+            list(tile_report.get("rejected_groups", [])),
+        )
+        record["renderer_geometry"] = renderer_geometry_report(
+            record["renderer"],
+        )
         records.append(record)
     return records
 
@@ -1412,6 +1660,344 @@ def classify_part_from_mapping(
             return "TILE_REARRANGEMENT"
         return "DIRECT_DECODE"
     return str((analysis or {}).get("classification") or "UNKNOWN")
+
+
+def _trace_integer(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _trace_retention_metadata(trace: dict[str, Any]) -> dict[str, Any]:
+    operations = trace.get("operations", [])
+    observed = _trace_integer(trace.get("observed_operation_count"))
+    if observed is None:
+        observed = max(
+            (_trace_integer(operation.get("index")) or 0 for operation in operations),
+            default=len(operations),
+        )
+    overflow_index = _trace_integer(trace.get("overflow_operation_index"))
+    retained_first = _trace_integer(trace.get("retained_first_operation_index"))
+    retained_last = _trace_integer(trace.get("retained_last_operation_index"))
+    if retained_first is None and operations:
+        retained_first = min(
+            (_trace_integer(operation.get("index")) or 0 for operation in operations),
+        )
+    if retained_last is None and operations:
+        retained_last = max(
+            (_trace_integer(operation.get("index")) or 0 for operation in operations),
+        )
+    return {
+        "trace_overflow": bool(trace.get("trace_overflow")) or overflow_index is not None,
+        "max_operations": _trace_integer(trace.get("max_operations"))
+        or MAX_OPERATION_RECORDS,
+        "observed_operation_count": observed,
+        "overflow_operation_index": overflow_index,
+        "operations_before_overflow": (
+            max(0, overflow_index - 1)
+            if overflow_index is not None
+            else observed
+        ),
+        "retained_operation_count": len(operations),
+        "retained_first_operation_index": retained_first,
+        "retained_last_operation_index": retained_last,
+        "dropped_operation_count": _trace_integer(
+            trace.get("dropped_operation_count")
+        ) or 0,
+        "post_overflow_operation_counts": {
+            str(key): int(value)
+            for key, value in (trace.get("post_overflow_operation_counts") or {}).items()
+            if isinstance(value, (int, float))
+        },
+        "imagebitmap_snapshot_count": _trace_integer(
+            trace.get("imagebitmap_snapshot_count")
+        ) or 0,
+        "imagebitmap_snapshot_skipped_count": _trace_integer(
+            trace.get("imagebitmap_snapshot_skipped_count")
+        ) or 0,
+        "max_imagebitmap_snapshots": _trace_integer(
+            trace.get("max_imagebitmap_snapshots")
+        ) or 32,
+        "source_inventory_count": _trace_integer(
+            trace.get("source_inventory_count")
+        ) or 0,
+        "source_inventory_truncated_count": _trace_integer(
+            trace.get("source_inventory_truncated_count")
+        ) or 0,
+        "canvas_inventory_count": _trace_integer(
+            trace.get("canvas_inventory_count")
+        ) or 0,
+        "canvas_inventory_truncated_count": _trace_integer(
+            trace.get("canvas_inventory_truncated_count")
+        ) or 0,
+        "retention_policy": trace.get(
+            "retention_policy", "rolling_operation_window"
+        ),
+    }
+
+
+def renderer_geometry_report(renderer: dict[str, Any]) -> dict[str, Any]:
+    """Classify renderer scaling/cropping without changing production policy."""
+
+    source_dimensions = renderer.get("source_dimensions") or {}
+    target_dimensions = renderer.get("target_dimensions") or {}
+    source_rect = renderer.get("source_rect") or {}
+    destination = renderer.get("destination") or {}
+    source_width = _trace_integer(source_dimensions.get("width"))
+    source_height = _trace_integer(source_dimensions.get("height"))
+    source_full = (
+        source_width is not None
+        and source_height is not None
+        and all(
+            abs(float(source_rect.get(key, float("nan"))) - expected) < 1e-6
+            for key, expected in {
+                "x": 0,
+                "y": 0,
+                "width": source_width,
+                "height": source_height,
+            }.items()
+        )
+    )
+    destination_width = _trace_integer(destination.get("width"))
+    destination_height = _trace_integer(destination.get("height"))
+    destination_matches_source = (
+        source_width is not None
+        and source_height is not None
+        and destination_width == source_width
+        and destination_height == source_height
+    )
+    transform = renderer.get("transform") or {}
+    identity_transform = (
+        transform in ({}, None)
+        or all(
+            float(transform.get(key, 0)) == expected
+            for key, expected in {
+                "a": 1,
+                "b": 0,
+                "c": 0,
+                "d": 1,
+                "e": 0,
+                "f": 0,
+            }.items()
+        )
+    )
+    safe_settings = (
+        identity_transform
+        and renderer.get("global_alpha") in (None, 1, 1.0)
+        and renderer.get("global_composite_operation") in (None, "source-over")
+        and renderer.get("filter") in (None, "none")
+    )
+    target_width = _trace_integer(target_dimensions.get("width"))
+    target_height = _trace_integer(target_dimensions.get("height"))
+    destination_in_target = (
+        target_width is not None
+        and target_height is not None
+        and _trace_integer(destination.get("x")) is not None
+        and _trace_integer(destination.get("y")) is not None
+        and destination_width is not None
+        and destination_height is not None
+        and int(destination["x"]) >= 0
+        and int(destination["y"]) >= 0
+        and int(destination["x"]) + destination_width <= target_width
+        and int(destination["y"]) + destination_height <= target_height
+    )
+    if source_width is None or source_height is None or not destination:
+        classification = "GEOMETRY_UNAVAILABLE"
+    elif source_full and safe_settings and destination_matches_source:
+        classification = "DIRECT_RENDERER_DRAW"
+    elif source_full and safe_settings:
+        classification = "PURE_RENDERER_SCALE"
+    else:
+        classification = "CROP_OR_PIXEL_PROCESSING"
+    return {
+        "classification": classification,
+        "source_dimensions": {
+            "width": source_width,
+            "height": source_height,
+        },
+        "target_dimensions": {
+            "width": target_width,
+            "height": target_height,
+        },
+        "source_rect": source_rect or None,
+        "destination": destination or None,
+        "source_rect_is_full": source_full,
+        "destination_matches_source_dimensions": destination_matches_source,
+        "destination_differs_from_source_dimensions": (
+            not destination_matches_source
+            if destination_width is not None and destination_height is not None
+            else None
+        ),
+        "destination_within_target": destination_in_target,
+        "identity_transform": identity_transform,
+        "safe_renderer_settings": safe_settings,
+        "css_or_display_scaling_not_inferred": True,
+    }
+
+
+def trace_mapping_window_diagnostic(
+    trace: dict[str, Any],
+    mapping: dict[str, Any],
+    groups: list[dict[str, Any]],
+    rejected_groups: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Explain whether a retained mapping window crosses trace overflow."""
+
+    retention = _trace_retention_metadata(trace)
+    renderer = mapping.get("renderer") or {}
+    renderer_index = _trace_integer(renderer.get("draw_operation_index"))
+    source_canvas_id = str(renderer.get("source_canvas_id") or "")
+    overflow_index = retention["overflow_operation_index"]
+    retained_first = retention["retained_first_operation_index"]
+    retained_last = retention["retained_last_operation_index"]
+    reset_indices = [
+        _trace_integer(operation.get("index"))
+        for operation in trace.get("operations", [])
+        if (
+            operation.get("operation") == "clearRect"
+            and str((operation.get("target") or {}).get("canvasId") or "")
+            == source_canvas_id
+            and renderer_index is not None
+            and (_trace_integer(operation.get("index")) or 0) < renderer_index
+        )
+    ]
+    reset_indices = [index for index in reset_indices if index is not None]
+    latest_clear_index = max(reset_indices, default=0)
+    source_groups = [
+        group
+        for group in groups
+        if str(group.get("target_canvas_id") or "") == source_canvas_id
+        and renderer_index is not None
+        and (_trace_integer(group.get("last_operation_index")) or 0) < renderer_index
+        and (_trace_integer(group.get("first_operation_index")) or 0) > latest_clear_index
+    ]
+    source_groups.sort(
+        key=lambda group: _trace_integer(group.get("last_operation_index")) or 0,
+    )
+    current_group = source_groups[-1] if source_groups else mapping.get("permutation")
+    rejected_source_groups = [
+        group
+        for group in rejected_groups or []
+        if str(group.get("target_canvas_id") or "") == source_canvas_id
+        and renderer_index is not None
+        and (_trace_integer(group.get("last_operation_index")) or 0) < renderer_index
+        and (_trace_integer(group.get("first_operation_index")) or 0) > latest_clear_index
+    ]
+    rejected_source_groups.sort(
+        key=lambda group: _trace_integer(group.get("last_operation_index")) or 0,
+    )
+    observed_group = current_group or (
+        rejected_source_groups[-1] if rejected_source_groups else None
+    )
+    mapping_first = (
+        _trace_integer(observed_group.get("first_operation_index"))
+        if observed_group
+        else None
+    )
+    mapping_last = (
+        _trace_integer(observed_group.get("last_operation_index"))
+        if observed_group
+        else None
+    )
+    mapping_complete = bool(current_group and current_group.get("complete_bijection"))
+    mapping_geometry_rejected = bool(not current_group and rejected_source_groups)
+    current_window_start = latest_clear_index + 1
+    current_window_end = (renderer_index - 1) if renderer_index is not None else None
+    window_fully_retained = bool(
+        current_window_end is not None
+        and retained_first is not None
+        and retained_last is not None
+        and current_window_start >= retained_first
+        and current_window_end <= retained_last
+    )
+    mapping_fully_retained = bool(
+        mapping_first is not None
+        and mapping_last is not None
+        and retained_first is not None
+        and retained_last is not None
+        and mapping_first >= retained_first
+        and mapping_last <= retained_last
+    )
+    selected_before_overflow = bool(
+        renderer_index is not None
+        and overflow_index is not None
+        and renderer_index < overflow_index
+    )
+    selected_after_overflow = bool(
+        renderer_index is not None
+        and overflow_index is not None
+        and renderer_index >= overflow_index
+    )
+    overflow_after_mapping = bool(
+        overflow_index is not None
+        and mapping_last is not None
+        and overflow_index > mapping_last
+    )
+    overflow_before_or_during_mapping = bool(
+        overflow_index is not None
+        and mapping_last is not None
+        and overflow_index <= mapping_last
+    )
+    if overflow_index is None:
+        category = "NO_TRACE_OVERFLOW"
+    elif renderer_index is None:
+        category = "TRACE_OVERFLOW_RENDERER_NOT_RETAINED"
+    elif mapping_complete and window_fully_retained:
+        if overflow_after_mapping:
+            category = "OVERFLOW_AFTER_CURRENT_MAPPING"
+        elif selected_after_overflow:
+            category = "OVERFLOW_BEFORE_RENDERER_MAPPING_RETAINED"
+        else:
+            category = "MAPPING_COMPLETE_BEFORE_OVERFLOW"
+    elif not window_fully_retained:
+        category = "OVERFLOW_CURRENT_MAPPING_WINDOW_NOT_RETAINED"
+    else:
+        category = "OVERFLOW_CURRENT_MAPPING_INCOMPLETE"
+    return {
+        **retention,
+        "renderer_draw_operation_index": renderer_index,
+        "renderer_draw_before_overflow": selected_before_overflow,
+        "renderer_draw_after_overflow": selected_after_overflow,
+        "source_canvas_id": source_canvas_id or None,
+        "latest_clear_operation_index": latest_clear_index or None,
+        "current_mapping_first_operation_index": mapping_first,
+        "current_mapping_last_operation_index": mapping_last,
+        "current_mapping_expected_tile_count": (
+            observed_group.get(
+                "expected_tile_count",
+                observed_group.get("expected_source_tile_count"),
+            )
+            if observed_group
+            else None
+        ),
+        "current_mapping_operation_count": (
+            observed_group.get("operations") if observed_group else 0
+        ),
+        "current_mapping_complete_bijection": mapping_complete,
+        "current_mapping_geometry_rejected": mapping_geometry_rejected,
+        "current_mapping_geometry_rejection_reasons": (
+            list((observed_group or {}).get("rejection_reasons") or [])
+            if mapping_geometry_rejected
+            else []
+        ),
+        "current_mapping_category": (
+            "GEOMETRY_REJECTED"
+            if mapping_geometry_rejected
+            else "COMPLETE_BIJECTION"
+            if mapping_complete
+            else "UNAVAILABLE"
+        ),
+        "current_mapping_window_start_index": current_window_start,
+        "current_mapping_window_end_index": current_window_end,
+        "current_mapping_window_fully_retained": window_fully_retained,
+        "current_mapping_fully_retained": mapping_fully_retained,
+        "overflow_after_current_mapping": overflow_after_mapping,
+        "overflow_before_or_during_current_mapping": (
+            overflow_before_or_during_mapping
+        ),
+        "overflow_category": category,
+    }
 
 
 def _jpeg_sof_marker(marker: int) -> bool:
@@ -1849,8 +2435,10 @@ def _operation_summary(
         target_id = str((operation.get("target") or {}).get("canvasId") or "")
         source_id = str((operation.get("source") or {}).get("sourceId") or "")
         by_target.setdefault(target_id, set()).add(source_id)
+    retention = _trace_retention_metadata(trace)
     return {
         "operation_count": len(operations),
+        **retention,
         "operation_counts": dict(sorted(Counter(
             str(operation.get("operation")) for operation in operations
         ).items())),
@@ -1872,7 +2460,8 @@ def _operation_summary(
             if operation.get("sourceSnapshotDataUrl")
         ),
         "tile_rearrangement": trace_tile_rearrangement_report(trace),
-        "bounded": len(operations) >= MAX_OPERATION_RECORDS,
+        "bounded": bool(retention["trace_overflow"])
+        or len(operations) >= MAX_OPERATION_RECORDS,
     }
 
 
@@ -1928,7 +2517,7 @@ async def _select_candidate(
     public_pool = []
     for rank, candidate, reasons in ranked:
         public_pool.append({
-            **candidate.public(),
+            **_public_candidate(candidate),
             "selection_rank": list(rank),
             "selection_reasons": reasons,
         })
@@ -1937,13 +2526,43 @@ async def _select_candidate(
     return ranked[0][1], public_pool
 
 
+def _redacted_path(value: str | None) -> str:
+    parts = str(value or "").split("/")
+    return "/".join(
+        "<redacted>" if len(part) > 96 else part
+        for part in parts
+    )
+
+
+def _public_candidate(candidate: MagicJpegCandidate) -> dict[str, Any]:
+    public = candidate.public()
+    public["url"] = redact_url(str(public.get("url") or ""))
+    public["path"] = _redacted_path(candidate.path)
+    return public
+
+
+def _redact_matching_details(details: dict[str, Any]) -> dict[str, Any]:
+    public = dict(details)
+    matched = []
+    for item in details.get("matched_candidates", []) or []:
+        if not isinstance(item, dict):
+            continue
+        redacted = dict(item)
+        redacted["url"] = redact_url(str(redacted.get("url") or ""))
+        redacted["path"] = _redacted_path(redacted.get("path"))
+        matched.append(redacted)
+    if "matched_candidates" in details:
+        public["matched_candidates"] = matched
+    return public
+
+
 def _compact_candidate(candidate: MagicJpegCandidate) -> dict[str, Any]:
     return {
         "record_index": candidate.record_index,
         "page_index": candidate.page_index,
         "sha256": candidate.metadata.get("sha256"),
         "hostname": candidate.hostname,
-        "path": candidate.path,
+        "path": _redacted_path(candidate.path),
         "dimensions": {
             "width": candidate.metadata.get("width"),
             "height": candidate.metadata.get("height"),
@@ -1952,6 +2571,76 @@ def _compact_candidate(candidate: MagicJpegCandidate) -> dict[str, Any]:
         "filter_match": candidate.filter_match,
         "estimated_quality": candidate.metadata.get("estimated_quality"),
         "subsampling": candidate.metadata.get("subsampling"),
+    }
+
+
+def candidate_matching_diagnostic(
+    candidate_pool: list[dict[str, Any]],
+    native: dict[str, Any],
+    selected: MagicJpegCandidate | None,
+    *,
+    imagebitmap: dict[str, Any],
+    selection_strategy: str,
+) -> dict[str, Any]:
+    dimensions = {
+        "width": native.get("width"),
+        "height": native.get("height"),
+    }
+    dimension_matches = [
+        item for item in candidate_pool
+        if item.get("selection_reasons", {}).get("dimensions_match")
+    ]
+    signature_matches = [
+        item for item in candidate_pool
+        if item.get("selection_reasons", {}).get("signature_match")
+    ]
+    selected_metadata = None
+    if selected is not None:
+        selected_metadata = {
+            "record_index": selected.record_index,
+            "page_index": selected.page_index,
+            "sha256": selected.metadata.get("sha256"),
+            "dimensions": {
+                "width": selected.metadata.get("width"),
+                "height": selected.metadata.get("height"),
+            },
+            "byte_size": selected.metadata.get("byte_size"),
+            "hostname": selected.hostname,
+            "path": _redacted_path(selected.path),
+            "route_match": selected.route_match,
+            "filter_match": selected.filter_match,
+        }
+    exact_count = int(imagebitmap.get("exact_decoded_pixel_match_count", 0) or 0)
+    if selected is None:
+        decision = "NO_CANDIDATE_SELECTED"
+    elif exact_count == 1:
+        decision = "IMAGEBITMAP_EXACT_CANDIDATE_SELECTED"
+    elif len(signature_matches) == 1:
+        decision = "SIGNATURE_CANDIDATE_SELECTED"
+    elif len(dimension_matches) == 1:
+        decision = "DIMENSION_CANDIDATE_SELECTED"
+    else:
+        decision = "RANKED_CANDIDATE_SELECTED"
+    return {
+        "production_original_path_invoked": False,
+        "production_original_path_note": (
+            "The diagnostic does not call capture_page(); this is bounded "
+            "candidate evidence for the existing original-JPEG decision."
+        ),
+        "native_dimensions": dimensions,
+        "candidate_count_total": len(candidate_pool),
+        "candidate_count_dimension_match": len(dimension_matches),
+        "candidate_count_signature_match": len(signature_matches),
+        "imagebitmap_exact_decoded_match_count": exact_count,
+        "selection_strategy": selection_strategy,
+        "decision": decision,
+        "selected": selected_metadata,
+        "dimension_match_record_indices": [
+            item.get("record_index") for item in dimension_matches
+        ],
+        "signature_match_record_indices": [
+            item.get("record_index") for item in signature_matches
+        ],
     }
 
 
@@ -2142,6 +2831,38 @@ async def _take_transform_trace(page: Page) -> dict[str, Any]:
     return trace if isinstance(trace, dict) else {}
 
 
+async def _visible_canvas_metrics(
+    canvas: Any,
+) -> dict[str, Any] | None:
+    if canvas is None:
+        return None
+    try:
+        metrics = await canvas.evaluate(
+            """element => {
+              const style = getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              return {
+                bitmap_width: element.width,
+                bitmap_height: element.height,
+                client_width: element.clientWidth,
+                client_height: element.clientHeight,
+                css_width: style.width,
+                css_height: style.height,
+                bounding_box: {
+                  x: rect.x,
+                  y: rect.y,
+                  width: rect.width,
+                  height: rect.height,
+                },
+                device_pixel_ratio: window.devicePixelRatio,
+              };
+            }"""
+        )
+    except Exception:  # noqa: BLE001 - diagnostic metadata is best effort
+        return None
+    return metrics if isinstance(metrics, dict) else None
+
+
 async def _run_once(
     *,
     session: BrowserSession,
@@ -2153,6 +2874,7 @@ async def _run_once(
     max_responses: int,
     max_body_reads: int,
     max_concurrent_body_reads: int,
+    metadata_only: bool,
 ) -> dict[str, Any]:
     run_dir.mkdir(parents=True, exist_ok=True)
     collector = ResponseCollector(
@@ -2206,6 +2928,9 @@ async def _run_once(
         await adapter.initialize(page)
         await page.wait_for_timeout(PAGE_SETTLE_MS)
         await collector.drain()
+        # The init script also observes the product/entry page. Keep the
+        # viewer trace window page-local and discard that unrelated activity.
+        await _take_transform_trace(page)
 
         for page_index in range(1, max_pages + 1):
             collector.set_page(page_index)
@@ -2221,6 +2946,16 @@ async def _run_once(
                 visible_size = await visible_canvas.evaluate(
                     "element => ({width: element.width, height: element.height})"
                 )
+            visible_canvas_metadata = await _visible_canvas_metrics(visible_canvas)
+            visible_part_rectangles: list[dict[str, Any]] = []
+            if visible_canvas is not None:
+                try:
+                    visible_part_rectangles = await adapter._page_draw_rectangles(
+                        page,
+                        visible_canvas,
+                    )
+                except Exception:  # noqa: BLE001 - diagnostic metadata is best effort
+                    visible_part_rectangles = []
             visible_width = int(visible_size["width"]) if visible_size else None
             visible_height = int(visible_size["height"]) if visible_size else None
             page_candidates = [
@@ -2246,6 +2981,7 @@ async def _run_once(
                 page_candidates,
                 signature_cache,
             )
+            matching = _redact_matching_details(matching)
             counter = page.locator("#pageSliderCounter")
             page_counter = await counter.inner_text() if await counter.count() else None
             page_dir = run_dir / f"page-{page_index:04d}"
@@ -2263,7 +2999,8 @@ async def _run_once(
                     and source_id not in saved_image_source_ids
                 ):
                     image_source_name = f"imagebitmap-source-{len(saved_image_source_ids) + 1:02d}.png"
-                    (page_dir / image_source_name).write_bytes(data)
+                    if not metadata_only:
+                        (page_dir / image_source_name).write_bytes(data)
                     saved_image_source_ids.add(source_id)
                     image_source_files.append(
                         {
@@ -2274,7 +3011,7 @@ async def _run_once(
                                 "height": source.get("height"),
                             },
                             "snapshot_sha256": hashlib.sha256(data).hexdigest(),
-                            "file": image_source_name,
+                            "file": None if metadata_only else image_source_name,
                         }
                     )
             part_records: list[dict[str, Any]] = []
@@ -2284,7 +3021,8 @@ async def _run_once(
                 native_data = native_part["_data"]
                 native_image = _decode_image(native_data)
                 native_name = "native.png" if part_index == 1 else f"native-{part_index:02d}.png"
-                (page_dir / native_name).write_bytes(native_data)
+                if not metadata_only:
+                    (page_dir / native_name).write_bytes(native_data)
                 candidate, candidate_pool = await _select_candidate(
                     page,
                     page_candidates,
@@ -2317,6 +3055,13 @@ async def _run_once(
                     "selection_pool": candidate_pool,
                     "selection_strategy": selection_strategy,
                 }
+                raw_record["matching_diagnostic"] = candidate_matching_diagnostic(
+                    candidate_pool,
+                    native_part,
+                    candidate,
+                    imagebitmap=imagebitmap,
+                    selection_strategy=selection_strategy,
+                )
                 analysis: dict[str, Any] | None = None
                 diff_files: dict[str, str] = {}
                 marker_metadata: list[dict[str, Any]] = []
@@ -2325,14 +3070,16 @@ async def _run_once(
                     raw_data = candidate.body
                     raw_image = _decode_image(raw_data)
                     raw_name = f"raw-candidate-{part_index:02d}.jpg"
-                    (page_dir / raw_name).write_bytes(raw_data)
+                    if not metadata_only:
+                        (page_dir / raw_name).write_bytes(raw_data)
                     analysis, aligned_raw = analyze_image_pair(raw_image, native_image)
-                    diff_files = _write_diff_images(
-                        page_dir,
-                        aligned_raw,
-                        native_image,
-                        stem=f"diff-part-{part_index:02d}",
-                    )
+                    if not metadata_only:
+                        diff_files = _write_diff_images(
+                            page_dir,
+                            aligned_raw,
+                            native_image,
+                            stem=f"diff-part-{part_index:02d}",
+                        )
                     marker_metadata = jpeg_marker_metadata(raw_data)
                     raw_record.update({
                         "sha256": candidate.metadata.get("sha256"),
@@ -2349,7 +3096,7 @@ async def _run_once(
                         "content_type": candidate.content_type,
                         "estimated_quality": candidate.metadata.get("estimated_quality"),
                         "subsampling": candidate.metadata.get("subsampling"),
-                        "file": raw_name,
+                        "file": None if metadata_only else raw_name,
                         "jpeg_marker_metadata": marker_metadata,
                     })
                     part_mapping["raw_jpeg"] = {
@@ -2371,9 +3118,10 @@ async def _run_once(
                 source_name = None
                 if full_source_png:
                     source_name = "source-canvas.png" if part_index == 1 else f"source-canvas-{part_index:02d}.png"
-                    (page_dir / source_name).write_bytes(full_source_png)
+                    if not metadata_only:
+                        (page_dir / source_name).write_bytes(full_source_png)
                 elif native_part.get("source_constructor") == "HTMLCanvasElement":
-                    source_name = native_name
+                    source_name = None if metadata_only else native_name
                 part_mapping["source_canvas_snapshot_sha256"] = (
                     hashlib.sha256(full_source_png).hexdigest()
                     if full_source_png
@@ -2408,7 +3156,7 @@ async def _run_once(
                     "native": {
                         **_public_native_part(native_part),
                         "sha256": hashlib.sha256(native_data).hexdigest(),
-                        "file": native_name,
+                        "file": None if metadata_only else native_name,
                     },
                     "source_canvas": {
                         "file": source_name,
@@ -2451,6 +3199,10 @@ async def _run_once(
                 "classification_from_existing_probe": classification,
                 "existing_probe_matching": matching,
                 "native_error": native_error,
+                "visible_canvas": visible_canvas_metadata,
+                "visible_part_count": len(visible_part_rectangles),
+                "visible_part_rectangles": visible_part_rectangles,
+                "metadata_only": metadata_only,
                 "parts": part_records,
                 "part_mappings": part_mapping_records,
                 "draw_calls": raw_draw_calls,
@@ -2545,6 +3297,20 @@ async def _run_once(
             {
                 "page_index": page_record.get("page_index"),
                 "page_counter": page_record.get("page_counter"),
+                "visible_canvas": page_record.get("visible_canvas"),
+                "visible_part_count": page_record.get("visible_part_count"),
+                "trace": {
+                    key: page_record.get("canvas_operation_summary", {}).get(key)
+                    for key in (
+                        "operation_count",
+                        "observed_operation_count",
+                        "trace_overflow",
+                        "overflow_operation_index",
+                        "retained_first_operation_index",
+                        "retained_last_operation_index",
+                        "dropped_operation_count",
+                    )
+                },
                 "parts": [
                     {
                         "classification": part.get("analysis", {}).get("classification"),
@@ -2568,7 +3334,7 @@ async def _run_once(
     )
     (run_dir / "jpeg_candidates.json").write_text(
         json.dumps(
-            [candidate.public() for candidate in _unique_candidates(collector.candidates)],
+            [_public_candidate(candidate) for candidate in _unique_candidates(collector.candidates)],
             ensure_ascii=False,
             indent=2,
         ),
@@ -2598,6 +3364,7 @@ async def run_probe(
     max_responses: int = DEFAULT_MAX_RESPONSES,
     max_body_reads: int = DEFAULT_MAX_BODY_READS,
     max_concurrent_body_reads: int = DEFAULT_MAX_CONCURRENT_BODY_READS,
+    metadata_only: bool = False,
 ) -> dict[str, Any]:
     if max_pages <= 0 or runs <= 0:
         raise ValueError("max_pages and runs must be positive")
@@ -2618,6 +3385,7 @@ async def run_probe(
                 max_responses=max_responses,
                 max_body_reads=max_body_reads,
                 max_concurrent_body_reads=max_concurrent_body_reads,
+                metadata_only=metadata_only,
             )
             runs_summary.append(run_summary)
     finally:
@@ -2636,6 +3404,7 @@ async def run_probe(
         "input_url": redact_url(url),
         "access_strategy": access_strategy,
         "max_pages": max_pages,
+        "metadata_only": metadata_only,
         "runs": concise_runs,
         "reload_comparison": comparison,
         "watermark_interpretation": {
@@ -2691,6 +3460,11 @@ def main() -> None:
     parser.add_argument("--max-responses", type=_positive_int, default=DEFAULT_MAX_RESPONSES)
     parser.add_argument("--max-body-reads", type=_positive_int, default=DEFAULT_MAX_BODY_READS)
     parser.add_argument(
+        "--metadata-only",
+        action="store_true",
+        help="retain image bytes only in memory and write metadata files, not images",
+    )
+    parser.add_argument(
         "--max-concurrent-body-reads",
         type=_positive_int,
         default=DEFAULT_MAX_CONCURRENT_BODY_READS,
@@ -2708,6 +3482,7 @@ def main() -> None:
             max_responses=args.max_responses,
             max_body_reads=args.max_body_reads,
             max_concurrent_body_reads=args.max_concurrent_body_reads,
+            metadata_only=args.metadata_only,
         )
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))

@@ -221,6 +221,135 @@ def test_trace_tile_report_rejects_duplicate_and_gap_mapping() -> None:
     assert group["destination_tile_gap_count"] == 2
 
 
+def test_trace_tile_report_keeps_geometry_rejected_groups_for_diagnostics() -> None:
+    operation = _trace_tile_operation(
+        target_id="intermediate",
+        source_id="bitmap-a",
+        source_x=0,
+        source_y=0,
+        destination_x=0,
+        destination_y=0,
+        tile_size=4,
+        target_size=8,
+    )
+    operation["source"]["width"] = 12
+    operation["source"]["height"] = 8
+
+    report = probe.trace_tile_rearrangement_report({"operations": [operation]})
+
+    assert report["groups"] == []
+    rejected = report["rejected_groups"][0]
+    assert rejected["source_dimensions"] == {"width": 12, "height": 8}
+    assert rejected["target_dimensions"] == {"width": 8, "height": 8}
+    assert rejected["expected_source_tile_count"] == 6
+    assert "target_source_dimension_mismatch" in rejected["rejection_reasons"]
+
+
+def test_trace_tile_report_segments_repeated_passes_at_clear_rect() -> None:
+    operations = []
+    for pass_index in range(2):
+        operations.append({
+            "index": len(operations) + 1,
+            "operation": "clearRect",
+            "target": {"canvasId": "source-canvas"},
+        })
+        for source_index, destination_index in enumerate((1, 0, 2, 3)):
+            operations.append(
+                _trace_tile_operation(
+                    target_id="source-canvas",
+                    source_id="bitmap-a",
+                    source_x=(source_index % 2) * 4,
+                    source_y=(source_index // 2) * 4,
+                    destination_x=(destination_index % 2) * 4,
+                    destination_y=(destination_index // 2) * 4,
+                    tile_size=4,
+                    target_size=8,
+                    index=len(operations) + 1,
+                )
+            )
+
+    report = probe.trace_tile_rearrangement_report({"operations": operations})
+
+    assert report["detected"] is True
+    assert len(report["groups"]) == 2
+    assert [group["operations"] for group in report["groups"]] == [4, 4]
+    assert [group["target_segment"] for group in report["groups"]] == [1, 2]
+
+
+def test_trace_mapping_window_reports_overflow_after_complete_mapping() -> None:
+    mapping_group = {
+        "target_canvas_id": "source-canvas",
+        "source_id": "bitmap-a",
+        "first_operation_index": 5,
+        "last_operation_index": 8,
+        "operations": 4,
+        "expected_tile_count": 4,
+        "complete_bijection": True,
+    }
+    mapping = {
+        "renderer": {
+            "draw_operation_index": 10,
+            "source_canvas_id": "source-canvas",
+        },
+        "permutation": mapping_group,
+    }
+    trace = {
+        "operations": [
+            {
+                "index": 3,
+                "operation": "clearRect",
+                "target": {"canvasId": "source-canvas"},
+            },
+            {"index": 10, "operation": "drawImage", "target": {}},
+        ],
+        "max_operations": 6,
+        "trace_overflow": True,
+        "overflow_operation_index": 10,
+        "observed_operation_count": 12,
+        "retained_first_operation_index": 3,
+        "retained_last_operation_index": 12,
+        "dropped_operation_count": 2,
+        "post_overflow_operation_counts": {"drawImage": 3},
+    }
+
+    report = probe.trace_mapping_window_diagnostic(
+        trace,
+        mapping,
+        [mapping_group],
+    )
+
+    assert report["renderer_draw_after_overflow"] is True
+    assert report["current_mapping_complete_bijection"] is True
+    assert report["current_mapping_window_fully_retained"] is True
+    assert report["overflow_after_current_mapping"] is True
+    assert report["overflow_category"] == "OVERFLOW_AFTER_CURRENT_MAPPING"
+    assert report["post_overflow_operation_counts"] == {"drawImage": 3}
+
+
+def test_renderer_geometry_distinguishes_pure_scale_from_crop() -> None:
+    scaled = probe.renderer_geometry_report({
+        "source_dimensions": {"width": 100, "height": 200},
+        "target_dimensions": {"width": 100, "height": 200},
+        "source_rect": {"x": 0, "y": 0, "width": 100, "height": 200},
+        "destination": {"x": 0, "y": 0, "width": 50, "height": 100},
+        "transform": {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+        "global_alpha": 1,
+        "global_composite_operation": "source-over",
+        "filter": "none",
+    })
+    cropped = probe.renderer_geometry_report({
+        "source_dimensions": {"width": 100, "height": 200},
+        "target_dimensions": {"width": 100, "height": 200},
+        "source_rect": {"x": 4, "y": 0, "width": 96, "height": 200},
+        "destination": {"x": 0, "y": 0, "width": 96, "height": 200},
+    })
+
+    assert scaled["classification"] == "PURE_RENDERER_SCALE"
+    assert scaled["destination_differs_from_source_dimensions"] is True
+    assert cropped["classification"] == "CROP_OR_PIXEL_PROCESSING"
+    assert cropped["source_rect_is_full"] is False
+
+
 def test_part_mapping_uses_object_identity_and_supports_mixed_classification() -> None:
     tile_operations = []
     for source_index, destination_index in enumerate((1, 0, 2, 3)):
