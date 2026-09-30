@@ -84,8 +84,11 @@ The first grant-only run exposed a production bug: locked viewer `page_N`
 placeholders were being treated as preexisting readable content before the
 live protobuf status was consulted. The adapter now waits for viewer hydration,
 consults live status first, and only then considers preexisting content for
-`FREE`/`RENTAL`. Unit coverage asserts that `TICKET_AVAILABLE` wins over those
-placeholders. The exact ticket control was never clicked in this verification:
+`FREE`/`RENTAL`. Viewer readiness recognizes the known non-ticket access gates
+before protobuf preflight, while those gates remain hydration signals rather
+than access authority. Unit coverage asserts that `TICKET_AVAILABLE` wins over
+those placeholders. The exact ticket control was never clicked in this
+verification:
 both the adapter debug metadata and the run records show
 `ticket_click_attempted=false` and `AccessConsumption.consumed=false`.
 
@@ -106,8 +109,9 @@ completed without another ticket action. The viewer needed two site-local
 bounded interstitial states: a visible ad spread and the volume-purchase /
 next-story spreads. These are advanced with the existing non-clicking
 `ArrowLeft` AD path. The explicit in-viewport `次の話を読む` signal remains
-required for terminal `NEXT_CONTENT`; page counters or DOM-only offscreen
-markers are not sufficient. The successful output contains 19 source-native
+required for terminal `NEXT_CONTENT`; last-page interstitial detection is
+visible/in-viewport only, and page counters or DOM-only offscreen markers are
+not sufficient. The successful output contains 19 source-native
 JPEG entries, all `760x1200`, and a ZIP Artifact. Catalog `Item=completed`,
 the successful CrawlRun stop reason is `next_content`, and the ZIP is at
 `output/zeblack_z5_title53/Books/漫画/Zeblack Z5 title 53  chapter 4/`.

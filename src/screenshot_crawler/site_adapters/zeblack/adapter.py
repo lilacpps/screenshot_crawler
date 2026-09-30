@@ -109,6 +109,13 @@ _ADVERTISEMENT_SCRIPT = r"""
 """
 _LAST_PAGE_SCRIPT = r"""
 (elements) => elements.some((element) => {
+  const style = getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  if (style.display === "none" || style.visibility === "hidden" ||
+      style.visibility === "collapse" || style.opacity === "0" ||
+      rect.width <= 0 || rect.height <= 0 || rect.right <= 0 ||
+      rect.left >= window.innerWidth || rect.bottom <= 0 ||
+      rect.top >= window.innerHeight) return false;
   const text = (element.innerText || '').replace(/\s+/g, ' ').trim();
   return text.includes("続きの巻購入で、何度でも読み返し！") ||
     text.includes("次の話を読む");
@@ -476,11 +483,25 @@ class ZeblackAdapter(SiteAdapter):
             if rows:
                 await self._wait_for_initial_content(page)
                 return
-            if await self._visible_exact_text_count(page, _TICKET_ENTRY_TEXT) == 1:
+            if await self._visible_access_gate(page):
                 return
             await page.wait_for_timeout(100)
             elapsed_ms += 100
         raise PageChangeTimeoutError("Zeblack viewer did not become ready")
+
+    async def _visible_access_gate(self, page: Page) -> bool:
+        """Return whether a known access gate proves viewer hydration."""
+
+        for text in (
+            _TICKET_ENTRY_TEXT,
+            _POINT_ENTRY_TEXT,
+            _POINT_AND_COIN_ENTRY_TEXT,
+            _COIN_ENTRY_TEXT,
+            _PURCHASE_ENTRY_TEXT,
+        ):
+            if await self._visible_exact_text_count(page, text):
+                return True
+        return False
 
     async def _has_preexisting_content(self, page: Page) -> bool:
         """Return true only when content is already observable in the viewer."""

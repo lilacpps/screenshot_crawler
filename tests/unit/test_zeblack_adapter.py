@@ -95,7 +95,7 @@ class _FakeLocator:
         if "iframe" in self.selector:
             return self.page.ad_signal
         if "-KWKsa_spread" in self.selector:
-            return self.page.last_page_signal
+            return self.page.last_page_signal and self.page.last_page_in_viewport
         return self.page.next_signal
 
     def nth(self, index: int) -> _FakeLocator:
@@ -119,12 +119,14 @@ class _FakePage:
         next_signal: bool = False,
         ad_signal: bool = False,
         last_page_signal: bool = False,
+        last_page_in_viewport: bool = True,
     ) -> None:
         self.url = TARGET
         self.rows = rows
         self.next_signal = next_signal
         self.ad_signal = ad_signal
         self.last_page_signal = last_page_signal
+        self.last_page_in_viewport = last_page_in_viewport
         self.nth_calls: list[int] = []
         self.keyboard = _FakeKeyboard()
         self.listeners: list[tuple[str, object]] = []
@@ -434,6 +436,63 @@ async def test_viewer_ready_waits_for_stable_page_before_live_preflight(monkeypa
     assert calls == ["stable"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "gate_text",
+    [
+        "チケットを使って読む",
+        "ポイントを使って読む",
+        "アイテムを使って読む",
+        "コインを使って読む",
+        "コインを購入する",
+    ],
+)
+async def test_viewer_ready_accepts_known_access_gates_without_click(
+    monkeypatch, gate_text: str
+) -> None:
+    page = _TicketPage({gate_text: 1})
+    adapter = ZeblackAdapter()
+
+    async def no_rows(_page: object) -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(adapter, "_safe_active_page_rows", no_rows)
+    await adapter._wait_for_viewer_ready(page)  # type: ignore[arg-type]
+    assert page.clicks == 0
+
+
+@pytest.mark.asyncio
+async def test_point_gate_reaches_live_preflight_and_skips_without_ticket(
+    monkeypatch,
+) -> None:
+    page = _TicketPage({"ポイントを使って読む": 1})
+    adapter = ZeblackAdapter()
+    await adapter.configure_run(page, "quota")  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(page, "work_ticket")  # type: ignore[arg-type]
+    adapter._initial_url = TARGET
+    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+
+    async def no_rows(_page: object) -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(adapter, "_safe_active_page_rows", no_rows)
+
+    async def observe(_page: object, **_kwargs: object) -> ZeblackLiveAccessState:
+        return _live_state(4, ("9265714",))
+
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.zeblack.adapter.observe_zeblack_live_access",
+        observe,
+    )
+    with pytest.raises(AccessResourceUnavailableError) as error:
+        await adapter._initialize_quota_entry(page, entry_only=False)  # type: ignore[arg-type]
+
+    assert error.value.reason == "work_ticket_not_available_for_chapter"
+    assert error.value.stop_resource_pass is False
+    assert page.clicks == 0
+    assert adapter.get_access_consumption().consumed is False
+
+
 async def _false() -> bool:
     return False
 
@@ -619,6 +678,22 @@ async def test_visible_advertisement_spread_is_an_intermediate_state(monkeypatch
     assert await adapter.detect_state(page) == PageState.AD  # type: ignore[arg-type]
     await adapter.go_next(page)  # type: ignore[arg-type]
     assert page.keyboard.presses == ["ArrowLeft"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_viewport", [False, True])
+async def test_last_page_signal_requires_visible_in_viewport_spread(
+    monkeypatch, in_viewport: bool
+) -> None:
+    page = _FakePage(
+        [],
+        last_page_signal=True,
+        last_page_in_viewport=in_viewport,
+    )
+    adapter = ZeblackAdapter()
+    _patch_rows(monkeypatch, adapter, page)
+
+    assert await adapter._last_page_signal(page) is in_viewport  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
