@@ -22,6 +22,10 @@ selected grant, and a confirmed grant is followed by a delay before the
 post-grant direct phase. A resolver with no selected candidate still updates
 the explicit-pass pacing state, while local-only skips do not. Catalog
 schema/version and the shared browser/CDP session model are unchanged.
+Resolver navigation and protobuf body reads share one bounded observation
+deadline, and resolver cancellation is propagated rather than swallowed.
+The generic Batch CLI reports resolver start, completion, and failure so a
+deferred-resource phase remains observable while its read-only snapshot runs.
 
 ## Zeblack Z5 current status (2026-09-30)
 

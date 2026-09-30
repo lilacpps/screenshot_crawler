@@ -144,17 +144,43 @@ class _LiveProtobufObserver:
         deadline = time.monotonic() + timeout_ms / 1000
         while time.monotonic() < deadline:
             tasks = tuple(self._tasks)
-            await self._drain(tasks)
+            await self._drain(tasks, deadline=deadline)
             if self._payloads:
                 # Allow same-load duplicates to arrive and compare them all.
-                await page.wait_for_timeout(ZEBLACK_LIVE_ACCESS_POLL_MS)
-                await self._drain(tuple(self._tasks))
+                remaining_ms = self._remaining_timeout_ms(deadline)
+                if remaining_ms <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(
+                        page.wait_for_timeout(
+                            min(ZEBLACK_LIVE_ACCESS_POLL_MS, remaining_ms)
+                        ),
+                        timeout=remaining_ms / 1000,
+                    )
+                except TimeoutError as exc:
+                    raise ZeblackLiveAccessError(
+                        "Zeblack chapter-list protobuf response timed out"
+                    ) from exc
+                await self._drain(tuple(self._tasks), deadline=deadline)
                 if self._errors:
                     raise ZeblackLiveAccessError(
                         "Zeblack chapter-list protobuf response was invalid"
                     ) from self._errors[0]
                 return tuple(self._payloads)
-            await page.wait_for_timeout(ZEBLACK_LIVE_ACCESS_POLL_MS)
+            remaining_ms = self._remaining_timeout_ms(deadline)
+            if remaining_ms <= 0:
+                break
+            try:
+                await asyncio.wait_for(
+                    page.wait_for_timeout(
+                        min(ZEBLACK_LIVE_ACCESS_POLL_MS, remaining_ms)
+                    ),
+                    timeout=remaining_ms / 1000,
+                )
+            except TimeoutError as exc:
+                raise ZeblackLiveAccessError(
+                    "Zeblack chapter-list protobuf response timed out"
+                ) from exc
         if self._errors:
             raise ZeblackLiveAccessError(
                 "Zeblack chapter-list protobuf response was invalid"
@@ -163,13 +189,32 @@ class _LiveProtobufObserver:
             "Zeblack title_chapter_list protobuf response was not observed"
         )
 
-    async def _drain(self, tasks: tuple[asyncio.Task[bytes], ...]) -> None:
+    @staticmethod
+    def _remaining_timeout_ms(deadline: float) -> int:
+        return max(0, int((deadline - time.monotonic()) * 1000))
+
+    async def _drain(
+        self, tasks: tuple[asyncio.Task[bytes], ...], *, deadline: float
+    ) -> None:
         for task in tasks:
             if task in self._processed:
                 continue
+            remaining_ms = self._remaining_timeout_ms(deadline)
+            if remaining_ms <= 0:
+                raise ZeblackLiveAccessError(
+                    "Zeblack chapter-list protobuf response body timed out"
+                )
             try:
-                await task
-            except BaseException as exc:  # noqa: BLE001 - fail closed
+                await asyncio.wait_for(
+                    asyncio.shield(task), timeout=remaining_ms / 1000
+                )
+            except TimeoutError as exc:
+                raise ZeblackLiveAccessError(
+                    "Zeblack chapter-list protobuf response body timed out"
+                ) from exc
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - fail closed
                 self._errors.append(exc)
             self._processed.add(task)
 
@@ -274,12 +319,14 @@ async def observe_zeblack_chapter_list(
 
     observer = _LiveProtobufObserver()
     observer.attach(page)
+    deadline = time.monotonic() + timeout_ms / 1000
     try:
         try:
+            navigation_timeout_ms = max(1, observer._remaining_timeout_ms(deadline))
             await page.goto(
                 canonical_zeblack_chapter_list_url(title_id),
                 wait_until="domcontentloaded",
-                timeout=timeout_ms,
+                timeout=navigation_timeout_ms,
             )
         except (PlaywrightTimeoutError, TimeoutError) as exc:
             raise ZeblackLiveAccessError(
@@ -290,7 +337,12 @@ async def observe_zeblack_chapter_list(
             raise ZeblackLiveAccessError(
                 "Zeblack chapter-list navigation changed title identity"
             )
-        payloads = await observer.wait_for_payloads(page, timeout_ms)
+        remaining_ms = observer._remaining_timeout_ms(deadline)
+        if remaining_ms <= 0:
+            raise ZeblackLiveAccessError(
+                "Zeblack chapter-list protobuf response timed out"
+            )
+        payloads = await observer.wait_for_payloads(page, remaining_ms)
     finally:
         observer.close()
 

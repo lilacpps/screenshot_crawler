@@ -49,6 +49,14 @@ direct is delayed after a confirmed grant. Phase A with zero site attempts has
 no leading resolver delay, and a resolver-only pass still affects the next
 explicit resource pass. Local Catalog skips do not create pacing delays.
 
+Resolver observability and timeout behavior are also bounded: chapter-list
+navigation, exact protobuf response-body reads, and same-load duplicate
+draining share one observation deadline. A stalled response body produces a
+resolver timeout rather than an unbounded wait, and cancellation propagates
+immediately. Generic Batch prints resolver snapshot start, completion, and
+failure messages; the read-only snapshot remains outside the grant attempt
+limit and does not consume a ticket.
+
 The former Z5 behavior and live verification records below are retained as
 history. This Z6 implementation was validated with synthetic/unit and
 browser-backed existing tests only; no real Work Ticket was consumed.

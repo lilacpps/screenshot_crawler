@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from typing import ClassVar
 
 import pytest
 
 from screenshot_crawler.site_adapters.zeblack.live_access import (
     ZeblackLiveAccessError,
+    observe_zeblack_chapter_list,
     observe_zeblack_live_access,
     parse_zeblack_chapter_list_title_id,
 )
@@ -61,6 +63,12 @@ class _Response:
         return self._body
 
 
+class _HangingResponse(_Response):
+    async def body(self) -> bytes:
+        await asyncio.sleep(3600)
+        return self._body
+
+
 class _Page:
     def __init__(self, payload: bytes) -> None:
         self.url = "about:blank"
@@ -83,6 +91,14 @@ class _Page:
 
     async def wait_for_timeout(self, _milliseconds: int) -> None:
         return None
+
+
+class _HangingBodyPage(_Page):
+    async def goto(self, url: str, **_kwargs: object) -> None:
+        self.url = url
+        response = _HangingResponse(self.payload)
+        for listener in tuple(self.listeners):
+            listener(response)  # type: ignore[operator]
 
 
 def test_zeblack_chapter_list_title_parser_is_strict() -> None:
@@ -124,3 +140,29 @@ async def test_live_access_fails_closed_when_target_is_missing() -> None:
         await observe_zeblack_live_access(
             page, title_id="5123", chapter_id="999", timeout_ms=1000
         )
+
+
+@pytest.mark.asyncio
+async def test_chapter_list_response_body_wait_is_bounded() -> None:
+    page = _HangingBodyPage(_payload(_chapter(101, 2, "#17")))
+
+    with pytest.raises(
+        ZeblackLiveAccessError,
+        match="protobuf response body timed out",
+    ):
+        await observe_zeblack_chapter_list(page, title_id="5123", timeout_ms=50)
+
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_chapter_list_observation_propagates_cancellation() -> None:
+    page = _HangingBodyPage(_payload(_chapter(101, 2, "#17")))
+    observation = asyncio.create_task(
+        observe_zeblack_chapter_list(page, title_id="5123", timeout_ms=5000)
+    )
+    await asyncio.sleep(0.01)
+    observation.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await observation

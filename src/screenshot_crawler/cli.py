@@ -912,6 +912,11 @@ async def _resolve_access_resource_candidates(
     if delay_before_first_ms is not None:
         await asyncio.sleep(delay_before_first_ms / 1000)
     page = await session.new_page()
+    site = str(getattr(candidates[0], "site", "unknown"))
+    print(
+        f"Batch access-resource resolver: site={site} resource={resource} "
+        f"snapshot start candidates={len(candidates)}"
+    )
     try:
         resolver = getattr(executor, "resolve_access_resource_candidates", None)
         if not callable(resolver):
@@ -919,6 +924,17 @@ async def _resolve_access_resource_candidates(
                 "Selected site does not provide the access-resource resolver contract"
             )
         resolution = await resolver(page, candidates, resource)
+        print(
+            f"Batch access-resource resolver: site={site} resource={resource} "
+            f"snapshot complete selected={len(resolution.selected_source_ids)}"
+        )
+    except BaseException as exc:
+        print(
+            f"Batch access-resource resolver: site={site} resource={resource} "
+            f"failed: {exc}",
+            file=sys.stderr,
+        )
+        raise
     finally:
         await _best_effort_cleanup(session.close_page(page))
 
