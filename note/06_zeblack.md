@@ -20,13 +20,16 @@ by the existing numeric item order fallback. No local 23-hour cooldown or
 work-wide ticket capacity is inferred, so multiple candidates in one Work
 remain in the plan.
 
-For an explicit Zeblack quota run, `ZeblackAdapter` performs a bounded,
-site-local live preflight by navigating the shared Playwright page to
-`/title/{title_id}/chapter/list` and observing the page-triggered
-`title_chapter_list` protobuf. It reuses the production ChapterV3 decoder,
-does not call DiscoveryService, and does not update Catalog. The target
-chapter must be present. The live `ConsumptionStatus` is authoritative, and
-the current `TICKET_AVAILABLE` chapter IDs are retained for pass-local skip
+For an explicit Zeblack quota run, `CrawlerRunner` first uses the Adapter's
+initial-navigation hook to enter the canonical
+`/title/{title_id}/chapter/list` while keeping the viewer URL as the crawl
+target. The existing `observe_zeblack_live_access()` then performs its bounded
+site-local list navigation and observes the page-triggered
+`title_chapter_list` protobuf, so the current implementation loads chapter/list
+twice. It reuses the production ChapterV3 decoder, does not call
+DiscoveryService, and does not update Catalog. The target chapter must be
+present. The live `ConsumptionStatus` and target `mainName` are authoritative,
+and the current `TICKET_AVAILABLE` chapter IDs are retained for pass-local skip
 decisions:
 
 ```text
@@ -35,21 +38,26 @@ target unavailable + no ticket available     -> work_ticket_unavailable, stop pa
 unknown status                                -> fail closed
 ```
 
-Only the bundle-observed exact text `チケットを使って読む` is eligible for a
-ticket entry. The control must be the single visible/enabled exact-text
-control in the same target viewer, with no visible point/coin/purchase control.
-The current static bundle showed no ticket-specific confirmation dialog; an
-unexpected visible dialog is therefore rejected rather than guessed. A run
-sets `_ticket_click_attempted` before the single click and never retries it.
-`AccessConsumption(consumed=True, resource="work_ticket")` is recorded only
-after the exact ticket action is clicked and stable same-chapter viewer
-`page_N` content is observed, with a UTC-aware timestamp. Selecting a
-`TICKET_AVAILABLE` chapter or opening its viewer only reveals that action; it
-does not consume the ticket. The ticket action is exactly
-`チケットを使って読む`. A POINT chapter exposes the distinct
-`ポイントを使って読む` action, which is a paid/point path and must never be
-clicked by the Work Ticket flow. Loading, timeout, unknown UI, and
-preexisting content remain fail-closed outcomes.
+For `TICKET_AVAILABLE`, only the bundle-observed exact text
+`チケットを使って読む` is eligible. The Adapter validates one visible target
+row and one exact visible `mainName` descendant, clicks that chapter control
+once, requires the URL to remain the exact chapter-list URL, and then finds a
+visible common DOM ancestor containing the exact target mainName, ticket control,
+and exact `キャンセル` control. CSS-module modal class fragments remain
+diagnostic only. The ticket control must be the single visible/enabled exact
+control in that bounded scope, with no visible point/item/coin/purchase control.
+The Adapter sets `_ticket_click_attempted` before the consuming click and never
+retries it. After the click, it requires navigation to the same target viewer
+and stable same-chapter `page_N` content before recording
+`AccessConsumption(consumed=True, resource="work_ticket")` with a UTC-aware
+timestamp. A POINT chapter exposes the distinct `ポイントを使って読む`
+action, which is never a Work Ticket fallback. Loading, timeout, unknown UI,
+ambiguous identity, and unexpected navigation remain fail-closed outcomes.
+
+`FREE` / `RENTAL` live statuses go directly from chapter/list to the canonical
+target viewer without opening the ticket modal. `entry_only` returns
+`work_ticket_not_needed` before that viewer navigation. Direct/auto runs keep
+the viewer as their initial URL and retain the preexisting viewer flow.
 
 `--grant-only work_ticket` uses the generic entry-only path, persists only
 confirmed observed consumption, leaves the Item pending, and creates no

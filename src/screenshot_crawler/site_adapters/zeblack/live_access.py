@@ -42,6 +42,7 @@ class ZeblackLiveAccessState:
 
     title_id: str
     chapter_id: str
+    target_main_name: str
     status_value: int
     status_name: str
     ticket_available_ids: tuple[str, ...]
@@ -262,6 +263,7 @@ async def observe_zeblack_live_access(
     return ZeblackLiveAccessState(
         title_id=str(title_id),
         chapter_id=str(chapter_id),
+        target_main_name=target.main_name,
         status_value=target.status_value,
         status_name=CONSUMPTION_STATUS_NAMES.get(target.status_value, "UNKNOWN"),
         ticket_available_ids=ticket_available_ids,

@@ -2,6 +2,39 @@
 
 ## Zeblack Z5 current status (2026-09-30)
 
+### Z5-6 production initial-navigation and Work Ticket flow
+
+The generic `SiteAdapter` contract now has the synchronous
+`resolve_initial_navigation_url(source_url)` hook. Its default returns the
+canonical `source_url`; `CrawlerRunner` calls it after run/resource validation
+and uses the result only for the first browser navigation. `source_url` remains
+the identity stored in ProgressStore, CrawlRun, BatchCandidate, and
+SourceTarget.
+
+Zeblack stores the canonical viewer target as `_target_url` / `_target_viewer`.
+For `quota + work_ticket`, the hook strictly parses that viewer URL and enters
+`/title/{title_id}/chapter/list`; malformed, foreign, or non-viewer targets fail
+closed without falling back to direct viewer navigation. `direct` and `auto`
+retain the viewer URL as the initial browser entry.
+
+The quota Adapter observes live protobuf status and `target.main_name`. For
+`TICKET_AVAILABLE`, it validates one visible target chapter row and one exact
+mainName descendant, clicks that chapter control once, requires the exact
+chapter-list URL to remain, validates the visible modal identity (mainName,
+`チケットを使って読む`, `キャンセル`) in one bounded DOM scope, and rejects
+point/item/coin/purchase controls. It clicks the exact ticket control at most
+once, waits for the same target viewer and stable `page_N` content, and only
+then records `AccessConsumption(consumed=True, resource="work_ticket")`.
+FREE / RENTAL skips the modal and navigates to the target viewer for normal
+runs; entry-only returns `work_ticket_not_needed` without that navigation.
+POINT/unavailable statuses retain the existing resource-pass skip behavior.
+
+The observer still owns its existing chapter-list navigation, so quota entry
+currently performs an initial Runner list load plus one bounded observer reload.
+This is an accepted initial implementation constraint and the observer remains
+the live protobuf authority. No real Work Ticket was consumed by this change;
+the controlled live click/consumption verification remains a separate follow-up.
+
 ### Current live verification: title 66 / chapter 6077
 
 The latest `main` commit `e990c97` was reviewed. Shared-CDP read-only

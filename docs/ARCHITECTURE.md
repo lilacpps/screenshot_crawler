@@ -117,6 +117,21 @@ Crawl Requestは既存`RunConfig`を最小限拡張して保持する。Catalog 
 
 Site Adapterは、必要なsiteではCrawl Requestの `access_strategy` を参照し、quota用入口かdirect入口か等のsite固有操作を選択できる。quota上限やreset rule自体は知らない。
 
+### Initial navigationとcanonical target
+
+`RunConfig.source_url`は常にCatalog / Crawl Requestのcanonical crawl targetであり、
+ProgressStore、CrawlRun、BatchCandidate、SourceTargetのidentityとして保持する。
+ブラウザの最初の入口がtargetと異なるsiteでは、`SiteAdapter.resolve_initial_navigation_url(source_url)`
+を使ってsite-localな初期遷移先だけを選択する。Base Adapterのdefaultは`source_url`そのものを返し、
+CrawlerRunnerは`configure_run`と`configure_quota_resource`の後、最初の`page.goto()`にだけこのhookの結果を使う。
+RunnerやGeneric Batch Coreにsite名・selector・URL分岐を追加しない。
+
+Zeblackの明示的な`quota + work_ticket`はcanonical viewer URLをtargetとして保持したまま、
+最初のブラウザ入口を`/title/{title_id}/chapter/list`へ切り替える。Adapterはlive protobufで対象章の
+statusと`mainName`を再確認し、`TICKET_AVAILABLE`のときだけchapter/listの対象行、確認modal、
+exact ticket controlを順に扱う。FREE / RENTALはlive確認後にtarget viewerへ遷移し、POINT等は
+target viewerへ遷移せずresource-unavailableとして終了する。
+
 ### `discovery/`（framework実装済み、site adapterはplanned）
 
 Watchlist targetからitem/source候補を列挙する。

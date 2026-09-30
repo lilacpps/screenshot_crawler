@@ -112,6 +112,7 @@ async def test_live_access_returns_target_status_and_all_ticket_ids() -> None:
 
     assert state.status_name == "POINT"
     assert state.status_value == 4
+    assert state.target_main_name == "#18"
     assert state.ticket_available_ids == ("101", "303")
 
 

@@ -29,6 +29,7 @@ from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import Consumpt
 from screenshot_crawler.site_adapters.zeblack.live_access import (
     ZeblackLiveAccessError,
     ZeblackLiveAccessState,
+    canonical_zeblack_chapter_list_url,
     observe_zeblack_live_access,
 )
 from screenshot_crawler.site_adapters.zeblack.native_capture import (
@@ -127,6 +128,7 @@ _POINT_ENTRY_TEXT = "ポイントを使って読む"
 _COIN_ENTRY_TEXT = "コインを使って読む"
 _POINT_AND_COIN_ENTRY_TEXT = "アイテムを使って読む"
 _PURCHASE_ENTRY_TEXT = "コインを購入する"
+_CANCEL_TEXT = "キャンセル"
 _TICKET_STATUS_VALUES = frozenset(
     {
         int(ConsumptionStatus.TICKET_UNAVAILABLE),
@@ -206,10 +208,12 @@ class ZeblackAdapter(SiteAdapter):
         self._access_consumption = AccessConsumption()
         self._live_access: ZeblackLiveAccessState | None = None
         self._preexisting_accessible = False
+        self._chapter_click_attempted = False
         self._ticket_click_attempted = False
         self._ticket_confirmation_state: str | None = None
-        self._initial_url: str | None = None
-        self._initial_viewer: ZeblackViewerIdentity | None = None
+        self._target_url: str | None = None
+        self._target_viewer: ZeblackViewerIdentity | None = None
+        self._target_main_name: str | None = None
         self._initial_context: ContentContext | None = None
         self._output_title: str | None = None
         self._transition_pending = False
@@ -247,8 +251,26 @@ class ZeblackAdapter(SiteAdapter):
         self._access_consumption = AccessConsumption()
         self._live_access = None
         self._preexisting_accessible = False
+        self._chapter_click_attempted = False
         self._ticket_click_attempted = False
         self._ticket_confirmation_state = None
+        self._target_url = None
+        self._target_viewer = None
+        self._target_main_name = None
+
+    def resolve_initial_navigation_url(self, source_url: str) -> str:
+        """Keep the viewer as the target but enter quota runs via chapter/list."""
+
+        target_viewer = parse_zeblack_viewer_url(source_url)
+        self._target_url = source_url
+        self._target_viewer = target_viewer
+        if self._access_strategy == "quota" and self._quota_resource == "work_ticket":
+            if target_viewer is None:
+                raise ValueError(
+                    "Zeblack quota/work_ticket requires a strict viewer source URL"
+                )
+            return canonical_zeblack_chapter_list_url(target_viewer.title_id)
+        return source_url
 
     async def configure_quota_resource(
         self, page: Page, quota_resource: str | None
@@ -513,10 +535,10 @@ class ZeblackAdapter(SiteAdapter):
         return True
 
     @staticmethod
-    def _exact_text_locator(page: Page, text: str) -> Locator:
+    def _exact_text_locator(page: Page | Locator, text: str) -> Locator:
         return page.get_by_text(text, exact=True)
 
-    async def _visible_exact_text_count(self, page: Page, text: str) -> int:
+    async def _visible_exact_text_count(self, page: Page | Locator, text: str) -> int:
         locator = self._exact_text_locator(page, text)
         count = await locator.count()
         visible = 0
@@ -524,6 +546,29 @@ class ZeblackAdapter(SiteAdapter):
             if await locator.nth(index).is_visible():
                 visible += 1
         return visible
+
+    async def _exact_leaf_text_matches(
+        self, scope: Page | Locator, text: str
+    ) -> list[Locator]:
+        """Return exact text elements, excluding ancestor text duplicates."""
+
+        # Enumerate descendants and validate textContent ourselves. Playwright's
+        # scoped get_by_text can omit a leaf when its row has an exact-text
+        # ancestor; the bounded DOM check below keeps the identity unambiguous.
+        locator = scope.locator("*")
+        matches: list[Locator] = []
+        for index in range(await locator.count()):
+            candidate = locator.nth(index)
+            if (await candidate.text_content() or "").strip() != text:
+                continue
+            has_exact_child = await candidate.evaluate(
+                """element => Array.from(element.children).some(
+                    child => (child.textContent || '').trim() === element.textContent.trim()
+                )"""
+            )
+            if not has_exact_child and await candidate.is_visible():
+                matches.append(candidate)
+        return matches
 
     async def _ticket_control(self, page: Page) -> Locator:
         ticket = self._exact_text_locator(page, _TICKET_ENTRY_TEXT)
@@ -559,6 +604,26 @@ class ZeblackAdapter(SiteAdapter):
             )
         return control
 
+    async def _validate_ticket_control(self, scope: Page | Locator) -> Locator:
+        """Validate one exact ticket control inside a bounded DOM scope."""
+
+        matches = await self._exact_leaf_text_matches(scope, _TICKET_ENTRY_TEXT)
+        if len(matches) != 1:
+            raise UnsupportedAccessStrategyError(
+                "Zeblack ticket entry control is ambiguous"
+            )
+        ticket = matches[0]
+        if not await ticket.is_visible() or not await ticket.is_enabled():
+            raise UnsupportedAccessStrategyError(
+                "Zeblack ticket entry control is not visible and enabled"
+            )
+        tag_name = await ticket.evaluate("element => element.tagName.toLowerCase()")
+        if tag_name not in {"button", "a", "div"}:
+            raise UnsupportedAccessStrategyError(
+                f"Zeblack ticket entry control has unsupported tag: {tag_name}"
+            )
+        return ticket
+
     async def _wait_for_ticket_control(self, page: Page) -> Locator:
         """Wait briefly for the exact entry control, never for a fallback UI."""
 
@@ -593,38 +658,181 @@ class ZeblackAdapter(SiteAdapter):
                 visible += 1
         return visible
 
-    async def _enter_with_work_ticket(self, page: Page) -> None:
+    async def _find_ticket_modal_scope(
+        self, page: Page, target_main_name: str
+    ) -> Locator | None:
+        """Find the smallest visible ancestor containing the modal identity."""
+
+        ticket_matches = await self._exact_leaf_text_matches(page, _TICKET_ENTRY_TEXT)
+        cancel_matches = await self._exact_leaf_text_matches(page, _CANCEL_TEXT)
+        ticket_count = len(ticket_matches)
+        cancel_count = len(cancel_matches)
+        if ticket_count == 0 or cancel_count == 0:
+            return None
+        if ticket_count != 1 or cancel_count != 1:
+            raise UnsupportedAccessStrategyError(
+                "Zeblack confirmation modal controls are ambiguous"
+            )
+
+        ticket = ticket_matches[0]
+        ancestors = ticket.locator("xpath=ancestor::*")
+        for index in range(await ancestors.count()):
+            scope = ancestors.nth(index)
+            if not await scope.is_visible():
+                continue
+            scoped_target = await self._exact_leaf_text_matches(scope, target_main_name)
+            scoped_ticket = await self._exact_leaf_text_matches(scope, _TICKET_ENTRY_TEXT)
+            scoped_cancel = await self._exact_leaf_text_matches(scope, _CANCEL_TEXT)
+            if (
+                len(scoped_target) != 1
+                or len(scoped_ticket) != 1
+                or len(scoped_cancel) != 1
+            ):
+                continue
+            point_count = await self._visible_exact_text_count(
+                scope, _POINT_ENTRY_TEXT
+            ) + await self._visible_exact_text_count(
+                scope, _POINT_AND_COIN_ENTRY_TEXT
+            )
+            coin_count = await self._visible_exact_text_count(
+                scope, _COIN_ENTRY_TEXT
+            ) + await self._visible_exact_text_count(scope, _PURCHASE_ENTRY_TEXT)
+            validate_zeblack_ticket_control_counts(
+                1,
+                point_count=point_count,
+                coin_count=coin_count,
+            )
+            await self._validate_ticket_control(scope)
+            return scope
+        raise UnsupportedAccessStrategyError(
+            "Zeblack confirmation modal identity is ambiguous"
+        )
+
+    async def _wait_for_ticket_modal(
+        self, page: Page, *, target_main_name: str, chapter_list_url: str
+    ) -> Locator:
+        """Wait for the observed confirmation modal, without selector guessing."""
+
+        elapsed_ms = 0
+        while elapsed_ms < self.page_change_timeout_ms:
+            if str(page.url) != chapter_list_url:
+                raise UnsupportedAccessStrategyError(
+                    "Zeblack chapter selection navigated away before confirmation"
+                )
+            scope = await self._find_ticket_modal_scope(page, target_main_name)
+            if scope is not None:
+                return scope
+            await page.wait_for_timeout(100)
+            elapsed_ms += 100
+        raise UnsupportedAccessStrategyError(
+            "Zeblack confirmation modal did not expose the required controls"
+        )
+
+    async def _click_target_chapter(self, page: Page) -> Locator:
+        if self._chapter_click_attempted:
+            raise UnsupportedAccessStrategyError(
+                "Zeblack target chapter action was already attempted"
+            )
+        if self._target_viewer is None or self._live_access is None:
+            raise UnknownPageStateError("Zeblack target chapter identity is unavailable")
+        chapter_list_url = canonical_zeblack_chapter_list_url(
+            self._target_viewer.title_id
+        )
+        if str(page.url) != chapter_list_url:
+            raise UnknownPageStateError(
+                "Zeblack chapter-list identity changed before chapter selection"
+            )
+        row = page.locator(f"#chapter{self._target_viewer.chapter_id}")
+        if await row.count() != 1 or not await row.is_visible():
+            raise UnsupportedAccessStrategyError(
+                "Zeblack target chapter row is missing or ambiguous"
+            )
+        controls = await self._exact_leaf_text_matches(
+            row, self._live_access.target_main_name
+        )
+        if len(controls) != 1:
+            raise UnsupportedAccessStrategyError(
+                "Zeblack target chapter mainName is missing or ambiguous"
+            )
+        control = controls[0]
+        self._chapter_click_attempted = True
+        await control.click(timeout=self.page_change_timeout_ms)
+        return await self._wait_for_ticket_modal(
+            page,
+            target_main_name=self._live_access.target_main_name,
+            chapter_list_url=chapter_list_url,
+        )
+
+    async def _wait_for_target_viewer_content(self, page: Page) -> None:
+        """Confirm navigation to the exact target viewer and stable content."""
+
+        if self._target_viewer is None:
+            raise UnknownPageStateError("Zeblack target viewer identity is unavailable")
+        elapsed_ms = 0
+        while elapsed_ms < self.page_change_timeout_ms:
+            current_url = str(page.url)
+            current = parse_zeblack_viewer_url(current_url)
+            if current is not None:
+                if current.key != self._target_viewer.key:
+                    raise UnsupportedAccessStrategyError(
+                        "Zeblack access entry navigated to a different chapter"
+                    )
+                await self._wait_for_initial_content(page)
+                return
+            if parse_zeblack_viewer_url(current_url) is None and not current_url.startswith(
+                canonical_zeblack_chapter_list_url(self._target_viewer.title_id)
+            ):
+                raise UnsupportedAccessStrategyError(
+                    "Zeblack access entry navigated to an unexpected URL"
+                )
+            await page.wait_for_timeout(100)
+            elapsed_ms += 100
+        raise PageChangeTimeoutError(
+            "Zeblack access entry did not navigate to the target viewer"
+        )
+
+    async def _goto_target_viewer(self, page: Page) -> None:
+        if self._target_url is None or self._target_viewer is None:
+            raise UnknownPageStateError("Zeblack target viewer identity is unavailable")
+        try:
+            await page.goto(
+                self._target_url,
+                wait_until="commit",
+                timeout=self.page_change_timeout_ms,
+            )
+        except (PlaywrightTimeoutError, TimeoutError) as exc:
+            raise PageChangeTimeoutError(
+                "Zeblack target viewer navigation did not complete"
+            ) from exc
+        await self._wait_for_target_viewer_content(page)
+
+    async def _enter_with_work_ticket(
+        self, page: Page, *, modal_scope: Locator | None = None
+    ) -> None:
         if self._ticket_click_attempted:
             raise UnsupportedAccessStrategyError(
                 "Zeblack ticket action was already attempted"
             )
-        if self._initial_viewer is None:
+        if self._target_viewer is None:
             raise UnknownPageStateError("Zeblack viewer identity is unavailable")
-        control = await self._wait_for_ticket_control(page)
-        current = parse_zeblack_viewer_url(str(page.url))
-        if current is None or current.key != self._initial_viewer.key:
+        if self._live_access is None:
+            raise UnknownPageStateError("Zeblack live access state is unavailable")
+        control = (
+            await self._validate_ticket_control(modal_scope)
+            if modal_scope is not None
+            else await self._wait_for_ticket_control(page)
+        )
+        current_url = canonical_zeblack_chapter_list_url(self._target_viewer.title_id)
+        if str(page.url) != current_url:
             raise UnsupportedAccessStrategyError(
-                "Zeblack ticket entry control is not in the target chapter"
+                "Zeblack ticket entry control is not on the target chapter list"
             )
 
         self._ticket_click_attempted = True
         self._ticket_confirmation_state = "click_attempted"
         await control.click(timeout=self.page_change_timeout_ms)
-        if await self._visible_dialog_count(page):
-            # No ticket-specific confirmation dialog was found in the current
-            # frontend bundle. Never confirm an unrecognized dialog.
-            self._ticket_confirmation_state = "unknown_dialog"
-            raise UnsupportedAccessStrategyError(
-                "Zeblack ticket confirmation dialog is unknown"
-            )
-
         try:
-            await self._wait_for_initial_content(page)
-            current = parse_zeblack_viewer_url(str(page.url))
-            if current is None or current.key != self._initial_viewer.key:
-                raise UnsupportedAccessStrategyError(
-                    "Zeblack ticket entry navigated to a different chapter"
-                )
+            await self._wait_for_target_viewer_content(page)
         except BaseException:
             self._ticket_confirmation_state = "unconfirmed"
             raise
@@ -639,8 +847,8 @@ class ZeblackAdapter(SiteAdapter):
     async def _initialize_quota_entry(
         self, page: Page, *, entry_only: bool
     ) -> None:
-        # Selecting a TICKET_AVAILABLE chapter and opening its viewer only
-        # reveals the entry action. It does not consume a Work Ticket. The
+        # Selecting a TICKET_AVAILABLE chapter on chapter/list only reveals
+        # the confirmation modal. It does not consume a Work Ticket. The
         # consuming action is the exact "チケットを使って読む" control below;
         # the distinct point action must remain rejected by the fail-closed
         # control-count checks.
@@ -648,60 +856,31 @@ class ZeblackAdapter(SiteAdapter):
             raise UnsupportedAccessStrategyError(
                 "Zeblack quota initialization requires work_ticket"
             )
-        if self._initial_url is None or self._initial_viewer is None:
-            raise UnknownPageStateError("Zeblack initial viewer identity is unavailable")
-        await self._clear_source_cache()
-        await self._wait_for_viewer_ready(page)
+        if self._target_url is None or self._target_viewer is None:
+            raise UnknownPageStateError("Zeblack target viewer identity is unavailable")
         try:
             self._live_access = await observe_zeblack_live_access(
                 page,
-                title_id=self._initial_viewer.title_id,
-                chapter_id=self._initial_viewer.chapter_id,
+                title_id=self._target_viewer.title_id,
+                chapter_id=self._target_viewer.chapter_id,
                 timeout_ms=self.page_change_timeout_ms,
             )
         except ZeblackLiveAccessError as exc:
             raise UnknownPageStateError(str(exc)) from exc
 
-        await self._clear_source_cache()
-        try:
-            await page.goto(
-                self._initial_url,
-                wait_until="commit",
-                timeout=self.page_change_timeout_ms,
-            )
-        except (PlaywrightTimeoutError, TimeoutError) as exc:
-            raise PageChangeTimeoutError(
-                "Zeblack viewer did not return after live access preflight"
-            ) from exc
-        current = parse_zeblack_viewer_url(str(page.url))
-        if current is None or current.key != self._initial_viewer.key:
-            raise UnknownPageStateError(
-                "Zeblack viewer identity changed after live access preflight"
-            )
-        await self._wait_for_viewer_ready(page)
-
         assert self._live_access is not None
+        self._target_main_name = self._live_access.target_main_name
         if self._live_access.status_value == int(ConsumptionStatus.TICKET_AVAILABLE):
-            await self._enter_with_work_ticket(page)
+            modal_scope = await self._click_target_chapter(page)
+            await self._enter_with_work_ticket(page, modal_scope=modal_scope)
             return
         if self._live_access.status_value in {
             int(ConsumptionStatus.FREE),
             int(ConsumptionStatus.RENTAL),
         }:
-            # A locked TICKET_AVAILABLE viewer can already contain stable
-            # page_N placeholders before the ticket action.  Live protobuf
-            # state is authoritative, so only treat preexisting content as
-            # an already-granted entry after the live status says that no
-            # Work Ticket is needed.
-            if await self._has_preexisting_content(page):
-                self._preexisting_accessible = True
-                self._ticket_confirmation_state = "preexisting_accessible"
-                if entry_only:
-                    raise AccessResourceUnavailableError("work_ticket_not_needed")
-                return
             if entry_only:
                 raise AccessResourceUnavailableError("work_ticket_not_needed")
-            await self._wait_for_initial_content(page)
+            await self._goto_target_viewer(page)
             return
         if self._live_access.status_value in _TICKET_STATUS_VALUES:
             if self._live_access.ticket_available_ids:
@@ -719,11 +898,20 @@ class ZeblackAdapter(SiteAdapter):
 
     async def initialize(self, page: Page) -> None:
         current_url = str(page.url)
-        viewer = parse_zeblack_viewer_url(current_url)
-        if viewer is None:
-            raise ValueError("Zeblack page URL is not a strict viewer URL")
-        self._initial_url = current_url
-        self._initial_viewer = viewer
+        if self._target_viewer is None:
+            viewer = parse_zeblack_viewer_url(current_url)
+            if viewer is None:
+                raise ValueError("Zeblack page URL is not a strict viewer URL")
+            self._target_url = current_url
+            self._target_viewer = viewer
+        elif self._access_strategy != "quota":
+            current_viewer = parse_zeblack_viewer_url(current_url)
+            if current_viewer is None or current_viewer.key != self._target_viewer.key:
+                raise ValueError("Zeblack page URL is not the canonical target viewer")
+        elif current_url != canonical_zeblack_chapter_list_url(
+            self._target_viewer.title_id
+        ):
+            raise ValueError("Zeblack quota entry did not start on chapter/list")
         self._transition_pending = False
         self._transition_stable = False
         self._transition_kind = "idle"
@@ -743,11 +931,20 @@ class ZeblackAdapter(SiteAdapter):
         """Confirm Zeblack access without entering full capture readiness."""
 
         current_url = str(page.url)
-        viewer = parse_zeblack_viewer_url(current_url)
-        if viewer is None:
-            raise ValueError("Zeblack page URL is not a strict viewer URL")
-        self._initial_url = current_url
-        self._initial_viewer = viewer
+        if self._target_viewer is None:
+            viewer = parse_zeblack_viewer_url(current_url)
+            if viewer is None:
+                raise ValueError("Zeblack page URL is not a strict viewer URL")
+            self._target_url = current_url
+            self._target_viewer = viewer
+        elif self._access_strategy != "quota":
+            current_viewer = parse_zeblack_viewer_url(current_url)
+            if current_viewer is None or current_viewer.key != self._target_viewer.key:
+                raise ValueError("Zeblack page URL is not the canonical target viewer")
+        elif current_url != canonical_zeblack_chapter_list_url(
+            self._target_viewer.title_id
+        ):
+            raise ValueError("Zeblack quota entry did not start on chapter/list")
         self._transition_pending = False
         self._transition_stable = False
         self._transition_kind = "idle"
@@ -763,7 +960,7 @@ class ZeblackAdapter(SiteAdapter):
         current = parse_zeblack_viewer_url(str(page.url))
         if current is None:
             return PageState.UNKNOWN
-        if self._initial_viewer is not None and current.key != self._initial_viewer.key:
+        if self._target_viewer is not None and current.key != self._target_viewer.key:
             return PageState.NEXT_CONTENT
 
         rows = await self._safe_active_page_rows(page)
@@ -774,8 +971,8 @@ class ZeblackAdapter(SiteAdapter):
         if (
             self._transition_stable
             and self._transition_kind in {"advertisement", "last_page"}
-            and self._initial_viewer is not None
-            and current.key == self._initial_viewer.key
+            and self._target_viewer is not None
+            and current.key == self._target_viewer.key
             and (
                 await self._visible_advertisement_signal(page)
                 if self._transition_kind == "advertisement"
@@ -786,8 +983,8 @@ class ZeblackAdapter(SiteAdapter):
         if (
             self._transition_stable
             and self._transition_kind == "terminal_next_content"
-            and self._initial_viewer is not None
-            and current.key == self._initial_viewer.key
+            and self._target_viewer is not None
+            and current.key == self._target_viewer.key
             and await self._visible_next_content_signal(page)
         ):
             return PageState.NEXT_CONTENT
@@ -869,7 +1066,7 @@ class ZeblackAdapter(SiteAdapter):
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:
         rows = await self._active_page_rows(page)
-        chapter_id = self._initial_viewer.chapter_id if self._initial_viewer else None
+        chapter_id = self._target_viewer.chapter_id if self._target_viewer else None
         return ContentIdentity(
             page_id=self._page_id(rows),
             page_number=(int(rows[0]["page_index"]) + 1) if rows else None,
@@ -898,8 +1095,8 @@ class ZeblackAdapter(SiteAdapter):
         current = parse_zeblack_viewer_url(str(page.url))
         if (
             current is None
-            or self._initial_viewer is None
-            or current.key != self._initial_viewer.key
+            or self._target_viewer is None
+            or current.key != self._target_viewer.key
         ):
             raise PageChangeTimeoutError("Zeblack next-page guard rejected the current URL")
         rows = await self._active_page_rows(page)
@@ -980,7 +1177,7 @@ class ZeblackAdapter(SiteAdapter):
         viewer = snapshot.get("viewer")
         if not isinstance(viewer, ZeblackViewerIdentity):
             return True
-        if self._initial_viewer is not None and viewer.key != self._initial_viewer.key:
+        if self._target_viewer is not None and viewer.key != self._target_viewer.key:
             return True
         rows = snapshot.get("rows")
         if rows is None:
@@ -992,10 +1189,10 @@ class ZeblackAdapter(SiteAdapter):
             or snapshot.get("last_page_signal") is True
         ):
             return viewer.key == (
-                self._initial_viewer.key if self._initial_viewer else viewer.key
+                self._target_viewer.key if self._target_viewer else viewer.key
             )
         return (
-            viewer.key == (self._initial_viewer.key if self._initial_viewer else viewer.key)
+            viewer.key == (self._target_viewer.key if self._target_viewer else viewer.key)
             and snapshot.get("terminal_signal") is True
         )
 
@@ -1005,8 +1202,8 @@ class ZeblackAdapter(SiteAdapter):
         viewer = snapshot.get("viewer")
         if (
             isinstance(viewer, ZeblackViewerIdentity)
-            and self._initial_viewer is not None
-            and viewer.key != self._initial_viewer.key
+            and self._target_viewer is not None
+            and viewer.key != self._target_viewer.key
         ):
             return "chapter_escape"
         rows = snapshot.get("rows")
@@ -1033,6 +1230,7 @@ class ZeblackAdapter(SiteAdapter):
             "live_access": {
                 "title_id": live_access.title_id,
                 "chapter_id": live_access.chapter_id,
+                "target_main_name": live_access.target_main_name,
                 "target_status": live_access.status_name,
                 "target_status_value": live_access.status_value,
                 "ticket_available_count": len(live_access.ticket_available_ids),

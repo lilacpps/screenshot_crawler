@@ -1,5 +1,33 @@
 # Discovery / Catalog / Batch Design
 
+## Z5-6 Zeblack production Work Ticket entry flow
+
+`SourceTarget.locator`と`RunConfig.source_url`はcanonical viewer URLのまま保持する。
+最初のブラウザ入口だけがAdapter hookでsite-localに変わり、`quota + work_ticket`では
+`https://zebrack-comic.shueisha.co.jp/title/{title_id}/chapter/list`へ遷移する。
+Runnerはこの入口を最初に1回開き、Zeblack Adapterはlive `title_chapter_list` protobufをauthorityとして
+target chapterのstatusと`target.main_name`を取得する。現実装ではlive observer自身もchapter/listを
+bounded reloadするため、quota runではlistが2回ロードされる既知の制約がある。viewer URLへ直接gotoして
+ticketを探す旧flowはproduction flowではない。
+
+`TICKET_AVAILABLE`のときは、対象`#chapter{chapter_id}`のrow count=1 / visible、row内の
+`mainName` exact leaf control count=1 / visibleを確認して、そのcontrolだけを1回clickする。
+URLが同じchapter-list URLに留まることを確認し、target mainName、exact `チケットを使って読む`、
+exact `キャンセル`を含む同一のvisible common ancestorをbounded DOM inspectionで特定する。
+ticket controlが1件でvisible / enabled / supported element、かつPOINT/ITEM/COIN/purchase controlが
+scope内にない場合だけticket controlを1回clickする。chapter clickもticket clickもretryしない。
+その後、target chapterと一致するviewer URLへの遷移と安定した`page_N` contentを確認してから、
+`AccessConsumption(consumed=True, resource="work_ticket")`を記録する。曖昧なrow、mainName、modal、
+control、unexpected navigation、paid controlはfail closedする。
+
+`FREE` / `RENTAL`はticket modalを開かず、live確認後にcanonical target viewerへ遷移する。
+`entry_only`では`work_ticket_not_needed`としてviewer遷移もしない。POINT / unavailable statusは
+existing pass-local resource skip semanticsを維持し、viewer gotoやpaid fallbackを行わない。
+
+この変更はgeneric initial-navigation hookとRunner integration、Zeblack Adapter / live state / testsの
+範囲に限定し、Catalog schema、Discovery output、Batch planner/executorのsite branch、Site Policyの
+quota ruleは変更しない。
+
 ## Zeblack Z5 Site Policy / runtime access status
 
 Zeblack Discovery deliberately keeps a broad Catalog classification:

@@ -33,6 +33,16 @@ class SiteAdapter(ABC):
 
         return
 
+    def resolve_initial_navigation_url(self, source_url: str) -> str:
+        """Return the adapter-selected URL used for the first navigation.
+
+        ``source_url`` remains the canonical crawl target and is persisted as
+        such.  Adapters may select a safer site-local entry point while
+        keeping that target identity separate from the browser entry URL.
+        """
+
+        return source_url
+
     def get_access_profile(self) -> AccessProfile:
         """Return site-owned host and access-signal classification metadata."""
 

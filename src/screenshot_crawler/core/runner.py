@@ -260,8 +260,11 @@ class CrawlerRunner:
                 adapter.configure_quota_resource(page, self.config.quota_resource),
                 "configure_quota_resource",
             )
+            initial_navigation_url = adapter.resolve_initial_navigation_url(
+                self.config.source_url
+            )
             await page.goto(
-                self.config.source_url,
+                initial_navigation_url,
                 timeout=self.config.navigation_timeout_ms,
                 wait_until="commit",
             )

@@ -88,9 +88,12 @@ class FakePage:
 
     def __init__(self) -> None:
         self.events: list[str] = []
+        self.goto_urls: list[str] = []
 
-    async def goto(self, *_args: object, **_kwargs: object) -> None:
+    async def goto(self, url: str, **_kwargs: object) -> None:
         self.events.append("goto")
+        self.goto_urls.append(url)
+        self.url = url
 
     async def wait_for_timeout(self, _milliseconds: int) -> None:
         return None
@@ -416,6 +419,11 @@ class TrackingAdapter(FakeAdapter):
         page.events.append(f"configure:{access_strategy}")
 
 
+class InitialNavigationAdapter(TrackingAdapter):
+    def resolve_initial_navigation_url(self, source_url: str) -> str:
+        return source_url + "?entry=chapter-list"
+
+
 async def test_runner_passes_access_strategy_before_navigation(tmp_path: Path) -> None:
     page = FakePage()
     adapter = TrackingAdapter(
@@ -435,6 +443,38 @@ async def test_runner_passes_access_strategy_before_navigation(tmp_path: Path) -
 
     assert result.stop_state is PageState.END
     assert page.events == ["configure:auto", "goto"]
+
+
+async def test_runner_uses_adapter_initial_navigation_but_keeps_canonical_source(
+    tmp_path: Path,
+) -> None:
+    page = FakePage()
+    adapter = InitialNavigationAdapter(
+        [PageState.END],
+        [ContentIdentity(page_number=1, source_id="work-1")],
+    )
+    source_url = "https://example.test/viewer"
+
+    result = await CrawlerRunner(
+        RunConfig(
+            site="test",
+            source_url=source_url,
+            output_dir=tmp_path / "run-entry",
+            diagnostics_dir=tmp_path / "diagnostics-entry",
+        )
+    ).run(page, adapter)
+
+    assert result.stop_state is PageState.END
+    assert page.goto_urls == [source_url + "?entry=chapter-list"]
+    manifest = json.loads((tmp_path / "run-entry" / "manifest.json").read_text())
+    assert manifest["source_url"] == source_url
+
+
+def test_base_adapter_initial_navigation_defaults_to_source_url() -> None:
+    adapter = FakeAdapter([PageState.END], [])
+    source_url = "https://example.test/viewer"
+
+    assert adapter.resolve_initial_navigation_url(source_url) == source_url
 
 
 async def test_runner_uses_adapter_timeout_for_initialize(tmp_path: Path) -> None:

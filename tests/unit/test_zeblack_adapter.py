@@ -175,6 +175,35 @@ def test_strict_viewer_url_parse_and_page_alt_parse() -> None:
     assert parse_zeblack_page_alt("page_") is None
 
 
+@pytest.mark.asyncio
+async def test_initial_navigation_keeps_viewer_target_and_enters_quota_via_chapter_list() -> None:
+    adapter = ZeblackAdapter()
+    await adapter.configure_run(object(), "quota")  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(object(), "work_ticket")  # type: ignore[arg-type]
+
+    assert adapter.resolve_initial_navigation_url(TARGET) == (
+        "https://zebrack-comic.shueisha.co.jp/title/118286/chapter/list"
+    )
+    assert adapter._target_url == TARGET
+    assert adapter._target_viewer == parse_zeblack_viewer_url(TARGET)
+
+    await adapter.configure_run(object(), "direct")  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(object(), None)  # type: ignore[arg-type]
+    assert adapter.resolve_initial_navigation_url(TARGET) == TARGET
+
+
+@pytest.mark.asyncio
+async def test_quota_initial_navigation_fails_closed_for_invalid_viewer_target() -> None:
+    adapter = ZeblackAdapter()
+    await adapter.configure_run(object(), "quota")  # type: ignore[arg-type]
+    await adapter.configure_quota_resource(object(), "work_ticket")  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="strict viewer"):
+        adapter.resolve_initial_navigation_url(
+            "https://zebrack-comic.shueisha.co.jp/title/118286/chapter/list"
+        )
+
+
 def test_registry_and_minimal_access_profile() -> None:
     assert isinstance(cli._registry().create("zeblack"), ZeblackAdapter)
     assert "zeblack" in cli._discovery_registry().sites()
@@ -266,13 +295,22 @@ class _TicketLocator:
 
     async def click(self, **_kwargs: object) -> None:
         self.page.clicks += 1
+        if self.page.click_navigate_to is not None:
+            self.page.url = self.page.click_navigate_to
 
 
 class _TicketPage:
-    def __init__(self, counts: dict[str, int]) -> None:
+    def __init__(
+        self,
+        counts: dict[str, int],
+        *,
+        url: str = TARGET,
+        click_navigate_to: str | None = None,
+    ) -> None:
         self.counts = counts
         self.clicks = 0
-        self.url = TARGET
+        self.url = url
+        self.click_navigate_to = click_navigate_to
 
     def get_by_text(self, text: str, *, exact: bool) -> _TicketLocator:
         assert exact is True
@@ -290,9 +328,22 @@ class _TicketPage:
 
 @pytest.mark.asyncio
 async def test_ticket_click_is_confirmed_once_and_never_retried(monkeypatch) -> None:
-    page = _TicketPage({"チケットを使って読む": 1})
+    chapter_list = "https://zebrack-comic.shueisha.co.jp/title/118286/chapter/list"
+    page = _TicketPage(
+        {"チケットを使って読む": 1},
+        url=chapter_list,
+        click_navigate_to=TARGET,
+    )
     adapter = ZeblackAdapter()
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._live_access = ZeblackLiveAccessState(
+        title_id="118286",
+        chapter_id="9265713",
+        target_main_name="第25話 プロの実力",
+        status_value=2,
+        status_name="TICKET_AVAILABLE",
+        ticket_available_ids=("9265713",),
+    )
 
     async def stable_content(_page: object) -> None:
         return None
@@ -335,6 +386,7 @@ def _live_state(status_value: int, ticket_available_ids: tuple[str, ...]) -> Zeb
     return ZeblackLiveAccessState(
         title_id="118286",
         chapter_id="9265713",
+        target_main_name="第25話 プロの実力",
         status_value=status_value,
         status_name=names.get(status_value, "UNKNOWN"),
         ticket_available_ids=ticket_available_ids,
@@ -362,8 +414,8 @@ async def test_quota_live_state_skips_unavailable_without_click(
     adapter = ZeblackAdapter()
     await adapter.configure_run(page, "quota")  # type: ignore[arg-type]
     await adapter.configure_quota_resource(page, "work_ticket")  # type: ignore[arg-type]
-    adapter._initial_url = TARGET
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_url = TARGET
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
     monkeypatch.setattr(adapter, "_has_preexisting_content", lambda _page: _false())
 
     async def ready(_page: object) -> None:
@@ -390,18 +442,13 @@ async def test_quota_live_state_skips_unavailable_without_click(
 async def test_ticket_available_status_wins_over_preexisting_page_placeholders(
     monkeypatch,
 ) -> None:
-    page = _TicketPage({"チケットを使って読む": 1})
+    chapter_list = "https://zebrack-comic.shueisha.co.jp/title/118286/chapter/list"
+    page = _TicketPage({}, url=chapter_list)
     adapter = ZeblackAdapter()
     await adapter.configure_run(page, "quota")  # type: ignore[arg-type]
     await adapter.configure_quota_resource(page, "work_ticket")  # type: ignore[arg-type]
-    adapter._initial_url = TARGET
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
-    monkeypatch.setattr(adapter, "_has_preexisting_content", lambda _page: _true())
-
-    async def ready(_page: object) -> None:
-        return None
-
-    monkeypatch.setattr(adapter, "_wait_for_viewer_ready", ready)
+    adapter._target_url = TARGET
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
 
     async def observe(_page: object, **_kwargs: object) -> ZeblackLiveAccessState:
         return _live_state(2, ("9265713",))
@@ -411,14 +458,21 @@ async def test_ticket_available_status_wins_over_preexisting_page_placeholders(
         observe,
     )
 
-    async def stable_content(_page: object) -> None:
-        return None
+    calls: list[str] = []
 
-    monkeypatch.setattr(adapter, "_wait_for_initial_content", stable_content)
+    async def click(_page: object) -> object:
+        calls.append("chapter")
+        return object()
+
+    async def enter(_page: object, *, modal_scope: object) -> None:
+        del modal_scope
+        calls.append("ticket")
+
+    monkeypatch.setattr(adapter, "_click_target_chapter", click)
+    monkeypatch.setattr(adapter, "_enter_with_work_ticket", enter)
     await adapter._initialize_quota_entry(page, entry_only=True)  # type: ignore[arg-type]
 
-    assert page.clicks == 1
-    assert adapter.get_access_consumption().consumed is True
+    assert calls == ["chapter", "ticket"]
 
 
 @pytest.mark.asyncio
@@ -469,8 +523,8 @@ async def test_point_gate_reaches_live_preflight_and_skips_without_ticket(
     adapter = ZeblackAdapter()
     await adapter.configure_run(page, "quota")  # type: ignore[arg-type]
     await adapter.configure_quota_resource(page, "work_ticket")  # type: ignore[arg-type]
-    adapter._initial_url = TARGET
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_url = TARGET
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
 
     async def no_rows(_page: object) -> list[dict[str, object]]:
         return []
@@ -507,8 +561,8 @@ async def test_unknown_quota_live_status_fails_closed(monkeypatch) -> None:
     adapter = ZeblackAdapter()
     await adapter.configure_run(page, "quota")  # type: ignore[arg-type]
     await adapter.configure_quota_resource(page, "work_ticket")  # type: ignore[arg-type]
-    adapter._initial_url = TARGET
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_url = TARGET
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
     monkeypatch.setattr(adapter, "_has_preexisting_content", lambda _page: _false())
 
     async def ready(_page: object) -> None:
@@ -625,7 +679,7 @@ async def test_content_identity_context_and_state_priority(monkeypatch) -> None:
     page = _FakePage([_row("page_2", BLOB_1, dom_order=0), _row("page_1", BLOB_0, dom_order=1)])
     adapter = ZeblackAdapter()
     _patch_rows(monkeypatch, adapter, page)
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
     identity = await adapter.get_content_identity(page)  # type: ignore[arg-type]
     context = await adapter.get_content_context(page)  # type: ignore[arg-type]
     assert identity.page_id == "page_1+page_2"
@@ -644,7 +698,7 @@ async def test_content_identity_page_number_is_first_logical_page(monkeypatch) -
     )
     adapter = ZeblackAdapter()
     _patch_rows(monkeypatch, adapter, page)
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
 
     assert (await adapter.get_content_identity(page)).page_number == 4  # type: ignore[arg-type]
 
@@ -656,7 +710,7 @@ async def test_content_identity_page_number_is_first_logical_page(monkeypatch) -
 async def test_terminal_requires_stable_transition_and_visible_control(monkeypatch) -> None:
     page = _FakePage([], next_signal=True)
     adapter = ZeblackAdapter()
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
     _patch_rows(monkeypatch, adapter, page)
     assert await adapter.detect_state(page) == PageState.UNKNOWN  # type: ignore[arg-type]
     adapter._transition_stable = True
@@ -670,7 +724,7 @@ async def test_terminal_requires_stable_transition_and_visible_control(monkeypat
 async def test_visible_advertisement_spread_is_an_intermediate_state(monkeypatch) -> None:
     page = _FakePage([], ad_signal=True)
     adapter = ZeblackAdapter()
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
     _patch_rows(monkeypatch, adapter, page)
     adapter._transition_stable = True
     adapter._transition_kind = "advertisement"
@@ -699,7 +753,7 @@ async def test_last_page_signal_requires_visible_in_viewport_spread(
 @pytest.mark.asyncio
 async def test_changed_chapter_is_next_content_but_foreign_url_is_unknown() -> None:
     adapter = ZeblackAdapter()
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
     page = _FakePage([])
     page.url = TARGET.replace("9265713", "9265714")
     assert await adapter.detect_state(page) == PageState.NEXT_CONTENT  # type: ignore[arg-type]
@@ -711,14 +765,14 @@ async def test_changed_chapter_is_next_content_but_foreign_url_is_unknown() -> N
 async def test_go_next_uses_arrow_left_and_blocks_unsafe_focus(monkeypatch) -> None:
     page = _FakePage([_row("page_0", BLOB_0)])
     adapter = ZeblackAdapter()
-    adapter._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
     _patch_rows(monkeypatch, adapter, page)
     await adapter.go_next(page)  # type: ignore[arg-type]
     assert page.keyboard.presses == ["ArrowLeft"]
     page2 = _FakePage([_row("page_0", BLOB_0)])
     page2.focus = {"unsafe": True}
     adapter2 = ZeblackAdapter()
-    adapter2._initial_viewer = parse_zeblack_viewer_url(TARGET)
+    adapter2._target_viewer = parse_zeblack_viewer_url(TARGET)
     _patch_rows(monkeypatch, adapter2, page2)
     with pytest.raises(PageChangeTimeoutError):
         await adapter2.go_next(page2)  # type: ignore[arg-type]
