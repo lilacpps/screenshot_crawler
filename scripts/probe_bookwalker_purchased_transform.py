@@ -108,6 +108,10 @@ _TRANSFORM_TRACE_SCRIPT = r"""
       width: numberOrNull(source.width),
       height: numberOrNull(source.height),
     };
+    if (constructorName(source) === 'HTMLCanvasElement') {
+      const canvas = canvasInfo(source);
+      if (canvas) info.canvasId = canvas.canvasId;
+    }
     state.sources[id] = state.sources[id] || info;
     return {...state.sources[id]};
   };
@@ -791,6 +795,14 @@ def _reload_label(
     return "RAW_DIFFERENT_NATIVE_DIFFERENT"
 
 
+def _mapping_label(mapping_a: str | None, mapping_b: str | None) -> str:
+    if mapping_a is None or mapping_b is None:
+        return "MAPPING_UNAVAILABLE"
+    if mapping_a == mapping_b:
+        return "MAPPING_SAME"
+    return "MAPPING_DIFFERENT"
+
+
 def _reload_page_key(page: dict[str, Any]) -> str:
     return str(
         page.get("page_counter")
@@ -815,6 +827,7 @@ def aggregate_reload_comparison(
         (_reload_page_key(page), int(part.get("part", index))): (
             part.get("raw", {}).get("sha256"),
             part.get("native", {}).get("sha256"),
+            part.get("mapping_sha256"),
         )
         for page in first_pages
         for index, part in enumerate(page.get("parts", []), start=1)
@@ -823,6 +836,7 @@ def aggregate_reload_comparison(
         (_reload_page_key(page), int(part.get("part", index))): (
             part.get("raw", {}).get("sha256"),
             part.get("native", {}).get("sha256"),
+            part.get("mapping_sha256"),
         )
         for page in second_pages
         for index, part in enumerate(page.get("parts", []), start=1)
@@ -840,10 +854,16 @@ def aggregate_reload_comparison(
         )
         for key in common_keys
     ]
+    mapping_comparison = [
+        _mapping_label(first_by_key[key][2], second_by_key[key][2])
+        for key in common_keys
+    ]
     return {
         "runs_observed": len(runs),
         "classification": classifications,
         "classification_counts": dict(sorted(Counter(classifications).items())),
+        "mapping_comparison": mapping_comparison,
+        "mapping_comparison_counts": dict(sorted(Counter(mapping_comparison).items())),
         "compared_page_parts": [
             {
                 "page_key": key[0],
@@ -852,11 +872,17 @@ def aggregate_reload_comparison(
                 "run_b_raw_sha256": second_by_key[key][0],
                 "run_a_native_sha256": first_by_key[key][1],
                 "run_b_native_sha256": second_by_key[key][1],
+                "run_a_mapping_sha256": first_by_key[key][2],
+                "run_b_mapping_sha256": second_by_key[key][2],
                 "classification": _reload_label(
                     first_by_key[key][0],
                     first_by_key[key][1],
                     second_by_key[key][0],
                     second_by_key[key][1],
+                ),
+                "mapping_comparison": _mapping_label(
+                    first_by_key[key][2],
+                    second_by_key[key][2],
                 ),
             }
             for key in common_keys
@@ -901,7 +927,7 @@ def _public_trace_operation(operation: dict[str, Any]) -> dict[str, Any]:
 
 
 def trace_tile_rearrangement_report(trace: dict[str, Any]) -> dict[str, Any]:
-    groups: dict[tuple[str, str, int, int, int, int], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for operation in trace.get("operations", []):
         if operation.get("operation") != "drawImage":
             continue
@@ -937,67 +963,184 @@ def trace_tile_rearrangement_report(trace: dict[str, Any]) -> dict[str, Any]:
             int(destination["y"])
         except (KeyError, TypeError, ValueError):
             continue
-        key = (
-            str(target.get("canvasId")),
-            str(source.get("sourceId")),
-            target_width,
-            target_height,
-            tile_width,
-            tile_height,
-        )
+        key = (str(target.get("canvasId")), str(source.get("sourceId")))
         groups.setdefault(key, []).append(operation)
 
     public_groups: list[dict[str, Any]] = []
     detected = False
     for key, operations in groups.items():
-        _, _, target_width, target_height, tile_width, tile_height = key
-        expected = (target_width // tile_width) * (target_height // tile_height)
-        source_positions = {
+        target_id, source_id = key
+        first_target = operations[0].get("target") or {}
+        first_source = operations[0].get("source") or {}
+        target_width = int(first_target["width"])
+        target_height = int(first_target["height"])
+        source_width = int(first_source["width"])
+        source_height = int(first_source["height"])
+        tile_shapes = Counter(
+            (
+                int((op.get("sourceRect") or {})["width"]),
+                int((op.get("sourceRect") or {})["height"]),
+            )
+            for op in operations
+        )
+        tile_width, tile_height = tile_shapes.most_common(1)[0][0]
+        expected_source_positions = {
+            (left, top)
+            for top in range(0, source_height, tile_height)
+            for left in range(0, source_width, tile_width)
+        }
+        expected_destination_positions = {
+            (left, top)
+            for top in range(0, target_height, tile_height)
+            for left in range(0, target_width, tile_width)
+        }
+        source_positions = [
             (int(op["sourceRect"]["x"]), int(op["sourceRect"]["y"]))
             for op in operations
-        }
-        destination_positions = {
+        ]
+        destination_positions = [
             (int(op["destination"]["x"]), int(op["destination"]["y"]))
             for op in operations
-        }
+        ]
+        source_counts = Counter(source_positions)
+        destination_counts = Counter(destination_positions)
+        source_unique = set(source_positions)
+        destination_unique = set(destination_positions)
+        source_out_of_bounds = sum(
+            int(
+                x < 0
+                or y < 0
+                or x + int(op["sourceRect"]["width"]) > source_width
+                or y + int(op["sourceRect"]["height"]) > source_height
+            )
+            for op, (x, y) in zip(operations, source_positions, strict=True)
+        )
+        destination_out_of_bounds = sum(
+            int(
+                x < 0
+                or y < 0
+                or x + int(op["destination"]["width"]) > target_width
+                or y + int(op["destination"]["height"]) > target_height
+            )
+            for op, (x, y) in zip(operations, destination_positions, strict=True)
+        )
+        source_duplicates = sum(max(0, count - 1) for count in source_counts.values())
+        destination_duplicates = sum(
+            max(0, count - 1) for count in destination_counts.values()
+        )
+        source_gaps = sorted(expected_source_positions - source_unique)
+        destination_gaps = sorted(expected_destination_positions - destination_unique)
+        source_extra = sorted(source_unique - expected_source_positions)
+        destination_extra = sorted(destination_unique - expected_destination_positions)
+        mapping = [
+            {
+                "source_x": int(op["sourceRect"]["x"]),
+                "source_y": int(op["sourceRect"]["y"]),
+                "destination_x": int(op["destination"]["x"]),
+                "destination_y": int(op["destination"]["y"]),
+                "width": int(op["sourceRect"]["width"]),
+                "height": int(op["sourceRect"]["height"]),
+            }
+            for op in operations
+        ]
+        canonical_mapping = sorted(
+            mapping,
+            key=lambda item: (
+                item["source_y"],
+                item["source_x"],
+                item["destination_y"],
+                item["destination_x"],
+                item["width"],
+                item["height"],
+            ),
+        )
+        mapping_sha256 = hashlib.sha256(
+            json.dumps(canonical_mapping, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()
+        partial_tile_count = sum(
+            int(
+                int((op.get("sourceRect") or {})["width"]) != tile_width
+                or int((op.get("sourceRect") or {})["height"]) != tile_height
+            )
+            for op in operations
+        )
+        expected = len(expected_source_positions)
+        complete_bijection = (
+            len(operations) == expected
+            and expected == len(expected_destination_positions)
+            and source_duplicates == 0
+            and destination_duplicates == 0
+            and not source_gaps
+            and not destination_gaps
+            and not source_extra
+            and not destination_extra
+            and source_out_of_bounds == 0
+            and destination_out_of_bounds == 0
+        )
         moved = sum(
             int(op["sourceRect"]["x"]) != int(op["destination"]["x"])
             or int(op["sourceRect"]["y"]) != int(op["destination"]["y"])
             for op in operations
         )
-        complete = (
-            len(operations) >= expected
-            and len(source_positions) == expected
-            and len(destination_positions) == expected
-        )
-        group_detected = complete and moved > 0
+        group_detected = complete_bijection and moved > 0
         detected = detected or group_detected
         public_groups.append(
             {
-                "target_canvas_id": key[0],
-                "source_id": key[1],
+                "target_canvas_id": target_id,
+                "source_id": source_id,
                 "target_dimensions": {"width": target_width, "height": target_height},
+                "source_dimensions": {"width": source_width, "height": source_height},
                 "tile_dimensions": {"width": tile_width, "height": tile_height},
                 "operations": len(operations),
+                "first_operation_index": min(
+                    int(op.get("index", 0)) for op in operations
+                ),
+                "last_operation_index": max(
+                    int(op.get("index", 0)) for op in operations
+                ),
                 "expected_tile_count": expected,
-                "unique_source_tiles": len(source_positions),
-                "unique_destination_tiles": len(destination_positions),
+                "unique_source_tiles": len(source_unique),
+                "unique_destination_tiles": len(destination_unique),
                 "moved_tile_count": moved,
-                "complete_permutation": complete,
-                "permutation_detected": group_detected,
-                "mapping_sample": [
-                    {
-                        "source": {
-                            "x": int(op["sourceRect"]["x"]),
-                            "y": int(op["sourceRect"]["y"]),
-                        },
-                        "destination": {
-                            "x": int(op["destination"]["x"]),
-                            "y": int(op["destination"]["y"]),
-                        },
-                    }
-                    for op in operations[:16]
+                "complete_permutation": complete_bijection,
+                "complete_bijection": complete_bijection,
+                "source_tile_overlap_count": source_duplicates,
+                "destination_tile_overlap_count": destination_duplicates,
+                "source_tile_gap_count": len(source_gaps),
+                "destination_tile_gap_count": len(destination_gaps),
+                "source_tile_gap_positions": [
+                    {"x": x, "y": y} for x, y in source_gaps
                 ],
+                "destination_tile_gap_positions": [
+                    {"x": x, "y": y} for x, y in destination_gaps
+                ],
+                "source_duplicate_tile_count": source_duplicates,
+                "destination_duplicate_tile_count": destination_duplicates,
+                "source_out_of_bounds_count": source_out_of_bounds,
+                "destination_out_of_bounds_count": destination_out_of_bounds,
+                "source_extra_positions": [
+                    {"x": x, "y": y} for x, y in source_extra
+                ],
+                "destination_extra_positions": [
+                    {"x": x, "y": y} for x, y in destination_extra
+                ],
+                "unique_source_x": sorted({x for x, _ in source_unique}),
+                "unique_source_y": sorted({y for _, y in source_unique}),
+                "unique_destination_x": sorted({x for x, _ in destination_unique}),
+                "unique_destination_y": sorted({y for _, y in destination_unique}),
+                "partial_tile_count": partial_tile_count,
+                "edge_tile_count": sum(
+                    int(
+                        int(op["sourceRect"]["x"]) + int(op["sourceRect"]["width"])
+                        == source_width
+                        or int(op["sourceRect"]["y"]) + int(op["sourceRect"]["height"])
+                        == source_height
+                    )
+                    for op in operations
+                ),
+                "mapping_sha256": mapping_sha256,
+                "permutation_detected": group_detected,
+                "mapping": canonical_mapping,
             }
         )
     return {
@@ -1006,28 +1149,679 @@ def trace_tile_rearrangement_report(trace: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _trace_source_operations_for_part(
+    trace: dict[str, Any],
+    part: dict[str, Any],
+) -> list[tuple[dict[str, Any], bytes | None]]:
+    matches: list[tuple[dict[str, Any], bytes | None]] = []
+    for operation in trace.get("operations", []):
+        if operation.get("operation") != "drawImage":
+            continue
+        op_source = operation.get("source") or {}
+        if op_source.get("constructor") != part.get("source_constructor"):
+            continue
+        if op_source.get("width") != part.get("source_width"):
+            continue
+        if op_source.get("height") != part.get("source_height"):
+            continue
+        if not _same_dict_geometry(operation.get("sourceRect"), part.get("source_rect")):
+            continue
+        if not _same_dict_geometry(operation.get("destination"), part.get("destination")):
+            continue
+        matches.append(
+            (
+                _public_trace_operation(operation),
+                _decode_png_data_url_local(operation.get("sourceSnapshotDataUrl")),
+            )
+        )
+    return matches
+
+
 def _trace_source_for_part(
     trace: dict[str, Any],
     part: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, bytes | None]:
-    source = part
-    for operation in reversed(trace.get("operations", [])):
-        if operation.get("operation") != "drawImage":
-            continue
-        op_source = operation.get("source") or {}
-        if op_source.get("constructor") != source.get("source_constructor"):
-            continue
-        if op_source.get("width") != source.get("source_width"):
-            continue
-        if op_source.get("height") != source.get("source_height"):
-            continue
-        if not _same_dict_geometry(operation.get("sourceRect"), source.get("source_rect")):
-            continue
-        if not _same_dict_geometry(operation.get("destination"), source.get("destination")):
-            continue
-        snapshot = _decode_png_data_url_local(operation.get("sourceSnapshotDataUrl"))
-        return _public_trace_operation(operation), snapshot
+    matches = _trace_source_operations_for_part(trace, part)
+    if matches:
+        return matches[-1]
     return None, None
+
+
+def _imagebitmap_match_by_id(
+    matches: list[dict[str, Any]],
+    source_id: str,
+) -> dict[str, Any] | None:
+    return next(
+        (item for item in matches if str(item.get("source_id")) == source_id),
+        None,
+    )
+
+
+def _mapping_status_for_part(
+    *,
+    source_operations: list[tuple[dict[str, Any], bytes | None]],
+    group_candidates: list[dict[str, Any]],
+    imagebitmap_match: dict[str, Any] | None,
+) -> tuple[str, str]:
+    if len(source_operations) != 1:
+        return (
+            "PART_MAPPING_AMBIGUOUS",
+            "renderer-to-source draw operation is missing or not unique",
+        )
+    if len(group_candidates) != 1:
+        return (
+            "PART_MAPPING_AMBIGUOUS",
+            "source canvas maps to zero or multiple permutation groups",
+        )
+    if imagebitmap_match is None:
+        return "PART_MAPPING_AMBIGUOUS", "ImageBitmap source was not captured"
+    exact_count = int(imagebitmap_match.get("exact_decoded_pixel_match_count", 0))
+    if exact_count == 0:
+        return "RAW_JPEG_NOT_IDENTIFIED", "ImageBitmap has no exact JPEG candidate"
+    if exact_count > 1:
+        return "RAW_JPEG_AMBIGUOUS", "ImageBitmap has multiple exact JPEG candidates"
+    group = group_candidates[0]
+    if not group.get("complete_bijection"):
+        return "TILE_MAPPING_INCOMPLETE", "tile mapping is not a complete bijection"
+    return "PART_MAPPING_PROVEN", "renderer/source/tile/ImageBitmap/raw chain is unique"
+
+
+def _permutation_groups_for_part(
+    trace: dict[str, Any],
+    groups: list[dict[str, Any]],
+    *,
+    source_canvas_id: str,
+    renderer_draw_index: int | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    history = [
+        group
+        for group in groups
+        if str(group.get("target_canvas_id")) == source_canvas_id
+    ]
+    if renderer_draw_index is None:
+        return [], history, []
+    reset_indices = [
+        int(operation.get("index", 0))
+        for operation in trace.get("operations", [])
+        if (
+            operation.get("operation") == "clearRect"
+            and str((operation.get("target") or {}).get("canvasId") or "")
+            == source_canvas_id
+            and int(operation.get("index", 0)) < renderer_draw_index
+        )
+    ]
+    latest_reset_index = max(reset_indices, default=0)
+    before_renderer = [
+        group
+        for group in history
+        if (
+            latest_reset_index < int(group.get("first_operation_index", 0))
+            and int(group.get("last_operation_index", 0)) < renderer_draw_index
+        )
+    ]
+    complete_before_renderer = [
+        group for group in before_renderer if group.get("complete_bijection")
+    ]
+    if not complete_before_renderer:
+        return [], history, []
+    latest_index = max(
+        int(group.get("last_operation_index", 0))
+        for group in complete_before_renderer
+    )
+    selected = [
+        group
+        for group in complete_before_renderer
+        if int(group.get("last_operation_index", 0)) == latest_index
+    ]
+    return selected, history, complete_before_renderer
+
+
+def build_part_mapping_records(
+    trace: dict[str, Any],
+    native_parts: list[dict[str, Any]],
+    tile_report: dict[str, Any],
+    imagebitmap_matches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Join each native part to its object-identity-based transform chain."""
+
+    groups = list(tile_report.get("groups", []))
+    records: list[dict[str, Any]] = []
+    for part_index, native_part in enumerate(native_parts, start=1):
+        source_operations = _trace_source_operations_for_part(trace, native_part)
+        selected_operation = source_operations[-1][0] if source_operations else None
+        renderer = (selected_operation or {}).get("target") or {}
+        source = (selected_operation or {}).get("source") or {}
+        source_canvas_id = str(source.get("canvasId") or "")
+        renderer_canvas_id = str(renderer.get("canvasId") or "")
+        renderer_draw_index = (
+            int(selected_operation.get("index"))
+            if selected_operation and selected_operation.get("index") is not None
+            else None
+        )
+        selected_group_candidates, permutation_history, window_groups = (
+            _permutation_groups_for_part(
+            trace,
+            groups,
+            source_canvas_id=source_canvas_id,
+            renderer_draw_index=renderer_draw_index,
+            )
+        )
+        group_candidates = window_groups
+        group = (
+            selected_group_candidates[0]
+            if len(selected_group_candidates) == 1
+            else None
+        )
+        imagebitmap_source_id = str(group.get("source_id") or "") if group else ""
+        imagebitmap_match = _imagebitmap_match_by_id(
+            imagebitmap_matches,
+            imagebitmap_source_id,
+        )
+        status, reason = _mapping_status_for_part(
+            source_operations=source_operations,
+            group_candidates=group_candidates,
+            imagebitmap_match=imagebitmap_match,
+        )
+        imagebitmap = None
+        if imagebitmap_match is not None:
+            imagebitmap = {
+                "source_id": imagebitmap_match.get("source_id"),
+                "dimensions": imagebitmap_match.get("source_dimensions"),
+                "snapshot_sha256": imagebitmap_match.get("snapshot_sha256"),
+                "candidate_count_compared": imagebitmap_match.get(
+                    "candidate_count_compared"
+                ),
+                "exact_decoded_pixel_match_count": imagebitmap_match.get(
+                    "exact_decoded_pixel_match_count", 0
+                ),
+                "exact_candidate_sha256": imagebitmap_match.get(
+                    "exact_candidate_sha256", []
+                ),
+                "best_candidates": imagebitmap_match.get("best_candidates", [])[:5],
+            }
+        record = {
+            "part": part_index,
+            "renderer": {
+                "canvas_id": renderer_canvas_id or None,
+                "draw_operation_index": (
+                    selected_operation.get("index") if selected_operation else None
+                ),
+                "source_canvas_id": source_canvas_id or None,
+                "source_constructor": source.get("constructor"),
+                "source_dimensions": {
+                    "width": source.get("width"),
+                    "height": source.get("height"),
+                },
+                "source_rect": (
+                    selected_operation.get("sourceRect") if selected_operation else None
+                ),
+                "destination": (
+                    selected_operation.get("destination") if selected_operation else None
+                ),
+                "transform": (
+                    selected_operation.get("transform") if selected_operation else None
+                ),
+                "filter": (
+                    selected_operation.get("filter") if selected_operation else None
+                ),
+                "global_composite_operation": (
+                    selected_operation.get("globalCompositeOperation")
+                    if selected_operation else None
+                ),
+            },
+            "source_canvas": {
+                "canvas_id": source_canvas_id or None,
+                "width": source.get("width"),
+                "height": source.get("height"),
+            },
+            "permutation": group,
+            "permutation_group_count": len(group_candidates),
+            "multiple_imagebitmap_sources": len(group_candidates) > 1,
+            "permutation_candidates": group_candidates,
+            "permutation_history_count": len(permutation_history),
+            "permutation_history": [
+                {
+                    "source_id": item.get("source_id"),
+                    "first_operation_index": item.get("first_operation_index"),
+                    "last_operation_index": item.get("last_operation_index"),
+                    "complete_bijection": item.get("complete_bijection"),
+                    "mapping_sha256": item.get("mapping_sha256"),
+                }
+                for item in permutation_history
+            ],
+            "imagebitmap": imagebitmap,
+            "raw_jpeg": {},
+            "mapping_status": status,
+            "mapping_reason": reason,
+        }
+        records.append(record)
+    return records
+
+
+def classify_part_from_mapping(
+    analysis: dict[str, Any] | None,
+    mapping: dict[str, Any],
+) -> str:
+    """Classify a part only after its own mapping evidence is available."""
+
+    if mapping.get("multiple_imagebitmap_sources"):
+        return "MULTI_SOURCE_PERMUTATION"
+    if mapping.get("mapping_status") == "PART_MAPPING_PROVEN":
+        permutation = mapping.get("permutation") or {}
+        if permutation.get("permutation_detected"):
+            return "TILE_REARRANGEMENT"
+        return "DIRECT_DECODE"
+    return str((analysis or {}).get("classification") or "UNKNOWN")
+
+
+def _jpeg_sof_marker(marker: int) -> bool:
+    return marker in {
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+        0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+    }
+
+
+def jpeg_mcu_geometry(data: bytes) -> dict[str, Any] | None:
+    """Read JPEG SOF sampling factors and coded MCU dimensions."""
+
+    if not data.startswith(b"\xff\xd8"):
+        return None
+    offset = 2
+    while offset + 1 < len(data):
+        if data[offset] != 0xFF:
+            offset += 1
+            continue
+        while offset < len(data) and data[offset] == 0xFF:
+            offset += 1
+        if offset >= len(data):
+            break
+        marker = data[offset]
+        offset += 1
+        if marker == 0x00:
+            continue
+        if marker in {0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+            continue
+        if offset + 2 > len(data):
+            break
+        segment_length = int.from_bytes(data[offset : offset + 2], "big")
+        if segment_length < 2 or offset + segment_length > len(data):
+            break
+        if _jpeg_sof_marker(marker) and segment_length >= 8:
+            height = int.from_bytes(data[offset + 3 : offset + 5], "big")
+            width = int.from_bytes(data[offset + 5 : offset + 7], "big")
+            component_count = data[offset + 7]
+            components: list[dict[str, int]] = []
+            component_offset = offset + 8
+            for _ in range(component_count):
+                if component_offset + 3 > offset + segment_length:
+                    return None
+                component_id = data[component_offset]
+                sampling = data[component_offset + 1]
+                components.append(
+                    {
+                        "id": component_id,
+                        "horizontal_sampling_factor": sampling >> 4,
+                        "vertical_sampling_factor": sampling & 0x0F,
+                    }
+                )
+                component_offset += 3
+            max_horizontal = max(
+                (item["horizontal_sampling_factor"] for item in components),
+                default=0,
+            )
+            max_vertical = max(
+                (item["vertical_sampling_factor"] for item in components),
+                default=0,
+            )
+            if not max_horizontal or not max_vertical:
+                return None
+            mcu_width = 8 * max_horizontal
+            mcu_height = 8 * max_vertical
+            coded_width = math.ceil(width / mcu_width) * mcu_width
+            coded_height = math.ceil(height / mcu_height) * mcu_height
+            return {
+                "sof_marker": f"0x{marker:02X}",
+                "visible_width": width,
+                "visible_height": height,
+                "component_count": component_count,
+                "components": components,
+                "max_horizontal_sampling_factor": max_horizontal,
+                "max_vertical_sampling_factor": max_vertical,
+                "mcu_width": mcu_width,
+                "mcu_height": mcu_height,
+                "coded_width": coded_width,
+                "coded_height": coded_height,
+                "right_edge_padding": coded_width - width,
+                "bottom_edge_padding": coded_height - height,
+            }
+        offset += segment_length
+        if marker == 0xDA:
+            break
+    return None
+
+
+def _mcu_rect_aligned(
+    rect: dict[str, Any],
+    *,
+    mcu_width: int,
+    mcu_height: int,
+    visible_width: int,
+    visible_height: int,
+) -> bool:
+    try:
+        x = int(rect["x"])
+        y = int(rect["y"])
+        width = int(rect["width"])
+        height = int(rect["height"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if x % mcu_width or y % mcu_height:
+        return False
+    right = x + width
+    bottom = y + height
+    width_ok = width % mcu_width == 0 or right == visible_width
+    height_ok = height % mcu_height == 0 or bottom == visible_height
+    return width_ok and height_ok
+
+
+def mcu_alignment_report(
+    raw_data: bytes,
+    permutation: dict[str, Any] | None,
+) -> dict[str, Any]:
+    geometry = jpeg_mcu_geometry(raw_data)
+    if geometry is None:
+        return {"available": False, "reason": "JPEG SOF sampling factors unavailable"}
+    if not permutation:
+        return {
+            "available": True,
+            "geometry": geometry,
+            "source_tile_mcu_aligned": False,
+            "destination_tile_mcu_aligned": False,
+            "all_mapping_mcu_aligned": False,
+            "reason": "permutation group unavailable",
+        }
+    mapping = permutation.get("mapping") or []
+    source_ok = all(
+        _mcu_rect_aligned(
+            {
+                "x": item.get("source_x"),
+                "y": item.get("source_y"),
+                "width": item.get("width"),
+                "height": item.get("height"),
+            },
+            mcu_width=int(geometry["mcu_width"]),
+            mcu_height=int(geometry["mcu_height"]),
+            visible_width=int(geometry["visible_width"]),
+            visible_height=int(geometry["visible_height"]),
+        )
+        for item in mapping
+    )
+    destination_width = int((permutation.get("target_dimensions") or {}).get("width", 0))
+    destination_height = int((permutation.get("target_dimensions") or {}).get("height", 0))
+    destination_ok = all(
+        _mcu_rect_aligned(
+            {
+                "x": item.get("destination_x"),
+                "y": item.get("destination_y"),
+                "width": item.get("width"),
+                "height": item.get("height"),
+            },
+            mcu_width=int(geometry["mcu_width"]),
+            mcu_height=int(geometry["mcu_height"]),
+            visible_width=destination_width,
+            visible_height=destination_height,
+        )
+        for item in mapping
+    )
+    strict_source_ok = all(
+        int(item.get("source_x", -1)) % int(geometry["mcu_width"]) == 0
+        and int(item.get("source_y", -1)) % int(geometry["mcu_height"]) == 0
+        and int(item.get("width", 0)) % int(geometry["mcu_width"]) == 0
+        and int(item.get("height", 0)) % int(geometry["mcu_height"]) == 0
+        for item in mapping
+    )
+    strict_destination_ok = all(
+        int(item.get("destination_x", -1)) % int(geometry["mcu_width"]) == 0
+        and int(item.get("destination_y", -1)) % int(geometry["mcu_height"]) == 0
+        and int(item.get("width", 0)) % int(geometry["mcu_width"]) == 0
+        and int(item.get("height", 0)) % int(geometry["mcu_height"]) == 0
+        for item in mapping
+    )
+    return {
+        "available": True,
+        "geometry": geometry,
+        "source_tile_mcu_aligned": source_ok,
+        "destination_tile_mcu_aligned": destination_ok,
+        "all_mapping_mcu_aligned": source_ok and destination_ok,
+        "strict_source_tile_mcu_aligned": strict_source_ok,
+        "strict_destination_tile_mcu_aligned": strict_destination_ok,
+        "strict_all_mapping_mcu_aligned": strict_source_ok and strict_destination_ok,
+        "mapping_count": len(mapping),
+        "edge_condition": {
+            "coded_width": geometry["coded_width"],
+            "coded_height": geometry["coded_height"],
+            "visible_width": geometry["visible_width"],
+            "visible_height": geometry["visible_height"],
+            "right_edge_padding": geometry["right_edge_padding"],
+            "bottom_edge_padding": geometry["bottom_edge_padding"],
+            "partial_visible_edge_allowed": bool(
+                geometry["right_edge_padding"] or geometry["bottom_edge_padding"]
+            ),
+        },
+    }
+
+
+def _operation_rect(operation: dict[str, Any]) -> dict[str, int] | None:
+    arguments = operation.get("arguments")
+    if not isinstance(arguments, list) or len(arguments) < 4:
+        return None
+    try:
+        return {
+            "x": int(arguments[0]),
+            "y": int(arguments[1]),
+            "width": int(arguments[2]),
+            "height": int(arguments[3]),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+def _rect_intersects(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    try:
+        return not (
+            float(first["x"]) + float(first["width"]) <= float(second["x"])
+            or float(second["x"]) + float(second["width"]) <= float(first["x"])
+            or float(first["y"]) + float(first["height"]) <= float(second["y"])
+            or float(second["y"]) + float(second["height"]) <= float(first["y"])
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _is_identity_transform(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, dict):
+        return False
+    return all(
+        round(float(value.get(key, math.nan)), 9) == expected
+        for key, expected in {
+            "a": 1,
+            "b": 0,
+            "c": 0,
+            "d": 1,
+            "e": 0,
+            "f": 0,
+        }.items()
+    )
+
+
+def transformation_safety_report(
+    trace: dict[str, Any],
+    mapping: dict[str, Any],
+) -> dict[str, Any]:
+    source_canvas_id = str((mapping.get("source_canvas") or {}).get("canvas_id") or "")
+    renderer_canvas_id = str((mapping.get("renderer") or {}).get("canvas_id") or "")
+    source_canvas = (mapping.get("source_canvas") or {})
+    source_area = {
+        "x": 0,
+        "y": 0,
+        "width": int(source_canvas.get("width") or 0),
+        "height": int(source_canvas.get("height") or 0),
+    }
+    renderer_destination = (mapping.get("renderer") or {}).get("destination")
+    source_operations = [
+        operation
+        for operation in trace.get("operations", [])
+        if str((operation.get("target") or {}).get("canvasId") or "") == source_canvas_id
+    ]
+    renderer_operations = [
+        operation
+        for operation in trace.get("operations", [])
+        if str((operation.get("target") or {}).get("canvasId") or "") == renderer_canvas_id
+    ]
+    renderer_draw_index = int(
+        (mapping.get("renderer") or {}).get("draw_operation_index") or 0
+    )
+    permutation = mapping.get("permutation") or {}
+    chain_start = int(permutation.get("first_operation_index") or 0)
+    chain_end = renderer_draw_index or None
+    reset_before_chain = [
+        operation
+        for operation in source_operations
+        if (
+            operation.get("operation") == "clearRect"
+            and int(operation.get("index", 0)) < chain_start
+        )
+    ]
+    latest_reset_before_chain = max(
+        reset_before_chain,
+        key=lambda operation: int(operation.get("index", 0)),
+        default=None,
+    )
+    source_non_draw = [
+        operation
+        for operation in source_operations
+        if (
+            operation.get("operation") != "drawImage"
+            and int(operation.get("index", 0)) >= chain_start
+            and (chain_end is None or int(operation.get("index", 0)) < chain_end)
+        )
+    ]
+    source_content_writes: list[dict[str, Any]] = []
+    source_initialization_clears: list[dict[str, Any]] = []
+    for operation in source_non_draw:
+        name = str(operation.get("operation"))
+        if name not in {"putImageData", "fillRect", "strokeRect", "clearRect"}:
+            continue
+        rect = _operation_rect(operation)
+        public = {"index": operation.get("index"), "operation": name, "rect": rect}
+        source_content_writes.append(public)
+    source_initialization_clears = list(source_initialization_clears)
+    if (
+        latest_reset_before_chain is not None
+        and _operation_rect(latest_reset_before_chain) == source_area
+    ):
+        source_initialization_clears.append(
+            {
+                "index": latest_reset_before_chain.get("index"),
+                "operation": "clearRect",
+                "rect": source_area,
+            }
+        )
+    renderer_content_writes: list[dict[str, Any]] = []
+    renderer_background_operations: list[dict[str, Any]] = []
+    renderer_edge_operations: list[dict[str, Any]] = []
+    for operation in renderer_operations:
+        name = str(operation.get("operation"))
+        if name not in {"putImageData", "fillRect", "strokeRect", "clearRect"}:
+            continue
+        rect = _operation_rect(operation)
+        public = {"index": operation.get("index"), "operation": name, "rect": rect}
+        index = int(operation.get("index", 0))
+        is_edge = (
+            name == "fillRect"
+            and rect is not None
+            and min(abs(rect["width"]), abs(rect["height"])) <= 2
+        )
+        if is_edge:
+            renderer_edge_operations.append(public)
+        elif renderer_draw_index and index < renderer_draw_index:
+            renderer_background_operations.append(public)
+        elif renderer_destination and rect and _rect_intersects(rect, renderer_destination):
+            renderer_content_writes.append(public)
+    relevant_draws = [
+        operation
+        for operation in trace.get("operations", [])
+        if (
+            operation.get("operation") == "drawImage"
+            and str((operation.get("target") or {}).get("canvasId") or "")
+            in {source_canvas_id, renderer_canvas_id}
+        )
+    ]
+    unsafe_draw_settings = [
+        {
+            "index": operation.get("index"),
+            "target_canvas_id": (operation.get("target") or {}).get("canvasId"),
+            "global_alpha": operation.get("globalAlpha"),
+            "global_composite_operation": operation.get("globalCompositeOperation"),
+            "transform": operation.get("transform"),
+            "filter": operation.get("filter"),
+        }
+        for operation in relevant_draws
+        if operation.get("globalAlpha") not in {None, 1}
+        or operation.get("globalCompositeOperation") not in {None, "source-over"}
+        or operation.get("filter") not in {None, "", "none"}
+        or not _is_identity_transform(operation.get("transform"))
+    ]
+    return {
+        "source_canvas_id": source_canvas_id or None,
+        "renderer_canvas_id": renderer_canvas_id or None,
+        "source_canvas_non_draw_operations": [
+            {"index": operation.get("index"), "operation": operation.get("operation")}
+            for operation in source_non_draw
+        ],
+        "source_canvas_initialization_clears": source_initialization_clears,
+        "source_canvas_content_writes": source_content_writes,
+        "renderer_background_operations": renderer_background_operations,
+        "renderer_edge_operations": renderer_edge_operations,
+        "renderer_intersecting_content_writes": renderer_content_writes,
+        "unsafe_draw_settings": unsafe_draw_settings,
+        "additional_pixel_processing": bool(
+            source_content_writes or renderer_content_writes or unsafe_draw_settings
+        ),
+        "source_canvas_tile_draw_count": sum(
+            int(operation.get("operation") == "drawImage")
+            for operation in source_operations
+            if chain_start <= int(operation.get("index", 0))
+            and (chain_end is None or int(operation.get("index", 0)) < chain_end)
+        ),
+    }
+
+
+def part_readiness_classification(
+    mapping: dict[str, Any],
+    *,
+    safety: dict[str, Any],
+    mcu: dict[str, Any],
+) -> str:
+    status = mapping.get("mapping_status")
+    if status == "PART_MAPPING_AMBIGUOUS":
+        return "PART_MAPPING_AMBIGUOUS"
+    if status == "RAW_JPEG_NOT_IDENTIFIED":
+        return "RAW_JPEG_NOT_IDENTIFIED"
+    if status == "RAW_JPEG_AMBIGUOUS":
+        return "RAW_JPEG_AMBIGUOUS"
+    if status == "TILE_MAPPING_INCOMPLETE":
+        return "TILE_MAPPING_INCOMPLETE"
+    if status != "PART_MAPPING_PROVEN":
+        classification = mapping.get("classification")
+        return str(classification or "UNKNOWN")
+    if safety.get("additional_pixel_processing"):
+        return "ADDITIONAL_PIXEL_PROCESSING"
+    if not mcu.get("all_mapping_mcu_aligned"):
+        return "MCU_ALIGNMENT_UNSAFE"
+    return "LOSSLESS_JPEG_REARRANGEMENT_READY"
 
 
 def _operation_summary(
@@ -1217,13 +2011,21 @@ def match_imagebitmap_sources(
             ),
             reverse=True,
         )
+        exact_candidates = [
+            item["sha256"]
+            for item in matches
+            if item["pixel_metrics"]["exact_pixel_equality"]
+        ]
         result.append({
             "source_id": source_id,
             "source_dimensions": {
                 "width": source_image.width,
                 "height": source_image.height,
             },
+            "snapshot_sha256": hashlib.sha256(data).hexdigest(),
             "candidate_count_compared": len(matches),
+            "exact_decoded_pixel_match_count": len(exact_candidates),
+            "exact_candidate_sha256": exact_candidates,
             "best_candidates": matches[:5],
         })
     return result
@@ -1257,6 +2059,78 @@ def _public_native_part(part: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key, value in part.items()
         if key != "_data"
+    }
+
+
+def part_mapping_summary(page_records: list[dict[str, Any]]) -> dict[str, Any]:
+    mappings = [
+        mapping
+        for page in page_records
+        for mapping in page.get("part_mappings", [])
+    ]
+    permutations = [
+        mapping.get("permutation") or {}
+        for mapping in mappings
+        if mapping.get("permutation")
+    ]
+    mcu_reports = [
+        mapping.get("mcu_alignment") or {}
+        for mapping in mappings
+        if mapping.get("mcu_alignment")
+    ]
+    return {
+        "pages_observed": len(page_records),
+        "parts_observed": len(mappings),
+        "mapping_status_counts": dict(sorted(Counter(
+            str(mapping.get("mapping_status")) for mapping in mappings
+        ).items())),
+        "readiness_counts": dict(sorted(Counter(
+            str(mapping.get("readiness")) for mapping in mappings
+        ).items())),
+        "classification_counts": dict(sorted(Counter(
+            str(mapping.get("classification")) for mapping in mappings
+        ).items())),
+        "tile_dimensions_distribution": dict(sorted(Counter(
+            json.dumps(
+                mapping.get("tile_dimensions"),
+                sort_keys=True,
+            )
+            for mapping in permutations
+            if mapping.get("tile_dimensions")
+        ).items())),
+        "mcu_dimensions_distribution": dict(sorted(Counter(
+            json.dumps(
+                {
+                    "width": (report.get("geometry") or {}).get("mcu_width"),
+                    "height": (report.get("geometry") or {}).get("mcu_height"),
+                },
+                sort_keys=True,
+            )
+            for report in mcu_reports
+            if report.get("geometry")
+        ).items())),
+        "complete_bijection_count": sum(
+            int(bool(mapping.get("complete_bijection")))
+            for mapping in permutations
+        ),
+        "mcu_aligned_count": sum(
+            int(bool(report.get("all_mapping_mcu_aligned")))
+            for report in mcu_reports
+        ),
+        "single_source_permutation_count": sum(
+            int(bool(mapping.get("imagebitmap", {}).get("source_id")))
+            for mapping in mappings
+            if mapping.get("imagebitmap")
+        ),
+        "multi_source_permutation_count": sum(
+            int(bool(mapping.get("multiple_imagebitmap_sources")))
+            for mapping in mappings
+        ),
+        "mapping_sha256_counts": dict(sorted(Counter(
+            str(mapping.get("mapping_sha256"))
+            for mapping in permutations
+            if mapping.get("mapping_sha256")
+        ).items())),
     }
 
 
@@ -1360,18 +2234,12 @@ async def _run_once(
                 page_index=page_index,
             )
             tile_trace_report = trace_tile_rearrangement_report(trace)
-            complete_tile_source_ids = [
-                str(group["source_id"])
-                for group in tile_trace_report.get("groups", [])
-                if group.get("complete_permutation")
-            ]
-            imagebitmap_best_hash = {
-                str(item["source_id"]): (
-                    item.get("best_candidates") or [{}]
-                )[0].get("sha256")
-                for item in imagebitmap_matches
-                if item.get("best_candidates")
-            }
+            part_mapping_records = build_part_mapping_records(
+                trace,
+                native_parts,
+                tile_trace_report,
+                imagebitmap_matches,
+            )
             classification, matching = await classify_page(
                 page,
                 native_parts,
@@ -1405,12 +2273,14 @@ async def _run_once(
                                 "width": source.get("width"),
                                 "height": source.get("height"),
                             },
+                            "snapshot_sha256": hashlib.sha256(data).hexdigest(),
                             "file": image_source_name,
                         }
                     )
             part_records: list[dict[str, Any]] = []
             selected_candidate_hashes: set[str] = set()
             for part_index, native_part in enumerate(native_parts, start=1):
+                part_mapping = part_mapping_records[part_index - 1]
                 native_data = native_part["_data"]
                 native_image = _decode_image(native_data)
                 native_name = "native.png" if part_index == 1 else f"native-{part_index:02d}.png"
@@ -1424,22 +2294,21 @@ async def _run_once(
                     excluded_hashes=selected_candidate_hashes,
                 )
                 selection_strategy = "bounded_route_filter_dimension_rank"
-                source_index = part_index - 1
-                if source_index < len(complete_tile_source_ids):
-                    source_id = complete_tile_source_ids[source_index]
-                    preferred_hash = imagebitmap_best_hash.get(source_id)
-                    preferred = next(
-                        (
-                            item
-                            for item in page_candidates
-                            if str(item.metadata.get("sha256")) == str(preferred_hash)
-                            and str(item.metadata.get("sha256")) not in selected_candidate_hashes
-                        ),
-                        None,
-                    )
-                    if preferred is not None:
-                        candidate = preferred
-                        selection_strategy = "imagebitmap_exact_decoded_match"
+                imagebitmap = part_mapping.get("imagebitmap") or {}
+                exact_hashes = imagebitmap.get("exact_candidate_sha256") or []
+                preferred = next(
+                    (
+                        item
+                        for item in page_candidates
+                        if str(item.metadata.get("sha256")) in {str(value) for value in exact_hashes}
+                    ),
+                    None,
+                )
+                if preferred is not None and int(imagebitmap.get(
+                    "exact_decoded_pixel_match_count", 0
+                )) == 1:
+                    candidate = preferred
+                    selection_strategy = "imagebitmap_exact_decoded_match"
                 raw_record: dict[str, Any] = {
                     "sha256": None,
                     "dimensions": None,
@@ -1483,6 +2352,21 @@ async def _run_once(
                         "file": raw_name,
                         "jpeg_marker_metadata": marker_metadata,
                     })
+                    part_mapping["raw_jpeg"] = {
+                        "sha256": candidate.metadata.get("sha256"),
+                        "width": candidate.metadata.get("width"),
+                        "height": candidate.metadata.get("height"),
+                        "decoded_pixel_exact_match": (
+                            str(candidate.metadata.get("sha256")) in {
+                                str(value) for value in (
+                                    (part_mapping.get("imagebitmap") or {}).get(
+                                        "exact_candidate_sha256", []
+                                    )
+                                )
+                            }
+                        ),
+                        "mcu_geometry": jpeg_mcu_geometry(raw_data),
+                    }
                 selected_operation, full_source_png = _trace_source_for_part(trace, native_part)
                 source_name = None
                 if full_source_png:
@@ -1490,6 +2374,34 @@ async def _run_once(
                     (page_dir / source_name).write_bytes(full_source_png)
                 elif native_part.get("source_constructor") == "HTMLCanvasElement":
                     source_name = native_name
+                part_mapping["source_canvas_snapshot_sha256"] = (
+                    hashlib.sha256(full_source_png).hexdigest()
+                    if full_source_png
+                    else None
+                )
+                if part_mapping.get("raw_jpeg"):
+                    part_mapping["mcu_alignment"] = mcu_alignment_report(
+                        candidate.body if candidate is not None else b"",
+                        part_mapping.get("permutation"),
+                    )
+                else:
+                    part_mapping["mcu_alignment"] = {
+                        "available": False,
+                        "reason": "raw JPEG candidate unavailable",
+                    }
+                part_mapping["safety"] = transformation_safety_report(
+                    trace,
+                    part_mapping,
+                )
+                part_mapping["classification"] = classify_part_from_mapping(
+                    analysis,
+                    part_mapping,
+                )
+                part_mapping["readiness"] = part_readiness_classification(
+                    part_mapping,
+                    safety=part_mapping["safety"],
+                    mcu=part_mapping["mcu_alignment"],
+                )
                 part_records.append({
                     "part": part_index,
                     "raw": raw_record,
@@ -1505,19 +2417,31 @@ async def _run_once(
                     },
                     "analysis": analysis,
                     "diff_files": diff_files,
+                    "mapping_sha256": (part_mapping.get("permutation") or {}).get(
+                        "mapping_sha256"
+                    ),
+                    "mapping_status": part_mapping.get("mapping_status"),
+                    "readiness": part_mapping.get("readiness"),
                 })
             operation_summary = _operation_summary(
                 trace,
                 visible_width=visible_width,
                 visible_height=visible_height,
             )
-            if operation_summary["tile_rearrangement"]["detected"]:
-                for part in part_records:
-                    if part.get("analysis"):
-                        part["analysis"]["classification"] = "TILE_REARRANGEMENT"
-                        part["analysis"]["classification_note"] = (
-                            "The canvas trace observed a complete tile permutation "
-                            "from an ImageBitmap into an HTMLCanvasElement."
+            for part_record, part_mapping in zip(
+                part_records,
+                part_mapping_records,
+                strict=True,
+            ):
+                if part_record.get("analysis") is not None:
+                    part_record["analysis"]["classification"] = part_mapping.get(
+                        "classification",
+                        part_record["analysis"].get("classification"),
+                    )
+                    if part_mapping.get("classification") == "TILE_REARRANGEMENT":
+                        part_record["analysis"]["classification_note"] = (
+                            "This part has its own unique complete tile permutation "
+                            "from the matched ImageBitmap into its source canvas."
                         )
             page_metadata = {
                 "page_index": page_index,
@@ -1528,6 +2452,7 @@ async def _run_once(
                 "existing_probe_matching": matching,
                 "native_error": native_error,
                 "parts": part_records,
+                "part_mappings": part_mapping_records,
                 "draw_calls": raw_draw_calls,
                 "canvas_operations": [
                     _public_trace_operation(operation)
@@ -1547,6 +2472,10 @@ async def _run_once(
                 "imagebitmap_candidate_matches": imagebitmap_matches,
                 "canvas_operation_summary": operation_summary,
             }
+            (page_dir / "part-mappings.json").write_text(
+                json.dumps(part_mapping_records, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             (page_dir / "metadata.json").write_text(
                 json.dumps(page_metadata, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -1592,6 +2521,7 @@ async def _run_once(
             for part in page_record.get("parts", [])
             if part.get("native", {}).get("source_constructor")
         ]),
+        "part_mapping_summary": part_mapping_summary(page_records),
         "canvas_operation_counts": dict(sorted(Counter(
             operation
             for page_record in page_records
@@ -1620,6 +2550,9 @@ async def _run_once(
                         "classification": part.get("analysis", {}).get("classification"),
                         "raw_sha256": part.get("raw", {}).get("sha256"),
                         "native_sha256": part.get("native", {}).get("sha256"),
+                        "mapping_sha256": part.get("mapping_sha256"),
+                        "mapping_status": part.get("mapping_status"),
+                        "readiness": part.get("readiness"),
                         "raw_dimensions": part.get("analysis", {}).get("raw_dimensions"),
                         "native_dimensions": part.get("analysis", {}).get("native_dimensions"),
                     }
@@ -1639,6 +2572,10 @@ async def _run_once(
             ensure_ascii=False,
             indent=2,
         ),
+        encoding="utf-8",
+    )
+    (run_dir / "part_mapping_summary.json").write_text(
+        json.dumps(summary["part_mapping_summary"], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     (run_dir / "summary.json").write_text(

@@ -1241,6 +1241,49 @@ does not establish purchaser watermarking, randomized session modification,
 or the server-side reason for the tile permutation. Generated artifacts are
 local diagnostic output and are not repository fixtures.
 
+### 20.9 Purchased part mapping and JPEG MCU readiness (2026-09-30)
+
+The transformation probe now joins each visible part by object identity and
+operation order rather than by part index or dimensions. For an
+HTMLCanvasElement source, the init script records the underlying canvasId in
+addition to the sourceId. The probe records the renderer canvas id, renderer
+draw operation index, source canvas id, selected permutation group, ImageBitmap
+source id/snapshot hash, exact raw-JPEG match count, canonical mapping hash,
+and reload mapping comparison.
+
+The final two-reload check for the purchased URL observed the following
+part-local chains on page 23/314:
+
+- Part 1: renderer canvas 3, draw operation 1203, source canvas 4,
+  ImageBitmap source 2, tile operations 3-1202, and mapping hash
+  7aefb09c0c62c4f155f38a2e8c5682f58dd200678a1e193f4c35baa625733902.
+- Part 2: renderer canvas 3, draw operation 2410, source canvas 4,
+  ImageBitmap source 5, tile operations 1210-2409, and mapping hash
+  7eb3352ba679b398b0d8d1a5b3b28571f34f165a8b70545a58d89266aec6eecd.
+
+Each selected group has 1200 operations, 1200 expected tiles, 1200 unique
+source tiles, 1200 unique destination tiles, 1199 moved tiles, and a complete
+bijection. A later ImageBitmap source 7 group is a partial prefetch/transition
+group after the next clear boundary and is not assigned to either visible
+part. A same-window multi-source case remains fail-safe and is reported as
+MULTI_SOURCE_PERMUTATION / PART_MAPPING_AMBIGUOUS rather than being collapsed.
+
+The selected raw JPEG is the unique exact decoded-pixel match for each
+selected ImageBitmap. JPEG SOF sampling factors give an 8x8 MCU for the
+observed 4:4:4 images; all source and destination tile rectangles are both
+edge-aware and strictly MCU aligned. The part-local trace has identity
+transform, source-over, filter none, no source-canvas content writes, and no
+renderer writes classified as image-content modification. clearRect between
+parts is recorded as source-canvas initialization; renderer fillRect calls are
+classified as background or thin edge operations.
+
+Both reloads report RAW_SAME_NATIVE_SAME and MAPPING_SAME for both parts.
+The final readiness is LOSSLESS_JPEG_REARRANGEMENT_READY and the part
+classification is TILE_REARRANGEMENT. The complete part mapping is written to
+page-level part-mappings.json and the run-level aggregation to
+part_mapping_summary.json. This remains diagnostic-only; no production
+capture, JPEG/PNG selection, or output behavior is changed.
+
 BookWalker exposes no additional named access resource in the Phase 3 Policy
 contract. Explicit resource planning therefore fails closed for unsupported
 resource names; normal direct/quota planning remains unchanged.

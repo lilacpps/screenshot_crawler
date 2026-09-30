@@ -37,6 +37,59 @@ def _jpeg_bytes(image: Image.Image) -> bytes:
     return output.getvalue()
 
 
+def _trace_tile_operation(
+    *,
+    target_id: str,
+    source_id: str,
+    source_x: int,
+    source_y: int,
+    destination_x: int,
+    destination_y: int,
+    tile_size: int,
+    target_size: int,
+    target_constructor: str = "HTMLCanvasElement",
+    source_constructor: str = "ImageBitmap",
+    index: int = 1,
+) -> dict[str, object]:
+    return {
+        "index": index,
+        "operation": "drawImage",
+        "target": {
+            "canvasId": target_id,
+            "constructor": target_constructor,
+            "width": target_size,
+            "height": target_size,
+        },
+        "source": {
+            "sourceId": source_id,
+            "constructor": source_constructor,
+            "width": target_size,
+            "height": target_size,
+            **(
+                {"canvasId": source_id}
+                if source_constructor == "HTMLCanvasElement"
+                else {}
+            ),
+        },
+        "sourceRect": {
+            "x": source_x,
+            "y": source_y,
+            "width": tile_size,
+            "height": tile_size,
+        },
+        "destination": {
+            "x": destination_x,
+            "y": destination_y,
+            "width": tile_size,
+            "height": tile_size,
+        },
+        "transform": {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+        "globalCompositeOperation": "source-over",
+        "globalAlpha": 1,
+        "filter": "none",
+    }
+
+
 def test_exact_image_comparison_is_direct_decode() -> None:
     image = _gradient(12, 10)
     result, aligned = probe.analyze_image_pair(image, image.copy())
@@ -98,6 +151,321 @@ def test_tile_swap_is_detected_only_after_direct_comparison_fails() -> None:
 
     assert result["classification"] == "TILE_REARRANGEMENT"
     assert result["tile_permutation"]["grids"]["2"]["permutation_detected"] is True
+
+
+def test_trace_tile_report_proves_complete_bijection_and_canonical_mapping() -> None:
+    operations = []
+    for source_index, destination_index in enumerate((1, 0, 2, 3)):
+        source_x = (source_index % 2) * 4
+        source_y = (source_index // 2) * 4
+        destination_x = (destination_index % 2) * 4
+        destination_y = (destination_index // 2) * 4
+        operations.append(
+            _trace_tile_operation(
+                target_id="source-canvas",
+                source_id="bitmap-a",
+                source_x=source_x,
+                source_y=source_y,
+                destination_x=destination_x,
+                destination_y=destination_y,
+                tile_size=4,
+                target_size=8,
+                index=len(operations) + 1,
+            )
+        )
+
+    report = probe.trace_tile_rearrangement_report({"operations": operations})
+    group = report["groups"][0]
+
+    assert report["detected"] is True
+    assert group["complete_bijection"] is True
+    assert group["source_duplicate_tile_count"] == 0
+    assert group["destination_duplicate_tile_count"] == 0
+    assert group["source_tile_gap_count"] == 0
+    assert group["destination_tile_gap_count"] == 0
+    assert group["source_out_of_bounds_count"] == 0
+    assert group["destination_out_of_bounds_count"] == 0
+    assert len(group["mapping"]) == 4
+    assert len(group["mapping_sha256"]) == 64
+
+
+def test_trace_tile_report_rejects_duplicate_and_gap_mapping() -> None:
+    operations = [
+        _trace_tile_operation(
+            target_id="source-canvas",
+            source_id="bitmap-a",
+            source_x=0,
+            source_y=0,
+            destination_x=0,
+            destination_y=0,
+            tile_size=4,
+            target_size=8,
+        ),
+        _trace_tile_operation(
+            target_id="source-canvas",
+            source_id="bitmap-a",
+            source_x=0,
+            source_y=0,
+            destination_x=4,
+            destination_y=0,
+            tile_size=4,
+            target_size=8,
+            index=2,
+        ),
+    ]
+    group = probe.trace_tile_rearrangement_report({"operations": operations})["groups"][0]
+
+    assert group["complete_bijection"] is False
+    assert group["source_duplicate_tile_count"] == 1
+    assert group["source_tile_gap_count"] == 3
+    assert group["destination_tile_gap_count"] == 2
+
+
+def test_part_mapping_uses_object_identity_and_supports_mixed_classification() -> None:
+    tile_operations = []
+    for source_index, destination_index in enumerate((1, 0, 2, 3)):
+        tile_operations.append(
+            _trace_tile_operation(
+                target_id="source-canvas-a",
+                source_id="bitmap-a",
+                source_x=(source_index % 2) * 4,
+                source_y=(source_index // 2) * 4,
+                destination_x=(destination_index % 2) * 4,
+                destination_y=(destination_index // 2) * 4,
+                tile_size=4,
+                target_size=8,
+                index=source_index + 1,
+            )
+        )
+    renderer_operation = _trace_tile_operation(
+        target_id="renderer",
+        source_id="source-canvas-a",
+        source_x=0,
+        source_y=0,
+        destination_x=0,
+        destination_y=0,
+        tile_size=8,
+        target_size=8,
+        source_constructor="HTMLCanvasElement",
+        index=5,
+    )
+    native_part = {
+        "source_constructor": "HTMLCanvasElement",
+        "source_width": 8,
+        "source_height": 8,
+        "source_rect": {"x": 0, "y": 0, "width": 8, "height": 8},
+        "destination": {"x": 0, "y": 0, "width": 8, "height": 8},
+    }
+    matches = [{
+        "source_id": "bitmap-a",
+        "source_dimensions": {"width": 8, "height": 8},
+        "snapshot_sha256": "snapshot-a",
+        "candidate_count_compared": 1,
+        "exact_decoded_pixel_match_count": 1,
+        "exact_candidate_sha256": ["raw-a"],
+        "best_candidates": [],
+    }]
+    mapping = probe.build_part_mapping_records(
+        {"operations": [*tile_operations, renderer_operation]},
+        [native_part],
+        probe.trace_tile_rearrangement_report({"operations": [*tile_operations, renderer_operation]}),
+        matches,
+    )[0]
+
+    assert mapping["renderer"]["draw_operation_index"] == 5
+    assert mapping["renderer"]["source_canvas_id"] == "source-canvas-a"
+    assert mapping["permutation"]["source_id"] == "bitmap-a"
+    assert mapping["mapping_status"] == "PART_MAPPING_PROVEN"
+    assert probe.classify_part_from_mapping(None, mapping) == "TILE_REARRANGEMENT"
+    assert probe.classify_part_from_mapping(
+        {"classification": "DIRECT_DECODE"},
+        {"mapping_status": "NOT_APPLICABLE"},
+    ) == "DIRECT_DECODE"
+
+
+def test_multiple_imagebitmap_sources_are_not_collapsed_into_one_part() -> None:
+    operations = [
+        _trace_tile_operation(
+            target_id="source-canvas",
+            source_id="bitmap-a",
+            source_x=0,
+            source_y=0,
+            destination_x=0,
+            destination_y=0,
+            tile_size=4,
+            target_size=4,
+        ),
+        _trace_tile_operation(
+            target_id="source-canvas",
+            source_id="bitmap-b",
+            source_x=0,
+            source_y=0,
+            destination_x=0,
+            destination_y=0,
+            tile_size=4,
+            target_size=4,
+            index=2,
+        ),
+        _trace_tile_operation(
+            target_id="renderer",
+            source_id="source-canvas",
+            source_x=0,
+            source_y=0,
+            destination_x=0,
+            destination_y=0,
+            tile_size=4,
+            target_size=4,
+            source_constructor="HTMLCanvasElement",
+            index=3,
+        ),
+    ]
+    native_part = {
+        "source_constructor": "HTMLCanvasElement",
+        "source_width": 4,
+        "source_height": 4,
+        "source_rect": {"x": 0, "y": 0, "width": 4, "height": 4},
+        "destination": {"x": 0, "y": 0, "width": 4, "height": 4},
+    }
+    mapping = probe.build_part_mapping_records(
+        {"operations": operations},
+        [native_part],
+        probe.trace_tile_rearrangement_report({"operations": operations}),
+        [],
+    )[0]
+
+    assert mapping["permutation_group_count"] == 2
+    assert mapping["multiple_imagebitmap_sources"] is True
+    assert mapping["mapping_status"] == "PART_MAPPING_AMBIGUOUS"
+    assert probe.classify_part_from_mapping(None, mapping) == "MULTI_SOURCE_PERMUTATION"
+
+
+def test_jpeg_mcu_geometry_reads_444_and_420_sampling() -> None:
+    image = _gradient(17, 19)
+    outputs: dict[int, dict[str, object]] = {}
+    for subsampling in (0, 2):
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=90, subsampling=subsampling)
+        geometry = probe.jpeg_mcu_geometry(output.getvalue())
+        assert geometry is not None
+        outputs[subsampling] = geometry
+
+    assert outputs[0]["mcu_width"] == 8
+    assert outputs[0]["mcu_height"] == 8
+    assert outputs[2]["mcu_width"] == 16
+    assert outputs[2]["mcu_height"] == 16
+    assert outputs[2]["coded_width"] >= outputs[2]["visible_width"]
+    assert outputs[2]["coded_height"] >= outputs[2]["visible_height"]
+
+
+def test_mcu_alignment_allows_only_visible_edge_padding() -> None:
+    image = _gradient(17, 19)
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=90, subsampling=0)
+    geometry = probe.jpeg_mcu_geometry(output.getvalue())
+    assert geometry is not None
+    group = {
+        "target_dimensions": {"width": 17, "height": 19},
+        "mapping": [{
+            "source_x": 0,
+            "source_y": 0,
+            "destination_x": 0,
+            "destination_y": 0,
+            "width": 17,
+            "height": 19,
+        }],
+    }
+
+    report = probe.mcu_alignment_report(output.getvalue(), group)
+
+    assert report["all_mapping_mcu_aligned"] is True
+    assert report["strict_all_mapping_mcu_aligned"] is False
+    assert report["edge_condition"]["right_edge_padding"] > 0
+    assert report["edge_condition"]["bottom_edge_padding"] > 0
+
+
+def test_transformation_safety_separates_clear_background_and_edge_operations() -> None:
+    mapping = {
+        "renderer": {
+            "canvas_id": "renderer",
+            "draw_operation_index": 5,
+            "destination": {"x": 0, "y": 0, "width": 8, "height": 8},
+        },
+        "source_canvas": {"canvas_id": "source", "width": 8, "height": 8},
+        "permutation": {"first_operation_index": 2},
+    }
+    trace = {
+        "operations": [
+            {
+                "index": 1,
+                "operation": "clearRect",
+                "target": {"canvasId": "source"},
+                "arguments": [0, 0, 8, 8],
+            },
+            {
+                "index": 2,
+                "operation": "drawImage",
+                "target": {"canvasId": "source"},
+                "source": {"constructor": "ImageBitmap"},
+            },
+            {
+                "index": 3,
+                "operation": "fillRect",
+                "target": {"canvasId": "renderer"},
+                "arguments": [0, 0, 8, 8],
+            },
+            {
+                "index": 4,
+                "operation": "fillRect",
+                "target": {"canvasId": "renderer"},
+                "arguments": [0, 0, 1, 8],
+            },
+            {
+                "index": 5,
+                "operation": "drawImage",
+                "target": {"canvasId": "renderer"},
+                "globalAlpha": 1,
+                "globalCompositeOperation": "source-over",
+                "filter": "none",
+                "transform": {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+            },
+        ],
+    }
+
+    safety = probe.transformation_safety_report(trace, mapping)
+
+    assert safety["source_canvas_initialization_clears"] == [{
+        "index": 1,
+        "operation": "clearRect",
+        "rect": {"x": 0, "y": 0, "width": 8, "height": 8},
+    }]
+    assert safety["source_canvas_content_writes"] == []
+    assert len(safety["renderer_background_operations"]) == 1
+    assert len(safety["renderer_edge_operations"]) == 1
+    assert safety["renderer_intersecting_content_writes"] == []
+    assert safety["additional_pixel_processing"] is False
+
+
+def test_reload_mapping_comparison_reports_stability_separately() -> None:
+    runs = [
+        {"pages": [{"page_counter": "1/2", "parts": [{
+            "part": 1,
+            "raw": {"sha256": "raw-a"},
+            "native": {"sha256": "native-a"},
+            "mapping_sha256": "mapping-a",
+        }]}]},
+        {"pages": [{"page_counter": "1/2", "parts": [{
+            "part": 1,
+            "raw": {"sha256": "raw-a"},
+            "native": {"sha256": "native-a"},
+            "mapping_sha256": "mapping-a",
+        }]}]},
+    ]
+
+    comparison = probe.aggregate_reload_comparison(runs)
+
+    assert comparison["classification"] == ["RAW_SAME_NATIVE_SAME"]
+    assert comparison["mapping_comparison"] == ["MAPPING_SAME"]
+    assert comparison["mapping_comparison_counts"] == {"MAPPING_SAME": 1}
 
 
 def test_reload_classification_is_deterministic_when_both_hashes_match() -> None:
