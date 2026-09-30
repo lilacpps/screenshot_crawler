@@ -132,8 +132,9 @@ production `batch run --grant-only work_ticket --limit 1` safely skipped with
 `work_ticket_not_needed` after its live preflight observed `RENTAL` and
 preexisting same-chapter content. `ticket_click_attempted=false`,
 `AccessConsumption.consumed=false`, no point/coin/purchase fallback was used,
-and no quota timestamp was committed. This run does not verify Work Ticket
-consumption, so the Z5 completion status remains blocked.
+and no quota timestamp was committed. This title-66 run does not verify Work
+Ticket consumption; it is superseded as the current Z5 completion status by
+the final title-3890 production verification below.
 
 The subsequent normal RENTAL run completed independently with no additional
 ticket click, 19 source-native JPEG pages, `next_content`, a ZIP Artifact, and
@@ -151,6 +152,53 @@ is not attributed to this read-only check. This title-66 statement is historical
 and did not test direct viewer navigation; the title-402 verification above
 supersedes its generalization about viewer opening. A follow-up implementation
 experiment must preserve the chapter-row/direct-viewer distinction.
+
+### Final production Work Ticket verification: title 3890 / chapter 58493 (2026-09-30)
+
+The latest `main` was verified at
+`002eeb4e3250d513e4c2d4ebb3fdd5c04cd1c6d2`
+(`Fix Zeblack Work Ticket modal lookup`). Using the shared Crawler Chrome/CDP
+session, the read-only protobuf preflight on chapter/list reported
+`58493=TICKET_AVAILABLE`, `TICKET_AVAILABLE=[58493]`, and
+`FREE=24, RENTAL=0, POINT=150, COIN=26`. The target was
+`第25話 プロの実力`; no viewer URL was opened before the production run.
+
+The reused Catalog and singleton Batch Plan were read-only checked before
+execution: `Item=pending`, `Source.access_mode=quota`, `available=true`,
+`quota_started_at=NULL`, `access_granted_until=NULL`, `Artifact=0`, and no
+Work-scoped resource state. There were two preserved failed CrawlRuns. The
+Plan had one candidate at the canonical viewer locator with
+`access_strategy=quota`, `quota_resource=work_ticket`, `quota_scope=work`,
+`quota_limit=NULL`, and
+`quota_commit_mode=after_observed_consumption`.
+
+The production `grant-only work_ticket --limit 1` command ran once. Its first
+navigation was chapter/list. The adapter performed one exact target chapter
+selection, passed bounded ticket-anchored modal validation (maximum ancestor
+depth 12; actual depth was not persisted), found one exact ticket control and
+zero point/item/coin/purchase controls, then clicked
+`チケットを使って読む` exactly once. It reached the strict target viewer
+identity `title_id=3890`, `chapter_id=58493` and confirmed stable in-viewport
+`page_N` content. No page capture, ZIP, or Artifact was produced. The result
+was `resource_consumed=true`, `entry_confirmed`, and
+`AccessConsumption(consumed=True, resource=work_ticket)`.
+
+After the run, `Source.quota_started_at` was committed at
+`2026-09-30T16:37:19.291767+09:00`; `access_granted_until=NULL` is expected
+because the current Zeblack policy returns the default `NULL`. No
+`QuotaResourceState` was created because
+`resource_state_scope("work_ticket")=None`. The new CrawlRun was
+`succeeded`, `page_count=0`, `stop_reason=entry_confirmed`; the Item remained
+`pending` and Artifact count remained 0.
+
+The post-run chapter/list-only protobuf reported
+`58493=RENTAL`, `remainingRentalTime=259113`, and
+`TICKET_AVAILABLE=[]`, with counts `FREE=24, RENTAL=1, POINT=150, COIN=26`.
+The Adapter consumption, Catalog quota timestamp, and live protobuf transition
+agree. Exactly one Work Ticket was consumed. The bounded modal lookup fix is
+therefore **production-managed Work Ticket consumption verified**; the prior
+page-wide DOM timeout did not recur. Production code was not changed by this
+verification.
 
 ### Current title-53 live verification (2026-09-30)
 

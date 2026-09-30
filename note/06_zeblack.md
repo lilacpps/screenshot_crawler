@@ -89,8 +89,8 @@ consumption rule remain unchanged.
 
 The fix is covered by browser-backed normal and 2,500-node large-DOM flows,
 ambiguous ticket, missing modal identity, paid-control contamination, and
-direct-link rejection cases. Live Work Ticket consumption verification remains
-pending and was not retried in this code-fix phase.
+direct-link rejection cases. The final production Work Ticket consumption
+verification is recorded below as verified.
 
 ### Z5-5 controlled live verification: title 3890 / chapter 58493 (2026-09-30)
 
@@ -162,6 +162,104 @@ The title-402 direct-navigation result remains the separate warning: direct
 viewer navigation can consume a ticket, while opening this chapter-list modal
 and cancelling it did not. The production adapter was intentionally left
 unchanged; hashed CSS classes are not approved as production selectors.
+
+### Z5-6 final production Work Ticket verification: title 3890 / chapter 58493 (2026-09-30)
+
+The latest `main` was reviewed at commit
+`002eeb4e3250d513e4c2d4ebb3fdd5c04cd1c6d2`
+(`Fix Zeblack Work Ticket modal lookup`). The shared Crawler Chrome was used
+through `http://127.0.0.1:9222`. No viewer URL was opened during either
+read-only preflight; the production run entered through chapter/list. No
+credentials, cookies, storage state, request bodies, or tokens were saved or
+reported.
+
+Target:
+
+```text
+title_id=3890
+chapter_id=58493
+mainName=第25話 プロの実力
+chapter-list=https://zebrack-comic.shueisha.co.jp/title/3890/chapter/list
+viewer=https://zebrack-comic.shueisha.co.jp/title/3890/chapter/58493/viewer
+```
+
+Before the production run, the read-only `title_chapter_list` protobuf decoded
+201 chapters:
+
+```text
+target 58493=TICKET_AVAILABLE
+TICKET_AVAILABLE=[58493]
+FREE=24, RENTAL=0, TICKET_AVAILABLE=1,
+POINT=150, COIN=26,
+TICKET_UNAVAILABLE=0, TICKET_UNAVAILABLE_COIN_ONLY=0, UNKNOWN=0
+```
+
+The reused temporary Catalog matched the target identity. Before execution,
+`Item=pending`, `Source.access_mode=quota`, `Source.available=true`,
+`Source.quota_started_at=NULL`, `Source.access_granted_until=NULL`,
+`Artifact=0`, `QuotaResourceState=0`, and two earlier failed CrawlRuns were
+preserved. The read-only Batch Plan contained exactly one candidate with
+`locator=.../title/3890/chapter/58493/viewer`,
+`access_strategy=quota`, `quota_resource=work_ticket`, `quota_scope=work`,
+`quota_limit=NULL`, and
+`quota_commit_mode=after_observed_consumption`.
+
+The production command was executed exactly once:
+
+```text
+batch run --site zeblack --grant-only work_ticket --limit 1
+```
+
+The observed entry sequence was:
+
+```text
+chapter/list
+-> live TICKET_AVAILABLE preflight
+-> #chapter58493 exact mainName selection (one click)
+-> chapter/list confirmation modal
+-> bounded ticket-anchored modal lookup
+-> exact チケットを使って読む (one consuming click)
+-> target viewer 3890 / 58493
+-> stable in-viewport page_N content
+```
+
+The modal validation passed with exactly one visible target identity, exact
+`チケットを使って読む`, and exact `キャンセル`, with zero visible point,
+item, coin, or purchase controls in scope. The implementation bound was
+`MAX_MODAL_ANCESTOR_DEPTH=12`; the successful run did not persist the actual
+ancestor depth. The previous page-wide `locator("*").nth(...)` timeout did not
+recur.
+
+The strict viewer identity matched `title_id=3890` and `chapter_id=58493`.
+Stable `page_N` content was confirmed for entry-only validation, but no page
+was captured. The production result was `entry_confirmed` with
+`resource_consumed=true`; `AccessConsumption` was
+`consumed=True, resource=work_ticket`.
+
+After execution, the Catalog contained `Source.quota_started_at != NULL`
+(`2026-09-30T16:37:19.291767+09:00`), while
+`access_granted_until=NULL` as expected from the current default policy.
+`QuotaResourceState` remained absent because
+`resource_state_scope("work_ticket")=None`. The new CrawlRun was
+`status=succeeded`, `page_count=0`, `stop_reason=entry_confirmed`; the two
+earlier failed runs were unchanged. `Item` remained `pending` and
+`Artifact=0`.
+
+The post-run read-only protobuf still used chapter/list only and reported:
+
+```text
+target 58493=RENTAL
+remainingRentalTime=259113
+TICKET_AVAILABLE=[]
+FREE=24, RENTAL=1, TICKET_AVAILABLE=0,
+POINT=150, COIN=26,
+TICKET_UNAVAILABLE=0, TICKET_UNAVAILABLE_COIN_ONLY=0, UNKNOWN=0
+```
+
+The three signals agree: Adapter `AccessConsumption.consumed=True`, Catalog
+`quota_started_at` committed, and live protobuf `TICKET_AVAILABLE -> RENTAL`.
+Exactly one Work Ticket was consumed. Current status:
+**production-managed Work Ticket consumption verified**.
 
 ### Z5-4 controlled live verification: title 402 / chapter 341029 (2026-09-30)
 
