@@ -24,6 +24,37 @@ work-wide state, and commits quota state only after confirmed same-chapter
 viewer content. Grant-only uses the generic entry-only contract; it records
 confirmed consumption, leaves the Item pending, and creates no package.
 
+### Current title-402 direct viewer navigation verification (2026-09-30)
+
+The latest `main` was reviewed at commit `8c84b5a`. Through the shared Crawler
+Chrome/CDP session, a read-only `title_chapter_list` observation for title
+`402` decoded 167 chapters with `FREE=3`, `RENTAL=0`,
+`TICKET_AVAILABLE=1`, `TICKET_UNAVAILABLE=0`, `POINT=139`, `COIN=24`,
+`TICKET_UNAVAILABLE_COIN_ONLY=0`, and `UNKNOWN=0`. The oldest/current ticket
+candidate was chapter `341029`, `第4話 電話できないッ!!`.
+
+The visible DOM row `#chapter341029` was clicked exactly once. The page stayed
+on `/title/402/chapter/list`, no new page or access dialog appeared, no exact
+ticket/point/item/coin/purchase control was clicked or visible, and a second
+read-only protobuf observation still reported `341029=TICKET_AVAILABLE`.
+
+One direct `page.goto()` to
+`/title/402/chapter/341029/viewer` was then allowed by the unchanged
+`TICKET_AVAILABLE` state. The viewer loaded three visible `page_N` images and
+no exact access control was clicked. The following protobuf observation changed
+to `341029=RENTAL`, `RENTAL=1`, `TICKET_AVAILABLE=0`, with
+`remainingRentalTime=259195`. Network observation showed the viewer document
+GET followed by `POST /api/v3/chapter_viewer` returning `200` protobuf; request
+bodies and credentials were not saved.
+
+This is live evidence that direct viewer navigation itself can consume a Work
+Ticket. It supersedes the previous general assumption that opening the viewer
+only reveals the ticket action. The chapter-list row click and direct viewer
+navigation are not equivalent: only the latter consumed the ticket in this
+check. The production implementation was intentionally not changed in this
+research run; until a new adapter flow is implemented and verified, production
+quota entry must not begin from a direct viewer URL.
+
 ### Current title-66 live verification (2026-09-30)
 
 Title `66` was checked through the shared CDP browser. Read-only protobuf
@@ -54,8 +85,10 @@ observation confirms that selecting/opening a `TICKET_AVAILABLE` chapter only
 reveals that action; the action itself is the consuming step. A POINT chapter
 instead exposes `ポイントを使って読む`; the Work Ticket flow must never
 click it or fall back to it. The later `TICKET_AVAILABLE -> RENTAL` observation
-is not attributed to this read-only check. A follow-up live experiment should
-use the separate account/address while preserving this two-step distinction.
+is not attributed to this read-only check. This title-66 statement is historical
+and did not test direct viewer navigation; the title-402 verification above
+supersedes its generalization about viewer opening. A follow-up implementation
+experiment must preserve the chapter-row/direct-viewer distinction.
 
 ### Current title-53 live verification (2026-09-30)
 

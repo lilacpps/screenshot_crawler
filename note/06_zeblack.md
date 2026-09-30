@@ -57,6 +57,62 @@ content package. `--grant-only all` resolves to the single Work Ticket pass.
 `batch run --site zeblack` uses the existing generic Executor; no Zeblack
 branch was added to Batch Core.
 
+### Z5-4 controlled live verification: title 402 / chapter 341029 (2026-09-30)
+
+The latest `main` was reviewed at commit `8c84b5a`. The shared Crawler Chrome
+was used through `http://127.0.0.1:9222`; no credentials, cookies, storage
+state, request bodies, or tokens were read or saved. This was a research-only
+check and did not modify the production implementation.
+
+The read-only `title_chapter_list` observation for title `402` decoded 167
+chapters:
+
+```text
+FREE=3, RENTAL=0, TICKET_AVAILABLE=1,
+TICKET_UNAVAILABLE=0, POINT=139, COIN=24,
+TICKET_UNAVAILABLE_COIN_ONLY=0, UNKNOWN=0
+oldest/current ticket candidate: chapter 341029
+mainName: 第4話 電話できないッ!!
+viewer: https://zebrack-comic.shueisha.co.jp/title/402/chapter/341029/viewer
+```
+
+The exact DOM target `#chapter341029` existed once and was visible. It was
+clicked exactly once. The URL remained the chapter-list URL, no new page was
+opened, no visible ticket/point/item/coin/purchase control or dialog appeared,
+and the read-only protobuf still reported `341029=TICKET_AVAILABLE` with one
+available ticket. Therefore the chapter-list row click itself was not observed
+to consume the ticket in this run.
+
+Because the target remained available, one direct navigation to the viewer URL
+was performed without clicking any control. The resulting viewer URL was
+correct, three visible `page_N` images were present, and the exact ticket,
+point, item, coin, and coin-purchase control counts were all zero. A subsequent
+read-only chapter-list protobuf observation reported:
+
+```text
+FREE=3, RENTAL=1, TICKET_AVAILABLE=0,
+TICKET_UNAVAILABLE=0, POINT=139, COIN=24,
+TICKET_UNAVAILABLE_COIN_ONLY=0, UNKNOWN=0
+target 341029: RENTAL, remainingRentalTime=259195
+```
+
+The direct navigation produced a document `GET` followed by a successful
+`POST /api/v3/chapter_viewer` (`200`, `application/protobuf`) and page-image
+requests. Request paths were recorded without query strings or bodies. The
+status transition from `TICKET_AVAILABLE` to `RENTAL` immediately after this
+direct navigation is strong live evidence that direct viewer navigation can
+consume a Work Ticket even when the exact ticket control is never clicked.
+The endpoint name and request ordering are supporting evidence; the protobuf
+state transition is the authority for this conclusion.
+
+This supersedes the earlier general assumption that selecting/opening a
+`TICKET_AVAILABLE` viewer only reveals the ticket action. The chapter-list row
+click and direct viewer URL must be treated as distinct operations: the former
+was non-consuming in this check, while the latter consumed the only available
+ticket. The current production adapter still contains the prior assumption and
+was intentionally left unchanged; production quota entry should not start from
+a direct viewer URL until the adapter flow is redesigned and re-verified.
+
 ### Z5-3 controlled live verification: title 66 / chapter 6077 (2026-09-30)
 
 The latest `main` was reviewed at commit `e990c97`. The shared Crawler Chrome
