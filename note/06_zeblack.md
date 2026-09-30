@@ -42,9 +42,14 @@ The current static bundle showed no ticket-specific confirmation dialog; an
 unexpected visible dialog is therefore rejected rather than guessed. A run
 sets `_ticket_click_attempted` before the single click and never retries it.
 `AccessConsumption(consumed=True, resource="work_ticket")` is recorded only
-after same-chapter viewer `page_N` content is stable, with a UTC-aware
-timestamp. Click, navigation, loading, timeout, unknown UI, and preexisting
-FREE/RENTAL content do not count as consumption.
+after the exact ticket action is clicked and stable same-chapter viewer
+`page_N` content is observed, with a UTC-aware timestamp. Selecting a
+`TICKET_AVAILABLE` chapter or opening its viewer only reveals that action; it
+does not consume the ticket. The ticket action is exactly
+`チケットを使って読む`. A POINT chapter exposes the distinct
+`ポイントを使って読む` action, which is a paid/point path and must never be
+clicked by the Work Ticket flow. Loading, timeout, unknown UI, and
+preexisting content remain fail-closed outcomes.
 
 `--grant-only work_ticket` uses the generic entry-only path, persists only
 confirmed observed consumption, leaves the Item pending, and creates no
@@ -53,11 +58,77 @@ content package. `--grant-only all` resolves to the single Work Ticket pass.
 branch was added to Batch Core.
 
 The exact ticket control and point/coin distinction are supported by
-read-only inspection of the current public frontend bundle. A signed-in
-browser/CDP session was not available for this turn, so current title `5123`
-status counts and live `batch plan` were not re-executed. No ticket was
-consumed. Controlled live read-only status and plan verification remain
-operator follow-up.
+read-only inspection of the current public frontend bundle. On 2026-09-30,
+the shared Crawler Chrome/CDP session was available and the current title
+`5123` protobuf status was observed. Before the preflight, the counts were
+`FREE=16`, `TICKET_AVAILABLE=3`, `POINT=188`, `COIN=43`, and `RENTAL=0`.
+The oldest-first candidate was chapter `198365` (`#17 問題ないです`). Its
+viewer identity matched, but one visible/in-viewport `page_0` blob image was
+already present and the exact ticket text was visible zero times. Point,
+item, coin, and purchase controls were also zero; no dialog was visible.
+The production fail-closed path stopped before any ticket click, so no
+`AccessConsumption` was recorded and no grant-only run was executed. Under the
+human-observed two-step behavior, that means this check did not consume a
+ticket.
+
+After the stopped preflight, a later read-only protobuf observation reported
+chapter `198365` as `RENTAL`, `TICKET_AVAILABLE=0`, and counts
+`RENTAL=1`, `POINT=190`. This transition is not attributed to the check:
+the verified flow did not click `チケットを使って読む`, and the human
+observation says that the preceding chapter selection/viewer opening is not
+the consuming action. The temporary singleton Discovery/Batch plan completed
+read-only (`observed=1`, `complete=True`, `eligible=1`, `quota=1`,
+`work_ticket`), while the temporary Catalog remained `pending` with no quota
+timestamp, CrawlRun, or Artifact.
+
+The detailed operator artifacts are in `output/zeblack_z5_live/`. They are
+temporary and contain no credentials, cookies, or storage state. Explicit
+ticket consumption remains unverified and was intentionally not performed.
+The next experiment may use another account/address; it must preserve the
+two-step distinction and never click the point action.
+
+### Z5-1 controlled live verification (2026-09-30)
+
+Target: title `5123`, oldest-first candidate chapter `198365` (`#17
+問題ないです`). Shared Crawler Chrome was verified through the repository CDP
+endpoint `http://127.0.0.1:9222`; authentication data was not read or saved.
+
+```text
+before status counts: FREE=16, RENTAL=0, TICKET_AVAILABLE=3,
+  TICKET_UNAVAILABLE=0, POINT=188, COIN=43,
+  TICKET_UNAVAILABLE_COIN_ONLY=0, UNKNOWN=0
+before TICKET_AVAILABLE: 198365 (#17 問題ないです),
+  224191 (#26 応援するよ), 226849 (#27 脈アリ)
+
+viewer identity: title=5123, chapter=198365 (matched)
+preexisting content: true; visible page_N rows=1 (page_0, blob, 760x1194)
+exact ticket control: visible count=0, enabled=false
+paid controls: point=0, item=0, coin=0, coin purchase=0
+dialog before click: 0
+ticket_click_attempted: false
+chapter selection/viewer navigation: performed; ticket not consumed by this step
+operational conclusion: no ticket consumption; exact ticket action was not clicked
+
+singleton Discovery: observed=1, complete=True, external_id=198365
+Batch plan: eligible=1, quota=1, resource=work_ticket,
+  quota_commit_mode=after_observed_consumption
+Catalog before grant: Item=pending, quota_started_at=NULL,
+  access_granted_until=NULL, CrawlRun=0, Artifact=0
+
+after status counts: FREE=16, RENTAL=1, TICKET_AVAILABLE=0,
+  TICKET_UNAVAILABLE=0, POINT=190, COIN=43,
+  TICKET_UNAVAILABLE_COIN_ONLY=0, UNKNOWN=0
+target observed transition: TICKET_AVAILABLE -> RENTAL
+TICKET_AVAILABLE ids after: none
+causality: not attributed to this verification; no exact ticket action was clicked
+POINT negative check: not run after unexpected preflight state
+package: not generated
+
+The earlier report's observation that no ticket action was clicked was correct,
+but its interpretation of the later status transition was left ambiguous. The
+human-observed UI sequence resolves the ambiguity: only the exact ticket action
+consumes a Work Ticket, while the point action is never clicked.
+```
 
 ## Z4-1 production Discovery status (2026-09-30)
 

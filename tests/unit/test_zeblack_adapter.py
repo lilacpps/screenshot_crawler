@@ -296,6 +296,17 @@ async def test_ticket_click_is_confirmed_once_and_never_retried(monkeypatch) -> 
     assert page.clicks == 1
 
 
+@pytest.mark.asyncio
+async def test_point_entry_control_is_rejected_without_click() -> None:
+    page = _TicketPage({"ポイントを使って読む": 1})
+    adapter = ZeblackAdapter()
+
+    with pytest.raises(UnsupportedAccessStrategyError):
+        await adapter._wait_for_ticket_control(page)  # type: ignore[arg-type]
+
+    assert page.clicks == 0
+
+
 def _live_state(status_value: int, ticket_available_ids: tuple[str, ...]) -> ZeblackLiveAccessState:
     names = {
         0: "FREE",

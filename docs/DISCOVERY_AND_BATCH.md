@@ -24,9 +24,14 @@ work-wide state, and commits quota state only after confirmed same-chapter
 viewer content. Grant-only uses the generic entry-only contract; it records
 confirmed consumption, leaves the Item pending, and creates no package.
 
-Current ticket-consuming live verification is intentionally not part of the
-Z5 implementation change. Read-only frontend bundle evidence supports the
-exact control text `チケットを使って読む`; no ticket was clicked.
+The 2026-09-30 Z5-1 live check did not click the exact control
+`チケットを使って読む`, and therefore did not consume a Work Ticket. Human
+observation confirms that selecting/opening a `TICKET_AVAILABLE` chapter only
+reveals that action; the action itself is the consuming step. A POINT chapter
+instead exposes `ポイントを使って読む`; the Work Ticket flow must never
+click it or fall back to it. The later `TICKET_AVAILABLE -> RENTAL` observation
+is not attributed to this read-only check. A follow-up live experiment should
+use the separate account/address while preserving this two-step distinction.
 
 > Site-native bounded Discoveryの詳細な採用仕様は `docs/BOUNDED_DISCOVERY.md` とし、本書のDiscovery仕様の一部として扱う。
 

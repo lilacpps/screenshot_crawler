@@ -551,6 +551,11 @@ class ZeblackAdapter(SiteAdapter):
     async def _initialize_quota_entry(
         self, page: Page, *, entry_only: bool
     ) -> None:
+        # Selecting a TICKET_AVAILABLE chapter and opening its viewer only
+        # reveals the entry action. It does not consume a Work Ticket. The
+        # consuming action is the exact "チケットを使って読む" control below;
+        # the distinct point action must remain rejected by the fail-closed
+        # control-count checks.
         if self._quota_resource != "work_ticket":
             raise UnsupportedAccessStrategyError(
                 "Zeblack quota initialization requires work_ticket"

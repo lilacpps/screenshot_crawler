@@ -13,10 +13,19 @@ supported Zeblack resource, with no local cooldown/capacity inference and
 `after_observed_consumption` persistence. Grant-only reuses the generic
 entry-only path and leaves Items pending without packages.
 
-Current live ticket consumption has not been executed. The frontend control
-signal was checked read-only from the public bundle; no browser/CDP session
-was available to re-run current title status counts or a live batch plan.
-The existing direct Z3 capture path and Z4 Discovery boundary remain intact.
+The 2026-09-30 Z5-1 check did not consume a ticket. Human observation confirms
+that selecting/opening a `TICKET_AVAILABLE` chapter only reveals the next
+entry action; consumption starts only when the exact `チケットを使って読む`
+action is clicked. The check stopped before that action, so no ticket action
+was performed and no grant-only run was executed.
+
+The later protobuf observation showing the target as `RENTAL` and removing
+all `TICKET_AVAILABLE` IDs is not attributed to this read-only check. The
+temporary singleton Discovery/Batch plan completed read-only and the
+temporary Catalog remained pending. The point path is separate: a point
+chapter exposes `ポイントを使って読む`, which is never a valid fallback and
+must not be clicked. The existing direct Z3 capture path and Z4 Discovery
+boundary remain intact.
 
 ## Zeblack Z4-1 status (historical baseline)
 
