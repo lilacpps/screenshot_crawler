@@ -738,18 +738,38 @@ class ZeblackAdapter(SiteAdapter):
                 "Zeblack chapter-list identity changed before chapter selection"
             )
         row = page.locator(f"#chapter{self._target_viewer.chapter_id}")
-        if await row.count() != 1 or not await row.is_visible():
+        elapsed_ms = 0
+        while elapsed_ms < self.page_change_timeout_ms:
+            row_count = await row.count()
+            if row_count > 1:
+                raise UnsupportedAccessStrategyError(
+                    "Zeblack target chapter row is ambiguous"
+                )
+            if row_count == 1 and await row.is_visible():
+                controls = await self._exact_leaf_text_matches(
+                    row, self._live_access.target_main_name
+                )
+                if len(controls) > 1:
+                    raise UnsupportedAccessStrategyError(
+                        "Zeblack target chapter mainName is ambiguous"
+                    )
+                if len(controls) == 1:
+                    control = controls[0]
+                    break
+            wait_ms = min(100, self.page_change_timeout_ms - elapsed_ms)
+            if wait_ms <= 0:
+                break
+            await page.wait_for_timeout(wait_ms)
+            elapsed_ms += wait_ms
+        else:
+            if await row.count() == 1 and await row.is_visible():
+                raise UnsupportedAccessStrategyError(
+                    "Zeblack target chapter mainName did not become ready"
+                )
             raise UnsupportedAccessStrategyError(
-                "Zeblack target chapter row is missing or ambiguous"
+                "Zeblack target chapter row did not become ready"
             )
-        controls = await self._exact_leaf_text_matches(
-            row, self._live_access.target_main_name
-        )
-        if len(controls) != 1:
-            raise UnsupportedAccessStrategyError(
-                "Zeblack target chapter mainName is missing or ambiguous"
-            )
-        control = controls[0]
+
         if await control.evaluate(
             "element => Boolean(element.closest('a[href]'))"
         ):

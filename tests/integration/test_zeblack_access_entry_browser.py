@@ -12,6 +12,11 @@ pytestmark = pytest.mark.asyncio(loop_scope="module")
 LIST_URL = "https://zebrack-comic.shueisha.co.jp/title/3890/chapter/list"
 TARGET_URL = "https://zebrack-comic.shueisha.co.jp/title/3890/chapter/58493/viewer"
 MAIN_NAME = "第25話 プロの実力"
+HYDRATION_LIST_URL = "https://zebrack-comic.shueisha.co.jp/title/11551/chapter/list"
+HYDRATION_TARGET_URL = (
+    "https://zebrack-comic.shueisha.co.jp/title/11551/chapter/630652/viewer"
+)
+HYDRATION_MAIN_NAME = "個人指導3"
 
 
 def _chapter_list_html(
@@ -66,6 +71,74 @@ def _chapter_list_with_direct_link_html() -> str:
       <a href="{TARGET_URL}"><p>{MAIN_NAME}</p></a>
     </div>
     """
+
+
+def _hydrating_chapter_list_html(*, row_mode: str, main_mode: str) -> str:
+    row_markup = ""
+    if row_mode == "present":
+        row_markup = (
+            '<div id="chapter630652" style="min-height: 1px;">'
+            f"{('<p>' + HYDRATION_MAIN_NAME + ' </p>') if main_mode == 'present' else ''}"
+            "</div>"
+        )
+    elif row_mode == "ambiguous":
+        row_markup = (
+            '<div id="chapter630652" style="min-height: 1px;"></div>'
+            '<div id="chapter630652" style="min-height: 1px;"></div>'
+        )
+    delayed_row = "" if row_mode != "delayed" else """
+      window.setTimeout(() => {
+        const row = document.createElement('div');
+        row.id = 'chapter630652';
+        row.style.minHeight = '1px';
+        document.body.appendChild(row);
+        window.setTimeout(() => {
+          row.innerHTML = '<p>個人指導3 </p>';
+        }, 150);
+      }, 150);
+    """
+    delayed_main = "" if main_mode != "delayed" else """
+      window.setTimeout(() => {
+        document.querySelector('#chapter630652').innerHTML = '<p>個人指導3 </p>';
+      }, 150);
+    """
+    return f"""
+    {row_markup}
+    <script>
+      window.chapterClicks = 0;
+      document.addEventListener('click', event => {{
+        if (event.target.closest('#chapter630652')) window.chapterClicks += 1;
+      }});
+      {delayed_row}
+      {delayed_main}
+    </script>
+    """
+
+
+async def _hydration_adapter(
+    page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> ZeblackAdapter:
+    adapter = ZeblackAdapter()
+    await adapter.configure_run(page, "quota")
+    await adapter.configure_quota_resource(page, "work_ticket")
+    assert adapter.resolve_initial_navigation_url(HYDRATION_TARGET_URL) == HYDRATION_LIST_URL
+    adapter._live_access = ZeblackLiveAccessState(
+        title_id="11551",
+        chapter_id="630652",
+        target_main_name=HYDRATION_MAIN_NAME,
+        status_value=2,
+        status_name="TICKET_AVAILABLE",
+        ticket_available_ids=("630652",),
+    )
+    adapter._target_main_name = HYDRATION_MAIN_NAME
+    adapter.page_change_timeout_ms = 1_000
+
+    async def wait_for_modal(_page: Page, **_kwargs: object):
+        return page.locator("#chapter630652")
+
+    monkeypatch.setattr(adapter, "_wait_for_ticket_modal", wait_for_modal)
+    return adapter
 
 
 @pytest.mark.parametrize(
@@ -124,6 +197,136 @@ async def test_zeblack_work_ticket_entry_uses_modal_then_target_viewer(
     assert adapter._ticket_click_attempted is True
     assert adapter.get_access_consumption().consumed is True
     assert adapter.get_access_consumption().resource == "work_ticket"
+
+
+async def test_zeblack_target_chapter_waits_for_delayed_row_hydration(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = browser_page
+
+    async def fulfill(route) -> None:  # type: ignore[no-untyped-def]
+        await route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body=_hydrating_chapter_list_html(row_mode="delayed", main_mode="delayed"),
+        )
+
+    await page.route("https://zebrack-comic.shueisha.co.jp/**", fulfill)
+    await page.goto(HYDRATION_LIST_URL)
+    adapter = await _hydration_adapter(page, monkeypatch)
+
+    await adapter._click_target_chapter(page)
+
+    assert await page.evaluate("window.chapterClicks") == 1
+    assert adapter._chapter_click_attempted is True
+
+
+async def test_zeblack_target_chapter_waits_for_delayed_main_name_hydration(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = browser_page
+
+    async def fulfill(route) -> None:  # type: ignore[no-untyped-def]
+        await route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body=_hydrating_chapter_list_html(row_mode="present", main_mode="delayed"),
+        )
+
+    await page.route("https://zebrack-comic.shueisha.co.jp/**", fulfill)
+    await page.goto(HYDRATION_LIST_URL)
+    adapter = await _hydration_adapter(page, monkeypatch)
+
+    await adapter._click_target_chapter(page)
+
+    assert await page.evaluate("window.chapterClicks") == 1
+    assert adapter._chapter_click_attempted is True
+
+
+async def test_zeblack_target_chapter_missing_main_name_fails_closed(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = browser_page
+
+    async def fulfill(route) -> None:  # type: ignore[no-untyped-def]
+        await route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body=_hydrating_chapter_list_html(row_mode="present", main_mode="missing"),
+        )
+
+    await page.route("https://zebrack-comic.shueisha.co.jp/**", fulfill)
+    await page.goto(HYDRATION_LIST_URL)
+    adapter = await _hydration_adapter(page, monkeypatch)
+    adapter.page_change_timeout_ms = 300
+
+    with pytest.raises(
+        UnsupportedAccessStrategyError,
+        match="mainName did not become ready",
+    ):
+        await adapter._click_target_chapter(page)
+
+    assert await page.evaluate("window.chapterClicks") == 0
+    assert adapter._chapter_click_attempted is False
+
+
+async def test_zeblack_target_chapter_ambiguous_row_fails_immediately(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = browser_page
+
+    async def fulfill(route) -> None:  # type: ignore[no-untyped-def]
+        await route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body=_hydrating_chapter_list_html(row_mode="ambiguous", main_mode="missing"),
+        )
+
+    await page.route("https://zebrack-comic.shueisha.co.jp/**", fulfill)
+    await page.goto(HYDRATION_LIST_URL)
+    adapter = await _hydration_adapter(page, monkeypatch)
+
+    with pytest.raises(UnsupportedAccessStrategyError, match="row is ambiguous"):
+        await adapter._click_target_chapter(page)
+
+    assert await page.evaluate("window.chapterClicks") == 0
+    assert adapter._chapter_click_attempted is False
+
+
+async def test_zeblack_target_chapter_ambiguous_main_name_fails_immediately(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = browser_page
+
+    async def fulfill(route) -> None:  # type: ignore[no-untyped-def]
+        await route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body="""
+            <div id="chapter630652" style="min-height: 1px;">
+              <p>個人指導3</p><p>個人指導3</p>
+            </div>
+            <script>window.chapterClicks = 0;</script>
+            """,
+        )
+
+    await page.route("https://zebrack-comic.shueisha.co.jp/**", fulfill)
+    await page.goto(HYDRATION_LIST_URL)
+    adapter = await _hydration_adapter(page, monkeypatch)
+
+    with pytest.raises(
+        UnsupportedAccessStrategyError,
+        match="mainName is ambiguous",
+    ):
+        await adapter._click_target_chapter(page)
+
+    assert await page.evaluate("window.chapterClicks") == 0
+    assert adapter._chapter_click_attempted is False
 
 
 @pytest.mark.parametrize(

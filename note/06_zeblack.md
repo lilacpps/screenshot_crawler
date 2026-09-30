@@ -53,6 +53,23 @@ The former Z5 behavior and live verification records below are retained as
 history. This Z6 implementation was validated with synthetic/unit and
 browser-backed existing tests only; no real Work Ticket was consumed.
 
+### Z6-1 chapter-list hydration race (2026-10-01)
+
+A live read-only check against title `11551`, chapter `630652`, mainName
+`個人指導3` reproduced a production entry failure after the site-native
+resolver had already selected the exact candidate. Immediately after
+`DOMContentLoaded`, the target `#chapter630652` row could be absent and its
+mainName control could still be missing; shortly afterward the same row and a
+trim-equivalent `個人指導3 ` control appeared. The production entry failed
+before the chapter click, so no Work Ticket was consumed.
+
+The cause was a chapter-list/mainName hydration race, not an identity mismatch.
+`_click_target_chapter()` now performs bounded 100 ms polling up to
+`page_change_timeout_ms`: row count/visibility and the row-scoped exact
+mainName leaf must become ready, while row or mainName ambiguity fails
+immediately. The direct-link guard and chapter-click flag timing remain
+unchanged; the flag is set only immediately before the single click.
+
 ## Z5 Site Policy / runtime Work Ticket status (2026-09-30)
 
 `ZeblackSitePolicy` is implemented and registered for Batch planning. The
