@@ -1156,6 +1156,45 @@ fail-safeを確認する。実サイトでのquota消費を伴うauto-login live
 
 ### Phase 3 generic access-resource contract
 
+### 20.7 JPEG delivery comparison probe (2026-09-30)
+
+Diagnostic-only probe added at scripts/probe_bookwalker_jpeg_delivery.py.
+It reuses the existing BookWalker product-to-viewer entry, access strategy,
+render wait, page advance and native draw trace. It does not call production
+capture_page() and does not change production route patterns or response
+filter. It records broad BookWalker response metadata, bounded body magic
+inspection, JPEG metadata, native source constructors, and cumulative
+JPEG/native matching. Query values are redacted and JPEG bodies are not saved.
+
+Live run results with the shared Crawler Chrome and max-pages 8:
+
+- trial / auto: 8 pages, 233 BookWalker responses, 72 JPEG bodies. 22 JPEGs
+  came from viewer-epubs-trial.bookwalker.jp; all 22 matched current route
+  patterns and current _is_original_response(). The other 50 were unrelated
+  c.bookwalker.jp or rimg.bookwalker.jp assets. Native draw parts were all
+  ImageBitmap (16 parts). All 8 pages classified
+  JPEG_EXACT_MATCH_CURRENT_FILTER. Current-route JPEGs were image/jpeg,
+  estimated quality 90, 4:2:0, non-progressive marker absent.
+
+- purchased / direct: 8 pages, 305 BookWalker responses, 102 JPEG bodies
+  (101 unique SHA-256). 24 JPEGs came from bw-bv-epubs.bookwalker.jp; all 24
+  matched current route patterns and current _is_original_response(). The
+  other 77 were unrelated c.bookwalker.jp or rimg.bookwalker.jp assets.
+  Native draw parts were all HTMLCanvasElement (13 parts). No page had an
+  exact current-filter match: 1 JPEG_DIMENSION_MISMATCH and 7
+  JPEG_SIGNATURE_MISMATCH. Current-route JPEGs were image/jpeg,
+  estimated quality 90, 4:4:4, non-progressive marker absent. Candidate
+  dimensions included 960x1280 and 1448x2048; native dimensions included
+  960x1280 and 1443x2048.
+
+The result is inconsistent with A (purchased JPEG absent), B (purchased JPEG
+outside current route patterns), and C (purchased JPEG rejected by current
+response filter). It is consistent with D/E: purchased JPEGs are visible to
+the current filter, but native source changes from ImageBitmap to
+HTMLCanvasElement and the bounded JPEG/native comparison does not produce a
+unique exact match. This is diagnostic evidence only; production fallback
+and filter behavior were not changed.
+
 BookWalker exposes no additional named access resource in the Phase 3 Policy
 contract. Explicit resource planning therefore fails closed for unsupported
 resource names; normal direct/quota planning remains unchanged.
