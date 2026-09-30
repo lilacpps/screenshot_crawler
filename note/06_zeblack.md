@@ -60,8 +60,13 @@ the read-only snapshot remains outside the grant attempt limit and does not
 consume a ticket.
 
 The former Z5 behavior and live verification records below are retained as
-history. This Z6 implementation was validated with synthetic/unit and
-browser-backed existing tests only; no real Work Ticket was consumed.
+history. A completed controlled live verification for title `11551`, chapter
+`630652`, mainName `個人指導3` confirmed exact candidate selection, exactly one
+Work Ticket consumption, grant persistence, post-grant replan, and a
+successful newly-active RENTAL/direct crawl; the Batch run completed
+successfully after the previous mainName whitespace issue was fixed. This
+resolver-cleanup follow-up is code/test-only and does not require another
+real Work Ticket.
 
 ### Z6-1 chapter-list hydration race (2026-10-01)
 

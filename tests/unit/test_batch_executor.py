@@ -7,6 +7,7 @@ from zipfile import ZipFile
 
 import pytest
 
+import screenshot_crawler.batch.executor as batch_executor_module
 from screenshot_crawler.batch import (
     BatchCandidate,
     BatchExecutionError,
@@ -22,7 +23,8 @@ from screenshot_crawler.catalog import (
     WorkInput,
 )
 from screenshot_crawler.catalog.service import JST
-from screenshot_crawler.core.errors import AccessResourceUnavailableError
+from screenshot_crawler.core.access_guard import AccessProfile
+from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult
 from screenshot_crawler.core.runner import RunResult
@@ -42,6 +44,36 @@ COMPLETED_NOW = datetime(2026, 9, 17, 15, 30, tzinfo=JST)
 class FakeAdapter:
     def get_output_metadata(self) -> dict[str, str]:
         return {"title": "Adapter title", "genre": "漫画"}
+
+
+class CancellationResistantResolverAdapter:
+    def get_access_profile(self) -> AccessProfile:
+        return AccessProfile()
+
+    async def resolve_access_resource_candidates(
+        self, *_args: object, **_kwargs: object
+    ) -> None:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            await asyncio.sleep(3600)
+
+
+class ImmediateStopGuard:
+    def __init__(self, error: AccessStopError) -> None:
+        self.error = error
+
+    def start(self, _page: object) -> None:
+        return None
+
+    async def wait_for_stop(self) -> AccessStopError:
+        return self.error
+
+    def raise_if_stopped(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
 
 
 class FakeRunner:
@@ -933,6 +965,78 @@ async def test_resolver_task_cleanup_is_bounded_when_cancellation_is_ignored() -
     operation.cancel()
     with pytest.raises(asyncio.CancelledError):
         await operation
+
+
+async def test_resolver_timeout_is_bounded_for_cancellation_resistant_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = CatalogService(tmp_path / "resolver-timeout.sqlite")
+    candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
+    executor = make_executor(service)
+    monkeypatch.setattr(
+        executor.adapters,
+        "create",
+        lambda _site: CancellationResistantResolverAdapter(),
+    )
+
+    async def immediate_timeout(
+        tasks: set[asyncio.Task[object]], *, timeout: float, return_when: object
+    ) -> tuple[set[asyncio.Task[object]], set[asyncio.Task[object]]]:
+        del timeout, return_when
+        await asyncio.sleep(0)
+        return set(), set(tasks)
+
+    monkeypatch.setattr(batch_executor_module.asyncio, "wait", immediate_timeout)
+    original_cancel = batch_executor_module._cancel_task_bounded
+
+    async def fast_cancel(task: asyncio.Task[object], **_kwargs: object) -> None:
+        await original_cancel(task, timeout_seconds=0.01)
+
+    monkeypatch.setattr(batch_executor_module, "_cancel_task_bounded", fast_cancel)
+
+    with pytest.raises(BatchExecutionError, match="Access-resource resolver timed out"):
+        await asyncio.wait_for(
+            executor.resolve_access_resource_candidates(
+                object(), [candidate], "work_ticket", timeout_ms=1
+            ),
+            timeout=0.5,
+        )
+
+
+async def test_resolver_access_guard_stop_is_bounded_for_cancellation_resistant_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = CatalogService(tmp_path / "resolver-stop.sqlite")
+    candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
+    executor = make_executor(service)
+    monkeypatch.setattr(
+        executor.adapters,
+        "create",
+        lambda _site: CancellationResistantResolverAdapter(),
+    )
+    stop_error = AccessStopError(
+        reason="http_403", site="mangaone", url="https://example.invalid"
+    )
+    stop_guard = ImmediateStopGuard(stop_error)
+    monkeypatch.setattr(
+        batch_executor_module.AccessGuard,
+        "from_profile",
+        staticmethod(lambda **_kwargs: stop_guard),
+    )
+    original_cancel = batch_executor_module._cancel_task_bounded
+
+    async def fast_cancel(task: asyncio.Task[object], **_kwargs: object) -> None:
+        await original_cancel(task, timeout_seconds=0.01)
+
+    monkeypatch.setattr(batch_executor_module, "_cancel_task_bounded", fast_cancel)
+
+    with pytest.raises(AccessStopError, match="access stop: http_403"):
+        await asyncio.wait_for(
+            executor.resolve_access_resource_candidates(
+                object(), [candidate], "work_ticket", timeout_ms=1
+            ),
+            timeout=0.5,
+        )
 
 
 async def test_unavailable_and_already_accessible_do_not_record_consumption(

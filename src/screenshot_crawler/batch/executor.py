@@ -366,12 +366,10 @@ class BatchExecutor:
             if stop in done:
                 error = stop.result()
                 if error is not None:
-                    operation.cancel()
-                    await asyncio.gather(operation, return_exceptions=True)
+                    await _cancel_task_bounded(operation)
                     raise error
             if operation not in done:
-                operation.cancel()
-                await asyncio.gather(operation, return_exceptions=True)
+                await _cancel_task_bounded(operation)
                 raise BatchExecutionError(
                     f"Access-resource resolver timed out for {next(iter(sites))}"
                 )
