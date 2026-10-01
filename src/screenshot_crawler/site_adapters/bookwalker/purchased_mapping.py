@@ -280,7 +280,11 @@ def _numeric_rect(value: object) -> tuple[float, float, float, float] | None:
 def _compact_number(value: object) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError("compact number has an impossible type")
-    if not math.isfinite(float(value)):
+    try:
+        finite = math.isfinite(float(value))
+    except (OverflowError, ValueError) as error:
+        raise ValueError("compact number is not finite") from error
+    if not finite:
         raise ValueError("compact number is not finite")
     return value
 
@@ -617,7 +621,7 @@ def decode_compact_completed_mappings(
             **summary,
         }
         return result
-    except (TypeError, ValueError, KeyError):
+    except (OverflowError, TypeError, ValueError, KeyError):
         return None
 
 

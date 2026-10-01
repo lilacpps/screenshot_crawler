@@ -470,6 +470,10 @@ def test_compact_decode_has_full_rich_proof_parity() -> None:
             lambda payload: payload["compactMappings"][0]["tileRows"][0].__setitem__(0, "102"),
             id="impossible-tile-type",
         ),
+        pytest.param(
+            lambda payload: payload["compactMappings"][0]["tileRows"][0].__setitem__(0, 10**1000),
+            id="integer-overflow",
+        ),
     ],
 )
 def test_compact_decoder_fails_closed_for_transport_shape_errors(mutate) -> None:
