@@ -9,9 +9,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import hashlib
 import os
 import re
 from binascii import Error as BinasciiError
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -751,10 +753,23 @@ class BookWalkerStrictEntryError(RuntimeError):
         )
 
 
+@dataclass(slots=True)
+class LosslessReconstructionEvaluation:
+    """Debug proof plus verified reconstructed captures for one visible spread."""
+
+    debug: dict[str, Any]
+    captures: tuple[CaptureResult, ...] | None
+
+    def __getitem__(self, key: str) -> Any:
+        """Keep the old debug-only indexing convenient for local diagnostics."""
+
+        return self.debug[key]
+
+
 class BookWalkerAdapter(SiteAdapter):
     """Canvas viewer adapter for one BookWalker content ID."""
 
-    # Use deferred source-native PNG capture followed by conservative JPEG
+    # Use deferred source-native capture followed by conservative JPEG
     # matching in production. A failed match still returns the native PNG.
     enable_original_jpeg_capture = True
     page_change_timeout_ms = 14_000
@@ -798,6 +813,9 @@ class BookWalkerAdapter(SiteAdapter):
                 "BOOKWALKER_CAPTURE_MODE must be 'native' or 'canvas', "
                 f"got {self.capture_mode!r}"
             )
+        self.lossless_jpeg_output_enabled = os.environ.get(
+            "BOOKWALKER_LOSSLESS_JPEG_OUTPUT", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
         self._access_strategy: AccessStrategy = "auto"
         self._auto_login_email = auto_login_email
         self._auto_login_password = auto_login_password
@@ -824,6 +842,8 @@ class BookWalkerAdapter(SiteAdapter):
                 "lossless_shadow": {
                     "attempted": False,
                     "spread_ready": False,
+                    "output_enabled": self.lossless_jpeg_output_enabled,
+                    "output_used": False,
                     "parts": [],
                 },
             }
@@ -1894,6 +1914,8 @@ class BookWalkerAdapter(SiteAdapter):
                 "lossless_shadow": {
                     "attempted": False,
                     "spread_ready": False,
+                    "output_enabled": self.lossless_jpeg_output_enabled,
+                    "output_used": False,
                     "parts": [],
                 },
             }
@@ -1954,12 +1976,14 @@ class BookWalkerAdapter(SiteAdapter):
         page: Page,
         native_captures: tuple[CaptureResult, ...],
         selected_draw_calls: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Evaluate purchased JPEG reconstruction without changing output."""
+    ) -> LosslessReconstructionEvaluation:
+        """Evaluate purchased JPEG reconstruction and retain verified captures."""
 
         shadow: dict[str, Any] = {
             "attempted": True,
             "spread_ready": False,
+            "output_enabled": self.lossless_jpeg_output_enabled,
+            "output_used": False,
             "parts": [],
         }
         purchased_candidates = tuple(
@@ -1977,16 +2001,17 @@ class BookWalkerAdapter(SiteAdapter):
                 self._shadow_part_defaults(len(purchased_candidates))
                 for _ in native_captures
             ]
-            return shadow
+            return LosslessReconstructionEvaluation(shadow, None)
         if len(selected_draw_calls) != len(native_captures):
             shadow["reason"] = "native capture and renderer draw counts differ"
             shadow["parts"] = [
                 self._shadow_part_defaults(len(purchased_candidates))
                 for _ in native_captures
             ]
-            return shadow
+            return LosslessReconstructionEvaluation(shadow, None)
 
         parts: list[dict[str, Any]] = []
+        reconstructed_captures: list[CaptureResult] = []
         for native, draw_call in zip(native_captures, selected_draw_calls, strict=False):
             part = self._shadow_part_defaults(len(purchased_candidates))
             analysis: MappingAnalysis = analyze_purchased_mapping(trace, draw_call)
@@ -2094,8 +2119,22 @@ class BookWalkerAdapter(SiteAdapter):
                 and result.coefficient_validation.get("mismatched_coefficients") == 0
                 and result.coefficient_validation.get("quantization_tables_equal") is True
             )
+            part["mismatched_blocks"] = result.coefficient_validation.get(
+                "mismatched_blocks"
+            )
+            part["mismatched_coefficients"] = result.coefficient_validation.get(
+                "mismatched_coefficients"
+            )
+            part["quantization_tables_equal"] = result.coefficient_validation.get(
+                "quantization_tables_equal"
+            )
             part["reconstruction_reason"] = result.reason
             if result.available and result.data is not None:
+                part["reconstructed_byte_size"] = len(result.data)
+                part["reconstructed_sha256"] = hashlib.sha256(result.data).hexdigest()
+                part["reconstructed_dimensions_match"] = (
+                    result.width == native.width and result.height == native.height
+                )
                 comparison = await self._browser_pixel_exact(page, result.data, native.data)
                 part["native_pixel_exact"] = bool(
                     comparison.get("available") and comparison.get("exact")
@@ -2108,20 +2147,46 @@ class BookWalkerAdapter(SiteAdapter):
                         "differing_pixel_count", "max_channel_difference", "reason",
                     }
                 }
+                if part["reconstructed_dimensions_match"]:
+                    reconstructed_captures.append(
+                        CaptureResult(
+                            data=result.data,
+                            width=result.width,
+                            height=result.height,
+                            mime_type="image/jpeg",
+                            file_extension=".jpg",
+                        )
+                    )
             parts.append(part)
         shadow["parts"] = parts
         shadow["spread_ready"] = bool(parts) and all(
-            part.get("mapping_proven")
-            and part.get("raw_jpeg_exact")
-            and part.get("jpeg_supported")
-            and part.get("strict_mcu_aligned")
-            and part.get("coefficient_exact")
-            and part.get("native_pixel_exact")
+            part.get("mapping_proven") is True
+            and part.get("mapping_source") == "completed_segment"
+            and part.get("segment_overflow") is False
+            and part.get("completed_mapping_evicted") is False
+            and part.get("raw_jpeg_exact") is True
+            and part.get("candidate_count_full_exact") == 1
+            and part.get("jpeg_supported") is True
+            and part.get("strict_mcu_aligned") is True
+            and part.get("coefficient_exact") is True
+            and part.get("quantization_tables_equal") is True
+            and part.get("native_pixel_exact") is True
+            and part.get("reconstructed_dimensions_match") is True
             for part in parts
         )
         if not shadow["spread_ready"]:
             shadow["reason"] = "one or more parts are not reconstruction-ready"
-        return shadow
+        captures = (
+            tuple(reconstructed_captures)
+            if shadow["spread_ready"]
+            and len(reconstructed_captures) == len(native_captures)
+            else None
+        )
+        if captures is None:
+            shadow["spread_ready"] = False
+            if "reason" not in shadow:
+                shadow["reason"] = "verified reconstructed captures are incomplete"
+        return LosslessReconstructionEvaluation(shadow, captures)
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
         del page
@@ -2314,6 +2379,8 @@ class BookWalkerAdapter(SiteAdapter):
                 self._capture_debug["bookwalker_capture"]["lossless_shadow"] = {
                     "attempted": False,
                     "spread_ready": False,
+                    "output_enabled": self.lossless_jpeg_output_enabled,
+                    "output_used": False,
                     "parts": [],
                     "reason": "existing original JPEG exact match",
                 }
@@ -2325,13 +2392,40 @@ class BookWalkerAdapter(SiteAdapter):
                 if is_purchased_jpeg_candidate(candidate)
             )
             if purchased_candidates:
-                self._capture_debug["bookwalker_capture"]["lossless_shadow"] = (
-                    await self._evaluate_lossless_reconstruction(
+                try:
+                    evaluation = await self._evaluate_lossless_reconstruction(
                         page,
                         native_captures,
                         selected_draw_calls,
                     )
+                except Exception as exc:  # noqa: BLE001 - JPEG output is optional
+                    evaluation = LosslessReconstructionEvaluation(
+                        debug={
+                            "attempted": True,
+                            "spread_ready": False,
+                            "output_enabled": self.lossless_jpeg_output_enabled,
+                            "output_used": False,
+                            "parts": [],
+                            "reason": f"lossless evaluation failed: {type(exc).__name__}",
+                        },
+                        captures=None,
+                    )
+                self._capture_debug["bookwalker_capture"]["lossless_shadow"] = (
+                    evaluation.debug
                 )
+                if (
+                    self.lossless_jpeg_output_enabled
+                    and evaluation.debug.get("spread_ready") is True
+                    and evaluation.captures is not None
+                    and bool(evaluation.captures)
+                    and len(evaluation.captures) == len(native_captures)
+                ):
+                    evaluation.debug["output_used"] = True
+                    self._capture_debug["bookwalker_capture"]["returned_path"] = (
+                        "reconstructed_jpeg"
+                    )
+                    await self._clear_geometry_trace(page)
+                    return evaluation.captures
             await self._clear_geometry_trace(page)
             self._capture_debug["bookwalker_capture"]["returned_path"] = "native_png"
             return native_captures

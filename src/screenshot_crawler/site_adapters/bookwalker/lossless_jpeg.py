@@ -16,9 +16,9 @@ from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import mappin
 class LosslessJpegResult:
     """Result of one bounded reconstruction attempt.
 
-    ``data`` is populated only for a proven reconstruction.  The Phase P1
-    adapter uses this result for shadow validation and does not return it as a
-    crawl artifact.
+    ``data`` is populated only for a proven reconstruction.  The adapter may
+    return it as a reconstructed JPEG artifact when its explicit output switch
+    is enabled and every production proof gate passes.
     """
 
     data: bytes | None

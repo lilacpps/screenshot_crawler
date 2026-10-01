@@ -281,19 +281,38 @@ async def test_canvas_mode_returns_none_without_touching_native_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BOOKWALKER_CAPTURE_MODE", "canvas")
+    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
     page = _FakePage([])
     adapter = _TestBookWalkerAdapter()
+    _add_purchased_candidate(adapter)
+    reconstruction_called = False
+
+    async def unexpected_reconstruction(*_args: object) -> object:
+        nonlocal reconstruction_called
+        reconstruction_called = True
+        return None
+
+    monkeypatch.setattr(
+        adapter,
+        "_evaluate_lossless_reconstruction",
+        unexpected_reconstruction,
+    )
 
     result = await adapter.capture_page(page)  # type: ignore[arg-type]
 
     assert result is None
     assert page.materialize_count == 0
+    assert reconstruction_called is False
+    debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
+    assert debug["bookwalker_capture"]["returned_path"] == "rendered_canvas"
+    assert debug["bookwalker_capture"]["lossless_shadow"]["output_used"] is False
 
 
 @pytest.mark.asyncio
 async def test_existing_original_jpeg_wins_before_lossless_shadow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
     original = CaptureResult(b"original-jpeg", 1, 1, "image/jpeg", ".jpg")
@@ -316,12 +335,15 @@ async def test_existing_original_jpeg_wins_before_lossless_shadow(
     assert shadow_called is False
     debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
     assert debug["bookwalker_capture"]["returned_path"] == "original_jpeg"
+    assert debug["bookwalker_capture"]["lossless_shadow"]["output_enabled"] is True
+    assert debug["bookwalker_capture"]["lossless_shadow"]["output_used"] is False
 
 
 @pytest.mark.asyncio
 async def test_purchased_direct_original_jpeg_is_returned_byte_for_byte(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
     candidate = candidate_from_jpeg(
@@ -358,6 +380,187 @@ async def test_purchased_direct_original_jpeg_is_returned_byte_for_byte(
     assert shadow_called is False
 
 
+def _add_purchased_candidate(adapter: BookWalkerAdapter) -> None:
+    candidate = candidate_from_jpeg(
+        JPEG_1X1,
+        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        sequence=1,
+    )
+    assert candidate is not None
+    adapter._original_candidates.add(candidate)
+
+
+def _evaluation(
+    adapter: BookWalkerAdapter,
+    captures: tuple[CaptureResult, ...] | None,
+    *,
+    spread_ready: bool,
+) -> adapter_module.LosslessReconstructionEvaluation:
+    return adapter_module.LosslessReconstructionEvaluation(
+        debug={
+            "attempted": True,
+            "spread_ready": spread_ready,
+            "output_enabled": adapter.lossless_jpeg_output_enabled,
+            "output_used": False,
+            "parts": [],
+        },
+        captures=captures,
+    )
+
+
+async def _no_original_capture(
+    _page: object,
+    _native: tuple[CaptureResult, ...],
+) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_lossless_output_switch_off_keeps_verified_shadow_native_png(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", raising=False)
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    _add_purchased_candidate(adapter)
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
+    native = CaptureResult(PNG_1X1, 1, 1)
+    reconstructed = CaptureResult(
+        b"verified-reconstructed-jpeg", 1, 1, "image/jpeg", ".jpg"
+    )
+
+    async def evaluate(*_args: object) -> adapter_module.LosslessReconstructionEvaluation:
+        return _evaluation(adapter, (reconstructed,), spread_ready=True)
+
+    monkeypatch.setattr(
+        adapter,
+        "_evaluate_lossless_reconstruction",
+        evaluate,
+    )
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result == (native,)
+    debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
+    shadow = debug["bookwalker_capture"]["lossless_shadow"]
+    assert debug["bookwalker_capture"]["returned_path"] == "native_png"
+    assert shadow["output_enabled"] is False
+    assert shadow["output_used"] is False
+    assert result[0].mime_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_lossless_output_switch_returns_verified_bytes_without_reencoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    _add_purchased_candidate(adapter)
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
+    verified_bytes = b"unique-verified-reconstructed-jpeg"
+    reconstructed = CaptureResult(verified_bytes, 1, 1, "image/jpeg", ".jpg")
+
+    async def evaluate(*_args: object) -> adapter_module.LosslessReconstructionEvaluation:
+        return _evaluation(adapter, (reconstructed,), spread_ready=True)
+
+    monkeypatch.setattr(
+        adapter,
+        "_evaluate_lossless_reconstruction",
+        evaluate,
+    )
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result == (reconstructed,)
+    assert result[0].data == verified_bytes
+    assert result[0].mime_type == "image/jpeg"
+    assert result[0].file_extension == ".jpg"
+    assert (result[0].width, result[0].height) == (1, 1)
+    debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
+    assert debug["bookwalker_capture"]["returned_path"] == "reconstructed_jpeg"
+    shadow = debug["bookwalker_capture"]["lossless_shadow"]
+    assert shadow["output_enabled"] is True
+    assert shadow["output_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_lossless_output_spread_is_all_or_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
+    first = _native_call_fixture(constructor="HTMLCanvasElement")
+    first["snapshotId"] = "snapshot-1"
+    second = _native_call_fixture(constructor="HTMLCanvasElement")
+    second["snapshotId"] = "snapshot-2"
+    second["destination"] = {"x": 100, "y": 0, "width": 100, "height": 100}
+
+    class SpreadAdapter(_TestBookWalkerAdapter):
+        async def get_capture_target(self, _page: _FakePage) -> _FakeCanvas:
+            class SpreadCanvas(_FakeCanvas):
+                async def evaluate(self, _expression: str) -> dict[str, int]:
+                    return {"width": 200, "height": 100}
+
+            return SpreadCanvas()
+
+        async def _page_draw_rectangles(
+            self, _page: _FakePage, _canvas: _FakeCanvas
+        ) -> list[dict[str, int]]:
+            return [
+                {"x": 0, "y": 0, "width": 100, "height": 100},
+                {"x": 100, "y": 0, "width": 100, "height": 100},
+            ]
+
+        async def _is_first_page(self, _page: _FakePage) -> bool:
+            return False
+
+    page = _FakePage([first, second])
+    adapter = SpreadAdapter()
+    _add_purchased_candidate(adapter)
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
+    jpeg_captures = (
+        CaptureResult(b"jpeg-right", 1, 1, "image/jpeg", ".jpg"),
+        CaptureResult(b"jpeg-left", 1, 1, "image/jpeg", ".jpg"),
+    )
+
+    async def evaluate(*_args: object) -> adapter_module.LosslessReconstructionEvaluation:
+        return _evaluation(adapter, jpeg_captures, spread_ready=True)
+
+    monkeypatch.setattr(
+        adapter,
+        "_evaluate_lossless_reconstruction",
+        evaluate,
+    )
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result == jpeg_captures
+    assert [capture.data for capture in result] == [b"jpeg-right", b"jpeg-left"]
+
+    page = _FakePage([first, second])
+    adapter = SpreadAdapter()
+    _add_purchased_candidate(adapter)
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
+    partial = _evaluation(adapter, (jpeg_captures[0],), spread_ready=False)
+
+    async def evaluate_partial(
+        *_args: object,
+    ) -> adapter_module.LosslessReconstructionEvaluation:
+        return partial
+
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", evaluate_partial)
+
+    fallback = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert fallback is not None
+    assert len(fallback) == 2
+    assert all(capture.mime_type == "image/png" for capture in fallback)
+    debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
+    assert debug["bookwalker_capture"]["returned_path"] == "native_png"
+    assert debug["bookwalker_capture"]["lossless_shadow"]["output_used"] is False
+
+
 @pytest.mark.asyncio
 async def test_lossless_shadow_spread_readiness_is_all_or_none(
     monkeypatch: pytest.MonkeyPatch,
@@ -383,7 +586,12 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
         imagebitmap_source_id="bitmap-1",
         mapping_sha256="mapping-1",
     )
-    ready = MappingAnalysis(MAPPING_PROVEN, "ready", mapping)
+    ready = MappingAnalysis(
+        MAPPING_PROVEN,
+        "ready",
+        mapping,
+        mapping_source="completed_segment",
+    )
     unsupported = MappingAnalysis("MAPPING_UNAVAILABLE", "unsupported")
     analyses = iter((ready, unsupported))
 
@@ -469,7 +677,12 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
         imagebitmap_source_id="bitmap-1",
         mapping_sha256="mapping-1",
     )
-    ready = MappingAnalysis(MAPPING_PROVEN, "ready", mapping)
+    ready = MappingAnalysis(
+        MAPPING_PROVEN,
+        "ready",
+        mapping,
+        mapping_source="completed_segment",
+    )
     full_resolution_calls: list[bytes] = []
 
     def fake_analysis(_trace: object, _draw: object) -> MappingAnalysis:

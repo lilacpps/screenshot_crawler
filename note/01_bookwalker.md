@@ -1649,13 +1649,70 @@ partial-edge source/target dimensions, and unsupported p.1 intermediate-canvas
 geometry remain native-PNG fallback cases.
 
 The Phase P1 order is unchanged: the existing byte-preserving original JPEG
-matcher runs first; only when it fails does the purchased shadow run; the
-returned artifact remains native PNG. Reconstructed JPEG bytes are not returned
-or saved. Shadow metadata records the completed-segment source, mapping and
-segment indexes, bounded counts/overflow/eviction state, renderer geometry
-classification, candidate matching, coefficient validation, and browser pixel
-comparison. Spread readiness remains all-or-none. `canvas` mode continues to
-bypass native/original/shadow capture and use rendered-canvas fallback.
+matcher runs first; only when it fails does the purchased evaluation run. Phase
+P1 live verification succeeded for ordinary 960x1280 pages: 1200/1200 tiles,
+completed mapping proven, one exact raw JPEG candidate, coefficient mismatch
+0, equal quantization tables, browser full-resolution pixel exactness, and
+successful two-part spread validation. p.1 and large/partial-edge geometry
+continue to fail closed to PNG.
+
+Phase P2 adds opt-in reconstructed JPEG output through the BookWalker-local
+`BOOKWALKER_LOSSLESS_JPEG_OUTPUT` switch. The default is OFF, preserving the
+P1 shadow-only behavior. When ON, the priority is:
+
+```text
+verified original JPEG
+    -> verified lossless reconstructed JPEG
+    -> native PNG
+    -> rendered canvas PNG
+```
+
+The reconstructed bytes are returned directly from `reconstruct_lossless_jpeg`
+as `.jpg`; they are not called original JPEG and are not re-encoded in Pillow.
+The output gate requires the completed-segment proof, no overflow/eviction,
+unique full-resolution raw match, strict supported JPEG layout, exact
+coefficients and quantization tables, browser pixel exactness, and matching
+native dimensions. Spread output is all-or-none: if one part is not ready,
+all parts remain native PNG and any temporary reconstructed result is discarded.
+Trial original JPEG, trial cover, and purchased direct-original JPEG remain
+first-priority byte-preserving paths and do not invoke reconstruction. p.1,
+crop, partial-edge, overflow, unavailable mapping, and other unsupported
+geometry remain PNG fallback cases. `BOOKWALKER_CAPTURE_MODE=canvas` bypasses
+the entire native/original/lossless path and continues to use rendered-canvas
+fallback.
+
+P2 debug metadata keeps the compatibility key `lossless_shadow` and adds
+`output_enabled` and `output_used`; `bookwalker_capture.returned_path` is
+`original_jpeg`, `reconstructed_jpeg`, `native_png`, or `rendered_canvas`.
+Reconstructed bytes, base64, and raw candidates are never stored in debug or
+manifest metadata.
+
+### 20.15 Phase P2 live verification (2026-10-01)
+
+Using the shared Crawler Chrome/CDP session, the target purchased work was
+crawled with `BOOKWALKER_CAPTURE_MODE=native`,
+`BOOKWALKER_LOSSLESS_JPEG_OUTPUT=1`, `direct`, and `--max-pages 20` into a
+new output directory. All 20 saved artifacts were `.jpg` with
+`returned_path=reconstructed_jpeg`, `spread_ready=true`,
+`output_enabled=true`, and `output_used=true`. The ordinary 960x1280 parts
+reported 1200/1200 tiles, completed-segment mapping provenance, one exact raw
+JPEG match, coefficient mismatch 0, equal quantization tables, and browser
+pixel comparison `differing_pixel_count=0`, `max_channel_difference=0`.
+
+A separate switch-OFF run produced native PNG artifacts. Two page/part
+identities overlapped between the runs and were compared after browser decode:
+
+| page/part | reconstructed JPEG | native PNG | byte reduction | pixel diff |
+| --- | ---: | ---: | ---: | ---: |
+| `41/314` part 1 | 254,718 bytes | 596,941 bytes | 57.33% | 0 pixels |
+| `41/314` part 2 | 282,138 bytes | 644,745 bytes | 56.24% | 0 pixels |
+
+Both compared artifacts were 960x1280 and had maximum channel difference 0.
+The CLI intentionally raised the existing `MaxPagesExceededError` after the
+requested page limit; artifacts and manifests were saved before that terminal
+guard. The switch-OFF run retained the P1 native PNG behavior. No repository
+image fixture, cookie, token, credential, JPEG byte stream, or base64 payload
+was added.
 
 ### Phase 1 runtime pacing
 

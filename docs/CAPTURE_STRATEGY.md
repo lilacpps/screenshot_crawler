@@ -372,12 +372,13 @@ Preferred path:
 
 ```text
 verified original JPEG
-    -> verified source-native PNG
+    -> verified lossless reconstructed JPEG
+    -> source-native PNG
         -> rendered canvas PNG
 ```
 
-BookWalker's Phase P1 purchased-JPEG integration is shadow-only. The existing
-byte-preserving original-JPEG candidate path remains first priority. When that
+BookWalker's purchased-JPEG integration keeps the existing byte-preserving
+original-JPEG candidate path first priority. When that
 path does not produce a unique exact match, the adapter may validate a
 clear-bounded completed renderer mapping containing the visible renderer draw,
 its intermediate `HTMLCanvasElement`, a unique `ImageBitmap` tile permutation,
@@ -391,6 +392,15 @@ coefficients back, and verifies zero mismatches plus unchanged quantization
 tables. A full-size browser pixel comparison against the current native PNG is
 also required.
 
+Phase P2 may return the verified reconstructed JPEG only when every proof gate
+passes, including `mapping_proven=true`, `mapping_source=completed_segment`, no
+segment overflow or completed-mapping eviction, one full-resolution raw JPEG
+match, supported strict-MCU JPEG layout, exact coefficients and quantization
+tables, browser full-resolution pixel exactness, and matching native
+dimensions. The output switch is BookWalker-local and opt-in:
+`BOOKWALKER_LOSSLESS_JPEG_OUTPUT=1` (also `true`, `yes`, or `on`). Its default
+is off, so the P1 shadow-only behavior remains the default.
+
 Before any full-size candidate comparison, purchased candidates are bounded
 by exact `mapping.source_dimensions`, then by the existing deterministic 64x64
 browser signature. The retained `ImageBitmap` is hashed with the same
@@ -399,15 +409,17 @@ signature matches reach full-resolution comparison. Zero signature matches
 leave the shadow unavailable, one exact full-resolution match is accepted, and
 two or more exact matches remain ambiguous.
 
-This reconstruction is recorded only in BookWalker adapter debug metadata in
-Phase P1; it is not returned as a crawl artifact. The output remains the
-existing native PNG, or the rendered-canvas fallback when native capture is
-unavailable. Unsupported JPEG layouts, ambiguous mappings or candidates,
-segment overflow, coefficient mismatch, and browser comparison failure are all
-non-fatal shadow failures. Spread readiness is all-or-none, and active
-segments, completed mappings, and retained browser source references are
-bounded and cleared after the capture window. `BOOKWALKER_CAPTURE_MODE=canvas`
-bypasses this machinery.
+With the switch off, reconstruction is recorded only in BookWalker adapter
+debug metadata and native PNG remains the returned output. With the switch on,
+the reconstructed JPEG bytes from `reconstruct_lossless_jpeg()` are returned
+unchanged as `.jpg` only after all gates pass. Spread output is all-or-none:
+one failed part makes every part native PNG. Unsupported JPEG layouts,
+ambiguous mappings or candidates, segment overflow, coefficient mismatch,
+dimension mismatch, and browser comparison failure are all non-fatal native
+PNG fallbacks. Active segments, completed mappings, and retained browser source
+references are bounded and cleared after the capture window.
+`BOOKWALKER_CAPTURE_MODE=canvas` bypasses original/native/lossless capture and
+continues to use the rendered-canvas fallback.
 
 For mutable purchased-viewer canvas sources, draw-time pixel snapshots are allowed, but PNG encoding occurs only after the selected draw calls are known.
 
