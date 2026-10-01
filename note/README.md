@@ -32,6 +32,8 @@ noteと上位authorityまたはcode/testsが食い違う場合、noteを現行�
 - `03_magapoke.md`: Magapoke固有のviewer・scrambled JPEG tile再構成・PNG fallback・遷移・現行Batch/resource挙動
 - `03_magapoke_access_plan.md`: Magapoke固有の採用済み未実装resource計画（PLANNED only）
 - `04_access_control_plan.md`: shared access-control / pacing / metrics / resource selectionの採用済み未実装計画（PLANNED only）
+- `05_catalog_status_plan.md`: 旧Catalog status計画。現在は`07_catalog_position_archive_plan.md`へ統合済み
+- `07_catalog_position_archive_plan.md`: Catalog v6 / display position / archive naming / archive renumber / Item status拡張の採用済み未実装計画（PLANNED only）
 - 新規site追加時: 対応番号のsite noteを追加
 
 ## Mandatory synchronization
@@ -45,6 +47,7 @@ noteと上位authorityまたはcode/testsが食い違う場合、noteを現行�
 - output naming / packaging変更 → Core note + 影響site note
 - shared access仕様の計画変更（未実装） → `04_access_control_plan.md`
 - Magapoke固有access resource計画の変更（未実装） → `03_magapoke_access_plan.md`
+- Catalog v6 / display position / archive naming / renumber / Item status計画の変更（未実装） → `07_catalog_position_archive_plan.md`
 
 実装が各Phaseでlandしたら、その実装済み内容は計画noteだけでなく `00_core.md` / 各site current-state noteにも反映します。
 
