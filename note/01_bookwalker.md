@@ -1954,8 +1954,9 @@ and the manifest. Corrected counts are:
 10 two-part spreads
 ```
 
-All 20 artifacts were reconstructed `.jpg` files. Across all 40 logical
-parts, `output_enabled=true`, `output_used=true`, `mapping_proven=true`,
+All 20 artifacts were reconstructed `.jpg` files. Across all 20 logical
+parts (the spread shadow is copied to both artifact rows, so the artifact
+metadata check visits 40 part rows), `output_enabled=true`, `output_used=true`, `mapping_proven=true`,
 `raw_jpeg_exact=true`, `coefficient_exact=true`,
 `quantization_tables_equal=true`, `native_pixel_exact=true`, and
 `differing_pixel_count=0`. All rows reported
