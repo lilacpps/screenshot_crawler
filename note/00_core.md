@@ -973,6 +973,20 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 これらを変更した場合は、このnoteを必ず更新する。
 
+## Planned Catalog v6: display position / archive naming / status expansion
+
+**NOT YET IMPLEMENTED.** Adopted implementation plan:
+
+```text
+note/07_catalog_position_archive_plan.md
+```
+
+The plan bundles Source-scoped display positions, position-prefixed archive naming,
+existing-archive renumber tooling, and Item status expansion
+(`pending | completed | skipped | external`) plus `items.note`.
+Until those phases land, the current implementation remains Catalog schema v5 and
+the current behavior described below is authoritative.
+
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery + Batch v3実装済み）
 
 2026-09-19時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE・BookWalker Policy、Phase 5BのManga ONE・BookWalker Batch Executor、BookWalker Adapterのstrict direct・quota product-page entryが実装済みである。BookWalkerは05:00 JSTのsite-wide 1枠local safety policyを使い、quota開始をreader entry前に永続化する。実サイトquota clickは未確認である。
