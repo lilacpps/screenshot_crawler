@@ -7,7 +7,7 @@ from playwright.async_api import Page
 
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
-    _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+    _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
     BookWalkerAdapter,
 )
 from screenshot_crawler.site_adapters.bookwalker.original_capture import (
@@ -17,6 +17,7 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
     MAPPING_PROVEN,
     analyze_purchased_mapping,
+    decode_compact_completed_mappings,
 )
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -36,6 +37,62 @@ class _PreparePage:
 
     async def route(self, _pattern: str, _handler: object) -> None:
         self.route_count += 1
+
+
+def _completed_mapping_fixture(mapping_id: str, renderer_index: int) -> dict[str, object]:
+    source_id = f"bitmap-{mapping_id}"
+    tiles = []
+    for offset, (source_x, source_y, destination_x, destination_y) in enumerate(
+        ((0, 0, 16, 0), (16, 0, 0, 0), (0, 16, 0, 16), (16, 16, 16, 16)),
+        start=102,
+    ):
+        tiles.append(
+            {
+                "operationIndex": offset,
+                "source": {
+                    "sourceId": source_id,
+                    "constructor": "ImageBitmap",
+                    "width": 32,
+                    "height": 32,
+                },
+                "target": {"canvasId": "source-canvas", "width": 32, "height": 32},
+                "sourceRect": {"x": source_x, "y": source_y, "width": 16, "height": 16},
+                "destination": {
+                    "x": destination_x,
+                    "y": destination_y,
+                    "width": 16,
+                    "height": 16,
+                },
+                "transform": {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+                "globalAlpha": 1,
+                "globalCompositeOperation": "source-over",
+                "filter": "none",
+            }
+        )
+    return {
+        "mappingId": mapping_id,
+        "rendererOperationIndex": renderer_index,
+        "rendererTarget": {"canvasId": "renderer", "width": 32, "height": 32},
+        "sourceCanvas": {"canvasId": "source-canvas", "width": 32, "height": 32},
+        "rendererSourceRect": {"x": 0, "y": 0, "width": 32, "height": 32},
+        "rendererDestination": {"x": 0, "y": 0, "width": 32, "height": 32},
+        "rendererTransform": {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+        "rendererAlpha": 1,
+        "rendererComposite": "source-over",
+        "rendererFilter": "none",
+        "segmentClearOperationIndex": 101,
+        "segmentClearRectangle": {"x": 0, "y": 0, "width": 32, "height": 32},
+        "segmentFirstTileOperationIndex": 102,
+        "segmentLastTileOperationIndex": 105,
+        "segmentTileCount": 4,
+        "segmentExpectedTileCount": 4,
+        "tileDraws": tiles,
+        "sourceIds": [source_id],
+        "unsafeOperationCount": 0,
+        "firstUnsafeOperationIndex": None,
+        "unsafeOperationTypes": [],
+        "segmentOverflow": False,
+    }
 
 
 async def test_native_capture_mode_init_script_controls_trace(
@@ -307,6 +364,22 @@ async def test_completed_segment_freeze_survives_large_post_render_prefetch(
     assert result.mapping is not None
     assert result.mapping.segment_tile_count == 4
 
+    compact_payload = await browser_page.evaluate(
+        _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
+        [record["mappingId"]],
+    )
+    decoded = decode_compact_completed_mappings(compact_payload)
+    assert decoded is not None
+    compact_result = analyze_purchased_mapping(
+        decoded,
+        {
+            "mappingId": record["mappingId"],
+            "traceOperationIndex": record["rendererOperationIndex"],
+            "sourceCanvasId": record["sourceCanvas"]["canvasId"],
+        },
+    )
+    assert compact_result.to_debug() == result.to_debug()
+
 
 async def test_selected_completed_mapping_fetch_excludes_unrelated_records(
     browser_page: Page,
@@ -314,40 +387,51 @@ async def test_selected_completed_mapping_fetch_excludes_unrelated_records(
     await browser_page.goto("data:text/html,<html><body></body></html>")
     await browser_page.evaluate(
         """
-        () => {
+        (completedMappings) => {
           window.__bookwalkerTransformTrace = {
-            completedMappings: [
-              {mappingId: 'unrelated-a', tileDraws: [{}, {}]},
-              {mappingId: 'requested', tileDraws: [{}]},
-              {mappingId: 'unrelated-b', tileDraws: [{}, {}, {}]},
-              {mappingId: 'unrelated-c', tileDraws: [{}]},
-            ],
-            activeSegments: {
-              active: {tileDraws: [{}, {}]},
-            },
+            completedMappings,
+            activeSegments: {active: {tileDraws: [{}, {}]}},
             droppedCompletedMappingCount: 2,
             droppedActiveSegmentCount: 1,
           };
         }
-        """
+        """,
+        [
+            _completed_mapping_fixture("unrelated-a", 106),
+            _completed_mapping_fixture("requested", 206),
+            _completed_mapping_fixture("unrelated-b", 306),
+            _completed_mapping_fixture("unrelated-c", 406),
+        ],
     )
 
-    selected = await browser_page.evaluate(
-        _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+    selected_payload = await browser_page.evaluate(
+        _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
         ["requested"],
     )
 
-    assert [record["mappingId"] for record in selected["completedMappings"]] == [
+    assert selected_payload["transportVersion"] == 1
+    assert "completedMappings" not in selected_payload
+    assert [record["mappingId"] for record in selected_payload["compactMappings"]] == [
         "requested"
     ]
-    assert selected["retainedCompletedMappingCount"] == 4
-    assert selected["retainedCompletedTileRecordCount"] == 7
-    assert selected["activeSegmentCount"] == 1
-    assert selected["activeTileRecordCount"] == 2
-    assert selected["requestedMappingCount"] == 1
-    assert selected["returnedCompletedMappingCount"] == 1
-    assert selected["returnedTileRecordCount"] == 1
-    assert selected["missingMappingCount"] == 0
+    assert selected_payload["retainedCompletedMappingCount"] == 4
+    assert selected_payload["retainedCompletedTileRecordCount"] == 16
+    assert selected_payload["activeSegmentCount"] == 1
+    assert selected_payload["activeTileRecordCount"] == 2
+    assert selected_payload["requestedMappingCount"] == 1
+    assert selected_payload["returnedCompletedMappingCount"] == 1
+    assert selected_payload["returnedTileRecordCount"] == 4
+    assert selected_payload["missingMappingCount"] == 0
+    assert selected_payload["compactSourceTableCount"] == 1
+    assert selected_payload["compactTargetTableCount"] == 1
+    assert selected_payload["compactTransformTableCount"] == 1
+    assert selected_payload["compactCompositeTableCount"] == 1
+    assert selected_payload["compactFilterTableCount"] == 1
+    decoded = decode_compact_completed_mappings(selected_payload)
+    assert decoded is not None
+    assert [record["mappingId"] for record in decoded["completedMappings"]] == [
+        "requested"
+    ]
 
 
 async def test_selected_completed_mapping_fetch_preserves_two_part_selection_order(
@@ -356,33 +440,52 @@ async def test_selected_completed_mapping_fetch_preserves_two_part_selection_ord
     await browser_page.goto("data:text/html,<html><body></body></html>")
     await browser_page.evaluate(
         """
-        () => {
-          window.__bookwalkerTransformTrace = {
-            completedMappings: [
-              {mappingId: 'mapping-A', tileDraws: [{}]},
-              {mappingId: 'mapping-B', tileDraws: [{}, {}]},
-              {mappingId: 'unrelated-C', tileDraws: [{}, {}, {}]},
-              {mappingId: 'unrelated-D', tileDraws: [{}]},
-            ],
-            activeSegments: {},
-          };
+        (completedMappings) => {
+          window.__bookwalkerTransformTrace = {completedMappings, activeSegments: {}};
         }
-        """
+        """,
+        [
+            _completed_mapping_fixture("mapping-A", 106),
+            _completed_mapping_fixture("mapping-B", 206),
+            _completed_mapping_fixture("unrelated-C", 306),
+            _completed_mapping_fixture("unrelated-D", 406),
+        ],
     )
 
-    selected = await browser_page.evaluate(
-        _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+    selected_payload = await browser_page.evaluate(
+        _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
         ["mapping-A", "mapping-B"],
     )
 
-    assert [record["mappingId"] for record in selected["completedMappings"]] == [
+    assert [record["mappingId"] for record in selected_payload["compactMappings"]] == [
         "mapping-A",
         "mapping-B",
     ]
-    assert selected["requestedMappingCount"] == 2
-    assert selected["returnedCompletedMappingCount"] == 2
-    assert selected["returnedTileRecordCount"] == 3
-    assert selected["missingMappingCount"] == 0
+    assert selected_payload["requestedMappingCount"] == 2
+    assert selected_payload["returnedCompletedMappingCount"] == 2
+    assert selected_payload["returnedTileRecordCount"] == 8
+    assert selected_payload["missingMappingCount"] == 0
+    assert selected_payload["compactSourceTableCount"] == 2
+    assert selected_payload["compactTargetTableCount"] == 2
+    assert selected_payload["compactTransformTableCount"] == 2
+    assert selected_payload["compactCompositeTableCount"] == 2
+    assert selected_payload["compactFilterTableCount"] == 2
+    decoded = decode_compact_completed_mappings(selected_payload)
+    assert decoded is not None
+    assert [record["mappingId"] for record in decoded["completedMappings"]] == [
+        "mapping-A",
+        "mapping-B",
+    ]
+    for record in decoded["completedMappings"]:
+        analysis = analyze_purchased_mapping(
+            decoded,
+            {
+                "mappingId": record["mappingId"],
+                "traceOperationIndex": record["rendererOperationIndex"],
+                "sourceCanvasId": record["sourceCanvas"]["canvasId"],
+            },
+        )
+        assert analysis.proven
 
 
 async def test_selected_completed_mapping_fetch_exposes_duplicates_and_missing_ids(
@@ -391,38 +494,38 @@ async def test_selected_completed_mapping_fetch_exposes_duplicates_and_missing_i
     await browser_page.goto("data:text/html,<html><body></body></html>")
     await browser_page.evaluate(
         """
-        () => {
-          window.__bookwalkerTransformTrace = {
-            completedMappings: [
-              {mappingId: 'duplicate', tileDraws: [{}]},
-              {mappingId: 'duplicate', tileDraws: [{}, {}]},
-            ],
-            activeSegments: {},
-          };
+        (completedMappings) => {
+          window.__bookwalkerTransformTrace = {completedMappings, activeSegments: {}};
         }
-        """
+        """,
+        [
+            _completed_mapping_fixture("duplicate", 106),
+            _completed_mapping_fixture("duplicate", 206),
+        ],
     )
 
-    selected = await browser_page.evaluate(
-        _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+    selected_payload = await browser_page.evaluate(
+        _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
         ["duplicate", "missing", "duplicate"],
     )
 
-    assert [record["mappingId"] for record in selected["completedMappings"]] == [
+    assert [record["mappingId"] for record in selected_payload["compactMappings"]] == [
         "duplicate",
         "duplicate",
     ]
-    assert selected["requestedMappingCount"] == 2
-    assert selected["returnedCompletedMappingCount"] == 2
-    assert selected["returnedTileRecordCount"] == 3
-    assert selected["missingMappingCount"] == 1
+    assert selected_payload["requestedMappingCount"] == 2
+    assert selected_payload["returnedCompletedMappingCount"] == 2
+    assert selected_payload["returnedTileRecordCount"] == 8
+    assert selected_payload["missingMappingCount"] == 1
+    decoded = decode_compact_completed_mappings(selected_payload)
+    assert decoded is not None
 
     duplicate_analysis = analyze_purchased_mapping(
-        selected,
+        decoded,
         {"mappingId": "duplicate"},
     )
     missing_analysis = analyze_purchased_mapping(
-        selected,
+        decoded,
         {"mappingId": "missing"},
     )
     assert duplicate_analysis.proven is False

@@ -39,6 +39,26 @@ JPEG_1X1 = (
     b"\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9"
 )
 
+EMPTY_COMPACT_PAYLOAD = {
+    "transportVersion": 1,
+    "compactMappings": [],
+    "retainedCompletedMappingCount": 0,
+    "retainedCompletedTileRecordCount": 0,
+    "activeSegmentCount": 0,
+    "activeTileRecordCount": 0,
+    "droppedCompletedMappingCount": 0,
+    "droppedActiveSegmentCount": 0,
+    "requestedMappingCount": 0,
+    "returnedCompletedMappingCount": 0,
+    "returnedTileRecordCount": 0,
+    "missingMappingCount": 0,
+    "compactSourceTableCount": 0,
+    "compactTargetTableCount": 0,
+    "compactTransformTableCount": 0,
+    "compactCompositeTableCount": 0,
+    "compactFilterTableCount": 0,
+}
+
 
 def _safe_call() -> dict:
     return {
@@ -577,7 +597,7 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
 ) -> None:
     class ShadowPage:
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
-            return {"operations": []}
+            return dict(EMPTY_COMPACT_PAYLOAD)
 
     mapping = PurchasedMapping(
         mapping=(
@@ -668,7 +688,7 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
 ) -> None:
     class ShadowPage:
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
-            return {"operations": []}
+            return dict(EMPTY_COMPACT_PAYLOAD)
 
     mapping = PurchasedMapping(
         mapping=(
@@ -775,6 +795,7 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     assert {
         "evaluation_total",
         "trace_fetch_ms",
+        "trace_decode_ms",
         "trace_python_analysis_ms",
         "mapping_analysis",
         "imagebitmap_signature",
@@ -832,6 +853,11 @@ def test_trace_payload_stats_count_bounded_records() -> None:
         "trace_returned_mapping_count": 0,
         "trace_returned_tile_record_count": 0,
         "trace_missing_mapping_count": 0,
+        "trace_compact_source_table_count": 0,
+        "trace_compact_target_table_count": 0,
+        "trace_compact_transform_table_count": 0,
+        "trace_compact_composite_table_count": 0,
+        "trace_compact_filter_table_count": 0,
     }
 
 
@@ -849,6 +875,11 @@ def test_trace_payload_stats_keeps_retained_counts_separate_from_selected_counts
             "returnedCompletedMappingCount": 1,
             "returnedTileRecordCount": 100,
             "missingMappingCount": 0,
+            "compactSourceTableCount": 1,
+            "compactTargetTableCount": 1,
+            "compactTransformTableCount": 1,
+            "compactCompositeTableCount": 1,
+            "compactFilterTableCount": 1,
         }
     )
 
@@ -857,6 +888,11 @@ def test_trace_payload_stats_keeps_retained_counts_separate_from_selected_counts
     assert stats["trace_returned_mapping_count"] == 1
     assert stats["trace_returned_tile_record_count"] == 100
     assert stats["trace_requested_mapping_count"] == 1
+    assert stats["trace_compact_source_table_count"] == 1
+    assert stats["trace_compact_target_table_count"] == 1
+    assert stats["trace_compact_transform_table_count"] == 1
+    assert stats["trace_compact_composite_table_count"] == 1
+    assert stats["trace_compact_filter_table_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -897,7 +933,7 @@ async def test_lossless_shadow_without_mapping_id_fails_closed_without_full_trac
 
     assert result["spread_ready"] is False
     assert result["reason"] == "selected renderer draw mapping identity unavailable"
-    assert result["trace_fetch_mode"] == "selected_completed_mappings"
+    assert result["trace_fetch_mode"] == "selected_completed_mappings_compact_v1"
     assert page.evaluate_calls == 0
 
 
@@ -907,7 +943,7 @@ async def test_lossless_shadow_full_resolution_ambiguity_fails_closed(
 ) -> None:
     class ShadowPage:
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
-            return {"operations": []}
+            return dict(EMPTY_COMPACT_PAYLOAD)
 
     mapping = PurchasedMapping(
         mapping=(
@@ -983,7 +1019,7 @@ async def test_lossless_shadow_signature_mismatch_skips_full_resolution(
 ) -> None:
     class ShadowPage:
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
-            return {"operations": []}
+            return dict(EMPTY_COMPACT_PAYLOAD)
 
     mapping = PurchasedMapping(
         mapping=(

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
     MAPPING_PROVEN,
     analyze_purchased_mapping,
+    decode_compact_completed_mappings,
 )
 
 IDENTITY = {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0}
@@ -237,6 +240,112 @@ def _completed_draw(record: dict) -> dict:
     }
 
 
+def _compact_payload(record: dict) -> dict:
+    sources: list[list[object]] = []
+    targets: list[list[object]] = []
+    transforms: list[list[object]] = []
+    composites: list[str] = []
+    filters: list[str] = []
+    tile_rows: list[list[object]] = []
+
+    def table_index(table: list, value: object) -> int:
+        if value not in table:
+            table.append(value)
+        return table.index(value)
+
+    for tile in record["tileDraws"]:
+        source = tile["source"]
+        target = tile["target"]
+        source_row = [
+            source["constructor"],
+            source["sourceId"],
+            source["width"],
+            source["height"],
+            source.get("canvasId", source.get("sourceCanvasId")),
+        ]
+        target_row = [target["canvasId"], target["width"], target["height"]]
+        transform = tile["transform"]
+        transform_row = [transform[key] for key in ("a", "b", "c", "d", "e", "f")]
+        source_index = table_index(sources, source_row)
+        target_index = table_index(targets, target_row)
+        transform_index = table_index(transforms, transform_row)
+        composite_index = table_index(composites, tile["globalCompositeOperation"])
+        filter_index = table_index(filters, tile["filter"])
+        source_rect = tile["sourceRect"]
+        destination = tile["destination"]
+        tile_rows.append([
+            tile["operationIndex"],
+            source_index,
+            target_index,
+            source_rect["x"],
+            source_rect["y"],
+            source_rect["width"],
+            source_rect["height"],
+            destination["x"],
+            destination["y"],
+            destination["width"],
+            destination["height"],
+            transform_index,
+            tile["globalAlpha"],
+            composite_index,
+            filter_index,
+        ])
+
+    compact = {
+        key: copy.deepcopy(record[key])
+        for key in (
+            "mappingId",
+            "rendererOperationIndex",
+            "rendererTarget",
+            "sourceCanvas",
+            "rendererSourceRect",
+            "rendererDestination",
+            "rendererTransform",
+            "rendererAlpha",
+            "rendererComposite",
+            "rendererFilter",
+            "segmentClearOperationIndex",
+            "segmentClearRectangle",
+            "segmentFirstTileOperationIndex",
+            "segmentLastTileOperationIndex",
+            "segmentTileCount",
+            "segmentExpectedTileCount",
+            "unsafeOperationCount",
+            "firstUnsafeOperationIndex",
+            "unsafeOperationTypes",
+            "segmentOverflow",
+            "sourceIds",
+        )
+    }
+    compact.update({
+        "sources": sources,
+        "targets": targets,
+        "transforms": transforms,
+        "composites": composites,
+        "filters": filters,
+        "tileRows": tile_rows,
+    })
+    return {
+        "transportVersion": 1,
+        "compactMappings": [compact],
+        "retainedCompletedMappingCount": 1,
+        "retainedCompletedTileRecordCount": len(tile_rows),
+        "activeSegmentCount": 0,
+        "activeTileRecordCount": 0,
+        "droppedCompletedMappingCount": 0,
+        "droppedActiveSegmentCount": 0,
+        "requestedMappingCount": 1,
+        "returnedCompletedMappingCount": 1,
+        "returnedTileRecordCount": len(tile_rows),
+        "missingMappingCount": 0,
+        "compactSourceTableCount": len(sources),
+        "compactTargetTableCount": len(targets),
+        "compactTransformTableCount": len(transforms),
+        "compactCompositeTableCount": len(composites),
+        "compactFilterTableCount": len(filters),
+    }
+
+
 def test_completed_segment_is_production_authority_past_global_operation_count() -> None:
     record = _completed_record()
     trace = {
@@ -315,6 +424,191 @@ def test_selected_completed_mapping_has_full_trace_proof_parity() -> None:
         "segment_tile_count": selected_result.segment_tile_count,
         "unsafe_operation_types": selected_result.unsafe_operation_types,
     }
+
+
+def test_compact_decode_has_full_rich_proof_parity() -> None:
+    record = _completed_record()
+    rich_result = analyze_purchased_mapping(
+        {"completedMappings": [record]},
+        _completed_draw(record),
+    )
+    decoded = decode_compact_completed_mappings(_compact_payload(record))
+
+    assert decoded is not None
+    compact_result = analyze_purchased_mapping(decoded, _completed_draw(record))
+    assert (rich_result.status, rich_result.reason, rich_result.proven) == (
+        compact_result.status,
+        compact_result.reason,
+        compact_result.proven,
+    )
+    assert rich_result.to_debug() == compact_result.to_debug()
+    assert rich_result.mapping is not None and compact_result.mapping is not None
+    assert rich_result.mapping.as_dict() == compact_result.mapping.as_dict()
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda payload: payload.update(transportVersion=2), id="unknown-version"),
+        pytest.param(
+            lambda payload: payload["compactMappings"][0]["tileRows"][0].pop(),
+            id="wrong-tile-array-length",
+        ),
+        pytest.param(
+            lambda payload: payload["compactMappings"][0].update(sources={}),
+            id="non-list-table",
+        ),
+        pytest.param(
+            lambda payload: payload["compactMappings"][0]["tileRows"][0].__setitem__(1, 99),
+            id="index-out-of-range",
+        ),
+        pytest.param(
+            lambda payload: payload["compactMappings"][0].pop("rendererTarget"),
+            id="missing-metadata",
+        ),
+        pytest.param(
+            lambda payload: payload["compactMappings"][0]["tileRows"][0].__setitem__(0, "102"),
+            id="impossible-tile-type",
+        ),
+    ],
+)
+def test_compact_decoder_fails_closed_for_transport_shape_errors(mutate) -> None:
+    payload = _compact_payload(_completed_record())
+    mutate(payload)
+
+    assert decode_compact_completed_mappings(payload) is None
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(
+            lambda record: record["tileDraws"][1].update(
+                sourceRect=copy.deepcopy(record["tileDraws"][0]["sourceRect"])
+            ),
+            id="duplicate-source-tile",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][1].update(
+                destination=copy.deepcopy(record["tileDraws"][0]["destination"])
+            ),
+            id="duplicate-destination-tile",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][0]["sourceRect"].update(x=24),
+            id="missing-source-tile-and-out-of-bounds",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][0]["destination"].update(x=24),
+            id="missing-destination-tile-and-out-of-bounds",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][0].update(
+                transform={"a": 1, "b": 0, "c": 1, "d": 1, "e": 0, "f": 0}
+            ),
+            id="unsafe-transform",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][0].update(globalAlpha=0.5),
+            id="unsafe-alpha",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][0].update(
+                globalCompositeOperation="multiply"
+            ),
+            id="unsafe-composite",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][0].update(filter="blur(1px)"),
+            id="unsafe-filter",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][0]["source"].update(
+                constructor="HTMLImageElement"
+            ),
+            id="non-imagebitmap",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][0]["source"].update(width=16),
+            id="wrong-source-dimensions",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][0]["target"].update(
+                canvasId="other-canvas"
+            ),
+            id="wrong-target-canvas",
+        ),
+        pytest.param(
+            lambda record: record["tileDraws"][1].update(
+                operationIndex=record["tileDraws"][0]["operationIndex"]
+            ),
+            id="duplicate-operation-index",
+        ),
+        pytest.param(
+            lambda record: record["segmentClearRectangle"].update(width=31),
+            id="partial-clear",
+        ),
+        pytest.param(
+            lambda record: record["rendererSourceRect"].update(width=31.5),
+            id="crop",
+        ),
+    ],
+)
+def test_compact_decode_preserves_rejection_semantics(mutate) -> None:
+    rich_record = _completed_record()
+    mutate(rich_record)
+    rich_result = analyze_purchased_mapping(
+        {"completedMappings": [rich_record]},
+        _completed_draw(rich_record),
+    )
+    decoded = decode_compact_completed_mappings(_compact_payload(rich_record))
+
+    assert not rich_result.proven
+    assert decoded is not None
+    compact_result = analyze_purchased_mapping(decoded, _completed_draw(rich_record))
+    assert not compact_result.proven
+    assert compact_result.status == rich_result.status
+
+
+def test_completed_mapping_counter_duplicate_counts_preserve_semantics() -> None:
+    clean = _completed_record()
+    clean_result = analyze_purchased_mapping(
+        {"completedMappings": [clean]}, _completed_draw(clean)
+    )
+    assert clean_result.proven
+
+    source_duplicate = _completed_record()
+    source_duplicate["tileDraws"][1]["sourceRect"] = copy.deepcopy(
+        source_duplicate["tileDraws"][0]["sourceRect"]
+    )
+    source_result = analyze_purchased_mapping(
+        {"completedMappings": [source_duplicate]}, _completed_draw(source_duplicate)
+    )
+    assert source_result.to_debug()["source_duplicate_tile_count"] == 1
+    assert source_result.to_debug()["destination_duplicate_tile_count"] == 0
+
+    triple_source = _completed_record()
+    triple_source["tileDraws"][1]["sourceRect"] = copy.deepcopy(
+        triple_source["tileDraws"][0]["sourceRect"]
+    )
+    triple_source["tileDraws"][2]["sourceRect"] = copy.deepcopy(
+        triple_source["tileDraws"][0]["sourceRect"]
+    )
+    triple_result = analyze_purchased_mapping(
+        {"completedMappings": [triple_source]}, _completed_draw(triple_source)
+    )
+    assert triple_result.to_debug()["source_duplicate_tile_count"] == 2
+
+    destination_duplicate = _completed_record()
+    destination_duplicate["tileDraws"][1]["destination"] = copy.deepcopy(
+        destination_duplicate["tileDraws"][0]["destination"]
+    )
+    destination_result = analyze_purchased_mapping(
+        {"completedMappings": [destination_duplicate]},
+        _completed_draw(destination_duplicate),
+    )
+    assert destination_result.to_debug()["source_duplicate_tile_count"] == 0
+    assert destination_result.to_debug()["destination_duplicate_tile_count"] == 1
 
 
 def test_duplicate_completed_mapping_id_fails_closed_as_ambiguous() -> None:

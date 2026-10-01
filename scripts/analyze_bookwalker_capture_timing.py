@@ -80,6 +80,7 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
         for name in (
             "evaluation_total",
             "trace_fetch_ms",
+            "trace_decode_ms",
             "measured_component_total_ms",
             "unaccounted_ms",
         ):
@@ -109,11 +110,12 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
                 reconstruction_metrics.setdefault(name, []).append(number)
 
     parts_by_capture: dict[str, int] = {}
+    spread_count = 0
     for capture in captures:
         metadata = capture.get("metadata") or {}
-        parts_by_capture[str(metadata.get("parts", 1))] = (
-            parts_by_capture.get(str(metadata.get("parts", 1)), 0) + 1
-        )
+        part_count = int(metadata.get("parts", 1) or 1)
+        parts_by_capture[str(part_count)] = parts_by_capture.get(str(part_count), 0) + 1
+        spread_count += int(part_count > 1)
 
     trace_rows = []
     for capture in captures:
@@ -125,6 +127,7 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
                 "page_id": (capture.get("identity") or {}).get("page_id"),
                 "trace_fetch_ms": evaluation_timing.get("trace_fetch_ms"),
                 "trace_fetch_mode": shadow.get("trace_fetch_mode"),
+                "trace_decode_ms": evaluation_timing.get("trace_decode_ms"),
                 "retained_mapping_count": shadow.get(
                     "trace_completed_mapping_count"
                 ),
@@ -139,6 +142,21 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
                     "trace_returned_tile_record_count"
                 ),
                 "missing_mapping_count": shadow.get("trace_missing_mapping_count"),
+                "compact_source_table_count": shadow.get(
+                    "trace_compact_source_table_count"
+                ),
+                "compact_target_table_count": shadow.get(
+                    "trace_compact_target_table_count"
+                ),
+                "compact_transform_table_count": shadow.get(
+                    "trace_compact_transform_table_count"
+                ),
+                "compact_composite_table_count": shadow.get(
+                    "trace_compact_composite_table_count"
+                ),
+                "compact_filter_table_count": shadow.get(
+                    "trace_compact_filter_table_count"
+                ),
                 # Compatibility aliases for the P4-1 report.
                 "completed_mapping_count": shadow.get("trace_completed_mapping_count"),
                 "completed_tile_record_count": shadow.get(
@@ -182,6 +200,7 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
         "artifact_count": len(pages),
         "logical_capture_count": len(captures),
         "part_count": len(parts),
+        "spread_count": spread_count,
         "logical_captures_by_parts": parts_by_capture,
         "capture_metrics": {name: _stats(values) for name, values in capture_metrics.items()},
         "part_metrics": {name: _stats(values) for name, values in part_metrics.items()},
@@ -213,6 +232,11 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
                 "returned_mapping_count",
                 "returned_tile_record_count",
                 "missing_mapping_count",
+                "compact_source_table_count",
+                "compact_target_table_count",
+                "compact_transform_table_count",
+                "compact_composite_table_count",
+                "compact_filter_table_count",
             )
         },
         "trace_rows": trace_rows,

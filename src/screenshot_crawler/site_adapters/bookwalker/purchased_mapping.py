@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -30,6 +31,26 @@ DIRECT_RENDERER_DRAW = "DIRECT_RENDERER_DRAW"
 PURE_RENDERER_SCALE = "PURE_RENDERER_SCALE"
 CROP_OR_PIXEL_PROCESSING = "CROP_OR_PIXEL_PROCESSING"
 GEOMETRY_UNAVAILABLE = "GEOMETRY_UNAVAILABLE"
+
+COMPACT_COMPLETED_MAPPING_TRANSPORT_VERSION = 1
+_COMPACT_TILE_FIELD_COUNT = 15
+_COMPACT_SUMMARY_FIELDS = (
+    "retainedCompletedMappingCount",
+    "retainedCompletedTileRecordCount",
+    "activeSegmentCount",
+    "activeTileRecordCount",
+    "droppedCompletedMappingCount",
+    "droppedActiveSegmentCount",
+    "requestedMappingCount",
+    "returnedCompletedMappingCount",
+    "returnedTileRecordCount",
+    "missingMappingCount",
+    "compactSourceTableCount",
+    "compactTargetTableCount",
+    "compactTransformTableCount",
+    "compactCompositeTableCount",
+    "compactFilterTableCount",
+)
 
 _IDENTITY_TRANSFORM = {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0}
 
@@ -253,6 +274,350 @@ def _numeric_rect(value: object) -> tuple[float, float, float, float] | None:
     try:
         return tuple(_number(value[key]) for key in ("x", "y", "width", "height"))  # type: ignore[return-value]
     except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _compact_number(value: object) -> int | float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("compact number has an impossible type")
+    if not math.isfinite(float(value)):
+        raise ValueError("compact number is not finite")
+    return value
+
+
+def _compact_integer(value: object) -> int:
+    number = _compact_number(value)
+    if number != round(float(number)):
+        raise ValueError("compact integer is not integral")
+    return int(number)
+
+
+def _compact_required(mapping: Mapping[str, Any], key: str) -> Any:
+    if key not in mapping:
+        raise ValueError(f"compact field is missing: {key}")
+    return mapping[key]
+
+
+def _compact_rectangle(value: object) -> dict[str, int | float]:
+    if not isinstance(value, Mapping):
+        raise TypeError("compact rectangle is not an object")
+    return {
+        key: _compact_number(_compact_required(value, key))
+        for key in ("x", "y", "width", "height")
+    }
+
+
+def _compact_transform(value: object) -> dict[str, int | float]:
+    if not isinstance(value, Mapping):
+        raise TypeError("compact transform is not an object")
+    return {
+        key: _compact_number(_compact_required(value, key))
+        for key in ("a", "b", "c", "d", "e", "f")
+    }
+
+
+def _compact_canvas(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError("compact canvas metadata is not an object")
+    canvas_id = _compact_required(value, "canvasId")
+    width = _compact_number(_compact_required(value, "width"))
+    height = _compact_number(_compact_required(value, "height"))
+    if not isinstance(canvas_id, str):
+        raise TypeError("compact canvas id has an impossible type")
+    result: dict[str, Any] = {
+        "canvasId": canvas_id,
+        "width": width,
+        "height": height,
+    }
+    if "constructor" in value:
+        constructor = value["constructor"]
+        if not isinstance(constructor, str):
+            raise ValueError("compact canvas constructor has an impossible type")
+        result["constructor"] = constructor
+    return result
+
+
+def _decode_compact_sources(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise TypeError("compact sources table is not a list")
+    sources: list[dict[str, Any]] = []
+    for row in value:
+        if not isinstance(row, list) or len(row) != 5:
+            raise ValueError("compact source table row has the wrong length")
+        constructor, source_id, width, height, canvas_id = row
+        if not isinstance(constructor, str) or not isinstance(source_id, str):
+            raise TypeError("compact source table string has an impossible type")
+        width = _compact_number(width)
+        height = _compact_number(height)
+        if canvas_id is not None and not isinstance(canvas_id, str):
+            raise ValueError("compact source canvas id has an impossible type")
+        source: dict[str, Any] = {
+            "sourceId": source_id,
+            "constructor": constructor,
+            "width": width,
+            "height": height,
+        }
+        if canvas_id is not None:
+            source["canvasId"] = canvas_id
+            source["sourceCanvasId"] = canvas_id
+        sources.append(source)
+    return sources
+
+
+def _decode_compact_targets(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise TypeError("compact targets table is not a list")
+    targets: list[dict[str, Any]] = []
+    for row in value:
+        if not isinstance(row, list) or len(row) != 3:
+            raise ValueError("compact target table row has the wrong length")
+        canvas_id, width, height = row
+        if not isinstance(canvas_id, str):
+            raise TypeError("compact target canvas id has an impossible type")
+        targets.append({
+            "canvasId": canvas_id,
+            "width": _compact_number(width),
+            "height": _compact_number(height),
+        })
+    return targets
+
+
+def _decode_compact_transforms(value: object) -> list[dict[str, int | float]]:
+    if not isinstance(value, list):
+        raise TypeError("compact transforms table is not a list")
+    transforms: list[dict[str, int | float]] = []
+    for row in value:
+        if not isinstance(row, list) or len(row) != 6:
+            raise ValueError("compact transform table row has the wrong length")
+        transforms.append({
+            key: _compact_number(number)
+            for key, number in zip(("a", "b", "c", "d", "e", "f"), row, strict=True)
+        })
+    return transforms
+
+
+def _decode_compact_strings(value: object, name: str) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"compact {name} table is invalid")
+    return list(value)
+
+
+def _compact_table_item(table: list[Any], index: object, name: str) -> Any:
+    index = _compact_integer(index)
+    if index < 0 or index >= len(table):
+        raise ValueError(f"compact {name} index is out of range")
+    return table[index]
+
+
+def _decode_compact_tiles(
+    mapping: Mapping[str, Any],
+    sources: list[dict[str, Any]],
+    targets: list[dict[str, Any]],
+    transforms: list[dict[str, int | float]],
+    composites: list[str],
+    filters: list[str],
+) -> list[dict[str, Any]]:
+    value = _compact_required(mapping, "tileRows")
+    if not isinstance(value, list):
+        raise TypeError("compact tile rows are not a list")
+    tiles: list[dict[str, Any]] = []
+    for row in value:
+        if not isinstance(row, list) or len(row) != _COMPACT_TILE_FIELD_COUNT:
+            raise ValueError("compact tile row has the wrong length")
+        (
+            operation_index,
+            source_index,
+            target_index,
+            source_x,
+            source_y,
+            source_width,
+            source_height,
+            destination_x,
+            destination_y,
+            destination_width,
+            destination_height,
+            transform_index,
+            global_alpha,
+            composite_index,
+            filter_index,
+        ) = row
+        source = _compact_table_item(sources, source_index, "source")
+        target = _compact_table_item(targets, target_index, "target")
+        transform = _compact_table_item(transforms, transform_index, "transform")
+        composite = _compact_table_item(composites, composite_index, "composite")
+        filter_value = _compact_table_item(filters, filter_index, "filter")
+        tiles.append({
+            "operationIndex": _compact_integer(operation_index),
+            "source": dict(source),
+            "target": dict(target),
+            "sourceRect": {
+                "x": _compact_number(source_x),
+                "y": _compact_number(source_y),
+                "width": _compact_number(source_width),
+                "height": _compact_number(source_height),
+            },
+            "destination": {
+                "x": _compact_number(destination_x),
+                "y": _compact_number(destination_y),
+                "width": _compact_number(destination_width),
+                "height": _compact_number(destination_height),
+            },
+            "transform": dict(transform),
+            "globalAlpha": _compact_number(global_alpha),
+            "globalCompositeOperation": composite,
+            "filter": filter_value,
+        })
+    return tiles
+
+
+def _decode_compact_mapping(value: object) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError("compact mapping is not an object")
+    required_fields = (
+        "mappingId",
+        "rendererOperationIndex",
+        "rendererTarget",
+        "sourceCanvas",
+        "rendererSourceRect",
+        "rendererDestination",
+        "rendererTransform",
+        "rendererAlpha",
+        "rendererComposite",
+        "rendererFilter",
+        "segmentClearOperationIndex",
+        "segmentClearRectangle",
+        "segmentFirstTileOperationIndex",
+        "segmentLastTileOperationIndex",
+        "segmentTileCount",
+        "segmentExpectedTileCount",
+        "unsafeOperationCount",
+        "firstUnsafeOperationIndex",
+        "unsafeOperationTypes",
+        "segmentOverflow",
+        "sourceIds",
+        "sources",
+        "targets",
+        "transforms",
+        "composites",
+        "filters",
+        "tileRows",
+    )
+    for key in required_fields:
+        _compact_required(value, key)
+    mapping_id = value["mappingId"]
+    if not isinstance(mapping_id, str):
+        raise TypeError("compact mapping id has an impossible type")
+    renderer_operation_index = _compact_integer(value["rendererOperationIndex"])
+    renderer_target = _compact_canvas(value["rendererTarget"])
+    source_canvas = _compact_canvas(value["sourceCanvas"])
+    renderer_source_rect = _compact_rectangle(value["rendererSourceRect"])
+    renderer_destination = _compact_rectangle(value["rendererDestination"])
+    renderer_transform = _compact_transform(value["rendererTransform"])
+    renderer_alpha = _compact_number(value["rendererAlpha"])
+    renderer_composite = value["rendererComposite"]
+    renderer_filter = value["rendererFilter"]
+    if not isinstance(renderer_composite, str) or not isinstance(renderer_filter, str):
+        raise TypeError("compact renderer operation string has an impossible type")
+    clear_index = _compact_integer(value["segmentClearOperationIndex"])
+    clear_rectangle = _compact_rectangle(value["segmentClearRectangle"])
+    nullable_indices: dict[str, int | None] = {}
+    for key in (
+        "segmentFirstTileOperationIndex",
+        "segmentLastTileOperationIndex",
+        "segmentExpectedTileCount",
+        "firstUnsafeOperationIndex",
+    ):
+        nullable_indices[key] = (
+            None if value[key] is None else _compact_integer(value[key])
+        )
+    segment_tile_count = _compact_integer(value["segmentTileCount"])
+    unsafe_count = _compact_integer(value["unsafeOperationCount"])
+    unsafe_types = value["unsafeOperationTypes"]
+    source_ids = value["sourceIds"]
+    if (
+        segment_tile_count < 0
+        or unsafe_count < 0
+        or not isinstance(unsafe_types, list)
+        or any(not isinstance(item, str) for item in unsafe_types)
+        or not isinstance(source_ids, list)
+        or any(not isinstance(item, str) for item in source_ids)
+        or not isinstance(value["segmentOverflow"], bool)
+    ):
+        raise ValueError("compact mapping metadata is invalid")
+    sources = _decode_compact_sources(value["sources"])
+    targets = _decode_compact_targets(value["targets"])
+    transforms = _decode_compact_transforms(value["transforms"])
+    composites = _decode_compact_strings(value["composites"], "composite")
+    filters = _decode_compact_strings(value["filters"], "filter")
+    tiles = _decode_compact_tiles(
+        value,
+        sources,
+        targets,
+        transforms,
+        composites,
+        filters,
+    )
+    if segment_tile_count != len(tiles):
+        raise ValueError("compact segment tile count does not match tile rows")
+    return {
+        "mappingId": mapping_id,
+        "rendererOperationIndex": renderer_operation_index,
+        "rendererTarget": renderer_target,
+        "sourceCanvas": source_canvas,
+        "rendererSourceRect": renderer_source_rect,
+        "rendererDestination": renderer_destination,
+        "rendererTransform": renderer_transform,
+        "rendererAlpha": renderer_alpha,
+        "rendererComposite": renderer_composite,
+        "rendererFilter": renderer_filter,
+        "segmentClearOperationIndex": clear_index,
+        "segmentClearRectangle": clear_rectangle,
+        "segmentFirstTileOperationIndex": nullable_indices["segmentFirstTileOperationIndex"],
+        "segmentLastTileOperationIndex": nullable_indices["segmentLastTileOperationIndex"],
+        "segmentTileCount": segment_tile_count,
+        "segmentExpectedTileCount": nullable_indices["segmentExpectedTileCount"],
+        "tileDraws": tiles,
+        "sourceIds": list(source_ids),
+        "unsafeOperationCount": unsafe_count,
+        "firstUnsafeOperationIndex": nullable_indices["firstUnsafeOperationIndex"],
+        "unsafeOperationTypes": list(unsafe_types),
+        "segmentOverflow": value["segmentOverflow"],
+    }
+
+
+def decode_compact_completed_mappings(
+    payload: object,
+) -> dict[str, Any] | None:
+    """Decode versioned compact mappings without changing proof semantics."""
+
+    try:
+        if not isinstance(payload, Mapping):
+            raise TypeError("compact payload is not an object")
+        if payload.get("transportVersion") != COMPACT_COMPLETED_MAPPING_TRANSPORT_VERSION:
+            raise ValueError("unknown compact transport version")
+        if payload.get("transportError") is not None:
+            raise ValueError("compact transport reported an error")
+        compact_mappings = payload.get("compactMappings")
+        if not isinstance(compact_mappings, list):
+            raise TypeError("compact mappings are not a list")
+        summary: dict[str, int] = {}
+        for key in _COMPACT_SUMMARY_FIELDS:
+            number = _compact_integer(_compact_required(payload, key))
+            if number < 0:
+                raise ValueError("compact summary contains a negative count")
+            summary[key] = number
+        mappings = [_decode_compact_mapping(item) for item in compact_mappings]
+        returned_tile_count = sum(len(item["tileDraws"]) for item in mappings)
+        if summary["returnedCompletedMappingCount"] != len(mappings):
+            raise ValueError("compact returned mapping count is inconsistent")
+        if summary["returnedTileRecordCount"] != returned_tile_count:
+            raise ValueError("compact returned tile count is inconsistent")
+        result: dict[str, Any] = {
+            "completedMappings": mappings,
+            **summary,
+        }
+        return result
+    except (TypeError, ValueError, KeyError):
         return None
 
 
@@ -541,10 +906,8 @@ def _analyze_legacy_operations(
         for y in range(0, dimensions[1], tile_height)
         for x in range(0, dimensions[0], tile_width)
     }
-    source_counts = {position: source_positions.count(position) for position in set(source_positions)}
-    destination_counts = {
-        position: destination_positions.count(position) for position in set(destination_positions)
-    }
+    source_counts = Counter(source_positions)
+    destination_counts = Counter(destination_positions)
     source_duplicates = sum(max(0, count - 1) for count in source_counts.values())
     destination_duplicates = sum(max(0, count - 1) for count in destination_counts.values())
     source_unique = set(source_positions)
@@ -902,8 +1265,8 @@ def _analyze_completed_mapping(
             return _reject_result("completed segment expected tile count is invalid", **base)
     else:
         expected_count = len(expected_positions)
-    source_counts = {position: source_positions.count(position) for position in set(source_positions)}
-    destination_counts = {position: destination_positions.count(position) for position in set(destination_positions)}
+    source_counts = Counter(source_positions)
+    destination_counts = Counter(destination_positions)
     source_duplicates = sum(max(0, count - 1) for count in source_counts.values())
     destination_duplicates = sum(max(0, count - 1) for count in destination_counts.values())
     source_gaps = len(expected_positions - set(source_positions))

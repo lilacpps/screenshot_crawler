@@ -2001,6 +2001,113 @@ If selected mapping transfer remains material after more representative
 measurements, compact numeric tile transport is a separate contract change;
 it was intentionally not included in P4-2.
 
+### 20.19 Phase P4-3 compact completed-mapping transport (2026-10-01)
+
+P4-3 keeps the P4-2 exact `mappingId` selection and changes only the
+browser-to-Python representation of the selected completed mappings. The
+BookWalker browser helper now returns
+`transportVersion=1` and `compactMappings`, never the rich tile objects. Each
+mapping stores scalar proof metadata once, deduplicated source/target/
+transform/composite/filter tables, and numeric-heavy 15-field tile rows.
+Unknown strings and malformed values are not replaced with safe defaults; the
+browser returns a transport error marker and the Python path falls back to
+native PNG when strict decoding fails. Python
+`decode_compact_completed_mappings()` accepts version 1 only, validates table
+and array shape/indexes/types, rebuilds the existing rich
+`completedMappings` contract, and then calls the unchanged proof authority
+`analyze_purchased_mapping()`.
+
+Retained browser trace storage is unchanged: active/completed bounds,
+eviction, overflow, unsafe metadata, and `mappingId` semantics remain in
+`_DRAW_TRACE_SCRIPT`. The retained summary compatibility keys still describe
+the full bounded browser store. The selected-payload keys still describe
+requested/returned/missing mappings and tile records. New compact table
+summary keys report the selected source, target, transform, composite, and
+filter table counts. The production mode is
+`trace_fetch_mode=selected_completed_mappings_compact_v1`; `trace_fetch_ms`
+still covers browser compact construction, serialization, transfer, and
+Playwright/Python payload materialization, while `trace_decode_ms` covers
+only strict Python reconstruction of the rich contract.
+
+The completed-mapping validator now uses `Counter` for source and destination
+position duplicate counts. The duplicate semantics are unchanged: no
+duplicate is zero, one repeated position is one duplicate, and a position
+appearing three times contributes two duplicates. Renderer geometry, unsafe
+operation, clear-boundary, source/target identity, bijection, operation-order,
+mapping-hash, coefficient, quantization-table, raw full-resolution, and final
+browser pixel proof gates remain Python-side and unchanged.
+
+The proof parity tests compare rich and compact-decoded records for status,
+reason, debug provenance, mapping hash and dimensions, ImageBitmap/source and
+renderer identities, segment metadata, unsafe metadata, and the complete
+`PurchasedMapping` contract. Browser-backed tests cover unrelated mapping
+exclusion, two-part `mapping-A`/`mapping-B` ordering and proof, duplicate
+record exposure, missing IDs, compact payload shape, and the large
+post-render prefetch completed-segment freeze. Strict decoder fixtures cover
+unknown versions, malformed arrays/tables/indexes, and impossible types;
+malformed/unsafe rich mapping cases retain identical rejection behavior after
+compact decode.
+
+The fresh default-ON live run used the shared Crawler Chrome/CDP session,
+native capture, direct access, the P4 URL, and a new
+`output/bookwalker-p4-3-compact-trace` directory. The CLI raised the existing
+`MaxPagesExceededError` after saving the requested 20 artifacts and manifest.
+Corrected counts are:
+
+```text
+20 artifacts
+10 logical captures
+20 logical parts
+10 two-part spreads
+```
+
+The first two artifact rows (one logical spread) had no selected renderer
+`mappingId` and correctly used native PNG fallback. The other 18 ordinary
+960x1280 parts returned reconstructed JPEGs. For those successful parts,
+`output_enabled=true`, `output_used=true`, `mapping_proven=true`,
+`raw_jpeg_exact=true`, `coefficient_exact=true`,
+`quantization_tables_equal=true`, `native_pixel_exact=true`, and
+`differing_pixel_count=0`. No compact decode failure occurred on the selected
+reconstruction path. Evaluation `unaccounted_ms` was 1.71 ms median.
+
+The P4-3 timing summary is below; values are milliseconds. Mapping analysis
+has 18 successful lossless parts because the initial mapping-ID-unavailable
+spread fails closed before analysis.
+
+| measurement | count | median | p90 | max |
+| --- | ---: | ---: | ---: | ---: |
+| capture total | 10 | 1674.60 | 2085.74 | 2329.53 |
+| lossless evaluation total | 10 | 890.38 | 991.80 | 1374.25 |
+| compact trace fetch | 10 | 150.91 | 213.14 | 224.29 |
+| trace decode | 10 | 10.33 | 28.63 | 84.06 |
+| mapping analysis | 18 | 15.71 | 31.28 | 33.32 |
+
+P4-2 to P4-3 median comparison:
+
+| measurement | P4-2 | P4-3 | absolute reduction | reduction |
+| --- | ---: | ---: | ---: | ---: |
+| selected trace fetch | 846.05 ms | 150.91 ms | 695.14 ms | 82.16% |
+| lossless evaluation total | 1641.07 ms | 890.38 ms | 750.69 ms | 45.74% |
+| capture total | 2396.72 ms | 1674.60 ms | 722.12 ms | 30.12% |
+| mapping analysis | 49.61 ms | 15.71 ms | 33.90 ms | 68.33% |
+
+The selected compact payload was normally two mappings and 2,400 tile rows,
+while the retained browser summary was a median three mappings/3,600 tiles
+(p90 and max seven mappings/8,400 tiles). The selected compact tables were
+two source, target, transform, composite, and filter entries per ordinary
+two-part spread. No rich 2,400-tile payload is returned by the browser.
+
+The new median cost ranking is original JPEG matching (581.46 ms), compact
+trace fetch (150.91 ms), final browser pixel comparison (139.62 ms), lossless
+reconstruction (134.51 ms), native materialization (111.35 ms), raw
+full-resolution comparison (59.58 ms), mapping analysis (15.71 ms), and
+strict compact decode (10.33 ms). Original matching still uses the existing
+bounded attempts and 150 ms retry interval. P4-4 candidates are original JPEG
+matching first, then final browser pixel comparison/native materialization,
+raw full-resolution comparison, and further mapping-analysis investigation;
+compact numeric transport is now implemented and is not a reason to change
+the proof contract further.
+
 ### Phase 1 runtime pacing
 
 BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を

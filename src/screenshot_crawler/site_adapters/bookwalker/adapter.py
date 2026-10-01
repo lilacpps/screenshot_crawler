@@ -57,6 +57,7 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
     MappingAnalysis,
     analyze_purchased_mapping,
+    decode_compact_completed_mappings,
 )
 from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     ReaderControlKind,
@@ -581,53 +582,202 @@ _DRAW_TRACE_SCRIPT = """
 })();
 """
 
-_SELECTED_COMPLETED_MAPPINGS_SCRIPT = """
+_SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
 (requestedMappingIds) => {
-  const trace = window.__bookwalkerTransformTrace;
-  const completedMappings = Array.isArray(trace?.completedMappings)
-    ? trace.completedMappings
-    : [];
-  const activeSegments = trace?.activeSegments
-    && typeof trace.activeSegments === 'object'
-    ? Object.values(trace.activeSegments)
-    : [];
-  const requested = Array.isArray(requestedMappingIds)
-    ? requestedMappingIds.map(value => String(value))
-    : [];
-  const requestedSet = new Set(requested);
-  const returned = completedMappings.filter(record => (
-    record
-    && record.mappingId !== null
-    && record.mappingId !== undefined
-    && requestedSet.has(String(record.mappingId))
-  ));
-  const tileCount = mappings => mappings.reduce((total, mapping) => (
-    total + (Array.isArray(mapping?.tileDraws) ? mapping.tileDraws.length : 0)
-  ), 0);
-  const activeTileCount = activeSegments.reduce((total, segment) => (
-    total + (Array.isArray(segment?.tileDraws) ? segment.tileDraws.length : 0)
-  ), 0);
-  const returnedMappingIds = new Set(
-    returned
-      .filter(record => record.mappingId !== null && record.mappingId !== undefined)
-      .map(record => String(record.mappingId)),
-  );
-  return {
-    completedMappings: returned,
-    retainedCompletedMappingCount: completedMappings.length,
-    retainedCompletedTileRecordCount: tileCount(completedMappings),
-    activeSegmentCount: activeSegments.length,
-    activeTileRecordCount: activeTileCount,
-    droppedCompletedMappingCount: Number.isFinite(trace?.droppedCompletedMappingCount)
-      ? Number(trace.droppedCompletedMappingCount) : 0,
-    droppedActiveSegmentCount: Number.isFinite(trace?.droppedActiveSegmentCount)
-      ? Number(trace.droppedActiveSegmentCount) : 0,
-    requestedMappingCount: requestedSet.size,
-    returnedCompletedMappingCount: returned.length,
-    returnedTileRecordCount: tileCount(returned),
-    missingMappingCount: [...requestedSet]
-      .filter(mappingId => !returnedMappingIds.has(mappingId)).length,
-  };
+  try {
+    const trace = window.__bookwalkerTransformTrace;
+    const completedMappings = Array.isArray(trace?.completedMappings)
+      ? trace.completedMappings
+      : [];
+    const activeSegments = trace?.activeSegments
+      && typeof trace.activeSegments === 'object'
+      ? Object.values(trace.activeSegments)
+      : [];
+    const requested = Array.isArray(requestedMappingIds)
+      ? requestedMappingIds.map(value => String(value))
+      : [];
+    const requestedSet = new Set(requested);
+    const returned = completedMappings.filter(record => (
+      record
+      && record.mappingId !== null
+      && record.mappingId !== undefined
+      && requestedSet.has(String(record.mappingId))
+    ));
+    const has = (object, key) => (
+      object !== null
+      && typeof object === 'object'
+      && Object.prototype.hasOwnProperty.call(object, key)
+    );
+    const required = (object, key) => {
+      if (!has(object, key) || object[key] === undefined) {
+        throw new Error(`compact field is missing: ${key}`);
+      }
+      return object[key];
+    };
+    const addTableValue = (table, indexes, value) => {
+      const key = JSON.stringify(value);
+      if (!indexes.has(key)) {
+        indexes.set(key, table.length);
+        table.push(value);
+      }
+      return indexes.get(key);
+    };
+    const rectangle = value => [
+      required(value, 'x'),
+      required(value, 'y'),
+      required(value, 'width'),
+      required(value, 'height'),
+    ];
+    const transform = value => [
+      required(value, 'a'),
+      required(value, 'b'),
+      required(value, 'c'),
+      required(value, 'd'),
+      required(value, 'e'),
+      required(value, 'f'),
+    ];
+    const compactMapping = mapping => {
+      if (!mapping || typeof mapping !== 'object') {
+        throw new Error('compact mapping is not an object');
+      }
+      const sources = [];
+      const sourceIndexes = new Map();
+      const targets = [];
+      const targetIndexes = new Map();
+      const transforms = [];
+      const transformIndexes = new Map();
+      const composites = [];
+      const compositeIndexes = new Map();
+      const filters = [];
+      const filterIndexes = new Map();
+      const tileRows = [];
+      const tiles = required(mapping, 'tileDraws');
+      if (!Array.isArray(tiles)) throw new Error('compact tile records are not a list');
+      for (const tile of tiles) {
+        const source = required(tile, 'source');
+        const target = required(tile, 'target');
+        const sourceCanvasId = has(source, 'canvasId')
+          ? source.canvasId
+          : has(source, 'sourceCanvasId') ? source.sourceCanvasId : null;
+        if (sourceCanvasId === undefined) throw new Error('compact source canvas id is missing');
+        const sourceRow = [
+          required(source, 'constructor'),
+          required(source, 'sourceId'),
+          required(source, 'width'),
+          required(source, 'height'),
+          sourceCanvasId,
+        ];
+        const targetRow = [
+          required(target, 'canvasId'),
+          required(target, 'width'),
+          required(target, 'height'),
+        ];
+        const sourceIndex = addTableValue(sources, sourceIndexes, sourceRow);
+        const targetIndex = addTableValue(targets, targetIndexes, targetRow);
+        const transformIndex = addTableValue(
+          transforms,
+          transformIndexes,
+          transform(required(tile, 'transform')),
+        );
+        const compositeIndex = addTableValue(
+          composites,
+          compositeIndexes,
+          required(tile, 'globalCompositeOperation'),
+        );
+        const filterIndex = addTableValue(
+          filters,
+          filterIndexes,
+          required(tile, 'filter'),
+        );
+        tileRows.push([
+          required(tile, 'operationIndex'),
+          sourceIndex,
+          targetIndex,
+          ...rectangle(required(tile, 'sourceRect')),
+          ...rectangle(required(tile, 'destination')),
+          transformIndex,
+          required(tile, 'globalAlpha'),
+          compositeIndex,
+          filterIndex,
+        ]);
+      }
+      const compact = {};
+      for (const key of [
+        'mappingId',
+        'rendererOperationIndex',
+        'rendererTarget',
+        'sourceCanvas',
+        'rendererSourceRect',
+        'rendererDestination',
+        'rendererTransform',
+        'rendererAlpha',
+        'rendererComposite',
+        'rendererFilter',
+        'segmentClearOperationIndex',
+        'segmentClearRectangle',
+        'segmentFirstTileOperationIndex',
+        'segmentLastTileOperationIndex',
+        'segmentTileCount',
+        'segmentExpectedTileCount',
+        'unsafeOperationCount',
+        'firstUnsafeOperationIndex',
+        'unsafeOperationTypes',
+        'segmentOverflow',
+        'sourceIds',
+      ]) compact[key] = required(mapping, key);
+      compact.sources = sources;
+      compact.targets = targets;
+      compact.transforms = transforms;
+      compact.composites = composites;
+      compact.filters = filters;
+      compact.tileRows = tileRows;
+      return compact;
+    };
+    const tileCount = mappings => mappings.reduce((total, mapping) => (
+      total + (Array.isArray(mapping?.tileDraws) ? mapping.tileDraws.length : 0)
+    ), 0);
+    const activeTileCount = activeSegments.reduce((total, segment) => (
+      total + (Array.isArray(segment?.tileDraws) ? segment.tileDraws.length : 0)
+    ), 0);
+    const compactMappings = returned.map(compactMapping);
+    const returnedMappingIds = new Set(
+      returned
+        .filter(record => record.mappingId !== null && record.mappingId !== undefined)
+        .map(record => String(record.mappingId)),
+    );
+    const compactCounts = compactMappings.reduce((counts, mapping) => {
+      counts.source += mapping.sources.length;
+      counts.target += mapping.targets.length;
+      counts.transform += mapping.transforms.length;
+      counts.composite += mapping.composites.length;
+      counts.filter += mapping.filters.length;
+      return counts;
+    }, {source: 0, target: 0, transform: 0, composite: 0, filter: 0});
+    return {
+      transportVersion: 1,
+      compactMappings,
+      retainedCompletedMappingCount: completedMappings.length,
+      retainedCompletedTileRecordCount: tileCount(completedMappings),
+      activeSegmentCount: activeSegments.length,
+      activeTileRecordCount: activeTileCount,
+      droppedCompletedMappingCount: Number.isFinite(trace?.droppedCompletedMappingCount)
+        ? Number(trace.droppedCompletedMappingCount) : 0,
+      droppedActiveSegmentCount: Number.isFinite(trace?.droppedActiveSegmentCount)
+        ? Number(trace.droppedActiveSegmentCount) : 0,
+      requestedMappingCount: requestedSet.size,
+      returnedCompletedMappingCount: compactMappings.length,
+      returnedTileRecordCount: tileCount(returned),
+      missingMappingCount: [...requestedSet]
+        .filter(mappingId => !returnedMappingIds.has(mappingId)).length,
+      compactSourceTableCount: compactCounts.source,
+      compactTargetTableCount: compactCounts.target,
+      compactTransformTableCount: compactCounts.transform,
+      compactCompositeTableCount: compactCounts.composite,
+      compactFilterTableCount: compactCounts.filter,
+    };
+  } catch (error) {
+    return {transportVersion: 1, transportError: String(error)};
+  }
 }
 """
 
@@ -790,6 +940,7 @@ def _evaluation_timing_defaults() -> dict[str, float]:
     return {
         "evaluation_total": 0.0,
         "trace_fetch_ms": 0.0,
+        "trace_decode_ms": 0.0,
         "trace_python_analysis_ms": 0.0,
         "mapping_analysis": 0.0,
         "imagebitmap_signature": 0.0,
@@ -814,6 +965,11 @@ def _trace_payload_stats(trace: object) -> dict[str, int]:
         "trace_returned_mapping_count": 0,
         "trace_returned_tile_record_count": 0,
         "trace_missing_mapping_count": 0,
+        "trace_compact_source_table_count": 0,
+        "trace_compact_target_table_count": 0,
+        "trace_compact_transform_table_count": 0,
+        "trace_compact_composite_table_count": 0,
+        "trace_compact_filter_table_count": 0,
     }
     if not isinstance(trace, dict):
         return stats
@@ -851,6 +1007,26 @@ def _trace_payload_stats(trace: object) -> dict[str, int]:
         "trace_missing_mapping_count": (
             "missingMappingCount",
             "missing_mapping_count",
+        ),
+        "trace_compact_source_table_count": (
+            "compactSourceTableCount",
+            "compact_source_table_count",
+        ),
+        "trace_compact_target_table_count": (
+            "compactTargetTableCount",
+            "compact_target_table_count",
+        ),
+        "trace_compact_transform_table_count": (
+            "compactTransformTableCount",
+            "compact_transform_table_count",
+        ),
+        "trace_compact_composite_table_count": (
+            "compactCompositeTableCount",
+            "compact_composite_table_count",
+        ),
+        "trace_compact_filter_table_count": (
+            "compactFilterTableCount",
+            "compact_filter_table_count",
         ),
     }
     has_retained_summary = any(
@@ -2212,7 +2388,7 @@ class BookWalkerAdapter(SiteAdapter):
             "spread_ready": False,
             "output_enabled": self.lossless_jpeg_output_enabled,
             "output_used": False,
-            "trace_fetch_mode": "selected_completed_mappings",
+            "trace_fetch_mode": "selected_completed_mappings_compact_v1",
             "timing_ms": evaluation_timing,
             "parts": [],
             **_trace_payload_stats(None),
@@ -2222,6 +2398,7 @@ class BookWalkerAdapter(SiteAdapter):
             evaluation_timing["evaluation_total"] = _elapsed_ms(evaluation_started)
             measured_keys = (
                 "trace_fetch_ms",
+                "trace_decode_ms",
                 "mapping_analysis",
                 "imagebitmap_signature",
                 "candidate_signature_total",
@@ -2274,15 +2451,18 @@ class BookWalkerAdapter(SiteAdapter):
         shadow["trace_requested_mapping_count"] = len(requested_mapping_ids)
         trace_fetch_started = time.perf_counter()
         try:
-            trace = await page.evaluate(
-                _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+            compact_payload = await page.evaluate(
+                _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
                 requested_mapping_ids,
             )
         except Exception:  # noqa: BLE001 - missing trace means unavailable
-            trace = None
+            compact_payload = None
         evaluation_timing["trace_fetch_ms"] = _elapsed_ms(trace_fetch_started)
+        trace_decode_started = time.perf_counter()
+        trace = decode_compact_completed_mappings(compact_payload)
+        evaluation_timing["trace_decode_ms"] = _elapsed_ms(trace_decode_started)
         if not isinstance(trace, dict):
-            shadow["reason"] = "trace unavailable"
+            shadow["reason"] = "compact trace unavailable or invalid"
             shadow["parts"] = [
                 self._shadow_part_defaults(len(purchased_candidates))
                 for _ in native_captures
