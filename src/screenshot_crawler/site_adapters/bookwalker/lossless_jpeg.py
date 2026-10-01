@@ -4,12 +4,34 @@ from __future__ import annotations
 
 import contextlib
 import tempfile
+import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import mapping_sha256
+
+_TIMING_KEYS = (
+    "jpeg_header_and_validation_ms",
+    "source_tempfile_write_ms",
+    "source_dct_read_ms",
+    "coefficient_array_copy_ms",
+    "coefficient_rearrange_ms",
+    "jpeg_dct_write_ms",
+    "output_tempfile_read_ms",
+    "output_dct_readback_ms",
+    "coefficient_readback_compare_ms",
+    "total_ms",
+)
+
+
+def _timing_defaults() -> dict[str, float]:
+    return {key: 0.0 for key in _TIMING_KEYS}
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +52,7 @@ class LosslessJpegResult:
     coefficient_validation: dict[str, Any]
     available: bool
     reason: str | None = None
+    timing: dict[str, float] = field(default_factory=dict)
 
     @property
     def success(self) -> bool:
@@ -104,6 +127,7 @@ def _fail(
     tiles: tuple[int, int] | None = None,
     mapping_hash: str | None = None,
     coefficients: dict[str, Any] | None = None,
+    timing: Mapping[str, float] | None = None,
 ) -> LosslessJpegResult:
     return LosslessJpegResult(
         data=None,
@@ -115,6 +139,7 @@ def _fail(
         coefficient_validation=coefficients or {},
         available=False,
         reason=reason,
+        timing=dict(_timing_defaults() if timing is None else timing),
     )
 
 
@@ -179,25 +204,52 @@ def _jpeg_header(data: bytes) -> tuple[str, int, int, int, list[tuple[int, int, 
     return None
 
 
-def _read_dct(data: bytes, jpeglib: object) -> tuple[object, Path]:
+def _read_dct(
+    data: bytes,
+    jpeglib: object,
+    *,
+    timing: dict[str, float] | None = None,
+    tempfile_key: str | None = None,
+    read_key: str | None = None,
+) -> tuple[object, Path]:
+    write_started = time.perf_counter()
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:
         path = Path(handle.name)
         handle.write(data)
+    if timing is not None and tempfile_key is not None:
+        timing[tempfile_key] = _elapsed_ms(write_started)
     try:
-        return jpeglib.read_dct(str(path)), path  # type: ignore[attr-defined]
+        read_started = time.perf_counter()
+        result = jpeglib.read_dct(str(path))  # type: ignore[attr-defined]
+        if timing is not None and read_key is not None:
+            timing[read_key] = _elapsed_ms(read_started)
+        return result, path
     except BaseException:
         path.unlink(missing_ok=True)
         raise
 
 
-def _write_dct(dct: object, arrays: Mapping[str, object], jpeglib: object) -> tuple[bytes, Path]:
+def _write_dct(
+    dct: object,
+    arrays: Mapping[str, object],
+    jpeglib: object,
+    *,
+    timing: dict[str, float] | None = None,
+) -> tuple[bytes, Path]:
     for name, array in arrays.items():
         getattr(dct, name)[...] = array
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:
         path = Path(handle.name)
     try:
+        write_started = time.perf_counter()
         dct.write_dct(str(path), quality=-1)  # type: ignore[attr-defined]
-        return path.read_bytes(), path
+        if timing is not None:
+            timing["jpeg_dct_write_ms"] = _elapsed_ms(write_started)
+        read_started = time.perf_counter()
+        output = path.read_bytes()
+        if timing is not None:
+            timing["output_tempfile_read_ms"] = _elapsed_ms(read_started)
+        return output, path
     except BaseException:
         path.unlink(missing_ok=True)
         raise
@@ -219,6 +271,8 @@ def reconstruct_lossless_jpeg(
     mapping returns an unavailable result and never leaves a temporary file.
     """
 
+    reconstruction_started = time.perf_counter()
+    timing = _timing_defaults()
     items, source_dimensions, destination_dimensions, tile_dimensions, mapping_hash = _mapping_values(mapping)
     if not mapping_hash:
         mapping_hash = None
@@ -281,6 +335,8 @@ def reconstruct_lossless_jpeg(
     ):
         return _fail("mapping is not a complete bijection", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
 
+    timing["jpeg_header_and_validation_ms"] = _elapsed_ms(reconstruction_started)
+
     try:
         import jpeglib  # type: ignore[import-not-found]
         import numpy as np  # type: ignore[import-not-found]
@@ -292,7 +348,13 @@ def reconstruct_lossless_jpeg(
     source_path: Path | None = None
     output_path: Path | None = None
     try:
-        source_dct, source_path = _read_dct(jpeg_bytes, jpeglib)
+        source_dct, source_path = _read_dct(
+            jpeg_bytes,
+            jpeglib,
+            timing=timing,
+            tempfile_key="source_tempfile_write_ms",
+            read_key="source_dct_read_ms",
+        )
         if int(source_dct.width) != header_width or int(source_dct.height) != header_height:
             return _fail("DCT dimensions differ from JPEG header", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
         factors = np.asarray(source_dct.samp_factor).tolist()
@@ -301,9 +363,12 @@ def reconstruct_lossless_jpeg(
         if int(getattr(source_dct, "num_scans", 1)) != 1 or bool(getattr(source_dct, "progressive_mode", False)):
             return _fail("UNSUPPORTED_JPEG_LAYOUT", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
         names = ("Y", "Cb", "Cr")
+        copy_started = time.perf_counter()
         original = {name: np.array(getattr(source_dct, name), dtype=np.int16, copy=True) for name in names}
         expected_arrays = {name: array.copy() for name, array in original.items()}
+        timing["coefficient_array_copy_ms"] = _elapsed_ms(copy_started)
         checked_blocks = 0
+        rearrange_started = time.perf_counter()
         for item in items:
             source_x = item["source_x"] // 8
             source_y = item["source_y"] // 8
@@ -314,11 +379,24 @@ def reconstruct_lossless_jpeg(
             for name in names:
                 expected_arrays[name][destination_y:destination_y + height, destination_x:destination_x + width] = original[name][source_y:source_y + height, source_x:source_x + width]
             checked_blocks += width * height
-        output_bytes, output_path = _write_dct(source_dct, expected_arrays, jpeglib)
-        output_dct, output_path_read = _read_dct(output_bytes, jpeglib)
+        timing["coefficient_rearrange_ms"] = _elapsed_ms(rearrange_started)
+        output_bytes, output_path = _write_dct(
+            source_dct,
+            expected_arrays,
+            jpeglib,
+            timing=timing,
+        )
+        output_dct, output_path_read = _read_dct(
+            output_bytes,
+            jpeglib,
+            timing=timing,
+            tempfile_key="output_tempfile_read_ms",
+            read_key="output_dct_readback_ms",
+        )
         # The second path is distinct from the write path and is cleaned below.
         readback_path = output_path_read
         try:
+            compare_started = time.perf_counter()
             observed = {name: np.array(getattr(output_dct, name), dtype=np.int16, copy=True) for name in names}
             mismatched_blocks = 0
             mismatched_coefficients = 0
@@ -345,6 +423,7 @@ def reconstruct_lossless_jpeg(
                 "quantization_tables_equal": quantization_tables_equal,
                 "by_component": by_component,
             }
+            timing["coefficient_readback_compare_ms"] = _elapsed_ms(compare_started)
             if mismatched_blocks or mismatched_coefficients:
                 return _fail("COEFFICIENT_MAPPING_MISMATCH", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash, coefficients=coefficient_validation)
             if not quantization_tables_equal:
@@ -361,13 +440,25 @@ def reconstruct_lossless_jpeg(
                 mapping_sha256=mapping_hash,
                 coefficient_validation=coefficient_validation,
                 available=True,
+                timing={
+                    **timing,
+                    "total_ms": _elapsed_ms(reconstruction_started),
+                },
             )
         finally:
             with contextlib.suppress(Exception):
                 output_dct.close()
             readback_path.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001 - shadow optimization must fail closed
-        return _fail(f"reconstruction failed: {type(exc).__name__}", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
+        timing["total_ms"] = _elapsed_ms(reconstruction_started)
+        return _fail(
+            f"reconstruction failed: {type(exc).__name__}",
+            width=header_width,
+            height=header_height,
+            tiles=tile_dimensions,
+            mapping_hash=mapping_hash,
+            timing=timing,
+        )
     finally:
         if output_dct is not None:
             with contextlib.suppress(Exception):

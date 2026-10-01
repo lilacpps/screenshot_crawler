@@ -1714,6 +1714,79 @@ guard. The switch-OFF run retained the P1 native PNG behavior. No repository
 image fixture, cookie, token, credential, JPEG byte stream, or base64 payload
 was added.
 
+### 20.16 Phase P3 default output and performance instrumentation (2026-10-01)
+
+Phase P3 promotes verified lossless reconstructed JPEG output to the production
+default. The BookWalker-local switch is now enabled when
+`BOOKWALKER_LOSSLESS_JPEG_OUTPUT` is unset. Explicit `1`, `true`, `yes`, and
+`on` also enable output; explicit `0`, `false`, `no`, and `off` are the kill
+switch and restore native PNG for purchased reconstruction. Invalid explicit
+values fail fast in the adapter. The existing original-JPEG matcher remains
+first priority, including trial pages, trial covers, and purchased
+direct-original covers; those paths return the original candidate bytes without
+calling reconstruction.
+
+The P2 proof gate is unchanged: completed-segment mapping must be proven and
+complete, with no overflow or eviction, one unique exact raw JPEG candidate,
+supported strict-MCU JPEG structure, exact coefficients and quantization
+tables, matching native dimensions, and browser full-resolution pixel exactness.
+Spread output remains all-or-none. p.1 geometry, crop, partial MCU edges,
+unsupported JPEG layouts, incomplete mappings, and other unsafe cases remain
+native PNG fallback. Canvas mode bypasses purchased reconstruction and keeps
+the rendered-canvas fallback.
+
+P3 adds observability-only timing metadata at capture, part, evaluation, and
+lossless reconstruction levels. It records mapping analysis, ImageBitmap and
+candidate signatures, raw and final browser comparisons, native materialization,
+coefficient array copy/rearrangement, DCT reads/writes/readback, coefficient
+verification, and total elapsed time. Timing does not affect proof, retry,
+timeout, navigation, or output selection. JPEG bytes are not stored in debug or
+manifest metadata; only the reconstructed size and SHA-256 fingerprint remain
+available for diagnosis.
+
+The P3 live benchmark used the shared Chrome/CDP session with the target URL,
+default environment (no `BOOKWALKER_LOSSLESS_JPEG_OUTPUT` override), native
+capture, direct access, a fresh output directory, and `--max-pages 20`. The
+existing terminal `MaxPagesExceededError` was raised after the 20 artifacts and
+manifest had been saved. All 20 artifacts were 960x1280 reconstructed JPEGs,
+with `returned_path=reconstructed_jpeg`, `output_enabled=true`,
+`output_used=true`, and browser pixel differences of zero. Every saved page was
+a two-part spread, so this run has no single-part comparison.
+
+Timing summary for the 20 successful pages / 40 successful parts follows. The
+values are milliseconds; p90 uses the nearest observed sample.
+
+| measurement | count | median | p90 | max |
+| --- | ---: | ---: | ---: | ---: |
+| evaluation total | 20 | 2472.13 | 4641.69 | 4835.17 |
+| native materialization | 20 | 115.62 | 134.57 | 199.81 |
+| mapping analysis | 40 | 52.36 | 62.05 | 86.30 |
+| signatures (ImageBitmap + candidates) | 40 | 3.63 | 4.93 | 61.51 |
+| raw full-resolution comparison | 40 | 60.28 | 68.70 | 98.96 |
+| lossless reconstruction | 40 | 134.50 | 241.84 | 313.63 |
+| source DCT read | 40 | 15.12 | 27.37 | 27.72 |
+| coefficient array copy | 40 | 21.04 | 35.41 | 47.86 |
+| coefficient rearrange | 40 | 4.82 | 7.34 | 10.76 |
+| JPEG DCT write | 40 | 27.29 | 30.67 | 61.28 |
+| output DCT readback | 40 | 13.46 | 17.31 | 25.32 |
+| coefficient readback compare | 40 | 27.01 | 31.86 | 57.87 |
+| final browser pixel comparison | 40 | 136.94 | 174.35 | 290.47 |
+
+The two-part capture total was median 3329.85 ms, p90 5614.69 ms, and max
+5721.48 ms. The coefficient rearrangement median was 3.81% of the per-part
+lossless reconstruction `total_ms` (median of per-part ratios), so the image
+reordering loop is not the main measured cost. By median, the requested cost
+ranking is final browser pixel comparison (136.94 ms), raw full-resolution
+candidate comparison (60.28 ms), combined source-DCT read plus JPEG write and
+output-DCT readback (approximately 55.87 ms from the component medians), then
+coefficient readback comparison (27.01 ms). These are observations only;
+removing or weakening any proof step is deferred to P4.
+
+P4 optimization candidates are therefore the repeated browser full-resolution
+comparisons and DCT/file-I/O path, subject to preserving the raw match proof,
+coefficient readback validation, and final browser pixel exactness. No such
+optimization is included in P3.
+
 ### Phase 1 runtime pacing
 
 BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を

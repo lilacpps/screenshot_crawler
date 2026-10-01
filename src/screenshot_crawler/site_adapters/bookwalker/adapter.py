@@ -12,6 +12,7 @@ import copy
 import hashlib
 import os
 import re
+import time
 from binascii import Error as BinasciiError
 from dataclasses import dataclass
 from typing import Any
@@ -689,6 +690,54 @@ def _capture_from_data_url(value: object) -> CaptureResult:
         ) from exc
 
 
+def parse_bookwalker_lossless_jpeg_output(value: str | None) -> bool:
+    """Parse the BookWalker-local reconstructed-JPEG output switch.
+
+    The P3 default is enabled when the environment variable is unset. An
+    explicit value must be one of the documented on/off spellings so a typo
+    cannot silently change the capture format.
+    """
+
+    if value is None:
+        return True
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        "BOOKWALKER_LOSSLESS_JPEG_OUTPUT must be one of: "
+        "0, 1, false, true, no, yes, off, on"
+    )
+
+
+def _elapsed_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 2)
+
+
+def _part_timing_defaults() -> dict[str, float]:
+    return {
+        "mapping_analysis_ms": 0.0,
+        "imagebitmap_signature_ms": 0.0,
+        "candidate_signature_ms_total": 0.0,
+        "raw_full_resolution_compare_ms": 0.0,
+        "lossless_reconstruction_ms": 0.0,
+        "final_browser_pixel_compare_ms": 0.0,
+    }
+
+
+def _evaluation_timing_defaults() -> dict[str, float]:
+    return {
+        "evaluation_total": 0.0,
+        "mapping_analysis": 0.0,
+        "imagebitmap_signature": 0.0,
+        "candidate_signature_total": 0.0,
+        "raw_full_resolution_compare": 0.0,
+        "lossless_reconstruction": 0.0,
+        "final_browser_pixel_compare": 0.0,
+    }
+
+
 def _native_call_is_safe(call: dict[str, Any]) -> bool:
     source = call.get("source")
     if not isinstance(source, dict) or source.get("constructor") not in {
@@ -813,9 +862,9 @@ class BookWalkerAdapter(SiteAdapter):
                 "BOOKWALKER_CAPTURE_MODE must be 'native' or 'canvas', "
                 f"got {self.capture_mode!r}"
             )
-        self.lossless_jpeg_output_enabled = os.environ.get(
-            "BOOKWALKER_LOSSLESS_JPEG_OUTPUT", ""
-        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.lossless_jpeg_output_enabled = parse_bookwalker_lossless_jpeg_output(
+            os.environ.get("BOOKWALKER_LOSSLESS_JPEG_OUTPUT")
+        )
         self._access_strategy: AccessStrategy = "auto"
         self._auto_login_email = auto_login_email
         self._auto_login_password = auto_login_password
@@ -839,6 +888,7 @@ class BookWalkerAdapter(SiteAdapter):
         self._capture_debug: dict[str, Any] = {
             "bookwalker_capture": {
                 "returned_path": "rendered_canvas",
+                "timing_ms": {},
                 "lossless_shadow": {
                     "attempted": False,
                     "spread_ready": False,
@@ -1911,6 +1961,7 @@ class BookWalkerAdapter(SiteAdapter):
         self._capture_debug = {
             "bookwalker_capture": {
                 "returned_path": "native_png",
+                "timing_ms": {},
                 "lossless_shadow": {
                     "attempted": False,
                     "spread_ready": False,
@@ -1979,13 +2030,24 @@ class BookWalkerAdapter(SiteAdapter):
     ) -> LosslessReconstructionEvaluation:
         """Evaluate purchased JPEG reconstruction and retain verified captures."""
 
+        evaluation_started = time.perf_counter()
+        evaluation_timing = _evaluation_timing_defaults()
         shadow: dict[str, Any] = {
             "attempted": True,
             "spread_ready": False,
             "output_enabled": self.lossless_jpeg_output_enabled,
             "output_used": False,
+            "timing_ms": evaluation_timing,
             "parts": [],
         }
+
+        def finish_timing() -> None:
+            for key, value in evaluation_timing.items():
+                evaluation_timing[key] = round(value, 2)
+            evaluation_timing["evaluation_total"] = _elapsed_ms(evaluation_started)
+            shadow["lossless_evaluation_total_ms"] = evaluation_timing[
+                "evaluation_total"
+            ]
         purchased_candidates = tuple(
             candidate
             for candidate in self._original_candidates.values()
@@ -2001,6 +2063,7 @@ class BookWalkerAdapter(SiteAdapter):
                 self._shadow_part_defaults(len(purchased_candidates))
                 for _ in native_captures
             ]
+            finish_timing()
             return LosslessReconstructionEvaluation(shadow, None)
         if len(selected_draw_calls) != len(native_captures):
             shadow["reason"] = "native capture and renderer draw counts differ"
@@ -2008,13 +2071,20 @@ class BookWalkerAdapter(SiteAdapter):
                 self._shadow_part_defaults(len(purchased_candidates))
                 for _ in native_captures
             ]
+            finish_timing()
             return LosslessReconstructionEvaluation(shadow, None)
 
         parts: list[dict[str, Any]] = []
         reconstructed_captures: list[CaptureResult] = []
         for native, draw_call in zip(native_captures, selected_draw_calls, strict=False):
             part = self._shadow_part_defaults(len(purchased_candidates))
+            part_timing = _part_timing_defaults()
+            part["timing_ms"] = part_timing
+            mapping_started = time.perf_counter()
             analysis: MappingAnalysis = analyze_purchased_mapping(trace, draw_call)
+            mapping_elapsed = _elapsed_ms(mapping_started)
+            part_timing["mapping_analysis_ms"] = mapping_elapsed
+            evaluation_timing["mapping_analysis"] += mapping_elapsed
             analysis_debug = analysis.to_debug()
             for key in (
                 "mapping_source",
@@ -2067,13 +2137,18 @@ class BookWalkerAdapter(SiteAdapter):
                 part["reason"] = "no purchased JPEG candidate has matching dimensions"
                 parts.append(part)
                 continue
+            imagebitmap_signature_started = time.perf_counter()
             source_signature = await imagebitmap_signature(page, source_id)
+            imagebitmap_elapsed = _elapsed_ms(imagebitmap_signature_started)
+            part_timing["imagebitmap_signature_ms"] = imagebitmap_elapsed
+            evaluation_timing["imagebitmap_signature"] += imagebitmap_elapsed
             part["imagebitmap_signature_available"] = source_signature is not None
             if source_signature is None:
                 part["reason"] = "ImageBitmap signature unavailable"
                 parts.append(part)
                 continue
             signature_candidates: list[Any] = []
+            candidate_signature_started = time.perf_counter()
             for candidate in dimension_candidates:
                 if candidate.signature is None:
                     candidate.signature = await image_signature(
@@ -2083,12 +2158,16 @@ class BookWalkerAdapter(SiteAdapter):
                     )
                 if candidate.signature == source_signature:
                     signature_candidates.append(candidate)
+            candidate_signature_elapsed = _elapsed_ms(candidate_signature_started)
+            part_timing["candidate_signature_ms_total"] = candidate_signature_elapsed
+            evaluation_timing["candidate_signature_total"] += candidate_signature_elapsed
             part["candidate_count_signature_match"] = len(signature_candidates)
             if not signature_candidates:
                 part["reason"] = "no purchased JPEG candidate has matching signature"
                 parts.append(part)
                 continue
             matches: list[Any] = []
+            raw_compare_started = time.perf_counter()
             for candidate in signature_candidates:
                 comparison = await imagebitmap_pixel_exact_match(
                     page,
@@ -2098,6 +2177,9 @@ class BookWalkerAdapter(SiteAdapter):
                 part["full_resolution_comparison_count"] += 1
                 if comparison.get("available") and comparison.get("exact"):
                     matches.append(candidate)
+            raw_compare_elapsed = _elapsed_ms(raw_compare_started)
+            part_timing["raw_full_resolution_compare_ms"] = raw_compare_elapsed
+            evaluation_timing["raw_full_resolution_compare"] += raw_compare_elapsed
             part["candidate_count_full_exact"] = len(matches)
             part["raw_jpeg_match_count"] = len(matches)
             if len(matches) != 1:
@@ -2106,13 +2188,18 @@ class BookWalkerAdapter(SiteAdapter):
                 continue
             candidate = matches[0]
             part["raw_jpeg_exact"] = True
+            reconstruction_started = time.perf_counter()
             result: LosslessJpegResult = await asyncio.to_thread(
                 reconstruct_lossless_jpeg,
                 candidate.data,
                 mapping,
             )
+            reconstruction_elapsed = _elapsed_ms(reconstruction_started)
+            part_timing["lossless_reconstruction_ms"] = reconstruction_elapsed
+            evaluation_timing["lossless_reconstruction"] += reconstruction_elapsed
             part["jpeg_supported"] = result.available
             part["coefficient_validation"] = result.coefficient_validation
+            part["lossless_timing_ms"] = dict(result.timing)
             part["coefficient_exact"] = bool(
                 result.available
                 and result.coefficient_validation.get("mismatched_blocks") == 0
@@ -2135,7 +2222,11 @@ class BookWalkerAdapter(SiteAdapter):
                 part["reconstructed_dimensions_match"] = (
                     result.width == native.width and result.height == native.height
                 )
+                final_compare_started = time.perf_counter()
                 comparison = await self._browser_pixel_exact(page, result.data, native.data)
+                final_compare_elapsed = _elapsed_ms(final_compare_started)
+                part_timing["final_browser_pixel_compare_ms"] = final_compare_elapsed
+                evaluation_timing["final_browser_pixel_compare"] += final_compare_elapsed
                 part["native_pixel_exact"] = bool(
                     comparison.get("available") and comparison.get("exact")
                 )
@@ -2186,6 +2277,7 @@ class BookWalkerAdapter(SiteAdapter):
             shadow["spread_ready"] = False
             if "reason" not in shadow:
                 shadow["reason"] = "verified reconstructed captures are incomplete"
+        finish_timing()
         return LosslessReconstructionEvaluation(shadow, captures)
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
@@ -2284,6 +2376,7 @@ class BookWalkerAdapter(SiteAdapter):
             self._capture_debug["bookwalker_capture"]["returned_path"] = "rendered_canvas"
             return None
         self._reset_capture_debug()
+        capture_started = time.perf_counter()
         selected_draw_calls: list[dict[str, Any]] = []
         try:
             canvas = await self.get_capture_target(page)
@@ -2323,7 +2416,11 @@ class BookWalkerAdapter(SiteAdapter):
                     "BookWalker native source calls did not match page geometry"
                 )
             selected_draw_calls = selected
+            materialization_started = time.perf_counter()
             selected = await self._materialize_native_source_crops(page, selected)
+            self._capture_debug["bookwalker_capture"]["timing_ms"][
+                "native_materialization_ms"
+            ] = _elapsed_ms(materialization_started)
 
             captures: list[CaptureResult] = []
             for call in selected:
@@ -2444,6 +2541,9 @@ class BookWalkerAdapter(SiteAdapter):
             return None
         finally:
             await self._clear_native_capture(page)
+            self._capture_debug["bookwalker_capture"]["timing_ms"][
+                "capture_total_ms"
+            ] = _elapsed_ms(capture_started)
 
     async def detect_state(self, page: Page) -> PageState:
         current_content_id = self.content_id_from_url(page.url)

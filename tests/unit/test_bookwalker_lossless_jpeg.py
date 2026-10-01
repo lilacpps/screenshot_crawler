@@ -58,6 +58,21 @@ def test_identity_reconstruction_is_coefficient_exact() -> None:
     assert result.coefficient_validation["mismatched_blocks"] == 0
     assert result.coefficient_validation["mismatched_coefficients"] == 0
     assert result.coefficient_validation["quantization_tables_equal"] is True
+    expected_timing_keys = {
+        "jpeg_header_and_validation_ms",
+        "source_dct_read_ms",
+        "coefficient_array_copy_ms",
+        "coefficient_rearrange_ms",
+        "jpeg_dct_write_ms",
+        "output_dct_readback_ms",
+        "coefficient_readback_compare_ms",
+        "total_ms",
+    }
+    assert expected_timing_keys <= result.timing.keys()
+    assert all(
+        isinstance(result.timing[key], (int, float)) and result.timing[key] >= 0
+        for key in expected_timing_keys
+    )
 
 
 def test_two_tile_swap_reconstructs_without_rgb_requantization() -> None:

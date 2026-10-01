@@ -13,6 +13,7 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import (
     BookWalkerAdapter,
     _capture_from_data_url,
     _native_call_is_safe,
+    parse_bookwalker_lossless_jpeg_output,
 )
 from screenshot_crawler.site_adapters.bookwalker.lossless_jpeg import LosslessJpegResult
 from screenshot_crawler.site_adapters.bookwalker.native_capture import (
@@ -312,7 +313,7 @@ async def test_canvas_mode_returns_none_without_touching_native_capture(
 async def test_existing_original_jpeg_wins_before_lossless_shadow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
+    monkeypatch.delenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", raising=False)
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
     original = CaptureResult(b"original-jpeg", 1, 1, "image/jpeg", ".jpg")
@@ -343,7 +344,7 @@ async def test_existing_original_jpeg_wins_before_lossless_shadow(
 async def test_purchased_direct_original_jpeg_is_returned_byte_for_byte(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
+    monkeypatch.delenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", raising=False)
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
     candidate = candidate_from_jpeg(
@@ -419,7 +420,7 @@ async def _no_original_capture(
 async def test_lossless_output_switch_off_keeps_verified_shadow_native_png(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", raising=False)
+    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "0")
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
     _add_purchased_candidate(adapter)
@@ -454,7 +455,7 @@ async def test_lossless_output_switch_off_keeps_verified_shadow_native_png(
 async def test_lossless_output_switch_returns_verified_bytes_without_reencoding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
+    monkeypatch.delenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", raising=False)
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
     _add_purchased_candidate(adapter)
@@ -762,6 +763,27 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     assert part["candidate_count_full_exact"] == 1
     assert len(full_resolution_calls) == 1
     assert result["spread_ready"] is True
+    assert {
+        "evaluation_total",
+        "mapping_analysis",
+        "imagebitmap_signature",
+        "candidate_signature_total",
+        "raw_full_resolution_compare",
+        "lossless_reconstruction",
+        "final_browser_pixel_compare",
+    } <= result["timing_ms"].keys()
+    assert {
+        "mapping_analysis_ms",
+        "imagebitmap_signature_ms",
+        "candidate_signature_ms_total",
+        "raw_full_resolution_compare_ms",
+        "lossless_reconstruction_ms",
+        "final_browser_pixel_compare_ms",
+    } <= part["timing_ms"].keys()
+    assert all(
+        isinstance(value, (int, float)) and value >= 0
+        for value in result["timing_ms"].values()
+    )
 
 
 @pytest.mark.asyncio
@@ -923,4 +945,33 @@ def test_invalid_capture_mode_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("BOOKWALKER_CAPTURE_MODE", "unexpected")
 
     with pytest.raises(ValueError, match="BOOKWALKER_CAPTURE_MODE"):
+        BookWalkerAdapter()
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, True),
+        ("1", True),
+        ("true", True),
+        ("yes", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_lossless_output_switch_parser(value: str | None, expected: bool) -> None:
+    assert parse_bookwalker_lossless_jpeg_output(value) is expected
+
+
+def test_lossless_output_switch_defaults_on_and_rejects_invalid_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", raising=False)
+    assert BookWalkerAdapter().lossless_jpeg_output_enabled is True
+
+    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "maybe")
+    with pytest.raises(ValueError, match="BOOKWALKER_LOSSLESS_JPEG_OUTPUT"):
         BookWalkerAdapter()

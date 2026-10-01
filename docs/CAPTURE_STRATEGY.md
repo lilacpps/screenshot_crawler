@@ -392,14 +392,17 @@ coefficients back, and verifies zero mismatches plus unchanged quantization
 tables. A full-size browser pixel comparison against the current native PNG is
 also required.
 
-Phase P2 may return the verified reconstructed JPEG only when every proof gate
+Phase P2/P3 may return the verified reconstructed JPEG only when every proof gate
 passes, including `mapping_proven=true`, `mapping_source=completed_segment`, no
 segment overflow or completed-mapping eviction, one full-resolution raw JPEG
 match, supported strict-MCU JPEG layout, exact coefficients and quantization
 tables, browser full-resolution pixel exactness, and matching native
-dimensions. The output switch is BookWalker-local and opt-in:
-`BOOKWALKER_LOSSLESS_JPEG_OUTPUT=1` (also `true`, `yes`, or `on`). Its default
-is off, so the P1 shadow-only behavior remains the default.
+dimensions. The output switch is BookWalker-local:
+`BOOKWALKER_LOSSLESS_JPEG_OUTPUT` is BookWalker-local and is enabled by
+default in Phase P3. Explicit `1`, `true`, `yes`, and `on` values also enable
+it. The kill switch is `BOOKWALKER_LOSSLESS_JPEG_OUTPUT=0` (also `false`,
+`no`, or `off`), which restores the P1/P2 shadow-only native-PNG output.
+An invalid explicit value fails fast in the BookWalker adapter.
 
 Before any full-size candidate comparison, purchased candidates are bounded
 by exact `mapping.source_dimensions`, then by the existing deterministic 64x64
