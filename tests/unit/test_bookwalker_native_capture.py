@@ -576,7 +576,7 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class ShadowPage:
-        async def evaluate(self, _expression: str) -> dict[str, object]:
+        async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
             return {"operations": []}
 
     mapping = PurchasedMapping(
@@ -653,7 +653,7 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
     result = await adapter._evaluate_lossless_reconstruction(
         ShadowPage(),
         (CaptureResult(PNG_1X1, 1, 1), CaptureResult(PNG_1X1, 1, 1)),
-        [{"part": 1}, {"part": 2}],
+        [{"part": 1, "mappingId": "mapping-1"}, {"part": 2, "mappingId": "mapping-2"}],
     )
 
     assert len(result["parts"]) == 2
@@ -667,7 +667,7 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class ShadowPage:
-        async def evaluate(self, _expression: str) -> dict[str, object]:
+        async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
             return {"operations": []}
 
     mapping = PurchasedMapping(
@@ -761,7 +761,7 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     result = await adapter._evaluate_lossless_reconstruction(
         ShadowPage(),
         (CaptureResult(PNG_1X1, 8, 8),),
-        [{"part": 1}],
+        [{"part": 1, "mappingId": "mapping-1"}],
     )
 
     part = result["parts"][0]
@@ -828,7 +828,35 @@ def test_trace_payload_stats_count_bounded_records() -> None:
         "trace_active_tile_record_count": 3,
         "trace_dropped_completed_mapping_count": 4,
         "trace_dropped_active_segment_count": 2,
+        "trace_requested_mapping_count": 0,
+        "trace_returned_mapping_count": 0,
+        "trace_returned_tile_record_count": 0,
+        "trace_missing_mapping_count": 0,
     }
+
+
+def test_trace_payload_stats_keeps_retained_counts_separate_from_selected_counts() -> None:
+    stats = _trace_payload_stats(
+        {
+            "completedMappings": [{"tileDraws": [{}]}],
+            "retainedCompletedMappingCount": 4,
+            "retainedCompletedTileRecordCount": 400,
+            "activeSegmentCount": 2,
+            "activeTileRecordCount": 20,
+            "droppedCompletedMappingCount": 3,
+            "droppedActiveSegmentCount": 1,
+            "requestedMappingCount": 1,
+            "returnedCompletedMappingCount": 1,
+            "returnedTileRecordCount": 100,
+            "missingMappingCount": 0,
+        }
+    )
+
+    assert stats["trace_completed_mapping_count"] == 4
+    assert stats["trace_completed_tile_record_count"] == 400
+    assert stats["trace_returned_mapping_count"] == 1
+    assert stats["trace_returned_tile_record_count"] == 100
+    assert stats["trace_requested_mapping_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -841,7 +869,7 @@ async def test_lossless_shadow_trace_unavailable_keeps_timing_metadata() -> None
     result = await adapter._evaluate_lossless_reconstruction(
         MissingTracePage(),
         (CaptureResult(PNG_1X1, 8, 8),),
-        [{"part": 1}],
+        [{"part": 1, "mappingId": "mapping-1"}],
     )
 
     assert result["spread_ready"] is False
@@ -851,11 +879,34 @@ async def test_lossless_shadow_trace_unavailable_keeps_timing_metadata() -> None
 
 
 @pytest.mark.asyncio
+async def test_lossless_shadow_without_mapping_id_fails_closed_without_full_trace_fetch() -> None:
+    class UnexpectedTraceFetchPage:
+        def __init__(self) -> None:
+            self.evaluate_calls = 0
+
+        async def evaluate(self, _expression: str, *_args: object) -> object:
+            self.evaluate_calls += 1
+            raise AssertionError("mapping-id-unavailable path must not fetch full trace")
+
+    page = UnexpectedTraceFetchPage()
+    result = await BookWalkerAdapter()._evaluate_lossless_reconstruction(
+        page,
+        (CaptureResult(PNG_1X1, 8, 8),),
+        [{"part": 1}],
+    )
+
+    assert result["spread_ready"] is False
+    assert result["reason"] == "selected renderer draw mapping identity unavailable"
+    assert result["trace_fetch_mode"] == "selected_completed_mappings"
+    assert page.evaluate_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_lossless_shadow_full_resolution_ambiguity_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class ShadowPage:
-        async def evaluate(self, _expression: str) -> dict[str, object]:
+        async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
             return {"operations": []}
 
     mapping = PurchasedMapping(
@@ -914,7 +965,7 @@ async def test_lossless_shadow_full_resolution_ambiguity_fails_closed(
     result = await adapter._evaluate_lossless_reconstruction(
         ShadowPage(),
         (CaptureResult(PNG_1X1, 8, 8),),
-        [{"part": 1}],
+        [{"part": 1, "mappingId": "mapping-1"}],
     )
 
     part = result["parts"][0]
@@ -931,7 +982,7 @@ async def test_lossless_shadow_signature_mismatch_skips_full_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class ShadowPage:
-        async def evaluate(self, _expression: str) -> dict[str, object]:
+        async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
             return {"operations": []}
 
     mapping = PurchasedMapping(
@@ -994,7 +1045,7 @@ async def test_lossless_shadow_signature_mismatch_skips_full_resolution(
     result = await adapter._evaluate_lossless_reconstruction(
         ShadowPage(),
         (CaptureResult(PNG_1X1, 8, 8),),
-        [{"part": 1}],
+        [{"part": 1, "mappingId": "mapping-1"}],
     )
 
     part = result["parts"][0]

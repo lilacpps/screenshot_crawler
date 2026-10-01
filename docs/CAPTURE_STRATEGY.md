@@ -390,7 +390,9 @@ dimensions, uniform strict-MCU tiles, and a complete bijection. The helper
 moves quantized DCT blocks with `jpeglib.read_dct()` / `write_dct()`, reads the
 coefficients back, and verifies zero mismatches plus unchanged quantization
 tables. A full-size browser pixel comparison against the current native PNG is
-also required.
+also required. Production reconstruction fetches only the completed mapping
+records selected by the exact renderer `mappingId`; retained-trace counts are
+returned as a small numeric summary rather than transferring the full trace.
 
 Phase P2/P3 may return the verified reconstructed JPEG only when every proof gate
 passes, including `mapping_proven=true`, `mapping_source=completed_segment`, no

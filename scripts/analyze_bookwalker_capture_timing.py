@@ -124,6 +124,22 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
             {
                 "page_id": (capture.get("identity") or {}).get("page_id"),
                 "trace_fetch_ms": evaluation_timing.get("trace_fetch_ms"),
+                "trace_fetch_mode": shadow.get("trace_fetch_mode"),
+                "retained_mapping_count": shadow.get(
+                    "trace_completed_mapping_count"
+                ),
+                "retained_tile_record_count": shadow.get(
+                    "trace_completed_tile_record_count"
+                ),
+                "requested_mapping_count": shadow.get(
+                    "trace_requested_mapping_count"
+                ),
+                "returned_mapping_count": shadow.get("trace_returned_mapping_count"),
+                "returned_tile_record_count": shadow.get(
+                    "trace_returned_tile_record_count"
+                ),
+                "missing_mapping_count": shadow.get("trace_missing_mapping_count"),
+                # Compatibility aliases for the P4-1 report.
                 "completed_mapping_count": shadow.get("trace_completed_mapping_count"),
                 "completed_tile_record_count": shadow.get(
                     "trace_completed_tile_record_count"
@@ -191,6 +207,12 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
                 "active_tile_record_count",
                 "dropped_completed_mapping_count",
                 "dropped_active_segment_count",
+                "retained_mapping_count",
+                "retained_tile_record_count",
+                "requested_mapping_count",
+                "returned_mapping_count",
+                "returned_tile_record_count",
+                "missing_mapping_count",
             )
         },
         "trace_rows": trace_rows,

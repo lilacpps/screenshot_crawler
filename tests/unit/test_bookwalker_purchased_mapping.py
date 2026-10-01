@@ -272,6 +272,67 @@ def test_completed_segment_freezes_separate_repeated_passes() -> None:
     assert first_result.mapping.mapping_sha256 == second_result.mapping.mapping_sha256
 
 
+def test_selected_completed_mapping_has_full_trace_proof_parity() -> None:
+    record = _completed_record()
+    unrelated = _completed_record(
+        mapping_id="mapping-unrelated",
+        renderer_index=207,
+        clear_index=201,
+    )
+    full_result = analyze_purchased_mapping(
+        {"completedMappings": [unrelated, record]},
+        _completed_draw(record),
+    )
+    selected_result = analyze_purchased_mapping(
+        {"completedMappings": [record]},
+        _completed_draw(record),
+    )
+
+    assert full_result.mapping is not None
+    assert selected_result.mapping is not None
+    assert (full_result.status, full_result.reason, full_result.proven) == (
+        selected_result.status,
+        selected_result.reason,
+        selected_result.proven,
+    )
+    assert full_result.to_debug() == selected_result.to_debug()
+    assert {
+        "mapping_id": full_result.mapping.mapping_id,
+        "mapping_sha256": full_result.mapping.mapping_sha256,
+        "source_dimensions": full_result.mapping.source_dimensions,
+        "destination_dimensions": full_result.mapping.destination_dimensions,
+        "tile_dimensions": full_result.mapping.tile_dimensions,
+        "imagebitmap_source_id": full_result.mapping.imagebitmap_source_id,
+        "segment_tile_count": full_result.segment_tile_count,
+        "unsafe_operation_types": full_result.unsafe_operation_types,
+    } == {
+        "mapping_id": selected_result.mapping.mapping_id,
+        "mapping_sha256": selected_result.mapping.mapping_sha256,
+        "source_dimensions": selected_result.mapping.source_dimensions,
+        "destination_dimensions": selected_result.mapping.destination_dimensions,
+        "tile_dimensions": selected_result.mapping.tile_dimensions,
+        "imagebitmap_source_id": selected_result.mapping.imagebitmap_source_id,
+        "segment_tile_count": selected_result.segment_tile_count,
+        "unsafe_operation_types": selected_result.unsafe_operation_types,
+    }
+
+
+def test_duplicate_completed_mapping_id_fails_closed_as_ambiguous() -> None:
+    first = _completed_record()
+    duplicate = _completed_record(renderer_index=107, clear_index=106)
+
+    result = analyze_purchased_mapping(
+        {"completedMappings": [first, duplicate]},
+        _completed_draw(first),
+    )
+
+    assert not result.proven
+    assert result.status == "MAPPING_UNAVAILABLE"
+    assert result.completed_mapping_evicted is True
+    assert result.mapping_id == first["mappingId"]
+    assert "unavailable" in result.reason
+
+
 def test_completed_segment_allows_pure_renderer_scale_but_rejects_crop() -> None:
     scaled = _completed_record(
         destination={"x": 0, "y": 0, "width": 24, "height": 24},

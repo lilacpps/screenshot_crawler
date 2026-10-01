@@ -1894,6 +1894,112 @@ P4-2 candidates, not implemented here:
   table equality until a separate proof of equivalent writer guarantees is
   completed.
 
+### 20.18 Phase P4-2 selected completed mapping transfer (2026-10-01)
+
+P4-2 changes only the production transform-trace fetch. The browser still
+retains the same bounded `activeSegments` and `completedMappings` stores with
+the same active-segment and completed-mapping limits, eviction counters,
+overflow metadata, unsafe-operation metadata, and `mappingId` assignment.
+The adapter now passes the deduplicated exact `mappingId` values from the
+selected native renderer draws to a BookWalker-local browser helper. The
+helper filters `completedMappings` with `filter()` and returns every matching
+record, never only the first match. It returns the selected records plus
+integer summaries for retained completed/active trace size, dropped counts,
+requested IDs, returned mappings/tiles, and missing IDs. The full trace is no
+longer returned to Python on the production reconstruction path.
+
+When a selected draw has no `mappingId`, the adapter does not fetch the full
+trace or guess from dimensions, canvas size, tile count, or source geometry.
+It fails closed and the existing all-or-none native-PNG spread fallback is
+used. A missing or evicted requested ID is passed as an empty selected
+mapping set to the existing Python validator, which keeps
+`completed_mapping_evicted=true` and cannot reconstruct. Duplicate completed
+records are all returned so the existing `len(matches) != 1` validator check
+continues to reject ambiguity. Python remains responsible for renderer
+geometry, unsafe metadata, tile bounds/coverage, bijection, operation order,
+mapping hash, JPEG coefficient/quantization validation, and final full-size
+pixel equality.
+
+The selected-only path is reported as
+`trace_fetch_mode=selected_completed_mappings`. The P4-1 compatibility keys
+`trace_completed_mapping_count`, `trace_completed_tile_record_count`,
+`trace_active_segment_count`, `trace_active_tile_record_count`,
+`trace_dropped_completed_mapping_count`, and
+`trace_dropped_active_segment_count` continue to describe the retained
+browser trace, not the selected return payload. Additional keys are
+`trace_requested_mapping_count`, `trace_returned_mapping_count`,
+`trace_returned_tile_record_count`, and `trace_missing_mapping_count`.
+`trace_fetch_ms` still measures the complete selected browser evaluate,
+serialization, Playwright/CDP transfer, and Python materialization wall
+clock, so it remains comparable with P4-1.
+
+The parity unit test compares the full-trace and selected-record analyzer
+results for the same completed mapping, including status/reason, provenance,
+mapping ID/hash, source/destination/tile dimensions, ImageBitmap identity,
+segment metadata, and unsafe metadata. Browser-backed fixtures cover
+unrelated-record exclusion, two-part `mapping-A`/`mapping-B` selection,
+duplicate exposure, missing IDs, and the existing large post-render prefetch
+completed-segment freeze.
+
+The fresh default-ON live run used the shared Crawler Chrome/CDP session,
+native capture, direct access, the P4-1 target URL, and a new
+`output/bookwalker-p4-2-selected-trace` directory. As in P4-1, the CLI raised
+the existing `MaxPagesExceededError` after saving the requested 20 artifacts
+and the manifest. Corrected counts are:
+
+```text
+20 artifacts
+10 logical captures
+20 logical parts
+10 two-part spreads
+```
+
+All 20 artifacts were reconstructed `.jpg` files. Across all 40 logical
+parts, `output_enabled=true`, `output_used=true`, `mapping_proven=true`,
+`raw_jpeg_exact=true`, `coefficient_exact=true`,
+`quantization_tables_equal=true`, `native_pixel_exact=true`, and
+`differing_pixel_count=0`. All rows reported
+`trace_fetch_mode=selected_completed_mappings`, two requested and two
+returned mappings, 2,400 returned tile records, and zero missing mappings.
+The retained trace was a median of 3 mappings/3,600 tiles, with a p90/max of
+7 mappings/8,400 tiles; this is distinct from the selected returned payload.
+
+| measurement | count | median | p90 | max |
+| --- | ---: | ---: | ---: | ---: |
+| capture total | 10 | 2396.72 | 2443.55 | 4122.33 |
+| lossless evaluation total | 10 | 1641.07 | 1702.73 | 1920.20 |
+| selected trace fetch | 10 | 846.05 | 929.63 | 933.12 |
+| native materialization | 10 | 102.53 | 124.20 | 167.32 |
+| original JPEG matching | 10 | 576.24 | 613.87 | 1961.46 |
+| mapping analysis | 20 | 49.61 | 55.64 | 120.78 |
+| raw full-resolution comparison | 20 | 57.27 | 67.35 | 75.96 |
+| lossless reconstruction | 20 | 133.12 | 177.24 | 270.98 |
+| final browser pixel comparison | 20 | 127.41 | 146.84 | 170.49 |
+
+P4-1 to P4-2 median comparison:
+
+| measurement | P4-1 | P4-2 | absolute reduction | reduction |
+| --- | ---: | ---: | ---: | ---: |
+| trace fetch | 1757.11 ms | 846.05 ms | 911.06 ms | 51.85% |
+| lossless evaluation total | 2863.34 ms | 1641.07 ms | 1222.27 ms | 42.69% |
+| capture total | 3747.36 ms | 2396.72 ms | 1350.64 ms | 36.04% |
+
+The new measured cost ranking is selected trace fetch (846.05 ms), original
+JPEG matching (576.24 ms), lossless reconstruction (133.12 ms), final
+browser pixel comparison (127.41 ms), native materialization (102.53 ms),
+raw full-resolution comparison (57.27 ms), and mapping analysis (49.61 ms).
+Original matching remains outside lossless evaluation and its three attempts
+with the 150 ms retry wait were not changed. Full-resolution comparisons,
+coefficient readback, quantization equality, and all proof gates remain in
+place.
+
+P4-3 candidates, not implemented here, are original-JPEG matching, any
+careful full-resolution comparison optimization, and bounded mapping-validator
+cost reduction such as replacing repeated duplicate counting with `Counter`.
+If selected mapping transfer remains material after more representative
+measurements, compact numeric tile transport is a separate contract change;
+it was intentionally not included in P4-2.
+
 ### Phase 1 runtime pacing
 
 BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を

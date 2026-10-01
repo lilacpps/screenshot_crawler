@@ -581,6 +581,56 @@ _DRAW_TRACE_SCRIPT = """
 })();
 """
 
+_SELECTED_COMPLETED_MAPPINGS_SCRIPT = """
+(requestedMappingIds) => {
+  const trace = window.__bookwalkerTransformTrace;
+  const completedMappings = Array.isArray(trace?.completedMappings)
+    ? trace.completedMappings
+    : [];
+  const activeSegments = trace?.activeSegments
+    && typeof trace.activeSegments === 'object'
+    ? Object.values(trace.activeSegments)
+    : [];
+  const requested = Array.isArray(requestedMappingIds)
+    ? requestedMappingIds.map(value => String(value))
+    : [];
+  const requestedSet = new Set(requested);
+  const returned = completedMappings.filter(record => (
+    record
+    && record.mappingId !== null
+    && record.mappingId !== undefined
+    && requestedSet.has(String(record.mappingId))
+  ));
+  const tileCount = mappings => mappings.reduce((total, mapping) => (
+    total + (Array.isArray(mapping?.tileDraws) ? mapping.tileDraws.length : 0)
+  ), 0);
+  const activeTileCount = activeSegments.reduce((total, segment) => (
+    total + (Array.isArray(segment?.tileDraws) ? segment.tileDraws.length : 0)
+  ), 0);
+  const returnedMappingIds = new Set(
+    returned
+      .filter(record => record.mappingId !== null && record.mappingId !== undefined)
+      .map(record => String(record.mappingId)),
+  );
+  return {
+    completedMappings: returned,
+    retainedCompletedMappingCount: completedMappings.length,
+    retainedCompletedTileRecordCount: tileCount(completedMappings),
+    activeSegmentCount: activeSegments.length,
+    activeTileRecordCount: activeTileCount,
+    droppedCompletedMappingCount: Number.isFinite(trace?.droppedCompletedMappingCount)
+      ? Number(trace.droppedCompletedMappingCount) : 0,
+    droppedActiveSegmentCount: Number.isFinite(trace?.droppedActiveSegmentCount)
+      ? Number(trace.droppedActiveSegmentCount) : 0,
+    requestedMappingCount: requestedSet.size,
+    returnedCompletedMappingCount: returned.length,
+    returnedTileRecordCount: tileCount(returned),
+    missingMappingCount: [...requestedSet]
+      .filter(mappingId => !returnedMappingIds.has(mappingId)).length,
+  };
+}
+"""
+
 _MATERIALIZE_NATIVE_SOURCE_SCRIPT = """
 items => items.map(item => {
   try {
@@ -760,29 +810,85 @@ def _trace_payload_stats(trace: object) -> dict[str, int]:
         "trace_active_tile_record_count": 0,
         "trace_dropped_completed_mapping_count": 0,
         "trace_dropped_active_segment_count": 0,
+        "trace_requested_mapping_count": 0,
+        "trace_returned_mapping_count": 0,
+        "trace_returned_tile_record_count": 0,
+        "trace_missing_mapping_count": 0,
     }
     if not isinstance(trace, dict):
         return stats
 
     completed = trace.get("completedMappings", trace.get("completed_mappings"))
-    if isinstance(completed, list):
-        stats["trace_completed_mapping_count"] = len(completed)
-        for mapping in completed:
-            if not isinstance(mapping, dict):
-                continue
-            tiles = mapping.get("tileDraws", mapping.get("tile_draws"))
-            if isinstance(tiles, list):
-                stats["trace_completed_tile_record_count"] += len(tiles)
+    retained_stats = {
+        "trace_completed_mapping_count": (
+            "retainedCompletedMappingCount",
+            "retained_completed_mapping_count",
+        ),
+        "trace_completed_tile_record_count": (
+            "retainedCompletedTileRecordCount",
+            "retained_completed_tile_record_count",
+        ),
+        "trace_active_segment_count": (
+            "activeSegmentCount",
+            "active_segment_count",
+        ),
+        "trace_active_tile_record_count": (
+            "activeTileRecordCount",
+            "active_tile_record_count",
+        ),
+        "trace_requested_mapping_count": (
+            "requestedMappingCount",
+            "requested_mapping_count",
+        ),
+        "trace_returned_mapping_count": (
+            "returnedCompletedMappingCount",
+            "returned_mapping_count",
+        ),
+        "trace_returned_tile_record_count": (
+            "returnedTileRecordCount",
+            "returned_tile_record_count",
+        ),
+        "trace_missing_mapping_count": (
+            "missingMappingCount",
+            "missing_mapping_count",
+        ),
+    }
+    has_retained_summary = any(
+        key in trace
+        for key in (
+            "retainedCompletedMappingCount",
+            "retained_completed_mapping_count",
+        )
+    )
+    if has_retained_summary:
+        for stat_name, keys in retained_stats.items():
+            for key in keys:
+                if key not in trace:
+                    continue
+                try:
+                    stats[stat_name] = int(trace[key])
+                except (TypeError, ValueError):
+                    pass
+                break
+    else:
+        if isinstance(completed, list):
+            stats["trace_completed_mapping_count"] = len(completed)
+            for mapping in completed:
+                if not isinstance(mapping, dict):
+                    continue
+                tiles = mapping.get("tileDraws", mapping.get("tile_draws"))
+                if isinstance(tiles, list):
+                    stats["trace_completed_tile_record_count"] += len(tiles)
 
-    active = trace.get("activeSegments", trace.get("active_segments"))
-    if isinstance(active, dict):
-        stats["trace_active_segment_count"] = len(active)
-        for segment in active.values():
-            if not isinstance(segment, dict):
-                continue
-            tiles = segment.get("tileDraws", segment.get("tile_draws"))
-            if isinstance(tiles, list):
-                stats["trace_active_tile_record_count"] += len(tiles)
+        active = trace.get("activeSegments", trace.get("active_segments"))
+        if isinstance(active, dict):
+            stats["trace_active_segment_count"] = len(active)
+            for segment in active.values():
+                if not isinstance(segment, dict):
+                    continue
+                tiles = segment.get("tileDraws", segment.get("tile_draws"))
+                if isinstance(tiles, list):
+                    stats["trace_active_tile_record_count"] += len(tiles)
 
     for key in (
         "droppedCompletedMappingCount",
@@ -2106,6 +2212,7 @@ class BookWalkerAdapter(SiteAdapter):
             "spread_ready": False,
             "output_enabled": self.lossless_jpeg_output_enabled,
             "output_used": False,
+            "trace_fetch_mode": "selected_completed_mappings",
             "timing_ms": evaluation_timing,
             "parts": [],
             **_trace_payload_stats(None),
@@ -2139,9 +2246,38 @@ class BookWalkerAdapter(SiteAdapter):
             for candidate in self._original_candidates.values()
             if is_purchased_jpeg_candidate(candidate)
         )
+        if len(selected_draw_calls) != len(native_captures):
+            shadow["reason"] = "native capture and renderer draw counts differ"
+            shadow["parts"] = [
+                self._shadow_part_defaults(len(purchased_candidates))
+                for _ in native_captures
+            ]
+            finish_timing()
+            return LosslessReconstructionEvaluation(shadow, None)
+
+        requested_mapping_ids: list[str] = []
+        requested_mapping_ids_seen: set[str] = set()
+        for draw_call in selected_draw_calls:
+            mapping_id = draw_call.get("mappingId", draw_call.get("mapping_id"))
+            if mapping_id is None:
+                shadow["reason"] = "selected renderer draw mapping identity unavailable"
+                shadow["parts"] = [
+                    self._shadow_part_defaults(len(purchased_candidates))
+                    for _ in native_captures
+                ]
+                finish_timing()
+                return LosslessReconstructionEvaluation(shadow, None)
+            normalized_mapping_id = str(mapping_id)
+            if normalized_mapping_id not in requested_mapping_ids_seen:
+                requested_mapping_ids_seen.add(normalized_mapping_id)
+                requested_mapping_ids.append(normalized_mapping_id)
+        shadow["trace_requested_mapping_count"] = len(requested_mapping_ids)
         trace_fetch_started = time.perf_counter()
         try:
-            trace = await page.evaluate("() => window.__bookwalkerTransformTrace || null")
+            trace = await page.evaluate(
+                _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+                requested_mapping_ids,
+            )
         except Exception:  # noqa: BLE001 - missing trace means unavailable
             trace = None
         evaluation_timing["trace_fetch_ms"] = _elapsed_ms(trace_fetch_started)
@@ -2154,14 +2290,6 @@ class BookWalkerAdapter(SiteAdapter):
             finish_timing()
             return LosslessReconstructionEvaluation(shadow, None)
         shadow.update(_trace_payload_stats(trace))
-        if len(selected_draw_calls) != len(native_captures):
-            shadow["reason"] = "native capture and renderer draw counts differ"
-            shadow["parts"] = [
-                self._shadow_part_defaults(len(purchased_candidates))
-                for _ in native_captures
-            ]
-            finish_timing()
-            return LosslessReconstructionEvaluation(shadow, None)
 
         parts: list[dict[str, Any]] = []
         reconstructed_captures: list[CaptureResult] = []

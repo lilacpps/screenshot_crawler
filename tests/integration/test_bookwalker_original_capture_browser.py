@@ -6,7 +6,10 @@ import pytest
 from playwright.async_api import Page
 
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
-from screenshot_crawler.site_adapters.bookwalker.adapter import BookWalkerAdapter
+from screenshot_crawler.site_adapters.bookwalker.adapter import (
+    _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+    BookWalkerAdapter,
+)
 from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     image_signature,
     imagebitmap_signature,
@@ -303,3 +306,125 @@ async def test_completed_segment_freeze_survives_large_post_render_prefetch(
     assert result.status == MAPPING_PROVEN
     assert result.mapping is not None
     assert result.mapping.segment_tile_count == 4
+
+
+async def test_selected_completed_mapping_fetch_excludes_unrelated_records(
+    browser_page: Page,
+) -> None:
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    await browser_page.evaluate(
+        """
+        () => {
+          window.__bookwalkerTransformTrace = {
+            completedMappings: [
+              {mappingId: 'unrelated-a', tileDraws: [{}, {}]},
+              {mappingId: 'requested', tileDraws: [{}]},
+              {mappingId: 'unrelated-b', tileDraws: [{}, {}, {}]},
+              {mappingId: 'unrelated-c', tileDraws: [{}]},
+            ],
+            activeSegments: {
+              active: {tileDraws: [{}, {}]},
+            },
+            droppedCompletedMappingCount: 2,
+            droppedActiveSegmentCount: 1,
+          };
+        }
+        """
+    )
+
+    selected = await browser_page.evaluate(
+        _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+        ["requested"],
+    )
+
+    assert [record["mappingId"] for record in selected["completedMappings"]] == [
+        "requested"
+    ]
+    assert selected["retainedCompletedMappingCount"] == 4
+    assert selected["retainedCompletedTileRecordCount"] == 7
+    assert selected["activeSegmentCount"] == 1
+    assert selected["activeTileRecordCount"] == 2
+    assert selected["requestedMappingCount"] == 1
+    assert selected["returnedCompletedMappingCount"] == 1
+    assert selected["returnedTileRecordCount"] == 1
+    assert selected["missingMappingCount"] == 0
+
+
+async def test_selected_completed_mapping_fetch_preserves_two_part_selection_order(
+    browser_page: Page,
+) -> None:
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    await browser_page.evaluate(
+        """
+        () => {
+          window.__bookwalkerTransformTrace = {
+            completedMappings: [
+              {mappingId: 'mapping-A', tileDraws: [{}]},
+              {mappingId: 'mapping-B', tileDraws: [{}, {}]},
+              {mappingId: 'unrelated-C', tileDraws: [{}, {}, {}]},
+              {mappingId: 'unrelated-D', tileDraws: [{}]},
+            ],
+            activeSegments: {},
+          };
+        }
+        """
+    )
+
+    selected = await browser_page.evaluate(
+        _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+        ["mapping-A", "mapping-B"],
+    )
+
+    assert [record["mappingId"] for record in selected["completedMappings"]] == [
+        "mapping-A",
+        "mapping-B",
+    ]
+    assert selected["requestedMappingCount"] == 2
+    assert selected["returnedCompletedMappingCount"] == 2
+    assert selected["returnedTileRecordCount"] == 3
+    assert selected["missingMappingCount"] == 0
+
+
+async def test_selected_completed_mapping_fetch_exposes_duplicates_and_missing_ids(
+    browser_page: Page,
+) -> None:
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    await browser_page.evaluate(
+        """
+        () => {
+          window.__bookwalkerTransformTrace = {
+            completedMappings: [
+              {mappingId: 'duplicate', tileDraws: [{}]},
+              {mappingId: 'duplicate', tileDraws: [{}, {}]},
+            ],
+            activeSegments: {},
+          };
+        }
+        """
+    )
+
+    selected = await browser_page.evaluate(
+        _SELECTED_COMPLETED_MAPPINGS_SCRIPT,
+        ["duplicate", "missing", "duplicate"],
+    )
+
+    assert [record["mappingId"] for record in selected["completedMappings"]] == [
+        "duplicate",
+        "duplicate",
+    ]
+    assert selected["requestedMappingCount"] == 2
+    assert selected["returnedCompletedMappingCount"] == 2
+    assert selected["returnedTileRecordCount"] == 3
+    assert selected["missingMappingCount"] == 1
+
+    duplicate_analysis = analyze_purchased_mapping(
+        selected,
+        {"mappingId": "duplicate"},
+    )
+    missing_analysis = analyze_purchased_mapping(
+        selected,
+        {"mappingId": "missing"},
+    )
+    assert duplicate_analysis.proven is False
+    assert missing_analysis.proven is False
+    assert missing_analysis.completed_mapping_evicted is True
