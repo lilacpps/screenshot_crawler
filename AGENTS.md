@@ -88,7 +88,7 @@ shared profileでBookWalker/MANGA ONEのlogin・crawl・session共存と既存vi
 - 新規サイト追加 → 対応する `note/<nn>_<site>.md` を追加
 - 共通変更が実サイト挙動にも影響する場合 → `00_core.md` と影響するsite noteの両方
 
-計画段階のaccess-control仕様同期には `note/04_access_control_plan.md`、Magapoke固有の未実装計画同期には `note/03_magapoke_access_plan.md` を使用する。これらは明示的に PLANNED / NOT YET IMPLEMENTED とし、現行実装スナップショットと混同しない。
+計画段階のaccess-control仕様同期には `note/04_access_control_plan.md`、Magapoke固有の未実装計画同期には `note/03_magapoke_access_plan.md` を使用する。Catalog v6 / display position / archive naming / archive renumber / Item status拡張の採用済み未実装計画は `note/07_catalog_position_archive_plan.md` を使用する。これらは明示的に PLANNED / NOT YET IMPLEMENTED とし、現行実装スナップショットと混同しない。
 
 noteには少なくとも、現在の挙動、主要な判定ロジック、設定/CLI、出力、既知の制約、実サイト確認状況を残す。
 
@@ -102,7 +102,7 @@ noteには少なくとも、現在の挙動、主要な判定ロジック、設�
 
 1. `docs/CODEX_IMPLEMENTATION_GUIDE.md` を読む。
 2. `docs/TEST_STRATEGY.md` を読み、変更する契約に対するtargeted / affected / integration / live verificationの必要範囲を決める。
-3. 変更対象に対応する `note/` を読む。
+3. 変更対象に対応する `note/` を読む。Catalog v6 / display position / archive naming / archive renumber / Item status拡張を変更する場合は `note/07_catalog_position_archive_plan.md` も読む。
 4. Discovery / Catalog / Batchを変更する場合は `docs/DISCOVERY_AND_BATCH.md` を読む。
 5. shared runtime pacing / AccessGuard / metrics / generic access-resource selection / grant-onlyを変更する場合は `docs/ACCESS_CONTROL_AND_PACING.md` と `docs/ACCESS_CONTROL_AND_PACING_PLAN.md` を読む。
 6. Magapoke固有のWork Ticket / Premium Ticket / resource semanticsを変更する場合は `docs/MAGAPOKE_BATCH_ACCESS.md` を読む。
