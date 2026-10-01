@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import statistics
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,22 @@ def _stats(values: list[float]) -> dict[str, float | int]:
         "median": round(statistics.median(ordered), 2),
         "p90": round(ordered[p90_index], 2),
         "max": round(max(ordered), 2),
+    }
+
+
+def _integer_distribution(
+    records: list[dict[str, Any]],
+    name: str,
+) -> dict[str, int]:
+    values = [
+        int(value)
+        for record in records
+        for value in [record.get(name)]
+        if isinstance(value, int) and not isinstance(value, bool)
+    ]
+    return {
+        str(value): count
+        for value, count in sorted(Counter(values).items())
     }
 
 
@@ -66,6 +83,17 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
     capture_metrics: dict[str, list[float]] = {}
     part_metrics: dict[str, list[float]] = {}
     reconstruction_metrics: dict[str, list[float]] = {}
+    original_match_records: list[dict[str, Any]] = []
+    original_match_metrics: dict[str, list[float]] = {}
+    original_match_fields = (
+        "original_attempt_count",
+        "original_retry_wait_count",
+        "original_pending_task_count_at_start",
+        "original_candidate_count_at_start",
+        "original_candidate_count_at_end",
+        "original_candidate_generation_start",
+        "original_candidate_generation_end",
+    )
 
     for capture in captures:
         metadata = capture.get("metadata") or {}
@@ -73,6 +101,13 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
         capture_timing = bookwalker.get("timing_ms") or {}
         shadow = bookwalker.get("lossless_shadow") or {}
         evaluation_timing = shadow.get("timing_ms") or {}
+        original_match = bookwalker.get("original_match") or {}
+        if isinstance(original_match, dict):
+            original_match_records.append(original_match)
+            for name in original_match_fields:
+                number = _number(original_match.get(name))
+                if number is not None:
+                    original_match_metrics.setdefault(name, []).append(number)
         for name, value in capture_timing.items():
             number = _number(value)
             if number is not None:
@@ -111,9 +146,11 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
 
     parts_by_capture: dict[str, int] = {}
     spread_count = 0
+    logical_part_count = 0
     for capture in captures:
         metadata = capture.get("metadata") or {}
         part_count = int(metadata.get("parts", 1) or 1)
+        logical_part_count += part_count
         parts_by_capture[str(part_count)] = parts_by_capture.get(str(part_count), 0) + 1
         spread_count += int(part_count > 1)
 
@@ -196,10 +233,19 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
         key=lambda item: item[1],
         reverse=True,
     )[:5]
+    original_match_report = {
+        name: _stats(values) for name, values in original_match_metrics.items()
+    }
+    for name in ("original_attempt_count", "original_retry_wait_count"):
+        original_match_report[f"{name}_distribution"] = _integer_distribution(
+            original_match_records,
+            name,
+        )
     return {
         "artifact_count": len(pages),
         "logical_capture_count": len(captures),
-        "part_count": len(parts),
+        "part_count": logical_part_count,
+        "evaluated_part_count": len(parts),
         "spread_count": spread_count,
         "logical_captures_by_parts": parts_by_capture,
         "capture_metrics": {name: _stats(values) for name, values in capture_metrics.items()},
@@ -207,6 +253,7 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
         "reconstruction_metrics": {
             name: _stats(values) for name, values in reconstruction_metrics.items()
         },
+        "original_match": original_match_report,
         "top_5_median_costs_ms": [
             {"measurement": name, "median": round(value, 2)}
             for name, value in top_costs

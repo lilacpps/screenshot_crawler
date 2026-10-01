@@ -401,6 +401,17 @@ async def test_purchased_direct_original_jpeg_is_returned_byte_for_byte(
     assert result[0].mime_type == "image/jpeg"
     assert result[0].file_extension == ".jpg"
     assert shadow_called is False
+    debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
+    assert debug["bookwalker_capture"]["returned_path"] == "original_jpeg"
+    assert (
+        debug["bookwalker_capture"]["original_match"]["original_attempt_count"]
+        == 1
+    )
+    assert (
+        debug["bookwalker_capture"]["original_match"]["original_retry_wait_count"]
+        == 0
+    )
+    assert debug["bookwalker_capture"]["timing_ms"]["original_retry_wait_ms"] == 0
 
 
 def _add_purchased_candidate(adapter: BookWalkerAdapter) -> None:

@@ -2108,6 +2108,128 @@ raw full-resolution comparison, and further mapping-analysis investigation;
 compact numeric transport is now implemented and is not a reason to change
 the proof contract further.
 
+### 20.20 Phase P4-4 original matcher event-driven retry (2026-10-02)
+
+P4-4 changes only the BookWalker original-JPEG matcher scheduling and its
+observability. The original-JPEG priority, native dimensions, browser 64x64
+signature, unique candidate requirement, all-part spread requirement, and
+byte-preserving return remain unchanged. The old negative path could perform
+three scans separated by two blind 150 ms waits. The new path scans the
+current candidate snapshot once, retries immediately if the candidate
+generation changes during the scan, and otherwise waits only when an eligible
+original-response task is still pending. The wait is bounded by the existing
+150 ms budget and wakes on either a new valid candidate or pending-task
+completion. A completed task that adds no valid candidate does not cause a
+repeat scan, and no pending work means an immediate negative decision.
+
+`_original_candidate_generation` is incremented only when a validated,
+non-duplicate candidate is admitted to the bounded cache. An
+`asyncio.Event` is used only as a wake-up optimization; the generation counter
+is authoritative and is rechecked around event clearing to avoid a lost wake.
+Negative decisions store the generation at which they were proven negative.
+When a later response admits a candidate, the stale negative is discarded and
+the same native decision key is evaluated again. Positive decisions still
+resolve the recorded candidate hashes and fail closed if those candidates
+were evicted.
+
+The matcher now reports native-signature, candidate-signature, scan, retry
+wait, and total timing, together with attempt/wait counts, pending work at
+entry, candidate counts, and candidate generations. These values are
+diagnostic only and do not select JPEG versus PNG or alter proof behavior.
+
+The targeted unit coverage includes exact-match first priority, positive
+decision reuse, mismatch and empty-cache immediate negatives, candidate
+arrival during a bounded pending-task wait, task completion without a valid
+candidate, generation changes during signature scanning, generation-safe
+negative-cache invalidation, duplicate-generation suppression, and the
+`fetch -> body store -> fulfill` route ordering. The existing purchased
+mapping/lossless proof and browser-backed BookWalker integration tests remain
+unchanged and pass.
+
+The fresh purchased live run used the P4-3 URL, the shared Crawler Chrome/CDP
+session, native capture, direct access, and a new
+`output/bookwalker-p4-4-original-match-retry` directory. The first identical
+attempt stopped before capture because the strict reader control did not
+navigate to a viewer; the fresh retry reached the requested limit and saved
+the manifest. The CLI raised the existing `MaxPagesExceededError` after 20
+artifacts, as expected. Corrected counts are:
+
+```text
+20 artifacts
+10 logical captures
+20 logical parts
+10 two-part spreads
+```
+
+All 20 artifacts returned `reconstructed_jpeg`. All 20 logical parts had
+`mapping_proven=true`, `raw_jpeg_exact=true`, `coefficient_exact=true`,
+`quantization_tables_equal=true`, `native_pixel_exact=true`, and
+`differing_pixel_count=0`; output was enabled and used. The compact P4-3
+mapping path, full-resolution comparisons, DCT reread, coefficient proof,
+quantization-table proof, and all-or-none spread behavior therefore remain
+intact.
+
+The P4-4 purchased timing summary is below; values are milliseconds. Capture
+and evaluation rows are deduplicated logical captures; original matcher
+internal rows are also capture-level.
+
+| measurement | count | median | p90 | max |
+| --- | ---: | ---: | ---: | ---: |
+| original JPEG matching | 10 | 308.27 | 387.72 | 2035.20 |
+| original native signature | 10 | 205.17 | 285.79 | 294.29 |
+| original candidate signature | 10 | 96.14 | 117.13 | 1749.22 |
+| original match scan | 10 | 0.02 | 0.04 | 0.07 |
+| original retry wait | 10 | 0.00 | 0.00 | 0.00 |
+| lossless evaluation total | 10 | 898.70 | 1075.20 | 1426.87 |
+| capture total | 10 | 1370.08 | 1577.07 | 3649.83 |
+
+P4-3 to P4-4 median comparison:
+
+| measurement | P4-3 | P4-4 | absolute reduction | reduction |
+| --- | ---: | ---: | ---: | ---: |
+| original JPEG matching | 581.46 ms | 308.27 ms | 273.19 ms | 46.98% |
+| capture total | 1674.60 ms | 1370.08 ms | 304.52 ms | 18.18% |
+| lossless evaluation total | 890.38 ms | 898.70 ms | -8.32 ms | -0.93% |
+
+The live attempt distribution was `attempt_count=1: 9`, `2: 0`, `3: 1`;
+`retry_wait_count=0: 10`, `1: 0`, `2: 0`. Pending response tasks at matcher
+entry were zero for every deduplicated purchased capture. Candidate counts
+were 23 median (30 p90, 32 max) at both start and end, and the corresponding
+generation values were also 23 median (30 p90, 32 max). The one three-attempt
+row admitted additional candidates while signature work was in progress and
+was retried without sleeping; it did not use a blind timeout.
+
+The retained-vs-selected P4-3 compact trace statistics remained unchanged in
+this run: retained completed mappings were 3 median / 5 p90 / 7 max and
+retained tiles were 3,600 median / 6,000 p90 / 8,400 max. Selected payloads
+were two mappings and 2,400 tiles for every ordinary spread, with two source,
+target, transform, composite, and filter table entries. The trace fetch was
+145.48 ms median (232.66 p90, 260.86 max) and compact decode was 9.55 ms
+median (11.36 p90, 13.79 max); evaluation unaccounted time was 2.04 ms
+median. The resulting median cost ranking is original JPEG matching
+(308.27 ms), final browser pixel comparison (149.03 ms), compact trace fetch
+(145.48 ms), lossless reconstruction (130.82 ms), native materialization
+(110.76 ms), raw full-resolution comparison (60.95 ms), mapping analysis
+(16.48 ms), and compact decode (9.55 ms). The matcher internals show that
+native and candidate signature generation, rather than retry sleep, now
+dominate original matching.
+
+The existing recorded trial viewer URL was also reused with automatic access
+for an original-path regression. It produced one logical two-part spread and
+two artifact rows at 960x1280. Both rows reported `returned_path=original_jpeg`,
+`output_used=false`, `original_attempt_count=1`, and
+`original_retry_wait_count=0`; no lossless shadow was attempted. The emitted
+file SHA-256 matched its manifest fingerprint, preserving the candidate bytes
+through the output path. The direct-access form of this viewer URL is not a
+strict product entry, so the regression used the recorded viewer URL with
+the adapter's existing automatic-entry behavior.
+
+P4-5 candidates are the final browser full-resolution comparison and native
+PNG materialization, followed by raw full-resolution comparison and possible
+bulk native/candidate signature work. No timing threshold was added to CI;
+behavior, counts, generation safety, byte preservation, and proof results are
+the authorities.
+
 ### Phase 1 runtime pacing
 
 BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を

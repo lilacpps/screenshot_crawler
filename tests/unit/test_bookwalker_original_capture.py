@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -190,6 +191,9 @@ async def test_response_body_listener_is_host_limited_and_redacts_url() -> None:
     await adapter._read_original_response(_FakeResponse())
 
     assert len(adapter._original_candidates) == 1
+    assert adapter._original_candidate_generation == 1
+    await adapter._read_original_response(_FakeResponse())
+    assert adapter._original_candidate_generation == 1
     candidate = adapter._original_candidates.values()[0]
     assert candidate.mime_type == "image/jpeg"
     assert "?" not in candidate.redacted_url
@@ -220,6 +224,27 @@ async def test_response_body_listener_is_host_limited_and_redacts_url() -> None:
 
 
 @pytest.mark.asyncio
+async def test_original_route_stores_body_before_fulfill() -> None:
+    adapter = BookWalkerAdapter()
+    events: list[str] = []
+
+    class FakeRoute:
+        async def fetch(self) -> _FakeResponse:
+            events.append("fetch")
+            return _FakeResponse()
+
+        async def fulfill(self, *, response: object) -> None:
+            assert response is not None
+            events.append("fulfill")
+            assert len(adapter._original_candidates) == 1
+
+    await adapter._handle_original_route(FakeRoute())
+
+    assert events == ["fetch", "fulfill"]
+    assert adapter._original_candidate_generation == 1
+
+
+@pytest.mark.asyncio
 async def test_unique_signature_match_returns_jpeg_and_ambiguous_match_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -244,6 +269,15 @@ async def test_unique_signature_match_returns_jpeg_and_ambiguous_match_falls_bac
     assert result[0].file_extension == ".jpg"
     assert result[0].data == matching.data
 
+    cached_result = await adapter._capture_original_jpegs(SimpleNamespace(), (native,))
+    assert cached_result is not None
+    assert cached_result[0].data == matching.data
+    assert (
+        adapter._capture_debug["bookwalker_capture"]["original_match"]
+        ["original_attempt_count"]
+        == 0
+    )
+
     ambiguous = BookWalkerAdapter()
     ambiguous._original_candidates.add(matching)
     ambiguous._original_candidates.add(_candidate(JPEG_1X1 + b"native2", sequence=2))
@@ -251,7 +285,29 @@ async def test_unique_signature_match_returns_jpeg_and_ambiguous_match_falls_bac
 
 
 @pytest.mark.asyncio
-async def test_original_capture_retries_twice_then_returns_native_fallback(
+async def test_original_capture_mismatch_without_pending_work_returns_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_signature(_page: object, data: bytes, mime_type: str) -> str:
+        return "native" if mime_type == "image/png" else "other"
+
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    adapter = BookWalkerAdapter()
+    page = SimpleNamespace(
+        wait_for_timeout=lambda _milliseconds: pytest.fail("blind wait was used")
+    )
+    native = CaptureResult(PNG_1X1, 1, 1)
+    adapter._original_candidates.add(_candidate(JPEG_1X1 + b"mismatch", sequence=1))
+
+    assert await adapter._capture_original_jpegs(page, (native,)) is None
+    debug = adapter._capture_debug["bookwalker_capture"]
+    assert debug["original_match"]["original_attempt_count"] == 1
+    assert debug["original_match"]["original_retry_wait_count"] == 0
+    assert debug["timing_ms"]["original_retry_wait_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_original_capture_empty_cache_without_pending_work_returns_immediately(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_signature(_page: object, _data: bytes, _mime_type: str) -> str:
@@ -259,22 +315,132 @@ async def test_original_capture_retries_twice_then_returns_native_fallback(
 
     monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
     adapter = BookWalkerAdapter()
-    adapter.original_capture_retry_interval_ms = 0
-    waits = 0
-
-    async def wait_for_timeout(_milliseconds: int) -> None:
-        nonlocal waits
-        waits += 1
-
-    page = SimpleNamespace(wait_for_timeout=wait_for_timeout)
     native = CaptureResult(PNG_1X1, 1, 1)
 
-    assert await adapter._capture_original_jpegs(page, (native,)) is None
-    assert waits == 2
+    assert await adapter._capture_original_jpegs(object(), (native,)) is None
+    debug = adapter._capture_debug["bookwalker_capture"]
+    assert debug["original_match"]["original_candidate_count_at_start"] == 0
+    assert debug["original_match"]["original_attempt_count"] == 1
+    assert debug["original_match"]["original_retry_wait_count"] == 0
 
-    adapter._original_candidates.add(_candidate(JPEG_1X1 + b"native", sequence=1))
-    assert await adapter._capture_original_jpegs(page, (native,)) is None
-    assert waits == 2
+
+@pytest.mark.asyncio
+async def test_original_capture_pending_task_candidate_wakes_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_signature(_page: object, data: bytes, mime_type: str) -> str:
+        return "native" if mime_type == "image/png" or data.endswith(b"native") else "other"
+
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    adapter = BookWalkerAdapter()
+    adapter.original_capture_retry_interval_ms = 100
+    native = CaptureResult(PNG_1X1, 1, 1)
+
+    async def pending_response() -> None:
+        await asyncio.sleep(0.001)
+        adapter._store_original_response_body(
+            SimpleNamespace(url="https://bw-bv-epubs.bookwalker.jp/page.jpeg"),
+            JPEG_1X1 + b"native",
+        )
+
+    task = asyncio.create_task(pending_response())
+    adapter._original_response_tasks.add(task)
+    result = await adapter._capture_original_jpegs(object(), (native,))
+    await task
+
+    assert result is not None
+    assert result[0].data == JPEG_1X1 + b"native"
+    debug = adapter._capture_debug["bookwalker_capture"]
+    assert debug["original_match"]["original_attempt_count"] == 2
+    assert debug["original_match"]["original_retry_wait_count"] == 1
+    assert debug["original_match"]["original_candidate_generation_start"] == 0
+    assert debug["original_match"]["original_candidate_generation_end"] == 1
+    assert debug["timing_ms"]["original_retry_wait_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_original_capture_completed_task_without_candidate_does_not_rescan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_signature(_page: object, _data: bytes, _mime_type: str) -> str:
+        return "native"
+
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    adapter = BookWalkerAdapter()
+    adapter.original_capture_retry_interval_ms = 100
+    native = CaptureResult(PNG_1X1, 1, 1)
+
+    async def completed_without_candidate() -> None:
+        await asyncio.sleep(0.001)
+
+    task = asyncio.create_task(completed_without_candidate())
+    adapter._original_response_tasks.add(task)
+    assert await adapter._capture_original_jpegs(object(), (native,)) is None
+    await task
+
+    debug = adapter._capture_debug["bookwalker_capture"]
+    assert debug["original_match"]["original_attempt_count"] == 1
+    assert debug["original_match"]["original_retry_wait_count"] == 1
+    assert debug["original_match"]["original_candidate_generation_end"] == 0
+
+
+@pytest.mark.asyncio
+async def test_original_capture_generation_change_during_scan_retries_without_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = BookWalkerAdapter()
+    native = CaptureResult(PNG_1X1, 1, 1)
+    mismatch = _candidate(JPEG_1X1 + b"mismatch", sequence=1)
+    adapter._original_candidates.add(mismatch)
+    added = False
+
+    async def fake_signature(_page: object, data: bytes, mime_type: str) -> str:
+        nonlocal added
+        if mime_type == "image/png":
+            return "native"
+        if not added:
+            added = True
+            adapter._store_original_response_body(
+                SimpleNamespace(url="https://bw-bv-epubs.bookwalker.jp/page.jpeg"),
+                JPEG_1X1 + b"native",
+            )
+        return "native" if data.endswith(b"native") else "other"
+
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    result = await adapter._capture_original_jpegs(object(), (native,))
+
+    assert result is not None
+    debug = adapter._capture_debug["bookwalker_capture"]
+    assert debug["original_match"]["original_attempt_count"] == 2
+    assert debug["original_match"]["original_retry_wait_count"] == 0
+    assert debug["timing_ms"]["original_retry_wait_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_original_negative_cache_is_invalidated_by_new_candidate_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_signature(_page: object, data: bytes, mime_type: str) -> str:
+        return "native" if mime_type == "image/png" or data.endswith(b"native") else "other"
+
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    adapter = BookWalkerAdapter()
+    native = CaptureResult(PNG_1X1, 1, 1)
+
+    assert await adapter._capture_original_jpegs(object(), (native,)) is None
+    assert adapter._original_capture_decisions
+    adapter._store_original_response_body(
+        SimpleNamespace(url="https://bw-bv-epubs.bookwalker.jp/page.jpeg"),
+        JPEG_1X1 + b"native",
+    )
+
+    result = await adapter._capture_original_jpegs(object(), (native,))
+
+    assert result is not None
+    assert result[0].data == JPEG_1X1 + b"native"
+    debug = adapter._capture_debug["bookwalker_capture"]
+    assert debug["original_match"]["original_candidate_generation_start"] == 1
+    assert debug["original_match"]["original_attempt_count"] == 1
 
 
 @pytest.mark.asyncio

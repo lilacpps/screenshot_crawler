@@ -930,9 +930,26 @@ def _capture_timing_defaults() -> dict[str, float]:
     return {
         "native_materialization_ms": 0.0,
         "original_jpeg_match_ms": 0.0,
+        "original_native_signature_ms": 0.0,
+        "original_candidate_signature_ms": 0.0,
+        "original_match_scan_ms": 0.0,
+        "original_retry_wait_ms": 0.0,
+        "original_total_ms": 0.0,
         "lossless_evaluation_total_ms": 0.0,
         "capture_total_ms": 0.0,
         "capture_unaccounted_ms": 0.0,
+    }
+
+
+def _original_match_debug_defaults() -> dict[str, int]:
+    return {
+        "original_attempt_count": 0,
+        "original_retry_wait_count": 0,
+        "original_pending_task_count_at_start": 0,
+        "original_candidate_count_at_start": 0,
+        "original_candidate_count_at_end": 0,
+        "original_candidate_generation_start": 0,
+        "original_candidate_generation_end": 0,
     }
 
 
@@ -1230,16 +1247,23 @@ class BookWalkerAdapter(SiteAdapter):
         self._final_navigation_pending = False
         self._original_candidates = OriginalJpegCache()
         self._original_response_tasks: set[asyncio.Task[None]] = set()
+        self._original_candidate_generation = 0
+        self._original_candidate_event = asyncio.Event()
         self._original_response_sequence = 0
         self._original_response_page: Page | None = None
         self._original_capture_decisions: dict[
             tuple[tuple[int | None, int | None, str], ...],
             tuple[str, ...] | None,
         ] = {}
+        self._original_capture_negative_generations: dict[
+            tuple[tuple[int | None, int | None, str], ...],
+            int,
+        ] = {}
         self._capture_debug: dict[str, Any] = {
             "bookwalker_capture": {
                 "returned_path": "rendered_canvas",
                 "timing_ms": _capture_timing_defaults(),
+                "original_match": _original_match_debug_defaults(),
                 "lossless_shadow": {
                     "attempted": False,
                     "spread_ready": False,
@@ -2105,8 +2129,11 @@ class BookWalkerAdapter(SiteAdapter):
             )
         self._original_response_tasks.clear()
         self._original_candidates.clear()
+        self._original_candidate_generation = 0
+        self._original_candidate_event.clear()
         self._original_response_sequence = 0
         self._original_capture_decisions.clear()
+        self._original_capture_negative_generations.clear()
         if self._original_response_page is not None and self._original_response_page is not page:
             try:
                 self._original_response_page.remove_listener(
@@ -2217,14 +2244,41 @@ class BookWalkerAdapter(SiteAdapter):
             url=str(getattr(response, "url", "")),
             sequence=self._original_response_sequence,
         )
-        if candidate is not None:
-            self._original_candidates.add(candidate)
+        if candidate is not None and self._original_candidates.add(candidate):
+            self._original_candidate_generation += 1
+            self._original_candidate_event.set()
 
-    async def _wait_for_original_retry(self, page: Page) -> None:
+    async def _wait_for_original_candidate_work(
+        self,
+        baseline_generation: int,
+    ) -> bool:
+        """Wait briefly only when an eligible response task is still pending."""
+
+        if self._original_candidate_generation != baseline_generation:
+            return True
+        pending_tasks = tuple(
+            task for task in self._original_response_tasks if not task.done()
+        )
+        if not pending_tasks:
+            return False
+
+        self._original_candidate_event.clear()
+        if self._original_candidate_generation != baseline_generation:
+            self._original_candidate_event.set()
+            return True
+
+        event_task = asyncio.create_task(self._original_candidate_event.wait())
         try:
-            await page.wait_for_timeout(self.original_capture_retry_interval_ms)
-        except Exception:  # noqa: BLE001 - test doubles may not expose wait_for_timeout
-            await asyncio.sleep(self.original_capture_retry_interval_ms / 1000)
+            await asyncio.wait(
+                (*pending_tasks, event_task),
+                timeout=self.original_capture_retry_interval_ms / 1000,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            if not event_task.done():
+                event_task.cancel()
+            await asyncio.gather(event_task, return_exceptions=True)
+        return self._original_candidate_generation != baseline_generation
 
     async def _capture_original_jpegs(
         self,
@@ -2233,12 +2287,36 @@ class BookWalkerAdapter(SiteAdapter):
     ) -> tuple[CaptureResult, ...] | None:
         """Return JPEGs only when every visible native part matches uniquely."""
 
+        matcher_started = time.perf_counter()
+        capture_debug = self._capture_debug["bookwalker_capture"]
+        timing = capture_debug["timing_ms"]
+        for key in (
+            "original_native_signature_ms",
+            "original_candidate_signature_ms",
+            "original_match_scan_ms",
+            "original_retry_wait_ms",
+            "original_total_ms",
+        ):
+            timing[key] = 0.0
+        original_debug = _original_match_debug_defaults()
+        capture_debug["original_match"] = original_debug
+        original_debug.update({
+            "original_pending_task_count_at_start": sum(
+                not task.done() for task in self._original_response_tasks
+            ),
+            "original_candidate_count_at_start": len(self._original_candidates),
+            "original_candidate_generation_start": self._original_candidate_generation,
+        })
         try:
+            native_signature_started = time.perf_counter()
             native_signatures = tuple(
                 [
                     await image_signature(page, capture.data, "image/png")
                     for capture in native_captures
                 ]
+            )
+            timing["original_native_signature_ms"] = _elapsed_ms(
+                native_signature_started
             )
             if any(signature is None for signature in native_signatures):
                 return None
@@ -2255,24 +2333,38 @@ class BookWalkerAdapter(SiteAdapter):
             if decision_key in self._original_capture_decisions:
                 selected_hashes = self._original_capture_decisions[decision_key]
                 if selected_hashes is None:
-                    return None
-                by_hash = {
-                    candidate.sha256: candidate
-                    for candidate in self._original_candidates.values()
-                }
-                selected = [by_hash.get(sha256) for sha256 in selected_hashes]
-                if any(candidate is None for candidate in selected):
-                    return None
-                resolved = tuple(
-                    candidate for candidate in selected if candidate is not None
-                )
-                if len(resolved) != len(selected):
-                    return None
-                return tuple(candidate_capture(candidate) for candidate in resolved)
+                    if (
+                        self._original_capture_negative_generations.get(decision_key)
+                        == self._original_candidate_generation
+                    ):
+                        return None
+                    self._original_capture_decisions.pop(decision_key, None)
+                    self._original_capture_negative_generations.pop(
+                        decision_key, None
+                    )
+                    selected_hashes = None
+                if selected_hashes is not None:
+                    by_hash = {
+                        candidate.sha256: candidate
+                        for candidate in self._original_candidates.values()
+                    }
+                    selected = [by_hash.get(sha256) for sha256 in selected_hashes]
+                    if any(candidate is None for candidate in selected):
+                        return None
+                    resolved = tuple(
+                        candidate for candidate in selected if candidate is not None
+                    )
+                    if len(resolved) != len(selected):
+                        return None
+                    return tuple(candidate_capture(candidate) for candidate in resolved)
 
             for attempt in range(self.original_capture_attempts):
+                original_debug["original_attempt_count"] = attempt + 1
+                attempt_generation = self._original_candidate_generation
                 candidates = self._original_candidates.values()
                 selected = []
+                match_scan_started = time.perf_counter()
+                candidate_signature_elapsed = 0.0
                 for capture, native_signature in zip(
                     native_captures, native_signatures, strict=True
                 ):
@@ -2284,9 +2376,13 @@ class BookWalkerAdapter(SiteAdapter):
                         ):
                             continue
                         if candidate.signature is None:
+                            candidate_signature_started = time.perf_counter()
                             candidate.signature = await image_signature(
                                 page, candidate.data, candidate.mime_type
                             )
+                            candidate_signature_elapsed += (
+                                time.perf_counter() - candidate_signature_started
+                            ) * 1000
                         if candidate.signature == native_signature:
                             matches.append(candidate)
                     if len(matches) != 1:
@@ -2294,25 +2390,72 @@ class BookWalkerAdapter(SiteAdapter):
                         break
                     selected.append(matches[0])
 
+                match_scan_elapsed = (
+                    time.perf_counter() - match_scan_started
+                ) * 1000
+                timing["original_candidate_signature_ms"] += round(
+                    candidate_signature_elapsed, 2
+                )
+                timing["original_match_scan_ms"] += round(
+                    max(0.0, match_scan_elapsed - candidate_signature_elapsed), 2
+                )
+
                 if selected and len({candidate.sha256 for candidate in selected}) == len(
                     selected
                 ):
                     self._original_capture_decisions[decision_key] = tuple(
                         candidate.sha256 for candidate in selected
                     )
+                    self._original_capture_negative_generations.pop(
+                        decision_key, None
+                    )
                     return tuple(candidate_capture(candidate) for candidate in selected)
-                if attempt < self.original_capture_attempts - 1:
-                    await self._wait_for_original_retry(page)
+
+                if self._original_candidate_generation != attempt_generation:
+                    continue
+                if attempt >= self.original_capture_attempts - 1:
+                    break
+
+                pending_task_count = sum(
+                    not task.done() for task in self._original_response_tasks
+                )
+                if not pending_task_count:
+                    break
+                original_debug["original_retry_wait_count"] += 1
+                retry_started = time.perf_counter()
+                await self._wait_for_original_candidate_work(attempt_generation)
+                timing["original_retry_wait_ms"] += _elapsed_ms(retry_started)
+                if self._original_candidate_generation != attempt_generation:
+                    continue
+                break
+
             self._original_capture_decisions[decision_key] = None
+            self._original_capture_negative_generations[decision_key] = (
+                self._original_candidate_generation
+            )
         except Exception:  # noqa: BLE001 - original capture is an optimization
             return None
-        return None
+        finally:
+            timing["original_total_ms"] = _elapsed_ms(matcher_started)
+            for key in (
+                "original_candidate_signature_ms",
+                "original_match_scan_ms",
+                "original_retry_wait_ms",
+            ):
+                timing[key] = round(timing[key], 2)
+            original_debug["original_candidate_count_at_end"] = len(
+                self._original_candidates
+            )
+            original_debug["original_candidate_generation_end"] = (
+                self._original_candidate_generation
+            )
 
     def _reset_capture_debug(self) -> None:
         self._capture_debug = {
             "bookwalker_capture": {
                 "returned_path": "native_png",
                 "timing_ms": _capture_timing_defaults(),
+                "original_match": _original_match_debug_defaults(),
                 "lossless_shadow": {
                     "attempted": False,
                     "spread_ready": False,

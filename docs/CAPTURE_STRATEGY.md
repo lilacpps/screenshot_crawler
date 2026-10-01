@@ -396,6 +396,8 @@ returned as a small numeric summary rather than transferring the full trace.
 The selected records use a versioned compact BookWalker-local transport
 representation and are decoded back to the unchanged rich mapping contract
 before the Python proof validator runs.
+Original JPEG matching remains first priority; its retry wait is now bounded
+and event-driven, and is used only while eligible response work is pending.
 
 Phase P2/P3 may return the verified reconstructed JPEG only when every proof gate
 passes, including `mapping_proven=true`, `mapping_source=completed_segment`, no
