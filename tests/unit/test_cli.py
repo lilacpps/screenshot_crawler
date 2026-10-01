@@ -21,7 +21,12 @@ from screenshot_crawler.catalog import (
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.cli import _parser
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.discovery.models import DiscoveryResult
+from screenshot_crawler.discovery.models import (
+    DiscoveredItem,
+    DiscoveredRecord,
+    DiscoveredSource,
+    DiscoveryResult,
+)
 
 
 async def _no_cli_pacing_wait(_seconds: float) -> None:
@@ -51,6 +56,179 @@ def test_crawl_uses_cdp_options() -> None:
     assert not hasattr(args, "auth_state")
     assert not hasattr(args, "auth_required")
     assert not hasattr(args, "headed")
+
+
+def test_episode_list_parser_accepts_read_only_options() -> None:
+    args = _parser().parse_args(
+        [
+            "episode-list",
+            "--url",
+            "https://shonenjumpplus.com/episode/13933686331679642476",
+            "--contains",
+            "117",
+            "--contains",
+            "150",
+            "--env-file",
+            "custom.env",
+            "--cdp-endpoint",
+            "http://127.0.0.1:9333",
+            "--keep-open",
+        ]
+    )
+
+    assert args.command == "episode-list"
+    assert args.contains == ["117", "150"]
+    assert args.env_file == Path("custom.env")
+    assert args.cdp_endpoint == "http://127.0.0.1:9333"
+    assert args.keep_open
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_site"),
+    [
+        (
+            "https://zebrack-comic.shueisha.co.jp/title/21356/chapter/list",
+            "zeblack",
+        ),
+        (
+            "https://shonenjumpplus.com/episode/13933686331679642476",
+            "jumpplus",
+        ),
+    ],
+)
+def test_episode_list_site_detection_reuses_strict_adapter_parsers(
+    url: str, expected_site: str
+) -> None:
+    assert cli._episode_list_site(url) == expected_site
+
+
+def test_episode_list_site_detection_rejects_unsupported_url() -> None:
+    with pytest.raises(cli.EpisodeListError, match="Unsupported episode-list URL"):
+        cli._episode_list_site("https://example.test/episodes/1")
+
+
+def _episode_record(
+    *, order_key: str | None, order_label: str | None, episode_id: str
+) -> DiscoveredRecord:
+    return DiscoveredRecord(
+        item=DiscoveredItem(order_key=order_key, order_label=order_label),
+        source=DiscoveredSource(
+            external_id=episode_id,
+            url=f"https://example.test/episode/{episode_id}",
+        ),
+    )
+
+
+def test_episode_list_filter_is_order_preserving_or_substring_and_includes_specials() -> None:
+    records = [
+        _episode_record(order_key="150", order_label="第150話", episode_id="150"),
+        _episode_record(order_key="117", order_label="第117話", episode_id="117"),
+        _episode_record(order_key="17", order_label="第17話", episode_id="17"),
+        _episode_record(order_key=None, order_label="特別収録", episode_id="special"),
+    ]
+
+    assert cli._filter_episode_records(records, []) == records
+    assert [record.source.external_id for record in cli._filter_episode_records(records, ["17"])] == [
+        "117",
+        "17",
+    ]
+    assert [
+        record.source.external_id
+        for record in cli._filter_episode_records(records, ["150", "特別"])
+    ] == ["150", "special"]
+    assert cli._filter_episode_records(records, ["missing"]) == []
+
+
+def test_episode_list_format_preserves_title_and_marks_missing_order_key() -> None:
+    record = _episode_record(
+        order_key=None,
+        order_label="番外編 特別収録",
+        episode_id="special",
+    )
+
+    assert cli._format_episode_record(record) == (
+        "-\t番外編 特別収録\thttps://example.test/episode/special"
+    )
+
+
+@pytest.mark.asyncio
+async def test_episode_list_uses_adapter_directly_and_closes_shared_session(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    records = [
+        _episode_record(order_key="150", order_label="第150話", episode_id="150"),
+        _episode_record(order_key="117", order_label="第117話", episode_id="117"),
+    ]
+    events: list[str] = []
+
+    class FakeAdapter:
+        async def iter_records(self, page, target, mode):
+            assert page == "page"
+            assert target == cli._episode_list_target("zeblack", "https://example.test")
+            assert mode == "full"
+            for record in records:
+                yield record
+
+    class FakeSession:
+        @classmethod
+        async def connect(cls, endpoint: str):
+            events.append(f"connect:{endpoint}")
+            return cls()
+
+        async def new_page(self):
+            events.append("new_page")
+            return "page"
+
+        async def close_page(self, page):
+            events.append(f"close_page:{page}")
+
+        async def close(self):
+            events.append("close")
+
+    monkeypatch.setattr(cli, "_episode_list_site", lambda _url: "zeblack")
+    monkeypatch.setattr(cli, "_episode_list_adapter", lambda _site: FakeAdapter())
+    monkeypatch.setattr(cli, "BrowserSession", FakeSession)
+
+    args = _parser().parse_args(
+        [
+            "episode-list",
+            "--url",
+            "https://example.test",
+            "--contains",
+            "117",
+            "--cdp-endpoint",
+            "http://127.0.0.1:9333",
+        ]
+    )
+    await cli._run_episode_list(args)
+
+    assert capsys.readouterr().out.splitlines() == [
+        "117\t第117話\thttps://example.test/episode/117"
+    ]
+    assert events == [
+        "connect:http://127.0.0.1:9333",
+        "new_page",
+        "close_page:page",
+        "close",
+    ]
+
+
+def test_main_returns_nonzero_for_unsupported_episode_list_url(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "episode-list", "--url", "https://example.test/episodes/1"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code == 2
+    assert "Unsupported episode-list URL" in capsys.readouterr().err
 
 
 def test_batch_grant_only_accepts_explicit_resource_and_all_shape() -> None:

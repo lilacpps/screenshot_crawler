@@ -1,5 +1,25 @@
 # 00. Core 現行実装ノート
 
+## Read-only episode-list helper CLI (2026-10-01)
+
+`python -m screenshot_crawler.cli episode-list --url <URL>` is an operator
+helper for selecting bounded Discovery endpoints manually. It recognizes only
+the strict Zeblack chapter-list URL and Jump+ episode URL parsers, connects to
+the shared CDP browser session, creates an in-memory `WatchlistTarget`, and
+calls the matching existing Discovery adapter's `iter_records(page, target,
+"full")`. It does not call `DiscoveryService.discover()`, `CatalogService`,
+or `WatchlistService`, and it does not write `watchlist.yaml` or Catalog data.
+
+Each retained record is printed in adapter order as tab-separated
+`order_key`, visible `order_label`, and canonical `source.url`. A missing
+`order_key` is shown as `-` so special episodes are retained. Repeatable
+`--contains TEXT` applies an exact substring OR filter to the combined order
+key/title display text; it is only a display filter and never chooses a
+boundary. `--env-file`, `--cdp-endpoint`, and optional `--keep-open` follow the
+existing CLI/CDP session contract. Unsupported URLs and adapter listing or
+validation failures exit with a concise error, and the created page/session
+are always closed while the remote Chrome remains running.
+
 ## Current shared Batch extension (2026-09-30)
 
 Batch retains the generic planner/executor and existing non-Zeblack behavior.

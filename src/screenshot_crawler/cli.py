@@ -48,8 +48,12 @@ from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.progress import normalize_path
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
-from screenshot_crawler.discovery.models import DiscoveryResult
+from screenshot_crawler.discovery import (
+    DiscoveryAdapterRegistry,
+    DiscoveryIncompleteError,
+    DiscoveryService,
+)
+from screenshot_crawler.discovery.models import DiscoveredRecord, DiscoveryResult
 from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.runtime_settings import load_runtime_settings
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
@@ -75,6 +79,10 @@ class DiscoveryAllError(RuntimeError):
         super().__init__(
             f"Discovery failed for {len(self.failures)} of {self.total} targets"
         )
+
+
+class EpisodeListError(RuntimeError):
+    """Raised when the read-only episode-list helper cannot complete safely."""
 
 
 def _positive_int(value: str) -> int:
@@ -193,6 +201,32 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     discover.add_argument(
+        "--keep-open",
+        action="store_true",
+        help="Keep the connected browser open until Enter is pressed",
+    )
+
+    episode_list = subparsers.add_parser(
+        "episode-list",
+        help="List episodes from a Zeblack or Jump+ page without Catalog writes",
+    )
+    episode_list.add_argument("--url", required=True)
+    episode_list.add_argument(
+        "--contains",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="Show rows whose order key or visible title contains TEXT (repeatable, OR)",
+    )
+    episode_list.add_argument("--env-file", type=Path, default=Path(".env"))
+    episode_list.add_argument(
+        "--cdp-endpoint",
+        help=(
+            "Attach to an existing Chromium browser "
+            f"(default: CRAWLER_CDP_ENDPOINT or {DEFAULT_CDP_ENDPOINT})"
+        ),
+    )
+    episode_list.add_argument(
         "--keep-open",
         action="store_true",
         help="Keep the connected browser open until Enter is pressed",
@@ -423,6 +457,125 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("mangaone", MangaOneSitePolicy)
     registry.register("zeblack", ZeblackSitePolicy)
     return registry
+
+
+def _episode_list_site(url: str) -> str:
+    """Identify one of the two supported episode-list input URL shapes."""
+
+    from screenshot_crawler.site_adapters.jumpplus import parse_jumpplus_episode_url
+    from screenshot_crawler.site_adapters.zeblack import parse_zeblack_chapter_list_url
+
+    if parse_zeblack_chapter_list_url(url) is not None:
+        return "zeblack"
+    if parse_jumpplus_episode_url(url) is not None:
+        return "jumpplus"
+    raise EpisodeListError(
+        "Unsupported episode-list URL; expected a Zeblack chapter-list URL "
+        "or a Jump+ episode URL"
+    )
+
+
+def _episode_list_adapter(site: str) -> Any:
+    """Create only the site Discovery adapter supported by episode-list."""
+
+    if site == "zeblack":
+        from screenshot_crawler.site_adapters.zeblack import ZeblackDiscoveryAdapter
+
+        return ZeblackDiscoveryAdapter()
+    if site == "jumpplus":
+        from screenshot_crawler.site_adapters.jumpplus import JumpPlusDiscoveryAdapter
+
+        return JumpPlusDiscoveryAdapter()
+    raise EpisodeListError(f"Unsupported episode-list site: {site}")
+
+
+def _episode_list_target(site: str, url: str) -> WatchlistTarget:
+    """Build the non-persistent target consumed by an existing adapter."""
+
+    return WatchlistTarget(
+        key="episode-list",
+        work_key="episode-list",
+        site=site,
+        url=url,
+        label="episode-list",
+        enabled=True,
+        discovery_scope=None,
+    )
+
+
+def _filter_episode_records(
+    records: list[DiscoveredRecord], contains: list[str]
+) -> list[DiscoveredRecord]:
+    """Apply the display-only OR substring filter without changing record order."""
+
+    if not contains:
+        return records
+    filtered: list[DiscoveredRecord] = []
+    for record in records:
+        searchable = " ".join(
+            value
+            for value in (record.item.order_key, record.item.order_label)
+            if value is not None
+        )
+        if any(needle in searchable for needle in contains):
+            filtered.append(record)
+    return filtered
+
+
+def _format_episode_record(record: DiscoveredRecord) -> str:
+    """Format one record as order, visible title, and canonical URL."""
+
+    order_key = record.item.order_key or "-"
+    order_label = record.item.order_label or "-"
+    return f"{order_key}\t{order_label}\t{record.source.url}"
+
+
+async def _run_episode_list(args: argparse.Namespace) -> None:
+    """List validated site-adapter records without invoking Catalog Discovery."""
+
+    site = _episode_list_site(args.url)
+    target = _episode_list_target(site, args.url)
+    adapter = _episode_list_adapter(site)
+    values = read_env_file(args.env_file) if args.env_file.is_file() else {}
+    endpoint = resolve_cdp_endpoint(
+        site=site,
+        cli_endpoint=args.cdp_endpoint,
+        values=values,
+    )
+    try:
+        session = await BrowserSession.connect(endpoint)
+    except Exception as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        raise EpisodeListError(f"Episode listing browser connection failed: {detail}") from exc
+
+    try:
+        page = await session.new_page()
+        try:
+            try:
+                records = [
+                    record
+                    async for record in adapter.iter_records(page, target, "full")
+                ]
+            except DiscoveryIncompleteError as exc:
+                detail = str(exc).strip() or "adapter validation failed"
+                raise EpisodeListError(f"Episode listing incomplete: {detail}") from exc
+            except Exception as exc:
+                detail = str(exc).strip() or type(exc).__name__
+                raise EpisodeListError(f"Episode listing failed: {detail}") from exc
+
+            filtered = _filter_episode_records(records, args.contains)
+            if not filtered:
+                print("No episodes matched the filters.")
+            else:
+                for record in filtered:
+                    print(_format_episode_record(record))
+            if args.keep_open:
+                print("Browser is open. Press Enter here to disconnect.")
+                await asyncio.to_thread(input)
+        finally:
+            await session.close_page(page)
+    finally:
+        await session.close()
 
 
 async def _run_probe(args: argparse.Namespace) -> None:
@@ -1638,6 +1791,8 @@ def main() -> None:
             asyncio.run(_run_crawl(args))
         elif args.command == "discover":
             asyncio.run(_run_discover(args))
+        elif args.command == "episode-list":
+            asyncio.run(_run_episode_list(args))
         elif args.command == "login":
             asyncio.run(_run_login(args))
         elif args.command == "watch":
@@ -1668,6 +1823,9 @@ def main() -> None:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     except DiscoveryAllError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    except EpisodeListError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
