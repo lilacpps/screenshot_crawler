@@ -1787,6 +1787,113 @@ comparisons and DCT/file-I/O path, subject to preserving the raw match proof,
 coefficient readback validation, and final browser pixel exactness. No such
 optimization is included in P3.
 
+The P3 timing table above used artifact rows directly. Because the Runner
+copies the same spread-level capture metadata onto both part artifacts, its
+`20 successful pages / 40 successful parts` labels were artifact-level counts,
+not logical capture counts. The corrected P4-1 analysis below deduplicates by
+logical page identity, part count, and identical capture timing metadata.
+
+### 20.17 Phase P4-1 performance accounting (2026-10-01)
+
+P4-1 adds observability only. It does not change the output priority, default
+JPEG behavior, proof gate, full-resolution comparisons, coefficient readback,
+retry, timeout, or reconstruction algorithm. The trace fetch is timed around
+the existing `page.evaluate(() => window.__bookwalkerTransformTrace || null)`;
+this wall-clock value includes browser-side object serialization and the
+Playwright/CDP transfer into Python. Small bounded trace counts are recorded,
+but the trace representation itself is unchanged.
+
+The fresh default-ON live run used the shared Crawler Chrome/CDP session,
+native capture, direct access, the target purchased URL, and `--max-pages 20`.
+The existing `MaxPagesExceededError` occurred after artifacts and manifest
+were saved. Corrected counts are:
+
+```text
+20 artifacts
+10 logical captures
+20 logical parts
+10 two-part spreads
+```
+
+All 20 artifacts were reconstructed JPEGs for the ordinary 960x1280 pages,
+with `returned_path=reconstructed_jpeg`, `output_enabled=true`,
+`output_used=true`, and native browser pixel difference zero. The corrected
+capture/part timing summary is below; values are milliseconds and p90 is the
+nearest observed sample.
+
+| measurement | count | median | p90 | max |
+| --- | ---: | ---: | ---: | ---: |
+| capture total | 10 | 3747.36 | 5934.02 | 7233.31 |
+| lossless evaluation total | 10 | 2863.34 | 4356.70 | 5108.71 |
+| trace fetch | 10 | 1757.11 | 3276.00 | 4171.84 |
+| measured component total | 10 | 2860.39 | 4353.31 | 5106.08 |
+| evaluation unaccounted | 10 | 3.61 | 4.85 | 5.18 |
+| capture unaccounted | 10 | 70.40 | 82.60 | 166.17 |
+| native materialization | 10 | 114.79 | 136.84 | 138.94 |
+| original JPEG matching | 10 | 625.50 | 999.12 | 2600.13 |
+| mapping analysis | 20 | 88.34 | 123.73 | 147.47 |
+| signatures | 20 | 3.83 | 5.04 | 55.63 |
+| raw full-resolution comparison | 20 | 65.76 | 106.56 | 174.85 |
+| lossless reconstruction | 20 | 175.88 | 329.62 | 411.24 |
+| final browser pixel comparison | 20 | 157.70 | 213.56 | 261.19 |
+
+The reconstruction/file timing breakdown was:
+
+| measurement | median | p90 | max |
+| --- | ---: | ---: | ---: |
+| source tempfile write | 1.21 | 1.67 | 2.32 |
+| source DCT read | 18.45 | 26.46 | 70.42 |
+| coefficient array copy | 24.32 | 31.55 | 38.68 |
+| coefficient rearrange | 7.97 | 11.05 | 13.65 |
+| JPEG DCT write | 35.98 | 49.68 | 74.95 |
+| output JPEG file read | 9.04 | 35.12 | 78.26 |
+| readback tempfile write | 0.95 | 1.12 | 1.45 |
+| output DCT readback | 16.52 | 27.51 | 45.61 |
+| coefficient readback compare | 34.80 | 45.64 | 64.37 |
+
+The trace payload was typically three completed mappings and 3,600 completed
+tile records. The observed rows were:
+
+| completed mappings | completed tile records | captures | trace fetch range |
+| ---: | ---: | ---: | ---: |
+| 3 | 3,600 | 8 | 1552.44–1940.31 ms |
+| 5 | 6,000 | 1 | 3276.00 ms |
+| 7 | 8,400 | 1 | 4171.84 ms |
+
+This small sample shows a clear directional relationship between retained
+trace size and fetch time: the 3,600-tile rows were around 1.6–1.9 seconds,
+while 6,000 and 8,400 tiles took 3.3 and 4.2 seconds. The evaluation gap is
+now only 3.61 ms median after accounting for trace fetch; therefore trace
+fetch is the explanation for the P3 unmeasured evaluation time and is the
+dominant evaluation cost. It is also much heavier than final browser pixel
+comparison (1757.11 ms versus 157.70 ms median). Coefficient rearrangement
+remains small: 7.97 ms median and 4.91% median of per-part reconstruction
+`total_ms`.
+
+The largest measured stage medians were trace fetch (1757.11 ms), original
+JPEG matching at capture level (625.50 ms), lossless reconstruction (175.88
+ms), final browser pixel comparison (157.70 ms), and native materialization
+(114.79 ms). Original matching is outside evaluation and is reported
+separately; within evaluation, trace fetch is followed by lossless
+reconstruction, final browser comparison, mapping analysis (88.34 ms), and
+raw full-resolution comparison (65.76 ms).
+
+P4-2 candidates, not implemented here:
+
+- Return only the completed mapping record(s) referenced by the selected draw
+  call from browser JavaScript, instead of transferring the entire transform
+  trace. Preserve the same mapping provenance, overflow/eviction state, and
+  fail-closed behavior.
+- If that remains necessary, use compact numeric tile arrays for the selected
+  mapping and reconstruct the existing mapping contract in Python; compare
+  payload size and validation cost before adopting it.
+- Keep full pixel exactness while investigating browser-side decode/hash or
+  cached comparison strategies; a 64x64 signature cannot replace either full
+  resolution proof.
+- Keep output DCT reread, coefficient mismatch validation, and quantization
+  table equality until a separate proof of equivalent writer guarantees is
+  completed.
+
 ### Phase 1 runtime pacing
 
 BookWalkerのmanual crawlおよびBatch crawlはroot `crawler.yaml`のresolved `page_turn_delay_ms`を

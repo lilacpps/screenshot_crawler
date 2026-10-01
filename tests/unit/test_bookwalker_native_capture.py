@@ -13,6 +13,7 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import (
     BookWalkerAdapter,
     _capture_from_data_url,
     _native_call_is_safe,
+    _trace_payload_stats,
     parse_bookwalker_lossless_jpeg_output,
 )
 from screenshot_crawler.site_adapters.bookwalker.lossless_jpeg import LosslessJpegResult
@@ -338,6 +339,7 @@ async def test_existing_original_jpeg_wins_before_lossless_shadow(
     assert debug["bookwalker_capture"]["returned_path"] == "original_jpeg"
     assert debug["bookwalker_capture"]["lossless_shadow"]["output_enabled"] is True
     assert debug["bookwalker_capture"]["lossless_shadow"]["output_used"] is False
+    assert debug["bookwalker_capture"]["timing_ms"]["original_jpeg_match_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -484,6 +486,13 @@ async def test_lossless_output_switch_returns_verified_bytes_without_reencoding(
     shadow = debug["bookwalker_capture"]["lossless_shadow"]
     assert shadow["output_enabled"] is True
     assert shadow["output_used"] is True
+    assert {
+        "native_materialization_ms",
+        "original_jpeg_match_ms",
+        "lossless_evaluation_total_ms",
+        "capture_total_ms",
+        "capture_unaccounted_ms",
+    } <= debug["bookwalker_capture"]["timing_ms"].keys()
 
 
 @pytest.mark.asyncio
@@ -765,12 +774,16 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     assert result["spread_ready"] is True
     assert {
         "evaluation_total",
+        "trace_fetch_ms",
+        "trace_python_analysis_ms",
         "mapping_analysis",
         "imagebitmap_signature",
         "candidate_signature_total",
         "raw_full_resolution_compare",
         "lossless_reconstruction",
         "final_browser_pixel_compare",
+        "measured_component_total_ms",
+        "unaccounted_ms",
     } <= result["timing_ms"].keys()
     assert {
         "mapping_analysis_ms",
@@ -781,9 +794,60 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
         "final_browser_pixel_compare_ms",
     } <= part["timing_ms"].keys()
     assert all(
-        isinstance(value, (int, float)) and value >= 0
+        isinstance(value, (int, float))
         for value in result["timing_ms"].values()
     )
+    assert all(
+        isinstance(result["timing_ms"][key], (int, float))
+        and result["timing_ms"][key] >= 0
+        for key in result["timing_ms"]
+        if key != "unaccounted_ms"
+    )
+
+
+def test_trace_payload_stats_count_bounded_records() -> None:
+    stats = _trace_payload_stats(
+        {
+            "completedMappings": [
+                {"tileDraws": [{}, {}]},
+                {"tileDraws": [{}]},
+            ],
+            "activeSegments": {
+                "canvas-1": {"tileDraws": [{}, {}, {}]},
+                "canvas-2": {"tileDraws": []},
+            },
+            "droppedCompletedMappingCount": 4,
+            "droppedActiveSegmentCount": 2,
+        }
+    )
+
+    assert stats == {
+        "trace_completed_mapping_count": 2,
+        "trace_completed_tile_record_count": 3,
+        "trace_active_segment_count": 2,
+        "trace_active_tile_record_count": 3,
+        "trace_dropped_completed_mapping_count": 4,
+        "trace_dropped_active_segment_count": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_lossless_shadow_trace_unavailable_keeps_timing_metadata() -> None:
+    class MissingTracePage:
+        async def evaluate(self, _expression: str) -> object:
+            raise RuntimeError("trace unavailable")
+
+    adapter = BookWalkerAdapter()
+    result = await adapter._evaluate_lossless_reconstruction(
+        MissingTracePage(),
+        (CaptureResult(PNG_1X1, 8, 8),),
+        [{"part": 1}],
+    )
+
+    assert result["spread_ready"] is False
+    assert result["trace_completed_mapping_count"] == 0
+    assert result["timing_ms"]["trace_fetch_ms"] >= 0
+    assert isinstance(result["timing_ms"]["unaccounted_ms"], (int, float))
 
 
 @pytest.mark.asyncio

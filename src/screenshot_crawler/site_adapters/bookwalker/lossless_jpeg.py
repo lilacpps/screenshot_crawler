@@ -19,7 +19,8 @@ _TIMING_KEYS = (
     "coefficient_array_copy_ms",
     "coefficient_rearrange_ms",
     "jpeg_dct_write_ms",
-    "output_tempfile_read_ms",
+    "output_jpeg_file_read_ms",
+    "output_readback_tempfile_write_ms",
     "output_dct_readback_ms",
     "coefficient_readback_compare_ms",
     "total_ms",
@@ -248,7 +249,7 @@ def _write_dct(
         read_started = time.perf_counter()
         output = path.read_bytes()
         if timing is not None:
-            timing["output_tempfile_read_ms"] = _elapsed_ms(read_started)
+            timing["output_jpeg_file_read_ms"] = _elapsed_ms(read_started)
         return output, path
     except BaseException:
         path.unlink(missing_ok=True)
@@ -390,7 +391,7 @@ def reconstruct_lossless_jpeg(
             output_bytes,
             jpeglib,
             timing=timing,
-            tempfile_key="output_tempfile_read_ms",
+            tempfile_key="output_readback_tempfile_write_ms",
             read_key="output_dct_readback_ms",
         )
         # The second path is distinct from the write path and is cleaned below.

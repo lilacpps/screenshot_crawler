@@ -726,16 +726,85 @@ def _part_timing_defaults() -> dict[str, float]:
     }
 
 
+def _capture_timing_defaults() -> dict[str, float]:
+    return {
+        "native_materialization_ms": 0.0,
+        "original_jpeg_match_ms": 0.0,
+        "lossless_evaluation_total_ms": 0.0,
+        "capture_total_ms": 0.0,
+        "capture_unaccounted_ms": 0.0,
+    }
+
+
 def _evaluation_timing_defaults() -> dict[str, float]:
     return {
         "evaluation_total": 0.0,
+        "trace_fetch_ms": 0.0,
+        "trace_python_analysis_ms": 0.0,
         "mapping_analysis": 0.0,
         "imagebitmap_signature": 0.0,
         "candidate_signature_total": 0.0,
         "raw_full_resolution_compare": 0.0,
         "lossless_reconstruction": 0.0,
         "final_browser_pixel_compare": 0.0,
+        "measured_component_total_ms": 0.0,
+        "unaccounted_ms": 0.0,
     }
+
+
+def _trace_payload_stats(trace: object) -> dict[str, int]:
+    stats = {
+        "trace_completed_mapping_count": 0,
+        "trace_completed_tile_record_count": 0,
+        "trace_active_segment_count": 0,
+        "trace_active_tile_record_count": 0,
+        "trace_dropped_completed_mapping_count": 0,
+        "trace_dropped_active_segment_count": 0,
+    }
+    if not isinstance(trace, dict):
+        return stats
+
+    completed = trace.get("completedMappings", trace.get("completed_mappings"))
+    if isinstance(completed, list):
+        stats["trace_completed_mapping_count"] = len(completed)
+        for mapping in completed:
+            if not isinstance(mapping, dict):
+                continue
+            tiles = mapping.get("tileDraws", mapping.get("tile_draws"))
+            if isinstance(tiles, list):
+                stats["trace_completed_tile_record_count"] += len(tiles)
+
+    active = trace.get("activeSegments", trace.get("active_segments"))
+    if isinstance(active, dict):
+        stats["trace_active_segment_count"] = len(active)
+        for segment in active.values():
+            if not isinstance(segment, dict):
+                continue
+            tiles = segment.get("tileDraws", segment.get("tile_draws"))
+            if isinstance(tiles, list):
+                stats["trace_active_tile_record_count"] += len(tiles)
+
+    for key in (
+        "droppedCompletedMappingCount",
+        "dropped_completed_mapping_count",
+    ):
+        if key in trace:
+            try:
+                stats["trace_dropped_completed_mapping_count"] = int(trace[key])
+            except (TypeError, ValueError):
+                pass
+            break
+    for key in (
+        "droppedActiveSegmentCount",
+        "dropped_active_segment_count",
+    ):
+        if key in trace:
+            try:
+                stats["trace_dropped_active_segment_count"] = int(trace[key])
+            except (TypeError, ValueError):
+                pass
+            break
+    return stats
 
 
 def _native_call_is_safe(call: dict[str, Any]) -> bool:
@@ -888,7 +957,7 @@ class BookWalkerAdapter(SiteAdapter):
         self._capture_debug: dict[str, Any] = {
             "bookwalker_capture": {
                 "returned_path": "rendered_canvas",
-                "timing_ms": {},
+                "timing_ms": _capture_timing_defaults(),
                 "lossless_shadow": {
                     "attempted": False,
                     "spread_ready": False,
@@ -1961,7 +2030,7 @@ class BookWalkerAdapter(SiteAdapter):
         self._capture_debug = {
             "bookwalker_capture": {
                 "returned_path": "native_png",
-                "timing_ms": {},
+                "timing_ms": _capture_timing_defaults(),
                 "lossless_shadow": {
                     "attempted": False,
                     "spread_ready": False,
@@ -2039,12 +2108,29 @@ class BookWalkerAdapter(SiteAdapter):
             "output_used": False,
             "timing_ms": evaluation_timing,
             "parts": [],
+            **_trace_payload_stats(None),
         }
 
         def finish_timing() -> None:
+            evaluation_timing["evaluation_total"] = _elapsed_ms(evaluation_started)
+            measured_keys = (
+                "trace_fetch_ms",
+                "mapping_analysis",
+                "imagebitmap_signature",
+                "candidate_signature_total",
+                "raw_full_resolution_compare",
+                "lossless_reconstruction",
+                "final_browser_pixel_compare",
+            )
+            evaluation_timing["measured_component_total_ms"] = sum(
+                evaluation_timing[key] for key in measured_keys
+            )
+            evaluation_timing["unaccounted_ms"] = (
+                evaluation_timing["evaluation_total"]
+                - evaluation_timing["measured_component_total_ms"]
+            )
             for key, value in evaluation_timing.items():
                 evaluation_timing[key] = round(value, 2)
-            evaluation_timing["evaluation_total"] = _elapsed_ms(evaluation_started)
             shadow["lossless_evaluation_total_ms"] = evaluation_timing[
                 "evaluation_total"
             ]
@@ -2053,10 +2139,12 @@ class BookWalkerAdapter(SiteAdapter):
             for candidate in self._original_candidates.values()
             if is_purchased_jpeg_candidate(candidate)
         )
+        trace_fetch_started = time.perf_counter()
         try:
             trace = await page.evaluate("() => window.__bookwalkerTransformTrace || null")
         except Exception:  # noqa: BLE001 - missing trace means unavailable
             trace = None
+        evaluation_timing["trace_fetch_ms"] = _elapsed_ms(trace_fetch_started)
         if not isinstance(trace, dict):
             shadow["reason"] = "trace unavailable"
             shadow["parts"] = [
@@ -2065,6 +2153,7 @@ class BookWalkerAdapter(SiteAdapter):
             ]
             finish_timing()
             return LosslessReconstructionEvaluation(shadow, None)
+        shadow.update(_trace_payload_stats(trace))
         if len(selected_draw_calls) != len(native_captures):
             shadow["reason"] = "native capture and renderer draw counts differ"
             shadow["parts"] = [
@@ -2084,6 +2173,7 @@ class BookWalkerAdapter(SiteAdapter):
             analysis: MappingAnalysis = analyze_purchased_mapping(trace, draw_call)
             mapping_elapsed = _elapsed_ms(mapping_started)
             part_timing["mapping_analysis_ms"] = mapping_elapsed
+            evaluation_timing["trace_python_analysis_ms"] += mapping_elapsed
             evaluation_timing["mapping_analysis"] += mapping_elapsed
             analysis_debug = analysis.to_debug()
             for key in (
@@ -2468,9 +2558,13 @@ class BookWalkerAdapter(SiteAdapter):
                 await self._clear_geometry_trace(page)
                 return tuple(captures)
             native_captures = tuple(captures)
+            original_match_started = time.perf_counter()
             original_captures = await self._capture_original_jpegs(
                 page, native_captures
             )
+            self._capture_debug["bookwalker_capture"]["timing_ms"][
+                "original_jpeg_match_ms"
+            ] = _elapsed_ms(original_match_started)
             if original_captures is not None:
                 self._capture_debug["bookwalker_capture"]["returned_path"] = "original_jpeg"
                 self._capture_debug["bookwalker_capture"]["lossless_shadow"] = {
@@ -2510,6 +2604,9 @@ class BookWalkerAdapter(SiteAdapter):
                 self._capture_debug["bookwalker_capture"]["lossless_shadow"] = (
                     evaluation.debug
                 )
+                self._capture_debug["bookwalker_capture"]["timing_ms"][
+                    "lossless_evaluation_total_ms"
+                ] = float(evaluation.debug.get("lossless_evaluation_total_ms", 0.0))
                 if (
                     self.lossless_jpeg_output_enabled
                     and evaluation.debug.get("spread_ready") is True
@@ -2541,9 +2638,15 @@ class BookWalkerAdapter(SiteAdapter):
             return None
         finally:
             await self._clear_native_capture(page)
-            self._capture_debug["bookwalker_capture"]["timing_ms"][
-                "capture_total_ms"
-            ] = _elapsed_ms(capture_started)
+            capture_timing = self._capture_debug["bookwalker_capture"]["timing_ms"]
+            capture_timing["capture_total_ms"] = _elapsed_ms(capture_started)
+            capture_timing["capture_unaccounted_ms"] = round(
+                capture_timing["capture_total_ms"]
+                - capture_timing.get("native_materialization_ms", 0.0)
+                - capture_timing.get("original_jpeg_match_ms", 0.0)
+                - capture_timing.get("lossless_evaluation_total_ms", 0.0),
+                2,
+            )
 
     async def detect_state(self, page: Page) -> PageState:
         current_content_id = self.content_id_from_url(page.url)
