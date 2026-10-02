@@ -13,9 +13,10 @@
 7. `docs/DECISIONS.md`
 8. `docs/TEST_STRATEGY.md`（テスト分類・選択・実行範囲）
 9. `docs/CODEX_IMPLEMENTATION_GUIDE.md`
-10. 現在のコードとテスト
-11. Site Adapter固有README / probe出力
-12. `note/` の現行実装ノート
+10. `docs/MULTI_AGENT_SITE_ADAPTER_WORKFLOW.md`（新規Site Adapterをmulti-agentで自律実装する場合）
+11. 現在のコードとテスト
+12. Site Adapter固有README / probe出力
+13. `note/` の現行実装ノート
 
 `note/` は詳細な現行実装スナップショットとして常に更新する。ただし、上位authorityと競合する場合は上位authorityを優先し、note側を修正する。
 
@@ -74,6 +75,30 @@ shared profileでBookWalker/MANGA ONEのlogin・crawl・session共存と既存vi
 - access resourceの候補・順序はSite Policy/integration、実際の利用可否・消費確認はlive site state / Site Adapterをauthorityとする。
 - あるresourceのattempt中に別resourceへ暗黙fallbackしない。resource切替は明示的なpass orchestrationで行う。
 
+## Multi-agent workflow for new Site Adapters
+
+ユーザーが新規Site Adapterについてmulti-agent / 自律実装を明示的に依頼した場合は、`docs/MULTI_AGENT_SITE_ADAPTER_WORKFLOW.md` に従う。
+
+基本役割:
+
+- root orchestrator: GPT-6.1 Sol。結果を見ながら現在Phase・追加Probe・修正方針・次Phaseを決める。
+- `site_adapter_worker`: GPT-5.6 Luna。Probe / PoC / production実装 / test / live verificationを担当する唯一のproduction writer。
+- `site_adapter_reviewer`: GPT-6.1 Sol、read-only。各worker iteration後の品質ゲートを担当する。
+
+必須ルール:
+
+- rootは最初に全手順を固定して機械的に消化しない。実サイト観測・テスト・review結果に応じてPhaseを分割、追加、反復、差し替えしてよい。
+- 各Phaseでrootは目的、既知事実、未確認事項、変更範囲、制約、受け入れ条件、必要なtest/live verificationをworkerへ明示する。
+- worker完了後は必ずreviewerへreviewを委譲する。
+- reviewerの`BLOCKING`が1件でも残る間は次Phaseへ進まない。workerによる追加Probe/修正後に再reviewする。
+- 不明な実サイト挙動を推測でproduction実装へ落とさない。必要ならProbe/PoCへ戻る。
+- production writeを行うsubagentは同時に1つだけとする。並列化は独立したread-heavy調査に限定する。
+- reviewerはファイルを変更しない。追加testや実行確認が必要ならroot経由でworkerへ依頼する。
+- 新規Site Adapterのproduction変更前にfeature branch上であることを確認する。未commitのユーザー変更を破棄・上書きしない。
+- free-only scopeではticket / point / coin / paid resource等を消費しない。
+- 実験用Catalogが指定されている場合、通常の`catalog.sqlite`へ暗黙fallbackしない。
+- root sessionのモデルはrepository全体へ固定しない。multi-agent Site Adapter作業開始時にGPT-6.1 Solを選択する。
+
 ## Note synchronization rule
 
 仕様・実装・テスト・運用方法を変更した場合、**同じ変更の中で対応する `note/` も更新することを必須**とする。
@@ -108,6 +133,7 @@ noteには少なくとも、現在の挙動、主要な判定ロジック、設�
 6. Magapoke固有のWork Ticket / Premium Ticket / resource semanticsを変更する場合は `docs/MAGAPOKE_BATCH_ACCESS.md` を読む。
 7. noteとコードが食い違う場合はcode/testsと上位authorityを確認し、作業内でnoteも同期する。
 8. Browser関連変更では `docs/SPEC.md` のBrowser Session Modelを確認する。
+9. 新規Site Adapterをmulti-agentで自律実装する場合は `docs/MULTI_AGENT_SITE_ADAPTER_WORKFLOW.md` を読む。
 
 ## After coding
 
