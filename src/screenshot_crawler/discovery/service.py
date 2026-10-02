@@ -103,6 +103,8 @@ class DiscoveryService:
         known_count = 0
         known_streak = 0
         previous_known_identity: tuple[str, str] | None = None
+        observed_source_ids: list[int] = []
+        stopped_reason: str | None = None
 
         try:
             async for record in adapter.iter_records(page, target, mode):
@@ -177,36 +179,22 @@ class DiscoveryService:
                     author=record.item.author,
                     genre=record.item.genre,
                 )
-                observed_external_ids.add(record.source.external_id)
+                if record.source.external_id not in observed_external_ids:
+                    observed_external_ids.add(record.source.external_id)
+                    observed_source_ids.append(catalog_record.source.id)
                 observed_count += 1
                 self._append_duplicate_warnings(target, catalog_record, warnings, warning_keys)
 
                 if mode == "incremental":
                     stop_decision = adapter.incremental_stop_decision(record, previous, target)
                     if stop_decision is IncrementalStopDecision.STOP:
-                        return DiscoveryResult(
-                            mode=mode,
-                            target_key=target.key,
-                            observed_count=observed_count,
-                            new_count=new_count,
-                            known_count=known_count,
-                            complete=None,
-                            stopped_reason="stable_boundary",
-                            warnings=tuple(warnings),
-                        )
+                        stopped_reason = "stable_boundary"
+                        break
                     if stop_decision is IncrementalStopDecision.CONTINUE:
                         continue
                 if mode == "incremental" and known_streak >= _KNOWN_STREAK_LIMIT:
-                    return DiscoveryResult(
-                        mode=mode,
-                        target_key=target.key,
-                        observed_count=observed_count,
-                        new_count=new_count,
-                        known_count=known_count,
-                        complete=None,
-                        stopped_reason="known_streak",
-                        warnings=tuple(warnings),
-                    )
+                    stopped_reason = "known_streak"
+                    break
         except DiscoveryIncompleteError:
             return DiscoveryResult(
                 mode=mode,
@@ -226,9 +214,21 @@ class DiscoveryService:
                     discovery_key=target.key,
                     observed_external_ids=observed_external_ids,
                 )
+            self._assign_full_display_positions(
+                site=target.site,
+                discovery_key=target.key,
+                observed_source_ids=observed_source_ids,
+            )
             complete: bool | None = True
         else:
             complete = None
+            stopped_reason = stopped_reason or "exhausted"
+            self._assign_incremental_display_positions(
+                site=target.site,
+                discovery_key=target.key,
+                observed_source_ids=observed_source_ids,
+                stopped_reason=stopped_reason,
+            )
         return DiscoveryResult(
             mode=mode,
             target_key=target.key,
@@ -236,8 +236,70 @@ class DiscoveryService:
             new_count=new_count,
             known_count=known_count,
             complete=complete,
-            stopped_reason="exhausted",
+            stopped_reason=stopped_reason or "exhausted",
             warnings=tuple(warnings),
+        )
+
+    def _assign_full_display_positions(
+        self,
+        *,
+        site: str,
+        discovery_key: str,
+        observed_source_ids: list[int],
+    ) -> None:
+        assignments = {
+            source_id: position
+            for position, source_id in enumerate(reversed(observed_source_ids), start=1)
+        }
+        self.catalog.set_source_display_positions(
+            site=site,
+            discovery_key=discovery_key,
+            assignments=assignments,
+        )
+
+    def _assign_incremental_display_positions(
+        self,
+        *,
+        site: str,
+        discovery_key: str,
+        observed_source_ids: list[int],
+        stopped_reason: str,
+    ) -> None:
+        if stopped_reason == "exhausted":
+            self._assign_full_display_positions(
+                site=site,
+                discovery_key=discovery_key,
+                observed_source_ids=observed_source_ids,
+            )
+            return
+
+        scope_sources = self.catalog.list_sources(site=site, discovery_key=discovery_key)
+        baseline_positions = [
+            source.display_position
+            for source in scope_sources
+            if source.display_position is not None
+        ]
+        if not baseline_positions:
+            return
+
+        sources_by_id = {source.id: source for source in scope_sources}
+        unpositioned_observed_ids = [
+            source_id
+            for source_id in observed_source_ids
+            if (source := sources_by_id.get(source_id)) is not None
+            and source.display_position is None
+        ]
+        baseline = max(baseline_positions)
+        assignments = {
+            source_id: position
+            for position, source_id in enumerate(
+                reversed(unpositioned_observed_ids), start=baseline + 1
+            )
+        }
+        self.catalog.set_source_display_positions(
+            site=site,
+            discovery_key=discovery_key,
+            assignments=assignments,
         )
 
     @staticmethod

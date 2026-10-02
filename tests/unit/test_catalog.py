@@ -335,6 +335,139 @@ def test_display_position_accepts_null_and_positive_integers(
     assert cleared.display_position is None
 
 
+def test_set_source_display_positions_updates_multiple_sources_atomically(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    sources = []
+    for external_id in ("old", "new"):
+        item = service.create_item(work_id=work.id)
+        sources.append(
+            service.create_source(
+                SourceInput(
+                    site="site",
+                    external_id=external_id,
+                    discovery_key="scope",
+                ),
+                item_id=item.id,
+            )
+        )
+
+    updated = service.set_source_display_positions(
+        site="site",
+        discovery_key="scope",
+        assignments={sources[0].id: 1, sources[1].id: 2},
+    )
+
+    assert [source.display_position for source in updated] == [1, 2]
+    assert [service.get_source(source.id).display_position for source in sources] == [1, 2]
+
+
+def test_set_source_display_positions_empty_assignments_are_noop(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+
+    assert service.set_source_display_positions(
+        site="site",
+        discovery_key="scope",
+        assignments={},
+    ) == ()
+    assert not (tmp_path / "catalog.sqlite").exists()
+
+
+@pytest.mark.parametrize("value", [True, False, None, 0, -1, 1.5, "1"])
+def test_set_source_display_positions_rejects_invalid_positions(
+    tmp_path: Path, value: object
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(work_id=work.id)
+    source = service.create_source(
+        SourceInput(site="site", external_id="source", discovery_key="scope"),
+        item_id=item.id,
+    )
+
+    with pytest.raises(CatalogValidationError, match="display_position"):
+        service.set_source_display_positions(
+            site="site",
+            discovery_key="scope",
+            assignments={source.id: value},  # type: ignore[dict-item]
+        )
+    assert service.get_source(source.id).display_position is None
+
+
+def test_set_source_display_positions_rolls_back_missing_or_mismatched_sources(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    first_item = service.create_item(work_id=work.id)
+    second_item = service.create_item(work_id=work.id)
+    first = service.create_source(
+        SourceInput(site="site", external_id="first", discovery_key="scope"),
+        item_id=first_item.id,
+    )
+    second = service.create_source(
+        SourceInput(site="other-site", external_id="second", discovery_key="other-scope"),
+        item_id=second_item.id,
+    )
+
+    with pytest.raises(CatalogNotFoundError):
+        service.set_source_display_positions(
+            site="site",
+            discovery_key="scope",
+            assignments={first.id: 1, 9999: 2},
+        )
+    assert service.get_source(first.id).display_position is None
+
+    with pytest.raises(CatalogValidationError, match="site"):
+        service.set_source_display_positions(
+            site="site",
+            discovery_key="scope",
+            assignments={first.id: 1, second.id: 2},
+        )
+    assert service.get_source(first.id).display_position is None
+    assert service.get_source(second.id).display_position is None
+
+    with pytest.raises(CatalogValidationError, match="Discovery scope"):
+        service.set_source_display_positions(
+            site="other-site",
+            discovery_key="scope",
+            assignments={second.id: 1},
+        )
+    assert service.get_source(second.id).display_position is None
+
+
+def test_set_source_display_positions_rolls_back_if_an_update_fails(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    sources = []
+    for external_id in ("ok", "fail"):
+        item = service.create_item(work_id=work.id)
+        sources.append(
+            service.create_source(
+                SourceInput(site="site", external_id=external_id, discovery_key="scope"),
+                item_id=item.id,
+            )
+        )
+
+    with service._connection() as connection:
+        connection.execute(
+            "CREATE TRIGGER fail_position_update BEFORE UPDATE OF display_position ON sources "
+            "WHEN NEW.external_id = 'fail' BEGIN SELECT RAISE(ABORT, 'forced failure'); END"
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced failure"):
+        service.set_source_display_positions(
+            site="site",
+            discovery_key="scope",
+            assignments={sources[0].id: 1, sources[1].id: 2},
+        )
+    assert [service.get_source(source.id).display_position for source in sources] == [None, None]
+
+
 def test_v6_sqlite_checks_reject_invalid_status_and_display_position(
     tmp_path: Path,
 ) -> None:

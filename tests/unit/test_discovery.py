@@ -98,11 +98,13 @@ class FakeDiscoveryAdapter(DiscoveryAdapter):
         failure: Exception | None = None,
         reconciled_access_mode: str | None = None,
         stop_decision: IncrementalStopDecision = IncrementalStopDecision.DEFAULT,
+        stop_after: str | None = None,
     ) -> None:
         self.records = records
         self.failure = failure
         self.reconciled_access_mode = reconciled_access_mode
         self.stop_decision = stop_decision
+        self.stop_after = stop_after
         self.iter_records_calls = 0
         self.reconciliation_calls: list[tuple[str, DiscoverySourceSnapshot | None]] = []
         self.stop_calls: list[str] = []
@@ -137,6 +139,8 @@ class FakeDiscoveryAdapter(DiscoveryAdapter):
     ) -> IncrementalStopDecision:
         del previous, target
         self.stop_calls.append(record.source.external_id)
+        if self.stop_after == record.source.external_id:
+            return IncrementalStopDecision.STOP
         return self.stop_decision
 
 
@@ -673,6 +677,257 @@ async def test_bounded_incremental_preserves_adapter_stop_hook_after_sync(
     assert result.observed_count == 1
     assert adapter.stop_calls == ["one"]
     assert catalog.find_source("site-a", "one") is not None
+
+
+async def test_full_discovery_assigns_oldest_to_newest_positions(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record(external_id) for external_id in ("D", "C", "B", "A")])
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is True
+    assert {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("A", "B", "C", "D")
+    } == {"A": 1, "B": 2, "C": 3, "D": 4}
+
+
+async def test_full_discovery_rerun_renumbers_existing_sources(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record(external_id) for external_id in ("C", "B", "A")])
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    await service.discover(FakePage(), watch_target, "full")
+
+    adapter.records = [record(external_id) for external_id in ("D", "C", "bonus", "B", "A")]
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is True
+    assert {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("A", "B", "bonus", "C", "D")
+    } == {"A": 1, "B": 2, "bonus": 3, "C": 4, "D": 5}
+
+
+async def test_incomplete_full_discovery_does_not_assign_positions(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record(external_id) for external_id in ("C", "B", "A")])
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    await service.discover(FakePage(), watch_target, "full")
+    before = {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("A", "B", "C")
+    }
+
+    adapter.records = [record("new-1"), record("new-2")]
+    adapter.failure = DiscoveryIncompleteError("listing incomplete")
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is False
+    assert {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("A", "B", "C")
+    } == before
+    assert catalog.find_source("site-a", "new-1").display_position is None
+    assert catalog.find_source("site-a", "new-2").display_position is None
+
+
+async def test_bounded_full_positions_are_scope_local(
+    tmp_path: Path,
+) -> None:
+    adapter = BoundedFakeDiscoveryAdapter(
+        [record(external_id) for external_id in ("C", "B", "A")]
+    )
+    service, catalog, watch_target = setup_service(
+        tmp_path,
+        adapter,
+        watch_target=target(
+            discovery_scope=DiscoveryScope(from_url="https://example.test/from")
+        ),
+    )
+    work = catalog.create_work(WorkInput(work_key="work-a", title="菴懷刀A"))
+    outside_item = catalog.create_item(work_id=work.id)
+    outside = catalog.create_source(
+        SourceInput(
+            site="site-a",
+            external_id="outside",
+            discovery_key=watch_target.key,
+            display_position=99,
+        ),
+        item_id=outside_item.id,
+    )
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is True
+    assert {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("A", "B", "C")
+    } == {"A": 1, "B": 2, "C": 3}
+    assert catalog.get_source(outside.id).display_position == 99
+
+
+async def test_incremental_stable_boundary_appends_oldest_to_newest(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [record(external_id) for external_id in ("F", "E", "D", "C", "B", "A")],
+        stop_after="A",
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="菴懷刀A"))
+    existing = []
+    for external_id, position in (("A", 1), ("B", 2), ("C", 3)):
+        item = catalog.create_item(work_id=work.id)
+        existing.append(
+            catalog.create_source(
+                SourceInput(
+                    site="site-a",
+                    external_id=external_id,
+                    discovery_key=watch_target.key,
+                    display_position=position,
+                ),
+                item_id=item.id,
+            )
+        )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.stopped_reason == "stable_boundary"
+    assert [catalog.get_source(source.id).display_position for source in existing] == [1, 2, 3]
+    assert {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("D", "E", "F")
+    } == {"D": 4, "E": 5, "F": 6}
+
+
+async def test_incremental_known_streak_appends_and_recovers_null_sources(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [record(external_id) for external_id in ("103", "102", "101", "100", "99", "98", "97", "96")]
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="菴懷刀A"))
+    for external_id, position in (("100", 100), ("99", 99), ("98", 98), ("97", 97), ("96", 96)):
+        item = catalog.create_item(work_id=work.id)
+        catalog.create_source(
+            SourceInput(
+                site="site-a",
+                external_id=external_id,
+                discovery_key=watch_target.key,
+                display_position=position,
+            ),
+            item_id=item.id,
+        )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.stopped_reason == "known_streak"
+    assert {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("101", "102", "103")
+    } == {"101": 101, "102": 102, "103": 103}
+    assert catalog.find_source("site-a", "100").display_position == 100
+
+
+async def test_incremental_recovers_previous_incomplete_null_sources(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [record(external_id) for external_id in ("103", "102", "101", "100")],
+        stop_after="100",
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="菴懷刀A"))
+    for external_id, position in (("103", None), ("102", None), ("100", 100)):
+        item = catalog.create_item(work_id=work.id)
+        catalog.create_source(
+            SourceInput(
+                site="site-a",
+                external_id=external_id,
+                discovery_key=watch_target.key,
+                display_position=position,
+            ),
+            item_id=item.id,
+        )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.stopped_reason == "stable_boundary"
+    assert {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("101", "102", "103")
+    } == {"101": 101, "102": 102, "103": 103}
+
+
+async def test_incomplete_incremental_leaves_existing_and_new_positions_unchanged(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [record("new-2"), record("new-1")],
+        failure=DiscoveryIncompleteError("listing incomplete"),
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="菴懷刀A"))
+    item = catalog.create_item(work_id=work.id)
+    existing = catalog.create_source(
+        SourceInput(
+            site="site-a",
+            external_id="known",
+            discovery_key=watch_target.key,
+            display_position=7,
+        ),
+        item_id=item.id,
+    )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.complete is None
+    assert result.stopped_reason == "incomplete"
+    assert catalog.get_source(existing.id).display_position == 7
+    assert catalog.find_source("site-a", "new-1").display_position is None
+    assert catalog.find_source("site-a", "new-2").display_position is None
+
+
+async def test_incremental_without_baseline_and_early_stop_fails_safe(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [record("new"), record("known")],
+        stop_after="known",
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="菴懷刀A"))
+    item = catalog.create_item(work_id=work.id)
+    catalog.create_source(
+        SourceInput(site="site-a", external_id="known", discovery_key=watch_target.key),
+        item_id=item.id,
+    )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.stopped_reason == "stable_boundary"
+    assert catalog.find_source("site-a", "new").display_position is None
+    assert catalog.find_source("site-a", "known").display_position is None
+
+
+async def test_incremental_without_baseline_but_exhausted_assigns_full_scope(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record(external_id) for external_id in ("C", "B", "A")])
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.stopped_reason == "exhausted"
+    assert {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("A", "B", "C")
+    } == {"A": 1, "B": 2, "C": 3}
 
 
 def test_discovered_graph_insert_is_atomic(tmp_path: Path) -> None:

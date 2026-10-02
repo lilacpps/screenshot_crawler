@@ -975,7 +975,7 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 ## Catalog v6: display position / archive naming / status expansion
 
-**P1 IMPLEMENTED; P2-P5 NOT YET IMPLEMENTED.** The adopted implementation plan is:
+**P1-P2 IMPLEMENTED; P3-P5 NOT YET IMPLEMENTED.** The adopted implementation plan is:
 
 ```text
 note/07_catalog_position_archive_plan.md
@@ -985,9 +985,9 @@ The plan bundles Source-scoped display positions, position-prefixed archive nami
 existing-archive renumber tooling, and Item status expansion
 (`pending | completed | skipped | external`) plus `items.note`.
 Catalog schema v6, the Item status/note service and CLI, Source display-position
-storage/validation, v5 -> v6 migration, and CSV export fields are implemented.
-Discovery position assignment, position-prefixed archive naming, collision handling,
-archive renumbering, and related rollout work remain P2-P5 planned behavior.
+storage/validation, v5 -> v6 migration, CSV export fields, and Discovery position
+assignment are implemented. Position-prefixed archive naming, collision handling,
+archive renumbering, and related rollout work remain P3-P5 planned behavior.
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery + Batch v3実装済み）
 
@@ -1009,9 +1009,11 @@ CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disa
 ### 22.2 Catalog（Schema v6 P1実装済み）
 
 P1 export detail: `items.csv` includes `note` and `sources.csv` includes
-`display_position`; NULL values are emitted as empty CSV fields. P1 leaves
-`display_position` NULL for normal Discovery because Discovery numbering is a
-planned P2 behavior.
+`display_position`; NULL values are emitted as empty CSV fields. P2 adds the
+atomic `CatalogService.set_source_display_positions()` API. It validates all
+positions and Source identities for `(site, discovery_key)` before updating all
+rows in one transaction and refreshing `updated_at`; empty assignments are a
+no-op and duplicate numeric positions are permitted.
 
 `CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、v6 CRUDを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。通常のCatalogService / Discovery / Batch / Exportはunsupported schemaをmigrationせず拒否する。v3 / v4 / v5からの更新は明示的な`catalog migrate`で行う。
 
@@ -1091,6 +1093,33 @@ The current generic incremental Discovery implementation stops after five
 consecutive distinct known source identities. Observing a new source resets
 the streak to zero. Any older two-known-source examples in this historical
 note describe the former default and are superseded by the current value.
+
+#### P2 Discovery position assignment
+
+`DiscoveryService` retains the first-observed Source IDs in Adapter yield order
+as a run-local ordered set. The Adapter remains responsible only for canonical
+newest-to-oldest Discovery order; it does not emit position metadata, and the
+Service never infers position from episode labels, numeric IDs, `order_key`,
+`order_label`, or publication dates.
+
+After a normal full exhaustion, the Service reverses the observed order and
+assigns `oldest=1 ... newest=N` through the Catalog bulk API. Bounded full
+Discovery applies the same numbering only to the yielded scope and leaves
+scope-external Sources unchanged. An incomplete full run does not assign any
+positions.
+
+For incremental Discovery, `stable_boundary` and generic `known_streak` stops
+append the currently observed Sources whose position is still NULL after the
+current scope maximum. The NULL set is reversed before assignment, so Sources
+created by a previous incomplete run are recovered when re-observed. A normal
+incremental exhaustion has full-scope authority and assigns `1..N`, even when
+no baseline exists. Early stop with no non-NULL baseline is fail-safe and
+leaves NULL positions unchanged. Incomplete incremental runs never assign
+positions or rewrite established positions.
+
+Position finalization uses only records already yielded by the existing
+Discovery run; it adds no pagination, DOM, HTTP, or full-list access. Discovery
+position updates do not modify Item status, `completed_at`, or operator notes.
 
 #### Magapoke M3b Batch boundary
 

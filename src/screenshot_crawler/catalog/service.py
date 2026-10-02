@@ -423,6 +423,67 @@ class CatalogService:
             rows = connection.execute(query, values).fetchall()
         return [self._source_from_row(row) for row in rows]
 
+    def set_source_display_positions(
+        self,
+        *,
+        site: str,
+        discovery_key: str,
+        assignments: Mapping[int, int],
+    ) -> tuple[Source, ...]:
+        """Atomically set display positions for Sources in one Discovery scope.
+
+        All assignments are validated, and all Source identities are checked,
+        before the first UPDATE is issued.  The connection context rolls the
+        complete batch back if any update fails.
+        """
+
+        self._validate_nonempty(site, "site")
+        self._validate_nonempty(discovery_key, "discovery_key")
+        if not isinstance(assignments, Mapping):
+            raise CatalogValidationError("assignments must be a mapping")
+        if not assignments:
+            return ()
+
+        normalized: tuple[tuple[int, int], ...] = tuple(assignments.items())
+        for source_id, position in normalized:
+            if isinstance(source_id, bool) or not isinstance(source_id, int) or source_id < 1:
+                raise CatalogValidationError("source_id must be a positive integer")
+            if isinstance(position, bool) or not isinstance(position, int) or position < 1:
+                raise CatalogValidationError("display_position must be an integer >= 1")
+
+        timestamp = format_timestamp(now_jst())
+        source_ids = tuple(source_id for source_id, _ in normalized)
+        placeholders = ", ".join("?" for _ in source_ids)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM sources WHERE id IN ({placeholders})", source_ids
+            ).fetchall()
+            rows_by_id = {row["id"]: row for row in rows}
+            for source_id in source_ids:
+                row = rows_by_id.get(source_id)
+                if row is None:
+                    raise CatalogNotFoundError(f"Catalog source not found: {source_id}")
+                if row["site"] != site:
+                    raise CatalogValidationError(
+                        f"Source {source_id} does not belong to site {site!r}"
+                    )
+                if row["discovery_key"] != discovery_key:
+                    raise CatalogValidationError(
+                        f"Source {source_id} does not belong to Discovery scope {discovery_key!r}"
+                    )
+
+            for source_id, position in normalized:
+                connection.execute(
+                    "UPDATE sources SET display_position = ?, updated_at = ? WHERE id = ?",
+                    (position, timestamp, source_id),
+                )
+
+            updated_rows = [
+                connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+                for source_id in source_ids
+            ]
+        return tuple(self._source_from_row(row) for row in updated_rows)
+
     def update_source_external_state(
         self,
         site: str,

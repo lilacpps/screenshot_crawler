@@ -1,11 +1,11 @@
 # Catalog position / archive naming / item status plan
 
-> **P1 IMPLEMENTED; P2-P5 PLANNED / NOT YET IMPLEMENTED**
+> **P1-P2 IMPLEMENTED; P3-P5 PLANNED / NOT YET IMPLEMENTED**
 >
 > This note is the adopted implementation plan for Catalog schema v6 and the later
-> display-position/archive phases. Catalog schema v6/P1 is implemented; the
-> Discovery numbering, Batch naming, archive renumbering, and rollout phases below
-> remain planned.
+> display-position/archive phases. Catalog schema v6/P1 and Discovery position
+> assignment/P2 are implemented; Batch naming, archive renumbering, and rollout
+> phases below remain planned.
 >
 > Codex must keep this note synchronized while implementing the plan. When a phase is completed,
 > update the corresponding section from PLANNED to IMPLEMENTED and record any verified deviations.
@@ -537,19 +537,56 @@ P1 implementation details:
   read-only inspection and status changes. `catalog item-note <item_id> "text"`
   sets/replaces a note, and `catalog item-note <item_id> --clear` clears it.
 - CSV export includes `items.note` and `sources.display_position`.
-- P1 does not assign display positions during Discovery and does not change Batch
-  archive naming, collision handling, archive renumbering, or crawl-status JSON
-  naming.
+- P1 alone did not assign display positions during Discovery and did not change
+  Batch archive naming, collision handling, archive renumbering, or crawl-status
+  JSON naming. P2 now assigns positions during safe Discovery completion; the
+  remaining archive behavior is still planned.
 
 ### P2 - Discovery position
 
-PLANNED.
+IMPLEMENTED.
 
 - full authoritative renumbering,
 - incremental append numbering,
 - incomplete-run safety,
 - bounded-scope behavior,
 - site regression coverage.
+
+P2 implementation details:
+
+- `DiscoveryService` computes positions from the first-observed Source IDs in
+  the Adapter's canonical newest-to-oldest yield order. Adapters do not receive
+  or emit a position/index/episode-number metadata field, and no title,
+  `order_key`, `order_label`, external ID, or date parsing is used.
+- The run-local observed Source ID list is an ordered-set equivalent, so a
+  duplicate observation is counted by the existing Discovery counters but is
+  assigned only once.
+- Normal full Discovery assigns `oldest=1 ... newest=N` only after normal
+  exhaustion. Bounded full Discovery assigns the same `1..N` numbering only
+  within the yielded scope; Sources outside that scope are untouched.
+- Incremental `stable_boundary` and `known_streak` stops use the current
+  scope's maximum non-NULL position as the baseline. The currently observed
+  Sources whose current position is NULL are reversed into oldest-to-newest
+  order and receive `max+1`, `max+2`, ... . This includes Sources created by a
+  previous incomplete incremental run and re-observed later.
+- An incremental run that exhausts the scope normally is treated as full for
+  position purposes and receives `1..N`, including when no baseline exists. If
+  an early-stop run has no non-NULL baseline, assignment is skipped and NULL is
+  preserved as a fail-safe.
+- `DiscoveryIncompleteError` never finalizes positions. Existing positions are
+  unchanged and Sources created during the incomplete run may remain NULL.
+  Item status, `completed_at`, and operator `note` are not changed.
+- `CatalogService.set_source_display_positions()` validates all positions and
+  all Source identities, then updates the batch in one transaction with
+  `updated_at`; an empty assignment is a no-op. The assignment API permits
+  duplicate numeric positions because no UNIQUE position constraint exists.
+- Position calculation uses only records already yielded for the requested
+  Discovery. It performs no additional pagination, DOM scan, HTTP request, or
+  full-list access.
+
+P3-P5 remain planned: ZIP filename/packaging changes, collision handling,
+archive renumbering, crawl-status JSON rename, and real Catalog rollout are not
+part of P2.
 
 ### P3 - Batch archive naming
 

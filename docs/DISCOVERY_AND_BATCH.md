@@ -657,7 +657,7 @@ item_id
 site
 external_id
 discovery_key
-display_position   # nullable 1-based listing position; P1 stores but does not assign it
+display_position   # nullable 1-based listing position; P2 assigns it after safe Discovery completion
 access_mode        # owned / free / quota / paid / unknown
 free_until
 available
@@ -1694,8 +1694,32 @@ final schema validation. Normal Catalog runtime does not implicitly migrate an
 older database. Schema v6 adds nullable `items.note` and nullable
 `sources.display_position`, expands Item status to `pending | completed | skipped |
 external`, and keeps only `pending` Batch-eligible. P1 stores display positions
-when explicitly supplied but does not assign them in Discovery; position numbering,
-position-prefixed archive naming, and archive renumbering remain planned phases.
+and P2 assigns them during successful Discovery. Position-prefixed archive naming
+and archive renumbering remain planned P3/P4 phases.
+
+### Discovery display position contract (P2 implemented)
+
+`DiscoveryService` is the sole position authority. Adapters continue to yield
+records in canonical newest-to-oldest order and do not emit position or episode
+number metadata. The Service keeps an ordered first-occurrence list of Source
+IDs observed during the run, without inferring positions from labels, numeric
+identities, `order_key`, `order_label`, or dates.
+
+After normal full exhaustion, the observed list is reversed and persisted as
+`oldest=1 ... newest=N` through the atomic
+`CatalogService.set_source_display_positions()` API. Bounded full Discovery
+assigns `1..N` only to the yielded scope and does not change Sources outside the
+scope. `DiscoveryIncompleteError` prevents all position finalization, leaving
+existing positions unchanged and newly created Sources NULL.
+
+Incremental `stable_boundary` and `known_streak` stops append the currently
+observed Sources whose current position is NULL after the scope's maximum
+non-NULL position; previous incomplete-run NULL Sources are included. If
+incremental traversal exhausts the whole scope, it has full-order authority and
+assigns `1..N` even without a baseline. Early stop without a non-NULL baseline
+is fail-safe and leaves NULL positions unchanged. Position assignment uses only
+records already yielded by the existing run and performs no additional site
+access. Item status, `completed_at`, and operator notes remain unchanged.
 
 Schema v2はsequential migrationの対象外であり、v2→v3 migrationは実装しない。
 `catalog migrate`はv3以降のDBに対してのみcomplete migration pathを要求する。v2 DBを利用する場合は、
