@@ -262,6 +262,27 @@ def _array_equal(first: object, second: object) -> bool:
     return bool(np.array_equal(np.asarray(first), np.asarray(second)))
 
 
+def _supported_dct_layout(dct: Any, numpy_module: Any) -> tuple[object, ...] | None:
+    """Return the supported jpeglib layout, or ``None`` if it is unsafe."""
+
+    try:
+        factors = tuple(
+            tuple(int(value) for value in row)
+            for row in numpy_module.asarray(dct.samp_factor).tolist()
+        )
+        layout = (
+            int(dct.num_components),
+            factors,
+            bool(dct.progressive_mode),
+            int(dct.num_scans),
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if layout != (3, ((1, 1), (1, 1), (1, 1)), False, 1):
+        return None
+    return layout
+
+
 def reconstruct_lossless_jpeg(
     jpeg_bytes: bytes,
     mapping: object,
@@ -358,10 +379,8 @@ def reconstruct_lossless_jpeg(
         )
         if int(source_dct.width) != header_width or int(source_dct.height) != header_height:
             return _fail("DCT dimensions differ from JPEG header", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
-        factors = np.asarray(source_dct.samp_factor).tolist()
-        if int(source_dct.num_components) != 3 or len(factors) != 3 or any(tuple(row) != (1, 1) for row in factors):
-            return _fail("UNSUPPORTED_JPEG_LAYOUT", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
-        if int(getattr(source_dct, "num_scans", 1)) != 1 or bool(getattr(source_dct, "progressive_mode", False)):
+        source_layout = _supported_dct_layout(source_dct, np)
+        if source_layout is None:
             return _fail("UNSUPPORTED_JPEG_LAYOUT", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
         names = ("Y", "Cb", "Cr")
         copy_started = time.perf_counter()
@@ -397,6 +416,15 @@ def reconstruct_lossless_jpeg(
         # The second path is distinct from the write path and is cleaned below.
         readback_path = output_path_read
         try:
+            output_layout = _supported_dct_layout(output_dct, np)
+            if output_layout is None or output_layout != source_layout:
+                return _fail(
+                    "UNSUPPORTED_JPEG_LAYOUT",
+                    width=header_width,
+                    height=header_height,
+                    tiles=tile_dimensions,
+                    mapping_hash=mapping_hash,
+                )
             compare_started = time.perf_counter()
             observed = {name: np.array(getattr(output_dct, name), dtype=np.int16, copy=True) for name in names}
             mismatched_blocks = 0

@@ -2243,3 +2243,98 @@ CONTENT保存後、initial `go_next()`直前に1回だけ使う。Batch candidat
 `bw-bv-epubs.bookwalker.jp`等のrelevant hostだけの403/429をfatal stopとする。
 explicit challengeとvisible CAPTCHAも共通stop reason/Batch JSONL metricsへ記録する。
 site-specific signalのlive verificationは未実施で、grant-onlyは未実装である。
+
+### 20.21 Phase P4-5 final reconstructed-JPEG pixel gate removal (2026-10-02)
+
+P4-5 completes the current BookWalker reconstructed-JPEG performance
+optimization series. The per-page full-resolution browser comparison between
+the reconstructed JPEG and native PNG is no longer part of the default
+production gate. The comparison remains available as a BookWalker-local
+diagnostic with `BOOKWALKER_FINAL_PIXEL_VERIFY`; unset, `0`, `false`, `no`, and
+`off` mean disabled, while `1`, `true`, `yes`, and `on` mean enabled. An invalid
+value fails fast in `BookWalkerAdapter`.
+
+The default production authority is now the verified source JPEG, the complete
+MCU-aligned mapping, exact raw-JPEG/ImageBitmap attribution, coefficient-exact
+DCT reconstruction, equal quantization tables, matching dimensions, and
+supported source/output JPEG structure. Output reread now also requires three
+components, 4:4:4 sampling, one scan, and non-progressive mode on the output
+DCT object, matching the supported source layout. Mapping proof, overflow and
+eviction guards, unsafe geometry checks, strict MCU alignment, raw full-
+resolution attribution, coefficient readback, and qtable equality were not
+weakened. The original JPEG matcher remains first priority and is not passed
+through reconstruction or final-pixel verification.
+
+Each lossless part records `final_pixel_verify_enabled`,
+`final_pixel_compare_performed`, and `native_pixel_exact`. With verification
+off, the last two remain `false` and `null` respectively; the adapter does not
+emit `native_pixel_comparison`, and `final_browser_pixel_compare_ms` remains
+`0.0`. With verification enabled, the browser helper returns the available,
+exact, dimension, differing-pixel, and maximum-channel fields; exactness is an
+additional spread gate and mismatch falls back to native PNG. Thus the default
+production path no longer claims runtime browser-decoded full-pixel equality
+for every reconstructed page; that equality is optional diagnostic evidence.
+
+The production unit coverage includes the default-off no-call guard (the
+`_browser_pixel_exact` helper is made to fail if invoked), enabled exact and
+mismatch behavior, strict environment parsing, all-or-none fallback, and
+fail-closed proof cases. Lossless-JPEG unit coverage also checks output DCT
+component count, sampling factors, progressive mode, and scan count. The
+browser integration regression decodes a reconstructed JPEG and its expected
+native PNG in Chromium and observed `differing_pixel_count=0` and
+`max_channel_difference=0`.
+
+The requested live URL was run with a fresh output directory and default
+verification unset. The first 20-artifact attempt began at the shared viewer's
+remembered `149/314`; after resetting the shared viewer to page 1, a second
+bounded run saved 19 artifacts from 10 logical captures (`11/314` onward; the
+first logical capture was a one-part cover). All parts in these live runs
+failed before raw matching at the existing mapping proof with
+`completed segment has no tile draws` / `trace_returned_tile_record_count=0`.
+Consequently, this session produced zero reconstructed-JPEG artifacts and is
+not a valid performance comparison against P4-4's successful proof path. It
+does verify the default metadata contract on the fallback path:
+`final_pixel_verify_enabled=false`,
+`final_pixel_compare_performed=false`, `native_pixel_exact=null`, and final
+browser comparison timing zero. The reset-run timing snapshot, in
+milliseconds, was:
+
+| measurement | count | median | p90 | max |
+| --- | ---: | ---: | ---: | ---: |
+| capture total | 10 | 138.30 | 158.56 | 161.93 |
+| lossless evaluation total | 10 | 3.75 | 4.89 | 5.67 |
+| final browser pixel comparison | 19 | 0.00 | 0.00 | 0.00 |
+| original JPEG matching | 10 | 56.98 | 62.40 | 65.67 |
+| compact trace fetch | 10 | 3.52 | 4.67 | 5.24 |
+| lossless reconstruction | 19 | 0.00 | 0.00 | 0.00 |
+| native materialization | 10 | 29.27 | 31.62 | 34.37 |
+| raw full-resolution comparison | 19 | 0.00 | 0.00 | 0.00 |
+| mapping analysis | 19 | 0.04 | 0.08 | 0.20 |
+| compact decode | 10 | 0.06 | 0.08 | 0.13 |
+
+P4-4's successful purchased baseline remains capture total `1370.08 ms`,
+lossless evaluation total `898.70 ms`, and final browser comparison
+`149.03 ms/part`. Absolute and percentage P4-4-to-P4-5 reductions are not
+claimed from the failed live proof path: subtracting a run that stopped before
+raw matching, DCT reconstruction, and native-pixel comparison would be
+misleading. The expected final-comparison production cost is nevertheless
+`~149.03 ms/part -> 0.0 ms`, and the unit/integration contracts prove that the
+comparison is only paid when explicitly enabled.
+
+A separate diagnostic live run with `BOOKWALKER_FINAL_PIXEL_VERIFY=1` covered
+five logical captures / ten artifacts. Verification was enabled in all ten
+manifest rows, but zero comparisons ran because the same pre-comparison
+mapping proof failed; therefore no live `native_pixel_exact=true` claim is
+made. The existing original-JPEG A/B diagnostic was also run after resetting
+to page 1 (`37/314 -> 1/314`); it observed no unique original match and fell
+back to native PNG, so it did not replace the previously recorded P4-4 trial
+original-path regression. Existing unit and browser regression tests continue
+to prove that a unique original match returns `original_jpeg` without lossless
+evaluation.
+
+The remaining measured costs are understood, but no further optimization is
+planned in this series for raw source full-resolution attribution, native PNG
+materialization, signatures, or coefficient readback. Their correctness and
+complexity balance is preferred at this phase boundary. Native materialization
+lazy evaluation, signature redesign, original matcher changes, compact
+transport v2, and Core/YAML/DB/packaging changes remain out of scope.

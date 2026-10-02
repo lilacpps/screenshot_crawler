@@ -1,12 +1,16 @@
+import base64
+import io
 import json
 
 import pytest
 import pytest_asyncio
+from PIL import Image
 from playwright.async_api import Browser, Page
 
 import screenshot_crawler.site_adapters.bookwalker.adapter as bookwalker_adapter_module
 import screenshot_crawler.site_adapters.bookwalker.login as bookwalker_login_module
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
+    _PIXEL_EXACT_COMPARISON_SCRIPT,
     BookWalkerAdapter,
     BookWalkerStrictEntryError,
 )
@@ -14,6 +18,10 @@ from screenshot_crawler.site_adapters.bookwalker.login import (
     BookWalkerLoginError,
     login_bookwalker,
 )
+from screenshot_crawler.site_adapters.bookwalker.lossless_jpeg import (
+    reconstruct_lossless_jpeg,
+)
+from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import mapping_sha256
 
 PRODUCT_ID = "6de7534d-7022-481d-b2d3-05f03f384454"
 PRODUCT_URL = f"https://bookwalker.jp/de{PRODUCT_ID}/"
@@ -101,6 +109,67 @@ async def _initialize_strict(
     await adapter.configure_run(browser_page, strategy)  # type: ignore[arg-type]
     await adapter.initialize(browser_page)
     return adapter
+
+
+async def test_reconstructed_jpeg_matches_expected_native_pixels_in_browser(
+    browser_page: Page,
+) -> None:
+    source = Image.new("RGB", (32, 32))
+    for y in range(32):
+        for x in range(32):
+            source.putpixel(
+                (x, y),
+                ((x * 17 + y * 3) % 256, (x * 5 + y * 19) % 256, (x * 11 + y * 7) % 256),
+            )
+    jpeg_buffer = io.BytesIO()
+    source.save(jpeg_buffer, format="JPEG", quality=90, subsampling=0, progressive=False)
+    jpeg_bytes = jpeg_buffer.getvalue()
+
+    native_buffer = io.BytesIO()
+    Image.open(io.BytesIO(jpeg_bytes)).convert("RGBA").save(native_buffer, format="PNG")
+    native_bytes = native_buffer.getvalue()
+    mapping = [
+        {
+            "source_x": x,
+            "source_y": y,
+            "destination_x": x,
+            "destination_y": y,
+            "width": 16,
+            "height": 16,
+        }
+        for y in range(0, 32, 16)
+        for x in range(0, 32, 16)
+    ]
+    result = reconstruct_lossless_jpeg(
+        jpeg_bytes,
+        {
+            "source_dimensions": {"width": 32, "height": 32},
+            "target_dimensions": {"width": 32, "height": 32},
+            "tile_dimensions": {"width": 16, "height": 16},
+            "mapping_sha256": mapping_sha256(mapping),
+            "mapping": mapping,
+        },
+    )
+    assert result.success
+    assert result.data is not None
+
+    await browser_page.goto("data:text/html,<html></html>")
+    comparison = await browser_page.evaluate(
+        _PIXEL_EXACT_COMPARISON_SCRIPT,
+        {
+            "reconstructed": "data:image/jpeg;base64,"
+            + base64.b64encode(result.data).decode("ascii"),
+            "native": "data:image/png;base64,"
+            + base64.b64encode(native_bytes).decode("ascii"),
+        },
+    )
+    assert comparison == {
+        "available": True,
+        "dimensions_equal": True,
+        "exact": True,
+        "differing_pixel_count": 0,
+        "max_channel_difference": 0,
+    }
 
 
 async def test_bookwalker_strict_quota_clicks_only_maruyomi(browser_page: Page) -> None:

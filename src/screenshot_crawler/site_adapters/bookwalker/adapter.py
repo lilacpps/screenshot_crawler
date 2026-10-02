@@ -911,6 +911,22 @@ def parse_bookwalker_lossless_jpeg_output(value: str | None) -> bool:
     )
 
 
+def parse_bookwalker_final_pixel_verify(value: str | None) -> bool:
+    """Parse the opt-in final reconstructed-JPEG pixel verification switch."""
+
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        "BOOKWALKER_FINAL_PIXEL_VERIFY must be one of: "
+        "0, 1, false, true, no, yes, off, on"
+    )
+
+
 def _elapsed_ms(start: float) -> float:
     return round((time.perf_counter() - start) * 1000, 2)
 
@@ -1233,6 +1249,9 @@ class BookWalkerAdapter(SiteAdapter):
         self.lossless_jpeg_output_enabled = parse_bookwalker_lossless_jpeg_output(
             os.environ.get("BOOKWALKER_LOSSLESS_JPEG_OUTPUT")
         )
+        self.final_pixel_verify_enabled = parse_bookwalker_final_pixel_verify(
+            os.environ.get("BOOKWALKER_FINAL_PIXEL_VERIFY")
+        )
         self._access_strategy: AccessStrategy = "auto"
         self._auto_login_email = auto_login_email
         self._auto_login_password = auto_login_password
@@ -1269,6 +1288,8 @@ class BookWalkerAdapter(SiteAdapter):
                     "spread_ready": False,
                     "output_enabled": self.lossless_jpeg_output_enabled,
                     "output_used": False,
+                    "final_pixel_verify_enabled": self.final_pixel_verify_enabled,
+                    "final_pixel_compare_performed": False,
                     "parts": [],
                 },
             }
@@ -2486,13 +2507,19 @@ class BookWalkerAdapter(SiteAdapter):
                     "spread_ready": False,
                     "output_enabled": self.lossless_jpeg_output_enabled,
                     "output_used": False,
+                    "final_pixel_verify_enabled": self.final_pixel_verify_enabled,
+                    "final_pixel_compare_performed": False,
                     "parts": [],
                 },
             }
         }
 
     @staticmethod
-    def _shadow_part_defaults(candidate_count_total: int = 0) -> dict[str, Any]:
+    def _shadow_part_defaults(
+        candidate_count_total: int = 0,
+        *,
+        final_pixel_verify_enabled: bool = False,
+    ) -> dict[str, Any]:
         return {
             "candidate_count_total": candidate_count_total,
             "candidate_count_dimension_match": 0,
@@ -2504,7 +2531,9 @@ class BookWalkerAdapter(SiteAdapter):
             "jpeg_supported": False,
             "strict_mcu_aligned": False,
             "coefficient_exact": False,
-            "native_pixel_exact": False,
+            "final_pixel_verify_enabled": final_pixel_verify_enabled,
+            "final_pixel_compare_performed": False,
+            "native_pixel_exact": None,
             "mapping_source": None,
             "mapping_id": None,
             "segment_clear_operation_index": None,
@@ -2556,6 +2585,8 @@ class BookWalkerAdapter(SiteAdapter):
             "spread_ready": False,
             "output_enabled": self.lossless_jpeg_output_enabled,
             "output_used": False,
+            "final_pixel_verify_enabled": self.final_pixel_verify_enabled,
+            "final_pixel_compare_performed": False,
             "trace_fetch_mode": "selected_completed_mappings_compact_v1",
             "timing_ms": evaluation_timing,
             "parts": [],
@@ -2594,7 +2625,10 @@ class BookWalkerAdapter(SiteAdapter):
         if len(selected_draw_calls) != len(native_captures):
             shadow["reason"] = "native capture and renderer draw counts differ"
             shadow["parts"] = [
-                self._shadow_part_defaults(len(purchased_candidates))
+                self._shadow_part_defaults(
+                    len(purchased_candidates),
+                    final_pixel_verify_enabled=self.final_pixel_verify_enabled,
+                )
                 for _ in native_captures
             ]
             finish_timing()
@@ -2607,7 +2641,10 @@ class BookWalkerAdapter(SiteAdapter):
             if mapping_id is None:
                 shadow["reason"] = "selected renderer draw mapping identity unavailable"
                 shadow["parts"] = [
-                    self._shadow_part_defaults(len(purchased_candidates))
+                    self._shadow_part_defaults(
+                        len(purchased_candidates),
+                        final_pixel_verify_enabled=self.final_pixel_verify_enabled,
+                    )
                     for _ in native_captures
                 ]
                 finish_timing()
@@ -2632,7 +2669,10 @@ class BookWalkerAdapter(SiteAdapter):
         if not isinstance(trace, dict):
             shadow["reason"] = "compact trace unavailable or invalid"
             shadow["parts"] = [
-                self._shadow_part_defaults(len(purchased_candidates))
+                self._shadow_part_defaults(
+                    len(purchased_candidates),
+                    final_pixel_verify_enabled=self.final_pixel_verify_enabled,
+                )
                 for _ in native_captures
             ]
             finish_timing()
@@ -2642,7 +2682,10 @@ class BookWalkerAdapter(SiteAdapter):
         parts: list[dict[str, Any]] = []
         reconstructed_captures: list[CaptureResult] = []
         for native, draw_call in zip(native_captures, selected_draw_calls, strict=False):
-            part = self._shadow_part_defaults(len(purchased_candidates))
+            part = self._shadow_part_defaults(
+                len(purchased_candidates),
+                final_pixel_verify_enabled=self.final_pixel_verify_enabled,
+            )
             part_timing = _part_timing_defaults()
             part["timing_ms"] = part_timing
             mapping_started = time.perf_counter()
@@ -2788,22 +2831,26 @@ class BookWalkerAdapter(SiteAdapter):
                 part["reconstructed_dimensions_match"] = (
                     result.width == native.width and result.height == native.height
                 )
-                final_compare_started = time.perf_counter()
-                comparison = await self._browser_pixel_exact(page, result.data, native.data)
-                final_compare_elapsed = _elapsed_ms(final_compare_started)
-                part_timing["final_browser_pixel_compare_ms"] = final_compare_elapsed
-                evaluation_timing["final_browser_pixel_compare"] += final_compare_elapsed
-                part["native_pixel_exact"] = bool(
-                    comparison.get("available") and comparison.get("exact")
-                )
-                part["native_pixel_comparison"] = {
-                    key: value
-                    for key, value in comparison.items()
-                    if key in {
-                        "available", "exact", "dimensions_equal",
-                        "differing_pixel_count", "max_channel_difference", "reason",
+                if self.final_pixel_verify_enabled:
+                    final_compare_started = time.perf_counter()
+                    comparison = await self._browser_pixel_exact(
+                        page, result.data, native.data
+                    )
+                    final_compare_elapsed = _elapsed_ms(final_compare_started)
+                    part_timing["final_browser_pixel_compare_ms"] = final_compare_elapsed
+                    evaluation_timing["final_browser_pixel_compare"] += final_compare_elapsed
+                    part["final_pixel_compare_performed"] = True
+                    part["native_pixel_exact"] = bool(
+                        comparison.get("available") and comparison.get("exact")
+                    )
+                    part["native_pixel_comparison"] = {
+                        key: value
+                        for key, value in comparison.items()
+                        if key in {
+                            "available", "exact", "dimensions_equal",
+                            "differing_pixel_count", "max_channel_difference", "reason",
+                        }
                     }
-                }
                 if part["reconstructed_dimensions_match"]:
                     reconstructed_captures.append(
                         CaptureResult(
@@ -2816,6 +2863,9 @@ class BookWalkerAdapter(SiteAdapter):
                     )
             parts.append(part)
         shadow["parts"] = parts
+        shadow["final_pixel_compare_performed"] = any(
+            part.get("final_pixel_compare_performed") is True for part in parts
+        )
         shadow["spread_ready"] = bool(parts) and all(
             part.get("mapping_proven") is True
             and part.get("mapping_source") == "completed_segment"
@@ -2827,8 +2877,11 @@ class BookWalkerAdapter(SiteAdapter):
             and part.get("strict_mcu_aligned") is True
             and part.get("coefficient_exact") is True
             and part.get("quantization_tables_equal") is True
-            and part.get("native_pixel_exact") is True
             and part.get("reconstructed_dimensions_match") is True
+            and (
+                not self.final_pixel_verify_enabled
+                or part.get("native_pixel_exact") is True
+            )
             for part in parts
         )
         if not shadow["spread_ready"]:
@@ -3048,6 +3101,8 @@ class BookWalkerAdapter(SiteAdapter):
                     "spread_ready": False,
                     "output_enabled": self.lossless_jpeg_output_enabled,
                     "output_used": False,
+                    "final_pixel_verify_enabled": self.final_pixel_verify_enabled,
+                    "final_pixel_compare_performed": False,
                     "parts": [],
                     "reason": "existing original JPEG exact match",
                 }
@@ -3072,6 +3127,8 @@ class BookWalkerAdapter(SiteAdapter):
                             "spread_ready": False,
                             "output_enabled": self.lossless_jpeg_output_enabled,
                             "output_used": False,
+                            "final_pixel_verify_enabled": self.final_pixel_verify_enabled,
+                            "final_pixel_compare_performed": False,
                             "parts": [],
                             "reason": f"lossless evaluation failed: {type(exc).__name__}",
                         },

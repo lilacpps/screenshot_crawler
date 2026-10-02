@@ -389,22 +389,29 @@ is baseline sequential SOF0, three-component 4:4:4 JPEG, equal source/canvas
 dimensions, uniform strict-MCU tiles, and a complete bijection. The helper
 moves quantized DCT blocks with `jpeglib.read_dct()` / `write_dct()`, reads the
 coefficients back, and verifies zero mismatches plus unchanged quantization
-tables. A full-size browser pixel comparison against the current native PNG is
-also required. Production reconstruction fetches only the completed mapping
-records selected by the exact renderer `mappingId`; retained-trace counts are
-returned as a small numeric summary rather than transferring the full trace.
+tables. Production reconstruction also validates the source and output DCT
+layout: three components, 4:4:4 sampling, one scan, and non-progressive
+baseline structure. The completed mapping records are selected by the exact
+renderer `mappingId`; retained-trace counts are returned as a small numeric
+summary rather than transferring the full trace.
 The selected records use a versioned compact BookWalker-local transport
 representation and are decoded back to the unchanged rich mapping contract
 before the Python proof validator runs.
 Original JPEG matching remains first priority; its retry wait is now bounded
 and event-driven, and is used only while eligible response work is pending.
 
-Phase P2/P3 may return the verified reconstructed JPEG only when every proof gate
-passes, including `mapping_proven=true`, `mapping_source=completed_segment`, no
-segment overflow or completed-mapping eviction, one full-resolution raw JPEG
-match, supported strict-MCU JPEG layout, exact coefficients and quantization
-tables, browser full-resolution pixel exactness, and matching native
-dimensions. The output switch is BookWalker-local:
+Phase P2/P3/P4/P5 may return the verified reconstructed JPEG only when every
+production proof gate passes, including `mapping_proven=true`,
+`mapping_source=completed_segment`, no segment overflow or completed-mapping
+eviction, one full-resolution raw JPEG match, supported strict-MCU JPEG layout,
+exact coefficients and quantization tables, output structural parity, and
+matching native dimensions. The production authority is the verified source
+JPEG, complete MCU-aligned mapping, coefficient-exact reconstruction, equal
+quantization tables, and supported source/output JPEG structure. Browser-decoded
+full-pixel equality is not a default production gate after P4-5. It remains an
+optional BookWalker-local diagnostic through `BOOKWALKER_FINAL_PIXEL_VERIFY`;
+when enabled, it is an additional gate and mismatch falls back to native PNG.
+The output switch is BookWalker-local:
 `BOOKWALKER_LOSSLESS_JPEG_OUTPUT` is BookWalker-local and is enabled by
 default in Phase P3. Explicit `1`, `true`, `yes`, and `on` values also enable
 it. The kill switch is `BOOKWALKER_LOSSLESS_JPEG_OUTPUT=0` (also `false`,
@@ -419,15 +426,18 @@ signature matches reach full-resolution comparison. Zero signature matches
 leave the shadow unavailable, one exact full-resolution match is accepted, and
 two or more exact matches remain ambiguous.
 
-With the switch off, reconstruction is recorded only in BookWalker adapter
-debug metadata and native PNG remains the returned output. With the switch on,
-the reconstructed JPEG bytes from `reconstruct_lossless_jpeg()` are returned
-unchanged as `.jpg` only after all gates pass. Spread output is all-or-none:
-one failed part makes every part native PNG. Unsupported JPEG layouts,
-ambiguous mappings or candidates, segment overflow, coefficient mismatch,
-dimension mismatch, and browser comparison failure are all non-fatal native
-PNG fallbacks. Active segments, completed mappings, and retained browser source
-references are bounded and cleared after the capture window.
+The final-pixel diagnostic defaults off. With it off, the reconstructed JPEG
+bytes from `reconstruct_lossless_jpeg()` are returned unchanged as `.jpg` after
+the structural and coefficient proof gates pass; `native_pixel_exact` remains
+unchecked (`null`) and the final comparison timing is zero. With
+`BOOKWALKER_FINAL_PIXEL_VERIFY=1` (also `true`, `yes`, or `on`), the browser
+full-resolution comparison is performed and exactness is required. An invalid
+explicit value fails fast. Spread output is all-or-none: one failed part makes
+every part native PNG. Unsupported JPEG layouts, ambiguous mappings or
+candidates, segment overflow, coefficient mismatch, dimension mismatch, and an
+enabled browser comparison failure are all non-fatal native PNG fallbacks.
+Active segments, completed mappings, and retained browser source references are
+bounded and cleared after the capture window.
 `BOOKWALKER_CAPTURE_MODE=canvas` bypasses original/native/lossless capture and
 continues to use the rendered-canvas fallback.
 

@@ -14,6 +14,7 @@ from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _capture_from_data_url,
     _native_call_is_safe,
     _trace_payload_stats,
+    parse_bookwalker_final_pixel_verify,
     parse_bookwalker_lossless_jpeg_output,
 )
 from screenshot_crawler.site_adapters.bookwalker.lossless_jpeg import LosslessJpegResult
@@ -606,6 +607,7 @@ async def test_lossless_output_spread_is_all_or_none(
 async def test_lossless_shadow_spread_readiness_is_all_or_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("BOOKWALKER_FINAL_PIXEL_VERIFY", "1")
     class ShadowPage:
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
             return dict(EMPTY_COMPACT_PAYLOAD)
@@ -689,14 +691,32 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
 
     assert len(result["parts"]) == 2
     assert result["parts"][0]["native_pixel_exact"] is True
+    assert result["parts"][0]["final_pixel_verify_enabled"] is True
+    assert result["parts"][0]["final_pixel_compare_performed"] is True
     assert result["parts"][1]["mapping_proven"] is False
     assert result["spread_ready"] is False
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("env_value", "final_exact", "expected_ready"),
+    [
+        (None, None, True),
+        ("1", True, True),
+        ("1", False, False),
+    ],
+    ids=["final-verify-off", "final-verify-exact", "final-verify-mismatch"],
+)
 async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     monkeypatch: pytest.MonkeyPatch,
+    env_value: str | None,
+    final_exact: bool | None,
+    expected_ready: bool,
 ) -> None:
+    if env_value is None:
+        monkeypatch.delenv("BOOKWALKER_FINAL_PIXEL_VERIFY", raising=False)
+    else:
+        monkeypatch.setenv("BOOKWALKER_FINAL_PIXEL_VERIFY", env_value)
     class ShadowPage:
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
             return dict(EMPTY_COMPACT_PAYLOAD)
@@ -739,8 +759,14 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
         full_resolution_calls.append(data)
         return {"available": True, "exact": data.endswith(b"candidate-31")}
 
+    final_pixel_calls = 0
+
     async def fake_native_pixels(*_args: object, **_kwargs: object) -> dict[str, object]:
-        return {"available": True, "exact": True}
+        nonlocal final_pixel_calls
+        final_pixel_calls += 1
+        if final_exact is None:
+            pytest.fail("final browser pixel comparison must be skipped")
+        return {"available": True, "exact": final_exact}
 
     def fake_reconstruct(*_args: object, **_kwargs: object) -> LosslessJpegResult:
         return LosslessJpegResult(
@@ -802,7 +828,22 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     assert part["full_resolution_comparison_count"] == 1
     assert part["candidate_count_full_exact"] == 1
     assert len(full_resolution_calls) == 1
-    assert result["spread_ready"] is True
+    assert result["spread_ready"] is expected_ready
+    assert result.captures is not None if expected_ready else result.captures is None
+    assert result["final_pixel_verify_enabled"] is (env_value is not None)
+    assert result["final_pixel_compare_performed"] is (env_value is not None)
+    assert final_pixel_calls == (1 if env_value is not None else 0)
+    if env_value is None:
+        assert part["final_pixel_verify_enabled"] is False
+        assert part["final_pixel_compare_performed"] is False
+        assert part["native_pixel_exact"] is None
+        assert "native_pixel_comparison" not in part
+        assert part["timing_ms"]["final_browser_pixel_compare_ms"] == 0.0
+    else:
+        assert part["final_pixel_verify_enabled"] is True
+        assert part["final_pixel_compare_performed"] is True
+        assert part["native_pixel_exact"] is final_exact
+        assert "native_pixel_comparison" in part
     assert {
         "evaluation_total",
         "trace_fetch_ms",
@@ -1126,6 +1167,38 @@ def test_invalid_capture_mode_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
 )
 def test_lossless_output_switch_parser(value: str | None, expected: bool) -> None:
     assert parse_bookwalker_lossless_jpeg_output(value) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, False),
+        ("1", True),
+        ("true", True),
+        ("yes", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_final_pixel_verify_switch_parser(
+    value: str | None,
+    expected: bool,
+) -> None:
+    assert parse_bookwalker_final_pixel_verify(value) is expected
+
+
+def test_final_pixel_verify_defaults_off_and_rejects_invalid_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BOOKWALKER_FINAL_PIXEL_VERIFY", raising=False)
+    assert BookWalkerAdapter().final_pixel_verify_enabled is False
+
+    monkeypatch.setenv("BOOKWALKER_FINAL_PIXEL_VERIFY", "maybe")
+    with pytest.raises(ValueError, match="BOOKWALKER_FINAL_PIXEL_VERIFY"):
+        BookWalkerAdapter()
 
 
 def test_lossless_output_switch_defaults_on_and_rejects_invalid_value(

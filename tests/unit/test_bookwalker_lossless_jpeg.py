@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from screenshot_crawler.site_adapters.bookwalker.lossless_jpeg import (
+    _supported_dct_layout,
     reconstruct_lossless_jpeg,
 )
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import mapping_sha256
@@ -112,3 +113,41 @@ def test_duplicate_or_gap_mapping_returns_no_artifact() -> None:
 
     assert not result.available
     assert result.data is None
+
+
+class _FakeDctLayout:
+    num_components = 3
+    samp_factor = ((1, 1), (1, 1), (1, 1))
+    progressive_mode = False
+    num_scans = 1
+
+
+def test_supported_dct_layout_matches_required_output_structure() -> None:
+    import numpy as np
+
+    assert _supported_dct_layout(_FakeDctLayout(), np) == (
+        3,
+        ((1, 1), (1, 1), (1, 1)),
+        False,
+        1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("num_components", 4),
+        ("samp_factor", ((2, 1), (1, 1), (1, 1))),
+        ("progressive_mode", True),
+        ("num_scans", 2),
+    ],
+)
+def test_output_dct_layout_changes_fail_closed(
+    attribute: str,
+    value: object,
+) -> None:
+    import numpy as np
+
+    dct = _FakeDctLayout()
+    setattr(dct, attribute, value)
+    assert _supported_dct_layout(dct, np) is None
