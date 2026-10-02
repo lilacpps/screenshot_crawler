@@ -1109,12 +1109,15 @@ scope-external Sources unchanged. An incomplete full run does not assign any
 positions.
 
 For incremental Discovery, `stable_boundary` and generic `known_streak` stops
-append the currently observed Sources whose position is still NULL after the
-current scope maximum. The NULL set is reversed before assignment, so Sources
-created by a previous incomplete run are recovered when re-observed. A normal
+use the maximum non-NULL position among Sources actually observed during the
+current run as the baseline, then append the currently observed Sources whose
+position is still NULL. Positioned Sources in the scope that were not observed
+during the run, including historical or unavailable Sources, are not part of
+that baseline. The NULL set is reversed before assignment, so Sources created
+by a previous incomplete run are recovered when re-observed. A normal
 incremental exhaustion has full-scope authority and assigns `1..N`, even when
-no baseline exists. Early stop with no non-NULL baseline is fail-safe and
-leaves NULL positions unchanged. Incomplete incremental runs never assign
+no baseline exists. Early stop with no observed non-NULL baseline is fail-safe
+and leaves NULL positions unchanged. Incomplete incremental runs never assign
 positions or rewrite established positions.
 
 Position finalization uses only records already yielded by the existing

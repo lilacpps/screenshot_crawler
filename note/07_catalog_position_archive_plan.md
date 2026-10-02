@@ -215,10 +215,14 @@ Incremental Discovery assumes the same latest-side append model already used by 
 
 For one discovery scope:
 
-1. read the current maximum non-NULL `display_position`,
-2. collect the newly observed Sources from the current incremental run,
-3. when the run reaches a normal incremental stopping condition, order those new Sources oldest -> newest,
-4. assign consecutive positions starting at `max + 1`.
+1. collect the Sources observed during the current incremental run,
+2. read the maximum non-NULL `display_position` only among those observed Sources,
+3. when the run reaches a normal incremental stopping condition, order the observed Sources whose position is NULL oldest -> newest,
+4. assign consecutive positions starting at `observed max + 1`.
+
+Positioned Sources in the same discovery scope that were not observed during
+the current run, including historical or unavailable Sources, do not contribute
+to the incremental baseline.
 
 Example:
 
@@ -564,15 +568,18 @@ P2 implementation details:
 - Normal full Discovery assigns `oldest=1 ... newest=N` only after normal
   exhaustion. Bounded full Discovery assigns the same `1..N` numbering only
   within the yielded scope; Sources outside that scope are untouched.
-- Incremental `stable_boundary` and `known_streak` stops use the current
-  scope's maximum non-NULL position as the baseline. The currently observed
-  Sources whose current position is NULL are reversed into oldest-to-newest
-  order and receive `max+1`, `max+2`, ... . This includes Sources created by a
-  previous incomplete incremental run and re-observed later.
+- Incremental `stable_boundary` and `known_streak` stops use the maximum
+  non-NULL position among Sources observed during the current run as the
+  baseline. The currently observed Sources whose current position is NULL are
+  reversed into oldest-to-newest order and receive `observed max+1`,
+  `observed max+2`, ... . Positioned Sources in the scope that were not
+  observed during the run, including historical or unavailable Sources, do not
+  contribute. This includes Sources created by a previous incomplete
+  incremental run and re-observed later.
 - An incremental run that exhausts the scope normally is treated as full for
   position purposes and receives `1..N`, including when no baseline exists. If
-  an early-stop run has no non-NULL baseline, assignment is skipped and NULL is
-  preserved as a fail-safe.
+  an early-stop run has no observed non-NULL baseline, assignment is skipped
+  and NULL is preserved as a fail-safe.
 - `DiscoveryIncompleteError` never finalizes positions. Existing positions are
   unchanged and Sources created during the incomplete run may remain NULL.
   Item status, `completed_at`, and operator `note` are not changed.

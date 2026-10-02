@@ -804,6 +804,43 @@ async def test_incremental_stable_boundary_appends_oldest_to_newest(
     } == {"D": 4, "E": 5, "F": 6}
 
 
+async def test_incremental_stable_boundary_ignores_unobserved_historical_high_position(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [record(external_id) for external_id in ("E", "D", "C")],
+        stop_after="C",
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="作品A"))
+    for external_id, position, available in (
+        ("A", 1, True),
+        ("B", 2, True),
+        ("C", 3, True),
+        ("historical", 99, False),
+    ):
+        item = catalog.create_item(work_id=work.id)
+        catalog.create_source(
+            SourceInput(
+                site="site-a",
+                external_id=external_id,
+                discovery_key=watch_target.key,
+                available=available,
+                display_position=position,
+            ),
+            item_id=item.id,
+        )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.stopped_reason == "stable_boundary"
+    assert {
+        external_id: catalog.find_source("site-a", external_id).display_position
+        for external_id in ("D", "E")
+    } == {"D": 4, "E": 5}
+    assert catalog.find_source("site-a", "historical").display_position == 99
+
+
 async def test_incremental_known_streak_appends_and_recovers_null_sources(
     tmp_path: Path,
 ) -> None:
@@ -913,6 +950,35 @@ async def test_incremental_without_baseline_and_early_stop_fails_safe(
     assert result.stopped_reason == "stable_boundary"
     assert catalog.find_source("site-a", "new").display_position is None
     assert catalog.find_source("site-a", "known").display_position is None
+
+
+async def test_incremental_early_stop_ignores_unobserved_positioned_source(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [record(external_id) for external_id in ("new-2", "new-1")],
+        stop_after="new-1",
+    )
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    work = catalog.create_work(WorkInput(work_key="work-a", title="作品A"))
+    item = catalog.create_item(work_id=work.id)
+    catalog.create_source(
+        SourceInput(
+            site="site-a",
+            external_id="historical",
+            discovery_key=watch_target.key,
+            available=False,
+            display_position=50,
+        ),
+        item_id=item.id,
+    )
+
+    result = await service.discover(FakePage(), watch_target, "incremental")
+
+    assert result.stopped_reason == "stable_boundary"
+    assert catalog.find_source("site-a", "new-1").display_position is None
+    assert catalog.find_source("site-a", "new-2").display_position is None
+    assert catalog.find_source("site-a", "historical").display_position == 50
 
 
 async def test_incremental_without_baseline_but_exhausted_assigns_full_scope(

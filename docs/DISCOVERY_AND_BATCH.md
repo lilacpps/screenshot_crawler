@@ -1712,14 +1712,17 @@ assigns `1..N` only to the yielded scope and does not change Sources outside the
 scope. `DiscoveryIncompleteError` prevents all position finalization, leaving
 existing positions unchanged and newly created Sources NULL.
 
-Incremental `stable_boundary` and `known_streak` stops append the currently
-observed Sources whose current position is NULL after the scope's maximum
-non-NULL position; previous incomplete-run NULL Sources are included. If
-incremental traversal exhausts the whole scope, it has full-order authority and
-assigns `1..N` even without a baseline. Early stop without a non-NULL baseline
-is fail-safe and leaves NULL positions unchanged. Position assignment uses only
-records already yielded by the existing run and performs no additional site
-access. Item status, `completed_at`, and operator notes remain unchanged.
+Incremental `stable_boundary` and `known_streak` stops use the maximum
+non-NULL position among Sources actually observed during the current run as
+the baseline. They append the currently observed Sources whose current
+position is NULL after that baseline; previous incomplete-run NULL Sources are
+included, while positioned Sources not observed in this run do not contribute.
+If incremental traversal exhausts the whole scope, it has full-order authority
+and assigns `1..N` even without a baseline. Early stop without an observed
+non-NULL baseline is fail-safe and leaves NULL positions unchanged. Position
+assignment uses only records already yielded by the existing run and performs
+no additional site access. Item status, `completed_at`, and operator notes
+remain unchanged.
 
 Schema v2はsequential migrationの対象外であり、v2→v3 migrationは実装しない。
 `catalog migrate`はv3以降のDBに対してのみcomplete migration pathを要求する。v2 DBを利用する場合は、

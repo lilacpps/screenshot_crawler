@@ -274,15 +274,16 @@ class DiscoveryService:
             return
 
         scope_sources = self.catalog.list_sources(site=site, discovery_key=discovery_key)
+        sources_by_id = {source.id: source for source in scope_sources}
         baseline_positions = [
             source.display_position
-            for source in scope_sources
-            if source.display_position is not None
+            for source_id in observed_source_ids
+            if (source := sources_by_id.get(source_id)) is not None
+            and source.display_position is not None
         ]
         if not baseline_positions:
             return
 
-        sources_by_id = {source.id: source for source in scope_sources}
         unpositioned_observed_ids = [
             source_id
             for source_id in observed_source_ids
