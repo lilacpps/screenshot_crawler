@@ -12,7 +12,12 @@ from screenshot_crawler.batch.models import (
     CandidateExecutionError,
     GrantOnlyExecutionResult,
 )
-from screenshot_crawler.batch.naming import archive_order_component
+from screenshot_crawler.batch.naming import (
+    archive_metadata_for_catalog,
+    archive_order_component,
+    catalog_archive_stem,
+    collision_source_ids,
+)
 from screenshot_crawler.batch.planner import BatchPlanner
 
 __all__ = [
@@ -27,5 +32,8 @@ __all__ = [
     "BatchSkipped",
     "CandidateExecutionError",
     "GrantOnlyExecutionResult",
+    "archive_metadata_for_catalog",
     "archive_order_component",
+    "catalog_archive_stem",
+    "collision_source_ids",
 ]

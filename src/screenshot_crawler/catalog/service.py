@@ -1224,6 +1224,66 @@ class CatalogService:
             updated = connection.execute("SELECT * FROM artifacts WHERE id = ?", (artifact_id,)).fetchone()
         return self._artifact_from_row(updated)
 
+    def update_artifact_locators(
+        self,
+        assignments: Mapping[int, tuple[str | None, str]],
+    ) -> tuple[Artifact, ...]:
+        """Compare-and-set multiple Artifact locators in one transaction.
+
+        Every Artifact and expected locator is validated before any UPDATE is
+        issued.  Only ``locator`` and ``updated_at`` are changed.
+        """
+
+        if not isinstance(assignments, Mapping):
+            raise CatalogValidationError("assignments must be a mapping")
+        if not assignments:
+            return ()
+
+        normalized: list[tuple[int, str | None, str]] = []
+        for artifact_id, assignment in assignments.items():
+            if isinstance(artifact_id, bool) or not isinstance(artifact_id, int):
+                raise CatalogValidationError("artifact_id must be an integer")
+            if (
+                not isinstance(assignment, tuple)
+                or len(assignment) != 2
+            ):
+                raise CatalogValidationError(
+                    "artifact locator assignment must be (expected_old_locator, new_locator)"
+                )
+            expected_old_locator, new_locator = assignment
+            self._validate_locator(expected_old_locator, required=False)
+            self._validate_locator(new_locator, required=True)
+            normalized.append((artifact_id, expected_old_locator, new_locator))
+
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            rows: list[sqlite3.Row] = []
+            for artifact_id, expected_old_locator, _ in normalized:
+                row = connection.execute(
+                    "SELECT * FROM artifacts WHERE id = ?", (artifact_id,)
+                ).fetchone()
+                if row is None:
+                    raise CatalogNotFoundError(f"Catalog artifact not found: {artifact_id}")
+                if row["locator"] != expected_old_locator:
+                    raise CatalogValidationError(
+                        f"Artifact {artifact_id} locator changed from expected value"
+                    )
+                rows.append(row)
+
+            for artifact_id, _, new_locator in normalized:
+                connection.execute(
+                    "UPDATE artifacts SET locator = ?, updated_at = ? WHERE id = ?",
+                    (new_locator, timestamp, artifact_id),
+                )
+
+            updated_rows = [
+                connection.execute(
+                    "SELECT * FROM artifacts WHERE id = ?", (artifact_id,)
+                ).fetchone()
+                for artifact_id, _, _ in normalized
+            ]
+        return tuple(self._artifact_from_row(row) for row in updated_rows)
+
     # Read helpers retained for callers that only inspect Catalog rows. ----
 
     def read_items_and_sources(self, *, site: str) -> tuple[list[Item], list[Source]]:
@@ -1254,21 +1314,28 @@ class CatalogService:
                 [self._source_target_from_row(row) for row in targets])
 
     def read_works_items_sources_and_targets(
-        self, *, site: str
+        self, *, site: str | None = None
     ) -> tuple[list[Work], list[Item], list[Source], list[SourceTarget]]:
         """Read the Work-aware site snapshot used by the Batch Planner."""
 
-        self._validate_nonempty(site, "site")
+        if site is not None:
+            self._validate_nonempty(site, "site")
         with self._read_only_connection() as connection:
             works = connection.execute("SELECT * FROM works ORDER BY id").fetchall()
             items = connection.execute("SELECT * FROM items ORDER BY id").fetchall()
-            sources = connection.execute(
-                "SELECT * FROM sources WHERE site = ? ORDER BY id", (site,)
-            ).fetchall()
-            targets = connection.execute(
-                "SELECT st.* FROM source_targets st JOIN sources s ON s.id = st.source_id "
-                "WHERE s.site = ? ORDER BY st.id", (site,)
-            ).fetchall()
+            if site is None:
+                sources = connection.execute("SELECT * FROM sources ORDER BY id").fetchall()
+                targets = connection.execute(
+                    "SELECT st.* FROM source_targets st ORDER BY st.id"
+                ).fetchall()
+            else:
+                sources = connection.execute(
+                    "SELECT * FROM sources WHERE site = ? ORDER BY id", (site,)
+                ).fetchall()
+                targets = connection.execute(
+                    "SELECT st.* FROM source_targets st JOIN sources s ON s.id = st.source_id "
+                    "WHERE s.site = ? ORDER BY st.id", (site,)
+                ).fetchall()
         return (
             [self._work_from_row(row) for row in works],
             [self._item_from_row(row) for row in items],

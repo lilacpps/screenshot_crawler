@@ -1446,6 +1446,24 @@ stemを同一Work内で比較する。distinct Item IDが2件以上のcollision 
 `{site}-{Source.external_id}`を設定し、同一Itemの複数Sourceはcollision扱いしない。これは
 Manga ONE/Magapokeを含むsite-neutralなルールである。通常itemではsuffixを付けない。
 
+既存archiveのP4 renumberは、Catalogをread-only snapshotとして先に全scope
+preflightする `scripts/renumber_archives.py` で行う。`--work-key`、`--site`、両方のAND、
+または`--all`の明示scopeが必須で、defaultはdry-run、変更は`--apply`だけである。
+Sourceごとに、archive/zip Artifactを生成した最新successful CrawlRunからcurrent Artifactを
+最大1件選ぶ。成功runにarchiveがなければ古い成功runを調べるが、選択後のlocator欠損では
+historical Artifactへfallbackせず`MISSING`とする。複数archive ZIPは`AMBIGUOUS`、非filesystem
+は`UNSUPPORTED`、`display_position=NULL`は`NO_POSITION`としてskipする。
+
+old pathのauthorityは常に`Artifact.locator`であり、new pathはその同じdirectory内でP3 shared
+naming helperが得るstemの`.zip`である。P3と同じsame-site collision snapshotを全site sources
+から作るため、P4のfiltered subsetだけではdisambiguator判定を変えない。internal/external
+target collision、除外participantに依存する連鎖、status target collisionはpreflightで除外し、
+overwriteはしない。実行対象はZIPをunique temporary siblingへ移してからfinalへ移す二段階renameを
+使う。matching `crawl-status/<old-stem>.json` はJSONの`archive_path`がold locatorと同一fileを
+指す場合だけrenameし、`archive_path`以外のfieldは保持する。status missing/mismatchはwarningで
+ZIPをblockしない。Catalogはlocator/updated_atだけを更新する一括compare-and-set transactionを
+使い、Catalog更新失敗時はZIP/statusをrollbackし、rollback不能時は`RECOVERY_REQUIRED`を出す。
+
 手動crawlでは:
 
 ```text
@@ -1698,7 +1716,9 @@ older database. Schema v6 adds nullable `items.note` and nullable
 `sources.display_position`, expands Item status to `pending | completed | skipped |
 external`, and keeps only `pending` Batch-eligible. P1 stores display positions
 and P2 assigns them during successful Discovery. P3 uses them for new Batch
-archive/status names; existing archive renumbering remains planned P4.
+archive/status names. P4 existing archive renumbering is implemented as a local
+filesystem/Catalog maintenance command; P5 real Catalog/output rollout and live
+verification remain planned.
 
 ### Discovery display position contract (P2 implemented)
 

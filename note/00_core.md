@@ -187,7 +187,7 @@ read-only Batch planning and Manga ONE Policy. Phase
 
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
-最終同期: 2026-09-30
+最終同期: 2026-10-02
 
 
 ### Test execution policy（2026-09-27）
@@ -845,6 +845,26 @@ ZIP内部の画像はmanifestの相対パスをそのまま使い、作品stem�
 archive filenameとcompletion status JSONのfilenameは従来どおり同じstemを使い、
 destination存在時の`FileExistsError`と自動連番なしの安全性を維持する。
 
+既存archiveのP4 renumberは `scripts/renumber_archives.py` が薄いCLI wrapperとして提供する。
+`--work-key`、`--site`、両方のAND、または`--all`の明示scopeが必須で、defaultはdry-run、
+変更は`--apply`時だけである。current ArtifactはSourceごとに、archive/zip Artifactを生成した
+最新successful CrawlRunから最大1件だけ選ぶ。新しいsuccessful runにarchiveがなければ古い
+successful runを探すが、選択後のlocator欠損では歴史Artifactへfallbackせず`MISSING`とする。
+`display_position=NULL`、複数archive Artifact、非filesystem、locator欠損はそれぞれ安全にskipする。
+old pathは常に`Artifact.locator`、new pathはそのparent内のP3 shared naming stemであり、
+library treeのdirectory移動やZIP再走査は行わない。P3のsame-site Work/stem collision snapshotは
+P4でもfiltered subsetではなく全site snapshotから計算する。
+
+P4はscope全体を先にpreflightし、内部/外部target collision、collision dependency、status target
+collisionを検出してoverwriteを拒否する。実行時はZIPをunique sibling temporaryへ移してからfinalへ
+移す二段階renameを使う。`output/crawl-status/<old-stem>.json`はJSONの`archive_path`がold
+Artifact locatorと同一fileを指す場合だけmatchingとし、matching時だけrenameして`archive_path`のみ
+更新する。missing/mismatch statusはwarningでZIP renameをblockしない。Catalog側は
+`update_artifact_locators()`のcompare-and-set一括transactionでlocator/updated_atだけを更新し、
+SHA-256、byte size、state、CrawlRun、Item、historical Artifactを変更しない。Catalog更新失敗時は
+ZIP/statusを二段階rollbackし、成功時は明示ERROR、失敗時は`RECOVERY_REQUIRED`と復旧pathを報告する。
+実Catalogや実archiveへの`--apply`は未実行である。
+
 既存ZIPの移行用に、`scripts/flatten_zip_archives.py`を提供する。指定directory配下を
 再帰検索し、画像artifactだけが同じ1つのtop-level directory配下にあるZIPから、その1階層だけを
 除去して元ZIPを安全に置換する。flat済み、曖昧なtop-level、unsafe path、collision、破損ZIPは
@@ -978,7 +998,7 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 ## Catalog v6: display position / archive naming / status expansion
 
-**P1-P3 IMPLEMENTED; P4-P5 NOT YET IMPLEMENTED.** The adopted implementation plan is:
+**P1-P4 IMPLEMENTED; P5 NOT YET IMPLEMENTED.** The adopted implementation plan is:
 
 ```text
 note/07_catalog_position_archive_plan.md
@@ -990,8 +1010,10 @@ existing-archive renumber tooling, and Item status expansion
 Catalog schema v6, the Item status/note service and CLI, Source display-position
 storage/validation, v5 -> v6 migration, CSV export fields, Discovery position
 assignment, and P3 position-prefixed Batch archive naming are implemented.
-Existing archive renumbering, Artifact locator/history updates, crawl-status JSON
-rename, and related rollout work remain P4-P5 planned behavior.
+Existing archive renumbering, current Artifact locator updates, and safe matching
+crawl-status JSON rename are implemented as the local-only
+`scripts/renumber_archives.py` maintenance command. P5 real Catalog/output rollout
+and live verification remain planned.
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery + Batch v3実装済み）
 
@@ -1031,7 +1053,7 @@ Schema v6は`works`、`items`、`sources`、`source_targets`、`crawl_runs`、`a
 
 Phase 1でCatalog packageをv3へ移行し、Phase 2でWatchlist / DiscoveryをWork-aware化し、Phase 3でBatch Planner / ExecutorをCrawlRun / Artifactへ接続した。Phase 4ではCatalog Exportを6 CSVのread-only snapshotとして実装した。
 
-Batch Planner用に `read_works_items_sources_and_targets(site=...)` を提供する。これはread-only接続でWork / Item全件、指定siteのSource、関連するSourceTargetを取得し、Plannerはraw SQLiteへ直接アクセスしない。指定siteのSourceを1件以上持つItemだけをsite-scopedな母集団にし、別site専用Itemとsourceなしのorphan Itemを`no_source` skipに含めない。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
+Batch Planner用に `read_works_items_sources_and_targets(site=...)` を提供する。これはread-only接続でWork / Item全件、指定siteのSource、関連するSourceTargetを取得し、Plannerはraw SQLiteへ直接アクセスしない。`site=None`では全siteのSource/Targetを同じread-only snapshotで取得でき、P4 maintenanceの`--all` scopeに使う。指定siteのSourceを1件以上持つItemだけをsite-scopedな母集団にし、別site専用Itemとsourceなしのorphan Itemを`no_source` skipに含めない。未存在・未初期化Catalogを作成せず、Batch planによるCatalog副作用を防ぐ。
 
 Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` はSQLiteをread-onlyで検証・読み込みし、`catalog-export/` 配下へ `works.csv`、`items.csv`、`sources.csv`、`source_targets.csv`、`crawl_runs.csv`、`artifacts.csv` の6 CSV snapshotを出力する。各CSVはtable identityとforeign keyを保持し、履歴をflat JOINで直積化しない。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力directory `catalog-export` であり、既存snapshotを上書きせず、CSVからCatalogへ戻す機能はない。
 

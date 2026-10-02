@@ -1,11 +1,11 @@
 # Catalog position / archive naming / item status plan
 
-> **P1-P3 IMPLEMENTED; P4-P5 PLANNED / NOT YET IMPLEMENTED**
+> **P1-P4 IMPLEMENTED; P5 PLANNED / NOT YET IMPLEMENTED**
 >
 > This note is the adopted implementation plan for Catalog schema v6 and the later
-> display-position/archive phases. Catalog schema v6/P1 and Discovery position
-> assignment/P2 and Batch archive naming/P3 are implemented; archive renumbering
-> and rollout phases below remain planned.
+> display-position/archive phases. Catalog schema v6/P1, Discovery position
+> assignment/P2, Batch archive naming/P3, and existing-archive renumbering/P4 are
+> implemented; the real Catalog/output rollout in P5 remains planned.
 >
 > Codex must keep this note synchronized while implementing the plan. When a phase is completed,
 > update the corresponding section from PLANNED to IMPLEMENTED and record any verified deviations.
@@ -548,7 +548,8 @@ P1 implementation details:
   Batch archive naming, collision handling, archive renumbering, or crawl-status
   JSON naming. P2 now assigns positions during safe Discovery completion. P3
   implements new Batch archive/status naming and generic collision handling;
-  existing archive/status renaming and Artifact locator updates remain P4.
+  P4 now provides the local existing-archive/status renaming and Artifact
+  locator update maintenance command. Real production rollout remains P5.
 
 ### P2 - Discovery position
 
@@ -595,16 +596,17 @@ P2 implementation details:
   Discovery. It performs no additional pagination, DOM scan, HTTP request, or
   full-list access.
 
-P4-P5 remain planned: existing ZIP renumbering, Artifact locator/history
-updates, crawl-status JSON rename, and real Catalog rollout are not part of P3.
+P5 remains planned: real Catalog/output rollout and live verification are not
+part of the tested P4 maintenance implementation.
 
 ### P3 - Batch archive naming
 
 IMPLEMENTED.
 
-- `src/screenshot_crawler/batch/naming.py` provides the shared
-  `archive_order_component(order_label=..., display_position=...)` helper for
-  Batch and future P4 renumber tooling. A non-NULL position is formatted with
+- `src/screenshot_crawler/batch/naming.py` provides shared Catalog naming
+  helpers (`archive_order_component()`, `archive_metadata_for_catalog()`,
+  `catalog_archive_stem()`, and `collision_source_ids()`) for Batch and P4.
+  A non-NULL position is formatted with
   minimum width three and combined with the raw order label; a position without
   a label becomes the position alone. NULL position preserves the legacy label
   fallback, and no order/title/id/identifier parsing is performed.
@@ -625,21 +627,51 @@ IMPLEMENTED.
   sanitization authority. Same-site planning collisions are handled by the
   Planner; cross-site or pre-existing filesystem collisions remain protected by
   `package_crawl_output()` raising `FileExistsError` without overwrite.
-- P3 does not rename existing ZIP archives, existing crawl-status JSON, or
-  historical Artifact locators. P4 renumbering and Artifact locator updates
-  remain unimplemented.
+- P3 still does not rename existing ZIP archives, existing crawl-status JSON, or
+  historical Artifact locators; those operations are isolated in the P4
+  maintenance command described below.
 
 ### P4 - Existing archive renumber tool
 
-PLANNED.
+IMPLEMENTED.
 
-- current Artifact selection,
-- filters + dry-run,
-- preflight,
-- two-stage rename,
-- Artifact locator update,
-- crawl-status update,
-- missing/collision behavior.
+- `scripts/renumber_archives.py` is a thin wrapper over
+  `screenshot_crawler.maintenance.archive_renumber`.
+- Scope is explicit: `--work-key`, `--site`, both as AND filters, or `--all`.
+  `--all` cannot be combined with another filter, and no-filter invocation is
+  rejected. Default mode is dry-run; only explicit `--apply` mutates files or
+  Catalog.
+- `Artifact.locator` is the sole old-path authority. The selected current
+  Artifact is the archive/zip Artifact from the newest successful CrawlRun that
+  produced one. A successful run without an archive is skipped while looking
+  older; once selected, a missing locator is `MISSING` with no historical
+  fallback. Multiple archive ZIP Artifacts in that run are `AMBIGUOUS`.
+  Non-filesystem storage is `UNSUPPORTED`, and `display_position = NULL` is
+  `NO_POSITION` without inference.
+- Desired stems use the same Catalog naming helpers as P3, including the full
+  same-site collision snapshot and `{site}-{external_id}` disambiguator rule.
+  The new path is only `Path(Artifact.locator).parent / <desired-stem>.zip`;
+  title/genre changes never move the directory.
+- The full plan is preflighted before mutation. Internal and external target
+  collisions, including dependencies on an excluded participant, are
+  `COLLISION`; existing files are never overwritten. ZIPs use
+  `old -> unique temporary sibling -> final` two-stage renames, so shifts and
+  swaps are safe. Apply performs a final old/target/temp recheck.
+- Matching `output/crawl-status/<old-stem>.json` is accepted only when parsed
+  `archive_path` identifies the current old ZIP. `STATUS_MISSING` and
+  `STATUS_MISMATCH` are warnings that do not block a ZIP rename. A matching
+  status file is renamed safely and only its `archive_path` value is changed;
+  target collisions block that Artifact.
+- `CatalogService.update_artifact_locators()` performs one compare-and-set
+  transaction after all filesystem/status mutations. It validates every
+  Artifact id and expected locator before updating only `locator` and
+  `updated_at`; SHA-256, byte size, state, CrawlRun, Item, and historical rows
+  remain unchanged.
+- Catalog failure attempts a two-stage filesystem/status rollback and reports
+  `ERROR Catalog update failed; filesystem rollback completed`. If rollback
+  cannot complete, `RECOVERY_REQUIRED` includes artifact, old/new/current/temp,
+  and status paths. P5 real Catalog/output rollout and live verification are
+  not performed by this implementation.
 
 ### P5 - Real DB rollout / documentation cleanup
 

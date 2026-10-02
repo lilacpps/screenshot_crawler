@@ -14,7 +14,8 @@ from screenshot_crawler.batch.models import (
     BatchPlanningError,
     BatchSkipped,
 )
-from screenshot_crawler.batch.naming import archive_order_component
+from screenshot_crawler.batch.naming import archive_metadata_for_catalog
+from screenshot_crawler.batch.naming import collision_source_ids as shared_collision_source_ids
 from screenshot_crawler.catalog import (
     CatalogError,
     CatalogService,
@@ -24,7 +25,6 @@ from screenshot_crawler.catalog import (
     Work,
 )
 from screenshot_crawler.catalog.service import JST, now_jst
-from screenshot_crawler.core.packaging import archive_stem
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
 
@@ -222,20 +222,7 @@ class BatchPlanner:
 
 
 def _metadata(work: Work, item: Item, source: Source) -> dict[str, str]:
-    metadata: dict[str, str] = {}
-    order = archive_order_component(
-        order_label=item.order_label,
-        display_position=source.display_position,
-    )
-    for target, value in (
-        ("title", work.title),
-        ("author", work.author),
-        ("order", order),
-        ("genre", work.genre),
-    ):
-        if value is not None and value.strip():
-            metadata[target] = value
-    return metadata
+    return archive_metadata_for_catalog(work, item, source)
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,33 +276,7 @@ def _collision_source_ids(
     sources: Iterable[Source],
     works_by_id: dict[int, Work],
 ) -> set[int]:
-    """Return Sources whose sanitized base archive stem collides within a Work.
-
-    The snapshot intentionally includes every Item status.  A completed Item's
-    existing archive must still disambiguate a later pending Item with the same
-    final, sanitized archive stem.  Multiple Sources for one Item do not make a
-    collision by themselves; only groups containing at least two distinct Item
-    IDs are marked.
-    """
-
-    items_by_id = {item.id: item for item in items}
-    sources_by_work_and_stem: dict[tuple[int, str], list[tuple[int, int]]] = defaultdict(list)
-    for source in sources:
-        item = items_by_id.get(source.item_id)
-        if item is None:
-            continue
-        work = works_by_id.get(item.work_id)
-        if work is None:
-            continue
-        base_stem, *_ = archive_stem(_metadata(work, item, source))
-        sources_by_work_and_stem[(work.id, base_stem)].append((item.id, source.id))
-
-    collision_source_ids: set[int] = set()
-    for entries in sources_by_work_and_stem.values():
-        item_ids = {item_id for item_id, _ in entries}
-        if len(item_ids) > 1:
-            collision_source_ids.update(source_id for _, source_id in entries)
-    return collision_source_ids
+    return shared_collision_source_ids(works_by_id.values(), items, sources)
 
 
 def _normalize_now(value: datetime) -> datetime:
