@@ -27,6 +27,7 @@ from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
     MAPPING_PROVEN,
     MappingAnalysis,
     PurchasedMapping,
+    ScaledCanvasSourceCandidate,
 )
 
 PNG_1X1 = (
@@ -879,6 +880,171 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
         and result["timing_ms"][key] >= 0
         for key in result["timing_ms"]
         if key != "unaccounted_ms"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("final_verify", "final_exact", "expected_ready"),
+    [
+        (None, None, True),
+        ("1", True, True),
+        ("1", False, False),
+    ],
+    ids=["default-off", "scaled-diagnostic-exact", "scaled-diagnostic-mismatch"],
+)
+async def test_scaled_source_uses_one_batched_upstream_fetch_and_source_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+    final_verify: str | None,
+    final_exact: bool | None,
+    expected_ready: bool,
+) -> None:
+    if final_verify is None:
+        monkeypatch.delenv("BOOKWALKER_FINAL_PIXEL_VERIFY", raising=False)
+    else:
+        monkeypatch.setenv("BOOKWALKER_FINAL_PIXEL_VERIFY", final_verify)
+
+    class ShadowPage:
+        def __init__(self) -> None:
+            self.evaluate_calls = 0
+
+        async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
+            self.evaluate_calls += 1
+            return dict(EMPTY_COMPACT_PAYLOAD)
+
+    mapping = PurchasedMapping(
+        mapping=({
+            "source_x": 0, "source_y": 0,
+            "destination_x": 0, "destination_y": 0,
+            "width": 8, "height": 8,
+        },),
+        source_dimensions=(8, 8),
+        destination_dimensions=(8, 8),
+        tile_dimensions=(8, 8),
+        imagebitmap_source_id="bitmap-1",
+        renderer_canvas_id="canvas-b",
+        source_canvas_id="canvas-a",
+        renderer_draw_operation_index=10,
+        renderer_geometry_classification="PURE_RENDERER_SCALE",
+        renderer_source_rect={"x": 0, "y": 0, "width": 8, "height": 8},
+        renderer_destination={"x": 0, "y": 0, "width": 4, "height": 4},
+        renderer_target_dimensions=(4, 4),
+        mapping_id="mapping-upstream",
+        mapping_sha256="mapping-1",
+    )
+    downstream = MappingAnalysis(
+        "MAPPING_UNAVAILABLE", "completed segment has no tile draws",
+        mapping_source="completed_segment", mapping_id="mapping-downstream",
+        renderer_operation_index=12, segment_tile_count=0,
+        segment_overflow=False, completed_mapping_evicted=False,
+        unsafe_operation_count=1,
+        unsafe_operation_types=("non_image_bitmap_draw",),
+        source_canvas_id="canvas-b", renderer_canvas_id="canvas-renderer",
+    )
+    upstream = MappingAnalysis(
+        MAPPING_PROVEN, "complete source/destination bijection", mapping=mapping,
+        mapping_source="completed_segment", mapping_id="mapping-upstream",
+        renderer_operation_index=10, mapping_provenance="direct",
+    )
+    candidate = ScaledCanvasSourceCandidate(
+        upstream_mapping_id="mapping-upstream", copy_operation_index=10,
+        source_canvas_id="canvas-a", target_canvas_id="canvas-b",
+        source_dimensions=(8, 8), target_dimensions=(4, 4),
+        source_rect={"x": 0, "y": 0, "width": 8, "height": 8},
+        destination={"x": 0, "y": 0, "width": 4, "height": 4},
+        transform={"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+        global_alpha=1, global_composite_operation="source-over", filter="none",
+        image_smoothing_enabled=True, image_smoothing_quality="high",
+    )
+    analyses = iter((downstream, upstream))
+    monkeypatch.setattr(
+        adapter_module, "analyze_purchased_mapping",
+        lambda *_args, **_kwargs: next(analyses),
+    )
+    monkeypatch.setattr(
+        adapter_module, "resolve_scaled_canvas_source_candidate",
+        lambda *_args, **_kwargs: candidate,
+    )
+    monkeypatch.setattr(
+        adapter_module, "validate_scaled_canvas_source_analysis",
+        lambda *_args, **_kwargs: True,
+    )
+
+    async def async_value(value: object) -> object:
+        return value
+
+    monkeypatch.setattr(
+        adapter_module, "image_signature",
+        lambda *_args: async_value("same"),
+    )
+    monkeypatch.setattr(
+        adapter_module, "imagebitmap_signature",
+        lambda *_args: async_value("same"),
+    )
+    monkeypatch.setattr(
+        adapter_module, "imagebitmap_pixel_exact_match",
+        lambda *_args: async_value({"available": True, "exact": True}),
+    )
+    monkeypatch.setattr(
+        adapter_module, "reconstruct_lossless_jpeg",
+        lambda *_args: LosslessJpegResult(
+            data=b"scaled-jpeg", width=8, height=8,
+            tile_dimensions=(8, 8), mcu_dimensions=(8, 8),
+            mapping_sha256="mapping-1",
+            coefficient_validation={
+                "mismatched_blocks": 0,
+                "mismatched_coefficients": 0,
+                "quantization_tables_equal": True,
+            }, available=True,
+        ),
+    )
+    adapter = BookWalkerAdapter()
+    scaled_pixel_calls = 0
+
+    async def fake_scaled_pixel_compare(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal scaled_pixel_calls
+        scaled_pixel_calls += 1
+        if final_exact is None:
+            pytest.fail("scaled diagnostic must remain disabled by default")
+        return {
+            "available": True,
+            "dimensions_equal": True,
+            "exact": final_exact,
+            "differing_pixel_count": 0 if final_exact else 1,
+            "max_channel_difference": 0 if final_exact else 1,
+        }
+
+    adapter._browser_scaled_source_pixel_exact = fake_scaled_pixel_compare  # type: ignore[method-assign]
+    candidate_jpeg = candidate_from_jpeg(
+        JPEG_1X1,
+        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        sequence=1,
+    )
+    assert candidate_jpeg is not None
+    candidate_jpeg.width = 8
+    candidate_jpeg.height = 8
+    adapter._original_candidates.add(candidate_jpeg)
+    page = ShadowPage()
+    result = await adapter._evaluate_lossless_reconstruction(
+        page, (CaptureResult(PNG_1X1, 4, 4),), [{"mappingId": "mapping-downstream"}]
+    )
+
+    assert page.evaluate_calls == 2
+    assert (result.captures is not None) is expected_ready
+    if expected_ready:
+        assert result.captures is not None
+        assert (result.captures[0].width, result.captures[0].height) == (8, 8)
+    part = result["parts"][0]
+    assert part["mapping_provenance"] == "scaled_canvas_source_1hop"
+    assert part["upstream_mapping_id"] == "mapping-upstream"
+    assert part["reconstructed_source_dimensions_match"] is True
+    assert part["reconstructed_dimensions_match"] is False
+    assert part["final_pixel_compare_performed"] is (final_verify is not None)
+    assert part["native_pixel_exact"] is final_exact
+    assert scaled_pixel_calls == (1 if final_verify is not None else 0)
+    assert result["timing_ms"]["trace_fetch_ms"] == (
+        result["timing_ms"]["selected_trace_fetch_ms"]
+        + result["timing_ms"]["upstream_trace_fetch_ms"]
     )
 
 

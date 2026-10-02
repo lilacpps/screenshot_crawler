@@ -8,6 +8,8 @@ from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
     MAPPING_PROVEN,
     analyze_purchased_mapping,
     decode_compact_completed_mappings,
+    resolve_scaled_canvas_source_candidate,
+    validate_scaled_canvas_source_analysis,
 )
 
 IDENTITY = {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0}
@@ -676,6 +678,227 @@ def test_duplicate_completed_mapping_id_fails_closed_as_ambiguous() -> None:
     assert result.completed_mapping_evicted is True
     assert result.mapping_id == first["mappingId"]
     assert "unavailable" in result.reason
+
+
+def _scaled_chain_fixture() -> tuple[dict, dict, dict, dict]:
+    upstream = _completed_record(
+        mapping_id="mapping-upstream",
+        renderer_index=6,
+        clear_index=1,
+    )
+    upstream["sourceCanvas"] = {
+        "canvasId": "canvas-a", "width": 32, "height": 32
+    }
+    upstream["rendererTarget"] = {
+        "canvasId": "canvas-b", "width": 16, "height": 16
+    }
+    upstream["rendererSourceRect"] = {
+        "x": 0, "y": 0, "width": 32, "height": 32
+    }
+    upstream["rendererDestination"] = {
+        "x": 0, "y": 0, "width": 16, "height": 16
+    }
+    upstream["nonImageBitmapDraws"] = []
+    for tile_index, tile in enumerate(upstream["tileDraws"], start=2):
+        tile["operationIndex"] = tile_index
+        tile["target"] = {
+            "canvasId": "canvas-a", "width": 32, "height": 32
+        }
+    upstream["segmentFirstTileOperationIndex"] = 2
+    upstream["segmentLastTileOperationIndex"] = 5
+
+    downstream = _completed_record(
+        mapping_id="mapping-downstream",
+        renderer_index=8,
+        clear_index=5,
+    )
+    downstream["sourceCanvas"] = {
+        "canvasId": "canvas-b", "width": 16, "height": 16
+    }
+    downstream["rendererTarget"] = {
+        "canvasId": "canvas-renderer", "width": 16, "height": 16
+    }
+    downstream["rendererSourceRect"] = {
+        "x": 0, "y": 0, "width": 16, "height": 16
+    }
+    downstream["rendererDestination"] = {
+        "x": 0, "y": 0, "width": 16, "height": 16
+    }
+    downstream["segmentClearRectangle"] = {
+        "x": 0, "y": 0, "width": 16, "height": 16
+    }
+    downstream["segmentFirstTileOperationIndex"] = None
+    downstream["segmentLastTileOperationIndex"] = None
+    downstream["tileDraws"] = []
+    downstream["segmentTileCount"] = 0
+    downstream["segmentExpectedTileCount"] = None
+    downstream["unsafeOperationCount"] = 1
+    downstream["unsafeOperationTypes"] = ["non_image_bitmap_draw"]
+    downstream["nonImageBitmapDraws"] = [{
+        "operationIndex": 6,
+        "source": {
+            "sourceId": "canvas-a-object",
+            "constructor": "HTMLCanvasElement",
+            "canvasId": "canvas-a",
+            "width": 32,
+            "height": 32,
+        },
+        "target": {
+            "canvasId": "canvas-b", "width": 16, "height": 16
+        },
+        "sourceRect": {"x": 0, "y": 0, "width": 32, "height": 32},
+        "destination": {"x": 0, "y": 0, "width": 16, "height": 16},
+        "transform": dict(IDENTITY),
+        "globalAlpha": 1,
+        "globalCompositeOperation": "source-over",
+        "filter": "none",
+        "imageSmoothingEnabled": True,
+        "imageSmoothingQuality": "high",
+    }]
+    upstream_summary = {
+        "mappingId": "mapping-upstream",
+        "sourceCanvasId": "canvas-a",
+        "targetCanvasId": "canvas-b",
+        "rendererOperationIndex": 6,
+        "segmentClearOperationIndex": 1,
+        "segmentFirstTileOperationIndex": 2,
+        "segmentLastTileOperationIndex": 5,
+        "segmentTileCount": 4,
+        "sourceImageBitmapIds": ["bitmap-a"],
+        "sourceDimensions": {"width": 32, "height": 32},
+        "targetDimensions": {"width": 16, "height": 16},
+    }
+    downstream_draw = {
+        "mappingId": "mapping-downstream",
+        "traceOperationIndex": 8,
+        "canvasId": "canvas-renderer",
+        "sourceCanvasId": "canvas-b",
+    }
+    return upstream, downstream, upstream_summary, downstream_draw
+
+
+def test_scaled_canvas_source_resolves_exact_one_hop_and_reuses_upstream_proof() -> None:
+    upstream, downstream, summary, downstream_draw = _scaled_chain_fixture()
+    downstream_analysis = analyze_purchased_mapping(
+        {"completedMappings": [downstream]}, downstream_draw
+    )
+    assert not downstream_analysis.proven
+    assert downstream_analysis.segment_tile_count == 0
+
+    candidate = resolve_scaled_canvas_source_candidate(
+        downstream_analysis, downstream_draw, [summary]
+    )
+    assert candidate is not None
+    assert candidate.upstream_mapping_id == "mapping-upstream"
+    assert candidate.source_dimensions == (32, 32)
+    assert candidate.target_dimensions == (16, 16)
+    upstream_analysis = analyze_purchased_mapping(
+        {"completedMappings": [upstream]}, candidate.upstream_renderer_draw()
+    )
+    assert upstream_analysis.proven
+    assert validate_scaled_canvas_source_analysis(upstream_analysis, candidate)
+    assert upstream_analysis.mapping is not None
+    assert upstream_analysis.mapping.source_dimensions == (32, 32)
+    assert upstream_analysis.mapping.destination_dimensions == (32, 32)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda record: record["nonImageBitmapDraws"].clear(), id="zero-draws"),
+        pytest.param(
+            lambda record: record["nonImageBitmapDraws"].append(
+                copy.deepcopy(record["nonImageBitmapDraws"][0])
+            ),
+            id="ambiguous-draws",
+        ),
+        pytest.param(
+            lambda record: record["nonImageBitmapDraws"][0]["source"].update(
+                constructor="ImageBitmap"
+            ),
+            id="wrong-source-constructor",
+        ),
+        pytest.param(
+            lambda record: record["nonImageBitmapDraws"][0]["target"].update(
+                canvasId="wrong-target"
+            ),
+            id="wrong-target-identity",
+        ),
+        pytest.param(
+            lambda record: record["nonImageBitmapDraws"][0]["sourceRect"].update(
+                width=31
+            ),
+            id="partial-source",
+        ),
+        pytest.param(
+            lambda record: record["nonImageBitmapDraws"][0]["destination"].update(
+                x=1
+            ),
+            id="destination-offset",
+        ),
+        pytest.param(
+            lambda record: record["nonImageBitmapDraws"][0].update(
+                transform={"a": 2, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0}
+            ),
+            id="non-identity-transform",
+        ),
+        pytest.param(
+            lambda record: record["nonImageBitmapDraws"][0].update(globalAlpha=0.5),
+            id="alpha",
+        ),
+        pytest.param(
+            lambda record: record["nonImageBitmapDraws"][0].update(
+                globalCompositeOperation="multiply"
+            ),
+            id="composite",
+        ),
+        pytest.param(
+            lambda record: record["nonImageBitmapDraws"][0].update(filter="blur(1px)"),
+            id="filter",
+        ),
+        pytest.param(
+            lambda record: record["unsafeOperationTypes"].append("other"),
+            id="unsafe-types",
+        ),
+    ],
+)
+def test_scaled_canvas_source_rejects_unsafe_wrapper_metadata(mutate) -> None:
+    _upstream, downstream, summary, downstream_draw = _scaled_chain_fixture()
+    mutate(downstream)
+    analysis = analyze_purchased_mapping(
+        {"completedMappings": [downstream]}, downstream_draw
+    )
+    assert resolve_scaled_canvas_source_candidate(analysis, downstream_draw, [summary]) is None
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda summary: summary.update(rendererOperationIndex=7), id="wrong-operation"),
+        pytest.param(lambda summary: summary.update(sourceCanvasId="other"), id="wrong-source-id"),
+        pytest.param(lambda summary: summary.update(targetCanvasId="other"), id="wrong-target-id"),
+        pytest.param(lambda summary: summary.update(segmentTileCount=0), id="zero-tiles"),
+        pytest.param(lambda summary: summary.update(segmentFirstTileOperationIndex=6), id="ordering"),
+    ],
+)
+def test_scaled_canvas_source_requires_exact_unique_summary(mutate) -> None:
+    _upstream, downstream, summary, downstream_draw = _scaled_chain_fixture()
+    mutate(summary)
+    analysis = analyze_purchased_mapping(
+        {"completedMappings": [downstream]}, downstream_draw
+    )
+    assert resolve_scaled_canvas_source_candidate(analysis, downstream_draw, [summary]) is None
+
+
+def test_scaled_canvas_source_rejects_zero_or_ambiguous_summary_matches() -> None:
+    _upstream, downstream, summary, downstream_draw = _scaled_chain_fixture()
+    analysis = analyze_purchased_mapping(
+        {"completedMappings": [downstream]}, downstream_draw
+    )
+    assert resolve_scaled_canvas_source_candidate(analysis, downstream_draw, []) is None
+    assert resolve_scaled_canvas_source_candidate(
+        analysis, downstream_draw, [summary, copy.deepcopy(summary)]
+    ) is None
 
 
 def test_completed_segment_allows_pure_renderer_scale_but_rejects_crop() -> None:

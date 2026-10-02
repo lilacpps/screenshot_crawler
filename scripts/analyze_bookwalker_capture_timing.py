@@ -114,7 +114,11 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
                 capture_metrics.setdefault(name, []).append(number)
         for name in (
             "evaluation_total",
+            "selected_trace_fetch_ms",
+            "upstream_trace_fetch_ms",
             "trace_fetch_ms",
+            "selected_trace_decode_ms",
+            "upstream_trace_decode_ms",
             "trace_decode_ms",
             "measured_component_total_ms",
             "unaccounted_ms",
@@ -163,8 +167,20 @@ def analyze(manifest: dict[str, Any]) -> dict[str, Any]:
             {
                 "page_id": (capture.get("identity") or {}).get("page_id"),
                 "trace_fetch_ms": evaluation_timing.get("trace_fetch_ms"),
+                "selected_trace_fetch_ms": evaluation_timing.get(
+                    "selected_trace_fetch_ms"
+                ),
+                "upstream_trace_fetch_ms": evaluation_timing.get(
+                    "upstream_trace_fetch_ms"
+                ),
                 "trace_fetch_mode": shadow.get("trace_fetch_mode"),
                 "trace_decode_ms": evaluation_timing.get("trace_decode_ms"),
+                "selected_trace_decode_ms": evaluation_timing.get(
+                    "selected_trace_decode_ms"
+                ),
+                "upstream_trace_decode_ms": evaluation_timing.get(
+                    "upstream_trace_decode_ms"
+                ),
                 "retained_mapping_count": shadow.get(
                     "trace_completed_mapping_count"
                 ),

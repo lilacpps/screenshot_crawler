@@ -147,6 +147,7 @@ class MappingAnalysis:
     additional_pixel_processing: bool = False
     mapping_source: str | None = None
     mapping_id: str | None = None
+    renderer_operation_index: int | None = None
     segment_clear_operation_index: int | None = None
     segment_first_tile_operation_index: int | None = None
     segment_last_tile_operation_index: int | None = None
@@ -182,6 +183,7 @@ class MappingAnalysis:
             "additional_pixel_processing": self.additional_pixel_processing,
             "mapping_source": self.mapping_source,
             "mapping_id": self.mapping_id,
+            "renderer_operation_index": self.renderer_operation_index,
             "segment_clear_operation_index": self.segment_clear_operation_index,
             "segment_first_tile_operation_index": self.segment_first_tile_operation_index,
             "segment_last_tile_operation_index": self.segment_last_tile_operation_index,
@@ -217,6 +219,79 @@ class MappingAnalysis:
                 "mapping_id": self.mapping.mapping_id,
             })
         return result
+
+
+@dataclass(frozen=True, slots=True)
+class ScaledCanvasSourceCandidate:
+    """An exact one-hop canvas-source provenance candidate.
+
+    This is deliberately a small Python-side proof object.  Browser trace
+    records are evidence only; callers must still fetch and validate the full
+    upstream mapping with :func:`analyze_purchased_mapping`.
+    """
+
+    upstream_mapping_id: str
+    copy_operation_index: int
+    source_canvas_id: str
+    target_canvas_id: str
+    source_dimensions: tuple[int, int]
+    target_dimensions: tuple[int, int]
+    source_rect: dict[str, float]
+    destination: dict[str, float]
+    transform: dict[str, float]
+    global_alpha: float
+    global_composite_operation: str
+    filter: str
+    image_smoothing_enabled: bool | None = None
+    image_smoothing_quality: str | None = None
+
+    @property
+    def scale_x(self) -> float:
+        return self.target_dimensions[0] / self.source_dimensions[0]
+
+    @property
+    def scale_y(self) -> float:
+        return self.target_dimensions[1] / self.source_dimensions[1]
+
+    def upstream_renderer_draw(self) -> dict[str, Any]:
+        """Build the exact renderer identity used for upstream validation."""
+
+        return {
+            "mappingId": self.upstream_mapping_id,
+            "traceOperationIndex": self.copy_operation_index,
+            "canvasId": self.target_canvas_id,
+            "sourceCanvasId": self.source_canvas_id,
+            "source": {
+                "constructor": "HTMLCanvasElement",
+                "canvasId": self.source_canvas_id,
+                "width": self.source_dimensions[0],
+                "height": self.source_dimensions[1],
+            },
+            "sourceRect": dict(self.source_rect),
+            "destination": dict(self.destination),
+            "transform": dict(self.transform),
+            "globalAlpha": self.global_alpha,
+            "globalCompositeOperation": self.global_composite_operation,
+            "filter": self.filter,
+        }
+
+    def to_debug(self) -> dict[str, Any]:
+        return {
+            "upstream_mapping_id": self.upstream_mapping_id,
+            "provenance_copy_operation_index": self.copy_operation_index,
+            "provenance_source_canvas_id": self.source_canvas_id,
+            "provenance_target_canvas_id": self.target_canvas_id,
+            "provenance_source_dimensions": {
+                "width": self.source_dimensions[0],
+                "height": self.source_dimensions[1],
+            },
+            "provenance_target_dimensions": {
+                "width": self.target_dimensions[0],
+                "height": self.target_dimensions[1],
+            },
+            "provenance_scale_x": self.scale_x,
+            "provenance_scale_y": self.scale_y,
+        }
 
 
 def _canonical_mapping(mapping: list[dict[str, Any]]) -> list[dict[str, int]]:
@@ -513,7 +588,7 @@ def _decode_compact_non_image_bitmap_draws(value: object) -> list[dict[str, Any]
         if canvas_id is not None:
             source["canvasId"] = canvas_id
             source["sourceCanvasId"] = canvas_id
-        draws.append({
+        draw = {
             "operationIndex": operation_index,
             "source": source,
             "target": _compact_canvas(_compact_required(item, "target")),
@@ -523,7 +598,18 @@ def _decode_compact_non_image_bitmap_draws(value: object) -> list[dict[str, Any]
             "globalAlpha": _compact_number(_compact_required(item, "globalAlpha")),
             "globalCompositeOperation": _compact_required(item, "globalCompositeOperation"),
             "filter": _compact_required(item, "filter"),
-        })
+        }
+        if "imageSmoothingEnabled" in item:
+            smoothing_enabled = item["imageSmoothingEnabled"]
+            if not isinstance(smoothing_enabled, bool):
+                raise TypeError("compact smoothing-enabled value is invalid")
+            draw["imageSmoothingEnabled"] = smoothing_enabled
+        if "imageSmoothingQuality" in item:
+            smoothing_quality = item["imageSmoothingQuality"]
+            if not isinstance(smoothing_quality, str):
+                raise TypeError("compact smoothing-quality value is invalid")
+            draw["imageSmoothingQuality"] = smoothing_quality
+        draws.append(draw)
         if not isinstance(draws[-1]["globalCompositeOperation"], str):
             raise TypeError("compact provenance composite has an impossible type")
         if not isinstance(draws[-1]["filter"], str):
@@ -1075,7 +1161,12 @@ def _analyze_legacy_operations(
         clear_boundary_operation_index=clear_boundary,
         mapping_sha256=mapping_sha256(ordered),
     )
-    return MappingAnalysis(status=MAPPING_PROVEN, reason="complete source/destination bijection", mapping=proven)
+    return MappingAnalysis(
+        status=MAPPING_PROVEN,
+        reason="complete source/destination bijection",
+        mapping=proven,
+        renderer_operation_index=renderer_index,
+    )
 
 
 def _safe_draw_operation(operation: Mapping[str, Any]) -> bool:
@@ -1090,6 +1181,253 @@ def _safe_draw_operation(operation: Mapping[str, Any]) -> bool:
     if operation.get("globalCompositeOperation") != "source-over":
         return False
     return operation.get("filter") == "none"
+
+
+def _summary_dimensions(value: object) -> tuple[int, int] | None:
+    return _dimensions(value)
+
+
+def _operation_identity(value: object) -> int | None:
+    try:
+        return _integer(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _full_frame_rect(
+    value: object,
+    dimensions: tuple[int, int],
+) -> tuple[float, float, float, float] | None:
+    rect = _numeric_rect(value)
+    if rect != (0.0, 0.0, float(dimensions[0]), float(dimensions[1])):
+        return None
+    return rect
+
+
+def resolve_scaled_canvas_source_candidate(
+    downstream_analysis: MappingAnalysis,
+    downstream_renderer_draw: Mapping[str, Any],
+    retained_completed_mapping_summaries: object,
+) -> ScaledCanvasSourceCandidate | None:
+    """Resolve one exact, supported canvas provenance hop.
+
+    The selected renderer mapping must be the completed downstream segment,
+    and its only unsafe operation must be one full-frame canvas draw.  The
+    retained summary must identify exactly one upstream mapping by operation,
+    canvas identity, and dimensions.  No dimension or operation proximity is
+    used here.
+    """
+
+    selected_mapping_id = _first(
+        downstream_renderer_draw, "mappingId", "mapping_id"
+    )
+    if (
+        selected_mapping_id is None
+        or downstream_analysis.mapping_id is None
+        or str(selected_mapping_id) != str(downstream_analysis.mapping_id)
+        or downstream_analysis.mapping_source != "completed_segment"
+        or downstream_analysis.segment_tile_count != 0
+        or downstream_analysis.segment_overflow
+        or downstream_analysis.completed_mapping_evicted
+        or len(downstream_analysis.non_image_bitmap_draws) != 1
+        or downstream_analysis.unsafe_operation_count != 1
+        or downstream_analysis.unsafe_operation_types
+        != ("non_image_bitmap_draw",)
+    ):
+        return None
+
+    non_image = downstream_analysis.non_image_bitmap_draws[0]
+    source = non_image.get("source")
+    target = non_image.get("target")
+    if not isinstance(source, Mapping) or not isinstance(target, Mapping):
+        return None
+    if source.get("constructor") != "HTMLCanvasElement":
+        return None
+    source_canvas_id = str(
+        source.get("canvasId") or source.get("sourceCanvasId") or ""
+    )
+    target_canvas_id = str(target.get("canvasId") or "")
+    downstream_source_canvas_id = str(downstream_analysis.source_canvas_id or "")
+    downstream_target_canvas_id = str(
+        downstream_analysis.renderer_canvas_id
+        or downstream_renderer_draw.get("canvasId")
+        or ""
+    )
+    if (
+        not source_canvas_id
+        or not target_canvas_id
+        or not downstream_source_canvas_id
+        or not downstream_target_canvas_id
+        or target_canvas_id != downstream_source_canvas_id
+        or source_canvas_id == target_canvas_id
+        or str(downstream_renderer_draw.get("canvasId") or "")
+        != downstream_target_canvas_id
+    ):
+        return None
+
+    source_dimensions = _summary_dimensions(source)
+    target_dimensions = _summary_dimensions(target)
+    if source_dimensions is None or target_dimensions is None:
+        return None
+    if (
+        source_dimensions[0] * target_dimensions[1]
+        != source_dimensions[1] * target_dimensions[0]
+    ):
+        return None
+
+    source_rect = _full_frame_rect(non_image.get("sourceRect"), source_dimensions)
+    destination = _full_frame_rect(non_image.get("destination"), target_dimensions)
+    if source_rect is None or destination is None:
+        return None
+    transform = non_image.get("transform")
+    if not isinstance(transform, Mapping):
+        return None
+    normalized_transform: dict[str, float] = {}
+    for key, expected in _IDENTITY_TRANSFORM.items():
+        try:
+            value = _number(transform[key])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if value != expected:
+            return None
+        normalized_transform[key] = value
+    try:
+        global_alpha = _number(non_image["globalAlpha"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if global_alpha != 1.0:
+        return None
+    if non_image.get("globalCompositeOperation") != "source-over":
+        return None
+    if non_image.get("filter") != "none":
+        return None
+    copy_operation_index = _operation_identity(non_image.get("operationIndex"))
+    downstream_renderer_index = _operation_identity(
+        downstream_analysis.renderer_operation_index
+        if downstream_analysis.renderer_operation_index is not None
+        else _first(
+            downstream_renderer_draw,
+            "traceOperationIndex",
+            "rendererOperationIndex",
+            "renderer_operation_index",
+            "index",
+        )
+    )
+    downstream_clear_index = _operation_identity(
+        downstream_analysis.segment_clear_operation_index
+    )
+    if (
+        copy_operation_index is None
+        or downstream_renderer_index is None
+        or downstream_clear_index is None
+        or not downstream_clear_index < copy_operation_index < downstream_renderer_index
+    ):
+        return None
+
+    smoothing_enabled = non_image.get("imageSmoothingEnabled")
+    if smoothing_enabled is not None and not isinstance(smoothing_enabled, bool):
+        return None
+    smoothing_quality = non_image.get("imageSmoothingQuality")
+    if smoothing_quality is not None and not isinstance(smoothing_quality, str):
+        return None
+    if smoothing_quality is not None and smoothing_quality not in {
+        "low", "medium", "high"
+    }:
+        return None
+
+    if not isinstance(retained_completed_mapping_summaries, list):
+        return None
+    matches: list[Mapping[str, Any]] = []
+    for summary in retained_completed_mapping_summaries:
+        if not isinstance(summary, Mapping):
+            continue
+        if (
+            _operation_identity(summary.get("rendererOperationIndex"))
+            != copy_operation_index
+            or str(summary.get("sourceCanvasId") or "") != source_canvas_id
+            or str(summary.get("targetCanvasId") or "") != target_canvas_id
+            or _summary_dimensions(summary.get("sourceDimensions"))
+            != source_dimensions
+            or _summary_dimensions(summary.get("targetDimensions"))
+            != target_dimensions
+        ):
+            continue
+        try:
+            tile_count = _integer(summary["segmentTileCount"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if tile_count <= 0:
+            continue
+        matches.append(summary)
+    if len(matches) != 1:
+        return None
+    summary = matches[0]
+    upstream_mapping_id = summary.get("mappingId")
+    if not isinstance(upstream_mapping_id, str) or not upstream_mapping_id:
+        return None
+    first_tile = _operation_identity(summary.get("segmentFirstTileOperationIndex"))
+    last_tile = _operation_identity(summary.get("segmentLastTileOperationIndex"))
+    clear_index = _operation_identity(summary.get("segmentClearOperationIndex"))
+    if (
+        first_tile is None
+        or last_tile is None
+        or clear_index is None
+        or not clear_index < first_tile <= last_tile < copy_operation_index
+    ):
+        return None
+
+    return ScaledCanvasSourceCandidate(
+        upstream_mapping_id=upstream_mapping_id,
+        copy_operation_index=copy_operation_index,
+        source_canvas_id=source_canvas_id,
+        target_canvas_id=target_canvas_id,
+        source_dimensions=source_dimensions,
+        target_dimensions=target_dimensions,
+        source_rect={
+            key: float(value)
+            for key, value in zip(
+                ("x", "y", "width", "height"), source_rect, strict=True
+            )
+        },
+        destination={
+            key: float(value)
+            for key, value in zip(
+                ("x", "y", "width", "height"), destination, strict=True
+            )
+        },
+        transform=normalized_transform,
+        global_alpha=global_alpha,
+        global_composite_operation="source-over",
+        filter="none",
+        image_smoothing_enabled=smoothing_enabled,
+        image_smoothing_quality=smoothing_quality,
+    )
+
+
+def validate_scaled_canvas_source_analysis(
+    analysis: MappingAnalysis,
+    candidate: ScaledCanvasSourceCandidate,
+) -> bool:
+    """Cross-check a full upstream proof against the downstream copy trace."""
+
+    mapping = analysis.mapping
+    if (
+        not analysis.proven
+        or mapping is None
+        or mapping.mapping_id != candidate.upstream_mapping_id
+        or mapping.renderer_draw_operation_index != candidate.copy_operation_index
+        or mapping.source_canvas_id != candidate.source_canvas_id
+        or mapping.renderer_canvas_id != candidate.target_canvas_id
+        or mapping.source_dimensions != candidate.source_dimensions
+        or mapping.renderer_target_dimensions != candidate.target_dimensions
+        or mapping.renderer_geometry_classification != PURE_RENDERER_SCALE
+    ):
+        return False
+    return (
+        _numeric_rect(mapping.renderer_source_rect) == _numeric_rect(candidate.source_rect)
+        and _numeric_rect(mapping.renderer_destination)
+        == _numeric_rect(candidate.destination)
+    )
 
 
 def _completed_mapping_match(
@@ -1158,6 +1496,52 @@ def _completed_record_identity(
     )
 
 
+def _completed_record_matches_renderer_identity(
+    record: Mapping[str, Any],
+    renderer_draw: Mapping[str, Any],
+) -> bool:
+    """Check operation/canvas identity after mapping-id selection."""
+
+    requested_index = _operation_identity(
+        _first(
+            renderer_draw,
+            "traceOperationIndex",
+            "rendererOperationIndex",
+            "renderer_operation_index",
+            "index",
+        )
+    )
+    record_index = _operation_identity(
+        _first(record, "rendererOperationIndex", "renderer_operation_index")
+    )
+    if requested_index is not None and requested_index != record_index:
+        return False
+    requested_target = str(
+        renderer_draw.get("canvasId") or _canvas_id(renderer_draw) or ""
+    )
+    renderer_target = _first(record, "rendererTarget", "renderer_target")
+    record_target = str(
+        _first(renderer_target, "canvasId", "canvas_id")
+        if isinstance(renderer_target, Mapping)
+        else ""
+    )
+    if requested_target and requested_target != record_target:
+        return False
+    requested_source_canvas = _first(
+        renderer_draw, "sourceCanvasId", "source_canvas_id"
+    )
+    record_source = _first(record, "sourceCanvas", "source_canvas")
+    record_source_canvas = _first(record, "sourceCanvasId", "source_canvas_id")
+    if isinstance(record_source, Mapping):
+        record_source_canvas = _first(
+            record_source, "canvasId", "canvas_id"
+        ) or record_source_canvas
+    return (
+        requested_source_canvas is None
+        or str(requested_source_canvas) == str(record_source_canvas or "")
+    )
+
+
 def _analyze_completed_mapping(
     trace: Mapping[str, Any],
     renderer_draw: Mapping[str, Any],
@@ -1184,6 +1568,12 @@ def _analyze_completed_mapping(
             completed_mapping_evicted=requested_mapping_id is not None,
         )
     record = matches[0]
+    if not _completed_record_matches_renderer_identity(record, renderer_draw):
+        return _reject_result(
+            "selected renderer operation or canvas identity does not match",
+            mapping_source="completed_segment",
+            mapping_id=_first(record, "mappingId", "mapping_id"),
+        )
     mapping_id, renderer_index, record_source_canvas_id = _completed_record_identity(record)
     segment_value = _first(record, "segment")
     segment: Mapping[str, Any] = segment_value if isinstance(segment_value, Mapping) else record
@@ -1232,6 +1622,7 @@ def _analyze_completed_mapping(
     base = {
         "mapping_source": "completed_segment",
         "mapping_id": mapping_id,
+        "renderer_operation_index": renderer_index,
         "mapping_provenance": None,
         "renderer_geometry_classification": classification,
         "renderer_canvas_id": str(_first(renderer_target, "canvasId", "canvas_id") or "") or None,
@@ -1478,6 +1869,7 @@ def _analyze_completed_mapping(
         mapping=proven,
         mapping_source="completed_segment",
         mapping_id=mapping_id,
+        renderer_operation_index=renderer_index,
         segment_clear_operation_index=clear_index,
         segment_first_tile_operation_index=first_tile,
         segment_last_tile_operation_index=last_tile,

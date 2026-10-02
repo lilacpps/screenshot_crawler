@@ -2395,10 +2395,106 @@ accept this scaled copy. The bounded diagnostic fields are the only adopted
 change; direct completed ImageBitmap-tile mappings retain
 `mapping_provenance=direct`.
 
-Because the live case is not A, no reconstructed-JPEG success, diagnostic
-pixel-exact run, or P4-4 versus P4-5 performance comparison is claimed from
-this investigation. `BOOKWALKER_FINAL_PIXEL_VERIFY=1` was not used after the
-diagnostic classification, and the pre-existing P4-5 default-off behavior
-remains unchanged. Supporting the observed resize would require a separate
-proof of the resize's JPEG/DCT equivalence; it must not be inferred from this
-trace.
+Because the live case was not A at the time of this investigation, that section
+did not claim reconstructed-JPEG success or infer JPEG/DCT equivalence from the
+resize. The follow-up implementation is recorded below; this paragraph remains
+the historical investigation snapshot.
+
+### 20.23 Strict one-hop scaled-source provenance recovery (2026-10-02)
+
+The purchased-viewer live shape is now supported with source-native semantics.
+The observed ordinary page is:
+
+```text
+ImageBitmap tiles -> canvas A 960x1280
+canvas A -> canvas B 480x640 (one full-frame draw)
+canvas B -> selected renderer
+```
+
+The production artifact for this path is the proven source-native reconstructed
+JPEG at 960x1280. It is not a JPEG encoding of the 480x640 displayed pixels;
+`PurchasedMapping.source_dimensions`, raw JPEG matching, DCT reconstruction,
+and `CaptureResult` dimensions remain 960x1280. The native 480x640 PNG is the
+displayed comparison/fallback artifact only.
+
+The Python-only resolver accepts exactly one hop and fails closed unless all of
+the following are exact: selected mapping ID; zero downstream tile draws;
+non-overflow, non-evicted completed segment; exactly one unsafe operation of
+type `non_image_bitmap_draw`; HTMLCanvasElement source identity; distinct source
+and target canvas IDs; full-frame source and destination rectangles; identity
+transform; alpha 1; source-over; filter none; positive aspect-preserving
+dimensions; and downstream/upstream operation ordering. The retained summary
+must have exactly one match on renderer operation index, source/target canvas
+IDs, source/target dimensions, and a positive tile count. No dimension
+proximity, operation proximity, nearest mapping, recursion, or two-hop graph is
+used. The resolved upstream ID is compact-fetched once for the whole spread,
+then the existing `analyze_purchased_mapping()` validator is applied unchanged
+and cross-checked against the copy operation.
+
+Direct completed tile mappings remain `mapping_provenance=direct` and do not
+perform an upstream fetch. Scaled mappings use
+`mapping_provenance=scaled_canvas_source_1hop`; spread output remains all-or-none.
+Common readiness still requires exact raw JPEG attribution, unique candidate,
+supported JPEG, strict MCU alignment, coefficient and qtable equality, and
+`reconstructed_source_dimensions_match`. Historical
+`reconstructed_dimensions_match` may be false only for this scaled path.
+
+`BOOKWALKER_FINAL_PIXEL_VERIFY` remains default off: no final browser compare is
+performed and `native_pixel_exact` is `null`. When enabled, direct mappings use
+the intrinsic comparison helper. Scaled mappings use a diagnostic-only browser
+draw of the reconstructed source-native JPEG at the proven 480x640 destination,
+with the traced `imageSmoothingEnabled` and `imageSmoothingQuality` applied;
+missing smoothing metadata fails closed. A mismatch returns native PNG and is
+not used as production provenance authority.
+
+Debug metadata records only the selected/upstream mapping IDs, copy operation,
+canvas identities, source/target dimensions, scale factors, provenance, and
+stage timing (`selected_trace_fetch_ms`, `upstream_trace_fetch_ms`, and their
+decode counterparts); full retained tile traces are never transferred for
+resolution. The compact transport version remains 1.
+
+Live validation completed on the requested URL with the shared Chrome/CDP
+session. With `BOOKWALKER_FINAL_PIXEL_VERIFY` unset,
+`output/bookwalker-onehop-default-20261002` saved 10 JPEG artifacts from five
+logical two-part captures. Every part returned `reconstructed_jpeg` at
+960x1280 with `mapping_proven=true`, `mapping_provenance=scaled_canvas_source_1hop`,
+an upstream mapping ID, unique raw-JPEG attribution, exact coefficient/qtable
+proof, and `reconstructed_source_dimensions_match=true`. Final browser pixel
+comparison was disabled, so `final_pixel_compare_performed=false`,
+`native_pixel_exact=null`, and the final comparison timing was 0 ms.
+
+With `BOOKWALKER_FINAL_PIXEL_VERIFY=1`,
+`output/bookwalker-onehop-diagnostic-20261002-r2` saved four JPEG artifacts.
+All four used `scaled_source_to_native` diagnostic comparison and reported
+`native_pixel_exact=true`, `differing_pixel_count=0`, and
+`max_channel_difference=0`. The diagnostic now restores the reconstructed
+JPEG into a source-size HTML canvas before applying the proven scale, matching
+the traced HTMLCanvasElement source identity. This remains diagnostic evidence
+and is not production proof.
+
+The successful default run was summarized with
+`scripts/analyze_bookwalker_capture_timing.py`; values are milliseconds,
+median / p90 / max. Capture-level values use five logical captures; part-level
+values use ten spread parts:
+
+| measurement | median | p90 | max |
+| --- | ---: | ---: | ---: |
+| capture total | 932.01 | 2233.39 | 2233.39 |
+| evaluation total | 808.84 | 2005.95 | 2005.95 |
+| selected trace fetch | 6.58 | 9.12 | 9.12 |
+| upstream trace fetch | 167.08 | 200.30 | 200.30 |
+| total trace fetch | 171.18 | 208.88 | 208.88 |
+| selected trace decode | 0.16 | 0.20 | 0.20 |
+| upstream trace decode | 8.96 | 9.60 | 9.60 |
+| original JPEG matching | 52.25 | 69.21 | 69.21 |
+| raw full-resolution compare | 52.38 | 56.63 | 112.18 |
+| lossless reconstruction | 125.72 | 293.60 | 305.22 |
+| native materialization | 28.61 | 44.59 | 44.59 |
+| final browser pixel compare | 0.00 | 0.00 | 0.00 |
+
+Against the successful P4-4 reference (capture 1370.08 ms, lossless
+evaluation 898.70 ms, final browser comparison 149.03 ms/part), this run was
+438.07 ms lower in median capture total and 89.86 ms lower in median lossless
+evaluation. The final comparison cost is now 0 ms by default. The runs are
+bounded live samples rather than a controlled benchmark suite, so these
+differences are directional only.

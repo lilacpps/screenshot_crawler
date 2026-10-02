@@ -372,7 +372,7 @@ Preferred path:
 
 ```text
 verified original JPEG
-    -> verified lossless reconstructed JPEG
+    -> verified source-native reconstructed JPEG
     -> source-native PNG
         -> rendered canvas PNG
 ```
@@ -397,6 +397,24 @@ summary rather than transferring the full trace.
 The selected records use a versioned compact BookWalker-local transport
 representation and are decoded back to the unchanged rich mapping contract
 before the Python proof validator runs.
+
+For purchased pages, a strictly proven full-frame one-hop canvas scale may
+expose a higher-resolution source-native canvas. The supported shape is only:
+
+```text
+proven tile canvas A
+    -> exactly one full-frame HTMLCanvasElement draw
+canvas B
+    -> selected renderer
+```
+
+The Python resolver connects that hop only by exact mapping ID, operation
+index, canvas identity, dimensions, geometry, safe draw state, and strict
+operation ordering. It does not support recursive canvas graphs, two or more
+hops, nearest mappings, dimension guessing, operation-proximity guessing, or
+fuzzy provenance. Reconstruction returns the source-native JPEG (for example
+960x1280), not a JPEG representation of the scaled 480x640 rendered pixels;
+the DCT mapping dimensions remain the proven source dimensions.
 Original JPEG matching remains first priority; its retry wait is now bounded
 and event-driven, and is used only while eligible response work is pending.
 
@@ -405,12 +423,20 @@ production proof gate passes, including `mapping_proven=true`,
 `mapping_source=completed_segment`, no segment overflow or completed-mapping
 eviction, one full-resolution raw JPEG match, supported strict-MCU JPEG layout,
 exact coefficients and quantization tables, output structural parity, and
-matching native dimensions. The production authority is the verified source
-JPEG, complete MCU-aligned mapping, coefficient-exact reconstruction, equal
-quantization tables, and supported source/output JPEG structure. Browser-decoded
+the reconstructed result matching the proven mapping source dimensions. Direct
+mapping additionally keeps the historical native-dimension contract; the
+one-hop source-native path intentionally permits reconstructed dimensions to
+differ from the displayed native PNG. The production authority is the verified
+source JPEG, complete MCU-aligned mapping, coefficient-exact reconstruction,
+equal quantization tables, and supported source/output JPEG structure. Browser-decoded
 full-pixel equality is not a default production gate after P4-5. It remains an
 optional BookWalker-local diagnostic through `BOOKWALKER_FINAL_PIXEL_VERIFY`;
 when enabled, it is an additional gate and mismatch falls back to native PNG.
+Direct mappings use intrinsic comparison. One-hop scaled mappings use the
+proven source rectangle and destination size, including observed image
+smoothing state, to compare the source-native JPEG after scaling to the native
+PNG; this remains diagnostic evidence rather than production provenance
+authority.
 The output switch is BookWalker-local:
 `BOOKWALKER_LOSSLESS_JPEG_OUTPUT` is BookWalker-local and is enabled by
 default in Phase P3. Explicit `1`, `true`, `yes`, and `on` values also enable

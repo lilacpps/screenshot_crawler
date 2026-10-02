@@ -7,6 +7,7 @@ from playwright.async_api import Page
 
 from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_module
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
+    _SCALED_SOURCE_PIXEL_EXACT_COMPARISON_SCRIPT,
     _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
     BookWalkerAdapter,
 )
@@ -297,6 +298,56 @@ async def test_different_images_have_different_browser_signature(
     assert await image_signature(browser_page, white, "image/png") != await image_signature(
         browser_page, black, "image/png"
     )
+
+
+async def test_scaled_source_diagnostic_reproduces_observed_full_frame_scale(
+    browser_page: Page,
+) -> None:
+    source_and_native = await browser_page.evaluate(
+        """
+        async () => {
+          const source = document.createElement('canvas');
+          source.width = 32;
+          source.height = 32;
+          const sourceContext = source.getContext('2d');
+          for (let y = 0; y < 32; y += 1) {
+            for (let x = 0; x < 32; x += 1) {
+              sourceContext.fillStyle = `rgb(${x * 8}, ${y * 8}, ${(x + y) * 4})`;
+              sourceContext.fillRect(x, y, 1, 1);
+            }
+          }
+          const reconstructed = source.toDataURL('image/jpeg', 1.0);
+          const image = await createImageBitmap(
+            await (await fetch(reconstructed)).blob(),
+          );
+          const target = document.createElement('canvas');
+          target.width = 16;
+          target.height = 16;
+          const targetContext = target.getContext('2d');
+          targetContext.imageSmoothingEnabled = true;
+          targetContext.imageSmoothingQuality = 'high';
+          targetContext.drawImage(image, 0, 0, 32, 32, 0, 0, 16, 16);
+          image.close();
+          return {reconstructed, native: target.toDataURL('image/png')};
+        }
+        """
+    )
+    result = await browser_page.evaluate(
+        _SCALED_SOURCE_PIXEL_EXACT_COMPARISON_SCRIPT,
+        {
+            **source_and_native,
+            "sourceRect": {"x": 0, "y": 0, "width": 32, "height": 32},
+            "destination": {"x": 0, "y": 0, "width": 16, "height": 16},
+            "targetDimensions": {"width": 16, "height": 16},
+            "imageSmoothingEnabled": True,
+            "imageSmoothingQuality": "high",
+        },
+    )
+
+    assert result["available"] is True
+    assert result["exact"] is True
+    assert result["differing_pixel_count"] == 0
+    assert result["max_channel_difference"] == 0
 
 
 async def test_completed_segment_freeze_survives_large_post_render_prefetch(

@@ -14,7 +14,7 @@ import os
 import re
 import time
 from binascii import Error as BinasciiError
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -58,6 +58,8 @@ from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
     MappingAnalysis,
     analyze_purchased_mapping,
     decode_compact_completed_mappings,
+    resolve_scaled_canvas_source_candidate,
+    validate_scaled_canvas_source_analysis,
 )
 from screenshot_crawler.site_adapters.bookwalker.reader_controls import (
     ReaderControlKind,
@@ -384,6 +386,10 @@ _DRAW_TRACE_SCRIPT = """
             globalAlpha: operation.globalAlpha,
             globalCompositeOperation: operation.globalCompositeOperation,
             filter: operation.filter,
+            imageSmoothingEnabled: typeof context.imageSmoothingEnabled === 'boolean'
+              ? context.imageSmoothingEnabled : null,
+            imageSmoothingQuality: typeof context.imageSmoothingQuality === 'string'
+              ? context.imageSmoothingQuality : null,
           });
         }
       } else if (!safe) {
@@ -747,8 +753,9 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
         'unsafeOperationTypes',
         'segmentOverflow',
         'sourceIds',
-        'nonImageBitmapDraws',
       ]) compact[key] = required(mapping, key);
+      compact.nonImageBitmapDraws = has(mapping, 'nonImageBitmapDraws')
+        ? required(mapping, 'nonImageBitmapDraws') : [];
       compact.sources = sources;
       compact.targets = targets;
       compact.transforms = transforms;
@@ -871,6 +878,84 @@ async ({reconstructed, native}) => {
     context.clearRect(0, 0, left.width, left.height);
     context.drawImage(right, 0, 0);
     const rightData = context.getImageData(0, 0, right.width, right.height).data;
+    let differingPixels = 0;
+    let maxChannelDifference = 0;
+    for (let index = 0; index < leftData.length; index += 4) {
+      let different = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const difference = Math.abs(leftData[index + channel] - rightData[index + channel]);
+        maxChannelDifference = Math.max(maxChannelDifference, difference);
+        different ||= difference !== 0;
+      }
+      if (different) differingPixels += 1;
+    }
+    return {
+      available: true,
+      dimensions_equal: true,
+      exact: differingPixels === 0,
+      differing_pixel_count: differingPixels,
+      max_channel_difference: maxChannelDifference,
+    };
+  } finally {
+    left.close();
+    right.close();
+  }
+}
+"""
+
+_SCALED_SOURCE_PIXEL_EXACT_COMPARISON_SCRIPT = """
+async ({reconstructed, native, sourceRect, destination, targetDimensions,
+        imageSmoothingEnabled, imageSmoothingQuality}) => {
+  async function load(dataUrl) {
+    const response = await fetch(dataUrl);
+    return await createImageBitmap(await response.blob());
+  }
+  if (typeof imageSmoothingEnabled !== 'boolean'
+      || typeof imageSmoothingQuality !== 'string'
+      || !['low', 'medium', 'high'].includes(imageSmoothingQuality)) {
+    return {available: false, exact: false, reason: 'smoothing metadata unavailable'};
+  }
+  const left = await load(reconstructed);
+  const right = await load(native);
+  try {
+    // The proven live operation has an HTMLCanvasElement source.  Restore the
+    // source-native JPEG into a source-size canvas before reproducing the
+    // scaled draw so the diagnostic uses the same source kind as the trace.
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = left.width;
+    sourceCanvas.height = left.height;
+    const sourceContext = sourceCanvas.getContext('2d');
+    if (!sourceContext) {
+      return {available: false, exact: false, reason: 'source 2d context unavailable'};
+    }
+    sourceContext.drawImage(left, 0, 0);
+    const targetWidth = Number(targetDimensions?.width);
+    const targetHeight = Number(targetDimensions?.height);
+    if (!Number.isInteger(targetWidth) || !Number.isInteger(targetHeight)
+        || targetWidth <= 0 || targetHeight <= 0
+        || right.width !== targetWidth || right.height !== targetHeight) {
+      return {available: true, dimensions_equal: false, exact: false};
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext('2d', {willReadFrequently: true});
+    if (!context) return {available: false, exact: false, reason: '2d context unavailable'};
+    context.imageSmoothingEnabled = imageSmoothingEnabled;
+    context.imageSmoothingQuality = imageSmoothingQuality;
+    const sx = Number(sourceRect?.x);
+    const sy = Number(sourceRect?.y);
+    const sw = Number(sourceRect?.width);
+    const sh = Number(sourceRect?.height);
+    const dx = Number(destination?.x);
+    const dy = Number(destination?.y);
+    const dw = Number(destination?.width);
+    const dh = Number(destination?.height);
+    context.drawImage(sourceCanvas, sx, sy, sw, sh, dx, dy, dw, dh);
+    const leftData = context.getImageData(0, 0, targetWidth, targetHeight).data;
+    context.clearRect(0, 0, targetWidth, targetHeight);
+    context.drawImage(right, 0, 0);
+    const rightData = context.getImageData(0, 0, targetWidth, targetHeight).data;
     let differingPixels = 0;
     let maxChannelDifference = 0;
     for (let index = 0; index < leftData.length; index += 4) {
@@ -1026,7 +1111,11 @@ def _original_match_debug_defaults() -> dict[str, int]:
 def _evaluation_timing_defaults() -> dict[str, float]:
     return {
         "evaluation_total": 0.0,
+        "selected_trace_fetch_ms": 0.0,
+        "upstream_trace_fetch_ms": 0.0,
         "trace_fetch_ms": 0.0,
+        "selected_trace_decode_ms": 0.0,
+        "upstream_trace_decode_ms": 0.0,
         "trace_decode_ms": 0.0,
         "trace_python_analysis_ms": 0.0,
         "mapping_analysis": 0.0,
@@ -2588,8 +2677,12 @@ class BookWalkerAdapter(SiteAdapter):
             "final_pixel_verify_enabled": final_pixel_verify_enabled,
             "final_pixel_compare_performed": False,
             "native_pixel_exact": None,
+            "final_pixel_comparison_mode": None,
+            "reconstructed_dimensions_match": False,
+            "reconstructed_source_dimensions_match": False,
             "mapping_source": None,
             "mapping_id": None,
+            "selected_mapping_id": None,
             "segment_clear_operation_index": None,
             "segment_first_tile_operation_index": None,
             "segment_last_tile_operation_index": None,
@@ -2601,6 +2694,14 @@ class BookWalkerAdapter(SiteAdapter):
             "mapping_provenance": None,
             "renderer_canvas_id": None,
             "source_canvas_id": None,
+            "upstream_mapping_id": None,
+            "provenance_copy_operation_index": None,
+            "provenance_source_canvas_id": None,
+            "provenance_target_canvas_id": None,
+            "provenance_source_dimensions": None,
+            "provenance_target_dimensions": None,
+            "provenance_scale_x": None,
+            "provenance_scale_y": None,
         }
 
     async def _browser_pixel_exact(
@@ -2621,6 +2722,59 @@ class BookWalkerAdapter(SiteAdapter):
             )
         except Exception:  # noqa: BLE001 - shadow validation must fail closed
             return {"available": False, "exact": False, "reason": "browser comparison failed"}
+        return result if isinstance(result, dict) else {
+            "available": False,
+            "exact": False,
+            "reason": "browser comparison returned invalid data",
+        }
+
+    async def _browser_scaled_source_pixel_exact(
+        self,
+        page: Page,
+        reconstructed: bytes,
+        native: bytes,
+        *,
+        source_rect: dict[str, float],
+        destination: dict[str, float],
+        target_dimensions: tuple[int, int],
+        image_smoothing_enabled: bool | None,
+        image_smoothing_quality: str | None,
+    ) -> dict[str, object]:
+        """Compare a source-native JPEG after the proven one-hop scale."""
+
+        if (
+            image_smoothing_enabled is None
+            or image_smoothing_quality not in {"low", "medium", "high"}
+        ):
+            return {
+                "available": False,
+                "exact": False,
+                "reason": "smoothing metadata unavailable",
+            }
+        encoded_reconstructed = base64.b64encode(reconstructed).decode("ascii")
+        encoded_native = base64.b64encode(native).decode("ascii")
+        try:
+            result = await page.evaluate(
+                _SCALED_SOURCE_PIXEL_EXACT_COMPARISON_SCRIPT,
+                {
+                    "reconstructed": f"data:image/jpeg;base64,{encoded_reconstructed}",
+                    "native": f"data:image/png;base64,{encoded_native}",
+                    "sourceRect": source_rect,
+                    "destination": destination,
+                    "targetDimensions": {
+                        "width": target_dimensions[0],
+                        "height": target_dimensions[1],
+                    },
+                    "imageSmoothingEnabled": image_smoothing_enabled,
+                    "imageSmoothingQuality": image_smoothing_quality,
+                },
+            )
+        except Exception:  # noqa: BLE001 - diagnostic validation fails closed
+            return {
+                "available": False,
+                "exact": False,
+                "reason": "browser comparison failed",
+            }
         return result if isinstance(result, dict) else {
             "available": False,
             "exact": False,
@@ -2651,6 +2805,14 @@ class BookWalkerAdapter(SiteAdapter):
         }
 
         def finish_timing() -> None:
+            evaluation_timing["trace_fetch_ms"] = (
+                evaluation_timing["selected_trace_fetch_ms"]
+                + evaluation_timing["upstream_trace_fetch_ms"]
+            )
+            evaluation_timing["trace_decode_ms"] = (
+                evaluation_timing["selected_trace_decode_ms"]
+                + evaluation_timing["upstream_trace_decode_ms"]
+            )
             evaluation_timing["evaluation_total"] = _elapsed_ms(evaluation_started)
             measured_keys = (
                 "trace_fetch_ms",
@@ -2719,10 +2881,12 @@ class BookWalkerAdapter(SiteAdapter):
             )
         except Exception:  # noqa: BLE001 - missing trace means unavailable
             compact_payload = None
-        evaluation_timing["trace_fetch_ms"] = _elapsed_ms(trace_fetch_started)
+        evaluation_timing["selected_trace_fetch_ms"] = _elapsed_ms(trace_fetch_started)
         trace_decode_started = time.perf_counter()
         trace = decode_compact_completed_mappings(compact_payload)
-        evaluation_timing["trace_decode_ms"] = _elapsed_ms(trace_decode_started)
+        evaluation_timing["selected_trace_decode_ms"] = _elapsed_ms(
+            trace_decode_started
+        )
         if not isinstance(trace, dict):
             shadow["reason"] = "compact trace unavailable or invalid"
             shadow["parts"] = [
@@ -2739,25 +2903,148 @@ class BookWalkerAdapter(SiteAdapter):
             "retainedCompletedMappingSummaries", []
         )
 
+        initial_analyses: list[MappingAnalysis] = []
+        initial_analysis_times: list[float] = []
+        provenance_candidates: list[Any | None] = []
+        for draw_call in selected_draw_calls:
+            mapping_started = time.perf_counter()
+            initial_analysis = analyze_purchased_mapping(trace, draw_call)
+            mapping_elapsed = _elapsed_ms(mapping_started)
+            initial_analyses.append(initial_analysis)
+            initial_analysis_times.append(mapping_elapsed)
+            evaluation_timing["trace_python_analysis_ms"] += mapping_elapsed
+            evaluation_timing["mapping_analysis"] += mapping_elapsed
+            candidate = None
+            if not initial_analysis.proven:
+                candidate = resolve_scaled_canvas_source_candidate(
+                    initial_analysis,
+                    draw_call,
+                    trace.get("retainedCompletedMappingSummaries", []),
+                )
+            provenance_candidates.append(candidate)
+
+        upstream_mapping_ids: list[str] = []
+        upstream_mapping_ids_seen: set[str] = set()
+        for candidate in provenance_candidates:
+            if candidate is None or candidate.upstream_mapping_id in upstream_mapping_ids_seen:
+                continue
+            upstream_mapping_ids_seen.add(candidate.upstream_mapping_id)
+            upstream_mapping_ids.append(candidate.upstream_mapping_id)
+        upstream_trace: dict[str, Any] | None = None
+        if upstream_mapping_ids:
+            upstream_fetch_started = time.perf_counter()
+            try:
+                upstream_payload = await page.evaluate(
+                    _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
+                    upstream_mapping_ids,
+                )
+            except Exception:  # noqa: BLE001 - missing upstream trace is fallback
+                upstream_payload = None
+            evaluation_timing["upstream_trace_fetch_ms"] = _elapsed_ms(
+                upstream_fetch_started
+            )
+            upstream_decode_started = time.perf_counter()
+            upstream_trace = decode_compact_completed_mappings(upstream_payload)
+            evaluation_timing["upstream_trace_decode_ms"] = _elapsed_ms(
+                upstream_decode_started
+            )
+        evaluation_timing["trace_fetch_ms"] = (
+            evaluation_timing["selected_trace_fetch_ms"]
+            + evaluation_timing["upstream_trace_fetch_ms"]
+        )
+        evaluation_timing["trace_decode_ms"] = (
+            evaluation_timing["selected_trace_decode_ms"]
+            + evaluation_timing["upstream_trace_decode_ms"]
+        )
+
+        analyses: list[MappingAnalysis] = []
+        analysis_times: list[float] = []
+        for initial_analysis, candidate in zip(
+            initial_analyses, provenance_candidates, strict=True
+        ):
+            if candidate is None:
+                analyses.append(initial_analysis)
+                analysis_times.append(0.0)
+                continue
+            upstream_analysis: MappingAnalysis
+            upstream_elapsed = 0.0
+            if upstream_trace is None:
+                upstream_analysis = MappingAnalysis(
+                    status="MAPPING_UNAVAILABLE",
+                    reason="upstream compact mapping unavailable",
+                    mapping_source="completed_segment",
+                    mapping_id=candidate.upstream_mapping_id,
+                    renderer_operation_index=candidate.copy_operation_index,
+                    completed_mapping_evicted=True,
+                )
+            else:
+                upstream_started = time.perf_counter()
+                upstream_analysis = analyze_purchased_mapping(
+                    upstream_trace,
+                    candidate.upstream_renderer_draw(),
+                )
+                upstream_elapsed = _elapsed_ms(upstream_started)
+                evaluation_timing["trace_python_analysis_ms"] += upstream_elapsed
+                evaluation_timing["mapping_analysis"] += upstream_elapsed
+            if validate_scaled_canvas_source_analysis(upstream_analysis, candidate):
+                assert upstream_analysis.mapping is not None
+                scaled_mapping = replace(
+                    upstream_analysis.mapping,
+                    mapping_provenance="scaled_canvas_source_1hop",
+                )
+                upstream_analysis = replace(
+                    upstream_analysis,
+                    mapping=scaled_mapping,
+                    mapping_provenance="scaled_canvas_source_1hop",
+                )
+            else:
+                upstream_analysis = replace(
+                    upstream_analysis,
+                    reason=(
+                        "scaled canvas upstream mapping failed provenance cross-check"
+                    ),
+                )
+            analyses.append(upstream_analysis)
+            analysis_times.append(upstream_elapsed)
+
         parts: list[dict[str, Any]] = []
         reconstructed_captures: list[CaptureResult] = []
-        for native, draw_call in zip(native_captures, selected_draw_calls, strict=False):
+        for (
+            native,
+            draw_call,
+            analysis,
+            provenance_candidate,
+            initial_analysis_time,
+            upstream_analysis_time,
+        ) in zip(
+            native_captures,
+            selected_draw_calls,
+            analyses,
+            provenance_candidates,
+            initial_analysis_times,
+            analysis_times,
+            strict=True,
+        ):
             part = self._shadow_part_defaults(
                 len(purchased_candidates),
                 final_pixel_verify_enabled=self.final_pixel_verify_enabled,
             )
             part_timing = _part_timing_defaults()
             part["timing_ms"] = part_timing
-            mapping_started = time.perf_counter()
-            analysis: MappingAnalysis = analyze_purchased_mapping(trace, draw_call)
-            mapping_elapsed = _elapsed_ms(mapping_started)
-            part_timing["mapping_analysis_ms"] = mapping_elapsed
-            evaluation_timing["trace_python_analysis_ms"] += mapping_elapsed
-            evaluation_timing["mapping_analysis"] += mapping_elapsed
+            part_timing["mapping_analysis_ms"] = round(
+                initial_analysis_time + upstream_analysis_time,
+                2,
+            )
+            part["selected_mapping_id"] = draw_call.get(
+                "mappingId", draw_call.get("mapping_id")
+            )
+            if provenance_candidate is not None:
+                part.update(provenance_candidate.to_debug())
             analysis_debug = analysis.to_debug()
             for key in (
                 "mapping_source",
                 "mapping_id",
+                "renderer_operation_index",
                 "segment_clear_operation_index",
                 "segment_first_tile_operation_index",
                 "segment_last_tile_operation_index",
@@ -2780,6 +3067,13 @@ class BookWalkerAdapter(SiteAdapter):
             part["mapping_status"] = analysis.status
             part["mapping_reason"] = analysis.reason
             part["trace_overflow"] = analysis.trace_overflow
+            if analysis.proven and part.get("mapping_provenance") is None:
+                part["mapping_provenance"] = "direct"
+            if provenance_candidate is not None:
+                part["scaled_canvas_source_provenance"] = bool(
+                    analysis.proven
+                    and analysis.mapping_provenance == "scaled_canvas_source_1hop"
+                )
             if not analysis.proven or analysis.mapping is None:
                 parts.append(part)
                 continue
@@ -2895,11 +3189,40 @@ class BookWalkerAdapter(SiteAdapter):
                 part["reconstructed_dimensions_match"] = (
                     result.width == native.width and result.height == native.height
                 )
+                part["reconstructed_source_dimensions_match"] = (
+                    result.width == mapping.source_dimensions[0]
+                    and result.height == mapping.source_dimensions[1]
+                )
+                part["final_pixel_comparison_mode"] = (
+                    "scaled_source_to_native"
+                    if part.get("mapping_provenance") == "scaled_canvas_source_1hop"
+                    else "intrinsic"
+                )
                 if self.final_pixel_verify_enabled:
                     final_compare_started = time.perf_counter()
-                    comparison = await self._browser_pixel_exact(
-                        page, result.data, native.data
-                    )
+                    if (
+                        provenance_candidate is not None
+                        and part.get("mapping_provenance")
+                        == "scaled_canvas_source_1hop"
+                    ):
+                        comparison = await self._browser_scaled_source_pixel_exact(
+                            page,
+                            result.data,
+                            native.data,
+                            source_rect=provenance_candidate.source_rect,
+                            destination=provenance_candidate.destination,
+                            target_dimensions=provenance_candidate.target_dimensions,
+                            image_smoothing_enabled=(
+                                provenance_candidate.image_smoothing_enabled
+                            ),
+                            image_smoothing_quality=(
+                                provenance_candidate.image_smoothing_quality
+                            ),
+                        )
+                    else:
+                        comparison = await self._browser_pixel_exact(
+                            page, result.data, native.data
+                        )
                     final_compare_elapsed = _elapsed_ms(final_compare_started)
                     part_timing["final_browser_pixel_compare_ms"] = final_compare_elapsed
                     evaluation_timing["final_browser_pixel_compare"] += final_compare_elapsed
@@ -2915,7 +3238,7 @@ class BookWalkerAdapter(SiteAdapter):
                             "differing_pixel_count", "max_channel_difference", "reason",
                         }
                     }
-                if part["reconstructed_dimensions_match"]:
+                if part["reconstructed_source_dimensions_match"]:
                     reconstructed_captures.append(
                         CaptureResult(
                             data=result.data,
@@ -2941,7 +3264,16 @@ class BookWalkerAdapter(SiteAdapter):
             and part.get("strict_mcu_aligned") is True
             and part.get("coefficient_exact") is True
             and part.get("quantization_tables_equal") is True
-            and part.get("reconstructed_dimensions_match") is True
+            and part.get("reconstructed_source_dimensions_match") is True
+            and (
+                part.get("mapping_provenance") == "direct"
+                and part.get("reconstructed_dimensions_match") is True
+                or (
+                    part.get("mapping_provenance")
+                    == "scaled_canvas_source_1hop"
+                    and part.get("scaled_canvas_source_provenance") is True
+                )
+            )
             and (
                 not self.final_pixel_verify_enabled
                 or part.get("native_pixel_exact") is True
