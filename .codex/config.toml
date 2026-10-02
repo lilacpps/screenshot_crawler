@@ -1,0 +1,26 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+[features]
+multi_agent = true
+
+[agents]
+enabled = true
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "high"
+max_concurrent_threads_per_session = 2
+
+[agents.site_adapter_worker]
+description = """
+Implementation worker for new Site Adapters. Use this role for browser probes, PoCs,
+production implementation, targeted tests, and live verification. This is the only
+subagent role that may modify production files during the gated workflow.
+"""
+config_file = "agents/site-adapter-worker.toml"
+
+[agents.site_adapter_reviewer]
+description = """
+Read-only quality gate for new Site Adapter work. Use this role after each worker
+iteration to compare the implementation with repository authorities, observed live-site
+evidence, acceptance criteria, tests, and regression risk. It must not edit files.
+"""
+config_file = "agents/site-adapter-reviewer.toml"
