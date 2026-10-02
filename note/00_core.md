@@ -1020,7 +1020,9 @@ and live verification remain planned.
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery + Batch v3実装済み）
 
-2026-09-19時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、BookWalker series-scoped Discovery、Phase 5Aのread-only Batch Planner / Site Policy registry / Manga ONE・BookWalker Policy、Phase 5BのManga ONE・BookWalker Batch Executor、BookWalker Adapterのstrict direct・quota product-page entryが実装済みである。BookWalkerは05:00 JSTのsite-wide 1枠local safety policyを使い、quota開始をreader entry前に永続化する。実サイトquota clickは未確認である。
+2026-10-02時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Comic DAYSを含む各siteのDiscovery / Site Policy registry、Phase 5Aのread-only Batch Planner、Manga ONE・BookWalker Batch Executor、BookWalker Adapterのstrict direct・quota product-page entryが実装済みである。Comic DAYSは公式free-only Atomの再検証を行うdirect専用Adapterとして登録され、ticket/point/coin/quota resourceは扱わない。BookWalkerは05:00 JSTのsite-wide 1枠local safety policyを使い、quota開始をreader entry前に永続化する。実サイトquota clickは未確認である。
+
+Comic DAYSのC3実サイトE2Eでは、明示的な`catalog_comicdays.sqlite`と隔離watchlistを使い、登録済みDiscoveryが79件（free 4 / unknown 75）をCatalogへ同期した。通常のBatch Plannerはfree targetをdirect・`consumes_quota=false`で選択し、登録済みBatch ExecutorがCrawlerRunner、packaging、CrawlRun / Item / Artifactの成功確定まで完了した。実行結果は32 native PNG、area 1..32、`END`、CRC・manifest fingerprint・dimensions一致である。通常の`catalog.sqlite`とroot `watchlist.yaml`はこのE2Eの入力にしていない。
 
 authority:
 

@@ -63,6 +63,7 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - BookWalker Adapter
 - Manga ONE Adapter
 - Magapoke Adapter（scrambled JPEGのtile再構成PNG、canvas screenshot fallback）
+- Comic DAYS Adapter（free-only Atom再検証、horizontal RTL canvas、native PNG）
 - 既存ChromeへCDP接続するcrawl/loginフロー
 - 共通Crawler Chrome launcher (`scripts/start_crawler_chrome.ps1`)
 - BookWalker canvas / spread capture
@@ -293,6 +294,39 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
   --url "https://manga-one.com/manga/2379/chapter/214131" `
   --output-dir output\crawl-mangaone
 ```
+
+Comic DAYSは現在無料話だけを対象にし、ticket / point / coin / paid / login
+resourceを使用しません。DiscoveryからCatalog、Batch、packagingまで検証する
+場合は、通常Catalogとwatchlistを指定せず、隔離したパスを明示します。
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli watch add `
+  --watchlist output\comicdays-watchlist.yaml `
+  --key comicdays-target `
+  --work-key comicdays:series:2550689798737278979 `
+  --site comicdays `
+  --url "https://comic-days.com/episode/2550689798754939004" `
+  --label "かみあそび！～カードゲーマー少女の日常～"
+
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `
+  --site comicdays --mode full `
+  --watchlist output\comicdays-watchlist.yaml `
+  --catalog catalog_comicdays.sqlite
+
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli batch run `
+  --site comicdays --limit 1 `
+  --catalog catalog_comicdays.sqlite `
+  --output-root output\comicdays-batch `
+  --library-dir output\comicdays-library
+```
+
+The adapter requires a canonical episode URL that is present in the site's
+current `free_only=1` feed. It validates the full feed count before Catalog
+yield, skips non-free entries as `unknown`, and bounds viewer initialization,
+rewind, page changes, and native source-body reads. The verified viewer is the
+horizontal RTL mode with a 64-step rewind/normalization cap and a maximum of
+40 pages in the representative run. Other viewer modes, ticket or owned/grant
+states, free-expiry transitions, and unverified works remain unsupported.
 
 `--access-strategy auto|direct|quota` と `--title` / `--author` / `--order` / `--genre` を指定できます。defaultは`auto`で、metadataはfield単位に explicit > Adapter > packaging fallback で解決します。Manga ONEは`auto`/`direct`/`quota`をサポートし、BookWalkerの`direct`/`quota`は未対応です。
 
