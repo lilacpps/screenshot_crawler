@@ -196,6 +196,8 @@ class BatchExecutor:
                 "library_dir": library_dir,
                 "explicit_metadata": candidate.metadata,
             }
+            if candidate.artifact_prefix is not None:
+                package_kwargs["artifact_prefix"] = candidate.artifact_prefix
             if candidate.artifact_disambiguator is not None:
                 package_kwargs["artifact_disambiguator"] = candidate.artifact_disambiguator
             package = self.package_function(

@@ -105,6 +105,22 @@ def test_archive_stem_accepts_generic_order_for_episode_archives() -> None:
     assert (title, genre, order, author) == ("作品名", "漫画", "第01話-前編", None)
 
 
+def test_archive_stem_places_optional_prefix_before_title() -> None:
+    stem, title, genre, order, author = archive_stem(
+        {
+            "title": "作品名",
+            "order": "番外編",
+            "author": "著者",
+            "genre": "漫画",
+        },
+        artifact_prefix="003/",
+        artifact_disambiguator="site-123",
+    )
+
+    assert stem == "003-作品名-番外編-著者-site-123"
+    assert (title, genre, order, author) == ("作品名", "漫画", "番外編", "著者")
+
+
 def test_archive_stem_appends_optional_disambiguator_after_author() -> None:
     stem, title, genre, order, author = archive_stem(
         {
@@ -126,6 +142,15 @@ def test_archive_stem_without_disambiguator_is_unchanged() -> None:
     assert stem == "作品名-第80話"
 
 
+def test_archive_stem_prefix_without_order_is_before_title() -> None:
+    stem, *_ = archive_stem(
+        {"title": "作品名", "genre": "漫画"},
+        artifact_prefix="003",
+    )
+
+    assert stem == "003-作品名"
+
+
 def test_position_prefixed_metadata_names_archive_and_status(tmp_path) -> None:
     crawl_dir = tmp_path / "crawl"
     crawl_dir.mkdir()
@@ -137,14 +162,35 @@ def test_position_prefixed_metadata_names_archive_and_status(tmp_path) -> None:
 
     result = package_crawl_output(
         crawl_dir,
-        {"title": "作品名", "order": "003-番外編", "genre": "漫画"},
+        {"title": "作品名", "order": "番外編", "genre": "漫画"},
+        artifact_prefix="003",
         library_dir=tmp_path / "Books",
     )
 
     assert result.archive_path == (
-        tmp_path / "Books" / "漫画" / "作品名" / "作品名-003-番外編.zip"
+        tmp_path / "Books" / "漫画" / "作品名" / "003-作品名-番外編.zip"
     )
-    assert result.status_path == tmp_path / "crawl-status" / "作品名-003-番外編.json"
+    assert result.status_path == tmp_path / "crawl-status" / "003-作品名-番外編.json"
+
+
+def test_position_prefix_does_not_change_library_directory(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "page-0001.png").write_bytes(b"png")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+
+    result = package_crawl_output(
+        crawl_dir,
+        {"title": "作品名", "order": "第01話", "genre": "漫画"},
+        artifact_prefix="001",
+        library_dir=tmp_path / "Books",
+    )
+
+    assert result.archive_path.parent == tmp_path / "Books" / "漫画" / "作品名"
+    assert not (tmp_path / "Books" / "漫画" / "001-作品名").exists()
 
 
 def test_package_crawl_output_creates_library_tree_and_zip(tmp_path) -> None:

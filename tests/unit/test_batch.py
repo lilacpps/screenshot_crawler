@@ -363,9 +363,10 @@ def test_batch_metadata_uses_source_display_position_for_archive_order(
     assert candidate.metadata == {
         "title": "作品A",
         "author": "作者A",
-        "order": "003-番外編",
+        "order": "番外編",
         "genre": "漫画",
     }
+    assert candidate.artifact_prefix == "003"
 
 
 def test_position_resolves_repeated_label_without_disambiguator(tmp_path: Path) -> None:
@@ -392,10 +393,31 @@ def test_position_resolves_repeated_label_without_disambiguator(tmp_path: Path) 
 
     assert candidates[first_source.id].item_id == first_item.id
     assert candidates[second_source.id].item_id == second_item.id
-    assert candidates[first_source.id].metadata["order"] == "001-おまけ"
-    assert candidates[second_source.id].metadata["order"] == "002-おまけ"
+    assert candidates[first_source.id].metadata["order"] == "おまけ"
+    assert candidates[second_source.id].metadata["order"] == "おまけ"
+    assert candidates[first_source.id].artifact_prefix == "001"
+    assert candidates[second_source.id].artifact_prefix == "002"
     assert candidates[first_source.id].artifact_disambiguator is None
     assert candidates[second_source.id].artifact_disambiguator is None
+
+
+def test_position_prefix_is_separate_when_order_label_is_missing(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    item, source = add_source(
+        service,
+        item=ItemInput(order_label=None),
+        external_id="label-less",
+        access_mode="free",
+        display_position=3,
+        work=WorkInput(work_key="label-less-work", title="作品A"),
+    )
+
+    candidate = plan_for(service).candidates[0]
+
+    assert candidate.item_id == item.id
+    assert candidate.source_id == source.id
+    assert candidate.artifact_prefix == "003"
+    assert "order" not in candidate.metadata
 
 
 def test_null_position_collision_gets_generic_artifact_disambiguator(tmp_path: Path) -> None:
@@ -423,6 +445,8 @@ def test_null_position_collision_gets_generic_artifact_disambiguator(tmp_path: P
     assert candidates[second_source.id].artifact_disambiguator == "mangaone-214987"
     assert candidates[first_source.id].metadata["order"] == "おまけ"
     assert candidates[second_source.id].metadata["order"] == "おまけ"
+    assert candidates[first_source.id].artifact_prefix is None
+    assert candidates[second_source.id].artifact_prefix is None
     assert candidates[first_source.id].item_id == first_item.id
     assert candidates[second_source.id].item_id == second_item.id
 
@@ -447,8 +471,10 @@ def test_magapoke_positioned_repeated_labels_keep_normal_filename(tmp_path: Path
 
     candidates = {candidate.source_id: candidate for candidate in magapoke_plan_for(service).candidates}
 
-    assert candidates[first_source.id].metadata["order"] == "001-番外編"
-    assert candidates[second_source.id].metadata["order"] == "002-番外編"
+    assert candidates[first_source.id].metadata["order"] == "番外編"
+    assert candidates[second_source.id].metadata["order"] == "番外編"
+    assert candidates[first_source.id].artifact_prefix == "001"
+    assert candidates[second_source.id].artifact_prefix == "002"
     assert candidates[first_source.id].artifact_disambiguator is None
     assert candidates[second_source.id].artifact_disambiguator is None
 
@@ -585,8 +611,10 @@ def test_same_position_same_label_collision_gets_generic_suffix(tmp_path: Path) 
 
     candidates = {candidate.source_id: candidate for candidate in plan_for(service).candidates}
 
-    assert candidates[first_source.id].metadata["order"] == "003-番外編"
-    assert candidates[second_source.id].metadata["order"] == "003-番外編"
+    assert candidates[first_source.id].metadata["order"] == "番外編"
+    assert candidates[second_source.id].metadata["order"] == "番外編"
+    assert candidates[first_source.id].artifact_prefix == "003"
+    assert candidates[second_source.id].artifact_prefix == "003"
     assert candidates[first_source.id].artifact_disambiguator == "mangaone-first"
     assert candidates[second_source.id].artifact_disambiguator == "mangaone-second"
 

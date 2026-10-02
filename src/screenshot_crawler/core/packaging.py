@@ -44,6 +44,7 @@ def safe_component(value: str | None, *, fallback: str) -> str:
 def archive_stem(
     metadata: Mapping[str, str | None],
     *,
+    artifact_prefix: str | None = None,
     artifact_disambiguator: str | None = None,
 ) -> tuple[str, str, str, str | None, str | None]:
     """Return ``(stem, title, genre, order, author)`` from adapter metadata.
@@ -59,7 +60,8 @@ def archive_stem(
         order_value = metadata.get("volume")
     order = safe_component(order_value, fallback="") or None
     author = safe_component(metadata.get("author"), fallback="") or None
-    components = [title]
+    prefix = safe_component(artifact_prefix, fallback="") or None
+    components = [component for component in (prefix, title) if component]
     if order:
         components.append(order)
     if author:
@@ -162,6 +164,7 @@ def package_crawl_output(
     *,
     library_dir: str | Path = "output/Books",
     explicit_metadata: Mapping[str, str | None] | None = None,
+    artifact_prefix: str | None = None,
     artifact_disambiguator: str | None = None,
 ) -> PackageResult:
     """Zip a completed crawl and move it into the configured library tree.
@@ -180,6 +183,7 @@ def package_crawl_output(
     resolved_metadata = resolve_output_metadata(explicit_metadata or {}, metadata)
     stem, title, genre, order, author = archive_stem(
         resolved_metadata,
+        artifact_prefix=artifact_prefix,
         artifact_disambiguator=artifact_disambiguator,
     )
     destination_dir = Path(library_dir) / genre / title

@@ -831,12 +831,15 @@ ZIPはlibrary treeへ保存し、completion status JSONを別途残す。ZIP内�
 manifestの`pages[].file`に記載された相対パスをそのまま使い、archive stemの
 top-level directoryは作成しない。
 
-Batch Candidateは必要な場合だけsite-neutralな`artifact_disambiguator`をpackagingへ渡せる。
-これはmetadataの`title` / `order` / `author` / `genre`を変更せず、archive stemの末尾へ追加する。
-Batch Plannerの`order`は`Source.display_position`を使うshared
-`archive_order_component()`から作る。positionがある場合は最小3桁のprefixと
-`Item.order_label`を組み合わせ、labelなしはpositionのみとする。positionがNULLなら
-従来のorder labelを維持し、positionを`order_key`やID等から推測しない。
+Batch Candidateは必要な場合だけsite-neutralな`artifact_prefix`と
+`artifact_disambiguator`をpackagingへ渡せる。`artifact_prefix`はpositionを
+最小3桁で表すarchive filename全体の先頭prefixであり、metadataの`title` /
+`order` / `author` / `genre`を変更しない。Batch Plannerの`order`は生の
+`Item.order_label`を維持し、positionはshared `archive_position_prefix()`で
+`BatchCandidate.artifact_prefix`へ分離する。labelなしはprefixだけになり、
+positionがNULLなら従来のorder labelを維持し、positionを`order_key`やID等から
+推測しない。Core packagingのprefixはarchive/status stemだけに作用し、library
+directoryは従来どおりgenre/titleである。
 Plannerはsite-scoped snapshotの全status Item/Sourceを対象に、既存の
 `archive_stem()`でsanitized base stemを比較する。同一Work内でdistinct Item IDが
 衝突するgroupのSourceだけへ`{site}-{Source.external_id}`を設定し、同一Itemの複数
@@ -1101,7 +1104,7 @@ Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request
 - metadata未指定なら現行Adapter自動取得を維持する
 - crawl + packaging成功時だけArtifact(present)、CrawlRun(succeeded)、Item(completed)を1 transactionで確定
 
-Phase 5AのBatch Plannerは `pending` itemだけを対象にし、completed / unavailable / paid / unknownをskipする。source priorityは期限付きfree、通常free、owned、quota、paid/unknownの順で、同順位はsource.id ASC。複数のquota-consuming candidateが新規枠を必要とする場合、quota仮予約の順序は`source.discovery_key`ごとのDiscovery groupをgroup内最小source.id（Catalog登録順）で並べ、group内を`order_key`のnatural orderで並べる。`order_key`を解釈できない場合は`order_label`、最後にitem.idのstable fallbackを使う。`discovery_key = NULL`のcandidateは明示groupの後ろに置く。free、owned、active grant中のquota sourceはdirectのままでこのquota allocation順序に入らない。Catalog metadataは`Work.title -> title`、`Work.author -> author`、`Work.genre -> genre`を従来どおり写し、`order`だけは`archive_order_component(Item.order_label, Source.display_position)`で作る。positionがある場合は最小3桁の`position-label`（labelなしはpositionのみ）、NULLの場合は従来の`order_label`（両方NULLなら省略）とし、`order_key`やIDから補完しない。Batch Plannerはsite-scoped snapshotの全status Item/Sourceを対象に、`archive_stem()`後のsanitized base stemを同一Work内で比較し、distinct Item IDが複数のgroupだけへ`{site}-{Source.external_id}`を設定する。同一Itemの複数Sourceはcollision扱いしない。Manga ONE/Magapoke固有のsuffix workaroundは廃止した。
+Phase 5AのBatch Plannerは `pending` itemだけを対象にし、completed / unavailable / paid / unknownをskipする。source priorityは期限付きfree、通常free、owned、quota、paid/unknownの順で、同順位はsource.id ASC。複数のquota-consuming candidateが新規枠を必要とする場合、quota仮予約の順序は`source.discovery_key`ごとのDiscovery groupをgroup内最小source.id（Catalog登録順）で並べ、group内を`order_key`のnatural orderで並べる。`order_key`を解釈できない場合は`order_label`、最後にitem.idのstable fallbackを使う。`discovery_key = NULL`のcandidateは明示groupの後ろに置く。free、owned、active grant中のquota sourceはdirectのままでこのquota allocation順序に入らない。Catalog metadataは`Work.title -> title`、`Work.author -> author`、`Work.genre -> genre`、`Item.order_label -> order`を従来どおり写し、positionは`archive_position_prefix(Source.display_position) -> artifact_prefix`へ分離する。positionがある場合は最小3桁のfilename prefix、NULLの場合はprefixなしとし、`order_key`やIDから補完しない。Batch Plannerはsite-scoped snapshotの全status Item/Sourceを対象に、`archive_stem()`後のsanitized base stemを同一Work内で比較し、distinct Item IDが複数のgroupだけへ`{site}-{Source.external_id}`を設定する。同一Itemの複数Sourceはcollision扱いしない。Manga ONE/Magapoke固有のsuffix workaroundは廃止した。
 
 Manga ONE Policyはsite-wide local quotaを4枠、09:00/21:00 JSTのhalf-open window、24時間grantとして扱う。current window内の`quota_started_at`だけを数え、active grant（`access_granted_until > now`）はdirectでslotを減らさない。quota candidateはplanner内だけで仮予約し、Catalogは変更しない。手動・外部clientの実消費はCatalogから観測できない。
 

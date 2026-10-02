@@ -14,7 +14,7 @@ from screenshot_crawler.batch.models import (
 )
 from screenshot_crawler.batch.naming import (
     archive_metadata_for_catalog,
-    archive_order_component,
+    archive_position_prefix,
     catalog_archive_stem,
     collision_source_ids,
 )
@@ -33,7 +33,7 @@ __all__ = [
     "CandidateExecutionError",
     "GrantOnlyExecutionResult",
     "archive_metadata_for_catalog",
-    "archive_order_component",
+    "archive_position_prefix",
     "catalog_archive_stem",
     "collision_source_ids",
 ]

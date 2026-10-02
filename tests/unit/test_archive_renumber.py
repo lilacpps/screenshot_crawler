@@ -105,7 +105,7 @@ def test_shared_catalog_stem_matches_position_and_author_rule(tmp_path: Path) ->
         author="作者",
         display_position=3,
     )
-    assert catalog_archive_stem(work, item, source) == "作品名-003-番外編-作者"
+    assert catalog_archive_stem(work, item, source) == "003-作品名-番外編-作者"
 
 
 def test_current_selection_uses_newest_successful_run_with_archive(tmp_path: Path) -> None:
@@ -210,7 +210,7 @@ def test_locator_is_the_only_old_path_authority_and_matching_status_is_updated(t
 
     plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=status_dir)
     entry = plan.entries[0]
-    assert entry.new_path == old.parent / "作品名-003-番外編-作者.zip"
+    assert entry.new_path == old.parent / "003-作品名-番外編-作者.zip"
     result = apply_archive_renumber_plan(plan)
 
     assert result.error is None
@@ -228,6 +228,45 @@ def test_locator_is_the_only_old_path_authority_and_matching_status_is_updated(t
     assert updated.byte_size == 9
     assert catalog.get_item(item.id).status == "pending"
     assert work.title == "作品名"
+
+
+def test_reapplies_p4_to_archive_with_position_inside_legacy_stem(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    _work, item, source, target = _make_source(
+        catalog,
+        tmp_path,
+        title="獣王と薬草",
+        order_label="第01話",
+        display_position=1,
+    )
+    old = tmp_path / "獣王と薬草-001-第01話.zip"
+    _, artifact = _add_archive(catalog, item.id, source.id, target.id, old)
+    status_dir = tmp_path / "crawl-status"
+    status_path = status_dir / f"{old.stem}.json"
+    atomic_write_json(
+        status_path,
+        {"status": "completed", "archive_path": old.as_posix(), "keep": True},
+    )
+
+    plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=status_dir)
+    entry = plan.entries[0]
+    assert entry.status == "RENAME"
+    assert entry.new_path == tmp_path / "001-獣王と薬草-第01話.zip"
+
+    result = apply_archive_renumber_plan(plan)
+
+    assert result.error is None
+    assert not old.exists()
+    assert entry.new_path.is_file()
+    assert not status_path.exists()
+    assert entry.new_status_path is not None and entry.new_status_path.is_file()
+    status = json.loads(entry.new_status_path.read_text(encoding="utf-8"))
+    assert status == {
+        "status": "completed",
+        "archive_path": entry.new_path.as_posix(),
+        "keep": True,
+    }
+    assert catalog.get_artifact(artifact.id).locator == entry.new_path.as_posix()
 
 
 def test_dry_run_does_not_change_zip_status_catalog_or_mtime(tmp_path: Path) -> None:
@@ -297,7 +336,7 @@ def test_swap_uses_two_stage_rename(tmp_path: Path) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(WorkInput(work_key="swap", title="作品" , genre="漫画"))
     rows = []
-    desired_names = ("作品-001-A.zip", "作品-002-B.zip")
+    desired_names = ("001-作品-A.zip", "002-作品-B.zip")
     for label, external_id, position in (("A", "a", 1), ("B", "b", 2)):
         item = catalog.create_item(ItemInput(item_title=label, order_label=label), work_id=work.id)
         source = catalog.create_source(
@@ -331,7 +370,7 @@ def test_external_collision_skips_without_overwrite(tmp_path: Path) -> None:
     _, item, source, target = _make_source(catalog, tmp_path)
     old = tmp_path / "legacy.zip"
     _, artifact = _add_archive(catalog, item.id, source.id, target.id, old)
-    target_path = tmp_path / "作品名-003-番外編.zip"
+    target_path = tmp_path / "003-作品名-番外編.zip"
     target_path.write_bytes(b"do not overwrite")
 
     plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=tmp_path / "status")
@@ -381,7 +420,7 @@ def test_matching_status_target_collision_blocks_zip_rename(tmp_path: Path) -> N
     _add_archive(catalog, item.id, source.id, target.id, old)
     status_dir = tmp_path / "status"
     atomic_write_json(status_dir / "legacy.json", {"archive_path": old.as_posix(), "keep": True})
-    target_status = status_dir / "作品名-003-番外編.json"
+    target_status = status_dir / "003-作品名-番外編.json"
     atomic_write_json(target_status, {"archive_path": "unrelated.zip", "keep": False})
 
     plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=status_dir)
@@ -508,9 +547,9 @@ def test_collision_dependency_marks_both_entries_as_collision(tmp_path: Path) ->
         rows[1][0].id,
         rows[1][1].id,
         rows[1][2].id,
-        tmp_path / "作品-001-b.zip",
+        tmp_path / "001-作品-b.zip",
     )
-    blocked = tmp_path / "作品-002-blocked.zip"
+    blocked = tmp_path / "002-作品-blocked.zip"
     blocked.write_bytes(b"non-participating")
 
     plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=tmp_path / "status")

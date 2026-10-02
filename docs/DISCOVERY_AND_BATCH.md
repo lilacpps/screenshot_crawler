@@ -1436,11 +1436,14 @@ BatchCandidateはCatalog identityとして`item_id`、`source_id`、`target_id`�
 `locator`を既存Crawlerの`RunConfig.source_url`へ変換する。
 
 BatchCandidateは必要な場合だけ、Crawlerのmetadataとは別のpackaging-onlyな
-`artifact_disambiguator`を持てる。これはarchive filenameとcompletion status filenameの
-suffixに使うが、ZIP内部の画像パス、`title` / `order`等のmetadataやCatalogの`order_label`は変更しない。
-Batch Plannerの`order`は`Source.display_position`と`Item.order_label`からshared
-`archive_order_component()`で作る。positionは最小3桁のprefixで、labelなしはpositionのみ、
-position=NULLは従来のlabelを使い、`order_key`・ID・title等から推測しない。Plannerは
+`artifact_prefix`と`artifact_disambiguator`を持てる。`artifact_prefix`は
+`Source.display_position`を最小3桁で表すarchive filename全体の先頭prefixであり、
+`artifact_disambiguator`はarchive filenameとcompletion status filenameのsuffixに使う。
+どちらもZIP内部の画像パス、`title` / `order`等のmetadataやCatalogの`order_label`は変更しない。
+Batch Plannerの`metadata["order"]`は生の`Item.order_label`を維持し、positionはshared
+`archive_position_prefix()`で`artifact_prefix`へ分離する。labelなしはprefixのみ、
+position=NULLはprefixなしで従来のlabelを使い、`order_key`・ID・title等から推測しない。
+Core packagingのprefixはarchive/status stemだけに適用し、library directoryはgenre/titleのままにする。Plannerは
 site-scoped snapshotの全status Item/Sourceを対象に、`archive_stem()`後のsanitized base
 stemを同一Work内で比較する。distinct Item IDが2件以上のcollision groupに属するSourceだけへ
 `{site}-{Source.external_id}`を設定し、同一Itemの複数Sourceはcollision扱いしない。これは
@@ -1749,14 +1752,17 @@ remain unchanged.
 
 ### Batch archive naming contract (P3 implemented)
 
-Batch output metadata uses the shared `archive_order_component()` helper. For a
-non-NULL `display_position`, the order is `{position:03d}-{order_label}` or the
-position alone when the label is NULL; three digits are a minimum width. For a
-NULL position, the existing `order_label` is preserved and no value is inferred
-from `order_key`, IDs, title text, or numeric parsing. The existing Core
-`archive_stem()` / `safe_component()` remains the final sanitization authority,
-so a new positioned crawl naturally uses the same stem for its ZIP and
-`crawl-status/<stem>.json` sidecar.
+Batch output uses the shared `archive_position_prefix()` helper. For a non-NULL
+`display_position`, `artifact_prefix` is `{position:03d}` and `metadata["order"]`
+remains the raw `order_label`; a NULL position passes no prefix and preserves
+the legacy order label. No value is inferred from `order_key`, IDs, title text,
+or numeric parsing. Core `archive_stem()` / `safe_component()` remains the
+final sanitization authority and assembles components in this order:
+`artifact_prefix -> title -> order -> author -> optional disambiguator`.
+Therefore a positioned crawl uses the same desired stem for its ZIP and
+`crawl-status/<stem>.json` sidecar, for example
+`003-作品名-番外編.zip`. The prefix does not change the `genre/title`
+library directory.
 
 Within one site planning snapshot, collision detection compares the sanitized
 base stem without a disambiguator, grouped by Work and base stem, across all

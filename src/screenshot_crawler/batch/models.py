@@ -51,6 +51,7 @@ class BatchCandidate:
     quota_scope: Literal["site", "work"] = "site"
     quota_limit: int | None = None
     quota_commit_mode: Literal["before_run", "after_observed_consumption"] = "before_run"
+    artifact_prefix: str | None = None
     artifact_disambiguator: str | None = None
     external_id: str = ""
     work_id: int | None = None

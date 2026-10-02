@@ -9,41 +9,22 @@ from screenshot_crawler.catalog.models import Item, Source, Work
 from screenshot_crawler.core.packaging import archive_stem
 
 
-def archive_order_component(
-    *,
-    order_label: str | None,
-    display_position: int | None,
-) -> str | None:
-    """Return the desired archive order component.
+def archive_position_prefix(display_position: int | None) -> str | None:
+    """Return a display position as the optional archive filename prefix."""
 
-    A known display position is the ordering authority and is rendered with a
-    minimum width of three digits.  The label is deliberately left otherwise
-    untouched; Windows filename sanitization remains the responsibility of
-    :func:`screenshot_crawler.core.packaging.safe_component`.
-    """
-
-    if display_position is not None:
-        prefix = f"{display_position:03d}"
-        if order_label is not None and order_label.strip():
-            return f"{prefix}-{order_label}"
-        return prefix
-    if order_label is not None and order_label.strip():
-        return order_label
-    return None
+    if display_position is None:
+        return None
+    return f"{display_position:03d}"
 
 
 def archive_metadata_for_catalog(work: Work, item: Item, source: Source) -> dict[str, str]:
     """Build the packaging metadata used by both Batch and archive renumbering."""
 
-    order = archive_order_component(
-        order_label=item.order_label,
-        display_position=source.display_position,
-    )
     metadata: dict[str, str] = {}
     for field_name, value in (
         ("title", work.title),
         ("author", work.author),
-        ("order", order),
+        ("order", item.order_label),
         ("genre", work.genre),
     ):
         if value is not None and value.strip():
@@ -62,6 +43,7 @@ def catalog_archive_stem(
 
     stem, *_ = archive_stem(
         archive_metadata_for_catalog(work, item, source),
+        artifact_prefix=archive_position_prefix(source.display_position),
         artifact_disambiguator=artifact_disambiguator,
     )
     return stem

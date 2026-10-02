@@ -14,7 +14,7 @@ from screenshot_crawler.batch.models import (
     BatchPlanningError,
     BatchSkipped,
 )
-from screenshot_crawler.batch.naming import archive_metadata_for_catalog
+from screenshot_crawler.batch.naming import archive_metadata_for_catalog, archive_position_prefix
 from screenshot_crawler.batch.naming import collision_source_ids as shared_collision_source_ids
 from screenshot_crawler.catalog import (
     CatalogError,
@@ -254,6 +254,7 @@ def _candidate_from_selection(
         locator=selection.target.locator,
         access_strategy=decision.access_strategy,
         metadata=_metadata(selection.work, item, source),
+        artifact_prefix=archive_position_prefix(source.display_position),
         artifact_disambiguator=(
             f"{source.site}-{source.external_id}"
             if source.id in collision_source_ids

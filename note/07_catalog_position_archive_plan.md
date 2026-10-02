@@ -258,10 +258,13 @@ The next successful full Discovery is authoritative and may correct all position
 
 ### 7.1 New order component
 
-For an episode Source with a known display position, Batch output metadata must use:
+For an episode Source with a known display position, Batch keeps the position
+separate from the ordinary output metadata and passes it as an optional archive
+filename prefix:
 
 ```text
-{display_position:03d}-{order_label}
+artifact_prefix = {display_position:03d}
+metadata["order"] = order_label
 ```
 
 Examples:
@@ -276,17 +279,25 @@ Examples:
 
 Three digits are a minimum width, not a maximum.
 
-The existing package stem structure remains generic:
+The generic package stem component order is:
 
 ```text
-title-order-author[-artifact_disambiguator].zip
+artifact_prefix-title-order-author[-artifact_disambiguator].zip
 ```
 
 Example:
 
 ```text
-作品名-003-番外編.zip
+003-作品名-番外編.zip
 ```
+
+`artifact_prefix` is applied only to the archive/status filename stem. The
+library directory remains `genre/title`, so a position never creates a
+`001-作品名` directory. `archive_position_prefix()` is the shared primitive
+for converting a nullable `display_position` to the minimum-three-digit
+prefix. `archive_metadata_for_catalog()` keeps `order` as the raw
+`Item.order_label`; NULL position therefore retains the legacy
+`title-order-author` fallback without inference.
 
 ### 7.2 NULL position
 
@@ -604,16 +615,16 @@ part of the tested P4 maintenance implementation.
 IMPLEMENTED.
 
 - `src/screenshot_crawler/batch/naming.py` provides shared Catalog naming
-  helpers (`archive_order_component()`, `archive_metadata_for_catalog()`,
+  helpers (`archive_position_prefix()`, `archive_metadata_for_catalog()`,
   `catalog_archive_stem()`, and `collision_source_ids()`) for Batch and P4.
-  A non-NULL position is formatted with
-  minimum width three and combined with the raw order label; a position without
-  a label becomes the position alone. NULL position preserves the legacy label
-  fallback, and no order/title/id/identifier parsing is performed.
-- Batch Planner passes the Source-aware order component into
+  A non-NULL position is formatted as a minimum-three-digit filename prefix;
+  NULL position preserves the legacy label fallback, and no order/title/id/
+  identifier parsing is performed.
+- Batch Planner passes `Source.display_position` as
+  `BatchCandidate.artifact_prefix` and keeps the raw `Item.order_label` in
   `BatchCandidate.metadata["order"]`; title, author, and genre keep their
-  existing Work metadata mapping. This changes archive and new crawl-status
-  names naturally through the existing generic packaging flow.
+  existing Work metadata mapping. The Core packaging prefix affects only the
+  archive/status stem, not the library directory.
 - Generic collision detection uses the site-scoped planning snapshot across all
   Item statuses. It compares `archive_stem()` output without a disambiguator,
   grouped by `(Work.id, sanitized base stem)`, and marks a group only when it
@@ -673,6 +684,10 @@ IMPLEMENTED.
   cannot complete, `RECOVERY_REQUIRED` includes artifact, old/new/current/temp,
   and status paths. P5 real Catalog/output rollout and live verification are
   not performed by this implementation.
+- Because the old path authority remains `Artifact.locator`, P4 can be applied
+  again to archives produced by an earlier P4 naming rule, for example
+  `作品名-001-第01話.zip` -> `001-作品名-第01話.zip`, including a matching
+  crawl-status JSON sidecar.
 
 ### P5 - Real DB rollout / documentation cleanup
 

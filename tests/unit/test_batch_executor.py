@@ -95,7 +95,9 @@ def make_executor(
     fail_package: bool = False,
     missing_archive: bool = False,
     configs: list[RunConfig] | None = None,
-    package_calls: list[tuple[dict[str, str], dict[str, str], str | None]] | None = None,
+    package_calls: list[
+        tuple[dict[str, str], dict[str, str], str | None, str | None]
+    ] | None = None,
     before_run: Callable[[RunConfig], None] | None = None,
 ) -> BatchExecutor:
     policies = SitePolicyRegistry()
@@ -116,12 +118,15 @@ def make_executor(
         *,
         library_dir: str | Path,
         explicit_metadata: dict[str, str],
+        artifact_prefix: str | None = None,
         artifact_disambiguator: str | None = None,
     ) -> PackageResult:
         if fail_package:
             raise RuntimeError("packaging failed")
         if package_calls is not None:
-            package_calls.append((metadata, explicit_metadata, artifact_disambiguator))
+            package_calls.append(
+                (metadata, explicit_metadata, artifact_prefix, artifact_disambiguator)
+            )
         suffix = f"-{artifact_disambiguator}" if artifact_disambiguator else ""
         archive_path = Path(library_dir) / "漫画" / "作品A" / f"archive{suffix}.zip"
         if not missing_archive:
@@ -242,10 +247,13 @@ async def test_artifact_disambiguator_is_forwarded_to_packaging(
     tmp_path: Path,
 ) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
-    package_calls: list[tuple[dict[str, str], dict[str, str], str | None]] = []
+    package_calls: list[
+        tuple[dict[str, str], dict[str, str], str | None, str | None]
+    ] = []
     candidate = replace(
         add_candidate(service, access_mode="free"),
-        metadata={"title": "作品A", "order": "003-番外編"},
+        metadata={"title": "作品A", "order": "番外編"},
+        artifact_prefix="003",
         artifact_disambiguator="mangaone-214131",
     )
     executor = make_executor(service, package_calls=package_calls)
@@ -264,7 +272,8 @@ async def test_artifact_disambiguator_is_forwarded_to_packaging(
     assert package_calls == [
         (
             {"title": "Adapter title", "genre": "漫画"},
-            {"title": "作品A", "order": "003-番外編"},
+            {"title": "作品A", "order": "番外編"},
+            "003",
             "mangaone-214131",
         )
     ]
