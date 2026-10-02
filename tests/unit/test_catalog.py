@@ -43,13 +43,13 @@ def make_graph(service: CatalogService):
     return work, item, source, target
 
 
-def test_initialize_creates_v5_tables_indexes_and_foreign_keys(tmp_path: Path) -> None:
+def test_initialize_creates_v6_tables_indexes_and_foreign_keys(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     service = CatalogService(path)
     service.initialize()
 
-    assert SCHEMA_VERSION == 5
-    assert service.schema_version() == 5
+    assert SCHEMA_VERSION == 6
+    assert service.schema_version() == 6
     with service._connection() as connection:
         tables = {
             row[0]
@@ -68,6 +68,8 @@ def test_initialize_creates_v5_tables_indexes_and_foreign_keys(tmp_path: Path) -
         assert "target_key" in target_columns
         source_columns = {row[1] for row in connection.execute("PRAGMA table_info(sources)")}
         assert "published_at" in source_columns
+        assert "display_position" in source_columns
+        assert "note" in item_columns
         indexes = {
             row[1]
             for row in connection.execute("PRAGMA index_list(items)")
@@ -239,6 +241,117 @@ def test_mark_item_pending_clears_completion_timestamp(tmp_path: Path) -> None:
     assert pending.updated_at >= completed.updated_at
     with pytest.raises(CatalogNotFoundError):
         service.mark_item_pending(999)
+
+
+@pytest.mark.parametrize("status", ["pending", "completed", "skipped", "external"])
+def test_item_statuses_are_supported(tmp_path: Path, status: str) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(ItemInput(status=status), work_id=work.id)
+
+    assert item.status == status
+    assert item.completed_at is None
+
+
+def test_item_status_transitions_enforce_completed_at_semantics(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(work_id=work.id)
+
+    completed = service.mark_item_completed(
+        item.id, completed_at="2026-09-17T12:00:00+09:00"
+    )
+    assert completed.completed_at == "2026-09-17T12:00:00+09:00"
+    for status in ("pending", "skipped", "external"):
+        changed = service.set_item_status(item.id, status)
+        assert changed.status == status
+        assert changed.completed_at is None
+        completed = service.mark_item_completed(item.id)
+        assert completed.completed_at is not None
+
+
+def test_item_note_set_update_clear_does_not_change_status_or_completion(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(work_id=work.id)
+    completed = service.mark_item_completed(
+        item.id, completed_at="2026-09-17T12:00:00+09:00"
+    )
+
+    updated = service.update_item_note(item.id, "vertical-scroll; intentionally unsupported")
+    assert updated.note == "vertical-scroll; intentionally unsupported"
+    assert updated.status == completed.status
+    assert updated.completed_at == completed.completed_at
+
+    replaced = service.set_item_note(item.id, "already archived manually")
+    assert replaced.note == "already archived manually"
+    assert replaced.status == completed.status
+    assert replaced.completed_at == completed.completed_at
+
+    cleared = service.clear_item_note(item.id)
+    assert cleared.note is None
+    assert cleared.status == completed.status
+    assert cleared.completed_at == completed.completed_at
+
+
+@pytest.mark.parametrize("value", [0, -1, True, False, 1.5, "1"])
+def test_display_position_rejects_non_positive_or_non_integer_values(
+    tmp_path: Path, value: object
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(work_id=work.id)
+
+    with pytest.raises(CatalogValidationError, match="display_position"):
+        service.create_source(
+            SourceInput(site="site", external_id=f"source-{value!s}", display_position=value),  # type: ignore[arg-type]
+            item_id=item.id,
+        )
+
+
+@pytest.mark.parametrize("value", [None, 1, 2, 1000])
+def test_display_position_accepts_null_and_positive_integers(
+    tmp_path: Path, value: int | None
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(work_id=work.id)
+    source = service.create_source(
+        SourceInput(site="site", external_id=f"source-{value}", display_position=value),
+        item_id=item.id,
+    )
+
+    assert source.display_position == value
+
+    updated = service.update_source_external_state(
+        "site", source.external_id, display_position=2
+    )
+    assert updated.display_position == 2
+    cleared = service.update_source_external_state(
+        "site", source.external_id, display_position=None
+    )
+    assert cleared.display_position is None
+
+
+def test_v6_sqlite_checks_reject_invalid_status_and_display_position(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="w", title="Work"))
+    item = service.create_item(work_id=work.id)
+    source = service.create_source(
+        SourceInput(site="site", external_id="source"), item_id=item.id
+    )
+
+    with service._connection() as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("UPDATE items SET status = 'running' WHERE id = ?", (item.id,))
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE sources SET display_position = 0 WHERE id = ?", (source.id,)
+            )
 
 
 def test_source_identity_external_state_quota_and_reconciliation(tmp_path: Path) -> None:
@@ -576,7 +689,7 @@ def test_timestamps_require_aware_datetime_and_normalize_to_jst() -> None:
         format_timestamp(datetime.fromisoformat("2026-09-17T12:00:00"))
 
 
-@pytest.mark.parametrize("version", [1, 2, 99])
+@pytest.mark.parametrize("version", [1, 2, 5, 99])
 def test_unsupported_schema_versions_are_rejected_without_mutation(
     tmp_path: Path, version: int
 ) -> None:

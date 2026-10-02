@@ -13,12 +13,13 @@ from screenshot_crawler.catalog.service import CatalogError, format_timestamp, n
 
 Migration = Callable[[sqlite3.Connection], None]
 
+
 def migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
     connection.execute("ALTER TABLE sources ADD COLUMN published_at TEXT")
 
 
 def migrate_v4_to_v5(connection: sqlite3.Connection) -> None:
-    connection.executescript(
+    connection.execute(
         """
         CREATE TABLE quota_resource_states (
             id INTEGER PRIMARY KEY,
@@ -29,16 +30,64 @@ def migrate_v4_to_v5(connection: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(work_id, site, resource)
-        );
-        CREATE INDEX idx_quota_resource_states_work_id
-            ON quota_resource_states(work_id);
-        CREATE INDEX idx_quota_resource_states_site_resource
-            ON quota_resource_states(site, resource);
+        )
         """
+    )
+    connection.execute(
+        "CREATE INDEX idx_quota_resource_states_work_id ON quota_resource_states(work_id)"
+    )
+    connection.execute(
+        "CREATE INDEX idx_quota_resource_states_site_resource "
+        "ON quota_resource_states(site, resource)"
     )
 
 
-MIGRATIONS: dict[int, Migration] = {3: migrate_v3_to_v4, 4: migrate_v4_to_v5}
+def migrate_v5_to_v6(connection: sqlite3.Connection) -> None:
+    """Add v6 metadata and rebuild Items for the expanded status CHECK."""
+
+    connection.execute(
+        "ALTER TABLE sources ADD COLUMN display_position INTEGER NULL "
+        "CHECK(display_position IS NULL OR display_position >= 1)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE items_v6_new (
+            id INTEGER PRIMARY KEY,
+            work_id INTEGER NOT NULL REFERENCES works(id),
+            item_title TEXT,
+            kind TEXT,
+            order_key TEXT,
+            order_label TEXT,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending', 'completed', 'skipped', 'external')),
+            completed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            note TEXT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO items_v6_new (
+            id, work_id, item_title, kind, order_key, order_label, status,
+            completed_at, created_at, updated_at, note
+        )
+        SELECT id, work_id, item_title, kind, order_key, order_label, status,
+               completed_at, created_at, updated_at, NULL
+        FROM items;
+        """
+    )
+    connection.execute("DROP TABLE items")
+    connection.execute("ALTER TABLE items_v6_new RENAME TO items")
+    connection.execute("CREATE INDEX idx_items_work_id ON items(work_id)")
+
+
+MIGRATIONS: dict[int, Migration] = {
+    3: migrate_v3_to_v4,
+    4: migrate_v4_to_v5,
+    5: migrate_v5_to_v6,
+}
 
 
 class CatalogMigrationError(CatalogError):
@@ -101,6 +150,10 @@ def _run_migrations(
     backup_result = None
     try:
         connection = sqlite3.connect(catalog_path)
+        # The table rebuild temporarily drops the referenced Items table. Runtime
+        # connections enable foreign keys; the migration validates the graph
+        # before commit and leaves the migrated database ready for those connections.
+        connection.execute("PRAGMA foreign_keys = OFF")
         connection.execute("BEGIN IMMEDIATE")
         try:
             backup_result = backup_catalog(catalog_path, backup_path)
@@ -117,6 +170,7 @@ def _run_migrations(
             connection.execute(f"PRAGMA user_version = {version}")
         _quick_check(connection, catalog_path)
         final_validator(connection)
+        _validate_foreign_keys(connection, catalog_path)
         connection.commit()
     except Exception as exc:
         if connection is not None:
@@ -218,6 +272,14 @@ def _quick_check(connection: sqlite3.Connection, catalog_path: Path) -> None:
     if result != "ok":
         raise CatalogMigrationError(
             f"Catalog quick_check failed for '{catalog_path}': {result}"
+        )
+
+
+def _validate_foreign_keys(connection: sqlite3.Connection, catalog_path: Path) -> None:
+    violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise CatalogMigrationError(
+            f"Catalog foreign_key_check failed for '{catalog_path}': {violations[0]}"
         )
 
 

@@ -320,9 +320,22 @@ def _parser() -> argparse.ArgumentParser:
     )
     catalog_item_status.add_argument("item_id", type=_positive_int)
     catalog_item_status.add_argument(
-        "status", nargs="?", choices=("pending", "completed")
+        "status", nargs="?", choices=("pending", "completed", "skipped", "external")
     )
     catalog_item_status.add_argument(
+        "--catalog",
+        type=Path,
+        default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    catalog_item_note = catalog_subparsers.add_parser(
+        "item-note", help="Show or change a Catalog item's operator note"
+    )
+    catalog_item_note.add_argument("item_id", type=_positive_int)
+    note_group = catalog_item_note.add_mutually_exclusive_group()
+    note_group.add_argument("note", nargs="?", help="New note text")
+    note_group.add_argument("--clear", action="store_true", help="Clear the note")
+    catalog_item_note.add_argument(
         "--catalog",
         type=Path,
         default=Path("catalog.sqlite"),
@@ -950,15 +963,22 @@ def _run_catalog(args: argparse.Namespace) -> None:
             print(f"  backup: {result.backup_path}")
     elif args.catalog_action == "item-status":
         service = CatalogService(args.catalog)
-        if args.status == "completed":
-            item = service.mark_item_completed(args.item_id)
-        elif args.status == "pending":
-            item = service.mark_item_pending(args.item_id)
+        if args.status is not None:
+            item = service.set_item_status(args.item_id, args.status)
         else:
             item = service.get_item(args.item_id)
         print(
             f"item={item.id} status={item.status} completed_at={item.completed_at}"
         )
+    elif args.catalog_action == "item-note":
+        service = CatalogService(args.catalog)
+        if args.clear:
+            item = service.clear_item_note(args.item_id)
+        elif args.note is not None:
+            item = service.set_item_note(args.item_id, args.note)
+        else:
+            item = service.get_item(args.item_id)
+        print(f"item={item.id} note={item.note}")
 
 
 def _print_batch_plan(

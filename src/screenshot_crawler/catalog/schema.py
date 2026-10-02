@@ -1,10 +1,11 @@
-"""SQLite Catalog schema and version guard."""
+"""SQLite Catalog v6 schema and version guard."""
 
 from __future__ import annotations
 
+import re
 import sqlite3
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA_SQL = """
 CREATE TABLE works (
@@ -25,10 +26,11 @@ CREATE TABLE items (
     order_key TEXT,
     order_label TEXT,
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'completed')),
+        CHECK (status IN ('pending', 'completed', 'skipped', 'external')),
     completed_at TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    note TEXT NULL
 );
 
 CREATE TABLE sources (
@@ -49,6 +51,8 @@ CREATE TABLE sources (
     published_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    display_position INTEGER NULL
+        CHECK(display_position IS NULL OR display_position >= 1),
     UNIQUE(site, external_id)
 );
 
@@ -138,12 +142,12 @@ _REQUIRED_COLUMNS = {
     "works": {"id", "work_key", "title", "author", "genre", "created_at", "updated_at"},
     "items": {
         "id", "work_id", "item_title", "kind", "order_key", "order_label", "status",
-        "completed_at", "created_at", "updated_at",
+        "completed_at", "created_at", "updated_at", "note",
     },
     "sources": {
         "id", "item_id", "site", "external_id", "discovery_key", "access_mode",
         "free_until", "available", "access_checked_at", "last_seen_at", "quota_started_at",
-        "access_granted_until", "published_at", "created_at", "updated_at",
+        "access_granted_until", "published_at", "created_at", "updated_at", "display_position",
     },
     "source_targets": {
         "id", "source_id", "backend", "target_key", "locator", "priority", "enabled",
@@ -178,7 +182,7 @@ def user_version(connection: sqlite3.Connection) -> int:
 
 
 def validate_existing_schema(connection: sqlite3.Connection) -> None:
-    """Validate an existing v5 schema without creating or changing anything."""
+    """Validate an existing v6 schema without creating or changing anything."""
 
     version = user_version(connection)
     if version != SCHEMA_VERSION:
@@ -195,7 +199,7 @@ def validate_existing_schema(connection: sqlite3.Connection) -> None:
     missing_tables = set(_REQUIRED_COLUMNS) - tables
     if missing_tables:
         raise SchemaError(
-            f"Catalog schema version 5 is missing table(s): {', '.join(sorted(missing_tables))}"
+            f"Catalog schema version 6 is missing table(s): {', '.join(sorted(missing_tables))}"
         )
 
     for table, required_columns in _REQUIRED_COLUMNS.items():
@@ -203,19 +207,32 @@ def validate_existing_schema(connection: sqlite3.Connection) -> None:
         missing_columns = required_columns - columns
         if missing_columns:
             raise SchemaError(
-                f"Catalog schema version 5 is missing {table} column(s): "
+                f"Catalog schema version 6 is missing {table} column(s): "
                 f"{', '.join(sorted(missing_columns))}"
             )
         forbidden_columns = _FORBIDDEN_COLUMNS.get(table, set()) & columns
         if forbidden_columns:
             raise SchemaError(
-                f"Catalog schema version 5 has removed {table} column(s): "
+                f"Catalog schema version 6 has removed {table} column(s): "
                 f"{', '.join(sorted(forbidden_columns))}"
             )
 
+    _require_check_constraint(
+        connection,
+        "items",
+        "check(statusin('pending','completed','skipped','external'))",
+        "items.status",
+    )
+    _require_check_constraint(
+        connection,
+        "sources",
+        "check(display_positionisnullordisplay_position>=1)",
+        "sources.display_position",
+    )
+
 
 def initialize(connection: sqlite3.Connection) -> None:
-    """Create v5 or validate it; never migrate an existing schema."""
+    """Create v6 or validate it; never migrate an existing schema."""
 
     version = user_version(connection)
     if version not in (0, SCHEMA_VERSION):
@@ -238,3 +255,20 @@ def initialize(connection: sqlite3.Connection) -> None:
 
     connection.executescript(SCHEMA_SQL)
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _require_check_constraint(
+    connection: sqlite3.Connection,
+    table: str,
+    expected: str,
+    field: str,
+) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    sql = "" if row is None or row[0] is None else row[0]
+    normalized = re.sub(r"\s+", "", sql).casefold()
+    if expected not in normalized:
+        raise SchemaError(
+            f"Catalog schema version 6 has an invalid {field} CHECK constraint"
+        )

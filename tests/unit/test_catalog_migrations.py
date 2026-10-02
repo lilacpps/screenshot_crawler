@@ -20,15 +20,15 @@ def make_database(path: Path, *, version: int = 3, value: str = "before") -> Non
         connection.execute(f"PRAGMA user_version = {version}")
 
 
-def test_current_v5_migration_is_noop_without_backup(tmp_path: Path) -> None:
+def test_current_v6_migration_is_noop_without_backup(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     CatalogService(path).initialize()
     before = path.read_bytes()
 
     result = migrate_catalog(path, backup_dir=tmp_path / "backup")
 
-    assert result.from_version == 5
-    assert result.to_version == 5
+    assert result.from_version == 6
+    assert result.to_version == 6
     assert result.migrated is False
     assert result.backup_path is None
     assert path.read_bytes() == before
@@ -184,7 +184,7 @@ def test_missing_migration_step_rejects_before_backup_or_mutation(tmp_path: Path
     assert not backup_dir.exists()
 
 
-@pytest.mark.parametrize("version", [0, 6])
+@pytest.mark.parametrize("version", [0, 7])
 def test_invalid_migration_version_is_rejected_without_backup(
     tmp_path: Path, version: int
 ) -> None:
@@ -198,12 +198,24 @@ def test_invalid_migration_version_is_rejected_without_backup(
     assert not (tmp_path / "backup").exists()
 
 
-def test_production_v3_to_v5_migration_preserves_rows_and_creates_backup(
+def test_production_v3_to_v6_migration_preserves_rows_and_creates_backup(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "catalog-v3.sqlite"
     backup_dir = tmp_path / "backup"
-    old_schema_sql = SCHEMA_SQL.replace("    published_at TEXT,\n", "")
+    old_schema_sql = SCHEMA_SQL.replace(
+        "CHECK (status IN ('pending', 'completed', 'skipped', 'external'))",
+        "CHECK (status IN ('pending', 'completed'))",
+    )
+    old_schema_sql = old_schema_sql.replace("    note TEXT NULL\n", "")
+    old_schema_sql = old_schema_sql.replace(
+        "    updated_at TEXT NOT NULL,\n);", "    updated_at TEXT NOT NULL\n);"
+    )
+    old_schema_sql = old_schema_sql.replace(
+        "    display_position INTEGER NULL\n        CHECK(display_position IS NULL OR display_position >= 1),\n",
+        "",
+    )
+    old_schema_sql = old_schema_sql.replace("    published_at TEXT,\n", "")
     old_schema_sql = old_schema_sql.replace(
         """CREATE TABLE quota_resource_states (
     id INTEGER PRIMARY KEY,
@@ -233,8 +245,9 @@ def test_production_v3_to_v5_migration_preserves_rows_and_creates_backup(
             "VALUES ('w', 'Work', '2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
         )
         connection.execute(
-            "INSERT INTO items (work_id, status, created_at, updated_at) "
-            "VALUES (1, 'pending', '2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
+            "INSERT INTO items (work_id, status, completed_at, created_at, updated_at) "
+            "VALUES (1, 'completed', '2026-01-02T00:00:00+09:00', "
+            "'2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
         )
         connection.execute(
             "INSERT INTO sources (item_id, site, external_id, created_at, updated_at) "
@@ -245,15 +258,82 @@ def test_production_v3_to_v5_migration_preserves_rows_and_creates_backup(
     result = migrate_catalog(path, backup_dir=backup_dir)
 
     assert result.migrated is True
-    assert result.from_version == 3 and result.to_version == 5
+    assert result.from_version == 3 and result.to_version == 6
     assert result.backup_path is not None and result.backup_path.is_file()
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute("SELECT count(*) FROM works").fetchone()[0] == 1
         assert connection.execute("SELECT count(*) FROM items").fetchone()[0] == 1
+        item = connection.execute(
+            "SELECT id, status, completed_at, note FROM items"
+        ).fetchone()
+        assert item == (1, "completed", "2026-01-02T00:00:00+09:00", None)
         assert connection.execute("SELECT published_at FROM sources").fetchone()[0] is None
+        assert connection.execute("SELECT display_position FROM sources").fetchone()[0] is None
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' "
             "AND name = 'quota_resource_states'"
         ).fetchone() is not None
+
+
+def test_production_v5_to_v6_migration_preserves_ids_and_foreign_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "catalog-v5.sqlite"
+    backup_dir = tmp_path / "backup"
+    old_schema_sql = SCHEMA_SQL.replace(
+        "CHECK (status IN ('pending', 'completed', 'skipped', 'external'))",
+        "CHECK (status IN ('pending', 'completed'))",
+    )
+    old_schema_sql = old_schema_sql.replace("    note TEXT NULL\n", "")
+    old_schema_sql = old_schema_sql.replace(
+        "    updated_at TEXT NOT NULL,\n);", "    updated_at TEXT NOT NULL\n);"
+    )
+    old_schema_sql = old_schema_sql.replace(
+        "    display_position INTEGER NULL\n        CHECK(display_position IS NULL OR display_position >= 1),\n",
+        "",
+    )
+    with sqlite3.connect(path) as connection:
+        connection.executescript(old_schema_sql)
+        connection.execute(
+            "INSERT INTO works (work_key, title, created_at, updated_at) "
+            "VALUES ('w', 'Work', '2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
+        )
+        connection.execute(
+            "INSERT INTO items (work_id, item_title, status, completed_at, created_at, updated_at) "
+            "VALUES (1, 'Episode', 'completed', '2026-01-02T00:00:00+09:00', "
+            "'2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
+        )
+        connection.execute(
+            "INSERT INTO sources (item_id, site, external_id, created_at, updated_at) "
+            "VALUES (1, 'magapoke', 'episode-1', '2026-01-01T00:00:00+09:00', "
+            "'2026-01-01T00:00:00+09:00')"
+        )
+        connection.execute(
+            "INSERT INTO source_targets (source_id, backend, locator, created_at, updated_at) "
+            "VALUES (1, 'web', 'https://example.invalid/1', "
+            "'2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
+        )
+        connection.execute("PRAGMA user_version = 5")
+
+    result = migrate_catalog(path, backup_dir=backup_dir)
+
+    assert result.from_version == 5
+    assert result.to_version == 6
+    assert result.backup_path is not None and result.backup_path.is_file()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert connection.execute("SELECT id FROM works").fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT id, status, completed_at, note FROM items"
+        ).fetchone() == (1, "completed", "2026-01-02T00:00:00+09:00", None)
+        assert connection.execute("SELECT id FROM sources").fetchone()[0] == 1
+        assert connection.execute("SELECT display_position FROM sources").fetchone()[0] is None
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    service = CatalogService(path)
+    with service._connection() as connection:
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1

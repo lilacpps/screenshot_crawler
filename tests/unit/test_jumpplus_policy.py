@@ -41,6 +41,7 @@ def source(
         published_at=None,
         created_at="2026-09-24T00:00:00+09:00",
         updated_at="2026-09-24T00:00:00+09:00",
+        display_position=None,
     )
 
 

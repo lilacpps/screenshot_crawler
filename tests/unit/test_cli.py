@@ -569,6 +569,8 @@ def test_catalog_item_status_parser_accepts_read_and_transition_forms() -> None:
         ["catalog", "item-status", "13745", "completed", "--catalog", "custom.sqlite"]
     )
     pending = _parser().parse_args(["catalog", "item-status", "13745", "pending"])
+    skipped = _parser().parse_args(["catalog", "item-status", "13745", "skipped"])
+    external = _parser().parse_args(["catalog", "item-status", "13745", "external"])
 
     assert read.item_id == 13745
     assert read.status is None
@@ -576,14 +578,69 @@ def test_catalog_item_status_parser_accepts_read_and_transition_forms() -> None:
     assert completed.status == "completed"
     assert completed.catalog == Path("custom.sqlite")
     assert pending.status == "pending"
+    assert skipped.status == "skipped"
+    assert external.status == "external"
 
 
-@pytest.mark.parametrize("status", ["skipped", "other"])
+@pytest.mark.parametrize("status", ["other"])
 def test_catalog_item_status_parser_rejects_unsupported_status(status: str) -> None:
     with pytest.raises(SystemExit) as error:
         _parser().parse_args(["catalog", "item-status", "13745", status])
 
     assert error.value.code == 2
+
+
+def test_catalog_item_note_parser_accepts_set_clear_and_read_forms() -> None:
+    read = _parser().parse_args(["catalog", "item-note", "13745"])
+    set_note = _parser().parse_args(["catalog", "item-note", "13745", "text"])
+    clear = _parser().parse_args(["catalog", "item-note", "13745", "--clear"])
+
+    assert read.note is None and read.clear is False
+    assert set_note.note == "text" and set_note.clear is False
+    assert clear.note is None and clear.clear is True
+
+
+def test_catalog_item_note_cli_sets_and_clears_without_creating_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    catalog_path = tmp_path / "catalog.sqlite"
+    service = CatalogService(catalog_path)
+    work = service.create_work(WorkInput(work_key="manual-note", title="Manual note"))
+    item = service.create_item(ItemInput(), work_id=work.id)
+    completed = service.mark_item_completed(
+        item.id, completed_at="2026-09-17T12:00:00+09:00"
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "catalog", "item-note", str(item.id),
+         "already archived manually", "--catalog", str(catalog_path)],
+    )
+    cli.main()
+    assert capsys.readouterr().out.strip() == (
+        f"item={item.id} note=already archived manually"
+    )
+    updated = service.get_item(item.id)
+    assert updated.status == completed.status
+    assert updated.completed_at == completed.completed_at
+    assert service.list_crawl_runs(item_id=item.id) == []
+    assert service.list_artifacts(item_id=item.id) == []
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["screenshot-crawler", "catalog", "item-note", str(item.id), "--clear",
+         "--catalog", str(catalog_path)],
+    )
+    cli.main()
+    assert capsys.readouterr().out.strip() == f"item={item.id} note=None"
+    cleared = service.get_item(item.id)
+    assert cleared.note is None
+    assert cleared.status == completed.status
+    assert cleared.completed_at == completed.completed_at
 
 
 def test_catalog_item_status_cli_updates_batch_eligibility(

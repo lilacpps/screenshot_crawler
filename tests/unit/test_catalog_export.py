@@ -50,7 +50,11 @@ def build_graph(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         ItemInput(item_title="第1話", kind="episode", order_key="1", order_label="第1話"),
         work_id=work.id,
     )
+    service.update_item_note(item.id, "already archived manually")
     source = service.create_source(make_source("episode-1"), item_id=item.id)
+    source = service.update_source_external_state(
+        "mangaone", source.external_id, display_position=2
+    )
     web_default = service.create_source_target(
         SourceTargetInput(backend="web", locator="https://example.invalid/episode-1"),
         source_id=source.id,
@@ -102,7 +106,7 @@ def build_graph(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     }
 
 
-def test_full_v3_graph_exports_six_lossless_csvs(tmp_path: Path) -> None:
+def test_full_v6_graph_exports_six_lossless_csvs(tmp_path: Path) -> None:
     catalog_path, graph = build_graph(tmp_path)
     output_dir = tmp_path / "catalog-export"
 
@@ -124,6 +128,9 @@ def test_full_v3_graph_exports_six_lossless_csvs(tmp_path: Path) -> None:
     assert items[0]["work_id"] == str(graph["work"].id)
     assert items[0]["item_title"] == "第1話"
     assert "canonical_title" not in items[0]
+    assert items[0]["note"] == "already archived manually"
+    sources = read_export(output_dir / "sources.csv")
+    assert sources[0]["display_position"] == "2"
     assert "local_path" not in items[0]
     assert {row["target_key"] for row in targets} == {"default", "direct"}
     assert {row["backend"] for row in targets} == {"web", "android"}
@@ -191,7 +198,7 @@ def test_export_rejects_broken_v5_schema_without_repair(tmp_path: Path) -> None:
         connection.execute("PRAGMA user_version = 5")
     before = catalog_path.read_bytes()
 
-    with pytest.raises(CatalogExportError, match="missing table"):
+    with pytest.raises(CatalogExportError, match="version 5"):
         export_catalog_csv(catalog_path, tmp_path / "out")
 
     assert catalog_path.read_bytes() == before

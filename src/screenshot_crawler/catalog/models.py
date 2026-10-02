@@ -1,4 +1,4 @@
-"""Catalog v5 input and row models."""
+"""Catalog v6 input and row models."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ class ItemInput:
     order_key: str | None = None
     order_label: str | None = None
     status: str = "pending"
+    note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,7 @@ class Item:
     completed_at: str | None
     created_at: str
     updated_at: str
+    note: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +64,7 @@ class SourceInput:
     quota_started_at: datetime | str | None = None
     access_granted_until: datetime | str | None = None
     published_at: datetime | str | None = None
+    display_position: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +84,7 @@ class Source:
     published_at: str | None
     created_at: str
     updated_at: str
+    display_position: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

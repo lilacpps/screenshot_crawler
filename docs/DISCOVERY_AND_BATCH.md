@@ -4,8 +4,9 @@
 
 Zeblack keeps the broad Catalog classification: `POINT`,
 `TICKET_UNAVAILABLE`, `TICKET_AVAILABLE`, and `RENTAL` remain
-`sources.access_mode=quota`. Catalog schema version 5 is unchanged; no
-migration or new table/column is introduced.
+`sources.access_mode=quota`. Catalog schema version 6 is unchanged by this
+site-specific behavior; no additional migration or site-specific table/column
+is introduced here.
 
 Discovery treats a protobuf `RENTAL` observation with
 `remainingRentalTime > 0` as an explicit observed local grant. It stores
@@ -629,8 +630,9 @@ item_title         # 個別タイトルがある場合。NULL可
 kind               # volume / episode / chapter / book / bonus / other等
 order_key
 order_label
-status             # pending / completed
-completed_at
+status             # pending / completed / skipped / external
+completed_at       # non-NULL is allowed only for completed
+note               # generic operator-maintained note; does not affect Batch
 created_at
 updated_at
 ```
@@ -655,6 +657,7 @@ item_id
 site
 external_id
 discovery_key
+display_position   # nullable 1-based listing position; P1 stores but does not assign it
 access_mode        # owned / free / quota / paid / unknown
 free_until
 available
@@ -1684,13 +1687,23 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 
 ## 16. Schema v3 transition policy
 
+The current Catalog schema is v6. The explicit `catalog migrate` flow supports
+the sequential v3 -> v4 -> v5 -> v6 path with an automatic pre-migration backup,
+one transaction, rollback on failure, `quick_check`, foreign-key validation, and
+final schema validation. Normal Catalog runtime does not implicitly migrate an
+older database. Schema v6 adds nullable `items.note` and nullable
+`sources.display_position`, expands Item status to `pending | completed | skipped |
+external`, and keeps only `pending` Batch-eligible. P1 stores display positions
+when explicitly supplied but does not assign them in Discovery; position numbering,
+position-prefixed archive naming, and archive renumbering remain planned phases.
+
 Schema v3導入時は、現在のSchema v2 DBをschema-neutralなSQLite backupとして保持したうえで破棄し、
 新しいv3 DBを初期化してWatchlist全targetを `full` discoveryする。既存local stateの移行価値が低いため、
 v2→v3 migrationは実装しない。
 
 Schema v3以降はDBを運用データの正本として扱い、原則として破棄再構築しない。`catalog backup`は
 SQLite online backup API、WAL対応、overwrite拒否、quick_check検証を提供する。`catalog migrate`は
-`PRAGMA user_version`を使った順次migration（例: v3→v4→v5）を明示的に実行し、migration実行前に
+`PRAGMA user_version`を使った順次migration（例: v3→v4→v5→v6）を明示的に実行し、migration実行前に
 complete migration pathを確認してから`BEGIN IMMEDIATE`でwriter lockを取得し、そのlock中に
 automatic backupを作成する。続いて単一transactionのrollbackと成功後のschema/integrity検証を行う。
 現在の`SCHEMA_VERSION=3`ではmigration registryは空で、v3はno-op、v2→v3はunsupportedである。

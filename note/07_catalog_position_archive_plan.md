@@ -1,9 +1,11 @@
 # Catalog position / archive naming / item status plan
 
-> **PLANNED / NOT YET IMPLEMENTED**
+> **P1 IMPLEMENTED; P2-P5 PLANNED / NOT YET IMPLEMENTED**
 >
-> This note is the adopted implementation plan for the next Catalog schema revision.
-> Current production code remains Catalog schema v5 until the implementation phases below land.
+> This note is the adopted implementation plan for Catalog schema v6 and the later
+> display-position/archive phases. Catalog schema v6/P1 is implemented; the
+> Discovery numbering, Batch naming, archive renumbering, and rollout phases below
+> remain planned.
 >
 > Codex must keep this note synchronized while implementing the plan. When a phase is completed,
 > update the corresponding section from PLANNED to IMPLEMENTED and record any verified deviations.
@@ -30,9 +32,9 @@ Primary examples:
 
 The numeric prefix is **display order**, not episode number.
 
-## 2. Current state
+## 2. Pre-P1 state
 
-Catalog schema v5 currently has:
+Before P1, Catalog schema v5 had:
 
 ```text
 items.status = pending | completed
@@ -509,7 +511,7 @@ Keep the automatic pre-migration backup.
 
 ### P1 - Catalog v6
 
-PLANNED.
+IMPLEMENTED.
 
 - schema + migration,
 - Source display_position model/service support,
@@ -518,6 +520,26 @@ PLANNED.
 - export,
 - status/note CLI,
 - migration tests.
+
+P1 implementation details:
+
+- Catalog runtime schema version is 6. `items.note` and nullable
+  `sources.display_position` are required schema columns.
+- Item statuses are `pending | completed | skipped | external`. Only `pending`
+  remains Batch-eligible. Status changes through `CatalogService` clear
+  `completed_at` for every non-`completed` status; note updates leave status and
+  `completed_at` unchanged.
+- `catalog migrate` performs the v5 -> v6 migration with the existing automatic
+  pre-migration backup and transaction/rollback/final validation contract. The
+  migration rebuilds `items` to replace its status CHECK constraint and initializes
+  `note` and `display_position` to NULL while preserving existing row IDs/data.
+- `catalog item-status <item_id> [pending|completed|skipped|external]` supports
+  read-only inspection and status changes. `catalog item-note <item_id> "text"`
+  sets/replaces a note, and `catalog item-note <item_id> --clear` clears it.
+- CSV export includes `items.note` and `sources.display_position`.
+- P1 does not assign display positions during Discovery and does not change Batch
+  archive naming, collision handling, archive renumbering, or crawl-status JSON
+  naming.
 
 ### P2 - Discovery position
 

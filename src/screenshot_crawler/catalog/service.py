@@ -1,4 +1,4 @@
-"""Catalog v5 SQLite service."""
+"""Catalog v6 SQLite service."""
 
 from __future__ import annotations
 
@@ -191,6 +191,7 @@ class CatalogService:
     ) -> Item:
         item_input = self._coerce_item_input(item, fields)
         self._validate_status(item_input.status)
+        self._validate_optional_text(item_input.note, "note")
         if work_id is None:
             raise CatalogValidationError("work_id is required")
         timestamp = format_timestamp(now_jst())
@@ -198,9 +199,9 @@ class CatalogService:
             self._require_row(connection, "works", work_id, "work")
             cursor = connection.execute(
                 "INSERT INTO items (work_id, item_title, kind, order_key, order_label, status, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, updated_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (work_id, item_input.item_title, item_input.kind, item_input.order_key,
-                 item_input.order_label, item_input.status, timestamp, timestamp),
+                 item_input.order_label, item_input.status, timestamp, timestamp, item_input.note),
             )
             row = connection.execute("SELECT * FROM items WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return self._item_from_row(row)
@@ -231,35 +232,76 @@ class CatalogService:
             rows = connection.execute(query, values).fetchall()
         return [self._item_from_row(row) for row in rows]
 
-    def mark_item_completed(
-        self, item_id: int, *, completed_at: datetime | str | None = None
+    def set_item_status(
+        self,
+        item_id: int,
+        status: str,
+        *,
+        completed_at: datetime | str | None = None,
     ) -> Item:
-        finished = format_timestamp(completed_at) or format_timestamp(now_jst())
+        """Set an Item status while enforcing the v6 completed_at invariant."""
+
+        self._validate_status(status)
+        finished = (
+            format_timestamp(completed_at) or format_timestamp(now_jst())
+            if status == "completed"
+            else None
+        )
         timestamp = format_timestamp(now_jst())
         with self._connection() as connection:
             cursor = connection.execute(
-                "UPDATE items SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
-                (finished, timestamp, item_id),
+                "UPDATE items SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?",
+                (status, finished, timestamp, item_id),
             )
             if cursor.rowcount == 0:
                 raise CatalogNotFoundError(f"Catalog item not found: {item_id}")
             row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
         return self._item_from_row(row)
+
+    def mark_item_completed(
+        self, item_id: int, *, completed_at: datetime | str | None = None
+    ) -> Item:
+        return self.set_item_status(item_id, "completed", completed_at=completed_at)
 
     def mark_item_pending(self, item_id: int) -> Item:
         """Return an item to Batch eligibility and clear its completion timestamp."""
 
+        return self.set_item_status(item_id, "pending")
+
+    def mark_item_skipped(self, item_id: int) -> Item:
+        """Intentionally exclude an Item from normal Batch planning."""
+
+        return self.set_item_status(item_id, "skipped")
+
+    def mark_item_external(self, item_id: int) -> Item:
+        """Record that an Item was acquired outside this crawler."""
+
+        return self.set_item_status(item_id, "external")
+
+    def update_item_note(self, item_id: int, note: str | None) -> Item:
+        """Set, replace, or clear an operator-maintained Item note."""
+
+        self._validate_optional_text(note, "note")
         timestamp = format_timestamp(now_jst())
         with self._connection() as connection:
             cursor = connection.execute(
-                "UPDATE items SET status = 'pending', completed_at = NULL, updated_at = ? "
-                "WHERE id = ?",
-                (timestamp, item_id),
+                "UPDATE items SET note = ?, updated_at = ? WHERE id = ?",
+                (note, timestamp, item_id),
             )
             if cursor.rowcount == 0:
                 raise CatalogNotFoundError(f"Catalog item not found: {item_id}")
             row = connection.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
         return self._item_from_row(row)
+
+    def set_item_note(self, item_id: int, note: str) -> Item:
+        """Set or replace an operator-maintained Item note."""
+
+        return self.update_item_note(item_id, note)
+
+    def clear_item_note(self, item_id: int) -> Item:
+        """Clear an operator-maintained Item note."""
+
+        return self.update_item_note(item_id, None)
 
     def update_item_metadata(
         self,
@@ -316,15 +358,16 @@ class CatalogService:
                 cursor = connection.execute(
                     "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
                     "free_until, available, access_checked_at, last_seen_at, quota_started_at, "
-                    "access_granted_until, published_at, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "access_granted_until, published_at, created_at, updated_at, display_position) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (item_id, source_input.site, source_input.external_id, source_input.discovery_key,
                      source_input.access_mode, format_timestamp(source_input.free_until),
                      1 if source_input.available is None else int(source_input.available),
                      format_timestamp(source_input.access_checked_at), last_seen,
                      format_timestamp(source_input.quota_started_at),
                      format_timestamp(source_input.access_granted_until),
-                     format_timestamp(source_input.published_at), timestamp, timestamp),
+                     format_timestamp(source_input.published_at), timestamp, timestamp,
+                     source_input.display_position),
                 )
             except sqlite3.IntegrityError as exc:
                 raise CatalogValidationError(f"Could not create source: {exc}") from exc
@@ -392,6 +435,7 @@ class CatalogService:
         access_checked_at: datetime | str | None | object = _UNSET,
         last_seen_at: datetime | str | None | object = _UNSET,
         published_at: datetime | str | None | object = _UNSET,
+        display_position: int | None | object = _UNSET,
     ) -> Source:
         self._validate_nonempty(site, "site")
         self._validate_nonempty(external_id, "external_id")
@@ -407,7 +451,7 @@ class CatalogService:
                 ("discovery_key", discovery_key), ("access_mode", access_mode),
                 ("free_until", free_until), ("available", available),
                 ("access_checked_at", access_checked_at), ("last_seen_at", last_seen_at),
-                ("published_at", published_at),
+                ("published_at", published_at), ("display_position", display_position),
             ):
                 if value is _UNSET:
                     continue
@@ -419,6 +463,8 @@ class CatalogService:
                     value = int(value)
                 elif column in {"free_until", "access_checked_at", "last_seen_at", "published_at"}:
                     value = format_timestamp(value)
+                elif column == "display_position":
+                    self._validate_display_position(value)
                 assignments.append(f"{column} = ?")
                 values.append(value)
             if assignments:
@@ -599,6 +645,7 @@ class CatalogService:
         source = self._coerce_source_input(source_input)
         target = self._coerce_source_target_input(web_target_input)
         self._validate_status(item.status)
+        self._validate_optional_text(item.note, "note")
         self._validate_source_input(source)
         self._validate_source_target_input(target)
         timestamp = format_timestamp(now_jst())
@@ -608,23 +655,23 @@ class CatalogService:
             try:
                 item_cursor = connection.execute(
                     "INSERT INTO items (work_id, item_title, kind, order_key, order_label, status, "
-                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "created_at, updated_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (work_id, item.item_title, item.kind, item.order_key, item.order_label,
-                     item.status, timestamp, timestamp),
+                     item.status, timestamp, timestamp, item.note),
                 )
                 item_id = item_cursor.lastrowid
                 source_cursor = connection.execute(
                     "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
                     "free_until, available, access_checked_at, last_seen_at, quota_started_at, "
-                    "access_granted_until, published_at, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "access_granted_until, published_at, created_at, updated_at, display_position) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (item_id, source.site, source.external_id, source.discovery_key,
                      source.access_mode, format_timestamp(source.free_until),
                      1 if source.available is None else int(source.available),
                      format_timestamp(source.access_checked_at), last_seen, None,
                      format_timestamp(source.access_granted_until),
                      format_timestamp(source.published_at),
-                     timestamp, timestamp),
+                     timestamp, timestamp, source.display_position),
                 )
                 source_id = source_cursor.lastrowid
                 target_cursor = connection.execute(
@@ -664,6 +711,7 @@ class CatalogService:
         source = self._coerce_source_input(source_input)
         target = self._coerce_source_target_input(web_target_input)
         self._validate_status(item.status)
+        self._validate_optional_text(item.note, "note")
         self._validate_source_input(source)
         self._validate_source_target_input(target)
         timestamp = format_timestamp(now_jst())
@@ -683,7 +731,6 @@ class CatalogService:
                 "free_until = ?",
                 "access_checked_at = ?",
                 "last_seen_at = ?",
-                "updated_at = ?",
             ]
             values: list[Any] = [
                 source.discovery_key,
@@ -691,18 +738,21 @@ class CatalogService:
                 format_timestamp(source.free_until),
                 format_timestamp(source.access_checked_at),
                 format_timestamp(source.last_seen_at) or timestamp,
-                timestamp,
-                source_id,
             ]
             if source.available is not None:
-                assignments.insert(3, "available = ?")
-                values.insert(3, int(source.available))
+                assignments.append("available = ?")
+                values.append(int(source.available))
             if source.access_granted_until is not None or access_granted_until_observed:
-                assignments.insert(-1, "access_granted_until = ?")
-                values.insert(-2, format_timestamp(source.access_granted_until))
+                assignments.append("access_granted_until = ?")
+                values.append(format_timestamp(source.access_granted_until))
             if source.published_at is not None:
-                assignments.insert(-1, "published_at = ?")
-                values.insert(-2, format_timestamp(source.published_at))
+                assignments.append("published_at = ?")
+                values.append(format_timestamp(source.published_at))
+            if source.display_position is not None:
+                assignments.append("display_position = ?")
+                values.append(source.display_position)
+            assignments.append("updated_at = ?")
+            values.extend([timestamp, source_id])
             connection.execute(
                 "UPDATE sources SET " + ", ".join(assignments) + " WHERE id = ?", values
             )
@@ -1216,8 +1266,19 @@ class CatalogService:
 
     @staticmethod
     def _validate_status(value: Any) -> None:
-        if value not in {"pending", "completed"}:
-            raise CatalogValidationError("status must be 'pending' or 'completed'")
+        if value not in {"pending", "completed", "skipped", "external"}:
+            raise CatalogValidationError(
+                "status must be one of pending, completed, skipped, external"
+            )
+
+    @staticmethod
+    def _validate_display_position(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise CatalogValidationError("display_position must be an integer or null")
+        if value < 1:
+            raise CatalogValidationError("display_position must be >= 1")
 
     @staticmethod
     def _validate_access_mode(value: Any) -> None:
@@ -1236,6 +1297,7 @@ class CatalogService:
         for value in (source.free_until, source.access_checked_at, source.last_seen_at,
                       source.quota_started_at, source.access_granted_until, source.published_at):
             format_timestamp(value)
+        cls._validate_display_position(source.display_position)
 
     @classmethod
     def _validate_source_target_input(cls, target: SourceTargetInput) -> None:

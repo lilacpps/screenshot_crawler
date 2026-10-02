@@ -1,4 +1,4 @@
-"""Read-only CSV snapshot export for the Schema v4 Catalog."""
+"""Read-only CSV snapshot export for the Catalog v6 schema."""
 
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ EXPORT_COLUMNS = {
     "works": ("id", "work_key", "title", "author", "genre", "created_at", "updated_at"),
     "items": (
         "id", "work_id", "item_title", "kind", "order_key", "order_label", "status",
-        "completed_at", "created_at", "updated_at",
+        "completed_at", "created_at", "updated_at", "note",
     ),
     "sources": (
         "id", "item_id", "site", "external_id", "discovery_key", "access_mode",
         "free_until", "available", "access_checked_at", "last_seen_at", "quota_started_at",
-        "access_granted_until", "created_at", "updated_at",
+        "access_granted_until", "created_at", "updated_at", "display_position",
     ),
     "source_targets": (
         "id", "source_id", "backend", "target_key", "locator", "priority", "enabled",
@@ -70,7 +70,7 @@ class ExportResult:
 
 
 def export_catalog_csv(catalog_path: str | Path, output_dir: str | Path) -> ExportResult:
-    """Export all v4 Catalog tables to a read-only, six-CSV snapshot."""
+    """Export all v6 Catalog tables to a read-only, six-CSV snapshot."""
 
     catalog_path = Path(catalog_path)
     output_dir = Path(output_dir)

@@ -429,6 +429,24 @@ async def test_android_target_is_preserved_while_web_default_refreshes(tmp_path:
     assert catalog.get_source_target(android.id) == android
 
 
+async def test_discovery_refresh_preserves_operator_item_status_and_note(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record("one")])
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    await service.discover(FakePage(), watch_target, "full")
+    item = catalog.list_items()[0]
+    catalog.mark_item_external(item.id)
+    catalog.set_item_note(item.id, "already archived manually")
+
+    await service.discover(FakePage(), watch_target, "full")
+
+    refreshed = catalog.get_item(item.id)
+    assert refreshed.status == "external"
+    assert refreshed.completed_at is None
+    assert refreshed.note == "already archived manually"
+
+
 async def test_full_reconciliation_only_happens_after_complete_exhaustion(tmp_path: Path) -> None:
     adapter = FakeDiscoveryAdapter([record("observed")])
     service, catalog, watch_target = setup_service(tmp_path, adapter)

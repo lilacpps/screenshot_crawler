@@ -179,6 +179,18 @@ def test_pending_only_and_basic_access_modes(tmp_path: Path) -> None:
         external_id="completed",
         access_mode="free",
     )
+    skipped, _ = add_source(
+        service,
+        item=ItemInput(item_title="skipped", status="skipped"),
+        external_id="skipped",
+        access_mode="free",
+    )
+    external, _ = add_source(
+        service,
+        item=ItemInput(item_title="external", status="external"),
+        external_id="external",
+        access_mode="free",
+    )
     add_source(
         service,
         item=ItemInput(item_title="unavailable"),
@@ -201,9 +213,11 @@ def test_pending_only_and_basic_access_modes(tmp_path: Path) -> None:
     ]
     reasons = Counter(skipped.reason for skipped in plan.skipped)
     assert reasons == Counter(
-        {"completed": 1, "unavailable": 1, "paid": 1, "unknown": 1}
+        {"completed": 1, "skipped": 1, "external": 1, "unavailable": 1, "paid": 1, "unknown": 1}
     )
     assert completed.id == 2
+    assert skipped.status == "skipped"
+    assert external.status == "external"
 
 
 def test_site_scoped_plan_ignores_other_site_and_orphan_items(tmp_path: Path) -> None:

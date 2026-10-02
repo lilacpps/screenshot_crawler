@@ -973,9 +973,9 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 これらを変更した場合は、このnoteを必ず更新する。
 
-## Planned Catalog v6: display position / archive naming / status expansion
+## Catalog v6: display position / archive naming / status expansion
 
-**NOT YET IMPLEMENTED.** Adopted implementation plan:
+**P1 IMPLEMENTED; P2-P5 NOT YET IMPLEMENTED.** The adopted implementation plan is:
 
 ```text
 note/07_catalog_position_archive_plan.md
@@ -984,8 +984,10 @@ note/07_catalog_position_archive_plan.md
 The plan bundles Source-scoped display positions, position-prefixed archive naming,
 existing-archive renumber tooling, and Item status expansion
 (`pending | completed | skipped | external`) plus `items.note`.
-Until those phases land, the current implementation remains Catalog schema v5 and
-the current behavior described below is authoritative.
+Catalog schema v6, the Item status/note service and CLI, Source display-position
+storage/validation, v5 -> v6 migration, and CSV export fields are implemented.
+Discovery position assignment, position-prefixed archive naming, collision handling,
+archive renumbering, and related rollout work remain P2-P5 planned behavior.
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery + Batch v3実装済み）
 
@@ -1004,11 +1006,16 @@ authority:
 
 CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disable`を提供する。書き込みは同一directory内のtemporary fileをfsyncして`os.replace`する。Watchlist操作はCatalogを読み書きせず、remove/disableでもCatalog rowを削除しない。
 
-### 22.2 Catalog（Schema v5 Phase 5 foundation実装済み）
+### 22.2 Catalog（Schema v6 P1実装済み）
 
-`CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、v5 CRUDを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。通常のCatalogService / Discovery / Batch / Exportはunsupported schemaをmigrationせず拒否する。v3 / v4からの更新は明示的な`catalog migrate`で行う。
+P1 export detail: `items.csv` includes `note` and `sources.csv` includes
+`display_position`; NULL values are emitted as empty CSV fields. P1 leaves
+`display_position` NULL for normal Discovery because Discovery numbering is a
+planned P2 behavior.
 
-Schema v5は`works`、`items`、`sources`、`source_targets`、`crawl_runs`、`artifacts`、`quota_resource_states`の7 domain tableを持つ。Workがstableな`work_key` / title / author / genreを保持し、ItemはWork配下の取得単位として`item_title`、kind、order、statusを保持する。`items.status`は`pending | completed`で、手動のcompletedもBatch対象外を示す運用状態として使える。Artifactの移動・missing・deletedではpendingへ戻さない。
+`CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、v6 CRUDを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。通常のCatalogService / Discovery / Batch / Exportはunsupported schemaをmigrationせず拒否する。v3 / v4 / v5からの更新は明示的な`catalog migrate`で行う。
+
+Schema v6は`works`、`items`、`sources`、`source_targets`、`crawl_runs`、`artifacts`、`quota_resource_states`の7 domain tableを持つ。Workがstableな`work_key` / title / author / genreを保持し、ItemはWork配下の取得単位として`item_title`、kind、order、status、genericなoperator noteを保持する。`items.status`は`pending | completed | skipped | external`で、通常Batchの候補は`pending`だけである。`completed`以外へ変更すると`completed_at`はNULLになり、`completed`では取得時刻を設定できる。Artifactの移動・missing・deletedではpendingへ戻さない。
 
 `Source`のidentityは`(site, external_id)`で、access stateとquota local stateを分離する。`update_source_external_state()`はquota stateを変更せず、`record_quota_access()`はquota stateだけを更新し、`clear_quota_access()`は指定timestampとのcompare-and-setが成功した場合だけquota stateをNULL化する。`mark_sources_unavailable_except()`は指定Discovery scope内のmissing sourceだけをunavailable化する。
 
@@ -1022,9 +1029,9 @@ Batch Planner用に `read_works_items_sources_and_targets(site=...)` を提供�
 
 Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` の `export_catalog_csv()` はSQLiteをread-onlyで検証・読み込みし、`catalog-export/` 配下へ `works.csv`、`items.csv`、`sources.csv`、`source_targets.csv`、`crawl_runs.csv`、`artifacts.csv` の6 CSV snapshotを出力する。各CSVはtable identityとforeign keyを保持し、履歴をflat JOINで直積化しない。CSVはUTF-8 BOM、header付きで、NULLは空欄、`available` と `enabled` は `true` / `false` とする。既定pathは入力 `catalog.sqlite`、出力directory `catalog-export` であり、既存snapshotを上書きせず、CSVからCatalogへ戻す機能はない。
 
-`catalog item-status <item_id> [pending|completed]` CLIはstatus省略時にItemの現状を表示し、指定時は`CatalogService`経由で状態を変更する。`completed`は手動でBatch対象から外す運用にも使え、この操作は`status`、`completed_at`、`updated_at`だけを更新し、CrawlRun / Artifactを作成しない。`pending`は`completed_at`をNULLに戻す。Batch Plannerは従来どおり`pending`だけを候補にし、通常crawl成功後も既存の`mark_item_completed()`が使われる。schema v5とstatus制約は変更しない。
+`catalog item-status <item_id> [pending|completed|skipped|external]` CLIはstatus省略時にItemの現状を表示し、指定時は`CatalogService`経由で状態を変更する。`catalog item-note <item_id> "text"` はnoteをset/updateし、`--clear`はnoteだけをNULLに戻す。status/note操作はCrawlRun / Artifactを作成しない。Discovery refreshはoperator-maintainedなstatus/noteを上書きしない。Batch Plannerは`pending`だけを候補にし、通常crawl成功後も既存の`mark_item_completed()`が使われる。
 
-日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。通常runtimeはschema v5だけをサポートし、異なるversionは暗黙migrationせず明示的に失敗する。v5では7 tablesとrequired columnsを検証し、削除済み`items` columnsが存在しないことを確認する。`catalog/backup.py`はschema-neutralなSQLite online backup、WAL-safe standalone化、quick_check、overwrite拒否を提供する。`catalog/migrations.py`は明示`catalog migrate`用のsequential v3→v4→v5 runnerを持ち、migration前automatic backup、single-transaction rollback、final validationを行う。
+日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。通常runtimeはschema v6だけをサポートし、異なるversionは暗黙migrationせず明示的に失敗する。v6では7 tablesとrequired columns、Item status CHECK、Source display-position CHECKを検証し、削除済み`items` columnsが存在しないことを確認する。`catalog/backup.py`はschema-neutralなSQLite online backup、WAL-safe standalone化、quick_check、overwrite拒否を提供する。`catalog/migrations.py`は明示`catalog migrate`用のsequential v3→v4→v5→v6 runnerを持ち、migration前automatic backup、single-transaction rollback、final validationを行う。
 
 採用した上位flow:
 
@@ -1044,7 +1051,7 @@ Crawl Request
 
 現行実装には、BookWalker quotaの実サイトlive click検証と、quotaのサーバー側実消費をCatalogだけから検証する機能は存在しない。
 
-Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request最小基盤、Schema v5 Batch Planner / Executor、Site Policy registry / Manga ONE・BookWalker Policyは実装済みである。Discoveryはtargetの`work_key`でWorkをfind/createし、`label`は新規Workのtitle初期値にだけ使う。新規recordはWork配下にItem、Source、web/default targetを原子的に作成し、既存recordはItemを再利用する。Batch PlannerはWork metadataとItem order metadataからcandidateを生成し、enabledなweb targetを`priority ASC, target.id ASC`で選ぶ。Batch Executorはstale validation後にCrawlRunを作成し、quota記録、Crawler、packaging、Artifact / Run / Itemの成功確定を順序づける。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。
+Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request最小基盤、Schema v6 Batch Planner / Executor、Site Policy registry / Manga ONE・BookWalker Policyは実装済みである。Discoveryはtargetの`work_key`でWorkをfind/createし、`label`は新規Workのtitle初期値にだけ使う。新規recordはWork配下にItem、Source、web/default targetを原子的に作成し、既存recordはItemを再利用する。Batch PlannerはWork metadataとItem order metadataからcandidateを生成し、enabledなweb targetを`priority ASC, target.id ASC`で選ぶ。Batch Executorはstale validation後にCrawlRunを作成し、quota記録、Crawler、packaging、Artifact / Run / Itemの成功確定を順序づける。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。
 
 主要仕様:
 
@@ -1189,7 +1196,7 @@ CrawlRun / Artifact / Item statusを書き換える。Manga ONEとBookWalkerのq
 維持し、Android targetはCatalogへ保持できるがPhase 3 Executorでは実行しない。
 
 
-### Catalog v5 / Magapoke M3c1 current update
+### Catalog v6 / Magapoke M3c1 current update
 
 Catalog schema v4 adds nullable sources.published_at and explicitly migrates v3 after an automatic pre-migration backup inside the existing transactional catalog migrate flow. Ordinary initialization remains non-migrating. Timestamp validation uses the same aware ISO/JST normalization as other Catalog timestamps.
 
@@ -1200,7 +1207,7 @@ Batch metadata now carries generic quota resource, scope, limit, and commit timi
 ### Phase 4 current state: generic grant-only
 
 Generic grant-only uses the existing adapter entry path with Core
-`entry_only=True`. Work Ticket state is persisted in Catalog schema v5 as
+`entry_only=True`. Work Ticket state is persisted in Catalog schema v6 as
 Work/site/resource state, and confirmed consumption atomically updates that
 state plus the source grant. Local cooldown skips happen before browser/page
 creation; confirmed grant-only runs do not capture, package, or complete the
@@ -1232,8 +1239,8 @@ Grant-only leaves Items pending and creates no capture/package/Artifact.
 The full automated regression suite is green across Magapoke, Manga ONE, and
 BookWalker (`681 passed`). It covers Phase 1 pacing and timeout isolation,
 Phase 2 AccessGuard/metrics, generic resource passes, Work/Premium grant-only,
-Catalog v5 migration, adapter retry/capture, and normal Batch semantics.
-Read-only `batch plan` also passed for all three sites on a temporary v4 -> v5
+Catalog v6 migration, adapter retry/capture, and normal Batch semantics.
+Read-only `batch plan` also passed for all three sites on a temporary v5 -> v6
 Catalog migration copy. Actual normal live Batch and scarce Work/Premium
 consumption were not forced because no safe non-consuming candidate/session was
 available. The detailed matrix is `docs/PHASE6_VERIFICATION.md`; current status
