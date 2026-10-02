@@ -2267,13 +2267,38 @@ class BookWalkerAdapter(SiteAdapter):
             self._original_candidate_event.set()
             return True
 
+        deadline = (
+            asyncio.get_running_loop().time()
+            + self.original_capture_retry_interval_ms / 1000
+        )
         event_task = asyncio.create_task(self._original_candidate_event.wait())
         try:
-            await asyncio.wait(
-                (*pending_tasks, event_task),
-                timeout=self.original_capture_retry_interval_ms / 1000,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            while True:
+                if self._original_candidate_generation != baseline_generation:
+                    return True
+                remaining_tasks = tuple(
+                    task for task in pending_tasks if not task.done()
+                )
+                if not remaining_tasks:
+                    return False
+                timeout = deadline - asyncio.get_running_loop().time()
+                if timeout <= 0:
+                    return False
+                await asyncio.wait(
+                    (*remaining_tasks, event_task),
+                    timeout=timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if self._original_candidate_generation != baseline_generation:
+                    return True
+                if event_task.done():
+                    # The event is only expected to be set with a generation
+                    # change. Re-arm it defensively if an external test or
+                    # future helper signals it without adding a candidate.
+                    self._original_candidate_event.clear()
+                    event_task = asyncio.create_task(
+                        self._original_candidate_event.wait()
+                    )
         finally:
             if not event_task.done():
                 event_task.cancel()

@@ -359,6 +359,116 @@ async def test_original_capture_pending_task_candidate_wakes_and_retries(
 
 
 @pytest.mark.asyncio
+async def test_original_capture_multiple_pending_tasks_waits_for_late_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_signature(_page: object, data: bytes, mime_type: str) -> str:
+        return "native" if mime_type == "image/png" or data.endswith(b"native") else "other"
+
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    adapter = BookWalkerAdapter()
+    adapter.original_capture_retry_interval_ms = 100
+    native = CaptureResult(PNG_1X1, 1, 1)
+    first_task_done = asyncio.Event()
+
+    async def first_response_without_candidate() -> None:
+        first_task_done.set()
+
+    async def second_response_with_candidate() -> None:
+        await first_task_done.wait()
+        await asyncio.sleep(0.005)
+        adapter._store_original_response_body(
+            SimpleNamespace(url="https://bw-bv-epubs.bookwalker.jp/page.jpeg"),
+            JPEG_1X1 + b"native",
+        )
+
+    first_task = asyncio.create_task(first_response_without_candidate())
+    second_task = asyncio.create_task(second_response_with_candidate())
+    adapter._original_response_tasks.update({first_task, second_task})
+
+    result = await adapter._capture_original_jpegs(object(), (native,))
+    await asyncio.gather(first_task, second_task)
+
+    assert result is not None
+    assert result[0].data == JPEG_1X1 + b"native"
+    debug = adapter._capture_debug["bookwalker_capture"]
+    assert debug["original_match"]["original_attempt_count"] == 2
+    assert debug["original_match"]["original_retry_wait_count"] == 1
+    assert debug["original_match"]["original_candidate_generation_end"] == 1
+
+
+@pytest.mark.asyncio
+async def test_original_capture_multiple_pending_tasks_waits_until_all_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_signature(_page: object, _data: bytes, _mime_type: str) -> str:
+        return "native"
+
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    adapter = BookWalkerAdapter()
+    adapter.original_capture_retry_interval_ms = 100
+    native = CaptureResult(PNG_1X1, 1, 1)
+    completed: list[str] = []
+
+    async def response_without_candidate(name: str) -> None:
+        await asyncio.sleep(0.001 if name == "first" else 0.005)
+        completed.append(name)
+
+    first_task = asyncio.create_task(response_without_candidate("first"))
+    second_task = asyncio.create_task(response_without_candidate("second"))
+    adapter._original_response_tasks.update({first_task, second_task})
+
+    assert await adapter._capture_original_jpegs(object(), (native,)) is None
+    await asyncio.gather(first_task, second_task)
+
+    assert completed == ["first", "second"]
+    debug = adapter._capture_debug["bookwalker_capture"]
+    assert debug["original_match"]["original_attempt_count"] == 1
+    assert debug["original_match"]["original_retry_wait_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_original_capture_pending_timeout_does_not_cancel_response_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_signature(_page: object, _data: bytes, _mime_type: str) -> str:
+        return "native"
+
+    monkeypatch.setattr(adapter_module, "image_signature", fake_signature)
+    adapter = BookWalkerAdapter()
+    adapter.original_capture_retry_interval_ms = 10
+    native = CaptureResult(PNG_1X1, 1, 1)
+    release = asyncio.Event()
+
+    async def pending_response() -> None:
+        await release.wait()
+
+    task = asyncio.create_task(pending_response())
+    adapter._original_response_tasks.add(task)
+
+    assert await adapter._capture_original_jpegs(object(), (native,)) is None
+    assert not task.done()
+
+    release.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_original_candidate_work_wait_without_pending_tasks_returns_false() -> None:
+    adapter = BookWalkerAdapter()
+
+    assert await adapter._wait_for_original_candidate_work(0) is False
+
+
+@pytest.mark.asyncio
+async def test_original_candidate_work_wait_with_changed_generation_returns_true() -> None:
+    adapter = BookWalkerAdapter()
+    adapter._original_candidate_generation = 1
+
+    assert await adapter._wait_for_original_candidate_work(0) is True
+
+
+@pytest.mark.asyncio
 async def test_original_capture_completed_task_without_candidate_does_not_rescan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

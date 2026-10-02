@@ -2118,9 +2118,11 @@ three scans separated by two blind 150 ms waits. The new path scans the
 current candidate snapshot once, retries immediately if the candidate
 generation changes during the scan, and otherwise waits only when an eligible
 original-response task is still pending. The wait is bounded by the existing
-150 ms budget and wakes on either a new valid candidate or pending-task
-completion. A completed task that adds no valid candidate does not cause a
-repeat scan, and no pending work means an immediate negative decision.
+150 ms budget and wakes on a new valid candidate or pending-task completion.
+Task completion only removes that task from the wait condition; the matcher
+continues waiting while another task from the initial pending set remains.
+It returns negative after all initially observed tasks complete without a new
+candidate, at timeout, or immediately when no pending work exists.
 
 `_original_candidate_generation` is incremented only when a validated,
 non-duplicate candidate is admitted to the bounded cache. An
@@ -2138,9 +2140,10 @@ entry, candidate counts, and candidate generations. These values are
 diagnostic only and do not select JPEG versus PNG or alter proof behavior.
 
 The targeted unit coverage includes exact-match first priority, positive
-decision reuse, mismatch and empty-cache immediate negatives, candidate
-arrival during a bounded pending-task wait, task completion without a valid
-candidate, generation changes during signature scanning, generation-safe
+decision reuse, mismatch and empty-cache immediate negatives, a later
+candidate arriving after an earlier pending task completes without a
+candidate, all-pending completion without a candidate, bounded timeout without
+cancellation, generation changes during signature scanning, generation-safe
 negative-cache invalidation, duplicate-generation suppression, and the
 `fetch -> body store -> fulfill` route ordering. The existing purchased
 mapping/lossless proof and browser-backed BookWalker integration tests remain
