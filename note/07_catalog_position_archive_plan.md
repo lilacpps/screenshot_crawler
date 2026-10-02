@@ -1,11 +1,11 @@
 # Catalog position / archive naming / item status plan
 
-> **P1-P2 IMPLEMENTED; P3-P5 PLANNED / NOT YET IMPLEMENTED**
+> **P1-P3 IMPLEMENTED; P4-P5 PLANNED / NOT YET IMPLEMENTED**
 >
 > This note is the adopted implementation plan for Catalog schema v6 and the later
 > display-position/archive phases. Catalog schema v6/P1 and Discovery position
-> assignment/P2 are implemented; Batch naming, archive renumbering, and rollout
-> phases below remain planned.
+> assignment/P2 and Batch archive naming/P3 are implemented; archive renumbering
+> and rollout phases below remain planned.
 >
 > Codex must keep this note synchronized while implementing the plan. When a phase is completed,
 > update the corresponding section from PLANNED to IMPLEMENTED and record any verified deviations.
@@ -53,7 +53,9 @@ There is no persisted display-position field.
 
 `order_key` is intentionally only a generic natural-order key when an episode/volume label can be parsed safely. It must not be repurposed as the new display position.
 
-Packaging currently derives the archive stem from generic output metadata and may add site-specific `artifact_disambiguator` suffixes for selected collision cases.
+Packaging derives the archive stem from generic output metadata. P3's Batch
+Planner supplies a generic `{site}-{external_id}` disambiguator only for a
+same-site, same-Work sanitized-stem collision across distinct Item IDs.
 
 A successful re-crawl creates a new CrawlRun and a new Artifact row. It does not replace the previous CrawlRun/Artifact history.
 
@@ -326,7 +328,8 @@ The long-term generic suffix shape may use stable Source identity such as:
 
 but it must only be added when necessary; do not make site/external-id suffixes part of every normal filename.
 
-Existing Manga ONE / Magapoke special-case collision logic should be replaced only when equivalent generic collision safety is covered by tests.
+P3 replaces the former Manga ONE / Magapoke special-case collision logic with
+the generic sanitized-stem collision rule, covered by Planner tests.
 
 Never overwrite an existing destination archive.
 
@@ -543,8 +546,9 @@ P1 implementation details:
 - CSV export includes `items.note` and `sources.display_position`.
 - P1 alone did not assign display positions during Discovery and did not change
   Batch archive naming, collision handling, archive renumbering, or crawl-status
-  JSON naming. P2 now assigns positions during safe Discovery completion; the
-  remaining archive behavior is still planned.
+  JSON naming. P2 now assigns positions during safe Discovery completion. P3
+  implements new Batch archive/status naming and generic collision handling;
+  existing archive/status renaming and Artifact locator updates remain P4.
 
 ### P2 - Discovery position
 
@@ -591,19 +595,39 @@ P2 implementation details:
   Discovery. It performs no additional pagination, DOM scan, HTTP request, or
   full-list access.
 
-P3-P5 remain planned: ZIP filename/packaging changes, collision handling,
-archive renumbering, crawl-status JSON rename, and real Catalog rollout are not
-part of P2.
+P4-P5 remain planned: existing ZIP renumbering, Artifact locator/history
+updates, crawl-status JSON rename, and real Catalog rollout are not part of P3.
 
 ### P3 - Batch archive naming
 
-PLANNED.
+IMPLEMENTED.
 
-- shared naming helper,
-- position-prefixed order component,
-- NULL fallback,
-- generic collision safety,
-- preserve Core/Catalog boundary.
+- `src/screenshot_crawler/batch/naming.py` provides the shared
+  `archive_order_component(order_label=..., display_position=...)` helper for
+  Batch and future P4 renumber tooling. A non-NULL position is formatted with
+  minimum width three and combined with the raw order label; a position without
+  a label becomes the position alone. NULL position preserves the legacy label
+  fallback, and no order/title/id/identifier parsing is performed.
+- Batch Planner passes the Source-aware order component into
+  `BatchCandidate.metadata["order"]`; title, author, and genre keep their
+  existing Work metadata mapping. This changes archive and new crawl-status
+  names naturally through the existing generic packaging flow.
+- Generic collision detection uses the site-scoped planning snapshot across all
+  Item statuses. It compares `archive_stem()` output without a disambiguator,
+  grouped by `(Work.id, sanitized base stem)`, and marks a group only when it
+  contains at least two distinct Item IDs. Same-Item multiple Sources do not
+  count as a collision.
+- Only candidates whose Source is in a real collision receive the generic
+  `{site}-{external_id}` `artifact_disambiguator`. This replaces the previous
+  Manga ONE non-numeric and Magapoke-only workarounds while retaining completed
+  Item participation and sanitized-stem safety.
+- Core packaging remains Catalog-independent and remains the final filename
+  sanitization authority. Same-site planning collisions are handled by the
+  Planner; cross-site or pre-existing filesystem collisions remain protected by
+  `package_crawl_output()` raising `FileExistsError` without overwrite.
+- P3 does not rename existing ZIP archives, existing crawl-status JSON, or
+  historical Artifact locators. P4 renumbering and Artifact locator updates
+  remain unimplemented.
 
 ### P4 - Existing archive renumber tool
 

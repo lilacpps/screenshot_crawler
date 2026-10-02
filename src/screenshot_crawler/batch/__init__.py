@@ -12,6 +12,7 @@ from screenshot_crawler.batch.models import (
     CandidateExecutionError,
     GrantOnlyExecutionResult,
 )
+from screenshot_crawler.batch.naming import archive_order_component
 from screenshot_crawler.batch.planner import BatchPlanner
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "BatchSkipped",
     "CandidateExecutionError",
     "GrantOnlyExecutionResult",
+    "archive_order_component",
 ]

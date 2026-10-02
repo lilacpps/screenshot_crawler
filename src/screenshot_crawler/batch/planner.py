@@ -14,6 +14,7 @@ from screenshot_crawler.batch.models import (
     BatchPlanningError,
     BatchSkipped,
 )
+from screenshot_crawler.batch.naming import archive_order_component
 from screenshot_crawler.catalog import (
     CatalogError,
     CatalogService,
@@ -60,9 +61,7 @@ class BatchPlanner:
         for target in targets:
             targets_by_source[target.source_id].append(target)
         works_by_id = {work.id: work for work in works}
-        magapoke_collision_item_ids = _magapoke_collision_item_ids(
-            items, sources, works_by_id
-        )
+        collision_source_ids = _collision_source_ids(items, sources, works_by_id)
         # A site-scoped plan only considers items with at least one source for that site.
         site_item_ids = set(sources_by_item)
         plan = BatchPlan()
@@ -163,7 +162,7 @@ class BatchPlanner:
                 plan.candidates.append(
                     _candidate_from_selection(
                         selection,
-                        magapoke_collision_item_ids=magapoke_collision_item_ids,
+                        collision_source_ids=collision_source_ids,
                     )
                 )
 
@@ -222,12 +221,16 @@ class BatchPlanner:
         return None
 
 
-def _metadata(work: Work, item: Item) -> dict[str, str]:
+def _metadata(work: Work, item: Item, source: Source) -> dict[str, str]:
     metadata: dict[str, str] = {}
+    order = archive_order_component(
+        order_label=item.order_label,
+        display_position=source.display_position,
+    )
     for target, value in (
         ("title", work.title),
         ("author", work.author),
-        ("order", item.order_label),
+        ("order", order),
         ("genre", work.genre),
     ):
         if value is not None and value.strip():
@@ -247,7 +250,7 @@ class _Selection:
 def _candidate_from_selection(
     selection: _Selection,
     *,
-    magapoke_collision_item_ids: set[int],
+    collision_source_ids: set[int],
 ) -> BatchCandidate:
     item = selection.item
     source = selection.source
@@ -263,15 +266,11 @@ def _candidate_from_selection(
         target_key=selection.target.target_key,
         locator=selection.target.locator,
         access_strategy=decision.access_strategy,
-        metadata=_metadata(selection.work, item),
+        metadata=_metadata(selection.work, item, source),
         artifact_disambiguator=(
-            f"mangaone-{source.external_id}"
-            if source.site == "mangaone" and item.order_key is None
-            else (
-                f"magapoke-{source.external_id}"
-                if source.site == "magapoke" and item.id in magapoke_collision_item_ids
-                else None
-            )
+            f"{source.site}-{source.external_id}"
+            if source.id in collision_source_ids
+            else None
         ),
         access_mode=source.access_mode,
         reason=decision.reason,
@@ -285,37 +284,38 @@ def _candidate_from_selection(
     )
 
 
-def _magapoke_collision_item_ids(
+def _collision_source_ids(
     items: Iterable[Item],
     sources: Iterable[Source],
     works_by_id: dict[int, Work],
 ) -> set[int]:
-    """Return Magapoke Items whose base archive stem collides within a Work.
+    """Return Sources whose sanitized base archive stem collides within a Work.
 
     The snapshot intentionally includes every Item status.  A completed Item's
     existing archive must still disambiguate a later pending Item with the same
-    final, sanitized archive stem.
+    final, sanitized archive stem.  Multiple Sources for one Item do not make a
+    collision by themselves; only groups containing at least two distinct Item
+    IDs are marked.
     """
 
     items_by_id = {item.id: item for item in items}
-    stems_by_work: dict[tuple[int, str], set[int]] = defaultdict(set)
+    sources_by_work_and_stem: dict[tuple[int, str], list[tuple[int, int]]] = defaultdict(list)
     for source in sources:
-        if source.site != "magapoke":
-            continue
         item = items_by_id.get(source.item_id)
         if item is None:
             continue
         work = works_by_id.get(item.work_id)
         if work is None:
             continue
-        base_stem, *_ = archive_stem(_metadata(work, item))
-        stems_by_work[(work.id, base_stem)].add(item.id)
+        base_stem, *_ = archive_stem(_metadata(work, item, source))
+        sources_by_work_and_stem[(work.id, base_stem)].append((item.id, source.id))
 
-    collision_item_ids: set[int] = set()
-    for item_ids in stems_by_work.values():
+    collision_source_ids: set[int] = set()
+    for entries in sources_by_work_and_stem.values():
+        item_ids = {item_id for item_id, _ in entries}
         if len(item_ids) > 1:
-            collision_item_ids.update(item_ids)
-    return collision_item_ids
+            collision_source_ids.update(source_id for _, source_id in entries)
+    return collision_source_ids
 
 
 def _normalize_now(value: datetime) -> datetime:

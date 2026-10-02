@@ -126,6 +126,27 @@ def test_archive_stem_without_disambiguator_is_unchanged() -> None:
     assert stem == "作品名-第80話"
 
 
+def test_position_prefixed_metadata_names_archive_and_status(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "page-0001.png").write_bytes(b"png")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+
+    result = package_crawl_output(
+        crawl_dir,
+        {"title": "作品名", "order": "003-番外編", "genre": "漫画"},
+        library_dir=tmp_path / "Books",
+    )
+
+    assert result.archive_path == (
+        tmp_path / "Books" / "漫画" / "作品名" / "作品名-003-番外編.zip"
+    )
+    assert result.status_path == tmp_path / "crawl-status" / "作品名-003-番外編.json"
+
+
 def test_package_crawl_output_creates_library_tree_and_zip(tmp_path) -> None:
     crawl_dir = tmp_path / "crawl"
     crawl_dir.mkdir()

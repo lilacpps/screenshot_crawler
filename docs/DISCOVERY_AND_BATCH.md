@@ -1438,10 +1438,13 @@ BatchCandidateはCatalog identityとして`item_id`、`source_id`、`target_id`�
 BatchCandidateは必要な場合だけ、Crawlerのmetadataとは別のpackaging-onlyな
 `artifact_disambiguator`を持てる。これはarchive filenameとcompletion status filenameの
 suffixに使うが、ZIP内部の画像パス、`title` / `order`等のmetadataやCatalogの`order_label`は変更しない。
-Manga ONEの`order_key = NULL` itemでは、Batch Plannerがstableな
-`mangaone-{Source.external_id}`を設定する。Magapokeでは同一Work内の全statusのItemを
-対象に、packagingの`archive_stem()`後のbase stemが重複するgroupへだけ
-`magapoke-{Source.external_id}`を設定する。通常item、手動crawl、他siteでは未指定とする。
+Batch Plannerの`order`は`Source.display_position`と`Item.order_label`からshared
+`archive_order_component()`で作る。positionは最小3桁のprefixで、labelなしはpositionのみ、
+position=NULLは従来のlabelを使い、`order_key`・ID・title等から推測しない。Plannerは
+site-scoped snapshotの全status Item/Sourceを対象に、`archive_stem()`後のsanitized base
+stemを同一Work内で比較する。distinct Item IDが2件以上のcollision groupに属するSourceだけへ
+`{site}-{Source.external_id}`を設定し、同一Itemの複数Sourceはcollision扱いしない。これは
+Manga ONE/Magapokeを含むsite-neutralなルールである。通常itemではsuffixを付けない。
 
 手動crawlでは:
 
@@ -1694,8 +1697,8 @@ final schema validation. Normal Catalog runtime does not implicitly migrate an
 older database. Schema v6 adds nullable `items.note` and nullable
 `sources.display_position`, expands Item status to `pending | completed | skipped |
 external`, and keeps only `pending` Batch-eligible. P1 stores display positions
-and P2 assigns them during successful Discovery. Position-prefixed archive naming
-and archive renumbering remain planned P3/P4 phases.
+and P2 assigns them during successful Discovery. P3 uses them for new Batch
+archive/status names; existing archive renumbering remains planned P4.
 
 ### Discovery display position contract (P2 implemented)
 
@@ -1723,6 +1726,26 @@ non-NULL baseline is fail-safe and leaves NULL positions unchanged. Position
 assignment uses only records already yielded by the existing run and performs
 no additional site access. Item status, `completed_at`, and operator notes
 remain unchanged.
+
+### Batch archive naming contract (P3 implemented)
+
+Batch output metadata uses the shared `archive_order_component()` helper. For a
+non-NULL `display_position`, the order is `{position:03d}-{order_label}` or the
+position alone when the label is NULL; three digits are a minimum width. For a
+NULL position, the existing `order_label` is preserved and no value is inferred
+from `order_key`, IDs, title text, or numeric parsing. The existing Core
+`archive_stem()` / `safe_component()` remains the final sanitization authority,
+so a new positioned crawl naturally uses the same stem for its ZIP and
+`crawl-status/<stem>.json` sidecar.
+
+Within one site planning snapshot, collision detection compares the sanitized
+base stem without a disambiguator, grouped by Work and base stem, across all
+Item statuses. A collision requires at least two distinct Item IDs. Only
+Sources in such a group receive `{site}-{external_id}`; multiple Sources for
+one Item alone do not. Cross-site or pre-existing filesystem collisions are
+not resolved by the Planner and remain fail-closed through packaging's existing
+`FileExistsError` behavior. Existing ZIPs, Artifact locators, and existing
+crawl-status JSON are outside P3 and are not renamed.
 
 Schema v2はsequential migrationの対象外であり、v2→v3 migrationは実装しない。
 `catalog migrate`はv3以降のDBに対してのみcomplete migration pathを要求する。v2 DBを利用する場合は、

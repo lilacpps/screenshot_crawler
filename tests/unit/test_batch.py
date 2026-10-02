@@ -10,6 +10,7 @@ from screenshot_crawler.catalog import (
     ItemInput,
     SourceInput,
     SourceTargetInput,
+    Work,
     WorkInput,
 )
 from screenshot_crawler.catalog.service import JST
@@ -90,16 +91,20 @@ def add_source(
     discovery_key: str | None = None,
     quota_started_at: str | None = None,
     access_granted_until: str | None = None,
-    work: WorkInput | None = None,
+    display_position: int | None = None,
+    work: WorkInput | Work | None = None,
 ):
-    catalog_item = add_item(
-        service,
-        item,
-        work=work or WorkInput(
-            work_key=f"work-{external_id}",
-            title=item.item_title or external_id,
-        ),
-    )
+    if isinstance(work, Work):
+        catalog_item = service.create_item(item, work_id=work.id)
+    else:
+        catalog_item = add_item(
+            service,
+            item,
+            work=work or WorkInput(
+                work_key=f"work-{external_id}",
+                title=item.item_title or external_id,
+            ),
+        )
     source = service.create_source(
         SourceInput(
             site="mangaone",
@@ -110,6 +115,7 @@ def add_source(
             available=available,
             quota_started_at=quota_started_at,
             access_granted_until=access_granted_until,
+            display_position=display_position,
         ),
         item_id=catalog_item.id,
     )
@@ -152,13 +158,19 @@ def add_magapoke_source(
     order_label: str,
     external_id: str,
     status: str = "pending",
+    display_position: int | None = None,
 ):
     item = service.create_item(
         ItemInput(item_title=order_label, order_label=order_label, status=status),
         work_id=work.id,
     )
     source = service.create_source(
-        SourceInput(site="magapoke", external_id=external_id, access_mode="free"),
+        SourceInput(
+            site="magapoke",
+            external_id=external_id,
+            access_mode="free",
+            display_position=display_position,
+        ),
         item_id=item.id,
     )
     service.create_source_target(
@@ -327,19 +339,81 @@ def test_source_priority_and_metadata_mapping(tmp_path: Path) -> None:
     }
 
 
-def test_mangaone_non_numeric_order_gets_stable_artifact_disambiguator(tmp_path: Path) -> None:
+def test_batch_metadata_uses_source_display_position_for_archive_order(
+    tmp_path: Path,
+) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
+    item, _ = add_source(
+        service,
+        item=ItemInput(order_label="番外編"),
+        external_id="positioned",
+        access_mode="free",
+        display_position=3,
+        work=WorkInput(
+            work_key="positioned-work",
+            title="作品A",
+            author="作者A",
+            genre="漫画",
+        ),
+    )
+
+    candidate = plan_for(service).candidates[0]
+
+    assert candidate.item_id == item.id
+    assert candidate.metadata == {
+        "title": "作品A",
+        "author": "作者A",
+        "order": "003-番外編",
+        "genre": "漫画",
+    }
+
+
+def test_position_resolves_repeated_label_without_disambiguator(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="positioned-work", title="作品A"))
+    first_item, first_source = add_source(
+        service,
+        item=ItemInput(order_label="おまけ"),
+        external_id="first",
+        access_mode="free",
+        display_position=1,
+        work=work,
+    )
+    second_item, second_source = add_source(
+        service,
+        item=ItemInput(order_label="おまけ"),
+        external_id="second",
+        access_mode="free",
+        display_position=2,
+        work=work,
+    )
+
+    candidates = {candidate.source_id: candidate for candidate in plan_for(service).candidates}
+
+    assert candidates[first_source.id].item_id == first_item.id
+    assert candidates[second_source.id].item_id == second_item.id
+    assert candidates[first_source.id].metadata["order"] == "001-おまけ"
+    assert candidates[second_source.id].metadata["order"] == "002-おまけ"
+    assert candidates[first_source.id].artifact_disambiguator is None
+    assert candidates[second_source.id].artifact_disambiguator is None
+
+
+def test_null_position_collision_gets_generic_artifact_disambiguator(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="mangaone-work", title="作品A"))
     first_item, first_source = add_source(
         service,
         item=ItemInput(item_title="おまけ", order_label="おまけ"),
         external_id="214131",
         access_mode="free",
+        work=work,
     )
     second_item, second_source = add_source(
         service,
         item=ItemInput(item_title="おまけ", order_label="おまけ"),
         external_id="214987",
         access_mode="free",
+        work=work,
     )
 
     plan = plan_for(service)
@@ -353,18 +427,28 @@ def test_mangaone_non_numeric_order_gets_stable_artifact_disambiguator(tmp_path:
     assert candidates[second_source.id].item_id == second_item.id
 
 
-def test_magapoke_distinct_episode_labels_keep_normal_filename(tmp_path: Path) -> None:
+def test_magapoke_positioned_repeated_labels_keep_normal_filename(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     work = service.create_work(WorkInput(work_key="magapoke-work", title="作品A"))
     _, first_source = add_magapoke_source(
-        service, work=work, order_label="【第1話】", external_id="1"
+        service,
+        work=work,
+        order_label="番外編",
+        external_id="1",
+        display_position=1,
     )
     _, second_source = add_magapoke_source(
-        service, work=work, order_label="【第2話】", external_id="2"
+        service,
+        work=work,
+        order_label="番外編",
+        external_id="2",
+        display_position=2,
     )
 
     candidates = {candidate.source_id: candidate for candidate in magapoke_plan_for(service).candidates}
 
+    assert candidates[first_source.id].metadata["order"] == "001-番外編"
+    assert candidates[second_source.id].metadata["order"] == "002-番外編"
     assert candidates[first_source.id].artifact_disambiguator is None
     assert candidates[second_source.id].artifact_disambiguator is None
 
@@ -459,16 +543,78 @@ def test_magapoke_sanitized_archive_stem_collision_disambiguates_items(
     service = CatalogService(tmp_path / "catalog.sqlite")
     work = service.create_work(WorkInput(work_key="magapoke-work", title="作品A"))
     _, first_source = add_magapoke_source(
-        service, work=work, order_label="番外/編", external_id="100"
+        service,
+        work=work,
+        order_label="番外/編",
+        external_id="100",
+        display_position=3,
     )
     _, second_source = add_magapoke_source(
-        service, work=work, order_label="番外編", external_id="200"
+        service,
+        work=work,
+        order_label="番外編",
+        external_id="200",
+        display_position=3,
     )
 
     candidates = {candidate.source_id: candidate for candidate in magapoke_plan_for(service).candidates}
 
     assert candidates[first_source.id].artifact_disambiguator == "magapoke-100"
     assert candidates[second_source.id].artifact_disambiguator == "magapoke-200"
+
+
+def test_same_position_same_label_collision_gets_generic_suffix(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="same-position-work", title="作品A"))
+    _, first_source = add_source(
+        service,
+        item=ItemInput(order_label="番外編"),
+        external_id="first",
+        access_mode="free",
+        display_position=3,
+        work=work,
+    )
+    _, second_source = add_source(
+        service,
+        item=ItemInput(order_label="番外編"),
+        external_id="second",
+        access_mode="free",
+        display_position=3,
+        work=work,
+    )
+
+    candidates = {candidate.source_id: candidate for candidate in plan_for(service).candidates}
+
+    assert candidates[first_source.id].metadata["order"] == "003-番外編"
+    assert candidates[second_source.id].metadata["order"] == "003-番外編"
+    assert candidates[first_source.id].artifact_disambiguator == "mangaone-first"
+    assert candidates[second_source.id].artifact_disambiguator == "mangaone-second"
+
+
+def test_same_item_multiple_sources_are_not_a_collision(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="multi-source-work", title="作品A"))
+    item = service.create_item(ItemInput(order_label="おまけ"), work_id=work.id)
+    first_source = service.create_source(
+        SourceInput(site="mangaone", external_id="first", access_mode="free"),
+        item_id=item.id,
+    )
+    second_source = service.create_source(
+        SourceInput(site="mangaone", external_id="second", access_mode="free"),
+        item_id=item.id,
+    )
+    for source in (first_source, second_source):
+        service.create_source_target(
+            SourceTargetInput(
+                backend="web", locator=f"https://manga-one.example/{source.external_id}"
+            ),
+            source_id=source.id,
+        )
+
+    candidates = plan_for(service).candidates
+
+    assert len(candidates) == 1
+    assert candidates[0].artifact_disambiguator is None
 
 
 def test_mangaone_numeric_order_has_no_artifact_disambiguator(tmp_path: Path) -> None:
