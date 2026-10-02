@@ -861,8 +861,8 @@ collisionを検出してoverwriteを拒否する。実行時はZIPをunique sibl
 Artifact locatorと同一fileを指す場合だけmatchingとし、matching時だけrenameして`archive_path`のみ
 更新する。missing/mismatch statusはwarningでZIP renameをblockしない。Catalog側は
 `update_artifact_locators()`のcompare-and-set一括transactionでlocator/updated_atだけを更新し、
-SHA-256、byte size、state、CrawlRun、Item、historical Artifactを変更しない。Catalog更新失敗時は
-ZIP/statusを二段階rollbackし、成功時は明示ERROR、失敗時は`RECOVERY_REQUIRED`と復旧pathを報告する。
+SHA-256、byte size、state、CrawlRun、Item、historical Artifactを変更しない。Catalog更新失敗時（SQLite由来を含む通常の
+Python例外）はZIP/statusを二段階rollbackし、成功時は明示ERROR、失敗時は`RECOVERY_REQUIRED`と復旧pathを報告する。
 実Catalogや実archiveへの`--apply`は未実行である。
 
 既存ZIPの移行用に、`scripts/flatten_zip_archives.py`を提供する。指定directory配下を

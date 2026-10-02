@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -436,7 +437,21 @@ def test_duplicate_cross_site_target_is_collision(tmp_path: Path) -> None:
     assert [entry.status for entry in plan.entries] == ["COLLISION", "COLLISION"]
 
 
-def test_catalog_failure_rolls_back_zip_and_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "exception_factory",
+    [
+        pytest.param(lambda: RuntimeError("forced"), id="runtime-error"),
+        pytest.param(
+            lambda: sqlite3.OperationalError("database is locked"),
+            id="sqlite-operational-error",
+        ),
+    ],
+)
+def test_catalog_failure_rolls_back_zip_and_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exception_factory,
+) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     _, item, source, target = _make_source(catalog, tmp_path)
     old = tmp_path / "legacy.zip"
@@ -447,14 +462,60 @@ def test_catalog_failure_rolls_back_zip_and_status(tmp_path: Path, monkeypatch: 
     original_status = status_path.read_bytes()
 
     plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=status_dir)
-    monkeypatch.setattr(catalog, "update_artifact_locators", lambda _assignments: (_ for _ in ()).throw(RuntimeError("forced")))
+    def fail_catalog_update(_assignments):
+        raise exception_factory()
+
+    monkeypatch.setattr(catalog, "update_artifact_locators", fail_catalog_update)
     result = apply_archive_renumber_plan(plan)
 
+    entry = plan.entries[0]
     assert result.error == "ERROR Catalog update failed; filesystem rollback completed"
     assert old.exists()
-    assert not plan.entries[0].new_path.exists()
+    assert not entry.new_path.exists()
+    assert not list(tmp_path.glob(".*.zip.*.tmp"))
     assert status_path.read_bytes() == original_status
+    assert not entry.new_status_path.exists()
     assert catalog.get_artifact(artifact.id).locator == old.as_posix()
+
+
+def test_collision_dependency_marks_both_entries_as_collision(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="dependency", title="作品", genre="漫画"))
+
+    rows = []
+    for order_label, external_id, position in (("b", "a", 1), ("blocked", "b", 2)):
+        item = catalog.create_item(
+            ItemInput(item_title=order_label, order_label=order_label), work_id=work.id
+        )
+        source = catalog.create_source(
+            SourceInput(
+                site="mangaone",
+                external_id=external_id,
+                display_position=position,
+                access_mode="free",
+            ),
+            item_id=item.id,
+        )
+        target = catalog.create_source_target(
+            SourceTargetInput(backend="web", locator=f"https://example.invalid/{external_id}"),
+            source_id=source.id,
+        )
+        rows.append((item, source, target))
+
+    _add_archive(catalog, rows[0][0].id, rows[0][1].id, rows[0][2].id, tmp_path / "a.zip")
+    _add_archive(
+        catalog,
+        rows[1][0].id,
+        rows[1][1].id,
+        rows[1][2].id,
+        tmp_path / "作品-001-b.zip",
+    )
+    blocked = tmp_path / "作品-002-blocked.zip"
+    blocked.write_bytes(b"non-participating")
+
+    plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=tmp_path / "status")
+
+    assert [entry.status for entry in plan.entries] == ["COLLISION", "COLLISION"]
 
 
 def test_scope_requires_explicit_filter_and_all_cannot_mix(tmp_path: Path) -> None:

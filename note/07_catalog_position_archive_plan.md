@@ -667,7 +667,8 @@ IMPLEMENTED.
   Artifact id and expected locator before updating only `locator` and
   `updated_at`; SHA-256, byte size, state, CrawlRun, Item, and historical rows
   remain unchanged.
-- Catalog failure attempts a two-stage filesystem/status rollback and reports
+- Catalog failure, including ordinary SQLite/database exceptions, attempts a
+  two-stage filesystem/status rollback and reports
   `ERROR Catalog update failed; filesystem rollback completed`. If rollback
   cannot complete, `RECOVERY_REQUIRED` includes artifact, old/new/current/temp,
   and status paths. P5 real Catalog/output rollout and live verification are

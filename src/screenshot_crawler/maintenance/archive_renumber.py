@@ -229,7 +229,7 @@ def apply_archive_renumber_plan(plan: ArchiveRenumberPlan) -> ArchiveRenumberRes
         }
         catalog_update_attempted = True
         plan.catalog.update_artifact_locators(assignments)
-    except (AssertionError, OSError, RuntimeError, TypeError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - fail-safe rollback for mutation errors
         rollback_ok, details = _rollback(entries)
         if rollback_ok:
             if catalog_update_attempted:
