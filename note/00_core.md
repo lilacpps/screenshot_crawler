@@ -1236,8 +1236,8 @@ Grant-only leaves Items pending and creates no capture/package/Artifact.
 
 ### Phase 6 cross-site verification current state
 
-The full automated regression suite is green across Magapoke, Manga ONE, and
-BookWalker (`681 passed`). It covers Phase 1 pacing and timeout isolation,
+The full automated regression suite has been run and is green across Magapoke,
+Manga ONE, and BookWalker. It covers Phase 1 pacing and timeout isolation,
 Phase 2 AccessGuard/metrics, generic resource passes, Work/Premium grant-only,
 Catalog v6 migration, adapter retry/capture, and normal Batch semantics.
 Read-only `batch plan` also passed for all three sites on a temporary v5 -> v6

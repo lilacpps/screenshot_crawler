@@ -316,6 +316,28 @@ def test_production_v5_to_v6_migration_preserves_ids_and_foreign_keys(
             "VALUES (1, 'web', 'https://example.invalid/1', "
             "'2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
         )
+        connection.execute(
+            "INSERT INTO crawl_runs ("
+            "item_id, source_id, target_id, site_snapshot, external_id_snapshot, "
+            "backend_snapshot, target_key_snapshot, locator_snapshot, access_strategy, "
+            "status, started_at, finished_at, page_count, stop_reason, error_type, "
+            "error_message, created_at, updated_at"
+            ") VALUES (1, 1, 1, 'magapoke', 'episode-1', 'web', 'default', "
+            "'https://example.invalid/1', 'direct', 'succeeded', "
+            "'2026-01-02T00:00:00+09:00', '2026-01-02T00:05:00+09:00', 3, "
+            "'normal', NULL, NULL, '2026-01-02T00:00:00+09:00', "
+            "'2026-01-02T00:05:00+09:00')"
+        )
+        connection.execute(
+            "INSERT INTO artifacts ("
+            "item_id, crawl_run_id, kind, format, sha256, byte_size, storage_backend, "
+            "locator, state, last_verified_at, created_at, updated_at"
+            ") VALUES (1, 1, 'archive', 'zip', "
+            "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 123, "
+            "'filesystem', 'archives/work/episode-1.zip', 'present', "
+            "'2026-01-02T00:05:00+09:00', '2026-01-02T00:05:00+09:00', "
+            "'2026-01-02T00:05:00+09:00')"
+        )
         connection.execute("PRAGMA user_version = 5")
 
     result = migrate_catalog(path, backup_dir=backup_dir)
@@ -332,6 +354,13 @@ def test_production_v5_to_v6_migration_preserves_ids_and_foreign_keys(
         ).fetchone() == (1, "completed", "2026-01-02T00:00:00+09:00", None)
         assert connection.execute("SELECT id FROM sources").fetchone()[0] == 1
         assert connection.execute("SELECT display_position FROM sources").fetchone()[0] is None
+        assert connection.execute("SELECT id FROM source_targets").fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT id, item_id, source_id, target_id FROM crawl_runs"
+        ).fetchone() == (1, 1, 1, 1)
+        assert connection.execute(
+            "SELECT id, item_id, crawl_run_id FROM artifacts"
+        ).fetchone() == (1, 1, 1)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
     service = CatalogService(path)

@@ -1685,7 +1685,7 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 - `direct` strategyは初期実装で購入済みfull reader以外をclickしない
 - strict entry失敗時にitemをcompletedにしない
 
-## 16. Schema v3 transition policy
+## 16. Schema transition policy
 
 The current Catalog schema is v6. The explicit `catalog migrate` flow supports
 the sequential v3 -> v4 -> v5 -> v6 path with an automatic pre-migration backup,
@@ -1697,18 +1697,20 @@ external`, and keeps only `pending` Batch-eligible. P1 stores display positions
 when explicitly supplied but does not assign them in Discovery; position numbering,
 position-prefixed archive naming, and archive renumbering remain planned phases.
 
-Schema v3導入時は、現在のSchema v2 DBをschema-neutralなSQLite backupとして保持したうえで破棄し、
-新しいv3 DBを初期化してWatchlist全targetを `full` discoveryする。既存local stateの移行価値が低いため、
-v2→v3 migrationは実装しない。
+Schema v2はsequential migrationの対象外であり、v2→v3 migrationは実装しない。
+`catalog migrate`はv3以降のDBに対してのみcomplete migration pathを要求する。v2 DBを利用する場合は、
+既存DBをschema-neutralなSQLite backupとして保持したうえで新しいv3以降のDBを初期化し、
+Watchlist全targetを `full` discoveryする運用とする。
 
 Schema v3以降はDBを運用データの正本として扱い、原則として破棄再構築しない。`catalog backup`は
-SQLite online backup API、WAL対応、overwrite拒否、quick_check検証を提供する。`catalog migrate`は
-`PRAGMA user_version`を使った順次migration（例: v3→v4→v5→v6）を明示的に実行し、migration実行前に
-complete migration pathを確認してから`BEGIN IMMEDIATE`でwriter lockを取得し、そのlock中に
-automatic backupを作成する。続いて単一transactionのrollbackと成功後のschema/integrity検証を行う。
-現在の`SCHEMA_VERSION=3`ではmigration registryは空で、v3はno-op、v2→v3はunsupportedである。
+SQLite online backup API、WAL対応、overwrite拒否、quick_check検証を提供する。現在の
+`SCHEMA_VERSION=6`ではmigration registryにv3→v4、v4→v5、v5→v6の各stepが登録されており、
+`catalog migrate`は`PRAGMA user_version`に従ってこの順次migrationを明示的に実行する。
+migration実行前にcomplete migration pathを確認してから`BEGIN IMMEDIATE`でwriter lockを取得し、
+そのlock中にautomatic backupを作成する。続いて単一transactionのrollbackと成功後の
+schema/integrity検証を行う。v2→v3 migrationは引き続きunsupportedである。
 
-v3では将来ケースを先取りして過剰なtableを作らない。必要になった時点で以下のような追加tableを
+現行Catalogでは将来ケースを先取りして過剰なtableを作らない。必要になった時点で以下のような追加tableを
 migrationで足せる境界を維持する。
 
 ```text
