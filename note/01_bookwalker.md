@@ -2338,3 +2338,67 @@ materialization, signatures, or coefficient readback. Their correctness and
 complexity balance is preferred at this phase boundary. Native materialization
 lazy evaluation, signature redesign, original matcher changes, compact
 transport v2, and Core/YAML/DB/packaging changes remain out of scope.
+
+### 20.22 P4-5 mapping provenance regression investigation (2026-10-02)
+
+The P4-5 fallback regression was investigated with bounded provenance
+instrumentation before changing any mapping authority. The BookWalker draw
+trace now retains at most four `nonImageBitmapDraws` per active segment and
+the selected compact transport carries those records plus small summaries of
+the bounded retained completed mappings. The summary includes canvas identity,
+operation ordering, clear/tile boundaries, tile count, ImageBitmap source IDs,
+and source/target dimensions. It does not transfer the full retained trace or
+tile payload for unselected mappings.
+
+The fresh default run used the shared Crawler Chrome/CDP session, the requested
+purchased URL, `BOOKWALKER_FINAL_PIXEL_VERIFY` unset, and
+`output/bookwalker-p4-6-provenance-r4`. It saved four artifacts from two
+logical captures (`29/314` and `31/314`); all four returned `native_png`.
+Every selected renderer mapping had an exact mapping ID, zero direct tile
+draws, one `non_image_bitmap_draw`, and no trace overflow. The selected chains
+were:
+
+```text
+renderer canvas 3, selected source/segment target canvas 5,
+copy source canvas 4 -> target canvas 5,
+copy op 6041/7250 on 29/314 and 3620/4829 on 31/314,
+copy source 960x1280 -> target 480x640,
+sourceRect=(0,0,960,1280), destination=(0,0,480,640),
+identity transform, alpha=1, source-over, filter=none.
+```
+
+The retained summaries proved that the tile-rich mapping is the immediately
+preceding canvas-4-to-canvas-5 mapping, not an unrelated same-size or nearby
+mapping. For example, on `29/314`, mapping `mapping-6041` has source canvas 4,
+target canvas 5, renderer operation 6041, clear 4835, tile operations
+4841-6040, 1,200 tiles, ImageBitmap source 2, and 960x1280 -> 480x640
+dimensions; the selected downstream mapping is `mapping-6042` and its copy
+operation is 6041 before renderer operation 6042. The corresponding `31/314`
+chain is `mapping-3620` -> `mapping-3621` and `mapping-4829` ->
+`mapping-4830`, with the same identities and dimensions. Retained traces had
+6-10 completed mappings and 3,600-6,000 tile records, while the selected
+compact payload returned two mappings and zero tile records.
+
+This is a real one-hop HTMLCanvasElement copy, but it is not hypothesis A's
+strict safe full-canvas identity copy: both source and destination rectangles
+are full, yet the source canvas is 960x1280 and the target canvas is 480x640,
+so the operation is a 0.5x resize. The live root-cause classification is C
+(partial/canvas resize path), not a trace reset, wrong active segment, or
+dimension/time-proximity selection error. The existing exact renderer
+`mappingId` authority therefore remains unchanged.
+
+No production `canvas_copy_1hop` proof was adopted. In particular, the
+strict conditions requiring equal source/target dimensions, full-size identity
+geometry, one safe non-ImageBitmap copy, no other unsafe operation, exact
+canvas identity, and complete upstream mapping proof were not weakened to
+accept this scaled copy. The bounded diagnostic fields are the only adopted
+change; direct completed ImageBitmap-tile mappings retain
+`mapping_provenance=direct`.
+
+Because the live case is not A, no reconstructed-JPEG success, diagnostic
+pixel-exact run, or P4-4 versus P4-5 performance comparison is claimed from
+this investigation. `BOOKWALKER_FINAL_PIXEL_VERIFY=1` was not used after the
+diagnostic classification, and the pre-existing P4-5 default-off behavior
+remains unchanged. Supporting the observed resize would require a separate
+proof of the resize's JPEG/DCT equivalence; it must not be inferred from this
+trace.

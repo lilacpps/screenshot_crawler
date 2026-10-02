@@ -83,6 +83,7 @@ class PurchasedMapping:
     unsafe_operation_count: int = 0
     first_unsafe_operation_index: int | None = None
     unsafe_operation_types: tuple[str, ...] = ()
+    mapping_provenance: str = "direct"
 
     def as_dict(self) -> dict[str, Any]:
         """Return the small JSON-compatible contract used by diagnostics."""
@@ -124,6 +125,7 @@ class PurchasedMapping:
             "unsafe_operation_count": self.unsafe_operation_count,
             "first_unsafe_operation_index": self.first_unsafe_operation_index,
             "unsafe_operation_types": list(self.unsafe_operation_types),
+            "mapping_provenance": self.mapping_provenance,
             "complete_bijection": True,
         }
 
@@ -156,6 +158,10 @@ class MappingAnalysis:
     unsafe_operation_count: int = 0
     first_unsafe_operation_index: int | None = None
     unsafe_operation_types: tuple[str, ...] = ()
+    mapping_provenance: str | None = None
+    non_image_bitmap_draws: tuple[dict[str, Any], ...] = ()
+    renderer_canvas_id: str | None = None
+    source_canvas_id: str | None = None
 
     @property
     def proven(self) -> bool:
@@ -187,6 +193,12 @@ class MappingAnalysis:
             "unsafe_operation_count": self.unsafe_operation_count,
             "first_unsafe_operation_index": self.first_unsafe_operation_index,
             "unsafe_operation_types": list(self.unsafe_operation_types),
+            "mapping_provenance": self.mapping_provenance,
+            "non_image_bitmap_draws": [
+                json.loads(json.dumps(item)) for item in self.non_image_bitmap_draws
+            ],
+            "renderer_canvas_id": self.renderer_canvas_id,
+            "source_canvas_id": self.source_canvas_id,
         }
         if self.mapping is not None:
             result.update({
@@ -474,6 +486,105 @@ def _decode_compact_tiles(
     return tiles
 
 
+def _decode_compact_non_image_bitmap_draws(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise TypeError("compact non-ImageBitmap draws are not a list")
+    draws: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise TypeError("compact non-ImageBitmap draw is not an object")
+        operation_index = _compact_integer(_compact_required(item, "operationIndex"))
+        source_value = _compact_required(item, "source")
+        if not isinstance(source_value, Mapping):
+            raise TypeError("compact provenance source is not an object")
+        constructor = _compact_required(source_value, "constructor")
+        source_id = _compact_required(source_value, "sourceId")
+        if not isinstance(constructor, str) or not isinstance(source_id, str):
+            raise TypeError("compact provenance source identity has an impossible type")
+        source: dict[str, Any] = {
+            "constructor": constructor,
+            "sourceId": source_id,
+            "width": _compact_number(_compact_required(source_value, "width")),
+            "height": _compact_number(_compact_required(source_value, "height")),
+        }
+        canvas_id = source_value.get("canvasId", source_value.get("sourceCanvasId"))
+        if canvas_id is not None and not isinstance(canvas_id, str):
+            raise TypeError("compact provenance source canvas id has an impossible type")
+        if canvas_id is not None:
+            source["canvasId"] = canvas_id
+            source["sourceCanvasId"] = canvas_id
+        draws.append({
+            "operationIndex": operation_index,
+            "source": source,
+            "target": _compact_canvas(_compact_required(item, "target")),
+            "sourceRect": _compact_rectangle(_compact_required(item, "sourceRect")),
+            "destination": _compact_rectangle(_compact_required(item, "destination")),
+            "transform": _compact_transform(_compact_required(item, "transform")),
+            "globalAlpha": _compact_number(_compact_required(item, "globalAlpha")),
+            "globalCompositeOperation": _compact_required(item, "globalCompositeOperation"),
+            "filter": _compact_required(item, "filter"),
+        })
+        if not isinstance(draws[-1]["globalCompositeOperation"], str):
+            raise TypeError("compact provenance composite has an impossible type")
+        if not isinstance(draws[-1]["filter"], str):
+            raise TypeError("compact provenance filter has an impossible type")
+    return draws
+
+
+def _decode_compact_mapping_summaries(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise TypeError("compact mapping summaries are not a list")
+    summaries: list[dict[str, Any]] = []
+    nullable_fields = {
+        "segmentFirstTileOperationIndex",
+        "segmentLastTileOperationIndex",
+    }
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise TypeError("compact mapping summary is not an object")
+        result: dict[str, Any] = {}
+        for key in (
+            "mappingId",
+            "sourceCanvasId",
+            "targetCanvasId",
+        ):
+            field = _compact_required(item, key)
+            if not isinstance(field, str):
+                raise TypeError("compact mapping summary id has an impossible type")
+            result[key] = field
+        for key in (
+            "rendererOperationIndex",
+            "segmentClearOperationIndex",
+            "segmentTileCount",
+        ):
+            number = _compact_integer(_compact_required(item, key))
+            if number < 0:
+                raise ValueError("compact mapping summary has a negative index/count")
+            result[key] = number
+        for key in nullable_fields:
+            value_for_key = _compact_required(item, key)
+            result[key] = (
+                None if value_for_key is None else _compact_integer(value_for_key)
+            )
+        source_ids = _compact_required(item, "sourceImageBitmapIds")
+        if not isinstance(source_ids, list) or any(
+            not isinstance(source_id, str) for source_id in source_ids
+        ):
+            raise TypeError("compact mapping summary source ids are invalid")
+        result["sourceImageBitmapIds"] = list(source_ids)
+        for key in ("sourceDimensions", "targetDimensions"):
+            dimensions = _compact_required(item, key)
+            if not isinstance(dimensions, Mapping):
+                raise TypeError("compact mapping summary dimensions are invalid")
+            width = _compact_integer(_compact_required(dimensions, "width"))
+            height = _compact_integer(_compact_required(dimensions, "height"))
+            if width <= 0 or height <= 0:
+                raise ValueError("compact mapping summary dimensions are invalid")
+            result[key] = {"width": width, "height": height}
+        summaries.append(result)
+    return summaries
+
+
 def _decode_compact_mapping(value: object) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise TypeError("compact mapping is not an object")
@@ -561,6 +672,9 @@ def _decode_compact_mapping(value: object) -> dict[str, Any]:
         composites,
         filters,
     )
+    non_image_bitmap_draws = _decode_compact_non_image_bitmap_draws(
+        value.get("nonImageBitmapDraws", [])
+    )
     if segment_tile_count != len(tiles):
         raise ValueError("compact segment tile count does not match tile rows")
     return {
@@ -586,6 +700,7 @@ def _decode_compact_mapping(value: object) -> dict[str, Any]:
         "firstUnsafeOperationIndex": nullable_indices["firstUnsafeOperationIndex"],
         "unsafeOperationTypes": list(unsafe_types),
         "segmentOverflow": value["segmentOverflow"],
+        "nonImageBitmapDraws": non_image_bitmap_draws,
     }
 
 
@@ -611,6 +726,9 @@ def decode_compact_completed_mappings(
                 raise ValueError("compact summary contains a negative count")
             summary[key] = number
         mappings = [_decode_compact_mapping(item) for item in compact_mappings]
+        retained_summaries = _decode_compact_mapping_summaries(
+            payload.get("retainedCompletedMappingSummaries", [])
+        )
         returned_tile_count = sum(len(item["tileDraws"]) for item in mappings)
         if summary["returnedCompletedMappingCount"] != len(mappings):
             raise ValueError("compact returned mapping count is inconsistent")
@@ -618,6 +736,7 @@ def decode_compact_completed_mappings(
             raise ValueError("compact returned tile count is inconsistent")
         result: dict[str, Any] = {
             "completedMappings": mappings,
+            "retainedCompletedMappingSummaries": retained_summaries,
             **summary,
         }
         return result
@@ -1113,7 +1232,10 @@ def _analyze_completed_mapping(
     base = {
         "mapping_source": "completed_segment",
         "mapping_id": mapping_id,
+        "mapping_provenance": None,
         "renderer_geometry_classification": classification,
+        "renderer_canvas_id": str(_first(renderer_target, "canvasId", "canvas_id") or "") or None,
+        "source_canvas_id": record_source_canvas_id,
         "segment_clear_operation_index": _record_segment_value(
             record, segment, "segmentClearOperationIndex", "segment_clear_operation_index", "clearOperationIndex", "clear_operation_index"
         ),
@@ -1131,6 +1253,22 @@ def _analyze_completed_mapping(
         "first_unsafe_operation_index": _record_segment_value(record, segment, "firstUnsafeOperationIndex", "first_unsafe_operation_index"),
         "unsafe_operation_types": (),
     }
+    non_image_bitmap_draws_value = _record_segment_value(
+        record, segment, "nonImageBitmapDraws", "non_image_bitmap_draws"
+    )
+    if non_image_bitmap_draws_value is None:
+        base["non_image_bitmap_draws"] = ()
+    elif not isinstance(non_image_bitmap_draws_value, list) or any(
+        not isinstance(item, Mapping) for item in non_image_bitmap_draws_value
+    ):
+        return _reject_result(
+            "completed segment non-ImageBitmap provenance metadata is invalid",
+            **base,
+        )
+    else:
+        base["non_image_bitmap_draws"] = tuple(
+            dict(item) for item in non_image_bitmap_draws_value
+        )
     unsafe_count_value = _record_segment_value(
         record, segment, "unsafeOperationCount", "unsafe_operation_count"
     )
@@ -1332,6 +1470,7 @@ def _analyze_completed_mapping(
         unsafe_operation_count=0,
         first_unsafe_operation_index=None,
         unsafe_operation_types=(),
+        mapping_provenance="direct",
     )
     return MappingAnalysis(
         status=MAPPING_PROVEN,
@@ -1346,6 +1485,8 @@ def _analyze_completed_mapping(
         segment_expected_tile_count=expected_count,
         segment_overflow=False,
         renderer_geometry_classification=classification,
+        mapping_provenance="direct",
+        non_image_bitmap_draws=(),
     )
 
 

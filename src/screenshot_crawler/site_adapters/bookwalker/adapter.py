@@ -85,6 +85,7 @@ _DRAW_TRACE_SCRIPT = """
   const MAX_TILE_DRAWS_PER_SEGMENT = 16384;
   const MAX_COMPLETED_MAPPINGS = 12;
   const MAX_COMPLETED_TILE_RECORDS = 20000;
+  const MAX_NON_IMAGE_BITMAP_DRAW_RECORDS = 4;
   const FULL_CLEAR_EPSILON = 1e-7;
   const original = CanvasRenderingContext2D.prototype.drawImage;
   let nextCanvasId = 1;
@@ -273,6 +274,7 @@ _DRAW_TRACE_SCRIPT = """
       unsafeOperationCount: 0,
       firstUnsafeOperationIndex: null,
       unsafeOperationTypes: [],
+      nonImageBitmapDraws: [],
       overflow: false,
       expectedTileCount: null,
     };
@@ -340,6 +342,14 @@ _DRAW_TRACE_SCRIPT = """
       segmentExpectedTileCount: segment.expectedTileCount,
       tileDraws: segment.tileDraws.map(tile => ({...tile, source: {...tile.source}, target: {...tile.target}})),
       sourceIds: [...segment.sourceIds],
+      nonImageBitmapDraws: segment.nonImageBitmapDraws.map(draw => ({
+        ...draw,
+        source: draw.source ? {...draw.source} : null,
+        target: draw.target ? {...draw.target} : null,
+        sourceRect: draw.sourceRect ? {...draw.sourceRect} : null,
+        destination: draw.destination ? {...draw.destination} : null,
+        transform: draw.transform ? {...draw.transform} : null,
+      })),
       unsafeOperationCount: segment.unsafeOperationCount,
       firstUnsafeOperationIndex: segment.firstUnsafeOperationIndex,
       unsafeOperationTypes: [...segment.unsafeOperationTypes],
@@ -363,6 +373,19 @@ _DRAW_TRACE_SCRIPT = """
       const safe = isSafeDraw(operation);
       if (sourceInfo?.constructor !== 'ImageBitmap') {
         markUnsafe(canvas, operation.index, 'non_image_bitmap_draw');
+        if (segment.nonImageBitmapDraws.length < MAX_NON_IMAGE_BITMAP_DRAW_RECORDS) {
+          segment.nonImageBitmapDraws.push({
+            operationIndex: operation.index,
+            source: sourceInfo ? {...sourceInfo} : null,
+            target: operation.target ? {...operation.target} : null,
+            sourceRect: geometry.sourceRect ? {...geometry.sourceRect} : null,
+            destination: geometry.destination ? {...geometry.destination} : null,
+            transform: operation.transform ? {...operation.transform} : null,
+            globalAlpha: operation.globalAlpha,
+            globalCompositeOperation: operation.globalCompositeOperation,
+            filter: operation.filter,
+          });
+        }
       } else if (!safe) {
         if (operation.transform && (
             operation.transform.a !== 1 || operation.transform.b !== 0
@@ -724,6 +747,7 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
         'unsafeOperationTypes',
         'segmentOverflow',
         'sourceIds',
+        'nonImageBitmapDraws',
       ]) compact[key] = required(mapping, key);
       compact.sources = sources;
       compact.targets = targets;
@@ -736,6 +760,35 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
     const tileCount = mappings => mappings.reduce((total, mapping) => (
       total + (Array.isArray(mapping?.tileDraws) ? mapping.tileDraws.length : 0)
     ), 0);
+    const mappingSummary = mapping => {
+      const sourceIds = [];
+      for (const tile of (Array.isArray(mapping?.tileDraws) ? mapping.tileDraws : [])) {
+        const sourceId = tile?.source?.sourceId;
+        if (typeof sourceId === 'string' && !sourceIds.includes(sourceId)) {
+          sourceIds.push(sourceId);
+        }
+        if (sourceIds.length >= 4) break;
+      }
+      return {
+        mappingId: required(mapping, 'mappingId'),
+        sourceCanvasId: required(mapping, 'sourceCanvas').canvasId,
+        targetCanvasId: required(mapping, 'rendererTarget').canvasId,
+        rendererOperationIndex: required(mapping, 'rendererOperationIndex'),
+        segmentClearOperationIndex: required(mapping, 'segmentClearOperationIndex'),
+        segmentFirstTileOperationIndex: required(mapping, 'segmentFirstTileOperationIndex'),
+        segmentLastTileOperationIndex: required(mapping, 'segmentLastTileOperationIndex'),
+        segmentTileCount: required(mapping, 'segmentTileCount'),
+        sourceImageBitmapIds: sourceIds,
+        sourceDimensions: {
+          width: required(mapping, 'sourceCanvas').width,
+          height: required(mapping, 'sourceCanvas').height,
+        },
+        targetDimensions: {
+          width: required(mapping, 'rendererTarget').width,
+          height: required(mapping, 'rendererTarget').height,
+        },
+      };
+    };
     const activeTileCount = activeSegments.reduce((total, segment) => (
       total + (Array.isArray(segment?.tileDraws) ? segment.tileDraws.length : 0)
     ), 0);
@@ -756,6 +809,7 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
     return {
       transportVersion: 1,
       compactMappings,
+      retainedCompletedMappingSummaries: completedMappings.map(mappingSummary),
       retainedCompletedMappingCount: completedMappings.length,
       retainedCompletedTileRecordCount: tileCount(completedMappings),
       activeSegmentCount: activeSegments.length,
@@ -2544,6 +2598,9 @@ class BookWalkerAdapter(SiteAdapter):
             "segment_overflow": False,
             "completed_mapping_evicted": False,
             "renderer_geometry_classification": "GEOMETRY_UNAVAILABLE",
+            "mapping_provenance": None,
+            "renderer_canvas_id": None,
+            "source_canvas_id": None,
         }
 
     async def _browser_pixel_exact(
@@ -2678,6 +2735,9 @@ class BookWalkerAdapter(SiteAdapter):
             finish_timing()
             return LosslessReconstructionEvaluation(shadow, None)
         shadow.update(_trace_payload_stats(trace))
+        shadow["retained_completed_mapping_summaries"] = trace.get(
+            "retainedCompletedMappingSummaries", []
+        )
 
         parts: list[dict[str, Any]] = []
         reconstructed_captures: list[CaptureResult] = []
@@ -2706,9 +2766,13 @@ class BookWalkerAdapter(SiteAdapter):
                 "segment_overflow",
                 "completed_mapping_evicted",
                 "renderer_geometry_classification",
+                "mapping_provenance",
+                "renderer_canvas_id",
+                "source_canvas_id",
                 "unsafe_operation_count",
                 "first_unsafe_operation_index",
                 "unsafe_operation_types",
+                "non_image_bitmap_draws",
             ):
                 if key in analysis_debug:
                     part[key] = analysis_debug[key]

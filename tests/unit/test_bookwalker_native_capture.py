@@ -10,6 +10,7 @@ from screenshot_crawler.site_adapters.bookwalker import adapter as adapter_modul
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
     _DRAW_TRACE_SCRIPT,
     _MATERIALIZE_NATIVE_SOURCE_SCRIPT,
+    _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT,
     BookWalkerAdapter,
     _capture_from_data_url,
     _native_call_is_safe,
@@ -136,6 +137,9 @@ def test_deferred_materialization_materializes_snapshot_or_source_reference() ->
     assert "snapshotId" in _DRAW_TRACE_SCRIPT
     assert "sourceConstructor" in _DRAW_TRACE_SCRIPT
     assert "sourceCanvasId" in _DRAW_TRACE_SCRIPT
+    assert "nonImageBitmapDraws" in _DRAW_TRACE_SCRIPT
+    assert "MAX_NON_IMAGE_BITMAP_DRAW_RECORDS" in _DRAW_TRACE_SCRIPT
+    assert "retainedCompletedMappingSummaries" in _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT
     assert "globalAlpha" in _DRAW_TRACE_SCRIPT
     assert "clearRect" in _DRAW_TRACE_SCRIPT
     assert "putImageData" in _DRAW_TRACE_SCRIPT

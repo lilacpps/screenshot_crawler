@@ -227,6 +227,7 @@ def _completed_record(
         "firstUnsafeOperationIndex": None,
         "unsafeOperationTypes": [],
         "segmentOverflow": False,
+        "nonImageBitmapDraws": [],
     }
     record.update(overrides)
     return record
@@ -315,6 +316,7 @@ def _compact_payload(record: dict) -> dict:
             "unsafeOperationTypes",
             "segmentOverflow",
             "sourceIds",
+            "nonImageBitmapDraws",
         )
     }
     compact.update({
@@ -328,6 +330,19 @@ def _compact_payload(record: dict) -> dict:
     return {
         "transportVersion": 1,
         "compactMappings": [compact],
+        "retainedCompletedMappingSummaries": [{
+            "mappingId": record["mappingId"],
+            "sourceCanvasId": record["sourceCanvas"]["canvasId"],
+            "targetCanvasId": record["rendererTarget"]["canvasId"],
+            "rendererOperationIndex": record["rendererOperationIndex"],
+            "segmentClearOperationIndex": record["segmentClearOperationIndex"],
+            "segmentFirstTileOperationIndex": record["segmentFirstTileOperationIndex"],
+            "segmentLastTileOperationIndex": record["segmentLastTileOperationIndex"],
+            "segmentTileCount": record["segmentTileCount"],
+            "sourceImageBitmapIds": ["bitmap-a"],
+            "sourceDimensions": {"width": 32, "height": 32},
+            "targetDimensions": {"width": 32, "height": 32},
+        }],
         "retainedCompletedMappingCount": 1,
         "retainedCompletedTileRecordCount": len(tile_rows),
         "activeSegmentCount": 0,
@@ -361,6 +376,37 @@ def test_completed_segment_is_production_authority_past_global_operation_count()
     assert result.mapping is not None
     assert result.mapping.mapping_id == "mapping-106"
     assert result.mapping.renderer_geometry_classification == "DIRECT_RENDERER_DRAW"
+    assert result.mapping.mapping_provenance == "direct"
+
+
+def test_selected_mapping_keeps_bounded_non_image_bitmap_provenance_diagnostic() -> None:
+    record = _completed_record()
+    record["tileDraws"] = []
+    record["segmentFirstTileOperationIndex"] = None
+    record["segmentLastTileOperationIndex"] = None
+    record["segmentTileCount"] = 0
+    record["nonImageBitmapDraws"] = [{
+        "operationIndex": 105,
+        "source": {
+            "sourceId": "source-a",
+            "constructor": "HTMLCanvasElement",
+            "width": 32,
+            "height": 32,
+            "canvasId": "canvas-a",
+        },
+        "target": {"canvasId": "canvas-b", "width": 32, "height": 32},
+        "sourceRect": {"x": 0, "y": 0, "width": 32, "height": 32},
+        "destination": {"x": 0, "y": 0, "width": 32, "height": 32},
+        "transform": dict(IDENTITY),
+        "globalAlpha": 1,
+        "globalCompositeOperation": "source-over",
+        "filter": "none",
+    }]
+    result = analyze_purchased_mapping({"completedMappings": [record]}, _completed_draw(record))
+
+    assert not result.proven
+    assert result.reason == "completed segment has no tile draws"
+    assert result.to_debug()["non_image_bitmap_draws"][0]["source"]["canvasId"] == "canvas-a"
 
 
 def test_completed_segment_freezes_separate_repeated_passes() -> None:
@@ -435,6 +481,7 @@ def test_compact_decode_has_full_rich_proof_parity() -> None:
     decoded = decode_compact_completed_mappings(_compact_payload(record))
 
     assert decoded is not None
+    assert decoded["retainedCompletedMappingSummaries"][0]["sourceCanvasId"] == "source-canvas"
     compact_result = analyze_purchased_mapping(decoded, _completed_draw(record))
     assert (rich_result.status, rich_result.reason, rich_result.proven) == (
         compact_result.status,
