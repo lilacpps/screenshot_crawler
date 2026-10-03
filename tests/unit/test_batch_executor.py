@@ -32,6 +32,7 @@ from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import AccessConsumption
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
+    ComicDaysSitePolicy,
     MagapokeSitePolicy,
     MangaOneSitePolicy,
     SitePolicyRegistry,
@@ -575,12 +576,12 @@ def test_batch_output_directory_is_unique_and_windows_safe(tmp_path: Path) -> No
 
 
 def _add_magapoke_candidate(
-    service: CatalogService, *, resource: str = "work_ticket"
+    service: CatalogService, *, resource: str = "work_ticket", site: str = "magapoke"
 ) -> BatchCandidate:
     work = service.create_work(WorkInput(work_key="magapoke-work", title="Magapoke"))
     item = service.create_item(ItemInput(order_label="Episode 1"), work_id=work.id)
     source = service.create_source(
-        SourceInput(site="magapoke", external_id="mp-1", access_mode="quota"),
+        SourceInput(site=site, external_id=f"{site}-1", access_mode="quota"),
         item_id=item.id,
     )
     target = service.create_source_target(
@@ -589,11 +590,11 @@ def _add_magapoke_candidate(
     )
     return BatchCandidate(
         item_id=item.id, source_id=source.id, target_id=target.id,
-        site="magapoke", backend="web", target_key=target.target_key,
+        site=site, backend="web", target_key=target.target_key,
         locator=target.locator, access_strategy="quota", access_mode="quota",
         reason=f"{resource}_candidate", consumes_quota=True,
         quota_resource=resource, quota_scope="work",
-        quota_limit=1 if resource == "work_ticket" else None,
+        quota_limit=1 if resource == "work_ticket" and site != "comicdays" else None,
         quota_commit_mode="after_observed_consumption",
     )
 
@@ -603,6 +604,8 @@ def _make_magapoke_executor(
     consumption: AccessConsumption,
     *,
     failure: BaseException | None = None,
+    site: str = "magapoke",
+    policy: type[MagapokeSitePolicy] = MagapokeSitePolicy,
 ) -> BatchExecutor:
     class ConsumingAdapter(FakeAdapter):
         def get_access_consumption(self) -> AccessConsumption:
@@ -633,14 +636,68 @@ def _make_magapoke_executor(
         )
 
     policies = SitePolicyRegistry()
-    policies.register("magapoke", MagapokeSitePolicy)
+    policies.register(site, policy)
     adapters = AdapterRegistry()
-    adapters.register("magapoke", ConsumingAdapter)
+    adapters.register(site, ConsumingAdapter)
     return BatchExecutor(
         service, policies, adapters,
         runner_factory=Runner,  # type: ignore[arg-type]
         package_function=package,
     )
+
+
+async def test_comicdays_policy_boundary_records_observed_consumption_and_keeps_grant_only_pending(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "comicdays-boundary.sqlite")
+    candidate = _add_magapoke_candidate(service, site="comicdays")
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "work_ticket", consumed_at),
+        site="comicdays",
+        policy=ComicDaysSitePolicy,
+    )
+
+    result = await executor.execute_grant_only_candidate(
+        object(), candidate, output_root=tmp_path / "batch", now=NOW
+    )
+
+    source = service.get_source(candidate.source_id)
+    assert result.resource_consumed is True
+    assert source.quota_started_at == consumed_at.isoformat()
+    assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+    state = service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="comicdays", resource="work_ticket",
+    )
+    assert state is not None and state.last_consumed_at == consumed_at.isoformat()
+
+
+async def test_comicdays_policy_boundary_entry_failure_after_consumption_persists_state(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "comicdays-boundary-failure.sqlite")
+    candidate = _add_magapoke_candidate(service, site="comicdays")
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "work_ticket", consumed_at),
+        failure=RuntimeError("Comic DAYS entry failed after observed debit"),
+        site="comicdays",
+        policy=ComicDaysSitePolicy,
+    )
+
+    with pytest.raises(BatchExecutionError, match="observed debit"):
+        await executor.execute_grant_only_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+    source = service.get_source(candidate.source_id)
+    assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
 
 
 async def test_work_ticket_consumption_is_recorded_at_observed_time(tmp_path: Path) -> None:

@@ -5,11 +5,19 @@
 The production adapter is registered as `comicdays` for direct crawl,
 Discovery, and Batch policy evaluation. Discovery loads the canonical episode,
 derives its series identity, validates the complete official Atom feed against
-the site's pagination-information count, and validates the `free_only=1`
-subset. It yields the full feed in the observed latest-first order. Sources in
-the filtered subset are `free`; other listed episodes remain
-`unknown` and are skipped by the free-only policy. The Atom `updated` value is
-not copied to `published_at`.
+the site's pagination-information count, the complete paginated readable-
+product listing, and the `free_only=1` subset. It yields the full feed in the
+observed latest-first order only after all invariants pass. Sources are mapped
+from first-party state to `free`, Work Ticket candidate `quota`, active Work
+Ticket grant `quota` with native `access_granted_until`, `paid`, or safe
+`unknown`. The Atom `updated` value is not copied to `published_at`.
+The free Atom membership is authoritative only with coherent free state:
+`can_read=true`, `is_free=true`, no ownership/unavailability, no ticket
+rental, and no expiry. The live Work5 listing also emits two free rows with
+`is_support_ticket=true`, numeric zero `rental_price`, and integer
+`rental_term=72`; this observed supporting metadata remains `free` and never
+becomes a quota candidate. Other malformed or contradictory combinations fail
+closed before any record is yielded.
 
 The viewer adapter supports the observed horizontal RTL canvas viewer. It
 selects only the current slider spread's canvas-bearing page areas, uses exact
@@ -29,9 +37,48 @@ timeout. The same monotonic deadline covers viewer observation, control
 inspection/clicks, transition waits, and final readiness; initialization cannot
 return while the slider is later than position 1.
 
-The supported access scope is a currently free episode with `auto` or `direct`
-strategy. Ticket, point, coin, paid, purchase, rental, owned, grant, and quota
-flows remain deliberately unsupported.
+The live granted viewer also has a non-body tail between content and the
+colophon: body slider 17 advances to slider 19 with one on-screen
+`js-back-link-page` (two images, no canvas) and one on-screen `js-page-ad` (two
+iframes, no canvas), then advances to slider 21 with a visible
+`#viewer-colophon` and no active rows. The adapter treats only this exact
+viewport-intersecting pattern as `AD`, tracks the actual pre-advance slider,
+and requires bounded monotonic progress. Unknown, blank, paid, mixed, repeated,
+or retrograde panels fail closed and are never captured or clicked.
+The free 32-page regression has indexed back-link/ad wrappers at areas 33/34
+and a visible colophon at area 35 while the slider reports 35/36. The adapter
+accepts that observed colophon as terminal; it does not issue another forward
+action after it, since a read-only live check showed that such an action can
+leave the canonical viewer scope.
+
+The Comic DAYS policy supports one named resource, `work_ticket`, with
+work-scoped state, deferred grant resolution, a 23-hour cooldown, and
+`after_observed_consumption` commits. Discovery records the site's observed
+72-hour `rental_end_at` when a grant is active. Generic observed-consumption
+commit always uses the policy's conservative 71-hour `access_grant_until()`;
+a later fresh Discovery refreshes the exact native expiry.
+The Adapter now implements `auto`/`direct` plus generic `quota`/`work_ticket`
+entry (synthetic-browser verified; the bounded reserved-ticket Batch attempt is recorded below). Its site-owned resolver validates one complete native listing per work,
+preserves Catalog order, and selects at most one pending candidate.
+The policy leaves `quota_limit=None` so the resolver receives the broad
+Catalog pool; the work-scoped resource gate and resolver select at most one
+candidate per work.
+requires the unique visible/enabled Work Ticket control,
+matching episode/work identity inside the target locked
+`section.private-viewer.js-viewer[data-json-url]` JSON scope and unique
+`.read-button-container`; the unlocked capture viewer uses the separate
+`section.viewer.js-viewer` scope. The sibling
+`[data-aggregate-id][data-type="episode"]` surface binds the work. A separate
+paid control may coexist only when its price attributes are explicit and it is
+never used; the Work5 preflight observed a separate 90pt purchase control.
+It clicks once only, latches the first positive native rental and
+work-level debit/recharge observation, then uses a separate bounded read-only
+readiness stage for the same episode's unlocked viewer, JSON identity, visible
+canvas, and render-ready native row. Loading is transient; wrong or ambiguous
+identity fails closed. A later viewer failure preserves that first observed
+consumption; successful entry still requires the usable viewer. `chargedAt`
+must be newer than both the pre-click value and current observation time.
+Discovery and Policy never click or consume an access control.
 
 The repaired live verification used the shared CDP endpoint and isolated
 output/library paths. It captured 32 pages and reached `END`; manifest and
@@ -41,7 +88,64 @@ progress were copied before packaging to
 dimensions. The first identity was area 1 / slider 1 and the last body identity
 was area 32 / slider 33; the following terminal state was the visible colophon.
 
-Status: **IMPLEMENTED / FREE-ONLY E2E LIVE VERIFIED**
+Status: **PHASE 5 FINAL SAME-NORMAL-CLI GRANT→REPLAN→DIRECT CRAWL VERIFIED / 4 TICKETS TOTAL / PAID 0**
+
+The fresh temporary-Catalog production CLI direct Batch check for already-
+granted work2 completed 17 native body pages, reached `END`, produced a
+17-entry ZIP with valid CRCs, completed the Item, and stored a present archive
+Artifact. The Catalog has no `quota_resource_states` row because no grant was
+needed. Fresh Discovery afterward preserved completion, the native
+`access_granted_until`, and the Artifact while updating `access_checked_at`.
+The bounded 2026-10-03 Phase5B production CLI run completed work1 free Phase A
+with 32 pages and an archive, then consumed exactly one Work Ticket for work4
+source168. The native grant and work-scoped resource state were persisted, but
+the run stopped at the first post-grant viewer readiness check before Phase C;
+no retry or extra ticket was made. A production-hook cold navigation probe on
+the already-granted episode observed 42 total native page areas and the first
+render-ready body row at about 2 seconds. Fresh Discovery then refreshed the
+exact native 72-hour expiry and advanced `access_checked_at`; Item168 remained
+pending. That historical third-ticket run stopped before Phase C; the later
+authorized fourth-ticket Work5 run verified the complete same-normal-CLI
+grant-only → replan → direct crawl → packaging flow.
+
+The subsequent non-consuming Phase5C recovery used the same isolated Catalog
+and selected source168 as a direct active-grant candidate. It completed 38
+native PNGs, reached `END`, packaged a verified ZIP, completed Item168, and
+left the Work Ticket resource timestamp unchanged. Fresh Discovery preserved
+the completed Item/Artifact and exact native expiry while advancing
+`access_checked_at`. A fresh Work5 Discovery then validated 77 records (1
+paid, 4 free, 72 quota). Its real BatchPlanner/resolver preflight selected
+source75, verified native integer term 72, `isCharged=true`, canonical episode
+and work identity, one exact visible/enabled ticket control, and a distinct
+paid control. This was the read-only preflight before the authorized fourth
+ticket; the subsequent normal Batch run completed the flow with source75.
+Across four tickets, paid operations remained at zero.
+
+A separate fresh work1/work4 preflight used the real `BatchPlanner` ordering:
+one direct source and 159 deferred Work Ticket candidates. The resolver
+skipped work1 because its resource was on cooldown and selected work4 source
+168, episode `13933686331677356244` (the actual order-3 candidate). Its native
+72-hour term, ready resource, canonical identity, exact visible/enabled locked
+ticket control, and distinct paid control were verified read-only. The later
+bounded Batch run used exactly one ticket for this candidate; paid operations
+remained at zero.
+
+The quota entry stage keeps one shared 10-second monotonic page-change budget
+across pre-observation, control/click, native grant confirmation, and viewer
+readiness; a separate 3-second read-only recovery window is used only after a
+possibly dispatched click. Ordinary quota initialization also needs metadata
+and viewer normalization, so the Runner-facing site-local budget is 35 seconds
+including those stages and headroom, without changing the page-change default.
+
+The 2026-10-03 read-only/controlled live evidence used work
+`2550689798737278979` (episode `12207421983645809792`) and work
+`2551460909766308490` (episode `2551460909766314566`). Each observed grant
+lasted 72 hours via native `rental_end_at`; the Work Ticket resource became
+ready again after 23 hours via its separate `chargedAt` signal. The first
+work's successful click run lost its durable click-result file during an early
+helper iteration; the later repair on work2 retained an atomic pre-state,
+exact-control guard, `Viewer_PurchaseViaTicket` operation, post-state, refresh,
+and new-page evidence. No paid operation was executed.
 
 The final current-code direct live run used fresh isolated paths under
 `output/comicdays_c2_final_*`. `CrawlerRunner` returned `END` with 32 native
@@ -236,9 +340,12 @@ not clicked.
 
 ## Remaining verification and constraints
 
-- The implementation intentionally does not support ticket, point, coin,
-  purchase, rental, owned, grant, quota, or login flows. It does not infer
-  publication dates from Atom `updated`.
+- Discovery and Policy classify Work Ticket candidates and active grants, and
+  the Adapter implements the bounded `quota`/`work_ticket` entry path. The
+  same-normal-CLI grant-only → replan → direct crawl → packaging flow was
+  verified on Work5 with one ticket. Point, coin, purchase, rental, owned, and
+  login flows remain unsupported; publication dates are not inferred from Atom
+  `updated`.
 - The research helper bounds page-side fetches with `AbortController`, wraps
   Playwright evaluation in a Python timeout, caps response-body inspection to
   first-party pagination/profile endpoints, and has focused tests proving a

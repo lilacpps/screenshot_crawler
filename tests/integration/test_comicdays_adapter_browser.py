@@ -1,48 +1,77 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 import pytest
 
 from screenshot_crawler.core.errors import PageChangeTimeoutError
-from screenshot_crawler.core.models import RunConfig
+from screenshot_crawler.core.models import ContentIdentity, RunConfig
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.comicdays import adapter as adapter_module
 from screenshot_crawler.site_adapters.comicdays import discovery as discovery_module
 from screenshot_crawler.site_adapters.comicdays.adapter import ComicDaysAdapter
+from screenshot_crawler.site_adapters.comicdays.live_access import (
+    ComicDaysLiveAccessState,
+    ComicDaysTicketState,
+)
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 
+@pytest.fixture(autouse=True)
+def synthetic_live_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep synthetic viewer tests independent of first-party network APIs."""
+
+    async def observe(_page, *, series_id: str, episode_id: str, **_kwargs):
+        return ComicDaysLiveAccessState(
+            series_id=str(series_id),
+            episode_id=str(episode_id),
+            row={},
+            access_mode="free",
+            grant_until=None,
+            grant_observed=True,
+            ticket=ComicDaysTicketState(
+                series_id=str(series_id),
+                is_charged=True,
+                charged_at=datetime(1999, 1, 1, tzinfo=UTC),
+            ),
+        )
+
+    monkeypatch.setattr(adapter_module, "observe_comicdays_live_access", observe)
+
+
 HTML = """
-<section class="viewer js-viewer">
+<section class="private-viewer viewer js-viewer" data-json-url="https://comic-days.com/episode/1.json">
   <div class="content-inner scroll-horizontal js-horizontal-viewer">
     <div class="image-container js-viewer-content is-spread">
-      <div class="page-area js-page-area" id="ad"><a href="/episode/999">ad</a></div>
+      <div class="page-area js-page-area" id="ad" style="display:none"><a href="/episode/999">ad</a></div>
       <div class="page-area js-page-area" id="body-one"><canvas class="page-image js-page-image"></canvas></div>
       <div class="page-area js-page-area" id="body-two" style="display:none;position:absolute;left:300px"><canvas class="page-image js-page-image"></canvas></div>
       <div class="page-area js-page-area" id="body-three" style="display:none;position:absolute;left:0"><canvas class="page-image js-page-image"></canvas></div>
-      <div class="page-area js-page-area" id="questionnaire"><img alt="ad"></div>
+      <div class="page-area js-page-area" style="display:none;position:absolute;left:-1000px;top:0;width:300px;height:300px"><div class="page js-page back-link-page link-page js-link-page js-back-link-page link-page-half" style="display:block;width:300px;height:300px"><img alt="back"><img alt="back"></div></div>
+      <div class="page-area js-page-area" style="display:none;position:absolute;left:-1000px;top:0;width:300px;height:300px"><div class="page js-page page-ad js-page-ad" style="display:block;width:300px;height:300px"><iframe></iframe><iframe></iframe></div></div>
       <div class="page-area js-page-area" id="viewer-colophon" style="display:none;width:300px;height:300px"></div>
     </div>
   </div>
-  <span class="js-viewer-slider-pagenum-now">1</span><span class="js-viewer-slider-pagenum-last">5</span>
+  <span class="js-viewer-slider-pagenum-now">1</span><span class="js-viewer-slider-pagenum-last">7</span>
   <button class="page-navigation-backward js-slide-backward" disabled>back</button>
-  <button class="page-navigation-forward js-slide-forward">next</button>
+  <button class="page-navigation-forward js-slide-forward" style="position:relative;z-index:5">next</button>
 </section>
 <h1 class="series-header-title">Synthetic Work</h1>
 <script>
   const now = document.querySelector('.js-viewer-slider-pagenum-now');
   const one = document.querySelector('#body-one'); const two = document.querySelector('#body-two'); const three = document.querySelector('#body-three');
-  const end = document.querySelector('#viewer-colophon');
+  const end = document.querySelector('#viewer-colophon'); const tailBack = document.querySelector('.js-back-link-page').parentElement; const tailAd = document.querySelector('.js-page-ad').parentElement;
   document.querySelector('.js-slide-forward').onclick = () => {
     const n = Number(now.textContent) + 2; now.textContent = String(n);
     if (n === 3) { one.style.display='none'; two.style.display='block'; three.style.display='block'; }
-    if (n >= 5) { two.style.display='none'; end.style.display='block'; }
+    if (n === 5) { two.style.display='none'; three.style.display='none'; tailBack.style.display='block'; tailBack.style.left='0px'; tailAd.style.display='block'; tailAd.style.left='310px'; }
+    if (n >= 7) { tailBack.style.display='none'; tailAd.style.display='none'; end.style.display='block'; }
   };
 </script>
 """
@@ -72,6 +101,34 @@ RUNNER_HTML = HTML.replace(
   window.paintRunner();
 </script>""",
 )
+
+
+TAIL_HTML = """
+<section class="private-viewer viewer js-viewer" data-json-url="https://comic-days.com/episode/1.json" style="position:relative;width:900px;height:400px">
+  <div class="image-container js-viewer-content is-spread"><canvas class="page-image js-page-image"></canvas></div>
+  <div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div><div class="page-area js-page-area" style="display:none"></div>
+  <div class="page-area js-page-area" style="display:none;position:absolute;left:-1000px;top:0;width:300px;height:300px"><div class="page js-page back-link-page link-page js-link-page js-back-link-page link-page-half" style="display:block;width:300px;height:300px"><img><img></div></div>
+  <div class="page-area js-page-area" style="display:none;position:absolute;left:-1000px;top:0;width:300px;height:300px"><div class="page js-page page-ad js-page-ad" style="display:block;width:300px;height:300px"><iframe></iframe><iframe></iframe></div></div>
+  <div id="viewer-colophon" class="page-area js-page-area" style="display:none;position:absolute;left:-1000px;top:0;width:300px;height:300px"></div>
+  <span class="js-viewer-slider-pagenum-now">17</span><span class="js-viewer-slider-pagenum-last">21</span>
+  <button class="page-navigation-forward js-slide-forward" style="position:relative;z-index:5">next</button>
+</section>
+<script>
+  window.__tailState = {sliderNow:17, sliderLast:21, colophon:false, rows:[{areaIndex:16, renderReady:true, canvasIndex:0}]};
+  window.__comicDaysProductionCapture = {active: () => ({...window.__tailState, rows: [...window.__tailState.rows]})};
+  const back = document.querySelector('.js-back-link-page').parentElement; const ad = document.querySelector('.js-page-ad').parentElement; const end = document.querySelector('#viewer-colophon');
+  const now = document.querySelector('.js-viewer-slider-pagenum-now');
+  document.querySelector('.js-slide-forward').onclick = () => {
+    if (window.__tailState.sliderNow === 17) {
+      window.__tailState = {sliderNow:19, sliderLast:21, colophon:false, rows:[]}; back.style.display='block'; ad.style.display='block'; back.style.left='0px'; ad.style.left='310px';
+      now.textContent = '19';
+    } else if (window.__tailState.sliderNow === 19) {
+      window.__tailState = {sliderNow:21, sliderLast:21, colophon:true, rows:[]}; back.style.display='none'; ad.style.display='none'; back.style.left='-1000px'; ad.style.left='-1000px'; end.style.display='block'; end.style.left='0px';
+      now.textContent = '21';
+    }
+  };
+</script>
+"""
 
 
 async def _paint_sources(
@@ -120,7 +177,6 @@ async def test_comicdays_adapter_browser_spread_end_and_ad_exclusion(
     monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
     monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
     monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
-    monkeypatch.setattr(adapter_module, "fetch_comicdays_atom", lambda *_args, **_kwargs: _completed([{"episode_id": "1", "url": "https://comic-days.com/episode/1", "title": "第１話"}]))
     await browser_page.goto("data:text/html,<html></html>")
     await browser_page.set_content(HTML)
     adapter = ComicDaysAdapter()
@@ -212,6 +268,9 @@ async def test_comicdays_adapter_browser_spread_end_and_ad_exclusion(
     previous = await adapter.get_content_identity(browser_page)
     await adapter.go_next(browser_page)
     await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
     assert await adapter.detect_state(browser_page) is PageState.END
 
     monkeypatch.setattr(
@@ -244,6 +303,125 @@ async def test_comicdays_initialize_rewinds_from_colophon_before_first_ready_spr
     identity = await adapter.get_content_identity(browser_page)
     assert identity.page_number == 1
     assert identity.page_id == "1"
+
+
+async def test_comicdays_known_tail_ad_then_colophon_never_enters_tail_content(
+    browser_page,
+) -> None:
+    await browser_page.set_content(TAIL_HTML)
+    adapter = ComicDaysAdapter()
+    adapter._episode_id = "1"
+    previous = ContentIdentity(page_id="16,17", page_number=17, source_id="1", fingerprint="body")
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.END
+
+
+async def test_comicdays_known_tail_uses_actual_pre_advance_and_rejects_stall(
+    browser_page,
+) -> None:
+    await browser_page.set_content(TAIL_HTML)
+    adapter = ComicDaysAdapter()
+    adapter._episode_id = "1"
+    previous = ContentIdentity(page_id="16,17", page_number=17, source_id="1", fingerprint="body")
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+    adapter.page_change_timeout_ms = 200
+    await adapter.go_next(browser_page)
+    await browser_page.evaluate("""() => {
+      window.__tailState = {sliderNow:19, sliderLast:21, colophon:false, rows:[]};
+      document.querySelector('#viewer-colophon').style.display='none';
+      document.querySelector('.js-back-link-page').style.left='0px';
+      document.querySelector('.js-page-ad').style.left='310px';
+      document.querySelector('.js-slide-forward').onclick = () => {};
+    }""")
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.wait_for_change(browser_page, previous)
+
+
+async def test_comicdays_nonbody_mismatched_slider_snapshot_resets_stability(
+    browser_page, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await browser_page.set_content(TAIL_HTML)
+    adapter = ComicDaysAdapter()
+    adapter._episode_id = "1"
+    original = adapter._nonbody_observation
+
+    async def mismatched(page, **kwargs):
+        observation = await original(page, **kwargs)
+        observation["sliderNow"] = int(observation["sliderNow"]) - 2
+        return observation
+
+    monkeypatch.setattr(adapter, "_nonbody_observation", mismatched)
+    adapter.page_change_timeout_ms = 200
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(
+            browser_page,
+            ContentIdentity(page_id="16,17", page_number=17, source_id="1", fingerprint="body"),
+        )
+
+
+async def test_comicdays_colophon_without_validated_transition_is_not_end(browser_page) -> None:
+    await browser_page.set_content(TAIL_HTML)
+    await browser_page.evaluate("""() => {
+      window.__tailState = {sliderNow:21, sliderLast:21, colophon:true, rows:[]};
+      document.querySelector('.js-viewer-slider-pagenum-now').textContent = '21';
+      document.querySelector('#viewer-colophon').style.display='block';
+      document.querySelector('#viewer-colophon').style.left='0px';
+    }""")
+    adapter = ComicDaysAdapter()
+    adapter._episode_id = "1"
+    assert await adapter.detect_state(browser_page) is not PageState.END
+
+
+@pytest.mark.parametrize("mutation", ["unknown", "blank", "paid", "mixed", "unknown_area"])
+async def test_comicdays_unknown_or_mixed_nonbody_tail_fails_closed(
+    browser_page, mutation: str,
+) -> None:
+    await browser_page.set_content(TAIL_HTML)
+    if mutation == "unknown":
+        extra = '<div class="page js-page unknown-panel" style="position:absolute;left:620px;top:0;width:100px;height:100px"></div>'
+    elif mutation == "blank":
+        extra = '<div class="page js-page" style="position:absolute;left:620px;top:0;width:100px;height:100px"></div>'
+    elif mutation == "paid":
+        extra = '<div class="page js-page paid-panel" style="position:absolute;left:620px;top:0;width:100px;height:100px">購入して読む</div>'
+    elif mutation == "mixed":
+        extra = '<div class="page js-page" style="position:absolute;left:620px;top:0;width:100px;height:100px"><canvas></canvas></div>'
+    else:
+        extra = '<div class="page-area js-page-area" style="display:block;position:absolute;left:620px;top:0;width:100px;height:100px"></div>'
+    await browser_page.locator("section.viewer.js-viewer").evaluate("(node, html) => node.insertAdjacentHTML('beforeend', html)", extra)
+    adapter = ComicDaysAdapter()
+    adapter._episode_id = "1"
+    adapter.page_change_timeout_ms = 200
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(
+            browser_page,
+            ContentIdentity(page_id="16,17", page_number=17, source_id="1", fingerprint="body"),
+        )
+
+
+@pytest.mark.parametrize("slider", [16, 22])
+async def test_comicdays_tail_slider_retrograde_or_out_of_range_fails_closed(
+    browser_page, slider: int,
+) -> None:
+    await browser_page.set_content(TAIL_HTML)
+    await browser_page.evaluate("(value) => { window.__tailState.sliderNow = value; }", slider)
+    adapter = ComicDaysAdapter()
+    adapter._episode_id = "1"
+    adapter.page_change_timeout_ms = 200
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.go_next(browser_page)
+        if slider == 16:
+            await adapter.wait_for_change(
+                browser_page,
+                ContentIdentity(page_id="16,17", page_number=16, source_id="1", fingerprint="body"),
+            )
 
 
 async def test_comicdays_initialize_waits_for_delayed_first_ready_spread(
@@ -436,7 +614,6 @@ async def test_comicdays_runner_browser_captures_spread_and_end(
     monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
     monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
     monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
-    monkeypatch.setattr(adapter_module, "fetch_comicdays_atom", lambda *_args, **_kwargs: _completed([{"episode_id": "1", "url": "https://comic-days.com/episode/1", "title": "第１話"}]))
     adapter = ComicDaysAdapter()
     runner_url = "data:text/html," + quote(RUNNER_HTML)
     adapter.resolve_initial_navigation_url = lambda _source_url: runner_url  # type: ignore[method-assign]
@@ -502,8 +679,26 @@ async def test_comicdays_discovery_browser_success_marks_free_subset(
     async def total(_page, _series: str, _episode: str) -> int:
         return 2
 
+    async def bulk(_page, _series: str, *, expected_total: int) -> list[dict]:
+        assert expected_total == 2
+        return [
+            {
+                "readable_product_id": "2",
+                "viewer_uri": "https://comic-days.com/episode/2",
+                "purchase_info": {"can_read": False, "is_free": False, "has_rented_via_ticket": False, "rentable_via_ticket": False, "unavailable": False, "has_purchased": False, "has_rented_via_point": False},
+                "status": {"is_support_ticket": False, "buy_price": 100, "rental_price": None, "rental_end_at": None, "rental_term": None},
+            },
+            {
+                "readable_product_id": "1",
+                "viewer_uri": "https://comic-days.com/episode/1",
+                "purchase_info": {"can_read": True, "is_free": True, "has_rented_via_ticket": False, "rentable_via_ticket": False, "unavailable": False, "has_purchased": False, "has_rented_via_point": False},
+                "status": {"is_support_ticket": False, "buy_price": None, "rental_price": None, "rental_end_at": None, "rental_term": None},
+            },
+        ]
+
     monkeypatch.setattr(discovery_module, "fetch_comicdays_atom", atom)
     monkeypatch.setattr(discovery_module, "fetch_comicdays_listing_total", total)
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_readable_products", bulk)
     target = WatchlistTarget("key", "work", "comicdays", "https://comic-days.com/episode/1", "Synthetic Work")
     rows = [
         row
@@ -512,7 +707,7 @@ async def test_comicdays_discovery_browser_success_marks_free_subset(
         )
     ]
     assert [row.source.external_id for row in rows] == ["2", "1"]
-    assert [row.source.access_mode for row in rows] == ["unknown", "free"]
+    assert [row.source.access_mode for row in rows] == ["paid", "free"]
 
 
 async def test_comicdays_discovery_browser_feed_identity_mismatch_yields_zero(
@@ -550,7 +745,6 @@ async def _initialized_comicdays_adapter(
     monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
     monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
     monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
-    monkeypatch.setattr(adapter_module, "fetch_comicdays_atom", lambda *_args, **_kwargs: _completed([{"episode_id": "1", "url": "https://comic-days.com/episode/1", "title": "第１話"}]))
     await browser_page.goto("data:text/html,<html></html>")
     await browser_page.set_content(HTML)
     adapter = ComicDaysAdapter()

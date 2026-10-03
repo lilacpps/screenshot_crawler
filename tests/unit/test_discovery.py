@@ -90,6 +90,32 @@ async def test_discovery_propagates_explicit_grant_clear(tmp_path: Path) -> None
     assert catalog.list_sources()[0].access_granted_until is None
 
 
+async def test_comicdays_discovery_grant_unknown_preservation_and_authoritative_clear(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeDiscoveryAdapter(
+        [record("episode", access_mode="quota", access_granted_until="2026-10-06T10:22:56+09:00", access_granted_until_observed=True)]
+    )
+    service, catalog, watch_target = setup_service(
+        tmp_path, adapter, site="comicdays", watch_target=target(site="comicdays")
+    )
+    await service.discover(FakePage(), watch_target, "full")
+    item = catalog.list_items()[0]
+    catalog.mark_item_completed(item.id)
+    assert catalog.list_sources()[0].access_granted_until == "2026-10-06T10:22:56+09:00"
+
+    adapter.records = [record("episode", access_mode="unknown", access_granted_until_observed=False)]
+    await service.discover(FakePage(), watch_target, "full")
+    preserved = catalog.list_sources()[0]
+    assert preserved.access_granted_until == "2026-10-06T10:22:56+09:00"
+    assert catalog.get_item(item.id).status == "completed"
+
+    adapter.records = [record("episode", access_mode="paid", access_granted_until_observed=True)]
+    await service.discover(FakePage(), watch_target, "full")
+    assert catalog.list_sources()[0].access_granted_until is None
+    assert catalog.get_item(item.id).status == "completed"
+
+
 class FakeDiscoveryAdapter(DiscoveryAdapter):
     def __init__(
         self,

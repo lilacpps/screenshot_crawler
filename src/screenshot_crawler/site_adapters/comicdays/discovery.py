@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from urllib.parse import urlencode, urlparse
 
 from playwright.async_api import Page
@@ -31,6 +32,8 @@ MAX_ATOM_BODY = 2_000_000
 EPISODE_PATH = re.compile(r"^/episode/(?P<episode_id>[0-9]+)/?$")
 SERIES_ID = re.compile(r"(?:series[/:])(?P<id>[0-9]+)")
 ORDER_LABEL = re.compile(r"^第\s*(?P<number>[0-9]+)\s*話(?:\s|$)")
+MAX_LISTING_BODY = 500_000
+MAX_LISTING_PAGES = 100
 
 
 def parse_comicdays_episode_url(url: str) -> str | None:
@@ -174,8 +177,171 @@ async def fetch_comicdays_listing_total(page: Page, series_id: str, episode_id: 
     return values.pop()
 
 
+def _required_mapping(value: object, name: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise DiscoveryIncompleteError(f"Comic DAYS listing row missing {name} object")
+    return value
+
+
+def _finite_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+
+def _parse_observed_timestamp(value: object, *, name: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise DiscoveryIncompleteError(f"Comic DAYS {name} was missing")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise DiscoveryIncompleteError(f"Comic DAYS {name} was invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise DiscoveryIncompleteError(f"Comic DAYS {name} was timezone-naive")
+    return parsed.astimezone(UTC)
+
+
+def comicdays_access_observation(
+    row: dict[str, object], *, free: bool, now: datetime
+) -> tuple[str, datetime | None, bool]:
+    """Classify one first-party readable-product row.
+
+    The final boolean says whether this observation is authoritative enough
+    to clear an older Catalog grant expiry.
+    """
+    product_id = row.get("readable_product_id")
+    if not isinstance(product_id, (str, int)) or not str(product_id).isdigit():
+        raise DiscoveryIncompleteError("Comic DAYS listing row had an invalid episode id")
+    purchase = _required_mapping(row.get("purchase_info"), "purchase_info")
+    status = _required_mapping(row.get("status"), "status")
+    required_purchase = {
+        "can_read", "is_free", "has_rented_via_ticket", "rentable_via_ticket",
+        "unavailable", "has_purchased", "has_rented_via_point",
+    }
+    required_status = {"is_support_ticket", "rental_price", "rental_end_at", "buy_price", "rental_term"}
+    if not required_purchase.issubset(purchase) or not required_status.issubset(status):
+        raise DiscoveryIncompleteError("Comic DAYS listing row omitted a relevant access flag")
+    can_read = purchase.get("can_read")
+    is_free = purchase.get("is_free")
+    has_rented = purchase.get("has_rented_via_ticket")
+    rentable = purchase.get("rentable_via_ticket")
+    is_support_ticket = status.get("is_support_ticket")
+    rental_end = status.get("rental_end_at")
+    if purchase.get("unavailable") is True:
+        raise DiscoveryIncompleteError("Comic DAYS listing row was unavailable")
+    if purchase.get("has_purchased") is True or purchase.get("has_rented_via_point") is True:
+        raise DiscoveryIncompleteError("Comic DAYS listing row had a conflicting ownership state")
+    boolean_values = (
+        can_read, is_free, has_rented, rentable,
+        purchase.get("unavailable"), purchase.get("has_purchased"),
+        purchase.get("has_rented_via_point"), is_support_ticket,
+    )
+    if any(not isinstance(value, bool) for value in boolean_values):
+        raise DiscoveryIncompleteError("Comic DAYS listing row had a malformed access flag")
+    if free:
+        free_ticket_metadata = (
+            is_support_ticket is True
+            and _finite_number(status.get("rental_price"))
+            and float(status["rental_price"]) == 0
+            and isinstance(status.get("rental_term"), int)
+            and not isinstance(status.get("rental_term"), bool)
+            and status.get("rental_term") == 72
+        )
+        plain_free_metadata = (
+            is_support_ticket is False
+            and status.get("rental_price") is None
+            and status.get("rental_term") is None
+        )
+        if (
+            can_read is not True or is_free is not True
+            or has_rented is not False or rentable is not False
+            or rental_end is not None or status.get("buy_price") is not None
+            or not (plain_free_metadata or free_ticket_metadata)
+        ):
+            raise DiscoveryIncompleteError("Comic DAYS free feed disagreed with readable-product state")
+        return "free", None, True
+    if can_read is True and is_free is False and has_rented is True:
+        if is_support_ticket is not True or rentable is True or rental_end is None:
+            raise DiscoveryIncompleteError("Comic DAYS active rental state was contradictory")
+        expiry = _parse_observed_timestamp(rental_end, name="rental_end_at")
+        if expiry <= now.astimezone(UTC):
+            return "unknown", None, False
+        return "quota", expiry, True
+    if (
+        can_read is False and is_free is False and has_rented is False
+        and rentable is True and is_support_ticket is True
+    ):
+        if rental_end is not None:
+            raise DiscoveryIncompleteError("Comic DAYS locked ticket state had a rental expiry")
+        if not _finite_number(status.get("rental_price")) or float(status["rental_price"]) != 0:
+            raise DiscoveryIncompleteError("Comic DAYS ticket price was malformed")
+        return "quota", None, True
+    if (
+        can_read is False and is_free is False and has_rented is False
+        and rentable is False and is_support_ticket is False
+    ):
+        if rental_end is not None:
+            raise DiscoveryIncompleteError("Comic DAYS paid state had a rental expiry")
+        if not _finite_number(status.get("buy_price")) or float(status["buy_price"]) <= 0:
+            raise DiscoveryIncompleteError("Comic DAYS paid price was malformed")
+        return "paid", None, True
+    return "unknown", None, False
+
+
+async def fetch_comicdays_readable_products(
+    page: Page, series_id: str, *, expected_total: int
+) -> list[dict[str, object]]:
+    """Fetch every first-party listing page and enforce completeness."""
+    if expected_total < 1 or expected_total > MAX_LISTING_PAGES * 50:
+        raise DiscoveryIncompleteError("Comic DAYS readable-product total was outside the supported bound")
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    page_count = (expected_total + 49) // 50
+    for offset in range(0, page_count * 50, 50):
+        query = urlencode({"type": "episode", "aggregate_id": series_id, "offset": offset, "limit": 50, "sort_order": "desc"})
+        try:
+            response = await page.request.get(
+                f"https://comic-days.com/api/viewer/pagination_readable_products?{query}",
+                timeout=15_000, fail_on_status_code=False,
+            )
+            if response.status != 200:
+                raise DiscoveryIncompleteError("Comic DAYS readable-product page was unavailable")
+            body = await asyncio.wait_for(response.body(), timeout=5)
+        except (PlaywrightTimeoutError, TimeoutError) as exc:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product page timed out") from exc
+        if len(body) > MAX_LISTING_BODY:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product page exceeded the body limit")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product page was invalid") from exc
+        page_rows = payload if isinstance(payload, list) else None
+        if not isinstance(page_rows, list) or not page_rows or len(page_rows) > 50:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product page was invalid or empty")
+        for row in page_rows:
+            if not isinstance(row, dict):
+                raise DiscoveryIncompleteError("Comic DAYS readable-product row was invalid")
+            product_id = row.get("readable_product_id")
+            key = str(product_id)
+            if not key.isdigit() or key in seen:
+                raise DiscoveryIncompleteError("Comic DAYS readable-product ids were invalid or duplicated")
+            viewer_uri = row.get("viewer_uri")
+            try:
+                viewer_id = parse_comicdays_episode_url(viewer_uri) if isinstance(viewer_uri, str) else None
+                canonical_viewer_uri = canonical_comicdays_episode_url(viewer_uri) if isinstance(viewer_uri, str) else None
+            except ValueError as exc:
+                raise DiscoveryIncompleteError("Comic DAYS readable-product viewer URI was invalid") from exc
+            if canonical_viewer_uri != viewer_uri or viewer_id != key:
+                raise DiscoveryIncompleteError("Comic DAYS readable-product viewer URI disagreed with its episode id")
+            seen.add(key)
+            rows.append(row)
+        if len(rows) >= expected_total:
+            break
+    if len(rows) != expected_total:
+        raise DiscoveryIncompleteError("Comic DAYS readable-product pages were incomplete")
+    return rows
+
+
 class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
-    """Yield the full official listing while marking only free entries eligible."""
+    """Yield a complete Atom listing classified by first-party access state."""
 
     async def iter_records(self, page: Page, target: WatchlistTarget, mode: DiscoveryMode) -> AsyncIterator[DiscoveredRecord]:
         del mode
@@ -186,6 +352,8 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
             await page.goto(canonical_comicdays_episode_url(target.url), wait_until="domcontentloaded", timeout=15_000)
         except (PlaywrightTimeoutError, TimeoutError) as exc:
             raise DiscoveryIncompleteError("Comic DAYS episode page did not load") from exc
+        if parse_comicdays_episode_url(page.url) != target_id:
+            raise DiscoveryIncompleteError("Comic DAYS episode navigation changed the target identity")
         series_id = await _series_id_from_page(page)
         full_entries = await fetch_comicdays_atom(page, series_id, free_only=False)
         free_entries = await fetch_comicdays_atom(page, series_id, free_only=True)
@@ -194,12 +362,29 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError(f"Comic DAYS Atom count {len(full_entries)} disagreed with pagination total {expected_total}")
         full_ids = [str(entry["episode_id"]) for entry in full_entries]
         free_ids = {str(entry["episode_id"]) for entry in free_entries}
+        if len(full_ids) != len(set(full_ids)):
+            raise DiscoveryIncompleteError("Comic DAYS full Atom feed contained duplicate episodes")
         if not free_ids.issubset(set(full_ids)):
             raise DiscoveryIncompleteError("Comic DAYS free feed contained an unknown episode")
         if [item_id for item_id in full_ids if item_id in free_ids] != [str(entry["episode_id"]) for entry in free_entries]:
             raise DiscoveryIncompleteError("Comic DAYS free feed order disagreed with the full feed")
-        if not any(entry["episode_id"] == target_id for entry in free_entries):
-            raise DiscoveryIncompleteError("Target episode is not currently in the official free feed")
+        if target_id not in set(full_ids):
+            raise DiscoveryIncompleteError("Target episode was absent from the complete Comic DAYS listing")
+        readable_rows = await fetch_comicdays_readable_products(
+            page, series_id, expected_total=expected_total
+        )
+        readable_ids = [str(row.get("readable_product_id")) for row in readable_rows]
+        if readable_ids != full_ids:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product order disagreed with Atom")
+        if len(set(readable_ids)) != expected_total:
+            raise DiscoveryIncompleteError("Comic DAYS readable-product ids were not unique")
+        now = datetime.now(UTC)
+        observations: dict[str, tuple[str, datetime | None, bool]] = {}
+        for row in readable_rows:
+            external_id = str(row["readable_product_id"])
+            observations[external_id] = comicdays_access_observation(
+                row, free=external_id in free_ids, now=now
+            )
         now = datetime.now(JST)
         title_locator = page.locator(".series-header-title,[class*='series-header-title']")
         author_locator = page.locator(".series-header-author,[class*='series-header-author']")
@@ -209,6 +394,7 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
             title = " ".join((await title_locator.inner_text(timeout=2_000)).split()) or None
         if await author_locator.count() == 1:
             author = " ".join((await author_locator.inner_text(timeout=2_000)).split()) or None
+        records: list[DiscoveredRecord] = []
         for entry in full_entries:
             label = entry.get("title")
             order = None
@@ -216,11 +402,18 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
                 normalized_label = unicodedata.normalize("NFKC", label)
                 match = ORDER_LABEL.match(normalized_label)
                 order = str(int(match["number"])) if match else None
-            yield DiscoveredRecord(
+            access_mode, grant_until, grant_observed = observations[str(entry["episode_id"])]
+            records.append(DiscoveredRecord(
                 item=DiscoveredItem(canonical_title=title, author=author, kind="episode", order_key=order, order_label=label),
                 source=DiscoveredSource(
                     external_id=str(entry["episode_id"]), url=str(entry["url"]),
-                    access_mode="free" if str(entry["episode_id"]) in free_ids else "unknown",
+                    access_mode=access_mode,
+                    access_granted_until=grant_until,
+                    access_granted_until_observed=grant_observed,
                     available=True, access_checked_at=now, last_seen_at=now, published_at=None,
                 ),
-            )
+            ))
+        # Every network/listing invariant and every access classification must
+        # pass before the first record is handed to the Catalog service.
+        for record in records:
+            yield record

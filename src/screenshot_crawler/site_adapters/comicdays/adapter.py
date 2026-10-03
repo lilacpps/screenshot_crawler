@@ -7,23 +7,47 @@ import base64
 import hashlib
 import json
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from playwright.async_api import Locator, Page
 
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult
-from screenshot_crawler.core.errors import PageChangeTimeoutError, UnsupportedAccessStrategyError
+from screenshot_crawler.core.errors import (
+    AccessConsumptionUnconfirmedError,
+    AccessResourceUnavailableError,
+    PageChangeTimeoutError,
+    UnknownPageStateError,
+    UnsupportedAccessStrategyError,
+)
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.base import (
+    AccessConsumption,
+    AccessResourceResolution,
+    SiteAdapter,
+)
 from screenshot_crawler.site_adapters.comicdays.access import comicdays_access_profile
 from screenshot_crawler.site_adapters.comicdays.discovery import (
     _series_id_from_page,
     canonical_comicdays_episode_url,
-    fetch_comicdays_atom,
     parse_comicdays_episode_url,
 )
+from screenshot_crawler.site_adapters.comicdays.live_access import (
+    COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
+    ComicDaysLiveAccessError,
+    ComicDaysLiveAccessState,
+    observe_comicdays_live_access,
+)
+
+
+def _supported_ticket_rental_term(row: dict[str, object]) -> bool:
+    """Accept only the observed 72-hour episode rental contract."""
+
+    status = row.get("status")
+    term = status.get("rental_term") if isinstance(status, dict) else None
+    return isinstance(term, int) and not isinstance(term, bool) and term == 72
 from screenshot_crawler.site_adapters.comicdays.native_capture import (
     COMICDAYS_CAPTURE_HOOK,
     reconstruct_png,
@@ -41,6 +65,7 @@ class ComicDaysAdapter(SiteAdapter):
     viewer_selector = "section.viewer.js-viewer"
     canvas_selector = "section.viewer.js-viewer .image-container.js-viewer-content canvas.page-image.js-page-image"
     forward_selector = "section.viewer.js-viewer .page-navigation-forward.js-slide-forward"
+    ticket_recovery_window_ms = 3_000
 
     def __init__(self) -> None:
         self._access_strategy: AccessStrategy = "auto"
@@ -51,23 +76,87 @@ class ComicDaysAdapter(SiteAdapter):
         self._author: str | None = None
         self._terminal = False
         self._advance_pending = False
+        self._advance_from_slider: int | None = None
+        self._known_tail_slider: int | None = None
+        self._known_nonbody_passes = 0
         self._last_slider: int | None = None
         self._capture_debug: dict[str, Any] = {}
         self._selected_signature: tuple[Any, ...] | None = None
+        self._quota_resource: str | None = None
+        self._access_consumption = AccessConsumption()
+        self._live_access: ComicDaysLiveAccessState | None = None
+        self._ticket_click_attempted = False
+        self._preexisting_accessible = False
+        self._target_url: str | None = None
 
     def get_access_profile(self) -> AccessProfile:
         return comicdays_access_profile()
 
+    def get_initialize_timeout_ms(self, default_ms: int) -> int:
+        # Initialization can contain access observation, metadata, viewer
+        # normalization, and (for quota) a finite post-click reconciliation.
+        # Keep one finite Runner-facing upper bound for all of those stages.
+        return max(
+            default_ms,
+            3 * self.page_change_timeout_ms + self.ticket_recovery_window_ms + 2_000,
+        )
+
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
         del page
-        if access_strategy not in {"auto", "direct"}:
-            raise UnsupportedAccessStrategyError("ComicDaysAdapter supports only free direct/auto access")
+        if access_strategy not in {"auto", "direct", "quota"}:
+            raise UnsupportedAccessStrategyError(
+                f"ComicDaysAdapter does not support access_strategy={access_strategy!r}"
+            )
         self._access_strategy = access_strategy
+        self._quota_resource = None
+        self._access_consumption = AccessConsumption()
+        self._live_access = None
+        self._ticket_click_attempted = False
+        self._preexisting_accessible = False
+        self._target_url = None
 
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
         del page
-        if quota_resource is not None:
-            raise UnsupportedAccessStrategyError("ComicDaysAdapter does not support quota resources")
+        if quota_resource not in {None, "work_ticket"}:
+            raise UnsupportedAccessStrategyError(
+                f"ComicDaysAdapter does not support quota_resource={quota_resource!r}"
+            )
+        if quota_resource is not None and self._access_strategy != "quota":
+            raise UnsupportedAccessStrategyError(
+                "ComicDays quota_resource requires access_strategy='quota'"
+            )
+        if self._access_strategy == "quota" and quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "ComicDays quota access requires quota_resource='work_ticket'"
+            )
+        self._quota_resource = quota_resource
+
+    def resolve_initial_navigation_url(self, source_url: str) -> str:
+        self._target_url = canonical_comicdays_episode_url(source_url)
+        self._episode_id = parse_comicdays_episode_url(self._target_url)
+        return self._target_url
+
+    async def resolve_access_resource_candidates(
+        self,
+        page: Page,
+        candidates: tuple[object, ...],
+        quota_resource: str,
+        *,
+        timeout_ms: int = COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
+    ) -> AccessResourceResolution | None:
+        if quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                f"ComicDaysAdapter does not support quota_resource={quota_resource!r}"
+            )
+        from screenshot_crawler.site_adapters.comicdays.access_resolver import (
+            resolve_comicdays_work_ticket_candidates,
+        )
+        return await resolve_comicdays_work_ticket_candidates(
+            page, candidates, timeout_ms=timeout_ms  # type: ignore[arg-type]
+        )
+
+    def get_access_consumption(self) -> AccessConsumption:
+        return self._access_consumption
 
     async def prepare_page(self, page: Page) -> None:
         await page.add_init_script(script=COMICDAYS_CAPTURE_HOOK)
@@ -109,14 +198,34 @@ class ComicDaysAdapter(SiteAdapter):
         episode_id = parse_comicdays_episode_url(page.url)
         if episode_id is None:
             raise ValueError("Comic DAYS page URL is not a canonical episode URL")
-        self._initial_url, self._episode_id = canonical_comicdays_episode_url(page.url), episode_id
+        canonical_url = canonical_comicdays_episode_url(page.url)
+        if self._target_url is not None and canonical_url != self._target_url:
+            raise ValueError("Comic DAYS page URL did not match the requested target")
+        self._initial_url, self._episode_id = canonical_url, episode_id
         self._work_id = await _series_id_from_page(page)
-        entries = await fetch_comicdays_atom(page, self._work_id, free_only=True)
-        if not any(item.get("episode_id") == episode_id and item.get("url") == self._initial_url for item in entries):
-            raise UnsupportedAccessStrategyError("Comic DAYS episode is not currently free")
+        if self._access_strategy == "quota":
+            await self._initialize_ticket_entry(page, entry_only=False)
+        else:
+            try:
+                self._live_access = await observe_comicdays_live_access(
+                    page, series_id=self._work_id, episode_id=episode_id,
+                    timeout_ms=self.page_change_timeout_ms,
+                )
+            except ComicDaysLiveAccessError as exc:
+                raise UnknownPageStateError(str(exc)) from exc
+            if self._live_access.access_mode not in {"free", "quota"}:
+                raise UnsupportedAccessStrategyError(
+                    "Comic DAYS episode is not currently free or under an active grant"
+                )
+            if self._live_access.access_mode == "quota" and self._live_access.grant_until is None:
+                raise UnsupportedAccessStrategyError("Comic DAYS episode requires a Work Ticket")
+            self._preexisting_accessible = True
         self._title, self._author = await self._read_metadata(page)
         self._terminal = False
         self._advance_pending = False
+        self._advance_from_slider = None
+        self._known_tail_slider = None
+        self._known_nonbody_passes = 0
         self._selected_signature = None
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         try:
@@ -124,6 +233,291 @@ class ComicDaysAdapter(SiteAdapter):
                 await self._normalize_viewer(page, deadline)
         except TimeoutError as exc:
             raise PageChangeTimeoutError("Comic DAYS viewer normalization exceeded its time bound") from exc
+
+    async def initialize_entry_only(self, page: Page) -> None:
+        """Perform only the bounded Work Ticket entry and confirmation."""
+
+        episode_id = parse_comicdays_episode_url(page.url)
+        if episode_id is None or (self._episode_id and episode_id != self._episode_id):
+            raise ValueError("Comic DAYS entry page did not match the target episode")
+        if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "Comic DAYS entry-only execution requires quota/work_ticket"
+            )
+        self._initial_url = canonical_comicdays_episode_url(page.url)
+        self._episode_id = episode_id
+        self._work_id = await _series_id_from_page(page)
+        await self._initialize_ticket_entry(page, entry_only=True)
+
+    async def _initialize_ticket_entry(self, page: Page, *, entry_only: bool) -> None:
+        if self._work_id is None or self._episode_id is None:
+            raise UnknownPageStateError("Comic DAYS target identity is unavailable")
+        if self._ticket_click_attempted:
+            raise UnsupportedAccessStrategyError(
+                "Comic DAYS Work Ticket action was already attempted; retry is forbidden"
+            )
+        deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
+        try:
+            state = await self._observe_live_access(page, deadline)
+        except ComicDaysLiveAccessError as exc:
+            raise UnknownPageStateError(str(exc)) from exc
+        self._live_access = state
+        if state.access_mode in {"free", "quota"} and (
+            state.access_mode == "free" or state.grant_until is not None
+        ):
+            self._preexisting_accessible = True
+            if entry_only:
+                raise AccessResourceUnavailableError("work_ticket_not_needed")
+            return
+        if state.access_mode != "quota" or state.grant_until is not None:
+            raise AccessResourceUnavailableError("work_ticket_unavailable")
+        if not _supported_ticket_rental_term(state.row):
+            raise AccessResourceUnavailableError("work_ticket_unsupported_rental_term")
+        if not state.ticket.is_charged:
+            raise AccessResourceUnavailableError("work_ticket_cooldown")
+        remaining = self._remaining_ms(deadline)
+        if remaining <= 0:
+            raise PageChangeTimeoutError("Comic DAYS ticket control inspection exceeded its time bound")
+        try:
+            control = await asyncio.wait_for(
+                self._exact_ticket_control(page, deadline), timeout=remaining / 1000
+            )
+        except TimeoutError as exc:
+            raise PageChangeTimeoutError("Comic DAYS ticket control inspection exceeded its time bound") from exc
+        previous_charged_at = state.ticket.charged_at
+        self._ticket_click_attempted = True
+        try:
+            remaining = self._remaining_ms(deadline)
+            if remaining <= 0:
+                raise PageChangeTimeoutError("Comic DAYS Work Ticket entry exceeded its time bound")
+            await control.click(timeout=remaining, no_wait_after=True)
+            confirmed = await self._poll_consumption(page, previous_charged_at, deadline)
+            if not confirmed:
+                raise AccessConsumptionUnconfirmedError(
+                    "Comic DAYS Work Ticket consumption was not confirmed"
+                )
+        except BaseException:
+            # The click may have reached the site even when Playwright reports
+            # timeout/cancellation. Reconcile only by bounded read-only polls;
+            # never dispatch a second click. Preserve the original exception.
+            recovery_deadline = asyncio.get_running_loop().time() + self.ticket_recovery_window_ms / 1000
+            try:
+                await self._poll_consumption(page, previous_charged_at, recovery_deadline)
+            except BaseException as recovery_error:  # noqa: BLE001 - preserve the original click error
+                self._capture_debug["ticket_recovery_error"] = type(recovery_error).__name__
+            raise
+
+    async def _observe_live_access(self, page: Page, deadline: float) -> ComicDaysLiveAccessState:
+        remaining = self._remaining_ms(deadline)
+        if remaining <= 0:
+            raise ComicDaysLiveAccessError("Comic DAYS access observation exceeded its time bound")
+        return await asyncio.wait_for(
+            observe_comicdays_live_access(
+                page, series_id=self._work_id or "", episode_id=self._episode_id or "",
+                timeout_ms=remaining,
+            ),
+            timeout=remaining / 1000,
+        )
+
+    async def _reobserve_consumption(
+        self, page: Page, previous_charged_at: datetime | None, deadline: float
+    ) -> bool:
+        if self._work_id is None or self._episode_id is None:
+            return False
+        try:
+            state = await self._observe_live_access(page, deadline)
+        except Exception:  # noqa: BLE001 - post-click state is fail-closed
+            return False
+        self._live_access = state
+        row = state.row
+        purchase = row.get("purchase_info")
+        status = row.get("status")
+        if not isinstance(purchase, dict) or not isinstance(status, dict):
+            return False
+        expiry = state.grant_until
+        now = datetime.now(UTC)
+        charged_at = state.ticket.charged_at
+        positive = (
+            state.access_mode == "quota" and expiry is not None
+            and expiry > now
+            and purchase.get("can_read") is True
+            and purchase.get("has_rented_via_ticket") is True
+            and state.ticket.is_charged is False
+            and charged_at is not None
+            and charged_at > now
+            and previous_charged_at is not None
+            and charged_at > previous_charged_at
+        )
+        if not positive:
+            return False
+        # Latch the first positive native debit/grant observation exactly once.
+        # Viewer loading is a separate, read-only stage and must not replace or
+        # reset the timestamp used by generic Batch resource accounting.
+        if not self._access_consumption.consumed:
+            self._access_consumption = AccessConsumption(
+                consumed=True, resource="work_ticket", consumed_at=datetime.now(UTC)
+            )
+        return True
+
+    async def _post_grant_viewer_ready(self, page: Page, deadline: float) -> bool:
+        """Wait for the same target's unlocked native viewer to settle."""
+
+        if self._remaining_ms(deadline) <= 0:
+            return False
+        try:
+            async with asyncio.timeout_at(deadline):
+                return await self._post_grant_viewer_ready_impl(page, deadline)
+        except TimeoutError:
+            return False
+
+    async def _post_grant_viewer_ready_impl(self, page: Page, deadline: float) -> bool:
+        """Perform the bounded viewer observation under the caller's deadline."""
+
+        if self._episode_id is None or self._work_id is None:
+            raise UnknownPageStateError("Comic DAYS post-grant target identity is unavailable")
+        if parse_comicdays_episode_url(str(page.url)) != self._episode_id:
+            raise UnknownPageStateError("Comic DAYS post-grant viewer changed episode identity")
+        remaining = self._remaining_ms(deadline)
+        if remaining <= 0:
+            return False
+        try:
+            viewer_scope = page.locator(
+                "section.viewer.js-viewer[data-json-url],"
+                "section.private-viewer.js-viewer[data-json-url]"
+            )
+            if await viewer_scope.count() > 1:
+                raise UnknownPageStateError("Comic DAYS post-grant viewer scope was ambiguous")
+            aggregate = page.locator('[data-aggregate-id][data-type="episode"]')
+            if await aggregate.count() > 1:
+                raise UnknownPageStateError("Comic DAYS post-grant work scope was ambiguous")
+            if await aggregate.count() == 1:
+                aggregate_remaining = self._remaining_ms(deadline)
+                if aggregate_remaining <= 0:
+                    return False
+                observed_work = await aggregate.get_attribute(
+                    "data-aggregate-id", timeout=aggregate_remaining
+                )
+                if observed_work != self._work_id:
+                    raise UnknownPageStateError("Comic DAYS post-grant viewer changed work identity")
+            if await viewer_scope.count() != 1:
+                return False
+            expected_json_url = canonical_comicdays_episode_url(
+                f"https://comic-days.com/episode/{self._episode_id}"
+            ) + ".json"
+            viewer_remaining = self._remaining_ms(deadline)
+            if viewer_remaining <= 0:
+                return False
+            if await viewer_scope.get_attribute(
+                "data-json-url", timeout=viewer_remaining
+            ) != expected_json_url:
+                raise UnknownPageStateError("Comic DAYS post-grant viewer JSON identity mismatched")
+            viewer_remaining = self._remaining_ms(deadline)
+            if viewer_remaining <= 0:
+                return False
+            if "private-viewer" in (
+                await viewer_scope.get_attribute("class", timeout=viewer_remaining) or ""
+            ):
+                return False
+            viewer_remaining = min(1_000, self._remaining_ms(deadline))
+            if viewer_remaining <= 0 or not await viewer_scope.is_visible(timeout=viewer_remaining):
+                return False
+            active = await self._active(page, timeout_ms=self._remaining_ms(deadline))
+            if not active.get("rows") or active.get("ready") is not True:
+                return False
+            canvas = page.locator(self.canvas_selector)
+            return await canvas.count() >= 1
+        except UnknownPageStateError:
+            raise
+        except Exception:  # noqa: BLE001 - loading races remain transient
+            return False
+
+    async def _poll_consumption(
+        self, page: Page, previous_charged_at: datetime | None, deadline: float
+    ) -> bool:
+        """Poll read-only state after a click without ever retrying the click."""
+
+        while self._remaining_ms(deadline) > 0:
+            if not self._access_consumption.consumed:
+                await self._reobserve_consumption(page, previous_charged_at, deadline)
+            if self._access_consumption.consumed and await self._post_grant_viewer_ready(page, deadline):
+                return True
+            delay = min(200, self._remaining_ms(deadline))
+            if delay <= 0:
+                break
+            await page.wait_for_timeout(delay)
+        if self._access_consumption.consumed:
+            raise PageChangeTimeoutError("Comic DAYS post-grant viewer was not render-ready")
+        return False
+
+    async def _exact_ticket_control(self, page: Page, deadline: float) -> Locator:
+        if self._episode_id is None or self._work_id is None:
+            raise UnknownPageStateError("Comic DAYS ticket target identity is unavailable")
+        # The locked access page uses the observed private viewer scope.  The
+        # unlocked capture viewer is a different class and is validated after
+        # the grant transition.
+        viewer = page.locator("section.private-viewer.js-viewer[data-json-url]")
+        if await viewer.count() != 1:
+            raise AccessResourceUnavailableError("work_ticket_viewer_scope_ambiguous")
+        expected_json_url = canonical_comicdays_episode_url(
+            f"https://comic-days.com/episode/{self._episode_id}"
+        ) + ".json"
+        if await viewer.get_attribute("data-json-url") != expected_json_url:
+            raise AccessResourceUnavailableError("work_ticket_viewer_scope_mismatch")
+        container = viewer.locator("div.read-button-container")
+        if await container.count() != 1:
+            raise AccessResourceUnavailableError("work_ticket_access_container_ambiguous")
+        ticket = container.locator(
+            'button[data-test-id="use-series-ticket-button"][data-ticket-type="series"]'
+        )
+        if await ticket.count() != 1:
+            raise AccessResourceUnavailableError("work_ticket_control_ambiguous")
+        remaining = min(1_000, self._remaining_ms(deadline))
+        if remaining <= 0:
+            raise PageChangeTimeoutError("Comic DAYS ticket control inspection exceeded its time bound")
+        if not await ticket.is_visible(timeout=remaining) or not await ticket.is_enabled(timeout=remaining):
+            raise AccessResourceUnavailableError("work_ticket_control_not_actionable")
+        if " ".join((await ticket.inner_text(timeout=remaining)).split()) != "\u4f5c\u54c1\u30c1\u30b1\u30c3\u30c8\u3067\u8aad\u3080\uff08\u7121\u6599\uff09":
+            raise AccessResourceUnavailableError("work_ticket_control_label_mismatch")
+        if await ticket.get_attribute("data-ticket-rental-id") != self._episode_id:
+            raise AccessResourceUnavailableError("work_ticket_control_episode_mismatch")
+        # The observed page binds work identity on a sibling listing surface;
+        # controls are separately scoped to the target viewer's access area.
+        areas = page.locator('[data-aggregate-id][data-type="episode"]')
+        if await areas.count() != 1 or not await areas.is_visible(timeout=remaining):
+            raise AccessResourceUnavailableError("work_ticket_access_area_missing")
+        panel_identity = await areas.get_attribute("data-aggregate-id")
+        if panel_identity != self._work_id:
+            raise AccessResourceUnavailableError("work_ticket_control_work_mismatch")
+        if await ticket.get_attribute("data-behaviour") != "button":
+            raise AccessResourceUnavailableError("work_ticket_control_operation_mismatch")
+        title = await ticket.get_attribute("title") or ""
+        if any(term in title for term in ("\u8cfc\u5165", "\u30dd\u30a4\u30f3\u30c8", "\u30ec\u30f3\u30bf\u30eb")):
+            raise AccessResourceUnavailableError("work_ticket_control_paid_attribute")
+        if await ticket.get_attribute("data-buy-price") is not None:
+            raise AccessResourceUnavailableError("work_ticket_control_cost_attribute")
+        if await ticket.get_attribute("onclick") is not None:
+            raise AccessResourceUnavailableError("work_ticket_control_handler_ambiguous")
+        # A visible premium ticket control in the same page is a distinct
+        # resource and makes this entry ambiguous; it is never a fallback.
+        premium = container.locator('[data-test-id="use-premium-ticket-button"]')
+        if await premium.count() > 1:
+            raise AccessResourceUnavailableError("premium_ticket_control_ambiguous")
+        remaining = min(1_000, self._remaining_ms(deadline))
+        if remaining <= 0:
+            raise PageChangeTimeoutError("Comic DAYS premium control inspection exceeded its time bound")
+        if await premium.count() == 1 and await premium.is_visible(timeout=remaining):
+            raise AccessResourceUnavailableError("premium_ticket_control_visible")
+        purchase = container.locator('[data-test-id="purchase-button"]')
+        if await purchase.count() > 1:
+            raise AccessResourceUnavailableError("purchase_control_ambiguous")
+        if await purchase.count() == 1:
+            purchase_price = await purchase.get_attribute("data-buy-price")
+            if purchase_price is None:
+                raise AccessResourceUnavailableError("purchase_control_identity_ambiguous")
+        # A separate purchase control may coexist in the same verified access
+        # area. It is checked only for scope and is never clicked or used as a
+        # fallback.
+        return ticket
 
     async def _normalize_viewer(self, page: Page, deadline: float) -> None:
         horizontal_seen = False
@@ -264,9 +658,17 @@ class ComicDaysAdapter(SiteAdapter):
             return PageState.LOADING
         if state.get("rows"):
             return PageState.CONTENT
-        if self._advance_pending and state.get("colophon") is True:
-            self._terminal = True
-            return PageState.END
+        slider = self._valid_slider_state(state)
+        if slider is not None:
+            observation = await self._nonbody_observation(page)
+            current, last = slider
+            if (
+                self._known_tail_slider == current
+                and self._observation_matches_slider(observation, slider)
+                and current < last
+                and self._is_observed_tail(observation)
+            ):
+                return PageState.AD
         viewer = page.locator(self.viewer_selector)
         if await viewer.count() and await viewer.is_visible(timeout=500):
             return PageState.LOADING
@@ -348,27 +750,254 @@ class ComicDaysAdapter(SiteAdapter):
     async def get_content_context(self, page: Page) -> ContentContext:
         return ContentContext(content_id=self._episode_id, work_id=self._work_id, episode_id=self._episode_id, title=self._title)
 
+    async def _nonbody_observation(self, page: Page, *, timeout_ms: int = 500) -> dict[str, Any]:
+        """Return only the observed, bounded non-body tail markers.
+
+        Comic DAYS places one back-link page and one ad page after the final
+        body spread.  They are treated as an advertisement equivalent only
+        when their exact classes, resource counts, and on-screen geometry all
+        match the live observation.  This intentionally does not classify
+        arbitrary blank, paid, or access panels as skips.
+        """
+
+        script = """
+        (expected) => {
+          const visibleOnScreen = (element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+              rect.left < window.innerWidth && rect.top < window.innerHeight &&
+              style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+          };
+          const summary = (element) => ({
+            className: element.className || '',
+            id: element.id || null,
+            onScreen: visibleOnScreen(element),
+            canvasCount: element.querySelectorAll('canvas').length,
+            imageCount: element.querySelectorAll('img').length,
+            iframeCount: element.querySelectorAll('iframe').length,
+          });
+          const viewers = [...document.querySelectorAll('section.viewer.js-viewer[data-json-url]')];
+          const viewer = viewers.length === 1 ? viewers[0] : null;
+          const baseUrl = location.href.split('#')[0];
+          const expectedJson = expected || (baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl) + '.json';
+          const scopeValid = !!viewer && viewer.getAttribute('data-json-url') === expectedJson;
+          const areas = viewer ? [...viewer.querySelectorAll('.page-area.js-page-area')] : [];
+          const sliderNow = Number(document.querySelector('.js-viewer-slider-pagenum-now')?.textContent?.trim());
+          const sliderLast = Number(document.querySelector('.js-viewer-slider-pagenum-last')?.textContent?.trim());
+          const backArea = Number.isFinite(sliderLast) ? areas[sliderLast - 3] : null;
+          const adArea = Number.isFinite(sliderLast) ? areas[sliderLast - 2] : null;
+          const colophonArea = Number.isFinite(sliderLast) ? areas[sliderLast - 1] : null;
+          const pageChildren = areas.flatMap((area) => [...area.children]
+            .filter((element) => element.classList.contains('page') && element.classList.contains('js-page'))
+            .map((element) => ({element, areaIndex: areas.indexOf(area)})));
+          const directPageChildren = viewer ? [...viewer.children]
+            .filter((element) => element.classList.contains('page') && element.classList.contains('js-page'))
+            .map((element) => ({element, areaIndex: null})) : [];
+          const knownPage = element => (element.classList.contains('back-link-page') &&
+            element.classList.contains('js-link-page') && element.classList.contains('js-back-link-page')) ||
+            element.classList.contains('js-page-ad');
+          const knownArea = (area, index) => {
+            if (index === sliderLast - 4) return area.querySelectorAll('canvas.page-image.js-page-image').length > 0;
+            if (index === sliderLast - 3) return [...area.children].filter((element) =>
+              element.classList.contains('page') && element.classList.contains('js-page') &&
+              element.classList.contains('back-link-page') && element.classList.contains('js-link-page') &&
+              element.classList.contains('js-back-link-page')).length === 1;
+            if (index === sliderLast - 2) return [...area.children].filter((element) =>
+              element.classList.contains('page') && element.classList.contains('js-page') &&
+              element.classList.contains('js-page-ad')).length === 1;
+            if (index === sliderLast - 1) return area.id === 'viewer-colophon';
+            return false;
+          };
+          const expectedTailIndices = Number.isFinite(sliderLast)
+            ? new Set([sliderLast - 4, sliderLast - 3, sliderLast - 2, sliderLast - 1]) : new Set();
+          const unknownOnScreenAreas = areas.filter((area, index) =>
+            visibleOnScreen(area) && (!expectedTailIndices.has(index) || !knownArea(area, index))
+          ).map((area) => ({...summary(area), areaIndex: areas.indexOf(area)}));
+          const otherOnScreen = [...pageChildren, ...directPageChildren]
+            .filter(({element}) => visibleOnScreen(element) && !knownPage(element));
+          const back = backArea ? [...backArea.children].filter((element) =>
+            element.classList.contains('page') && element.classList.contains('js-page') &&
+            element.classList.contains('back-link-page') && element.classList.contains('js-link-page') &&
+            element.classList.contains('js-back-link-page')).map((element) => ({...summary(element), areaIndex: areas.indexOf(backArea)})) : [];
+          const ads = adArea ? [...adArea.children].filter((element) =>
+            element.classList.contains('page') && element.classList.contains('js-page') &&
+            element.classList.contains('js-page-ad')).map((element) => ({...summary(element), areaIndex: areas.indexOf(adArea)})) : [];
+          const colophon = colophonArea && colophonArea.id === 'viewer-colophon' ?
+            {...summary(colophonArea), areaIndex: areas.indexOf(colophonArea)} : null;
+          return {
+            scopeValid, viewerCount: viewers.length,
+            sliderNow: Number.isFinite(sliderNow) ? sliderNow : null,
+            sliderLast: Number.isFinite(sliderLast) ? sliderLast : null,
+            activePageAreas: areas.map((element) => ({
+              areaIndex: areas.indexOf(element),
+              id: element.id || null, className: element.className || '',
+              dataIndex: element.getAttribute('data-area-index') || element.getAttribute('data-page-index'),
+              onScreen: visibleOnScreen(element),
+              children: [...element.children].slice(0, 8).map(summary),
+            })),
+            back, ads,
+            otherOnScreen: otherOnScreen.map(({element, areaIndex}) => ({...summary(element), areaIndex})),
+            unknownOnScreenAreas, colophon,
+          };
+        }
+        """
+        try:
+            value = await asyncio.wait_for(
+                page.evaluate(script, (f"https://comic-days.com/episode/{self._episode_id}.json" if self._episode_id else None)),
+                timeout=max(0.05, timeout_ms / 1000)
+            )
+        except TimeoutError as exc:
+            raise PageChangeTimeoutError("Comic DAYS non-body observation exceeded its time bound") from exc
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _valid_slider_state(state: dict[str, Any]) -> tuple[int, int] | None:
+        current, last = state.get("sliderNow"), state.get("sliderLast")
+        if not isinstance(current, int) or isinstance(current, bool):
+            return None
+        if not isinstance(last, int) or isinstance(last, bool) or not 1 <= current <= last:
+            return None
+        return current, last
+
+    @staticmethod
+    def _is_observed_tail(observation: dict[str, Any]) -> bool:
+        back, ads = observation.get("back"), observation.get("ads")
+        if not isinstance(back, list) or not isinstance(ads, list) or len(back) != 1 or len(ads) != 1:
+            return False
+        back_item, ad_item = back[0], ads[0]
+        last = observation.get("sliderLast")
+        if not isinstance(last, int):
+            return False
+        return (
+            isinstance(back_item, dict) and isinstance(ad_item, dict)
+            and observation.get("scopeValid") is True
+            and back_item.get("areaIndex") == last - 3
+            and ad_item.get("areaIndex") == last - 2
+            and back_item.get("onScreen") is True and ad_item.get("onScreen") is True
+            and back_item.get("canvasCount") == 0 and back_item.get("imageCount") == 2
+            and ad_item.get("canvasCount") == 0 and ad_item.get("iframeCount") == 2
+            and observation.get("unknownOnScreenAreas") == []
+            and observation.get("otherOnScreen") == []
+        )
+
+    @staticmethod
+    def _is_observed_colophon(observation: dict[str, Any]) -> bool:
+        colophon = observation.get("colophon")
+        last = observation.get("sliderLast")
+        return (
+            isinstance(colophon, dict)
+            and observation.get("scopeValid") is True
+            and isinstance(last, int) and colophon.get("areaIndex") == last - 1
+            and colophon.get("onScreen") is True
+            and colophon.get("canvasCount") == 0
+            and observation.get("unknownOnScreenAreas") == []
+            and observation.get("otherOnScreen") == []
+        )
+
+    @staticmethod
+    def _observation_matches_slider(
+        observation: dict[str, Any], slider: tuple[int, int] | None
+    ) -> bool:
+        return (
+            slider is not None
+            and observation.get("sliderNow") == slider[0]
+            and observation.get("sliderLast") == slider[1]
+        )
+
+    @staticmethod
+    def _nonbody_signature(observation: dict[str, Any], state: dict[str, Any]) -> tuple[Any, ...]:
+        def marker(value: Any) -> tuple[Any, ...]:
+            if not isinstance(value, dict):
+                return ()
+            return (
+                value.get("className"), value.get("id"), value.get("onScreen"),
+                value.get("areaIndex"),
+                value.get("canvasCount"), value.get("imageCount"), value.get("iframeCount"),
+            )
+
+        return (
+            state.get("sliderNow"), state.get("sliderLast"), state.get("colophon"),
+            observation.get("sliderNow"), observation.get("sliderLast"),
+            tuple(marker(item) for item in observation.get("back", []) if isinstance(item, dict)),
+            tuple(marker(item) for item in observation.get("ads", []) if isinstance(item, dict)),
+            marker(observation.get("colophon")),
+            tuple(marker(item) for item in observation.get("otherOnScreen", []) if isinstance(item, dict)),
+            tuple(marker(item) for item in observation.get("unknownOnScreenAreas", []) if isinstance(item, dict)),
+        )
+
     async def go_next(self, page: Page) -> None:
+        state = await self._active(page, timeout_ms=1_000)
+        slider = self._valid_slider_state(state)
+        if slider is None:
+            raise PageChangeTimeoutError("Comic DAYS forward transition had an invalid slider")
         button = page.locator(self.forward_selector)
-        if await button.count() != 1 or not await button.is_visible():
+        if await button.count() != 1 or not await button.is_visible(timeout=1_000):
             raise PageChangeTimeoutError("Comic DAYS forward control was not uniquely visible")
-        values = " ".join(str(value or "") for value in [await button.inner_text(), await button.get_attribute("aria-label"), await button.get_attribute("title"), await button.get_attribute("href"), await button.get_attribute("class")])
-        href = await button.get_attribute("href")
+        values = " ".join(str(value or "") for value in [await button.inner_text(timeout=1_000), await button.get_attribute("aria-label", timeout=1_000), await button.get_attribute("title", timeout=1_000), await button.get_attribute("href", timeout=1_000), await button.get_attribute("class", timeout=1_000)])
+        href = await button.get_attribute("href", timeout=1_000)
         if _FORBIDDEN.search(values) or (href and "/episode/" in href):
             raise PageChangeTimeoutError("Comic DAYS forward control failed safety validation")
+        self._advance_from_slider = slider[0]
         self._advance_pending = True
         await button.click(timeout=1_000, no_wait_after=True)
 
     async def wait_for_change(self, page: Page, previous_identity: ContentIdentity | None) -> None:
-        elapsed, stable, previous = 0, 0, None
-        while elapsed < self.page_change_timeout_ms:
+        deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
+        stable, previous = 0, None
+        nonbody_stable, nonbody_previous = 0, None
+        while self._remaining_ms(deadline) > 0:
             state = await self._active(page)
-            if self._advance_pending and not state.get("rows") and state.get("colophon"):
-                slider = state.get("sliderNow")
-                if previous_identity is None or slider != previous_identity.page_number:
-                    self._terminal = True
-                    return
-            if state.get("rows") and state.get("ready") is True:
+            slider_state = self._valid_slider_state(state)
+            advance_from = self._advance_from_slider
+            if self._advance_pending and slider_state is not None and advance_from is not None:
+                current, last = slider_state
+                if current < advance_from or current > last:
+                    raise PageChangeTimeoutError("Comic DAYS viewer slider did not advance monotonically")
+                if current > advance_from:
+                    if state.get("rows"):
+                        observation = None
+                    else:
+                        observation = await self._nonbody_observation(page, timeout_ms=min(500, self._remaining_ms(deadline)))
+                        if not self._observation_matches_slider(observation, slider_state):
+                            nonbody_stable, nonbody_previous = 0, None
+                            observation = None
+                        else:
+                            signature = self._nonbody_signature(observation, state)
+                            nonbody_stable = nonbody_stable + 1 if signature == nonbody_previous else 1
+                            nonbody_previous = signature
+                    if (
+                        observation is not None
+                        and nonbody_stable >= 2
+                        and state.get("colophon") is True
+                        and (
+                            (current == last and self._known_tail_slider == last - 2)
+                            or (current == last - 1 and self._known_tail_slider is None)
+                        )
+                        and self._is_observed_colophon(observation)
+                    ):
+                        self._terminal = True
+                        self._advance_pending = False
+                        self._advance_from_slider = None
+                        return
+                    elif (
+                        observation is not None
+                        and nonbody_stable >= 2
+                        and current == last - 2
+                        and self._is_observed_tail(observation)
+                    ):
+                        if self._known_tail_slider is not None or self._known_nonbody_passes >= 1:
+                            raise PageChangeTimeoutError("Comic DAYS repeated known tail transition")
+                        self._known_tail_slider = current
+                        self._known_nonbody_passes += 1
+                        self._advance_pending = False
+                        self._advance_from_slider = None
+                        return
+            if (
+                state.get("rows") and state.get("ready") is True
+                and slider_state is not None
+                and (advance_from is None or slider_state[0] > advance_from)
+            ):
                 current = await self.get_content_identity(page)
                 progressed = previous_identity is None or (
                     current.page_id != previous_identity.page_id
@@ -380,11 +1009,11 @@ class ComicDaysAdapter(SiteAdapter):
                     previous = sig
                     if stable >= 2:
                         self._advance_pending = False
+                        self._advance_from_slider = None
                         return
                 else:
                     stable, previous = 0, None
-            await page.wait_for_timeout(100)
-            elapsed += 100
+            await page.wait_for_timeout(min(100, self._remaining_ms(deadline)))
         raise PageChangeTimeoutError("Comic DAYS page did not change within the timeout")
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
