@@ -362,6 +362,15 @@ The existing generic `quota_resource` contract remains the starting point:
 
 Evolve these extension points rather than creating a parallel Magapoke-only path.
 
+The generic adapter also exposes an optional scalar
+`configure_target_identity(external_id, work_key)` hook. Batch calls it after
+Catalog candidate validation and before Runner navigation; site adapters may
+retain the expected identity for target-local live checks. The generic
+Executor/CLI evaluates a policy-owned work-scoped local resource state before
+opening a page for consuming candidates. A local cooldown skip does not count
+as a site attempt or pacing event. These hooks remain site/resource neutral;
+Core does not interpret site names, resource names, or identity formats.
+
 ### 9.3 Policy versus live UI
 
 The shared rule is:

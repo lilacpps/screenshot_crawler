@@ -585,3 +585,11 @@ Batchまたは手動CLIからCrawlerへ渡すsite-neutralな実行入力。
 - optional `title / author / order / genre`
 
 Catalog identityやquota ruleそのものは含めない。
+### Shared Batch identity and local resource gate
+
+Batch may call the optional scalar
+`SiteAdapter.configure_target_identity(external_id, work_key)` before Runner
+navigation. This lets a site adapter bind Catalog identity to target-local live
+checks without giving Core Catalog access or site-specific identity rules.
+Work-scoped local resource cooldown checks run before opening a consuming
+candidate page; local skips do not count as site attempts or pacing events.

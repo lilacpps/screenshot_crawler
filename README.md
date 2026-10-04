@@ -295,13 +295,123 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
   --output-dir output\crawl-mangaone
 ```
 
-Comic DAYS supports free episodes and existing active grants. Policy and the
-site-owned resolver select Work Ticket candidates; the adapter performs the
-exact ticket-control operation and confirms consumption from live state.
+Comic DAYS supports free episodes, active grants, and one Catalog-selected
+Work Ticket candidate per work (`quota_limit=1`). Batch opens the selected
+episode once, performs strict target-local safety validation, clicks the exact
+Work Ticket control once, confirms positive consumption, and continues from
+the same Page for normal quota crawling. Grant-only leaves the Item pending
+without an Artifact. Catalog/live mismatch stops the resource pass and
+requires a fresh full Discovery; a positive ticket cooldown is reported
+separately. The generic live resolver remains for sites whose Discovery cannot
+classify native ticket state, such as Zebrack.
+For live verification, the supplied episode URL seeds full Discovery for its
+native work; the natural Planner candidate may be another episode in that same
+work, while Catalog access facts and ordering remain authoritative.
+For a consuming Comic DAYS Batch candidate, the Catalog Work key must match
+`comicdays:series:<native-series-id>`. The adapter validates that identity
+before navigation and returns `comicdays_work_identity_unavailable` with no
+navigation or consumption for an arbitrary or malformed key. This is distinct
+from `comicdays_discovery_refresh_required`, which means a positive live
+mismatch after a valid Catalog identity. Free/direct candidates may retain
+arbitrary Work keys; a manually invoked quota run without configured Catalog
+expectations keeps the adapter's target-local contract checks.
+After a positive mismatch, refresh the isolated Catalog with full Discovery:
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `
+  --site comicdays --mode full `
+  --watchlist output\comicdays-watchlist.yaml `
+  --catalog output\comicdays-refresh.sqlite
+```
+
 Native capture is lossless-JPEG first when the observed source and tile
 geometry pass coefficient-level validation, with whole-spread reconstructed
 PNG and locator fallbacks. Point, coin, paid, and login operations are never
 performed. Discovery, Catalog, Batch, and packaging remain available.
+
+The isolated 2026-10-04 Test A used the seed URL above and the native work's
+natural Planner quota candidate (`12207421983943213206`). The production
+grant-only run opened that candidate once, issued one Work Ticket click, and
+durably observed the native debit/unlocked target evidence. The Item remained
+pending and no Artifact was created; the CLI subsequently reported an
+`AccessConsumptionUnconfirmedError` after the positive latch, so the run was
+not retried. The isolated Catalog retained the 23-hour resource timestamp,
+and the policy's calculated 71-hour fallback is
+`2026-10-07T16:35:36.501568+09:00` (the pre-refresh source snapshot was not
+captured). A complete post-grant Discovery then replaced the source value with
+the observed native expiry.
+Instrumentation recorded three adapter Work Ticket GraphQL checks and zero
+adapter whole-work listing calls. The page's own JavaScript emitted 31
+first-party Atom/readable-product requests, which are recorded separately from
+crawler-side adapter traffic. This evidence is current behavior; older
+resolver/replan live runs below are historical.
+The same diagnostic target probe showed the native viewer identity and unlocked
+normal viewer, while the capture hook remained incomplete with
+`expected_body_area_not_visible_or_extra` (expected area 2, no visible body
+areas) for the bounded observation window. Grant-only confirmation therefore
+uses target-local debit/unlock evidence and does not require body/capture
+readiness. The common post-click confirmation requires matching canonical
+episode/work/JSON identity, one visible normal viewer, no private viewer, no
+remaining target Work Ticket control, and a newer positive `chargedAt`. Normal
+crawling continues on that same Page through the existing
+initialize/normalization/capture guards; an incomplete body area fails closed
+there while the positive consumption record is retained.
+
+The historical A/2R/3P raw directories under `output/tmp` are currently
+unavailable; their original Catalogs and raw evidence cannot be revalidated.
+The reviewer verified the A evidence before disappearance; the cause and any
+recovery location are unknown, and no raw evidence was reconstructed. Future
+B/C live evidence uses an explicit protected task directory outside
+`output/tmp`.
+
+The protected 2026-10-04 normal quota Test B used
+`output/comicdays_one_navigation_liveB_20261004_protected_1859/` and the
+natural Planner candidate source165 (`10834108156719217950`) in work
+`comicdays:series:10834108156713445245`. The real Planner/Executor/Runner/
+Adapter path opened the candidate once, recorded one site-owned
+`Viewer_PurchaseViaTicket` mutation with positive debit/unlock evidence, and
+performed zero paid or premium operations. The same Page continued through
+normalization and native JPEG capture to `END`, producing a 28-page ZIP and a
+completed Catalog Item with a present Artifact. Adapter target GraphQL checks:
+3; adapter whole-work Atom/free-Atom/pagination/readable-product calls: 0.
+ Raw AccessEvent classification recorded 31 site-owned listing requests
+ (Atom 28, `readable_product_pagination_information` 2, and
+ `pagination_readable_products` 1). The harness's limited marker pattern
+ counted 30; the raw sink total is authoritative. Page.goto and Locator.click
+ were not directly instrumented: the one crawler target open is inferred from
+ the target-document ordering, and the one exact ticket click is inferred from
+ the single `Viewer_PurchaseViaTicket` mutation plus positive debit/unlock
+ evidence (the reload removed selector metadata from the DOM listener). The
+ protected audit is
+`output/comicdays_one_navigation_liveB_20261004_protected_1859/normal_batch_report.json`;
+the pre-package output copy is under `evidence/normal_batch/pre_package_output`.
+The B-run snapshot was A=1 ticket, B=1 ticket, C=0 tickets. The corrected
+grant-only Test C below brings the current task ledger to A=1/B=1/C=1.
+
+The corrected isolated 2026-10-04 grant-only Test C used seed
+`12207421983645809730`; full Discovery selected source39, episode
+`2550912965783608326`, in work `comicdays:series:14079602755643699323`.
+The production CLI exited successfully after one positive debit/unlock, left
+ the Item pending, created no Artifact or images, and persisted the work resource
+ state. The `consumed_at + 71h` value was calculated from policy; a separate
+ pre-refresh source/SQLite snapshot of that value was not persisted. A second production
+grant-only CLI run selected another same-work quota candidate but stopped at the
+Catalog-only `work_ticket_cooldown` gate with zero page, goto, click, or request
+activity. The subsequent isolated full Discovery observed 63/63 and refreshed
+the native expiry to `2026-10-07T19:22:14+09:00`.
+
+ Durable page AccessEvents recorded three site-JavaScript
+ `Viewer_SeriesTicketQuery` requests; the adapter-specific GraphQL call count is
+ unknown because its wrapper output was not persisted. The quota path has zero
+ whole-work adapter calls by code-path verification, rather than a persisted
+ runtime counter. The C harness installed direct `Page.goto` and `Locator.click` wrappers, but a
+harness-only nested-async error while writing post-Discovery output lost those
+in-memory callback records. Durable production AccessEvents recover one
+crawler target open, one same-target site transition, one
+`Viewer_PurchaseViaTicket` mutation, and zero paid mutations; the report marks
+these recovered counts separately from direct wrapper callbacks. The protected
+audit is
+`output/comicdays_grant_only_liveC_20261004_protected_1920/grant_only_report.json`.
 
 ```powershell
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli watch add `

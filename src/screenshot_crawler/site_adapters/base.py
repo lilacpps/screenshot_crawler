@@ -73,6 +73,13 @@ class SiteAdapter(ABC):
                 f"access_strategy={access_strategy!r}"
             )
 
+    async def configure_target_identity(
+        self, external_id: str, work_key: str
+    ) -> None:
+        """Supply Catalog identity expected by a Batch navigation."""
+
+        del external_id, work_key
+
     async def configure_quota_resource(
         self, page: Page, quota_resource: str | None
     ) -> None:

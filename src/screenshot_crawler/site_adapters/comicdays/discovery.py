@@ -273,6 +273,15 @@ def comicdays_access_observation(
             raise DiscoveryIncompleteError("Comic DAYS locked ticket state had a rental expiry")
         if not _finite_number(status.get("rental_price")) or float(status["rental_price"]) != 0:
             raise DiscoveryIncompleteError("Comic DAYS ticket price was malformed")
+        if (
+            not isinstance(status.get("rental_term"), int)
+            or isinstance(status.get("rental_term"), bool)
+            or status.get("rental_term") != 72
+        ):
+            # Discovery is the authority for candidate classification.  A
+            # ticket contract outside the native 72-hour contract is known
+            # but unsupported, so it must not become a quota candidate.
+            return "unknown", None, False
         return "quota", None, True
     if (
         can_read is False and is_free is False and has_rented is False

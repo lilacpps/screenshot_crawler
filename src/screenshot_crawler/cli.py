@@ -1648,6 +1648,18 @@ async def _execute_batch_candidates(
                 if metrics is not None:
                     metrics.record_local_skip(candidate, reason=local_skip_reason)
                 continue
+        elif getattr(candidate, "consumes_quota", False):
+            resource_state_check = getattr(executor, "resource_state_skip_reason", None)
+            if callable(resource_state_check):
+                local_skip_reason = resource_state_check(candidate)
+                if local_skip_reason is not None:
+                    print(
+                        f"[{phase} {index}/{len(candidates)}] item={candidate.item_id} "
+                        f"SKIPPED {local_skip_reason}"
+                    )
+                    if metrics is not None:
+                        metrics.record_local_skip(candidate, reason=local_skip_reason)
+                    continue
         if attempts == 0 and delay_before_first_ms is not None:
             await asyncio.sleep(delay_before_first_ms / 1000)
         attempts += 1
@@ -1727,7 +1739,7 @@ async def _execute_batch_candidates(
             if metrics is not None:
                 metrics.finish_candidate(result="skipped", stop_reason=reason)
             if exc.stop_resource_pass:
-                print("  Resource is exhausted; stopping this resource pass.")
+                print("  Stopping this resource pass.")
                 return attempts, False
             continue_after_candidate = True
         except CandidateExecutionError as exc:

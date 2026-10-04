@@ -54,6 +54,30 @@ visible, while deferred candidates are shown only as a pool summary with their
 candidate count and policy-owned resource. The generic partition has no site
 or resource-name branch, and non-deferred site output remains unchanged.
 
+Comic DAYS is a non-deferred policy: Discovery full classifies the complete
+first-party listing and is the authority for quota candidates. Its policy uses
+work-scoped `work_ticket` state with `quota_limit=1`; Planner therefore passes
+at most one quota candidate per work in existing Catalog order. The generic
+Executor exposes an optional `SiteAdapter.configure_target_identity()` hook
+before Runner navigation, allowing a site adapter to compare Catalog identity
+with the target page. It also evaluates work-scoped local resource cooldown
+state before opening a page for any consuming candidate. These are neutral
+hooks; no site or resource name is interpreted by Core.
+
+Comic DAYS no longer uses a production live candidate resolver. Its adapter
+opens the selected target once, performs target-local identity and exact Work
+Ticket safety checks, clicks once, confirms positive debit/unlock evidence,
+and continues normal quota crawling on the same Page. Positive Catalog/live
+identity or contract disagreement stops the resource pass and requests a new
+full Discovery; a positive `isCharged=false` is reported as a distinct
+`work_ticket_cooldown`. The shared resolver framework remains for Zebrack,
+whose Discovery cannot classify native per-chapter ticket state.
+The generic Executor validates a populated candidate external ID against the
+Catalog source before opening a page. Comic DAYS treats charged-without-
+`chargedAt` as unknown; the target-local safety path cannot infer a click
+baseline. CLI stop-pass output is neutral, while the adapter reason remains
+available for operators and metrics.
+
 ## Zeblack Z5 current status (2026-09-30)
 
 ### Z5-6 production initial-navigation and Work Ticket flow
@@ -1023,6 +1047,25 @@ and live verification remain planned.
 2026-10-02時点では、Watchlist + Catalog基盤、Crawl Requestの最小基盤、site-neutral Discovery framework、Comic DAYSを含む各siteのDiscovery / Site Policy registry、Phase 5Aのread-only Batch Planner、Manga ONE・BookWalker Batch Executor、BookWalker Adapterのstrict direct・quota product-page entryが実装済みである。Comic DAYSは公式free-only Atomの再検証を行うdirect専用Adapterとして登録され、ticket/point/coin/quota resourceは扱わない。BookWalkerは05:00 JSTのsite-wide 1枠local safety policyを使い、quota開始をreader entry前に永続化する。実サイトquota clickは未確認である。
 
 Comic DAYSのC3実サイトE2Eでは、明示的な`catalog_comicdays.sqlite`と隔離watchlistを使い、登録済みDiscoveryが79件（free 4 / unknown 75）をCatalogへ同期した。通常のBatch Plannerはfree targetをdirect・`consumes_quota=false`で選択し、登録済みBatch ExecutorがCrawlerRunner、packaging、CrawlRun / Item / Artifactの成功確定まで完了した。実行結果は32 native PNG、area 1..32、`END`、CRC・manifest fingerprint・dimensions一致である。通常の`catalog.sqlite`とroot `watchlist.yaml`はこのE2Eの入力にしていない。
+
+The dated Japanese C3 paragraphs immediately above are historical snapshots.
+Their direct-only/free-only and no-ticket statements are stale and must not be
+used as the current contract; the current behavior is the non-deferred,
+one-Catalog-candidate Work Ticket flow below.
+
+### Current Comic DAYS Batch authority
+
+The older C3 paragraph above describes the former free-only implementation and
+is historical. Current Comic DAYS Discovery full classifies the complete
+first-party listing, and `quota_limit=1` keeps one Work Ticket candidate per
+work in existing Catalog order. Quota execution is non-deferred: the adapter
+does not run a live candidate resolver, opens the Planner-selected target once,
+validates its target-local identity and exact Work Ticket contract, confirms
+positive debit/unlock evidence, and continues normal crawling on the same Page.
+Catalog/live identity or contract disagreement stops the resource pass with
+`comicdays_discovery_refresh_required`; `isCharged=false` is the separate
+`work_ticket_cooldown` state. The generic resolver remains for Zebrack, whose
+Discovery cannot classify native per-chapter ticket state.
 
 authority:
 

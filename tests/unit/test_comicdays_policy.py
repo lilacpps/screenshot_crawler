@@ -31,7 +31,7 @@ def test_comicdays_policy_selects_work_ticket_and_active_grant_direct() -> None:
     candidate = policy.evaluate(_source("quota"), now=now, quota_available=None)
     assert candidate.eligible and candidate.access_strategy == "quota"
     assert candidate.consumes_quota and candidate.quota_resource == "work_ticket"
-    assert candidate.quota_scope == "work" and candidate.quota_limit is None
+    assert candidate.quota_scope == "work" and candidate.quota_limit == 1
     assert candidate.quota_commit_mode == "after_observed_consumption"
     active = replace(_source("quota"), access_granted_until=now + timedelta(hours=1))
     direct = policy.evaluate(active, now=now, quota_available=None)
@@ -44,7 +44,7 @@ def test_comicdays_policy_resource_contract_and_cooldown_boundaries() -> None:
     assert policy.ordered_access_resource_passes() == ("work_ticket",)
     assert policy.grant_only_supported_access_resources() == ("work_ticket",)
     assert policy.resource_state_scope("work_ticket") == "work"
-    assert policy.defer_quota_access_to_grant_phase() is True
+    assert policy.defer_quota_access_to_grant_phase() is False
     consumed = datetime(2026, 10, 3, 0, tzinfo=JST)
     assert policy.grant_only_skip_reason(resource="work_ticket", last_consumed_at=consumed, now=consumed + timedelta(hours=23) - timedelta(seconds=1), cooldown_hours=None) == "work_ticket_cooldown"
     assert policy.grant_only_skip_reason(resource="work_ticket", last_consumed_at=consumed, now=consumed + timedelta(hours=23), cooldown_hours=None) is None

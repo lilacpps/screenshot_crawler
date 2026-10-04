@@ -93,6 +93,15 @@ def test_access_observation_classifies_free_ticket_grant_paid_and_unknown() -> N
     assert comicdays_access_observation(unsupported, free=False, now=now) == ("unknown", None, False)
 
 
+@pytest.mark.parametrize("term", [None, True, "72", 71, 73])
+def test_access_observation_excludes_unsupported_locked_ticket_contract(term: object) -> None:
+    row = _row("5", ticket=True)
+    row["status"]["rental_term"] = term
+    assert comicdays_access_observation(
+        row, free=False, now=datetime(2026, 10, 3, tzinfo=UTC)
+    ) == ("unknown", None, False)
+
+
 def test_access_observation_accepts_free_feed_ticket_support_metadata_without_quota() -> None:
     row = _row("6", free=True)
     row["status"].update(is_support_ticket=True, rental_price=0, rental_term=72)

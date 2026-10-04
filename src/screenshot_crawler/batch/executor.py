@@ -125,6 +125,17 @@ class BatchExecutor:
                 )
             policy = self.policies.create(candidate.site)
             self._validate_candidate(candidate, policy, current)
+            local_skip_reason = self.resource_state_skip_reason(
+                candidate, policy=policy, now=current
+            )
+            if local_skip_reason is not None:
+                raise AccessResourceUnavailableError(local_skip_reason)
+            adapter = self.adapters.create(candidate.site)
+            source = self.catalog.get_source(candidate.source_id)
+            work = self.catalog.get_work(self.catalog.get_item(candidate.item_id).work_id)
+            configure_identity = getattr(adapter, "configure_target_identity", None)
+            if configure_identity is not None:
+                await configure_identity(source.external_id, work.work_key)
             run = self.catalog.create_crawl_run(
                 item_id=candidate.item_id,
                 source_id=candidate.source_id,
@@ -134,7 +145,6 @@ class BatchExecutor:
             )
             run_id = run.id
             output_dir = _new_output_dir(output_root, candidate, current)
-            adapter = self.adapters.create(candidate.site)
 
             if candidate.consumes_quota and candidate.quota_commit_mode == "before_run":
                 grant_until = policy.access_grant_until(current)
@@ -279,12 +289,34 @@ class BatchExecutor:
     ) -> str | None:
         """Check local resource state before opening a browser page."""
 
-        if candidate.quota_resource is None:
-            raise BatchExecutionError("grant-only candidate has no access resource")
-        current = _normalize_now(now_jst() if now is None else now)
-        policy = self.policies.create(candidate.site)
         try:
+            if candidate.quota_resource is None:
+                raise BatchExecutionError("grant-only candidate has no access resource")
+            current = _normalize_now(now_jst() if now is None else now)
+            policy = self.policies.create(candidate.site)
             policy.validate_grant_only_resource(candidate.quota_resource)
+            return self.resource_state_skip_reason(candidate, policy=policy, now=current)
+        except BatchExecutionError:
+            raise
+        except (CatalogError, SitePolicyError, ValueError, TypeError) as exc:
+            raise BatchExecutionError(f"Could not evaluate grant-only state: {exc}") from exc
+
+    def resource_state_skip_reason(
+        self,
+        candidate: BatchCandidate,
+        *,
+        policy: SitePolicy | None = None,
+        now: datetime | None = None,
+    ) -> str | None:
+        """Check a work-scoped resource state without site access."""
+
+        if candidate.quota_resource is None or not candidate.consumes_quota:
+            return None
+        try:
+            current = _normalize_now(now_jst() if now is None else now)
+            selected_policy = policy or self.policies.create(candidate.site)
+            if selected_policy.resource_state_scope(candidate.quota_resource) != "work":
+                return None
             item = self.catalog.get_item(candidate.item_id)
             state = self.catalog.get_quota_resource_state(
                 item.work_id,
@@ -292,9 +324,11 @@ class BatchExecutor:
                 resource=candidate.quota_resource,
             )
             last_consumed_at = (
-                datetime.fromisoformat(state.last_consumed_at) if state is not None else None
+                datetime.fromisoformat(state.last_consumed_at)
+                if state is not None
+                else None
             )
-            return policy.grant_only_skip_reason(
+            return selected_policy.grant_only_skip_reason(
                 resource=candidate.quota_resource,
                 last_consumed_at=last_consumed_at,
                 now=current,
@@ -304,8 +338,8 @@ class BatchExecutor:
                     else None
                 ),
             )
-        except (CatalogError, SitePolicyError, ValueError) as exc:
-            raise BatchExecutionError(f"Could not evaluate grant-only state: {exc}") from exc
+        except (CatalogError, SitePolicyError, ValueError, TypeError) as exc:
+            raise BatchExecutionError(f"Could not evaluate resource state: {exc}") from exc
 
     async def resolve_access_resource_candidates(
         self,
@@ -422,6 +456,17 @@ class BatchExecutor:
             policy = self.policies.create(candidate.site)
             policy.validate_grant_only_resource(candidate.quota_resource)
             self._validate_candidate(candidate, policy, current)
+            local_skip_reason = self.resource_state_skip_reason(
+                candidate, policy=policy, now=current
+            )
+            if local_skip_reason is not None:
+                raise AccessResourceUnavailableError(local_skip_reason)
+            adapter = self.adapters.create(candidate.site)
+            source = self.catalog.get_source(candidate.source_id)
+            work = self.catalog.get_work(self.catalog.get_item(candidate.item_id).work_id)
+            configure_identity = getattr(adapter, "configure_target_identity", None)
+            if configure_identity is not None:
+                await configure_identity(source.external_id, work.work_key)
             run = self.catalog.create_crawl_run(
                 item_id=candidate.item_id,
                 source_id=candidate.source_id,
@@ -431,7 +476,6 @@ class BatchExecutor:
             )
             run_id = run.id
             output_dir = _new_output_dir(output_root, candidate, current)
-            adapter = self.adapters.create(candidate.site)
             config = RunConfig(
                 site=candidate.site,
                 source_url=candidate.locator,
@@ -559,6 +603,8 @@ class BatchExecutor:
             mismatches.append(f"item.status={item.status!r}")
         if source.item_id != candidate.item_id:
             mismatches.append("source.item_id")
+        if candidate.external_id and candidate.external_id != source.external_id:
+            mismatches.append("external_id")
         if source.site != candidate.site:
             mismatches.append("source.site")
         if source.access_mode != candidate.access_mode:

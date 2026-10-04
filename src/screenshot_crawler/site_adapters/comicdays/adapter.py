@@ -25,7 +25,6 @@ from screenshot_crawler.core.models import AccessStrategy, ContentContext, Conte
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import (
     AccessConsumption,
-    AccessResourceResolution,
     SiteAdapter,
 )
 from screenshot_crawler.site_adapters.comicdays.access import comicdays_access_profile
@@ -35,11 +34,14 @@ from screenshot_crawler.site_adapters.comicdays.discovery import (
     parse_comicdays_episode_url,
 )
 from screenshot_crawler.site_adapters.comicdays.live_access import (
-    COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
     ComicDaysLiveAccessError,
     ComicDaysLiveAccessState,
+    ComicDaysTargetIdentityMismatch,
     observe_comicdays_live_access,
+    observe_comicdays_target_access,
 )
+
+_COMICDAYS_WORK_KEY = re.compile(r"^comicdays:series:(?P<series_id>[0-9]+)$")
 
 
 def _supported_ticket_rental_term(row: dict[str, object]) -> bool:
@@ -91,6 +93,8 @@ class ComicDaysAdapter(SiteAdapter):
         self._ticket_click_attempted = False
         self._preexisting_accessible = False
         self._target_url: str | None = None
+        self._expected_external_id: str | None = None
+        self._expected_work_key: str | None = None
 
     def get_access_profile(self) -> AccessProfile:
         return comicdays_access_profile()
@@ -118,6 +122,10 @@ class ComicDaysAdapter(SiteAdapter):
         self._preexisting_accessible = False
         self._target_url = None
 
+    async def configure_target_identity(self, external_id: str, work_key: str) -> None:
+        self._expected_external_id = str(external_id)
+        self._expected_work_key = str(work_key)
+
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
         del page
         if quota_resource not in {None, "work_ticket"}:
@@ -137,26 +145,23 @@ class ComicDaysAdapter(SiteAdapter):
     def resolve_initial_navigation_url(self, source_url: str) -> str:
         self._target_url = canonical_comicdays_episode_url(source_url)
         self._episode_id = parse_comicdays_episode_url(self._target_url)
-        return self._target_url
-
-    async def resolve_access_resource_candidates(
-        self,
-        page: Page,
-        candidates: tuple[object, ...],
-        quota_resource: str,
-        *,
-        timeout_ms: int = COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
-    ) -> AccessResourceResolution | None:
-        if quota_resource != "work_ticket":
-            raise UnsupportedAccessStrategyError(
-                f"ComicDaysAdapter does not support quota_resource={quota_resource!r}"
+        if (
+            self._access_strategy == "quota"
+            and self._expected_external_id is not None
+            and self._episode_id != self._expected_external_id
+        ):
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
             )
-        from screenshot_crawler.site_adapters.comicdays.access_resolver import (
-            resolve_comicdays_work_ticket_candidates,
-        )
-        return await resolve_comicdays_work_ticket_candidates(
-            page, candidates, timeout_ms=timeout_ms  # type: ignore[arg-type]
-        )
+        if (
+            self._access_strategy == "quota"
+            and self._expected_work_key is not None
+            and _COMICDAYS_WORK_KEY.fullmatch(self._expected_work_key) is None
+        ):
+            raise AccessResourceUnavailableError(
+                "comicdays_work_identity_unavailable", stop_resource_pass=True
+            )
+        return self._target_url
 
     def get_access_consumption(self) -> AccessConsumption:
         return self._access_consumption
@@ -209,9 +214,14 @@ class ComicDaysAdapter(SiteAdapter):
             raise ValueError("Comic DAYS page URL is not a canonical episode URL")
         canonical_url = canonical_comicdays_episode_url(page.url)
         if self._target_url is not None and canonical_url != self._target_url:
+            if self._access_strategy == "quota":
+                raise AccessResourceUnavailableError(
+                    "comicdays_discovery_refresh_required", stop_resource_pass=True
+                )
             raise ValueError("Comic DAYS page URL did not match the requested target")
         self._initial_url, self._episode_id = canonical_url, episode_id
         self._work_id = await _series_id_from_page(page)
+        self._validate_expected_work_identity()
         if self._access_strategy == "quota":
             await self._initialize_ticket_entry(page, entry_only=False)
         else:
@@ -248,6 +258,10 @@ class ComicDaysAdapter(SiteAdapter):
 
         episode_id = parse_comicdays_episode_url(page.url)
         if episode_id is None or (self._episode_id and episode_id != self._episode_id):
+            if self._access_strategy == "quota":
+                raise AccessResourceUnavailableError(
+                    "comicdays_discovery_refresh_required", stop_resource_pass=True
+                )
             raise ValueError("Comic DAYS entry page did not match the target episode")
         if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
             raise UnsupportedAccessStrategyError(
@@ -256,7 +270,21 @@ class ComicDaysAdapter(SiteAdapter):
         self._initial_url = canonical_comicdays_episode_url(page.url)
         self._episode_id = episode_id
         self._work_id = await _series_id_from_page(page)
+        self._validate_expected_work_identity()
         await self._initialize_ticket_entry(page, entry_only=True)
+
+    def _validate_expected_work_identity(self) -> None:
+        if self._access_strategy != "quota" or self._expected_work_key is None:
+            return
+        match = _COMICDAYS_WORK_KEY.fullmatch(self._expected_work_key)
+        if match is None:
+            raise AccessResourceUnavailableError(
+                "comicdays_work_identity_unavailable", stop_resource_pass=True
+            )
+        if self._work_id != match.group("series_id"):
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
+            )
 
     async def _initialize_ticket_entry(self, page: Page, *, entry_only: bool) -> None:
         if self._work_id is None or self._episode_id is None:
@@ -268,20 +296,33 @@ class ComicDaysAdapter(SiteAdapter):
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
         try:
             state = await self._observe_live_access(page, deadline)
+        except ComicDaysTargetIdentityMismatch as exc:
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
+            ) from exc
         except ComicDaysLiveAccessError as exc:
             raise UnknownPageStateError(str(exc)) from exc
         self._live_access = state
-        if state.access_mode in {"free", "quota"} and (
-            state.access_mode == "free" or state.grant_until is not None
+        if state.access_mode == "unknown":
+            raise UnknownPageStateError(
+                "Comic DAYS target access state was missing or ambiguous"
+            )
+        if state.access_mode != "quota":
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
+            )
+        if state.ticket.is_charged and state.ticket.charged_at is None:
+            raise UnknownPageStateError(
+                "Comic DAYS charged ticket state omitted chargedAt"
+            )
+        if (
+            state.rental_term_hours != 72
+            or state.rental_term_seconds != 259200
+            or not _supported_ticket_rental_term(state.row)
         ):
-            self._preexisting_accessible = True
-            if entry_only:
-                raise AccessResourceUnavailableError("work_ticket_not_needed")
-            return
-        if state.access_mode != "quota" or state.grant_until is not None:
-            raise AccessResourceUnavailableError("work_ticket_unavailable")
-        if not _supported_ticket_rental_term(state.row):
-            raise AccessResourceUnavailableError("work_ticket_unsupported_rental_term")
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
+            )
         if not state.ticket.is_charged:
             raise AccessResourceUnavailableError("work_ticket_cooldown")
         remaining = self._remaining_ms(deadline)
@@ -321,7 +362,7 @@ class ComicDaysAdapter(SiteAdapter):
         if remaining <= 0:
             raise ComicDaysLiveAccessError("Comic DAYS access observation exceeded its time bound")
         return await asyncio.wait_for(
-            observe_comicdays_live_access(
+            observe_comicdays_target_access(
                 page, series_id=self._work_id or "", episode_id=self._episode_id or "",
                 timeout_ms=remaining,
             ),
@@ -343,19 +384,27 @@ class ComicDaysAdapter(SiteAdapter):
         status = row.get("status")
         if not isinstance(purchase, dict) or not isinstance(status, dict):
             return False
-        expiry = state.grant_until
         now = datetime.now(UTC)
         charged_at = state.ticket.charged_at
         positive = (
-            state.access_mode == "quota" and expiry is not None
-            and expiry > now
-            and purchase.get("can_read") is True
-            and purchase.get("has_rented_via_ticket") is True
+            state.viewer_unlocked
             and state.ticket.is_charged is False
             and charged_at is not None
             and charged_at > now
             and previous_charged_at is not None
             and charged_at > previous_charged_at
+            and (self._target_url is None or state.canonical_url == self._target_url)
+            and state.series_id == self._work_id
+            and state.episode_id == self._episode_id
+            and state.normal_viewer_count == 1
+            and state.normal_viewer_visible
+            and state.normal_viewer_json == (
+                canonical_comicdays_episode_url(
+                    f"https://comic-days.com/episode/{self._episode_id}"
+                ) + ".json"
+            )
+            and state.private_viewer_count == 0
+            and state.ticket_control_count == 0
         )
         if not positive:
             return False
@@ -368,78 +417,6 @@ class ComicDaysAdapter(SiteAdapter):
             )
         return True
 
-    async def _post_grant_viewer_ready(self, page: Page, deadline: float) -> bool:
-        """Wait for the same target's unlocked native viewer to settle."""
-
-        if self._remaining_ms(deadline) <= 0:
-            return False
-        try:
-            async with asyncio.timeout_at(deadline):
-                return await self._post_grant_viewer_ready_impl(page, deadline)
-        except TimeoutError:
-            return False
-
-    async def _post_grant_viewer_ready_impl(self, page: Page, deadline: float) -> bool:
-        """Perform the bounded viewer observation under the caller's deadline."""
-
-        if self._episode_id is None or self._work_id is None:
-            raise UnknownPageStateError("Comic DAYS post-grant target identity is unavailable")
-        if parse_comicdays_episode_url(str(page.url)) != self._episode_id:
-            raise UnknownPageStateError("Comic DAYS post-grant viewer changed episode identity")
-        remaining = self._remaining_ms(deadline)
-        if remaining <= 0:
-            return False
-        try:
-            viewer_scope = page.locator(
-                "section.viewer.js-viewer[data-json-url],"
-                "section.private-viewer.js-viewer[data-json-url]"
-            )
-            if await viewer_scope.count() > 1:
-                raise UnknownPageStateError("Comic DAYS post-grant viewer scope was ambiguous")
-            aggregate = page.locator('[data-aggregate-id][data-type="episode"]')
-            if await aggregate.count() > 1:
-                raise UnknownPageStateError("Comic DAYS post-grant work scope was ambiguous")
-            if await aggregate.count() == 1:
-                aggregate_remaining = self._remaining_ms(deadline)
-                if aggregate_remaining <= 0:
-                    return False
-                observed_work = await aggregate.get_attribute(
-                    "data-aggregate-id", timeout=aggregate_remaining
-                )
-                if observed_work != self._work_id:
-                    raise UnknownPageStateError("Comic DAYS post-grant viewer changed work identity")
-            if await viewer_scope.count() != 1:
-                return False
-            expected_json_url = canonical_comicdays_episode_url(
-                f"https://comic-days.com/episode/{self._episode_id}"
-            ) + ".json"
-            viewer_remaining = self._remaining_ms(deadline)
-            if viewer_remaining <= 0:
-                return False
-            if await viewer_scope.get_attribute(
-                "data-json-url", timeout=viewer_remaining
-            ) != expected_json_url:
-                raise UnknownPageStateError("Comic DAYS post-grant viewer JSON identity mismatched")
-            viewer_remaining = self._remaining_ms(deadline)
-            if viewer_remaining <= 0:
-                return False
-            if "private-viewer" in (
-                await viewer_scope.get_attribute("class", timeout=viewer_remaining) or ""
-            ):
-                return False
-            viewer_remaining = min(1_000, self._remaining_ms(deadline))
-            if viewer_remaining <= 0 or not await viewer_scope.is_visible(timeout=viewer_remaining):
-                return False
-            active = await self._active(page, timeout_ms=self._remaining_ms(deadline))
-            if not active.get("rows") or active.get("ready") is not True:
-                return False
-            canvas = page.locator(self.canvas_selector)
-            return await canvas.count() >= 1
-        except UnknownPageStateError:
-            raise
-        except Exception:  # noqa: BLE001 - loading races remain transient
-            return False
-
     async def _poll_consumption(
         self, page: Page, previous_charged_at: datetime | None, deadline: float
     ) -> bool:
@@ -448,7 +425,12 @@ class ComicDaysAdapter(SiteAdapter):
         while self._remaining_ms(deadline) > 0:
             if not self._access_consumption.consumed:
                 await self._reobserve_consumption(page, previous_charged_at, deadline)
-            if self._access_consumption.consumed and await self._post_grant_viewer_ready(page, deadline):
+            # Target-local debit/unlock confirmation is the grant entry
+            # contract.  Capture readiness belongs to normal initialize's
+            # existing _normalize_viewer path and must not consume this
+            # confirmation budget or make grant-only success depend on the
+            # production capture hook.
+            if self._access_consumption.consumed:
                 return True
             delay = min(200, self._remaining_ms(deadline))
             if delay <= 0:
@@ -461,6 +443,10 @@ class ComicDaysAdapter(SiteAdapter):
     async def _exact_ticket_control(self, page: Page, deadline: float) -> Locator:
         if self._episode_id is None or self._work_id is None:
             raise UnknownPageStateError("Comic DAYS ticket target identity is unavailable")
+        if parse_comicdays_episode_url(str(page.url)) != self._episode_id:
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
+            )
         # The locked access page uses the observed private viewer scope.  The
         # unlocked capture viewer is a different class and is validated after
         # the grant transition.
@@ -471,7 +457,9 @@ class ComicDaysAdapter(SiteAdapter):
             f"https://comic-days.com/episode/{self._episode_id}"
         ) + ".json"
         if await viewer.get_attribute("data-json-url") != expected_json_url:
-            raise AccessResourceUnavailableError("work_ticket_viewer_scope_mismatch")
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
+            )
         container = viewer.locator("div.read-button-container")
         if await container.count() != 1:
             raise AccessResourceUnavailableError("work_ticket_access_container_ambiguous")
@@ -488,15 +476,31 @@ class ComicDaysAdapter(SiteAdapter):
         if " ".join((await ticket.inner_text(timeout=remaining)).split()) != "\u4f5c\u54c1\u30c1\u30b1\u30c3\u30c8\u3067\u8aad\u3080\uff08\u7121\u6599\uff09":
             raise AccessResourceUnavailableError("work_ticket_control_label_mismatch")
         if await ticket.get_attribute("data-ticket-rental-id") != self._episode_id:
-            raise AccessResourceUnavailableError("work_ticket_control_episode_mismatch")
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
+            )
+        contract = page.locator(
+            '.js-readable-products-pagination[data-type="episode"][data-aggregate-id]'
+        )
+        if await contract.count() != 1:
+            raise AccessResourceUnavailableError("work_ticket_contract_unknown")
+        raw_term = await contract.get_attribute("data-rental-term")
+        if raw_term is None or not raw_term.isdigit():
+            raise AccessResourceUnavailableError("work_ticket_contract_unknown")
+        if int(raw_term) != 259200:
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
+            )
         # The observed page binds work identity on a sibling listing surface;
         # controls are separately scoped to the target viewer's access area.
         areas = page.locator('[data-aggregate-id][data-type="episode"]')
-        if await areas.count() != 1 or not await areas.is_visible(timeout=remaining):
+        if await areas.count() != 1:
             raise AccessResourceUnavailableError("work_ticket_access_area_missing")
         panel_identity = await areas.get_attribute("data-aggregate-id")
         if panel_identity != self._work_id:
-            raise AccessResourceUnavailableError("work_ticket_control_work_mismatch")
+            raise AccessResourceUnavailableError(
+                "comicdays_discovery_refresh_required", stop_resource_pass=True
+            )
         if await ticket.get_attribute("data-behaviour") != "button":
             raise AccessResourceUnavailableError("work_ticket_control_operation_mismatch")
         title = await ticket.get_attribute("title") or ""

@@ -111,32 +111,142 @@ viewer observation, rewind control inspection/clicks, transition waits, and the
 final readiness check; initialization cannot return while the slider is later
 than position 1.
 
-Discovery, Policy, the site-owned read-only resolver, and the exact Work Ticket
-entry path are implemented and synthetic-browser verified. The policy uses `work_ticket` with work
-scope, deferred grant resolution, a 23-hour resource cooldown, and
-observed-consumption commits. Generic observed-consumption commit uses the
-policy's conservative 71-hour value; a later fresh Discovery refreshes the
-source with the exact native `rental_end_at` when available. The resolver
-preserves Catalog order, validates one complete native listing per work, and
-selects at most one pending candidate. The policy keeps `quota_limit=None` so
-the resolver sees the broad pool; its work-scoped resource gate permits at
-most one actual selection per work. Entry accepts only the unique visible
+Discovery, Policy, and the exact Work Ticket entry path are implemented and
+synthetic-browser verified. The current policy uses `work_ticket` with work
+scope, `quota_limit=1`, non-deferred quota execution, a 23-hour resource
+cooldown, and observed-consumption commits. Generic observed-consumption
+commit uses the policy's conservative 71-hour value; a later fresh Discovery
+refreshes the source with the exact native `rental_end_at` when available.
+Batch Planner selects one Catalog candidate per work. Batch opens that target
+once, validates target-local identity/contract/control state, clicks exactly
+once, confirms consumption from target-local unlock plus the work ticket debit,
+and continues on the same Page for normal quota crawling. Grant-only leaves
+the Item pending and creates no Artifact. There is no Comic DAYS live
+candidate resolver in the production path; the generic resolver framework
+remains for sites such as Zebrack whose Discovery cannot classify each native
+ticket state. For live verification, the supplied episode URL seeds full
+Discovery for its native work; the natural Planner candidate may be another
+episode in that work, while Catalog classifications and ordering remain
+authoritative. Entry accepts only the unique visible
 enabled series-ticket control with the exact observed Japanese label and
 matching episode identity inside the target locked
 `section.private-viewer.js-viewer[data-json-url]` JSON scope and its unique
 `.read-button-container`; the unlocked capture viewer uses the separate
 `section.viewer.js-viewer` scope. The sibling
 `[data-aggregate-id][data-type="episode"]` surface binds the work identity.
+Consuming Comic DAYS Batch requires a Work key matching
+`comicdays:series:<native-series-id>`. The adapter checks this Catalog/live
+binding before the first navigation and returns
+`comicdays_work_identity_unavailable` with `stop_resource_pass=True` for an
+arbitrary or malformed key, with no navigation or consumption. This is
+separate from the positive live mismatch reason
+`comicdays_discovery_refresh_required`. Free/direct candidates may use
+arbitrary Work keys; a manually invoked quota run without configured Catalog
+expectations retains the target-local contract checks. After a positive
+mismatch, rerun full Discovery against an isolated Catalog/watchlist, for
+example:
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `
+  --site comicdays --mode full `
+  --watchlist output\comicdays-watchlist.yaml `
+  --catalog output\comicdays-refresh.sqlite
+```
+
 Paid and premium controls are never fallback paths; the live Work5 guard
 observed the purchase control separately with a 90pt price. Consumption is latched
 once after positive native rental and work-ticket debit/recharge evidence. A
-bounded read-only readiness stage then waits for the same episode's unlocked
-viewer, matching JSON identity, visible canvas, and render-ready native row;
-loading is transient, while identity ambiguity fails closed. A subsequent
-viewer failure preserves the first observed consumption. Successful entry
-still requires the usable viewer,
-and `chargedAt` must be newer than the pre-click value and current observation
-time. Discovery and Policy never click or consume an access control. A fresh
+hidden or duplicate Work Ticket control alongside a purchase control remains
+`unknown` and fails closed; only a purchase-only target can be classified as
+positive `paid`.
+
+The isolated 2026-10-04 grant-only Test A used seed
+`12207421984217275863` and the native work's natural quota candidate
+`12207421983943213206`. It recorded one candidate navigation, one exact Work
+Ticket click, positive native debit/unlocked evidence, zero paid operations,
+and zero resolver calls. The Item stayed pending with no Artifact. The outer
+CLI then returned `AccessConsumptionUnconfirmedError` after the positive latch;
+no click or same-work retry followed. The Catalog retained the resource
+timestamp; the policy's calculated 71-hour fallback is
+`2026-10-07T16:35:36.501568+09:00`, while the pre-refresh source snapshot was
+not captured. A complete Discovery refreshed the source with native expiry.
+Adapter instrumentation saw three small ticket GraphQL
+checks and zero adapter whole-work listing calls; 31 Atom/readable-product
+requests came from the page's own JavaScript and are tracked separately.
+The bounded post-run diagnostic found the native normal viewer and correct
+identity but capture-hook state `expected_body_area_not_visible_or_extra`
+(expected area 2, no visible body areas). This is a normal crawl readiness
+limitation; grant-only consumption confirmation remains target-local and does
+not treat capture readiness as debit evidence.
+
+Common post-click confirmation checks the same episode's matching canonical
+episode/work/JSON identity, exactly one visible normal viewer, no private
+viewer, and no remaining target Work Ticket control; `chargedAt` must be newer
+than the pre-click value and current observation time. It does not require
+body/capture readiness for grant-only. Normal quota continues on the same Page
+through the existing initialize, normalization, and capture guards. A
+subsequent viewer failure preserves the first observed consumption.
+Catalog/live disagreement stops the resource pass with
+`comicdays_discovery_refresh_required`; no alternate candidate or paid control
+is attempted. A positive work-ticket `isCharged=false` is reported separately
+as `work_ticket_cooldown`. Discovery and Policy never click or consume an access control.
+
+The historical A/2R/3P raw directories under `output/tmp` are currently
+unavailable; their original Catalogs and raw evidence cannot be revalidated.
+The reviewer verified the A evidence before disappearance; the cause and any
+recovery location are unknown, and no raw evidence was reconstructed. Future
+B/C live evidence uses an explicit protected task directory outside
+`output/tmp`.
+
+The protected 2026-10-04 normal quota Test B used
+`output/comicdays_one_navigation_liveB_20261004_protected_1859/` and natural
+Planner source165 (`10834108156719217950`) in work
+`comicdays:series:10834108156713445245`. The real Planner/Executor/Runner/
+Adapter path used one crawler candidate navigation, one site-owned
+`Viewer_PurchaseViaTicket` mutation with positive debit/unlock evidence, zero
+paid/premium operations, and no resolver or post-grant replan. The same Page
+continued through normal capture to `END`, packaging a 28-page native JPEG ZIP
+and completing the Item with a present Artifact. Adapter target GraphQL checks
+ were 3 and adapter whole-work listing calls were 0. Raw AccessEvent
+ classification recorded 31 page-JavaScript listing requests (Atom 28,
+ `readable_product_pagination_information` 2, and
+ `pagination_readable_products` 1); the harness's limited marker pattern
+ counted 30. Page.goto and Locator.click were not directly instrumented: the
+ one crawler target open is inferred from target-document ordering, and the one
+ exact ticket click is inferred from the single `Viewer_PurchaseViaTicket`
+ mutation plus positive debit/unlock evidence because reload removed selector
+ metadata from the DOM listener. Full audit:
+`normal_batch_report.json` in the protected task directory. Ledger A=1, B=1,
+C=0 tickets at the B snapshot; the corrected grant-only Test C below brings
+the current task ledger to A=1/B=1/C=1.
+
+The corrected isolated 2026-10-04 grant-only Test C used seed
+`12207421983645809730`; full Discovery selected source39, episode
+`2550912965783608326`, in work `comicdays:series:14079602755643699323`.
+The production CLI exited successfully after one positive debit/unlock, left
+ the Item pending, created no Artifact or images, and persisted the work resource
+ state. The `consumed_at + 71h` value was calculated from policy; a separate
+ pre-refresh source/SQLite snapshot of that value was not persisted. A second production
+grant-only run selected another same-work quota candidate but stopped at the
+Catalog-only `work_ticket_cooldown` gate with zero page, goto, click, or request
+activity. A subsequent isolated full Discovery observed 63/63 and refreshed the
+native expiry to `2026-10-07T19:22:14+09:00`.
+
+ Durable page AccessEvents recorded three site-JavaScript
+ `Viewer_SeriesTicketQuery` requests; the adapter-specific GraphQL call count is
+ unknown because its wrapper output was not persisted. The quota path has zero
+ whole-work adapter calls by code-path verification, rather than a persisted
+ runtime counter. The C harness installed direct `Page.goto` and `Locator.click` wrappers, but a
+harness-only nested-async error while writing post-Discovery output lost those
+in-memory callback records. Durable production AccessEvents recover one
+crawler target open, one same-target site transition, one
+`Viewer_PurchaseViaTicket` mutation, and zero paid mutations; the report marks
+these recovered counts separately from direct wrapper callbacks. Full audit:
+`output/comicdays_grant_only_liveC_20261004_protected_1920/grant_only_report.json`.
+
+The dated live evidence below predates the current non-deferred, one-candidate
+design; references to a Comic DAYS resolver or replan describe historical runs.
+A fresh
 temporary-Catalog production CLI direct run for an already-active grant
 completed the 17-page crawl, reached `END`, packaged a 17-entry ZIP, and left
 the Item completed with a present Artifact and no quota-resource consumption.

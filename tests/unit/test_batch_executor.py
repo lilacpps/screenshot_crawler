@@ -559,6 +559,22 @@ async def test_wrong_backend_is_rejected_before_web_runner(tmp_path: Path) -> No
     assert service.list_crawl_runs() == []
 
 
+async def test_populated_candidate_external_id_must_match_catalog_source(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    executor = make_executor(service)
+
+    with pytest.raises(BatchExecutionError, match="external_id"):
+        await executor.execute_candidate(
+            object(), replace(candidate, external_id="different-episode"), now=NOW
+        )
+
+    assert service.list_crawl_runs() == []
+    assert service.list_artifacts() == []
+
+
 def test_batch_output_directory_is_unique_and_windows_safe(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = add_candidate(service, access_mode="free")
@@ -594,7 +610,7 @@ def _add_magapoke_candidate(
         locator=target.locator, access_strategy="quota", access_mode="quota",
         reason=f"{resource}_candidate", consumes_quota=True,
         quota_resource=resource, quota_scope="work",
-        quota_limit=1 if resource == "work_ticket" and site != "comicdays" else None,
+        quota_limit=1 if resource == "work_ticket" else None,
         quota_commit_mode="after_observed_consumption",
     )
 
@@ -726,6 +742,77 @@ async def test_work_ticket_consumption_is_recorded_at_observed_time(tmp_path: Pa
     assert executor.grant_only_skip_reason(
         candidate, now=consumed_at + timedelta(hours=1)
     ) == "work_ticket_cooldown"
+
+
+@pytest.mark.parametrize("grant_only", [True, False])
+async def test_comicdays_work_cooldown_blocks_both_executor_entrypoints(
+    tmp_path: Path, grant_only: bool
+) -> None:
+    service = CatalogService(tmp_path / f"comicdays-cooldown-{grant_only}.sqlite")
+    candidate = _add_magapoke_candidate(service, site="comicdays")
+    work = service.get_item(candidate.item_id).work_id
+    second_item = service.create_item(ItemInput(order_label="Episode 2"), work_id=work)
+    second_source = service.create_source(
+        SourceInput(site="comicdays", external_id="comicdays-2", access_mode="quota"),
+        item_id=second_item.id,
+    )
+    second_target = service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/mp-2"),
+        source_id=second_source.id,
+    )
+    second_candidate = replace(
+        candidate,
+        item_id=second_item.id,
+        source_id=second_source.id,
+        target_id=second_target.id,
+        locator=second_target.locator,
+    )
+    consumed_at = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
+    service.record_quota_access_with_resource_state(
+        candidate.source_id,
+        work_id=work,
+        site="comicdays",
+        resource="work_ticket",
+        consumed_at=consumed_at,
+        access_granted_until=consumed_at + timedelta(hours=71),
+    )
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "work_ticket", consumed_at),
+        site="comicdays",
+        policy=ComicDaysSitePolicy,
+    )
+    runner_calls: list[RunConfig] = []
+    original_factory = executor.runner_factory
+
+    def recording_factory(config: RunConfig):
+        runner_calls.append(config)
+        return original_factory(config)
+
+    executor.runner_factory = recording_factory
+    blocked_now = consumed_at + timedelta(hours=22, minutes=59)
+    # The consumed source has a local active grant, while the second episode
+    # remains a quota candidate in the same work. The work-scoped state must
+    # block that second candidate before either Executor entrypoint reaches a
+    # runner or browser page.
+    for blocked_candidate in (second_candidate,):
+        with pytest.raises(AccessResourceUnavailableError, match="work_ticket_cooldown"):
+            if grant_only:
+                await executor.execute_grant_only_candidate(
+                    object(), blocked_candidate, output_root=tmp_path / "batch", now=blocked_now
+                )
+            else:
+                await executor.execute_candidate(
+                    object(), blocked_candidate, output_root=tmp_path / "batch", now=blocked_now
+                )
+    assert runner_calls == []
+    assert service.list_crawl_runs() == []
+    assert service.list_artifacts() == []
+    boundary_now = consumed_at + timedelta(hours=23)
+    assert executor.resource_state_skip_reason(
+        candidate, now=boundary_now
+    ) is None
+    assert executor.grant_only_skip_reason(candidate, now=boundary_now) is None
 
 
 async def test_mismatched_observed_resource_fails_closed_without_persistence(

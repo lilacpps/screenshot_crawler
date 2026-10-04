@@ -1150,7 +1150,7 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     assert plans == [None, "premium_ticket"]
     assert calls == [1, 2, 3]
     assert "reason=premium_ticket_exhausted" in output.out
-    assert "stopping this resource pass" in output.out
+    assert "Stopping this resource pass." in output.out
     assert "item=4" not in output.out
     assert "FAILED" not in output.out
 
@@ -2225,6 +2225,65 @@ async def test_grant_only_local_skip_does_not_open_page_or_delay(
         phase="grant-only",
         inter_candidate_delay_ms=17,
         grant_only=True,
+    )
+
+    assert (processed, should_continue) == (1, True)
+    assert events == ["new", "execute:2", "close"]
+
+
+@pytest.mark.asyncio
+async def test_normal_work_cooldown_skip_does_not_open_page_or_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeSession:
+        async def new_page(self) -> object:
+            events.append("new")
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            events.append("close")
+
+    class FakeExecutor:
+        def resource_state_skip_reason(self, candidate: object, **_kwargs: object) -> str | None:
+            return "work_ticket_cooldown" if candidate.item_id == 1 else None
+
+        async def execute_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            events.append(f"execute:{candidate.item_id}")
+            return SimpleNamespace(archive_path=Path(f"item-{candidate.item_id}.zip"))
+
+    async def fake_sleep(seconds: float) -> None:
+        events.append(f"delay:{seconds}")
+
+    monkeypatch.setattr(cli.asyncio, "sleep", fake_sleep)
+    args = SimpleNamespace(
+        output_root=Path("output/batch"),
+        library_dir=Path("output/Books"),
+        max_pages=1000,
+        max_same_content=3,
+        keep_open=False,
+    )
+    candidates = [
+        SimpleNamespace(
+            item_id=1, source_id=11, metadata={}, access_strategy="quota",
+            quota_resource="work_ticket", consumes_quota=True,
+        ),
+        SimpleNamespace(
+            item_id=2, source_id=22, metadata={}, access_strategy="quota",
+            quota_resource="work_ticket", consumes_quota=True,
+        ),
+    ]
+
+    processed, should_continue = await cli._execute_batch_candidates(
+        args,
+        FakeSession(),
+        FakeExecutor(),
+        candidates,
+        phase="normal",
+        inter_candidate_delay_ms=17,
     )
 
     assert (processed, should_continue) == (1, True)

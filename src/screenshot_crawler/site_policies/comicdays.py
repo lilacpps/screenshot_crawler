@@ -32,7 +32,7 @@ class ComicDaysSitePolicy(SitePolicy):
         return None
 
     def defer_quota_access_to_grant_phase(self) -> bool:
-        return True
+        return False
 
     def grant_only_skip_reason(
         self,
@@ -75,7 +75,7 @@ class ComicDaysSitePolicy(SitePolicy):
                 return PolicyDecision(True, "direct", "active_work_ticket_grant")
             return PolicyDecision(
                 True, "quota", "work_ticket_candidate", consumes_quota=True,
-                quota_resource="work_ticket", quota_scope="work", quota_limit=None,
+                quota_resource="work_ticket", quota_scope="work", quota_limit=1,
                 quota_commit_mode="after_observed_consumption",
             )
         if source.access_mode == "paid":
