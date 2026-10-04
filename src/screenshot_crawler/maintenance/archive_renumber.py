@@ -597,7 +597,7 @@ def _current_path(entry: RenumberEntry) -> Path | None:
 
 
 def _temporary_sibling(path: Path, artifact_id: int, kind: str) -> Path:
-    return path.with_name(f".{path.name}.{kind}-{artifact_id}.tmp")
+    return path.with_name(f".{kind}-{artifact_id}.tmp")
 
 
 def _path_key(path: Path | None) -> str:

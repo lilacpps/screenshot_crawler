@@ -1041,6 +1041,9 @@ Existing archive renumbering, current Artifact locator updates, and safe matchin
 crawl-status JSON rename are implemented as the local-only
 `scripts/renumber_archives.py` maintenance command. P5 real Catalog/output rollout
 and live verification remain planned.
+P4 temporary sibling paths use short Artifact-ID-based names without copying the
+archive basename, so long Windows archive paths can complete the two-stage rename
+and rollback without hitting the legacy path-length limit.
 
 ## 22. Discovery / Catalog / Batch（Watchlist + Catalog + Discovery + Batch v3実装済み）
 

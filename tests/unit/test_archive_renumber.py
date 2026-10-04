@@ -293,6 +293,35 @@ def test_dry_run_does_not_change_zip_status_catalog_or_mtime(tmp_path: Path) -> 
     assert (tmp_path / "catalog.sqlite").stat().st_mtime_ns == before_catalog_mtime
 
 
+def test_long_archive_basename_uses_short_temporary_path(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    _, item, source, target = _make_source(catalog, tmp_path)
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+
+    suffix = ".zip"
+    target_old_length = 250
+    name_length = target_old_length - len(str(archive_dir)) - len(suffix) - 1
+    old = archive_dir / ("x" * name_length + suffix)
+    _, artifact = _add_archive(catalog, item.id, source.id, target.id, old)
+
+    plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=tmp_path / "status")
+    entry = plan.entries[0]
+
+    assert entry.status == "RENAME"
+    assert entry.temporary_path is not None
+    assert entry.temporary_path == archive_dir / f".renumber-{artifact.id}.tmp"
+    assert old.name not in entry.temporary_path.name
+
+    result = apply_archive_renumber_plan(plan)
+
+    assert result.error is None
+    assert not old.exists()
+    assert entry.new_path is not None and entry.new_path.is_file()
+    assert not entry.temporary_path.exists()
+    assert catalog.get_artifact(artifact.id).locator == entry.new_path.as_posix()
+
+
 def test_only_current_artifact_changes_and_history_remains_untouched(tmp_path: Path) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     _, item, source, target = _make_source(catalog, tmp_path)
@@ -511,7 +540,7 @@ def test_catalog_failure_rolls_back_zip_and_status(
     assert result.error == "ERROR Catalog update failed; filesystem rollback completed"
     assert old.exists()
     assert not entry.new_path.exists()
-    assert not list(tmp_path.glob(".*.zip.*.tmp"))
+    assert not list(tmp_path.rglob(".*-*.tmp"))
     assert status_path.read_bytes() == original_status
     assert not entry.new_status_path.exists()
     assert catalog.get_artifact(artifact.id).locator == old.as_posix()
