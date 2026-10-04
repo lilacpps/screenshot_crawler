@@ -24,3 +24,28 @@ iteration to compare the implementation with repository authorities, observed li
 evidence, acceptance criteria, tests, and regression risk. It must not edit files.
 """
 config_file = "agents/site-adapter-reviewer.toml"
+
+
+[agents.bookwalker_worker]
+description = """
+Primary Luna worker for existing BookWalker capture research and maintenance.
+Use it for bounded live probes, diagnostics, minimal production implementation,
+tests, live verification, and note synchronization. It is the only production writer.
+"""
+config_file = "agents/bookwalker-worker.toml"
+
+[agents.bookwalker_reviewer]
+description = """
+Read-only GPT-6.1 Sol quality gate for BookWalker capture work. Use after every
+material worker iteration. It reviews authority compliance, correctness, regression
+risk, tests, live evidence, and note synchronization, and must not edit files.
+"""
+config_file = "agents/bookwalker-reviewer.toml"
+
+[agents.bookwalker_critic]
+description = """
+Read-only GPT-6.1 Sol adversarial critic for BookWalker capture work. Use at evidence
+and final design gates to challenge provenance assumptions, unnecessary JPEG conversion,
+heuristics, over-generalization, and claims stronger than the observed evidence.
+"""
+config_file = "agents/bookwalker-critic.toml"
