@@ -80,7 +80,7 @@ async def _ticket_page(browser_page, *, html: str = ENTRY_HTML):
     )
     await browser_page.goto("https://comic-days.com/episode/1")
     await browser_page.evaluate("""() => {
-      window.__comicDaysProductionCapture = { active: () => ({rows: [{renderReady: true}], sliderNow: 1, sliderLast: 1}) };
+      window.__comicDaysProductionCapture = { active: () => ({complete: true, rows: [{renderReady: true}], sliderNow: 1, sliderLast: 1}) };
       document.querySelector('[data-test-id="use-series-ticket-button"]').addEventListener('click', () => {
         document.querySelector('section.private-viewer')?.classList.remove('private-viewer');
         document.querySelector('section.js-viewer')?.classList.add('viewer');
@@ -238,7 +238,7 @@ async def test_comicdays_delayed_viewer_readiness_succeeds_after_one_click(
       document.querySelector('[data-test-id=use-series-ticket-button]').addEventListener('click', () => window.ticketClicks++);
       let polls = 0;
       window.__comicDaysProductionCapture.active = () => ({
-        rows: [{renderReady: ++polls >= 3}], sliderNow: 1, sliderLast: 1
+        complete: true, rows: [{renderReady: ++polls >= 3}], sliderNow: 1, sliderLast: 1
       });
     }""")
     states = iter([_state(mode="quota", charged=True), _state(mode="quota", charged=False, changed=True)])

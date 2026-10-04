@@ -1,8 +1,12 @@
 import io
 
+import pytest
 from PIL import Image
 
 from screenshot_crawler.site_adapters.comicdays.native_capture import (
+    _jpeg_header,
+    _jpeg_normalize_writer_metadata,
+    reconstruct_jpeg,
     reconstruct_png,
     strict_canvas_sequence,
 )
@@ -75,3 +79,119 @@ def test_strict_sequence_rejects_missing_column_and_fractional_geometry() -> Non
     fractional = _row(); fractional["mapping"][0]["args"][4] = 0.5
     assert strict_canvas_sequence(missing) is None
     assert strict_canvas_sequence(fractional) is None
+
+
+def _jpeg_row(*, subsampling: int = 0, progressive: bool = False) -> tuple[dict, bytes]:
+    image = Image.new("RGB", (1125, 1600))
+    for y in range(1600):
+        for x in range(1125):
+            image.putpixel((x, y), ((x // 32) % 256, (y // 32) % 256, (x + y) % 256))
+    data = io.BytesIO()
+    image.save(data, format="JPEG", quality=85, subsampling=subsampling, progressive=progressive)
+    safe = {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0, "alpha": 1, "composite": "source-over", "filter": "none"}
+    source_url = "blob:comicdays-jpeg"
+    def draw(args: list[int], sequence: int) -> dict:
+        return {
+            "sequence": sequence,
+            "canvasWidth": 1125,
+            "canvasHeight": 1600,
+            "sourceId": 1,
+            "sourceUrl": source_url,
+            "source": {"id": 1, "url": source_url, "width": 1125, "height": 1600},
+            "args": args,
+            "state": safe,
+        }
+    base = draw([0, 0, 1125, 1600, 0, 0, 1125, 1600], 1)
+    tiles = []
+    sequence = 2
+    for dest_y in range(4):
+        for dest_x in range(4):
+            tiles.append(draw([dest_y * 280, dest_x * 400, 280, 400, dest_x * 280, dest_y * 400, 280, 400], sequence))
+            sequence += 1
+    return {"canvasWidth": 1125, "canvasHeight": 1600, "base": base, "mapping": tiles, "mutations": []}, data.getvalue()
+
+
+def test_reconstruct_jpeg_preserves_coefficients_and_edge() -> None:
+    row, source = _jpeg_row()
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    result = reconstruct_jpeg(source, plan)
+    assert result is not None
+    assert result.mime_type == "image/jpeg"
+    assert result.file_extension == ".jpg"
+    assert Image.open(io.BytesIO(result.data)).size == (1125, 1600)
+
+
+@pytest.mark.parametrize("subsampling", [1, 2])
+def test_unsupported_sampling_uses_png_reconstruction_fallback(subsampling: int) -> None:
+    row, source = _jpeg_row(subsampling=subsampling)
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    assert reconstruct_jpeg(source, plan) is None
+    png = reconstruct_png(source, plan)
+    assert png is not None and png.mime_type == "image/png"
+
+
+def test_reconstruct_jpeg_rejects_unsupported_subsampling() -> None:
+    row, source = _jpeg_row(subsampling=2)
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    assert reconstruct_jpeg(source, plan) is None
+
+
+def test_reconstruct_jpeg_rejects_progressive_source() -> None:
+    row, source = _jpeg_row(progressive=True)
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    assert reconstruct_jpeg(source, plan) is None
+    png = reconstruct_png(source, plan)
+    assert png is not None and png.mime_type == "image/png"
+
+
+def test_reconstruct_jpeg_rejects_malformed_source() -> None:
+    row, _ = _jpeg_row()
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    assert reconstruct_jpeg(b"not-a-jpeg", plan) is None
+
+
+def _insert_after_soi(data: bytes, marker: int, payload: bytes) -> bytes:
+    segment = bytes((0xFF, marker)) + (len(payload) + 2).to_bytes(2, "big") + payload
+    return data[:2] + segment + data[2:]
+
+
+def test_jpeg_metadata_normalizer_allows_only_one_observed_duplicate_app0() -> None:
+    _, source = _jpeg_row()
+    header = _jpeg_header(source)
+    assert header is not None
+    app0 = next(item["payload"] for item in header["records"] if item["marker"] == 0xE0)
+    generated = _insert_after_soi(source, 0xE0, app0)
+    assert _jpeg_normalize_writer_metadata(source, generated) == source
+
+    original_duplicate = _insert_after_soi(source, 0xE0, app0)
+    generated_duplicate = _insert_after_soi(original_duplicate, 0xE0, app0)
+    assert _jpeg_normalize_writer_metadata(original_duplicate, generated_duplicate) == original_duplicate
+
+
+def test_jpeg_metadata_normalizer_rejects_unknown_or_changed_markers() -> None:
+    _, source = _jpeg_row()
+    header = _jpeg_header(source)
+    assert header is not None
+    app0 = next(item["payload"] for item in header["records"] if item["marker"] == 0xE0)
+    assert _jpeg_normalize_writer_metadata(source, _insert_after_soi(source, 0xE1, b"unknown")) is None
+    changed = _insert_after_soi(source, 0xE0, app0[:-1] + b"X")
+    assert _jpeg_normalize_writer_metadata(source, changed) is None
+    assert _jpeg_header(source[:-2]) is None
+
+
+def test_reconstruct_jpeg_rejects_postscan_metadata_marker() -> None:
+    row, source = _jpeg_row()
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    postscan = b"\xff\xfe\x00\x06after"  # COM after SOS entropy is unsupported.
+    assert reconstruct_jpeg(source[:-2] + postscan + source[-2:], plan) is None
+
+
+def test_reconstruct_jpeg_rejects_direct_incomplete_plan() -> None:
+    _, source = _jpeg_row()
+    assert reconstruct_jpeg(source, {"width": 1125, "height": 1600, "tiles": []}) is None

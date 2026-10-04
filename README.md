@@ -58,12 +58,12 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 ## 現在実装されているもの
 
 - Core Runnerと6状態 (`CONTENT / AD / END / NEXT_CONTENT / LOADING / UNKNOWN`)
-- PNG capture、SHA-256 fingerprint、manifest / progress、diagnostics
+- Native JPEG/PNG capture、SHA-256 fingerprint、manifest / progress、diagnostics
 - Playwright Probe
 - BookWalker Adapter
 - Manga ONE Adapter
 - Magapoke Adapter（scrambled JPEGのtile再構成PNG、canvas screenshot fallback）
-- Comic DAYS Adapter（free-only Atom再検証、horizontal RTL canvas、native PNG）
+- Comic DAYS Adapter (free/active-grant discovery, Work Ticket policy, horizontal RTL canvas, lossless JPEG-first native capture with reconstructed-PNG and locator fallbacks)
 - 既存ChromeへCDP接続するcrawl/loginフロー
 - 共通Crawler Chrome launcher (`scripts/start_crawler_chrome.ps1`)
 - BookWalker canvas / spread capture
@@ -295,9 +295,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_crawler_chrome.ps1
   --output-dir output\crawl-mangaone
 ```
 
-Comic DAYSは現在無料話だけを対象にし、ticket / point / coin / paid / login
-resourceを使用しません。DiscoveryからCatalog、Batch、packagingまで検証する
-場合は、通常Catalogとwatchlistを指定せず、隔離したパスを明示します。
+Comic DAYS supports free episodes and existing active grants. Policy and the
+site-owned resolver select Work Ticket candidates; the adapter performs the
+exact ticket-control operation and confirms consumption from live state.
+Native capture is lossless-JPEG first when the observed source and tile
+geometry pass coefficient-level validation, with whole-spread reconstructed
+PNG and locator fallbacks. Point, coin, paid, and login operations are never
+performed. Discovery, Catalog, Batch, and packaging remain available.
 
 ```powershell
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli watch add `
@@ -320,13 +324,13 @@ resourceを使用しません。DiscoveryからCatalog、Batch、packagingまで
   --library-dir output\comicdays-library
 ```
 
-The adapter requires a canonical episode URL that is present in the site's
-current `free_only=1` feed. It validates the full feed count before Catalog
-yield, skips non-free entries as `unknown`, and bounds viewer initialization,
-rewind, page changes, and native source-body reads. The verified viewer is the
-horizontal RTL mode with a 64-step rewind/normalization cap and a maximum of
-40 pages in the representative run. Other viewer modes, ticket or owned/grant
-states, free-expiry transitions, and unverified works remain unsupported.
+The adapter requires a canonical episode URL validated against the site's
+current feed and first-party access state. It supports free and active-grant
+episodes, with bounded viewer initialization, rewind, page changes, and native
+source-body reads. The verified viewer is the horizontal RTL mode with a
+64-step rewind/normalization cap; body spreads are captured only when all
+logically expected areas are ready. Paid, owned, and unverified states remain
+unsupported.
 
 `--access-strategy auto|direct|quota` と `--title` / `--author` / `--order` / `--genre` を指定できます。defaultは`auto`で、metadataはfield単位に explicit > Adapter > packaging fallback で解決します。Manga ONEは`auto`/`direct`/`quota`をサポートし、BookWalkerの`direct`/`quota`は未対応です。
 
@@ -343,7 +347,7 @@ output/crawl-xxx/
 └─ diagnostics/   # 失敗時に作られる場合あり
 ```
 
-正常な `END` / `NEXT_CONTENT` 後は、manifestに記載されたPNGだけをZIPへ格納します。manifestにない古いPNGは混入しません。中間crawl directoryは、manifest / progress / manifest記載PNG以外のファイルを含まない場合だけ削除されます。
+正常な `END` / `NEXT_CONTENT` 後は、manifestに記載されたJPEGまたはPNGだけをZIPへ格納します。manifestにない古い画像は混入しません。中間crawl directoryは、manifest / progress / manifest記載画像以外のファイルを含まない場合だけ削除されます。
 
 失敗runは調査用に残します。
 

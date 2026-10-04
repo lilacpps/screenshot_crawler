@@ -20,10 +20,15 @@ becomes a quota candidate. Other malformed or contradictory combinations fail
 closed before any record is yielded.
 
 The viewer adapter supports the observed horizontal RTL canvas viewer. It
-selects only the current slider spread's canvas-bearing page areas, uses exact
-canvas-to-blob provenance for strict native PNG reconstruction, and falls back
-to the normal locator capture for an entire spread when provenance or pixel
-mutation safety cannot be proven. Terminal state requires a completed forward
+selects only the current slider spread's logically expected canvas-bearing page
+areas. Capture attempts lossless JPEG coefficient reconstruction first, then
+uses exact canvas-to-blob provenance for all reconstructed PNG parts, and
+falls back to locator capture for the entire spread when provenance or pixel
+mutation safety cannot be proven. A body spread is complete only when every
+expected area is visible with exactly one ready canvas; a missing or hidden
+second area remains loading. The 20-page leading-area live variant uses body
+areas 1..20 with sliders 1, 2, 4, ..., 20 and terminal sliders 22/23.
+Terminal state requires a completed forward
 transition to the visible colophon with no active body canvas. URL changes are
 reported as `NEXT_CONTENT`. Render readiness is tracked separately from native
 provenance: incomplete or one-sided spreads remain `LOADING`, while a
@@ -39,12 +44,33 @@ return while the slider is later than position 1.
 
 The live granted viewer also has a non-body tail between content and the
 colophon: body slider 17 advances to slider 19 with one on-screen
-`js-back-link-page` (two images, no canvas) and one on-screen `js-page-ad` (two
-iframes, no canvas), then advances to slider 21 with a visible
-`#viewer-colophon` and no active rows. The adapter treats only this exact
+`js-back-link-page` (two images, no canvas, wrapped by exactly one
+`link-page-content`) and one on-screen `js-page-ad` (two iframes, no canvas,
+wrapped by exactly one `ad-nav-area-wrap page-content`), then advances to slider 21 with a visible
+`#viewer-colophon` and no active rows; its ten images are under exactly one
+`back-matter-content` child. The adapter treats only this exact
 viewport-intersecting pattern as `AD`, tracks the actual pre-advance slider,
 and requires bounded monotonic progress. Unknown, blank, paid, mixed, repeated,
 or retrograde panels fail closed and are never captured or clicked.
+
+Phase3A research used the hook's exact source URL/id and draw generation and
+isolated source bytes from the current shared-CDP viewer. The sampled JPEGs
+were baseline SOF0, 1125x1600 for free/granted samples and 1127x1600 for the
+target episode. They were either grayscale 1x1 or three-component Y/Cb/Cr
+4:4:4, all with 8x8 MCU blocks. The runtime mapping is 16 tiles of 280x400
+(35x50 coefficient blocks), covering 1120x1600; the final coded block column
+is preserved as the 5px or 7px visible right edge. Production now attempts
+this coefficient reconstruction first. It requires exact geometry, a
+bijective block mapping, source APPn/COM preservation, unchanged quantization,
+sampling, colorspace, SOF, and exact post-write coefficient readback. The
+writer may re-encode DHT entropy tables, and may remove one observed leading
+duplicate JFIF APP0; any other marker change, post-scan marker, unsupported
+sampling/progressive source, malformed input, or unsafe canvas falls back to a
+whole-spread reconstructed PNG and then locator capture. JPEG and PNG parts
+are never mixed within one spread. The bounded source report is
+`output/comicdays_phase3a_report/report.json`; current live reports record
+capture mode and exact manifest/ZIP audits.
+
 The free 32-page regression has indexed back-link/ad wrappers at areas 33/34
 and a visible colophon at area 35 while the slider reports 35/36. The adapter
 accepts that observed colophon as terminal; it does not issue another forward
