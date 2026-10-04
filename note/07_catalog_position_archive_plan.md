@@ -74,8 +74,9 @@ CHECK(display_position IS NULL OR display_position >= 1)
 
 Semantics:
 
-- the value is a 1-based display-order position,
-- lower values are older/earlier in the configured discovery scope,
+- the value is a 1-based position in the site's complete work listing,
+  ordered oldest-to-newest,
+- lower values are older/earlier in that complete listing,
 - higher values are newer/later,
 - it is not an episode number,
 - it is Source metadata because the authority is the site/discovery listing, not cross-site Item identity,
@@ -84,7 +85,10 @@ Semantics:
 
 Do not add a global UNIQUE constraint for `display_position`.
 
-The practical position namespace is the Source's site/discovery scope, normally identified by `(site, discovery_key)`. Different sites or different discovery scopes may legitimately use the same numeric position.
+The practical position namespace is the site's complete work listing, normally
+identified by `(site, discovery_key)` and its listing identity. Different sites
+may legitimately use the same numeric position. A bounded scope does not create
+a new position namespace and must not renumber the selected subset.
 
 ### 3.2 Item status
 
@@ -173,22 +177,33 @@ Do not derive position by parsing Arabic numerals, kanji numerals, titles, or ep
 
 ### 4.2 Bounded Discovery
 
-For a bounded Watchlist target, position is relative to the configured discovery scope, not to hidden content outside that scope.
+For a bounded Watchlist target, position remains relative to the site's
+complete listing, including content outside the configured scope. The bounded
+scope only filters which records are synchronized.
 
 Example:
 
 ```text
+complete listing:
+oldest A=1 ... newest H=8
+
 configured bounded scope:
-oldest selected record -> display_position 1
-...
-newest selected record -> display_position N
+D -> display_position 4
+E -> display_position 5
+F -> display_position 6
+G -> display_position 7
 ```
 
-This avoids requiring additional site access outside the user-configured scope.
+Bounded-capable Adapters that already enumerate the complete listing attach a
+run-local global-position hint before applying the scope slice. The hint is not
+a schema column and is committed only after safe Discovery completion.
 
-If the configured scope changes, a later full Discovery may renumber the scope. That is expected.
+If the configured scope changes, the selected set changes but its positions do
+not reset. A bounded run without global hints fails closed rather than falling
+back to scope-local `1..N`.
 
-Because positions are scope-local, different discovery scopes may have overlapping numeric positions. Archive collision handling must remain fail-safe and must not assume position alone is globally unique.
+Archive collision handling remains fail-safe and must not assume position alone
+is globally unique across sites or Works.
 
 ## 5. Full Discovery position behavior
 
@@ -197,13 +212,13 @@ A successful full Discovery is authoritative for positions inside its own discov
 Requirements:
 
 1. validate and collect the complete canonical record set required by the existing full Discovery contract,
-2. determine positions oldest -> newest as `1..N`,
+2. use Adapter-provided complete-listing positions when bounded; otherwise determine positions oldest -> newest as `1..N` from the unbounded canonical stream,
 3. persist those positions for every observed Source in the scope,
 4. allow existing positions to change,
 5. do not change Item status,
 6. do not use position changes as cross-site merge evidence.
 
-For bounded full Discovery, update only the configured scope. Existing Sources outside that scope must not be renumbered or reconciled by this position update.
+For bounded full Discovery, update only the configured scope. Existing Sources outside that scope must not be renumbered or reconciled by this position update, and selected Sources retain their complete-listing positions.
 
 Position assignment should be committed only after the run has satisfied the existing full-Discovery completeness contract. An incomplete full Discovery must not partially rewrite established positions.
 
@@ -213,9 +228,12 @@ Incremental Discovery must also assign positions because newly discovered conten
 
 ### 6.1 Normal append case
 
-Incremental Discovery assumes the same latest-side append model already used by its early-stop behavior.
+When the Adapter provides complete-listing global hints, Incremental Discovery
+uses those hints as the authority. Otherwise unbounded Incremental Discovery
+retains the same latest-side append model already used by its early-stop
+behavior. Bounded Incremental Discovery without hints fails closed.
 
-For one discovery scope:
+For the unbounded no-hint append case:
 
 1. collect the Sources observed during the current incremental run,
 2. read the maximum non-NULL `display_position` only among those observed Sources,
@@ -369,7 +387,10 @@ If the old ZIP still exists, existing packaging collision behavior may stop the 
 
 ## 10. Existing archive renumber tool
 
-Provide a dedicated migration/maintenance tool for archives already created without the position prefix and for later full-Discovery renumbering.
+Provide a dedicated maintenance tool for archives already created without the
+position prefix and for later full-Discovery renumbering. This is not a
+separate migration for previously scope-local names; corrected Catalog
+positions are handled by the normal P4 command.
 
 The exact CLI name may be chosen during implementation, but the functional contract is fixed below.
 
@@ -574,17 +595,20 @@ IMPLEMENTED.
 
 P2 implementation details:
 
-- `DiscoveryService` computes positions from the first-observed Source IDs in
-  the Adapter's canonical newest-to-oldest yield order. Adapters do not receive
-  or emit a position/index/episode-number metadata field, and no title,
-  `order_key`, `order_label`, external ID, or date parsing is used.
+- `DiscoveryService` keeps first-observed Source IDs in the Adapter's
+  canonical newest-to-oldest yield order. Bounded-capable Adapters attach a
+  run-local `global_display_position` after complete-listing validation and
+  before scope slicing. It is not a persisted schema field.
 - The run-local observed Source ID list is an ordered-set equivalent, so a
   duplicate observation is counted by the existing Discovery counters but is
   assigned only once.
 - Normal full Discovery assigns `oldest=1 ... newest=N` only after normal
-  exhaustion. Bounded full Discovery assigns the same `1..N` numbering only
-  within the yielded scope; Sources outside that scope are untouched.
-- Incremental `stable_boundary` and `known_streak` stops use the maximum
+  exhaustion. Bounded full Discovery persists Adapter-provided complete-listing
+  positions only within the yielded scope; it never scope-local-renumbers them
+  and Sources outside that scope are untouched.
+- Incremental `stable_boundary` and `known_streak` stops use available global
+  hints as authority. Without hints, only unbounded incremental Discovery uses
+  the maximum
   non-NULL position among Sources observed during the current run as the
   baseline. The currently observed Sources whose current position is NULL are
   reversed into oldest-to-newest order and receive `observed max+1`,
@@ -592,10 +616,12 @@ P2 implementation details:
   observed during the run, including historical or unavailable Sources, do not
   contribute. This includes Sources created by a previous incomplete
   incremental run and re-observed later.
-- An incremental run that exhausts the scope normally is treated as full for
-  position purposes and receives `1..N`, including when no baseline exists. If
-  an early-stop run has no observed non-NULL baseline, assignment is skipped
-  and NULL is preserved as a fail-safe.
+- An unbounded incremental run that exhausts the scope normally is treated as
+  full for position purposes and receives `1..N`, including when no baseline
+  exists. Bounded incremental without complete-listing hints is incomplete;
+  it never falls back to scope-local numbering. If an unbounded early-stop run
+  has no observed non-NULL baseline, assignment is skipped and NULL is
+  preserved as a fail-safe.
 - `DiscoveryIncompleteError` never finalizes positions. Existing positions are
   unchanged and Sources created during the incomplete run may remain NULL.
   Item status, `completed_at`, and operator `note` are not changed.
@@ -604,7 +630,9 @@ P2 implementation details:
   `updated_at`; an empty assignment is a no-op. The assignment API permits
   duplicate numeric positions because no UNIQUE position constraint exists.
 - Position calculation uses only records already yielded for the requested
-  Discovery. It performs no additional pagination, DOM scan, HTTP request, or
+  Discovery. Adapters perform any site-native complete-listing enumeration
+  needed to calculate bounded hints before yielding their selected slice; the
+  Service performs no additional pagination, DOM scan, HTTP request, or
   full-list access.
 
 P5 remains planned: real Catalog/output rollout and live verification are not
@@ -678,6 +706,13 @@ IMPLEMENTED.
   Artifact id and expected locator before updating only `locator` and
   `updated_at`; SHA-256, byte size, state, CrawlRun, Item, and historical rows
   remain unchanged.
+- Archive and matching status temporary names use separate short namespaces:
+  `.archive-renumber-{artifact_id}.tmp` and
+  `.status-renumber-{artifact_id}.tmp`. Rollback uses
+  `.archive-rollback-{artifact_id}.tmp` and
+  `.status-rollback-{artifact_id}.tmp`. These names do not include the original
+  long archive basename, preserving Windows long-path mitigation and avoiding
+  same-directory ZIP/status collisions.
 - Catalog failure, including ordinary SQLite/database exceptions, attempts a
   two-stage filesystem/status rollback and reports
   `ERROR Catalog update failed; filesystem rollback completed`. If rollback
@@ -688,6 +723,10 @@ IMPLEMENTED.
   again to archives produced by an earlier P4 naming rule, for example
   `作品名-001-第01話.zip` -> `001-作品名-第01話.zip`, including a matching
   crawl-status JSON sidecar.
+- Archives previously renamed using a scope-local position are repaired by the
+  normal rollout: fixed full Discovery -> corrected `Source.display_position`
+  -> `renumber_archives.py --dry-run` -> `renumber_archives.py --apply`. No
+  dedicated migration is required.
 
 ### P5 - Real DB rollout / documentation cleanup
 
@@ -706,9 +745,9 @@ At minimum:
 
 1. v5 -> v6 migration preserves all existing ids and data.
 2. migrated Sources start with NULL display_position.
-3. full Discovery assigns contiguous 1..N positions oldest -> newest inside its discovery scope.
+3. unbounded full Discovery assigns contiguous 1..N positions oldest -> newest; bounded full Discovery preserves complete-listing global positions and never renumbers the selected scope.
 4. a later full Discovery may safely change existing positions.
-5. incremental Discovery assigns new positions immediately after the existing max for normal latest-side additions.
+5. unbounded no-hint incremental Discovery assigns new positions immediately after the existing max for normal latest-side additions; available global hints are authoritative.
 6. multiple new incremental records receive oldest -> newest consecutive positions even when observed newest-first.
 7. an incomplete incremental/full run does not partially overwrite established positions.
 8. kanji-numbered and non-numeric labels require no parsing for archive order.
@@ -726,7 +765,8 @@ At minimum:
 20. renumber preflight prevents overwrite and supports chained renames safely.
 21. successful rename updates only the selected Artifact locator and matching crawl-status metadata.
 22. work_key/site filters behave as explicit AND scope.
-23. existing access/quota/discovery identity behavior is not changed by this feature.
+23. bounded Discovery without global hints fails closed and does not fall back to scope-local numbering.
+24. existing access/quota/discovery identity behavior is not changed by this feature.
 
 ## 16. Non-goals
 

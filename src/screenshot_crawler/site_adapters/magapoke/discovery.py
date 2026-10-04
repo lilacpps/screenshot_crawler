@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urljoin, urlparse
 
@@ -167,6 +167,16 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
                 canonical_title,
             )
             if target.discovery_scope is not None:
+                records = [
+                    replace(
+                        record,
+                        source=replace(
+                            record.source,
+                            global_display_position=len(records) - index,
+                        ),
+                    )
+                    for index, record in enumerate(records)
+                ]
                 records = self._apply_discovery_scope(
                     records,
                     target_parts,

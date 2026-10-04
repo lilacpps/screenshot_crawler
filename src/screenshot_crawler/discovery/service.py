@@ -104,7 +104,10 @@ class DiscoveryService:
         known_streak = 0
         previous_known_identity: tuple[str, str] | None = None
         observed_source_ids: list[int] = []
+        global_position_hints: dict[int, int] = {}
+        source_ids_by_global_position: dict[int, int] = {}
         stopped_reason: str | None = None
+        bounded = target.discovery_scope is not None
 
         try:
             async for record in adapter.iter_records(page, target, mode):
@@ -182,6 +185,12 @@ class DiscoveryService:
                 if record.source.external_id not in observed_external_ids:
                     observed_external_ids.add(record.source.external_id)
                     observed_source_ids.append(catalog_record.source.id)
+                self._record_global_position_hint(
+                    record.source.global_display_position,
+                    source_id=catalog_record.source.id,
+                    global_position_hints=global_position_hints,
+                    source_ids_by_global_position=source_ids_by_global_position,
+                )
                 observed_count += 1
                 self._append_duplicate_warnings(target, catalog_record, warnings, warning_keys)
 
@@ -195,6 +204,12 @@ class DiscoveryService:
                 if mode == "incremental" and known_streak >= _KNOWN_STREAK_LIMIT:
                     stopped_reason = "known_streak"
                     break
+            if bounded and any(
+                source_id not in global_position_hints for source_id in observed_source_ids
+            ):
+                raise DiscoveryIncompleteError(
+                    "Bounded Discovery did not provide global display positions"
+                )
         except DiscoveryIncompleteError:
             return DiscoveryResult(
                 mode=mode,
@@ -218,6 +233,7 @@ class DiscoveryService:
                 site=target.site,
                 discovery_key=target.key,
                 observed_source_ids=observed_source_ids,
+                global_position_hints=global_position_hints,
             )
             complete: bool | None = True
         else:
@@ -228,6 +244,7 @@ class DiscoveryService:
                 discovery_key=target.key,
                 observed_source_ids=observed_source_ids,
                 stopped_reason=stopped_reason,
+                global_position_hints=global_position_hints,
             )
         return DiscoveryResult(
             mode=mode,
@@ -246,11 +263,19 @@ class DiscoveryService:
         site: str,
         discovery_key: str,
         observed_source_ids: list[int],
+        global_position_hints: dict[int, int] | None = None,
     ) -> None:
-        assignments = {
-            source_id: position
-            for position, source_id in enumerate(reversed(observed_source_ids), start=1)
-        }
+        if global_position_hints and all(
+            source_id in global_position_hints for source_id in observed_source_ids
+        ):
+            assignments = {
+                source_id: global_position_hints[source_id] for source_id in observed_source_ids
+            }
+        else:
+            assignments = {
+                source_id: position
+                for position, source_id in enumerate(reversed(observed_source_ids), start=1)
+            }
         self.catalog.set_source_display_positions(
             site=site,
             discovery_key=discovery_key,
@@ -264,12 +289,27 @@ class DiscoveryService:
         discovery_key: str,
         observed_source_ids: list[int],
         stopped_reason: str,
+        global_position_hints: dict[int, int] | None = None,
     ) -> None:
         if stopped_reason == "exhausted":
             self._assign_full_display_positions(
                 site=site,
                 discovery_key=discovery_key,
                 observed_source_ids=observed_source_ids,
+                global_position_hints=global_position_hints,
+            )
+            return
+
+        if global_position_hints and all(
+            source_id in global_position_hints for source_id in observed_source_ids
+        ):
+            self.catalog.set_source_display_positions(
+                site=site,
+                discovery_key=discovery_key,
+                assignments={
+                    source_id: global_position_hints[source_id]
+                    for source_id in observed_source_ids
+                },
             )
             return
 
@@ -302,6 +342,31 @@ class DiscoveryService:
             discovery_key=discovery_key,
             assignments=assignments,
         )
+
+    @staticmethod
+    def _record_global_position_hint(
+        hint: int | None,
+        *,
+        source_id: int,
+        global_position_hints: dict[int, int],
+        source_ids_by_global_position: dict[int, int],
+    ) -> None:
+        if hint is None:
+            return
+        if isinstance(hint, bool) or not isinstance(hint, int) or hint < 1:
+            raise DiscoveryIncompleteError(
+                "Discovery global display position must be an integer >= 1"
+            )
+        previous_hint = global_position_hints.get(source_id)
+        if previous_hint is not None and previous_hint != hint:
+            raise DiscoveryIncompleteError("Discovery source has conflicting global positions")
+        previous_source_id = source_ids_by_global_position.get(hint)
+        if previous_source_id is not None and previous_source_id != source_id:
+            raise DiscoveryIncompleteError(
+                "Discovery sources have conflicting global display positions"
+            )
+        global_position_hints[source_id] = hint
+        source_ids_by_global_position[hint] = source_id
 
     @staticmethod
     def _ensure_existing_source_is_safe(source, target: WatchlistTarget) -> None:

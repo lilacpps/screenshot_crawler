@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import Locator, Page
@@ -203,6 +203,16 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
                 )
             if await self._is_disabled(next_button):
                 if target.discovery_scope is not None:
+                    buffered_records = [
+                        replace(
+                            record,
+                            source=replace(
+                                record.source,
+                                global_display_position=len(buffered_records) - index,
+                            ),
+                        )
+                        for index, record in enumerate(buffered_records)
+                    ]
                     for record in self._apply_discovery_scope(
                         buffered_records,
                         target_parts,

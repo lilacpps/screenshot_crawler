@@ -42,6 +42,7 @@ def record(
     available: bool | None = True,
     access_granted_until: str | None = None,
     access_granted_until_observed: bool = False,
+    global_display_position: int | None = None,
 ) -> DiscoveredRecord:
     return DiscoveredRecord(
         item=DiscoveredItem(
@@ -59,6 +60,7 @@ def record(
             access_granted_until=access_granted_until,
             access_granted_until_observed=access_granted_until_observed,
             available=available,
+            global_display_position=global_display_position,
         ),
     )
 
@@ -312,11 +314,15 @@ async def test_bounded_same_work_key_still_never_merges_items_cross_site(
     registry = DiscoveryAdapterRegistry()
     registry.register(
         "site-a",
-        lambda: BoundedFakeDiscoveryAdapter([record("a", order_key="1")]),
+        lambda: BoundedFakeDiscoveryAdapter(
+            [record("a", order_key="1", global_display_position=1)]
+        ),
     )
     registry.register(
         "site-b",
-        lambda: BoundedFakeDiscoveryAdapter([record("b", order_key="1")]),
+        lambda: BoundedFakeDiscoveryAdapter(
+            [record("b", order_key="1", global_display_position=1)]
+        ),
     )
     service = DiscoveryService(catalog, registry)
     scope = DiscoveryScope(from_url="https://example.test/from")
@@ -513,7 +519,15 @@ async def test_incremental_known_streak_and_run_start_snapshot_are_preserved(
     discovery_scope: DiscoveryScope | None,
 ) -> None:
     adapter = adapter_factory(
-        [record(external_id) for external_id in ("one", "two", "three", "four", "five", "six")]
+        [
+            record(
+                external_id,
+                global_display_position=6 - index if discovery_scope is not None else None,
+            )
+            for index, external_id in enumerate(
+                ("one", "two", "three", "four", "five", "six")
+            )
+        ]
     )
     service, catalog, watch_target = setup_service(
         tmp_path,
@@ -642,7 +656,7 @@ async def test_bounded_scope_fails_closed_before_adapter_iteration_or_catalog_mu
 async def test_bounded_full_syncs_records_without_global_reconciliation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter = BoundedFakeDiscoveryAdapter([record("observed")])
+    adapter = BoundedFakeDiscoveryAdapter([record("observed", global_display_position=7)])
     service, catalog, watch_target = setup_service(
         tmp_path,
         adapter,
@@ -678,6 +692,7 @@ async def test_bounded_full_syncs_records_without_global_reconciliation(
     assert result.stopped_reason == "exhausted"
     assert adapter.iter_records_calls == 1
     assert catalog.find_source("site-a", "observed") is not None
+    assert catalog.find_source("site-a", "observed").display_position == 7
     assert catalog.get_source(outside.id).available is True
     assert reconciliation_calls == []
 
@@ -686,7 +701,7 @@ async def test_bounded_incremental_preserves_adapter_stop_hook_after_sync(
     tmp_path: Path,
 ) -> None:
     adapter = BoundedFakeDiscoveryAdapter(
-        [record("one")], stop_decision=IncrementalStopDecision.STOP
+        [record("one", global_display_position=7)], stop_decision=IncrementalStopDecision.STOP
     )
     service, catalog, watch_target = setup_service(
         tmp_path,
@@ -761,11 +776,14 @@ async def test_incomplete_full_discovery_does_not_assign_positions(
     assert catalog.find_source("site-a", "new-2").display_position is None
 
 
-async def test_bounded_full_positions_are_scope_local(
+async def test_bounded_full_preserves_global_display_positions(
     tmp_path: Path,
 ) -> None:
     adapter = BoundedFakeDiscoveryAdapter(
-        [record(external_id) for external_id in ("C", "B", "A")]
+        [
+            record(external_id, global_display_position=position)
+            for external_id, position in (("C", 5), ("B", 4), ("A", 3))
+        ]
     )
     service, catalog, watch_target = setup_service(
         tmp_path,
@@ -792,8 +810,94 @@ async def test_bounded_full_positions_are_scope_local(
     assert {
         external_id: catalog.find_source("site-a", external_id).display_position
         for external_id in ("A", "B", "C")
-    } == {"A": 1, "B": 2, "C": 3}
+    } == {"A": 3, "B": 4, "C": 5}
     assert catalog.get_source(outside.id).display_position == 99
+
+
+async def test_bounded_full_without_global_display_positions_fails_closed(
+    tmp_path: Path,
+) -> None:
+    adapter = BoundedFakeDiscoveryAdapter([record("C"), record("B"), record("A")])
+    service, catalog, watch_target = setup_service(
+        tmp_path,
+        adapter,
+        watch_target=target(
+            discovery_scope=DiscoveryScope(from_url="https://example.test/from")
+        ),
+    )
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is False
+    assert result.stopped_reason == "incomplete"
+    assert [
+        catalog.find_source("site-a", value).display_position for value in ("A", "B", "C")
+    ] == [None, None, None]
+
+
+@pytest.mark.parametrize("invalid_hint", [True, 0, -1, 1.5, "1"])
+async def test_bounded_global_display_position_hint_validation_fails_closed(
+    tmp_path: Path, invalid_hint: object
+) -> None:
+    adapter = BoundedFakeDiscoveryAdapter(
+        [record("A", global_display_position=invalid_hint)]  # type: ignore[arg-type]
+    )
+    service, catalog, watch_target = setup_service(
+        tmp_path,
+        adapter,
+        watch_target=target(
+            discovery_scope=DiscoveryScope(from_url="https://example.test/from")
+        ),
+    )
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is False
+    assert result.stopped_reason == "incomplete"
+    assert catalog.find_source("site-a", "A").display_position is None
+
+
+async def test_bounded_conflicting_global_position_hints_fail_closed(
+    tmp_path: Path,
+) -> None:
+    adapter = BoundedFakeDiscoveryAdapter(
+        [record("A", global_display_position=3), record("A", global_display_position=4)]
+    )
+    service, catalog, watch_target = setup_service(
+        tmp_path,
+        adapter,
+        watch_target=target(
+            discovery_scope=DiscoveryScope(from_url="https://example.test/from")
+        ),
+    )
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is False
+    assert result.stopped_reason == "incomplete"
+    assert catalog.find_source("site-a", "A").display_position is None
+
+
+async def test_bounded_duplicate_global_position_hints_fail_closed(
+    tmp_path: Path,
+) -> None:
+    adapter = BoundedFakeDiscoveryAdapter(
+        [record("A", global_display_position=3), record("B", global_display_position=3)]
+    )
+    service, catalog, watch_target = setup_service(
+        tmp_path,
+        adapter,
+        watch_target=target(
+            discovery_scope=DiscoveryScope(from_url="https://example.test/from")
+        ),
+    )
+
+    result = await service.discover(FakePage(), watch_target, "full")
+
+    assert result.complete is False
+    assert result.stopped_reason == "incomplete"
+    assert catalog.find_source("site-a", "A").display_position is None
+    assert catalog.find_source("site-a", "B").display_position is None
 
 
 async def test_incremental_stable_boundary_appends_oldest_to_newest(

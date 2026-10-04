@@ -5,6 +5,7 @@ import pytest
 from screenshot_crawler.discovery import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.jumpplus.discovery import (
     JumpPlusDiscoveryAdapter,
+    JumpPlusRange,
     canonical_jumpplus_episode_url,
     map_jumpplus_access,
     parse_jumpplus_dom_expiry,
@@ -371,6 +372,66 @@ async def test_jumpplus_bounded_buffers_all_ranges_before_yielding(monkeypatch, 
     ]
 
     assert [item.source.external_id for item in observed] == ["3", "2"]
+
+
+@pytest.mark.asyncio
+async def test_jumpplus_bounded_preserves_global_positions_from_complete_identity_order(
+    monkeypatch,
+) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    page = _FakePage()
+    snapshot = _jump_snapshot([str(value) for value in range(140, 0, -1)])
+    ranges = [JumpPlusRange("140 - 1", 0, 140, 1)]
+    _configure_jumpplus_traversal(monkeypatch, adapter, page, [snapshot], ranges)
+
+    observed = [
+        record
+        async for record in adapter.iter_records(
+            page,
+            _jump_target(
+                DiscoveryScope(
+                    from_url="https://shonenjumpplus.com/episode/140",
+                    through_url="https://shonenjumpplus.com/episode/138",
+                )
+            ),
+            "full",
+        )
+    ]
+
+    assert [record.source.external_id for record in observed] == ["140", "139", "138"]
+    assert [record.source.global_display_position for record in observed] == [140, 139, 138]
+    assert all(record.item.order_label == "Special" for record in observed)
+
+
+@pytest.mark.asyncio
+async def test_jumpplus_special_chapter_keeps_global_position_without_label_inference(
+    monkeypatch,
+) -> None:
+    adapter = JumpPlusDiscoveryAdapter()
+    page = _FakePage()
+    snapshot = _jump_snapshot(["5004", "5003", "5000", "5002", "5001"])
+    labels = ["第4話", "第3話", "番外編", "第2話", "第1話"]
+    for row, label in zip(snapshot["episodes"], labels, strict=True):
+        row["title_text"] = label
+    ranges = [JumpPlusRange("5 - 1", 0, 5, 1)]
+    _configure_jumpplus_traversal(monkeypatch, adapter, page, [snapshot], ranges)
+
+    observed = [
+        record
+        async for record in adapter.iter_records(
+            page,
+            _jump_target(
+                DiscoveryScope(
+                    from_url="https://shonenjumpplus.com/episode/5003",
+                    through_url="https://shonenjumpplus.com/episode/5002",
+                )
+            ),
+            "full",
+        )
+    ]
+
+    assert [record.item.order_label for record in observed] == ["第3話", "番外編", "第2話"]
+    assert [record.source.global_display_position for record in observed] == [4, 3, 2]
 
 
 @pytest.mark.asyncio

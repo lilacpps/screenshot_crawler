@@ -11,7 +11,7 @@ import asyncio
 import json
 import re
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import pairwise
 from typing import Any
@@ -344,6 +344,16 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
                     )
             records = list(records_by_id.values())
             if bounded:
+                records = [
+                    replace(
+                        record,
+                        source=replace(
+                            record.source,
+                            global_display_position=len(records) - index,
+                        ),
+                    )
+                    for index, record in enumerate(records)
+                ]
                 selected_records = self._apply_discovery_scope(
                     records,
                     target.discovery_scope,

@@ -51,6 +51,9 @@ class DiscoveredSource:
     available: bool | None = None
     access_checked_at: TimestampValue = None
     last_seen_at: TimestampValue = None
+    # Run-local metadata from a complete site listing. It is not persisted as
+    # a separate Catalog/schema field.
+    global_display_position: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

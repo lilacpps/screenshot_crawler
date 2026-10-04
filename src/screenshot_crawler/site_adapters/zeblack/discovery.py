@@ -417,6 +417,7 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
                         ),
                         access_granted_until_observed=True,
                         available=True,
+                        global_display_position=row.dom_index + 1,
                     ),
                 )
             )

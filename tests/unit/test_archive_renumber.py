@@ -195,8 +195,9 @@ def test_locator_is_the_only_old_path_authority_and_matching_status_is_updated(t
     work, item, source, target = _make_source(catalog, tmp_path, author="作者")
     old = tmp_path / "totally-legacy-weird-name.zip"
     _, artifact = _add_archive(catalog, item.id, source.id, target.id, old)
-    status_dir = tmp_path / "crawl-status"
-    status_dir.mkdir()
+    # Keep the matching status next to the ZIP to exercise the short-temp
+    # namespace collision case.
+    status_dir = old.parent
     status_path = status_dir / f"{old.stem}.json"
     original_status = {
         "status": "completed",
@@ -211,6 +212,9 @@ def test_locator_is_the_only_old_path_authority_and_matching_status_is_updated(t
     plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=status_dir)
     entry = plan.entries[0]
     assert entry.new_path == old.parent / "003-作品名-番外編-作者.zip"
+    assert entry.temporary_path == old.parent / f".archive-renumber-{artifact.id}.tmp"
+    assert entry.status_temporary_path == old.parent / f".status-renumber-{artifact.id}.tmp"
+    assert entry.temporary_path != entry.status_temporary_path
     result = apply_archive_renumber_plan(plan)
 
     assert result.error is None
@@ -222,6 +226,7 @@ def test_locator_is_the_only_old_path_authority_and_matching_status_is_updated(t
     status = json.loads(moved_status.read_text(encoding="utf-8"))
     assert status["archive_path"] == entry.new_path.as_posix()
     assert status["future"] == {"keep": True}
+    assert not list(old.parent.glob(".*-*.tmp"))
     updated = catalog.get_artifact(artifact.id)
     assert updated.locator == entry.new_path.as_posix()
     assert updated.sha256 == SHA.lower()
@@ -310,7 +315,7 @@ def test_long_archive_basename_uses_short_temporary_path(tmp_path: Path) -> None
 
     assert entry.status == "RENAME"
     assert entry.temporary_path is not None
-    assert entry.temporary_path == archive_dir / f".renumber-{artifact.id}.tmp"
+    assert entry.temporary_path == archive_dir / f".archive-renumber-{artifact.id}.tmp"
     assert old.name not in entry.temporary_path.name
 
     result = apply_archive_renumber_plan(plan)

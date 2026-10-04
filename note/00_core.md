@@ -883,8 +883,12 @@ library treeのdirectory移動やZIP再走査は行わない。P3のsame-site Wo
 P4でもfiltered subsetではなく全site snapshotから計算する。
 
 P4はscope全体を先にpreflightし、内部/外部target collision、collision dependency、status target
-collisionを検出してoverwriteを拒否する。実行時はZIPをunique sibling temporaryへ移してからfinalへ
-移す二段階renameを使う。`output/crawl-status/<old-stem>.json`はJSONの`archive_path`がold
+collisionを検出してoverwriteを拒否する。実行時はZIPを短い
+`.archive-renumber-{artifact_id}.tmp`へ、matching status JSONを
+`.status-renumber-{artifact_id}.tmp`へ移してからfinalへ移す二段階renameを使う。
+rollback時も`.archive-rollback-{artifact_id}.tmp`と
+`.status-rollback-{artifact_id}.tmp`を分離する。元の長いbasenameはtemp名へ含めない。
+`output/crawl-status/<old-stem>.json`はJSONの`archive_path`がold
 Artifact locatorと同一fileを指す場合だけmatchingとし、matching時だけrenameして`archive_path`のみ
 更新する。missing/mismatch statusはwarningでZIP renameをblockしない。Catalog側は
 `update_artifact_locators()`のcompare-and-set一括transactionでlocator/updated_atだけを更新し、
@@ -1174,28 +1178,27 @@ note describe the former default and are superseded by the current value.
 #### P2 Discovery position assignment
 
 `DiscoveryService` retains the first-observed Source IDs in Adapter yield order
-as a run-local ordered set. The Adapter remains responsible only for canonical
-newest-to-oldest Discovery order; it does not emit position metadata, and the
-Service never infers position from episode labels, numeric IDs, `order_key`,
-`order_label`, or publication dates.
+as a run-local ordered set. The Adapter remains responsible for canonical
+newest-to-oldest Discovery order. A bounded-capable Adapter also attaches a
+run-local `global_display_position` hint after observing the complete listing
+and before applying its scope slice. The hint is not persisted separately.
 
-After a normal full exhaustion, the Service reverses the observed order and
-assigns `oldest=1 ... newest=N` through the Catalog bulk API. Bounded full
-Discovery applies the same numbering only to the yielded scope and leaves
-scope-external Sources unchanged. An incomplete full run does not assign any
-positions.
+`Source.display_position` means the 1-based position in the site's complete
+work listing ordered oldest-to-newest. It is never inferred from episode
+labels, numeric IDs, `order_key`, `order_label`, or publication dates. Bounded
+Discovery filters synchronized Sources but does not renumber them: if the
+complete listing positions selected are 4..7, Catalog receives 4, 5, 6, 7.
+The Service validates hints (`int`, not `bool`, and `>=1`), rejects conflicting
+Source/position mappings, and finalizes them only after safe completion.
 
-For incremental Discovery, `stable_boundary` and generic `known_streak` stops
-use the maximum non-NULL position among Sources actually observed during the
-current run as the baseline, then append the currently observed Sources whose
-position is still NULL. Positioned Sources in the scope that were not observed
-during the run, including historical or unavailable Sources, are not part of
-that baseline. The NULL set is reversed before assignment, so Sources created
-by a previous incomplete run are recovered when re-observed. A normal
-incremental exhaustion has full-scope authority and assigns `1..N`, even when
-no baseline exists. Early stop with no observed non-NULL baseline is fail-safe
-and leaves NULL positions unchanged. Incomplete incremental runs never assign
-positions or rewrite established positions.
+Unbounded full Discovery retains the existing reverse of the canonical stream
+to assign `oldest=1 ... newest=N`. Bounded full Discovery requires a global hint
+for every observed Source and fails closed without one; it never falls back to
+scope-local `1..N`. Incremental Discovery uses an available global hint as the
+authority. When an unbounded incremental run has no hints, its existing
+observed-position baseline plus append algorithm remains in force. Incomplete
+runs never finalize positions or rewrite established positions; newly created
+Sources may remain NULL.
 
 Position finalization uses only records already yielded by the existing
 Discovery run; it adds no pagination, DOM, HTTP, or full-list access. Discovery
@@ -1430,20 +1433,20 @@ and per-artifact capture fingerprint.
 - Watchlistの`DiscoveryScope(from_url / through_url)` model、YAML parse、mapping / boundary存在 / non-empty string validation: **IMPLEMENTED**
 - scope付きtargetのenable / disable等のWatchlist rewrite preservation: **IMPLEMENTED**
 - scopeなしtargetの既存load / rewrite互換: **IMPLEMENTED**。scopeなしtargetは従来どおりunboundedとして扱い、scope専用CLI optionは追加していない
-- common Discovery capability gate: **IMPLEMENTED**。`DiscoveryAdapter.supports_bounded_discovery` のdefaultは`False`で、明示的にopt-inしたAdapterだけboundedを受け付ける。Magapoke / BookWalker / Manga ONE / Jump+はopt-in済みで、Zeblack等の未対応Adapterはdefault `False`のまま
+- common Discovery capability gate: **IMPLEMENTED**。`DiscoveryAdapter.supports_bounded_discovery` のdefaultは`False`で、明示的にopt-inしたAdapterだけboundedを受け付ける。Magapoke / BookWalker / Manga ONE / Jump+ / Zeblackはopt-in済みで、その他の未対応Adapterはdefault `False`のまま
 - scope付きtargetを未対応Adapterへ渡した場合: **IMPLEMENTED**。Work作成前にincompleteとして停止し、`iter_records()`、unbounded fallback、Item / Source / SourceTarget同期を行わない
-- bounded full: **IMPLEMENTED**。対応Adapterがyieldしたrecordは通常どおり同期し、正常終了時は`complete=True` / `stopped_reason="exhausted"`とする。global missing-source reconciliationは実行しない
-- bounded incremental common semantics: **IMPLEMENTED**。generic known-streak（5件の連続distinct known identity）と`incremental_stop_decision()`のstop hookをscopeなしと同じ順序・契約で適用する
-- Magapoke bounded Discovery: **IMPLEMENTED**。既存strict parserで`title_id` / `episode_id`を検証し、parse済みlatest-first listing order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。invalid / foreign / different-title / missing / reversed boundaryはyield前にincompleteとする
+- bounded full: **IMPLEMENTED**。対応Adapterがyieldしたrecordは通常どおり同期し、正常終了時は`complete=True` / `stopped_reason="exhausted"`とする。global missing-source reconciliationは実行しない。完全一覧を把握できるAdapterはscope slice前にglobal display-position hintを付与し、scope-local `1..N`へ再採番しない。hintなしbounded runはincompleteでfail closedとする
+- bounded incremental common semantics: **IMPLEMENTED**。generic known-streak（5件の連続distinct known identity）と`incremental_stop_decision()`のstop hookをscopeなしと同じ順序・契約で適用する。global hintがあればそれをauthorityとして使い、boundedでhintがなければincompleteとする
+- Magapoke bounded Discovery: **IMPLEMENTED**。既存strict parserで`title_id` / `episode_id`を検証し、parse済みlatest-first listing order上でglobal positionを計算してからfrom-only / through-only / both / singletonのinclusive rangeを選択する。invalid / foreign / different-title / missing / reversed boundaryはyield前にincompleteとする
 - Magapokeのboundary validation前yield防止: **IMPLEMENTED**。既存の全listing parse・buffer構造の後にrange確定してからyieldするため、invalid scopeでCatalog partial writeを行わない
-- BookWalker bounded Discovery: **IMPLEMENTED**。strict `/deUUID/` parserでproduct UUIDをboundary identityとし、full collected series-list membershipと既存のcollect order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。invalid / foreign / missing / reversed boundaryはproduct observation前にincompleteとする
+- BookWalker bounded Discovery: **IMPLEMENTED**。strict `/deUUID/` parserでproduct UUIDをboundary identityとし、full collected series-list membershipと既存のcollect order上でglobal positionを計算してからfrom-only / through-only / both / singletonのinclusive rangeを選択する。invalid / foreign / missing / reversed boundaryはproduct observation前にincompleteとする
 - BookWalkerのfirst-volume inference: **IMPLEMENTED**。scope slice前にfull productsで候補を算出するため、bounded sliceの外側にある後続巻を文脈として維持する
-- Manga ONE bounded Discovery: **IMPLEMENTED**。strict HTTPS / `manga-one.com` chapter parserで`work_id` / `chapter_id`をboundary identityとし、既存のlisting order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。relative hrefはpage URLとの`urljoin()`後にparseし、foreign hostはrejectする
+- Manga ONE bounded Discovery: **IMPLEMENTED**。strict HTTPS / `manga-one.com` chapter parserで`work_id` / `chapter_id`をboundary identityとし、complete listingのglobal positionを計算してから既存のlisting order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。relative hrefはpage URLとの`urljoin()`後にparseし、foreign hostはrejectする
 - Manga ONEのbounded buffering: **IMPLEMENTED**。scopeなしは既存のpage/card単位streamingとpartial-refreshを維持し、scope付きだけ全listingをbufferしてpagination完了・boundary validation後にyieldする。invalid / foreign / different-work / missing / reversed boundaryやbounded pagination failureではCatalog partial writeを行わない
-- Jump+ bounded Discovery: **IMPLEMENTED**。既存のstrict episode URL parserで`episode_id`をboundary identityとし、全rangeのpagination・duplicate・network scope・total validationを完了した`records_by_id`のcanonical insertion order上でfrom-only / through-only / both / singletonのinclusive rangeを選択する。invalid / foreign / missing / reversed boundaryはyield前にincompleteとする
+- Jump+ bounded Discovery: **IMPLEMENTED**。既存のstrict episode URL parserで`episode_id`をboundary identityとし、全rangeのpagination・duplicate・network scope・total validationを完了した`records_by_id`のcanonical insertion order上でglobal positionを計算してからfrom-only / through-only / both / singletonのinclusive rangeを選択する。latest-first ordering、range direction、row directionは変更しない。invalid / foreign / missing / reversed boundaryはyield前にincompleteとする
 - Jump+ bounded buffering: **IMPLEMENTED**。scope付きfull / incrementalとも全rangeをbufferしてからboundary sliceをyieldし、後続range失敗時にpartial recordをyieldしない。scopeなしincrementalの既存streamingとscopeなしfullの既存全件bufferは維持する
 - Jump+ / bounded cross-site no-merge regression: **IMPLEMENTED**。bounded対応Fakeを使った共通回帰で、同じ`work_key`でもsiteをまたぐItem自動mergeを行わないことを確認している
-- Zeblack production Adapter bounded support: **IMPLEMENTED**。strict chapter-list / viewer parser、DOM/protobuf exact-set validation、latest-first canonical order、chapter_id boundary slice、およびyield前bufferingを`ZeblackDiscoveryAdapter`で実装済み。Z4-1時点ではDiscovery registryのみ登録し、Z5でBatch Policy registryにも登録した
+- Zeblack production Adapter bounded support: **IMPLEMENTED**。strict chapter-list / viewer parser、DOM/protobuf exact-set validation、latest-first canonical order、raw DOM oldest-first index由来のglobal position、chapter_id boundary slice、およびyield前bufferingを`ZeblackDiscoveryAdapter`で実装済み。Z4-1時点ではDiscovery registryのみ登録し、Z5でBatch Policy registryにも登録した
 - 他siteのbounded range boundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
 
 The following historical summary predates Z4-1; the current production

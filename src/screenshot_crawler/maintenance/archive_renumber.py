@@ -330,7 +330,7 @@ def _preflight_source(
         new_path=new_path,
     )
     if entry.status == "RENAME":
-        entry.temporary_path = _temporary_sibling(old_path, artifact.id, "renumber")
+        entry.temporary_path = _temporary_sibling(old_path, artifact.id, "archive-renumber")
         _inspect_status_candidate(entry, status_dir)
     return entry
 
@@ -368,7 +368,9 @@ def _inspect_status_candidate(entry: RenumberEntry, status_dir: Path) -> None:
         return
     entry.status_path = candidate
     entry.status_payload = payload
-    entry.status_temporary_path = _temporary_sibling(candidate, entry.artifact.id, "renumber")  # type: ignore[union-attr]
+    entry.status_temporary_path = _temporary_sibling(
+        candidate, entry.artifact.id, "status-renumber"
+    )  # type: ignore[union-attr]
 
 
 def _read_matching_status(path: Path, old_path: Path | None) -> dict[str, Any] | None:
@@ -522,7 +524,9 @@ def _rollback(entries: list[RenumberEntry]) -> tuple[bool, list[str]]:
         for entry in zip_states:
             current = entry.new_path if entry.zip_final_done else entry.temporary_path
             assert current is not None
-            rollback_path = _temporary_sibling(current, entry.artifact.id, "rollback")  # type: ignore[union-attr]
+            rollback_path = _temporary_sibling(
+                current, entry.artifact.id, "archive-rollback"
+            )  # type: ignore[union-attr]
             if rollback_path.exists():
                 raise OSError(f"rollback temporary path exists: {rollback_path}")
             if not current.exists():
@@ -542,7 +546,9 @@ def _rollback(entries: list[RenumberEntry]) -> tuple[bool, list[str]]:
         for entry in status_states:
             current = entry.new_status_path if entry.status_final_done else entry.status_temporary_path
             assert current is not None
-            rollback_path = _temporary_sibling(current, entry.artifact.id, "status-rollback")  # type: ignore[union-attr]
+            rollback_path = _temporary_sibling(
+                current, entry.artifact.id, "status-rollback"
+            )  # type: ignore[union-attr]
             if rollback_path.exists():
                 raise OSError(f"status rollback temporary path exists: {rollback_path}")
             if not current.exists():

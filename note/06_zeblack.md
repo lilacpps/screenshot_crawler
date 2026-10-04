@@ -660,6 +660,14 @@ validation has passed. Thus invalid scope or DOM/protobuf mismatch yields no
 partial records. Dynamic POINT-to-ticket changes and rental-time units remain
 unresolved live-state questions for Z5.
 
+The raw DOM order remains oldest-first and production canonical Discovery order
+remains its reverse, newest-first. Before any bounded scope slice, each raw DOM
+index supplies the run-local global position (`index + 1`); therefore a selected
+canonical slice such as `D, C, B` preserves positions `4, 3, 2`, not `3, 2, 1`.
+The position is identity-listing order, never an episode-label inference. A
+bounded run without a global hint fails closed through the generic Discovery
+service, and hints are persisted only after safe completion.
+
 ### Z4-1 live verification (2026-09-30)
 
 Using the shared Crawler Chrome/CDP session and a temporary

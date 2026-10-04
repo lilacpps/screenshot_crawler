@@ -14,6 +14,17 @@ and login automation remain out of scope.
 production Discovery / Site Policy / Batchの挙動を置き換えない。通常のBatchは
 Discoveryの取得順を変更せず、Batch PlannerのWork内orderingだけを変更する。
 
+## Current Discovery positioning contract
+
+Jump+のcanonical Discovery orderは引き続きlatest-firstである。rangeの巡回順、各rangeのDOM row順、
+`records_by_id`のinsertion orderは変更しない。bounded Discoveryでは全rangeから完全なcanonical identity listingを
+構築した後、scope slice前にoldest-firstのglobal positionを算出し、選択recordへrun-local hintとして付与する。
+したがってbounded scope内のpositionは1..Nへ再採番されず、完全一覧上の位置を保持する。
+
+positionはepisode labelや`order_key`から推測しない。番外編・special chapter・前後編もidentity listing上の
+1レコードとして数える。以前scope-local positionで作られたarchiveは、fixed full DiscoveryでCatalogの
+`Source.display_position`を更新した後、通常の`renumber_archives.py --dry-run`、`--apply`で再renameできる。
+
 対象は次のepisode URLのみ。
 
 ```text

@@ -1461,11 +1461,15 @@ old pathのauthorityは常に`Artifact.locator`であり、new pathはその同�
 naming helperが得るstemの`.zip`である。P3と同じsame-site collision snapshotを全site sources
 から作るため、P4のfiltered subsetだけではdisambiguator判定を変えない。internal/external
 target collision、除外participantに依存する連鎖、status target collisionはpreflightで除外し、
-overwriteはしない。実行対象はZIPをunique temporary siblingへ移してからfinalへ移す二段階renameを
-使う。matching `crawl-status/<old-stem>.json` はJSONの`archive_path`がold locatorと同一fileを
+overwriteはしない。実行対象はZIPを短い`.archive-renumber-{artifact_id}.tmp`へ、matching statusを
+`.status-renumber-{artifact_id}.tmp`へ移してからfinalへ移す二段階renameを使う。rollback時も
+`.archive-rollback-{artifact_id}.tmp`と`.status-rollback-{artifact_id}.tmp`を分離し、元の長い
+basenameはtemp名へ含めない。matching `crawl-status/<old-stem>.json` はJSONの`archive_path`がold locatorと同一fileを
 指す場合だけrenameし、`archive_path`以外のfieldは保持する。status missing/mismatchはwarningで
 ZIPをblockしない。Catalogはlocator/updated_atだけを更新する一括compare-and-set transactionを
-使い、Catalog更新失敗時はZIP/statusをrollbackし、rollback不能時は`RECOVERY_REQUIRED`を出す。
+使い、Catalog更新失敗時はZIP/statusをrollbackし、rollback不能時は`RECOVERY_REQUIRED`を出す。以前の
+scope-local positionでrename済みのarchiveは、fixed full Discoveryでcorrected `Source.display_position`を
+得た後、通常の`renumber_archives.py --dry-run` -> `--apply`で再renameでき、専用migrationは不要である。
 
 手動crawlでは:
 
@@ -1725,30 +1729,33 @@ verification remain planned.
 
 ### Discovery display position contract (P2 implemented)
 
-`DiscoveryService` is the sole position authority. Adapters continue to yield
-records in canonical newest-to-oldest order and do not emit position or episode
-number metadata. The Service keeps an ordered first-occurrence list of Source
-IDs observed during the run, without inferring positions from labels, numeric
-identities, `order_key`, `order_label`, or dates.
+`DiscoveryService` is the sole persistence/finalization authority, but a
+bounded-capable Adapter supplies a run-local
+`global_display_position` hint after it has observed the site's complete
+listing and before it applies the configured scope slice. The hint is not a
+schema column. It must be an `int >= 1` (with `bool` rejected), and conflicting
+hints for one Source or one numeric position are fail-closed.
 
-After normal full exhaustion, the observed list is reversed and persisted as
-`oldest=1 ... newest=N` through the atomic
-`CatalogService.set_source_display_positions()` API. Bounded full Discovery
-assigns `1..N` only to the yielded scope and does not change Sources outside the
-scope. `DiscoveryIncompleteError` prevents all position finalization, leaving
-existing positions unchanged and newly created Sources NULL.
+The sole meaning of `Source.display_position` is the 1-based position in the
+site's complete work listing ordered oldest-to-newest. It is not an episode
+number and is never inferred from `order_key`, `order_label`, numeric IDs,
+titles, or dates. A bounded scope filters which Sources are synchronized; it
+does not renumber them. For example, selecting complete-list positions 4..7
+persists `4, 5, 6, 7`, not `1, 2, 3, 4`.
 
-Incremental `stable_boundary` and `known_streak` stops use the maximum
-non-NULL position among Sources actually observed during the current run as
-the baseline. They append the currently observed Sources whose current
-position is NULL after that baseline; previous incomplete-run NULL Sources are
-included, while positioned Sources not observed in this run do not contribute.
-If incremental traversal exhausts the whole scope, it has full-order authority
-and assigns `1..N` even without a baseline. Early stop without an observed
-non-NULL baseline is fail-safe and leaves NULL positions unchanged. Position
-assignment uses only records already yielded by the existing run and performs
-no additional site access. Item status, `completed_at`, and operator notes
-remain unchanged.
+Adapters that already hold the complete listing attach global hints to yielded
+records. The Service keeps those hints run-local and passes them to the atomic
+`CatalogService.set_source_display_positions()` call only after safe
+completion. A bounded run without hints is `incomplete`; it never falls back
+to scope-local `1..N`. `DiscoveryIncompleteError` and hint validation failures
+leave existing positions unchanged and newly created Sources NULL.
+
+Unbounded full Discovery retains the existing canonical newest-to-oldest stream
+followed by reverse assignment to `oldest=1 ... newest=N`. Incremental
+Discovery retains the existing observed-position baseline plus append behavior
+when it has no global hints; bounded incremental uses global hints when
+available and fails closed when they are unavailable. Item status,
+`completed_at`, and operator notes remain unchanged.
 
 ### Batch archive naming contract (P3 implemented)
 

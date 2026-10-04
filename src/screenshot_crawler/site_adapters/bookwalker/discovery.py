@@ -321,6 +321,10 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
                 products,
                 target.discovery_scope,
             )
+        global_positions = {
+            product.external_id: len(products) - index
+            for index, product in enumerate(products)
+        }
 
         for product in selected_products:
             try:
@@ -354,6 +358,11 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
                     url=product.url,
                     access_mode=access_mode,
                     available=True,
+                    global_display_position=(
+                        global_positions[product.external_id]
+                        if target.discovery_scope is not None
+                        else None
+                    ),
                 ),
             )
 

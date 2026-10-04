@@ -246,6 +246,7 @@ async def test_zeblack_full_discovery_is_latest_first_and_buffered() -> None:
     assert [record.source.external_id for record in records] == ["303", "202", "101"]
     assert [record.item.order_key for record in records] == [None, "2", "1"]
     assert [record.source.access_mode for record in records] == ["paid", "quota", "free"]
+    assert [record.source.global_display_position for record in records] == [3, 2, 1]
 
 
 @pytest.mark.asyncio
@@ -338,6 +339,7 @@ async def test_zeblack_bounded_discovery_is_inclusive_and_uses_chapter_id_only()
         )
     ]
     assert [record.source.external_id for record in records] == ["303", "202"]
+    assert [record.source.global_display_position for record in records] == [3, 2]
 
 
 @pytest.mark.asyncio
