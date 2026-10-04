@@ -99,6 +99,24 @@ shared profileでBookWalker/MANGA ONEのlogin・crawl・session共存と既存vi
 - 実験用Catalogが指定されている場合、通常の`catalog.sqlite`へ暗黙fallbackしない。
 - root sessionのモデルはrepository全体へ固定しない。multi-agent Site Adapter作業開始時にGPT-6.1 Solを選択する。
 
+## Multi-agent workflow for existing BookWalker capture research
+
+ユーザーが既存BookWalker adapterのsource-native capture / JPEG・PNG判定 / viewer provenanceについて
+multi-agent / 自律調査・実装を依頼した場合は、
+`docs/BOOKWALKER_SOURCE_NATIVE_CAPTURE_RUNBOOK.md` に従う。
+
+基本役割:
+
+- root/Lead: GPT-6.1 Sol。Phase、証拠十分性、実装要否、次のProbeを判断する。
+- `bookwalker_worker`: GPT-5.6 Luna。live調査、Probe、実装、test、live verificationを担当する唯一のproduction writer。
+- `bookwalker_reviewer`: GPT-6.1 Sol、read-only。各material worker iteration後の品質ゲート。
+- `bookwalker_critic`: GPT-6.1 Sol、read-only。実装前のevidence gateと最終sign-offで前提・provenance・過剰一般化を攻撃的に検証する。
+
+特にBookWalkerでは「JPEG化」を目的化せず、source-native formatをauthorityとする。
+sourceがPNGならPNGのままを正解とし、dimension / filename / timing / visual similarityだけでJPEG candidateへ
+結びつけない。BookWalker viewerは読書位置を永続化するため、live probeごとにactual page stateを確認し、
+必要なら明示的に巻き戻してから調査する。複数agentが同時にviewerを操作してはならない。
+
 ## Note synchronization rule
 
 仕様・実装・テスト・運用方法を変更した場合、**同じ変更の中で対応する `note/` も更新することを必須**とする。
