@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-09-30
+最終同期: 2026-10-05
 
 ## 1. 目的と現在のscope
 
@@ -28,6 +28,65 @@ BookWalkerの商品ページまたはviewer URLから、現在コンテンツの
 BookWalkerのseries-scoped Discovery、Site Policy、Batch実行は実装済みである。Batchからのstrict `direct` / `quota` entryも実装済みである。Adapterを直接生成
 した場合のstrategy defaultは`auto`で、`configure_run()`は`auto` / `direct` / `quota`を受け付け、
 run stateへ保存する。
+
+## 1.1 Current source-native baseline (2026-10-05)
+
+The current production priority remains unchanged:
+
+```text
+verified original JPEG
+    -> verified lossless reconstructed JPEG
+    -> verified source-native PNG
+    -> rendered-canvas PNG fallback
+```
+
+The existing original-JPEG matcher uses a bounded deterministic 64x64 browser
+signature for production selection. The Phase 1/2 diagnostics additionally used
+bounded full-resolution comparisons; those stronger diagnostic results must not be
+retroactively attributed to the ordinary matcher.
+
+The representative manga baseline (`de038ee678-e389-4ceb-a13e-4f7f0154d79e`)
+was observed with actual position `1/159`, verified anchor `1/159`, captures
+through `23/159`, and restoration to `1/159`. The cover was an original JPEG at
+844x1200, 306739 bytes, with candidate/output SHA-256
+`0f1c65cd495b5bcc0cb6f7c44437706ff850d011ab3fca53b1cf608f330254b3`; its
+selected ImageBitmap source was also checked by a full-resolution diagnostic.
+Seven ordinary body spreads (`9/159` through `21/159`) returned native-PNG
+fallback records with dimension/mapping rejection and no proven upstream exact
+response attribution.
+
+The representative light-novel baseline
+(`dea0961d33-6ef8-4673-a455-0ec0ecd5de47`) used a verified `1/314` anchor,
+captured actual positions through `15/314`, and restored to `1/314`. The cover
+(`1/314`, 1443x2048) was original-JPEG A with a full-resolution exact comparison.
+Positions `8/314`, `10/314`, `11/314`, `13/314`, and `15/314` used the existing
+direct reconstructed-JPEG path at 960x1280 with strict completed mappings,
+unique raw-JPEG/ImageBitmap matches, MCU alignment, and coefficient/DCT proof;
+the adapter's coefficient gate includes quantization-table equality. Positions
+`2/314` through `7/314` were leading illustrations/front matter and remained
+PNG fallback D observations; no network-PNG claim was made.
+
+The focused source diagnostic advanced and restored as `1/314 -> 2/314 ->
+3/314 -> 1/314`. For `2/314`, bitmap 5 matched a JPEG at 1448x2048 by full
+pixels, but the selected native draw was 1443x2048 while the retained source
+canvas was 2048x1453, so visible-output attribution remains unusable and D.
+For `3/314`, bitmap 8 at 2048x1456 had one exact JPEG candidate; crop/padding/
+coded mapping and source-native output proof remain incomplete, so this remains
+D and is only evidence for possible future B research. No confirmed B or C
+case was observed. The PNG artifact is a correct fail-closed fallback candidate,
+not proof of a network PNG.
+
+Invalid earlier constructor-event/zero-or-None candidate probes are excluded
+from source-format evidence. Mapping IDs and renderer operation identities are
+window-local diagnostic facts; no global association is inferred from timing,
+dimensions, path, order, or visual similarity. No second manga was used.
+
+Targeted capture unit tests (153 passed) and BookWalker browser-backed
+integration tests (45 passed) pass on this unchanged production code. Ruff
+(`.venv\\Scripts\\ruff.exe check src tests`) passes. No new fixture, production
+implementation, or live-site rerun was made in this note-only synchronization.
+The mandatory independent Critic gate remains pending; these observations do
+not constitute final implementation approval.
 
 ## 2. Entry flow
 
