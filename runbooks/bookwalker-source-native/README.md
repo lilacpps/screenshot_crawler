@@ -3,55 +3,60 @@
 This workstream investigates and improves BookWalker capture while preserving the
 authoritative source-native representation.
 
-## Role model
+## Default operating model
 
-Unless a stage explicitly says otherwise:
+> **Research is lead-driven. Review is change-driven. Critic is risk-driven.**
 
-- Lead / root orchestrator: **GPT-6.1 Sol**, high reasoning
-- Worker: **GPT-5.6 Luna**, high reasoning, single production writer
-- Reviewer: **GPT-6.1 Sol**, read-only quality gate
-- Critic: **GPT-6.1 Sol**, read-only adversarial evidence/design gate
+Default research:
 
-The worker is the only agent allowed to drive the live BookWalker viewer.
+- Lead: **GPT-6.1 Sol**
+- Worker: **GPT-5.6 Luna**
+
+Reviewer and Critic are not routine research participants.
+
+- Reviewer: mandatory for production implementation before merge; optional for research.
+- Critic: only for high-risk design decisions such as weakening proof gates, introducing
+  heuristics, broad generalization, or large/shared abstraction.
+
+The Worker is the only production writer and the only live BookWalker viewer operator.
 
 ## Sequence
 
-### Foundation / baseline workflow
+### Foundation
 
 Current location:
 
 `docs/BOOKWALKER_SOURCE_NATIVE_CAPTURE_RUNBOOK.md`
 
-This is the original workstream runbook that established the source-native objective,
-model roles, viewer-position protocol, A/B/C/D classification, and baseline research
-workflow.
+This defines the source-native objective, A/B/C/D classification, browser-position
+protocol, and the lightweight role policy.
 
-It should eventually move into this workstream directory in a documentation-only change,
-but **do not move it during the active provenance-resolution stage**.
+It may later move into this directory in a documentation-only cleanup.
 
-### 02 — Provenance resolution and minimal implementation
+### 02 — Provenance resolution
 
 `02-provenance-resolution/README.md`
 
-Starts from research checkpoint:
+Current checkpoint:
 
-`1040abce1e130ce69e7a82812ea924315e06f78c`
+`02-provenance-resolution/CHECKPOINT.md`
 
 Goals:
 
-- run the pending independent Critic gate;
-- explain the manga ordinary-body D cases;
-- resolve or bound the light-novel opening D cases;
+- resolve only the manga/LN provenance questions that can change an operational
+  decision;
+- avoid finishing diagnostic machinery for its own sake;
 - implement only confirmed B cases;
-- leave A/C unchanged and D fail-closed;
-- finish with Reviewer + Critic sign-off and bounded cross-content live verification.
+- allow a safe no-change conclusion;
+- invoke Reviewer only if production changes are made;
+- invoke Critic only when a material design-risk trigger appears.
 
-## Naming guidance for future stages
+## Future stages
 
-Add a new numbered stage only when there is a new execution objective, for example:
+Add a numbered stage only for a new execution objective, for example:
 
 - `03-cross-title-generalization/`
 - `04-performance-hardening/`
 - `05-production-rollout/`
 
-Do not create a new runbook for every tiny code edit or reviewer fix.
+Do not create a runbook for every small probe, code edit, or review fix.
