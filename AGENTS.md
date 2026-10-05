@@ -106,17 +106,27 @@ multi-agent / 自律調査・実装を依頼した場合は、
 `docs/BOOKWALKER_SOURCE_NATIVE_CAPTURE_RUNBOOK.md` を基礎runbookとして使用し、個別stageは
 `runbooks/bookwalker-source-native/README.md` の順序に従う。
 
-基本役割:
+基本原則は以下。
 
-- root/Lead: GPT-6.1 Sol。Phase、証拠十分性、実装要否、次のProbeを判断する。
-- `bookwalker_worker`: GPT-5.6 Luna。live調査、Probe、実装、test、live verificationを担当する唯一のproduction writer。
-- `bookwalker_reviewer`: GPT-6.1 Sol、read-only。各material worker iteration後の品質ゲート。
-- `bookwalker_critic`: GPT-6.1 Sol、read-only。実装前のevidence gateと最終sign-offで前提・provenance・過剰一般化を攻撃的に検証する。
+> **Research is lead-driven. Review is change-driven. Critic is risk-driven.**
 
-特にBookWalkerでは「JPEG化」を目的化せず、source-native formatをauthorityとする。
-sourceがPNGならPNGのままを正解とし、dimension / filename / timing / visual similarityだけでJPEG candidateへ
-結びつけない。BookWalker viewerは読書位置を永続化するため、live probeごとにactual page stateを確認し、
-必要なら明示的に巻き戻してから調査する。複数agentが同時にviewerを操作してはならない。
+通常の調査では次の2役だけをactiveにする。
+
+- root/Lead: GPT-6.1 Sol。証拠十分性、A/B/C/D分類、次のbounded Probe、実装要否を判断する。
+- `bookwalker_worker`: GPT-5.6 Luna。live調査、Probe、必要最小限のdiagnostic、実装、test、
+  live verificationを担当する唯一のproduction writer / live-viewer operator。
+
+`bookwalker_reviewer` は通常のResearch loopには入れない。production codeを変更した場合はmerge前に必須とし、
+diagnosticをdurable production/test contractへ昇格させる場合やLeadが重要判断の独立確認を必要とした場合だけ使う。
+
+`bookwalker_critic` はroutine gateにしない。既存proof/fail-closed gateを弱める、heuristic attributionを導入する、
+観測範囲を超えて一般化する、大きなshared abstraction/refactorを行う等、silent wrong-artifact riskが高い設計判断でのみ使う。
+Research開始時・終了時に機械的に呼ばない。
+
+BookWalkerでは「JPEG化」を目的化せずsource-native formatをauthorityとする。sourceがPNGならPNGのままを正解とし、
+dimension / filename / timing / visual similarityだけでJPEG candidateへ結びつけない。証拠不足ならD/fail-closedで終了してよい。
+viewerは読書位置を永続化するため、live probeごとにactual page stateを確認し、必要なら明示的に巻き戻してから調査する。
+複数agentが同時にviewerを操作してはならない。
 
 ## Note synchronization rule
 
