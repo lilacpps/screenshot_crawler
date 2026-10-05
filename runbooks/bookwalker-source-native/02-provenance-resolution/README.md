@@ -1,431 +1,311 @@
 # BookWalker Source-Native Capture — Stage 02: Provenance Resolution
 
-## 1. Starting checkpoint
+## 1. Starting point
 
-Continue from branch:
+Continue from:
 
 `research/bookwalker-source-native-20261005`
 
-Starting research checkpoint:
+Latest published checkpoint before this workflow revision:
 
-`1040abce1e130ce69e7a82812ea924315e06f78c`
+`efbadb8a4a1f503705546b1eb37375c30a9e6beb`
 
-At this checkpoint:
+Production capture code is still unchanged.
 
-- production capture code is unchanged;
-- only `note/01_bookwalker.md` was updated with bounded observations;
-- targeted capture tests: 153 passed;
-- BookWalker browser-backed integration tests: 45 passed;
-- Ruff passed;
-- independent Critic gate is still pending.
+The previous workflow attempted frequent Reviewer/Critic gates and hit agent-thread
+capacity. This revised Stage 02 removes those gates from ordinary research.
 
-Do not treat the checkpoint note as final implementation approval.
+The previous unreviewed OBJECT-A/B/C diagnostic work is **not repository authority**.
+Use it only if Lead decides it is the shortest path to a concrete unanswered question.
+It is valid to retire it.
 
 ## 2. Known evidence
 
-### Manga target
-
-Product:
+### Manga 1
 
 https://bookwalker.jp/de038ee678-e389-4ceb-a13e-4f7f0154d79e/
 
-Observed:
+Known:
 
-- actual and restored anchor: `1/159`;
-- bounded observation reached `23/159`;
-- cover is proven A / original JPEG at 844x1200;
-- seven ordinary body spreads, roughly `9/159` through `21/159`, currently return
-  native-PNG fallback;
-- those ordinary-body cases failed current dimension/mapping proof and do not yet have
-  proven upstream exact response attribution;
-- therefore ordinary manga body is currently **D**, not C.
+- cover baseline A / original JPEG;
+- ordinary manga body remains D;
+- R5 verified selected native lineage at `9/159`;
+- two native PNG parts were 844x1200;
+- renderer/canvas/mapping identity and ordering were observed;
+- each selected mapping had 1,026 tiles and 38 destination-edge clips;
+- no eligible full-resolution encoded candidate was proven;
+- candidate inventory contained only 158x224 JPEG thumbnails;
+- R5 therefore does **not** prove source PNG, JPEG reconstruction, or complete encoded
+  source attribution.
 
-The second manga target remains optional:
+Manga 2 remains optional:
 
 https://bookwalker.jp/deeb7abe07-9147-4959-b490-75fa6743d8f2/
 
-Do not use it until the first manga's ordinary-body rendering path is understood well
-enough that a second title answers a concrete generalization question.
-
-### Light-novel target
-
-Product:
+### Light novel
 
 https://bookwalker.jp/dea0961d33-6ef8-4673-a455-0ec0ecd5de47/
 
-Observed:
+Known:
 
-- actual and restored anchor: `1/314`;
-- cover `1/314` is proven A / original JPEG at 1443x2048;
-- ordinary text positions including `8/314`, `10/314`, `11/314`, `13/314`,
-  and `15/314` use the existing proven reconstructed-JPEG path at 960x1280;
-- opening/front-matter `2/314` through `7/314` remain D;
-- `2/314`: a 1448x2048 JPEG exactly matches a bitmap, but visible selected native draw
-  and retained source-canvas geometry do not yet prove visible-output attribution;
-- `3/314`: a 2048x1456 bitmap has one exact JPEG candidate, but crop/padding/coded
-  mapping and source-native output proof remain incomplete;
-- no confirmed C case exists yet; PNG fallback is safe but is not evidence that the
-  network source itself is PNG.
+- cover A / original JPEG;
+- ordinary text pages use the existing proven reconstructed-JPEG path;
+- opening `2/314` through `7/314` remain D;
+- `2/314`: a 1448x2048 JPEG exactly matched a bitmap, but exact visible-output
+  attribution was incomplete;
+- `3/314`: a 2048x1456 bitmap had one exact JPEG candidate, but
+  crop/padding/coded-mapping/output proof was incomplete.
 
-## 3. Objective
+## 3. Goal
 
-Resolve the unresolved D cases far enough to make a justified decision.
+Get to an operationally useful classification with the least additional work.
 
-For each investigated pattern, end in exactly one of:
+For each investigated pattern:
 
-- **A — already source-native**
-- **B — recoverable source-native**
-- **C — source-native PNG / current PNG correct**
-- **D — ambiguous/unsupported and intentionally fail-closed**
+- A — already source-native;
+- B — recoverable source-native;
+- C — source-native PNG/current PNG correct;
+- D — ambiguous/unsupported and intentionally fail-closed.
 
-Implementation is optional.
+Stage 02 may finish with zero production changes.
 
-A successful Stage 02 may conclude with no production code change if no B case can be
-proven safely.
+The goal is not complete viewer reverse engineering.
 
-## 4. Multi-agent roles
-
-Use the existing BookWalker roles.
+## 4. Active roles
 
 ### Lead — GPT-6.1 Sol
 
-The Lead owns phase decisions, evidence sufficiency, and browser-lease coordination.
+Lead decides:
 
-The Lead must:
+- the next bounded question;
+- whether existing evidence is enough;
+- when a D case is no longer worth deeper investigation;
+- whether a B recovery contract is sufficiently proven;
+- whether Reviewer or Critic should be invoked.
 
-- start with the pending Critic gate;
-- convert Critic challenges into bounded probe questions;
-- prevent implementation until a B case has exact enough provenance;
-- keep probes narrow and hypothesis-driven;
-- decide whether the optional second manga is necessary;
-- require Reviewer after every material Worker result;
-- require final Critic sign-off.
+### Worker — GPT-5.6 Luna
 
-### Worker — `bookwalker_worker`, GPT-5.6 Luna
-
-The Worker performs:
+Worker performs:
 
 - bounded live probes;
-- diagnostic instrumentation;
-- any minimal implementation;
-- tests;
-- live verification;
-- note synchronization.
+- minimal diagnostics;
+- implementation if approved by Lead;
+- tests/live verification;
+- note/checkpoint synchronization.
 
-The Worker is the only production writer and the only live-viewer operator.
+Worker is the only live-viewer operator and only production writer.
 
-### Reviewer — `bookwalker_reviewer`, GPT-6.1 Sol, read-only
+### Reviewer
 
-Reviewer checks:
+Do **not** invoke Reviewer for normal research probes.
 
-- probe evidence quality;
-- implementation correctness;
-- regressions;
-- fail-closed boundaries;
-- tests;
-- note accuracy.
+Invoke Reviewer only when:
 
-Any `BLOCKING` finding stops phase advancement.
+- production code is changed;
+- a diagnostic helper is being promoted into a durable test/production contract;
+- Lead explicitly asks for one consequential conclusion review.
 
-### Critic — `bookwalker_critic`, GPT-6.1 Sol, read-only
+Production code may not be merged without Reviewer approval.
 
-Critic challenges provenance and generalization.
+### Critic
 
-Use Critic:
+Do **not** invoke Critic at stage entry or stage completion by default.
 
-1. immediately at Stage 02 entry;
-2. after a B classification is proposed but before production implementation;
-3. at final sign-off.
+Invoke only if Lead proposes:
 
-A material `CHALLENGE` is blocking.
+- weakening proof/fail-closed gates;
+- heuristic attribution;
+- generalizing beyond observed exact provenance;
+- large/shared abstraction;
+- another change with material silent-wrong-artifact risk.
 
-## 5. Browser-position protocol
+## 5. Resume policy after the previous checkpoint
 
-Persisted reader position remains a first-class hazard.
+The previous `agent thread limit reached` problem no longer blocks research under this
+runbook.
 
-For every independent live probe:
+Do not begin by restoring Reviewer or Critic.
 
-1. attach/open via the shared Crawler Chrome/CDP path;
-2. read the actual visible page counter/state;
-3. compare with the intended anchor;
-4. explicitly rewind/reposition if different;
-5. verify the resulting page counter/state;
-6. collect only the bounded evidence window;
-7. record observed start and end positions;
-8. restore the intended anchor before ending the probe when practical.
+Do not mechanically finish OBJECT-A/B/C.
 
-Never infer current position from the previous probe.
+Instead:
 
-Do not let Reviewer or Critic operate the live viewer.
+1. Lead reads R5 and Stage 01 evidence.
+2. Lead chooses the smallest direct unanswered question.
+3. Worker performs one bounded probe.
+4. Lead decides whether that materially changes A/B/C/D.
+5. Repeat only while another bounded answer could change the operational decision.
 
-## 6. Phase A — Independent Critic gate
+Unreviewed OBJECT-A output may not be used as production/source-format authority.
+If not needed, leave it unused.
 
-Before new implementation, give Critic the Stage 01 evidence and current production
-capture logic.
+## 6. Manga research
 
-Critic must answer:
+Start with at most two representative ordinary-body spreads unless evidence requires
+more.
 
-1. What is the strongest alternative explanation for manga ordinary-body PNG fallback?
-2. What exact missing evidence prevents those manga pages from B or C?
-3. For LN `2/314` and `3/314`, what exact provenance step is missing between the
-   matched JPEG/bitmap and the visible page?
-4. Which currently recorded facts are merely correlated rather than authoritative?
-5. What is the smallest probe that could falsify each proposed recovery hypothesis?
-6. Is any current note wording stronger than the evidence?
-7. Is a second manga title useful now, or only after the first manga renderer path is
-   understood?
+For each, answer only the minimum useful questions:
 
-Lead converts the answer into bounded Worker tasks.
+- What exact selected renderer/native source is used?
+- Can the visible page be tied one-to-one to an upstream encoded source?
+- Is there a real rotation/crop/scale/padding/composition step?
+- Is a full-resolution JPEG or PNG candidate actually attributable?
+- What single fact prevents B or C?
 
-Do not skip directly to implementation.
+Possible exits:
 
-## 7. Phase B — Manga ordinary-body deep probe
+### A
 
-Investigate only enough representative ordinary-body pages to explain the rendering path.
+Existing path already preserves source-native output.
 
-Recommended first sample:
+### B
 
-- one early ordinary spread near the start of the observed D range;
-- one later ordinary spread from the same stable-looking range.
+A specific exact recovery contract exists.
 
-Do not probe all seven D spreads unless evidence requires it.
+Before implementation, Lead checks whether any Critic risk trigger applies.
 
-For each selected spread, identify:
+### C
 
-- selected renderer/native draw;
-- selected source constructor and identity;
-- source and destination dimensions;
-- sourceRect / destination;
-- transform matrix;
-- alpha/composite/filter;
-- canvas identities;
-- operation ordering;
-- upstream ImageBitmap identities;
-- response candidates with MIME, dimensions, and hashes;
-- whether any candidate can be matched exactly to the upstream bitmap;
-- whether the visible page is a crop, rotation, scale, padded canvas, composed canvas,
-  or another bounded pattern;
-- whether the same pattern is present on both representative spreads.
+Authoritative source-native PNG is proven. Current PNG remains correct.
 
-The probe must be able to distinguish:
+### D
 
-- source JPEG recoverable through a new proven transform;
-- source PNG already correct;
-- renderer-owned canvas with no recoverable direct source artifact;
-- unsupported/ambiguous chain.
+Exact encoded-source attribution is not available or recovery remains unsafe.
+Document the missing fact and stop unless a concrete next probe could change the
+decision.
 
-### Manga exit rule
+Do not probe all unresolved spreads merely to increase confidence.
 
-After the bounded probe, classify the ordinary-body pattern.
-
-If B is proposed, run Critic before implementation.
-
-If C is proposed, require evidence of authoritative PNG source-native representation;
-"current output is PNG" is insufficient.
-
-If D remains, document the exact missing proof and stop broadening the implementation.
-
-## 8. Phase C — Light-novel opening provenance probe
+## 7. Light-novel research
 
 Focus first on `2/314` and `3/314`.
 
-The objective is not to "make them JPEG"; it is to prove or disprove that the exact
-matched JPEG source can be mapped to the visible output without unsupported inference.
+For each, determine whether the exact JPEG/bitmap can be tied to visible output through
+an explicit traced lineage:
 
-For each target page, capture enough bounded trace data to answer:
+- selected draw/source identity;
+- upstream canvas/bitmap identity;
+- sourceRect/destinationRect;
+- transform/rotation;
+- crop/padding;
+- scale/composition;
+- whether all candidate pixels correspond to the visible page;
+- whether exactly one candidate remains.
 
-- exact selected renderer draw and source identity;
-- exact upstream canvas/bitmap lineage;
-- whether width/height swaps imply a real rotation and, if so, the exact transform;
-- sourceRect and destinationRect;
-- any padding, crop, clear, intermediate canvas, or scaling operation;
-- whether all pixels in the candidate participate in the visible page;
-- whether any pixels are added/removed/reordered;
-- whether reconstruction can preserve source-native dimensions and semantics;
-- whether one exact response candidate remains after attribution;
-- whether the rule also rejects a near-miss page or geometry.
+A width/height swap is not itself proof of rotation.
 
-Do not treat a 90-degree-looking dimension swap as proof of rotation without the traced
-operation/transform that establishes it.
+If the exact lineage cannot be proven with a bounded probe, D is an acceptable final
+classification.
 
-### LN exit rule
+## 8. Optional manga 2
 
-Each opening pattern must end as A/B/C/D with explicit evidence.
+Use manga 2 only when manga 1 has produced a concrete pattern whose generalization needs
+cross-title confirmation.
 
-A B classification requires a precise recovery contract that can be expressed without:
+Do not use it for sample-size inflation.
 
-- nearest candidate selection;
-- dimension-ratio guessing;
-- filename/path heuristics;
-- request-order/timing heuristics;
-- visual-similarity heuristics.
+## 9. Production implementation
 
-## 9. Phase D — Optional second manga
+Only B cases are candidates.
 
-Use the second manga only if one of these is true:
+Implement the smallest renderer/provenance cause, not content labels such as:
 
-- a B pattern from manga 1 appears safe but needs cross-title confirmation before
-  production generalization;
-- manga 1 exposes multiple possible renderer patterns and a second title can distinguish
-  which is normal;
-- Reviewer/Critic identifies a concrete generalization risk that manga 2 can answer.
+- manga;
+- front matter;
+- first N pages.
 
-Do not use manga 2 merely to increase sample size.
+Preserve:
 
-If used, inspect only the pages needed to answer that question.
+- original-JPEG priority;
+- existing proven reconstruction;
+- fail-closed fallback;
+- all-or-none spread behavior where applicable.
 
-## 10. Phase E — Minimal implementation
+If the implementation is exact and does not trigger Critic risk conditions, Critic is
+not required.
 
-Only confirmed B cases are implementation candidates.
+After implementation:
 
-Implement by renderer/provenance cause, not by content label.
+1. Worker runs targeted tests and bounded live verification.
+2. Reviewer reviews the production diff and evidence.
+3. Worker fixes all `BLOCKING`.
+4. Reviewer confirms no `BLOCKING`.
 
-Good scopes:
+## 10. Tests
 
-- one exact transform lineage;
-- one exact rotation/crop/padding chain;
-- one exact upstream source attribution rule.
+Research diagnostics only need enough checking to trust the immediate probe.
 
-Bad scopes:
+Do not create a large synthetic test matrix unless it is needed for a production
+contract.
 
-- "manga mode";
-- "light-novel front matter";
-- "first 7 pages";
-- "2x-ish candidate";
-- "portrait/landscape mismatch";
-- "closest request".
+For production recovery logic, test:
 
-For every production change:
+- positive proven path;
+- ambiguous/wrong identity path;
+- wrong geometry/transform;
+- near miss;
+- fallback;
+- existing original JPEG;
+- existing reconstructed JPEG.
 
-- keep original-JPEG priority unchanged;
-- keep existing proven reconstructed-JPEG paths unchanged unless necessary;
-- preserve fail-closed behavior;
-- keep spread all-or-none semantics where applicable;
-- avoid shared/Core abstraction unless more than one proven BookWalker pattern genuinely
-  needs it;
-- update `note/01_bookwalker.md` in the same change.
+Use browser-backed Integration when the proof depends on Canvas/ImageBitmap behavior.
 
-## 11. Tests
+## 11. Live verification
 
-Follow `docs/TEST_STRATEGY.md`.
-
-For each new proof path, include:
-
-- positive proven case;
-- ambiguous candidate case;
-- wrong identity case;
-- wrong geometry/transform case;
-- unsafe operation case where relevant;
-- near-miss dimensions;
-- fallback preservation;
-- existing original-JPEG path regression;
-- existing ordinary reconstructed-JPEG regression.
-
-Use browser-backed Integration where the proof depends on actual Canvas/ImageBitmap
-behavior.
-
-Do not add copyrighted BookWalker page bodies as fixtures.
-
-Run Ruff when practical.
-
-Full pytest is required only if the change becomes shared, large, or impact scope is
-uncertain.
-
-## 12. Live verification
-
-After implementation, perform bounded live verification.
-
-At minimum:
+If production changes are made, verify a bounded set covering:
 
 ### Manga
 
-- cover;
-- one opening/special page if affected;
-- at least two ordinary body spreads using the changed or intentionally unchanged path.
+- cover or known A control;
+- at least two ordinary body spreads relevant to the changed path.
 
 ### Light novel
 
-- cover;
-- `2/314` and/or `3/314` if changed;
-- one additional opening D/fallback page if left unsupported;
-- at least two ordinary text pages using the existing reconstructed-JPEG path.
+- cover or known A control;
+- changed opening page(s);
+- one unsupported/fallback opening page if relevant;
+- at least two ordinary text controls.
 
-For any new recovery path, use the strongest available bounded diagnostic comparison.
+Always check and restore actual viewer position.
 
-Pixel equality may support the evidence but does not replace provenance.
+If no production changes are made, additional regression live runs are optional unless
+Lead needs them to support the final classification.
 
-Always verify/restore page position around each independent probe.
+## 12. Completion
 
-## 13. Reviewer final gate
+### No production change
 
-Reviewer must confirm:
+Stage 02 may complete when Lead has documented:
 
-- every production change corresponds to a confirmed B case;
-- no C/A case was needlessly rewritten;
-- D remains fail-closed;
-- no heuristic candidate selection was introduced;
-- manga and LN existing A paths still work;
-- ordinary LN reconstructed-JPEG behavior still works;
-- tests cover positive and rejection boundaries;
-- live verification targeted the intended actual pages;
-- note wording does not overclaim.
+- manga conclusion A/B/C/D;
+- LN `2/314` and `3/314` conclusions;
+- exact missing evidence for remaining D;
+- why further research is not worth its cost;
+- whether manga 2 was unnecessary.
 
-No `BLOCKING` finding may remain.
+Reviewer and Critic are not mandatory.
 
-## 14. Critic final gate
+### Production change
 
-Critic independently challenges the final result.
+Stage 02 completes when:
 
-Required questions:
+- B recovery contract is explicit;
+- relevant tests/live verification pass;
+- note is synchronized;
+- Reviewer has no `BLOCKING`;
+- Critic has no unresolved challenge **only if Critic was triggered by a material risk
+  condition**.
 
-1. Can any new rule return the wrong response for another page?
-2. Is any rule broader than the observed renderer/provenance evidence?
-3. Did any PNG fallback get "improved" merely because JPEG existed nearby?
-4. Could a source PNG be incorrectly reinterpreted as JPEG?
-5. Are visible-page semantics preserved, including rotation/crop/padding?
-6. Are unsupported cases still clearly D rather than silently accepted?
-7. Was the optional second manga used only for a concrete generalization question?
-8. Are the final note claims exactly supported by evidence?
-
-Any material `CHALLENGE` returns to Lead/Worker.
-
-## 15. Completion criteria
-
-Stage 02 is complete when:
-
-1. the pending Critic gate has been performed;
-2. manga ordinary-body D behavior is explained enough to classify it A/B/C/D;
-3. LN `2/314` and `3/314` are individually classified A/B/C/D with the missing or
-   proven provenance stated explicitly;
-4. any confirmed B case is either implemented safely or intentionally deferred with a
-   documented reason;
-5. A/C cases are not changed unnecessarily;
-6. D cases remain fail-closed;
-7. required tests pass;
-8. bounded live verification passes for changed and regression paths;
-9. viewer-position handling is recorded;
-10. `note/01_bookwalker.md` is synchronized;
-11. Reviewer has no `BLOCKING`;
-12. Critic has no material `CHALLENGE`.
-
-It is valid for Stage 02 to finish with **zero production changes** if evidence does not
-justify a B implementation.
-
-## 16. Final Lead report
+## 13. Final report
 
 Report:
 
-- Critic entry findings;
-- probes actually run and why;
-- manga A/B/C/D conclusion;
-- LN opening A/B/C/D conclusion;
-- whether manga 2 was used and why;
-- implemented changes, if any;
-- unchanged cases and why they were already correct or intentionally fail-closed;
-- tests and results;
-- live verification;
-- viewer-position restoration evidence;
-- Reviewer findings/resolution;
-- Critic final findings/resolution;
+- probes actually run;
+- manga conclusion;
+- LN opening conclusion;
+- manga 2 usage and reason;
+- implementation, if any;
+- tests/live verification, if any;
 - remaining D cases;
-- recommended next runbook, if any.
+- Reviewer/Critic usage and why;
+- recommended next stage, if any.
