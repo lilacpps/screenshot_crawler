@@ -103,7 +103,8 @@ shared profileでBookWalker/MANGA ONEのlogin・crawl・session共存と既存vi
 
 ユーザーが既存BookWalker adapterのsource-native capture / JPEG・PNG判定 / viewer provenanceについて
 multi-agent / 自律調査・実装を依頼した場合は、
-`docs/BOOKWALKER_SOURCE_NATIVE_CAPTURE_RUNBOOK.md` に従う。
+`docs/BOOKWALKER_SOURCE_NATIVE_CAPTURE_RUNBOOK.md` を基礎runbookとして使用し、個別stageは
+`runbooks/bookwalker-source-native/README.md` の順序に従う。
 
 基本役割:
 
