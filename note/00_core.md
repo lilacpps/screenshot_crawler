@@ -1453,6 +1453,35 @@ The following historical summary predates Z4-1; the current production
 bounded adapters include both Jump+ and Zeblack. Site Policy and Batch
 changes remain outside the Zeblack Discovery phase.
 
+### Archive health check and recrawl preparation (implemented)
+
+`scripts/prepare_recrawl.py` inspects only `completed` Catalog Items in an
+exact `--site` and/or Work title scope. It does not run Discovery or modify
+sources, source targets, crawl runs, or ZIP contents. The current site policy
+mapping is intentionally limited to the confirmed production capture paths:
+Comic DAYS and Magapoke prefer JPEG (`.jpg`/`.jpeg`) with PNG fallback, while
+MANGA ONE prefers source-native WebP with PNG fallback. An explicitly unknown
+site fails closed; work-only scans skip sources whose policy is undefined.
+
+ZIP page members are inspected at archive root with case-insensitive
+extensions. `PREFERRED_ONLY`, `FALLBACK_INCLUDED`, `UNEXPECTED_FORMAT`,
+`BROKEN`, `MISSING`, and `AMBIGUOUS_ARTIFACT` are reported using site-neutral
+classifications. Default output lists only problems; `--show-all` also lists
+preferred items. `--ignore-missing` keeps MISSING in the classification
+summary but excludes it from problems, recrawl candidates, and apply changes;
+with `--show-all` it is printed as `MISSING (ignored)`.
+
+The default is dry-run. With `--apply`, fallback/unexpected/broken archives
+are moved to `output/reimport-backup/<timestamp>/` while preserving their
+relative path under `output/Books` where possible, then their Catalog locator
+is updated and the Item is returned to `pending`. Missing artifacts retain
+their locator, are marked `missing`, and then return to `pending`. Ambiguous
+artifacts and ignored missing artifacts are never mutated. Move, artifact, and
+pending failures are reported as partial failures without a rollback
+framework. Synthetic ZIP coverage is in
+`tests/unit/test_prepare_recrawl.py`; no real Catalog `--apply` run is part of
+the implementation verification.
+
 B1/B2/B3/B4/B5/B6ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、BookWalker、Magapoke、Manga ONE以外ではJump+だけproduction bounded Discoveryを実装している。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 
 将来cross-site dedupeが必要になった場合はphysical Item mergeより先にhuman approval付きnon-destructive equivalence mappingを検討する。physical mergeは現計画の対象外である。
