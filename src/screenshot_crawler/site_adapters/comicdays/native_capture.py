@@ -409,6 +409,7 @@ def reconstruct_jpeg(source_bytes: bytes, plan: dict[str, Any]) -> CaptureResult
             return None
         source_rectangles: list[tuple[int, int, int, int]] = []
         destination_rectangles: list[tuple[int, int, int, int]] = []
+        tile_geometry: tuple[int, int, int] | None = None
         for draw in tiles:
             args = draw["args"]
             if not isinstance(args, list) or len(args) != 8 or any(
@@ -416,16 +417,25 @@ def reconstruct_jpeg(source_bytes: bytes, plan: dict[str, Any]) -> CaptureResult
             ):
                 return None
             sx, sy, sw, sh, dx, dy, dw, dh = args
-            if (sw, sh, dw, dh) != (280, 400, 280, 400):
+            if (sw, sh, dw, dh) == (280, 400, 280, 400):
+                tile_geometry = tile_geometry or (280, 400, 1120)
+            elif (sw, sh, dw, dh) == (176, 256, 176, 256) and (width, height) == (720, 1024):
+                tile_geometry = tile_geometry or (176, 256, 704)
+            else:
+                return None
+            if tile_geometry not in {(280, 400, 1120), (176, 256, 704)}:
                 return None
             if min(sx, sy, dx, dy) < 0 or sx + sw > width or sy + sh > height or dx + dw > width or dy + dh > height:
                 return None
             source_rectangles.append((sx, sy, sw, sh))
             destination_rectangles.append((dx, dy, dw, dh))
+        if tile_geometry is None:
+            return None
+        tile_width, tile_height, tiled_width = tile_geometry
         expected_rectangles = {
-            (x, y, 280, 400)
-            for y in range(0, 1600, 400)
-            for x in range(0, 1120, 280)
+            (x, y, tile_width, tile_height)
+            for y in range(0, height, tile_height)
+            for x in range(0, tiled_width, tile_width)
         }
         if set(source_rectangles) != expected_rectangles or set(destination_rectangles) != expected_rectangles:
             return None
@@ -441,6 +451,8 @@ def reconstruct_jpeg(source_bytes: bytes, plan: dict[str, Any]) -> CaptureResult
         return None
     components = sof["components"]
     if len(components) not in {1, 3} or any((item["h"], item["v"]) != (1, 1) for item in components):
+        return None
+    if (width, height, tile_geometry) == (720, 1024, (176, 256, 704)) and len(components) != 1:
         return None
     try:
         import numpy as np
@@ -471,7 +483,7 @@ def reconstruct_jpeg(source_bytes: bytes, plan: dict[str, Any]) -> CaptureResult
         for draw in tiles:
             args = draw["args"]
             sx, sy, sw, sh, dx, dy, dw, dh = args
-            if any(value % 8 for value in args) or (sw, sh) != (280, 400):
+            if any(value % 8 for value in args) or (sw, sh) != (tile_width, tile_height):
                 return None
             bx, by, dbx, dby = sx // 8, sy // 8, dx // 8, dy // 8
             bw, bh = sw // 8, sh // 8

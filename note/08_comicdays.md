@@ -71,6 +71,19 @@ are never mixed within one spread. The bounded source report is
 `output/comicdays_phase3a_report/report.json`; current live reports record
 capture mode and exact manifest/ZIP audits.
 
+The same lossless path now has one explicit additional geometry whitelist for
+the observed 720x1024 grayscale variant: sixteen 176x256 tiles cover
+704x1024, preserving the two untouched right-edge coefficient columns. This
+variant must be baseline 8-bit, one-component 1x1 sampling; color, subsampled,
+progressive, malformed, incomplete, or non-8px-aligned inputs still fall back
+to reconstructed PNG. The bounded 2026-10-06 proof used areas 1, 2, 16, and
+17 with coefficient readback, metadata/SOF/quantization/sampling/colorspace/
+progressive checks, and exact decoded JPEG/PNG pixel equality. The compact
+metadata report is `docs/research/comicdays_png_fallback_20261006.md`.
+The post-change bounded crawl of the requested 22-page episode reached `END`
+with 22 native JPEG pages, including atomic two-part spreads; the same crawl
+had 22 reconstructed PNG pages before this whitelist and no locator fallback.
+
 The free 32-page regression has indexed back-link/ad wrappers at areas 33/34
 and a visible colophon at area 35 while the slider reports 35/36. The adapter
 accepts that observed colophon as terminal; it does not issue another forward
