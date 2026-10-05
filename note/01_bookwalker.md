@@ -86,9 +86,11 @@ BookWalker browser-backed integration tests (45 passed) passed. Ruff
 (`.venv\\Scripts\\ruff.exe check src tests`) passed. No new fixture, production
 implementation, or live-site rerun is included in this publishing synchronization.
 Those test counts are the Stage 01 checkpoint, not fresh Stage 02 verification.
-The Stage 02 entry Critic gate has since been performed; visible-output
-attribution remains challenged, and final Reviewer/Critic approval is pending.
-These observations do not constitute final implementation approval.
+The earlier Stage 02 workflow did run an entry Critic gate; visible-output
+attribution remained challenged. The workflow has since been simplified:
+ordinary research is Lead + Worker only, Reviewer is change-driven, and Critic
+is risk-driven. No production implementation has been approved from these
+observations.
 
 ## 1.2 Stage 02 current research status (2026-10-06, incomplete)
 
@@ -100,16 +102,18 @@ JPEG reconstruction proof. Its cover capture used rendered fallback and is
 not a fresh original-JPEG regression pass. No new light-novel live probe has
 completed in Stage 02.
 
-Diagnostic ticket/producer controls are still awaiting the required Reviewer
-gate. Worker-reported synthetic checks are not source-format evidence or gate
-approval. Reviewer restoration failed twice with `agent thread limit reached`;
-running existing agents sequentially did not resolve the session capacity
-blocker. Further producer-capability development is frozen pending supported
-capacity recovery and a narrow evidence-sufficiency decision.
+Earlier diagnostic ticket/producer controls remain unreviewed and are not
+source-format or production authority. Under the revised workflow there is no
+requirement to finish that diagnostic framework or restore Reviewer before
+continuing research. The prior `agent thread limit reached` problem is therefore
+not a Stage 02 research blocker. Lead may retire the unreviewed diagnostic path
+and continue with simpler bounded manga/LN probes.
 
 The committed [Stage 02 checkpoint](../runbooks/bookwalker-source-native/02-provenance-resolution/CHECKPOINT.md)
-records accepted observations, unreviewed local artifact hashes, and remaining
-work. It is a partial research handoff, not completion or implementation approval.
+records accepted observations, local artifact identities, and the revised
+resume policy. Production remains unchanged; Reviewer becomes mandatory only
+if production code is changed, and Critic is used only for material design-risk
+conditions.
 
 ## 2. Entry flow
 
