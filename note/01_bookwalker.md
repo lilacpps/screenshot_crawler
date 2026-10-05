@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-10-05
+最終同期: 2026-10-06
 
 ## 1. 目的と現在のscope
 
@@ -81,12 +81,35 @@ from source-format evidence. Mapping IDs and renderer operation identities are
 window-local diagnostic facts; no global association is inferred from timing,
 dimensions, path, order, or visual similarity. No second manga was used.
 
-Targeted capture unit tests (153 passed) and BookWalker browser-backed
-integration tests (45 passed) pass on this unchanged production code. Ruff
-(`.venv\\Scripts\\ruff.exe check src tests`) passes. No new fixture, production
-implementation, or live-site rerun was made in this note-only synchronization.
-The mandatory independent Critic gate remains pending; these observations do
-not constitute final implementation approval.
+At the Stage 01 checkpoint, targeted capture unit tests (153 passed) and
+BookWalker browser-backed integration tests (45 passed) passed. Ruff
+(`.venv\\Scripts\\ruff.exe check src tests`) passed. No new fixture, production
+implementation, or live-site rerun is included in this publishing synchronization.
+Those test counts are the Stage 01 checkpoint, not fresh Stage 02 verification.
+The Stage 02 entry Critic gate has since been performed; visible-output
+attribution remains challenged, and final Reviewer/Critic approval is pending.
+These observations do not constitute final implementation approval.
+
+## 1.2 Stage 02 current research status (2026-10-06, incomplete)
+
+Production capture code and its source-native priority remain unchanged.
+No new B/C classification or recovery rule has been approved. The latest bounded
+manga probe (R5) verified the normal native-canvas lineage at `9/159`, but did
+not establish exact encoded-source attribution, complete pixel coverage, or
+JPEG reconstruction proof. Its cover capture used rendered fallback and is
+not a fresh original-JPEG regression pass. No new light-novel live probe has
+completed in Stage 02.
+
+Diagnostic ticket/producer controls are still awaiting the required Reviewer
+gate. Worker-reported synthetic checks are not source-format evidence or gate
+approval. Reviewer restoration failed twice with `agent thread limit reached`;
+running existing agents sequentially did not resolve the session capacity
+blocker. Further producer-capability development is frozen pending supported
+capacity recovery and a narrow evidence-sufficiency decision.
+
+The committed [Stage 02 checkpoint](../runbooks/bookwalker-source-native/02-provenance-resolution/CHECKPOINT.md)
+records accepted observations, unreviewed local artifact hashes, and remaining
+work. It is a partial research handoff, not completion or implementation approval.
 
 ## 2. Entry flow
 
