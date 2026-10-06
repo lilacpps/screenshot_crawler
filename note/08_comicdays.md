@@ -129,6 +129,18 @@ pre-click value and current observation time. Grant-only does not require
 body/capture readiness. Normal quota continues on the same Page into the
 existing initialize, viewer normalization, and capture guards; if those
 guards fail closed, the recorded consumption is retained.
+
+For the 2026-10-06 race investigation, `ComicDaysAdapter` keeps a bounded
+metadata-only `ticket_trace` (160 events) and clears it in `configure_run()`.
+It records navigation/entry timing, ticket GraphQL status and elapsed time,
+sanitized DOM viewer/control state, the pre-click decision, click return/error,
+state-changing plus final post-click polls, and confirmed/unconfirmed entry
+outcomes. It never stores GraphQL bodies, cookies, authorization values, HTML,
+or image bytes. Failure diagnostics expose this trace through the existing
+`adapter_debug` metadata. Generic successful grant-only execution writes the
+same adapter metadata to `diagnostics/entry_trace.json` with candidate identity
+and resource fields; no access or capture semantics are changed by this
+instrumentation.
 Discovery and Policy never click or consume an access control. A
 candidate-local Catalog/live identity mismatch skips only that candidate with
 `comicdays_discovery_refresh_required`; no alternate candidate or paid fallback

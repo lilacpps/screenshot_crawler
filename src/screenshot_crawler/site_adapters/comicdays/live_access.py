@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -28,6 +30,7 @@ from screenshot_crawler.site_adapters.comicdays.discovery import (
 
 COMICDAYS_LIVE_ACCESS_TIMEOUT_MS = 15_000
 MAX_GRAPHQL_BODY = 100_000
+TraceSink = Callable[[str, dict[str, object]], None]
 TICKET_QUERY = """
 query Viewer_SeriesTicketQuery($id: String!) {
   userAccount { eventTicketCount }
@@ -50,6 +53,8 @@ class ComicDaysTicketState:
     is_charged: bool
     charged_at: datetime | None
     event_ticket_count: int | None = None
+    graphql_status: int | None = None
+    graphql_elapsed_ms: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +75,97 @@ class ComicDaysLiveAccessState:
     normal_viewer_visible: bool = False
     normal_viewer_json: str | None = None
     ticket_control_count: int = 0
+    dom_snapshot: dict[str, object] | None = None
+
+
+def _safe_diagnostic_url(value: object) -> str:
+    """Keep only a credential-free, query-free URL shape for diagnostics."""
+
+    raw = str(value or "")
+    try:
+        parts = urlsplit(raw)
+        host = parts.hostname or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        try:
+            port = parts.port
+        except ValueError:
+            port = None
+        netloc = host + (f":{port}" if port is not None else "")
+        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))[:500]
+    except (TypeError, ValueError):
+        return raw.split("?", 1)[0].split("#", 1)[0][:500]
+
+
+def _emit_trace(
+    trace_sink: TraceSink | None,
+    phase: str,
+    fields: dict[str, object],
+) -> None:
+    if trace_sink is None:
+        return
+    try:
+        trace_sink(phase, fields)
+    except Exception:  # noqa: BLE001 - diagnostics must never change access behavior
+        return
+
+
+def _dom_trace_metadata(
+    dom: dict[str, object], *, expected_episode_id: str
+) -> dict[str, object]:
+    """Reduce the live DOM snapshot to bounded, body-free metadata."""
+
+    private_rows = dom.get("private")
+    normal_rows = dom.get("normal")
+    aggregate_rows = dom.get("aggregate")
+    contract_rows = dom.get("contract")
+    ticket_rows = dom.get("ticket")
+    purchase_rows = dom.get("purchase")
+    private = private_rows if isinstance(private_rows, list) else []
+    normal = normal_rows if isinstance(normal_rows, list) else []
+    aggregates = aggregate_rows if isinstance(aggregate_rows, list) else []
+    contracts = contract_rows if isinstance(contract_rows, list) else []
+    tickets = ticket_rows if isinstance(ticket_rows, list) else []
+    purchases = purchase_rows if isinstance(purchase_rows, list) else []
+    expected_json = f"https://comic-days.com/episode/{expected_episode_id}.json"
+
+    def ids(rows: list[object]) -> list[str]:
+        values: list[str] = []
+        for row in rows[:32]:
+            if isinstance(row, dict) and row.get("aggregate_id") is not None:
+                values.append(str(row["aggregate_id"]))
+        return values
+
+    ticket = tickets[0] if len(tickets) == 1 and isinstance(tickets[0], dict) else {}
+    contract = contracts[0] if len(contracts) == 1 and isinstance(contracts[0], dict) else {}
+    rental_term = contract.get("rental_term")
+    rental_term_value = (
+        int(rental_term) if isinstance(rental_term, str) and rental_term.isdigit() else None
+    )
+    return {
+        "url": _safe_diagnostic_url(dom.get("url")),
+        "private_viewer_count": len(private),
+        "normal_viewer_count": len(normal),
+        "normal_viewer_visible": bool(normal[0].get("visible"))
+        if len(normal) == 1 and isinstance(normal[0], dict)
+        else False,
+        "private_json_matches_expected": len(private) == 1
+        and isinstance(private[0], dict)
+        and private[0].get("json") == expected_json,
+        "normal_json_matches_expected": len(normal) == 1
+        and isinstance(normal[0], dict)
+        and normal[0].get("json") == expected_json,
+        "aggregate_count": len(aggregates),
+        "aggregate_ids": ids(aggregates),
+        "contract_count": len(contracts),
+        "contract_aggregate_ids": ids(contracts),
+        "rental_term": rental_term_value,
+        "ticket_control_count": len(tickets),
+        "ticket_visible": ticket.get("visible") if ticket else None,
+        "ticket_enabled": ticket.get("enabled") if ticket else None,
+        "ticket_label": str(ticket.get("label", ""))[:200] if ticket else None,
+        "purchase_control_count": len(purchases),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +183,7 @@ async def observe_comicdays_ticket(
     series_id: str,
     *,
     timeout_ms: int = COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
+    trace_sink: TraceSink | None = None,
 ) -> ComicDaysTicketState:
     if not str(series_id).isdigit():
         raise ComicDaysLiveAccessError("Comic DAYS series identity is not numeric")
@@ -94,56 +191,84 @@ async def observe_comicdays_ticket(
         raise ValueError("timeout_ms must be a positive integer")
     query_timeout = min(timeout_ms, 15_000)
     deadline = asyncio.get_running_loop().time() + query_timeout / 1000
-    try:
-        remaining = _remaining_ms(deadline)
-        if remaining <= 0:
-            raise ComicDaysLiveAccessError("Comic DAYS ticket query timed out")
-        response = await page.request.post(
-            "https://comic-days.com/graphql?opname=Viewer_SeriesTicketQuery",
-            data={"query": TICKET_QUERY, "variables": {"id": str(series_id)}},
-            headers={"Content-Type": "application/json"},
-            timeout=remaining,
-            fail_on_status_code=False,
-        )
-        if response.status != 200:
-            raise ComicDaysLiveAccessError("Comic DAYS ticket query returned a non-200 status")
-        remaining = _remaining_ms(deadline)
-        if remaining <= 0:
-            raise ComicDaysLiveAccessError("Comic DAYS ticket query timed out")
-        body = await asyncio.wait_for(response.body(), timeout=remaining / 1000)
-    except (PlaywrightTimeoutError, TimeoutError) as exc:
-        raise ComicDaysLiveAccessError("Comic DAYS ticket query timed out") from exc
-    if len(body) > MAX_GRAPHQL_BODY:
-        raise ComicDaysLiveAccessError("Comic DAYS ticket query exceeded the body limit")
-    try:
-        payload = json.loads(body.decode("utf-8"))
-        data = payload["data"]
-        series = data["series"]
-        ticket = series["ticket"]
-        account = data["userAccount"]
-    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise ComicDaysLiveAccessError("Comic DAYS ticket query had an invalid shape") from exc
-    if not isinstance(ticket, dict) or not isinstance(account, dict):
-        raise ComicDaysLiveAccessError("Comic DAYS ticket query omitted ticket state")
-    is_charged = ticket.get("isCharged")
-    if not isinstance(is_charged, bool):
-        raise ComicDaysLiveAccessError("Comic DAYS ticket readiness was malformed")
+    query_started = time.monotonic()
+    graphql_status: int | None = None
+    is_charged: bool | None = None
     charged_at: datetime | None = None
-    raw_charged_at = ticket.get("chargedAt")
-    if raw_charged_at is not None:
-        if not isinstance(raw_charged_at, str):
-            raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was malformed")
+    count: int | None = None
+    try:
         try:
-            charged_at = datetime.fromisoformat(raw_charged_at)
-        except ValueError as exc:
-            raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was invalid") from exc
-        if charged_at.tzinfo is None or charged_at.utcoffset() is None:
-            raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was timezone-naive")
-        charged_at = charged_at.astimezone(UTC)
-    count = account.get("eventTicketCount")
-    if count is not None and (isinstance(count, bool) or not isinstance(count, int) or count < 0):
-        raise ComicDaysLiveAccessError("Comic DAYS event ticket count was malformed")
-    return ComicDaysTicketState(str(series_id), is_charged, charged_at, count)
+            remaining = _remaining_ms(deadline)
+            if remaining <= 0:
+                raise ComicDaysLiveAccessError("Comic DAYS ticket query timed out")
+            response = await page.request.post(
+                "https://comic-days.com/graphql?opname=Viewer_SeriesTicketQuery",
+                data={"query": TICKET_QUERY, "variables": {"id": str(series_id)}},
+                headers={"Content-Type": "application/json"},
+                timeout=remaining,
+                fail_on_status_code=False,
+            )
+            raw_status = getattr(response, "status", None)
+            if isinstance(raw_status, int) and not isinstance(raw_status, bool):
+                graphql_status = raw_status
+            if graphql_status != 200:
+                raise ComicDaysLiveAccessError("Comic DAYS ticket query returned a non-200 status")
+            remaining = _remaining_ms(deadline)
+            if remaining <= 0:
+                raise ComicDaysLiveAccessError("Comic DAYS ticket query timed out")
+            body = await asyncio.wait_for(response.body(), timeout=remaining / 1000)
+        except (PlaywrightTimeoutError, TimeoutError) as exc:
+            raise ComicDaysLiveAccessError("Comic DAYS ticket query timed out") from exc
+        if len(body) > MAX_GRAPHQL_BODY:
+            raise ComicDaysLiveAccessError("Comic DAYS ticket query exceeded the body limit")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            data = payload["data"]
+            series = data["series"]
+            ticket = series["ticket"]
+            account = data["userAccount"]
+        except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise ComicDaysLiveAccessError("Comic DAYS ticket query had an invalid shape") from exc
+        if not isinstance(ticket, dict) or not isinstance(account, dict):
+            raise ComicDaysLiveAccessError("Comic DAYS ticket query omitted ticket state")
+        is_charged = ticket.get("isCharged")
+        if not isinstance(is_charged, bool):
+            raise ComicDaysLiveAccessError("Comic DAYS ticket readiness was malformed")
+        raw_charged_at = ticket.get("chargedAt")
+        if raw_charged_at is not None:
+            if not isinstance(raw_charged_at, str):
+                raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was malformed")
+            try:
+                charged_at = datetime.fromisoformat(raw_charged_at)
+            except ValueError as exc:
+                raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was invalid") from exc
+            if charged_at.tzinfo is None or charged_at.utcoffset() is None:
+                raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was timezone-naive")
+            charged_at = charged_at.astimezone(UTC)
+        count = account.get("eventTicketCount")
+        if count is not None and (isinstance(count, bool) or not isinstance(count, int) or count < 0):
+            raise ComicDaysLiveAccessError("Comic DAYS event ticket count was malformed")
+        return ComicDaysTicketState(
+            str(series_id),
+            is_charged,
+            charged_at,
+            count,
+            graphql_status,
+            int((time.monotonic() - query_started) * 1000),
+        )
+    finally:
+        _emit_trace(
+            trace_sink,
+            "ticket_query_result",
+            {
+                "series_id": str(series_id),
+                "is_charged": is_charged,
+                "charged_at": charged_at.isoformat() if charged_at is not None else None,
+                "event_ticket_count": count,
+                "graphql_status": graphql_status,
+                "elapsed_ms": int((time.monotonic() - query_started) * 1000),
+            },
+        )
 
 
 async def observe_comicdays_live_access(
@@ -234,6 +359,7 @@ async def observe_comicdays_target_access(
     series_id: str,
     episode_id: str,
     timeout_ms: int = COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
+    trace_sink: TraceSink | None = None,
 ) -> ComicDaysLiveAccessState:
     """Observe only the selected episode and work-level ticket state.
 
@@ -259,12 +385,14 @@ async def observe_comicdays_target_access(
         # timeout, so a removed scope cannot consume Playwright's default
         # 30-second Locator wait.
         ticket_state = await observe_comicdays_ticket(
-            page, str(series_id), timeout_ms=timeout_ms
+            page, str(series_id), timeout_ms=timeout_ms, trace_sink=trace_sink
         )
         remaining = _remaining_ms(deadline)
         if remaining <= 0:
             raise ComicDaysLiveAccessError("Comic DAYS target access observation timed out")
         dom = await _observe_target_dom_snapshot(page, timeout_ms=remaining)
+        dom_trace = _dom_trace_metadata(dom, expected_episode_id=str(episode_id))
+        _emit_trace(trace_sink, "dom_snapshot", dom_trace)
         current = parse_comicdays_episode_url(str(dom.get("url", "")))
         if current != str(episode_id):
             raise ComicDaysTargetIdentityMismatch(
@@ -358,6 +486,7 @@ async def observe_comicdays_target_access(
             bool(viewer_rows[0].get("visible")) if viewer_count == 1 and isinstance(viewer_rows[0], dict) else False,
             viewer_rows[0].get("json") if viewer_count == 1 and isinstance(viewer_rows[0], dict) else None,
             ticket_count,
+            dom_trace,
         )
     except (PlaywrightTimeoutError, TimeoutError) as exc:
         raise ComicDaysLiveAccessError("Comic DAYS target access observation timed out") from exc

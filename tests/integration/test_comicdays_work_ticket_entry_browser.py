@@ -348,6 +348,18 @@ async def test_comicdays_quota_accepts_arbitrary_stable_work_key_before_navigati
     ) == "https://comic-days.com/episode/1"
 
 
+async def test_comicdays_ticket_trace_resets_on_configure_run(browser_page) -> None:
+    adapter = ComicDaysAdapter()
+    await adapter.configure_target_identity("1", "synthetic-work")
+    await adapter.configure_run(browser_page, "quota")
+    adapter._record_ticket_trace(browser_page, "entry_error", error_type="Synthetic")
+    assert len((await adapter.collect_debug_metadata(browser_page))["ticket_trace"]) == 2
+
+    await adapter.configure_run(browser_page, "quota")
+    trace = (await adapter.collect_debug_metadata(browser_page))["ticket_trace"]
+    assert [event["phase"] for event in trace] == ["entry_start"]
+
+
 async def test_comicdays_direct_identity_gate_keeps_arbitrary_work_key_supported(
     browser_page,
 ) -> None:
@@ -410,6 +422,32 @@ async def test_comicdays_ticket_entry_confirms_consumption_and_never_clicks_paid
     assert adapter.get_access_consumption().consumed is True
     assert adapter.get_access_consumption().resource == "work_ticket"
     assert await page.evaluate("() => window.paidClicked === true") is False
+    trace = (await adapter.collect_debug_metadata(page))["ticket_trace"]
+    assert len(trace) <= adapter.max_ticket_trace_events
+    required = {
+        "timestamp_utc",
+        "monotonic_offset_ms",
+        "phase",
+        "page_url",
+        "expected_episode_id",
+        "observed_episode_id",
+        "observed_series_id",
+    }
+    assert all(required <= set(event) for event in trace)
+    phases = [event["phase"] for event in trace]
+    assert {
+        "entry_start",
+        "initialize_entry_only_start",
+        "pre_observe_start",
+        "pre_click_decision",
+        "click_start",
+        "click_returned",
+        "post_click_poll",
+        "consumption_confirmed",
+        "entry_success",
+    } <= set(phases)
+    polls = [event for event in trace if event["phase"] == "post_click_poll"]
+    assert polls and all(isinstance(event["elapsed_ms"], int) for event in polls)
 
 
 async def test_comicdays_charged_without_charged_at_fails_before_click(
@@ -477,6 +515,99 @@ async def test_comicdays_target_observation_uses_dom_and_small_graphql_only(
             "free_only=1",
         )
     )
+
+
+async def test_comicdays_target_trace_is_metadata_only_and_body_free(browser_page) -> None:
+    page = await _ticket_page(browser_page)
+    trace: list[tuple[str, dict[str, object]]] = []
+
+    class Response:
+        status = 200
+
+        async def body(self) -> bytes:
+            return json.dumps(
+                {
+                    "data": {
+                        "userAccount": {"eventTicketCount": 1},
+                        "series": {
+                            "ticket": {
+                                "isCharged": True,
+                                "chargedAt": "2026-10-04T00:00:00+00:00",
+                            }
+                        },
+                        "secret": "must-not-enter-trace",
+                    }
+                }
+            ).encode()
+
+    class Request:
+        async def post(self, _url: str, **_kwargs: object) -> Response:
+            return Response()
+
+    observed_page = SimpleNamespace(
+        url=page.url,
+        locator=page.locator,
+        evaluate=page.evaluate,
+        request=Request(),
+    )
+    await observe_comicdays_target_access(
+        observed_page,
+        series_id="1",
+        episode_id="1",
+        timeout_ms=2_000,
+        trace_sink=lambda phase, fields: trace.append((phase, dict(fields))),
+    )
+
+    phases = [phase for phase, _fields in trace]
+    assert phases == ["ticket_query_result", "dom_snapshot"]
+    ticket = trace[0][1]
+    assert ticket["graphql_status"] == 200
+    assert isinstance(ticket["elapsed_ms"], int)
+    assert ticket["event_ticket_count"] == 1
+    dom = trace[1][1]
+    assert dom["private_viewer_count"] == 1
+    assert dom["normal_viewer_count"] == 0
+    assert dom["private_json_matches_expected"] is True
+    assert dom["aggregate_ids"] == ["1"]
+    assert dom["contract_aggregate_ids"] == ["1"]
+    encoded = json.dumps(trace, ensure_ascii=False)
+    assert "must-not-enter-trace" not in encoded
+    assert "data-json-url" not in encoded
+    assert "Cookie" not in encoded
+
+
+async def test_comicdays_failure_diagnostics_include_ticket_trace(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    page = await _ticket_page(browser_page)
+    monkeypatch.setattr(
+        adapter_module,
+        "observe_comicdays_target_access",
+        lambda *_a, **_k: _anext(iter([_state(mode="quota", charged=True, term=71)])),
+    )
+    adapter = ComicDaysAdapter()
+    from screenshot_crawler.core.models import RunConfig
+    from screenshot_crawler.core.runner import CrawlerRunner
+
+    with pytest.raises(AccessResourceUnavailableError):
+        await CrawlerRunner(
+            RunConfig(
+                site="comicdays",
+                source_url="https://comic-days.com/episode/1",
+                output_dir=tmp_path / "run",
+                diagnostics_dir=tmp_path / "run" / "diagnostics",
+                entry_only=True,
+                access_strategy="quota",
+                quota_resource="work_ticket",
+            )
+        ).run(page, adapter)
+
+    metadata = json.loads(
+        (tmp_path / "run" / "diagnostics" / "metadata.json").read_text(encoding="utf-8")
+    )
+    ticket_trace = metadata["adapter_debug"]["ticket_trace"]
+    assert any(event["phase"] == "entry_error" for event in ticket_trace)
+    assert all("body" not in event for event in ticket_trace)
 
 
 async def test_comicdays_target_observation_prioritizes_positive_cooldown(
@@ -688,6 +819,19 @@ async def test_comicdays_real_planner_executor_grant_only_navigates_once(
     assert await page.evaluate("() => window.paidClicks") == 0
     assert catalog.get_item(item.id).status == "pending"
     assert catalog.list_artifacts() == []
+    entry_trace_files = list(
+        (tmp_path / "batch" / "comicdays").glob("*/diagnostics/entry_trace.json")
+    )
+    assert len(entry_trace_files) == 1
+    entry_trace = json.loads(entry_trace_files[0].read_text(encoding="utf-8"))
+    assert {
+        entry_trace["item_id"],
+        entry_trace["source_id"],
+        entry_trace["target_id"],
+        entry_trace["site"],
+        entry_trace["resource"],
+    } == {item.id, source.id, candidate.target_id, "comicdays", "work_ticket"}
+    assert entry_trace["adapter_debug"]["ticket_trace"]
     state = catalog.get_quota_resource_state(
         work.id, site="comicdays", resource="work_ticket"
     )

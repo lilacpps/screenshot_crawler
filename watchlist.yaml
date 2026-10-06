@@ -255,7 +255,7 @@ targets:
     work_key: diamond-no-a
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00030/episode/742
-    enabled: false
+    enabled: true
     label: "ダイヤのA"
 
   - key: diamond-no-a-act2
@@ -269,7 +269,7 @@ targets:
     work_key: days
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00009/episode/465
-    enabled: false
+    enabled: true
     label: "DAYS"
 
   - key: hajime-no-ippo
@@ -325,7 +325,7 @@ targets:
     work_key: runway-de-waratte
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00276/episode/166505
-    enabled: false
+    enabled: true
     label: "ランウェイで笑って"
 
   - key: kyokou-suiri
@@ -339,7 +339,7 @@ targets:
     work_key: hoshino-me-wo-tsubutte
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00133/episode/142388
-    enabled: false
+    enabled: true
     label: "星野、目をつぶって。"
 
   - key: narikawari
@@ -381,21 +381,21 @@ targets:
     work_key: kimi-no-iru-machi
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00049/episode/850
-    enabled: false
+    enabled: true
     label: "君のいる町"
 
   - key: suzuka
     work_key: suzuka
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00100/episode/142259
-    enabled: false
+    enabled: true
     label: "涼風"
 
   - key: hitman
     work_key: hitman
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00578/episode/207469
-    enabled: false
+    enabled: true
     label: "ヒットマン"
 
   - key: ano-shima-no-kaionsou
@@ -416,7 +416,7 @@ targets:
     work_key: kishuku-gakkou-no-juliet
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00070/episode/140484
-    enabled: false
+    enabled: true
     label: "寄宿学校のジュリエット"
 
   - key: kuroneko-to-majo-no-kyoushitsu
@@ -437,7 +437,7 @@ targets:
     work_key: akb49
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00016/episode/472
-    enabled: false
+    enabled: true
     label: "AKB49～恋愛禁止条例～"
 
   - key: kimi-no-yokogao-wo-miteita
@@ -458,7 +458,7 @@ targets:
     work_key: chinmoku-no-kantai
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00502/episode/350832
-    enabled: false
+    enabled: true
     label: "沈黙の艦隊"
 
   - key: zipang
@@ -486,7 +486,7 @@ targets:
     work_key: kami-no-shizuku
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00503/episode/358007
-    enabled: false
+    enabled: true
     label: "神の雫"
 
   - key: world-is-dancing
@@ -528,7 +528,7 @@ targets:
     work_key: fairy-tail
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00045/episode/458
-    enabled: false
+    enabled: true
     label: "FAIRY TAIL"
 
   - key: tonari-no-kurokawa-san
@@ -563,7 +563,7 @@ targets:
     work_key: shigatsu-wa-kimi-no-uso
     site: magapoke
     url: https://pocket.shonenmagazine.com/title/00403/episode/184318
-    enabled: false
+    enabled: true
     label: "四月は君の嘘"
 
   - key: banjou-no-orion
@@ -572,6 +572,48 @@ targets:
     url: https://pocket.shonenmagazine.com/title/02455/episode/390740
     enabled: true
     label: "盤上のオリオン"
+
+  - key: baby-steps
+    work_key: baby-steps
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00014/episode/470
+    enabled: true
+    label: "ベイビーステップ"
+
+  - key: kiseiju
+    work_key: kiseiju
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01457/episode/323895
+    enabled: true
+    label: "寄生獣"
+
+  - key: tsumi-to-batsu-no-spica
+    work_key: tsumi-to-batsu-no-spica
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02775/episode/411611
+    enabled: true
+    label: "罪と罰のスピカ"
+
+  - key: historie
+    work_key: historie
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02378/episode/387970
+    enabled: true
+    label: "ヒストリエ"
+
+  - key: planetes
+    work_key: planetes
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01539/episode/331441
+    enabled: true
+    label: "プラネテス"
+
+  - key: game-chuuban-de-shinu-akuyaku-kizoku
+    work_key: game-chuuban-de-shinu-akuyaku-kizoku
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02855/episode/417016
+    enabled: true
+    label: "ゲーム中盤で死ぬ悪役貴族に転生したので、外れスキル〖テイム〗を駆使して最強を目指してみた"
 
   - key: runorita
     work_key: runorita
@@ -640,7 +682,7 @@ targets:
     work_key: seija-no-koushin
     site: jumpplus
     url: https://shonenjumpplus.com/episode/13932016480029130646
-    enabled: true
+    enabled: false
     label: "生者の行進"
 
   - key: nisekoi
@@ -668,7 +710,7 @@ targets:
     work_key: 2-5jigen-no-ririsa
     site: jumpplus
     url: https://shonenjumpplus.com/episode/13933686331679642476
-    enabled: true
+    enabled: false
     label: "2.5次元の誘惑"
 
   - key: sankyu-pitch
@@ -773,5 +815,425 @@ targets:
     work_key: kaiju-no-8
     site: jumpplus
     url: https://shonenjumpplus.com/episode/13933686331674116123
-    enabled: true
+    enabled: false
     label: "怪獣８号"
+
+  - key: to-love-ru-darkness
+    work_key: to-love-ru-darkness
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256822560664
+    enabled: false
+    label: "To LOVEる―とらぶる―ダークネス"
+
+  - key: hyperinflation
+    work_key: hyperinflation
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13933686331749163174
+    enabled: false
+    label: "ハイパーインフレーション"
+
+  - key: himesama-goumon-no-jikan-desu
+    work_key: himesama-goumon-no-jikan-desu
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10834108156649530410
+    enabled: false
+    label: "姫様“拷問”の時間です"
+
+  - key: karada-sagashi
+    work_key: karada-sagashi
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13932016480029215458
+    enabled: false
+    label: "カラダ探し"
+
+  - key: kono-oto-tomare
+    work_key: kono-oto-tomare
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/86/chapter/list
+    enabled: true
+    label: "この音とまれ！"
+
+  - key: haikyu
+    work_key: haikyu
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/37/chapter/list
+    enabled: true
+    label: "ハイキュー!!"
+
+  - key: nigejouzu-no-wakagimi
+    work_key: nigejouzu-no-wakagimi
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/5906/chapter/list
+    enabled: true
+    label: "逃げ上手の若君"
+
+  - key: ao-no-hako
+    work_key: ao-no-hako
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/5123/chapter/list
+    enabled: true
+    label: "アオのハコ"
+
+  - key: witch-watch
+    work_key: witch-watch
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/6131/chapter/list
+    enabled: true
+    label: "ウィッチウォッチ"
+
+  - key: kanata-no-astra
+    work_key: kanata-no-astra
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/7/chapter/list
+    enabled: true
+    label: "彼方のアストラ"
+
+  - key: black-clover
+    work_key: black-clover
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/12/chapter/list
+    enabled: true
+    label: "ブラッククローバー"
+
+  - key: ansatsu-kyoushitsu
+    work_key: ansatsu-kyoushitsu
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/2/chapter/list
+    enabled: true
+    label: "暗殺教室"
+
+  - key: majin-tantei-nougami-neuro
+    work_key: majin-tantei-nougami-neuro
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/3/chapter/list
+    enabled: true
+    label: "魔人探偵脳噛ネウロ モノクロ版"
+
+  - key: kabushikigaisha-magilumiere
+    work_key: kabushikigaisha-magilumiere
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/19813/chapter/list
+    enabled: true
+    label: "株式会社マジルミエ"
+
+  - key: to-love-ru
+    work_key: to-love-ru
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/79/chapter/list
+    enabled: true
+    label: "To LOVEる―とらぶる― モノクロ版"
+
+  - key: karada-sagashi-kai
+    work_key: karada-sagashi-kai
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/56/chapter/list
+    enabled: true
+    label: "カラダ探し 解"
+
+
+  # ふつうの軽音部
+  - key: futsuu-no-keionbu-jumpplus-001-030
+    work_key: futsuu-no-keionbu
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/16457717013869519536
+    enabled: false
+    label: "ふつうの軽音部"
+    # 範囲: ～第30話
+    discovery_scope:
+      from_url: https://shonenjumpplus.com/episode/17106371891889388410
+
+  - key: futsuu-no-keionbu-zeblack
+    work_key: futsuu-no-keionbu
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/71629/chapter/list
+    enabled: true
+    label: "ふつうの軽音部"
+    # 範囲: 第31話～第102話
+    # TODO: 第103～121話は現在Discovery対象外。
+    #       Zeblackで配信されたらfrom_urlを新しい話まで延長して、この空白を埋める。
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/71629/chapter/9221433/viewer
+      through_url: https://zebrack-comic.shueisha.co.jp/title/71629/chapter/746714/viewer
+
+  - key: futsuu-no-keionbu-jumpplus-122-latest
+    work_key: futsuu-no-keionbu
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/16457717013869519536
+    enabled: true
+    label: "ふつうの軽音部"
+    # 範囲: 第122話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/9253191256479734451
+
+
+  # 幼稚園WARS
+  - key: youchien-wars-jumpplus-001-021
+    work_key: youchien-wars
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/4855956445109234830
+    enabled: false
+    label: "幼稚園WARS"
+    # 範囲: ～第21話
+    discovery_scope:
+      from_url: https://shonenjumpplus.com/episode/4856001361001118304
+
+  - key: youchien-wars-zeblack
+    work_key: youchien-wars
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/44156/chapter/list
+    enabled: true
+    label: "幼稚園WARS"
+    # 範囲: 第22話～第129話
+    # TODO: 第130～139話は現在Discovery対象外。
+    #       Zeblackで配信されたらfrom_urlを新しい話まで延長して、この空白を埋める。
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/44156/chapter/9264564/viewer
+      through_url: https://zebrack-comic.shueisha.co.jp/title/44156/chapter/659740/viewer
+
+  - key: youchien-wars-jumpplus-140-latest
+    work_key: youchien-wars
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/4855956445109234830
+    enabled: true
+    label: "幼稚園WARS"
+    # 範囲: 第140話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/9253191256637716200
+
+
+  # ダンダダン
+  - key: dandadan-zeblack
+    work_key: dandadan
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/8423/chapter/list
+    enabled: true
+    label: "ダンダダン"
+    # 範囲: ～第210話
+    # TODO: 第211～244話は現在Discovery対象外。
+    #       Zeblackで配信されたらfrom_urlを新しい話まで延長して、この空白を埋める。
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/8423/chapter/1039249/viewer
+
+  - key: dandadan-jumpplus
+    work_key: dandadan
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/3269632237310729754
+    enabled: true
+    label: "ダンダダン"
+    # 範囲: 第245話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/9253191256195089604
+
+
+  # マリッジトキシン
+  - key: marriage-toxin-zeblack
+    work_key: marriage-toxin
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/23461/chapter/list
+    enabled: true
+    label: "マリッジトキシン"
+    # 範囲: ～第162話
+    # TODO: 第163～176話は現在Discovery対象外。
+    #       Zeblackで配信されたらfrom_urlを新しい話まで延長して、この空白を埋める。
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/23461/chapter/9255972/viewer
+
+  - key: marriage-toxin-jumpplus
+    work_key: marriage-toxin
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/3269754496881854355
+    enabled: true
+    label: "マリッジトキシン"
+    # 範囲: 第177話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/9253191256195089711
+
+  # エクソシストを堕とせない
+  - key: exorcist-wo-otosenai-zeblack
+    work_key: exorcist-wo-otosenai
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/21356/chapter/list
+    enabled: true
+    label: "エクソシストを堕とせない"
+    # 範囲: ～第117話
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/21356/chapter/9220011/viewer
+
+  - key: exorcist-wo-otosenai-jumpplus
+    work_key: exorcist-wo-otosenai
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256784141807
+    enabled: true
+    label: "エクソシストを堕とせない"
+    # 範囲: 第118話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/9253191254350319442
+
+  # ジャンケットバンク
+  - key: junket-bank-zeblack
+    work_key: junket-bank
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/5106/chapter/list
+    enabled: true
+    label: "ジャンケットバンク"
+    # 範囲: ～第217話
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/5106/chapter/9261669/viewer
+
+  - key: junket-bank-jumpplus
+    work_key: junket-bank
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256784141836
+    enabled: true
+    label: "ジャンケットバンク"
+    # 範囲: 第218話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/9253191255561725732
+
+  # 魔都精兵のスレイブ
+  - key: mato-seihei-no-slave-zeblack
+    work_key: mato-seihei-no-slave
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/3662/chapter/list
+    enabled: true
+    label: "魔都精兵のスレイブ"
+    # 範囲: ～第178話
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/3662/chapter/1039363/viewer
+
+  - key: mato-seihei-no-slave-jumpplus
+    work_key: mato-seihei-no-slave
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10834108156641784254
+    enabled: true
+    label: "魔都精兵のスレイブ"
+    # 範囲: 第179話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/17107419589696004719
+
+  # 忘却バッテリー
+  - key: boukyaku-battery-zeblack
+    work_key: boukyaku-battery
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/3421/chapter/list
+    enabled: true
+    label: "忘却バッテリー"
+    # 範囲: ～第189話
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/3421/chapter/9264501/viewer
+
+  - key: boukyaku-battery-jumpplus
+    work_key: boukyaku-battery
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10834108156630506434
+    enabled: true
+    label: "忘却バッテリー"
+    # 範囲: 第190話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/9253191254640655460
+
+  # SPY×FAMILY
+  - key: spy-family-zeblack
+    work_key: spy-family
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/3790/chapter/list
+    enabled: true
+    label: "SPY×FAMILY"
+    # 範囲: ～SHORT MISSION：3（10P）
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/3790/chapter/65475/viewer
+
+  - key: spy-family-jumpplus
+    work_key: spy-family
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/10834108156648240735
+    enabled: true
+    label: "SPY×FAMILY"
+    # 範囲: 第139話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/9253191255607512279
+
+  # 〖推しの子〗
+
+  - key: oshi-no-ko-zeblack
+    work_key: oshi-no-ko
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/4558/chapter/list
+    enabled: true
+    label: "〖推しの子〗"
+    # 範囲: ～第120話
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/4558/chapter/523496/viewer
+
+  - key: oshi-no-ko-jumpplus
+    work_key: oshi-no-ko
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13933686331661632099
+    enabled: true
+    label: "〖推しの子〗"
+    # 範囲: 第121話～最新話
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/4856001361361801015
+
+  - key: uchuu-kyoudai
+    work_key: uchuu-kyoudai
+    site: comicdays
+    url: https://comic-days.com/episode/10834108156628505403
+    enabled: true
+    label: "宇宙兄弟"
+
+  - key: tsuihou-chito-fuyo-majutsushi
+    work_key: tsuihou-chito-fuyo-majutsushi
+    site: comicdays
+    url: https://comic-days.com/episode/3269754496723442126
+    enabled: true
+    label: "追放されたチート付与魔術師は気ままなセカンドライフを謳歌する。 ～俺は武器だけじゃなく、あらゆるものに『強化ポイント』を付与できるし、俺の意思でいつでも効果を解除できるけど、残った人たち大丈夫？～"
+
+  - key: heiwa-no-kuni-no-shimazaki-e
+    work_key: heiwa-no-kuni-no-shimazaki-e
+    site: comicdays
+    url: https://comic-days.com/episode/3270375685389230080
+    enabled: true
+    label: "平和の国の島崎へ"
+
+  - key: skip-to-loafer
+    work_key: skip-to-loafer
+    site: comicdays
+    url: https://comic-days.com/episode/10834108156642600786
+    enabled: true
+    label: "スキップとローファー"
+
+  - key: golden-drop
+    work_key: golden-drop
+    site: comicdays
+    url: https://comic-days.com/episode/4856001361242284853
+    enabled: true
+    label: "ゴールデンドロップ"
+
+  - key: getsuyoubi-no-tawawa
+    work_key: getsuyoubi-no-tawawa
+    site: comicdays
+    url: https://comic-days.com/episode/13933686331736505956
+    enabled: true
+    label: "月曜日のたわわ"
+
+  - key: noroi-atsume
+    work_key: noroi-atsume
+    site: comicdays
+    url: https://comic-days.com/episode/12207421984001216436
+    enabled: true
+    label: "呪イアツメ"
+
+  - key: akumade-kujaku-no-hanashi-desu
+    work_key: akumade-kujaku-no-hanashi-desu
+    site: comicdays
+    url: https://comic-days.com/episode/14079602755444925507
+    enabled: true
+    label: "あくまでクジャクの話です。"
+
+  - key: zeikin-de-katta-hon
+    work_key: zeikin-de-katta-hon
+    site: comicdays
+    url: https://comic-days.com/episode/3269754496607127115
+    enabled: true
+    label: "税金で買った本"

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -47,6 +48,9 @@ COMPLETED_NOW = datetime(2026, 9, 17, 15, 30, tzinfo=JST)
 class FakeAdapter:
     def get_output_metadata(self) -> dict[str, str]:
         return {"title": "Adapter title", "genre": "漫画"}
+
+    async def collect_debug_metadata(self, _page: object) -> dict[str, object]:
+        return {"ticket_trace": [{"phase": "entry_success"}]}
 
 
 class CancellationResistantResolverAdapter:
@@ -928,6 +932,17 @@ async def test_grant_only_work_ticket_persists_state_without_completion_or_artif
     run = service.get_crawl_run(result.crawl_run_id)
     assert run.status == "succeeded"
     assert run.page_count == 0
+    trace_files = list((tmp_path / "batch" / "magapoke").glob("*/diagnostics/entry_trace.json"))
+    assert len(trace_files) == 1
+    trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
+    assert {
+        trace["item_id"], trace["source_id"], trace["target_id"],
+        trace["site"], trace["resource"],
+    } == {
+        candidate.item_id, candidate.source_id, candidate.target_id,
+        candidate.site, candidate.quota_resource,
+    }
+    assert trace["adapter_debug"]["ticket_trace"] == [{"phase": "entry_success"}]
 
 
 async def test_grant_only_premium_ticket_persists_source_only(

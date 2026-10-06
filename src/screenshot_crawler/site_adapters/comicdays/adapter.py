@@ -7,8 +7,10 @@ import base64
 import hashlib
 import json
 import re
+import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from playwright.async_api import Locator, Page
 
@@ -68,6 +70,7 @@ class ComicDaysAdapter(SiteAdapter):
     canvas_selector = "section.viewer.js-viewer .image-container.js-viewer-content canvas.page-image.js-page-image"
     forward_selector = "section.viewer.js-viewer .page-navigation-forward.js-slide-forward"
     ticket_recovery_window_ms = 3_000
+    max_ticket_trace_events = 160
 
     def __init__(self) -> None:
         self._access_strategy: AccessStrategy = "auto"
@@ -92,6 +95,89 @@ class ComicDaysAdapter(SiteAdapter):
         self._preexisting_accessible = False
         self._target_url: str | None = None
         self._expected_external_id: str | None = None
+        self._ticket_trace: list[dict[str, object]] = []
+        self._ticket_trace_started_monotonic = 0.0
+        self._ticket_entry_only = False
+        self._ticket_click_started_monotonic: float | None = None
+        self._last_ticket_poll_signature: tuple[object, ...] | None = None
+        self._last_ticket_observe_error: str | None = None
+        self._entry_error_recorded = False
+
+    @staticmethod
+    def _safe_trace_url(value: object) -> str:
+        raw = str(value or "")
+        try:
+            parts = urlsplit(raw)
+            host = parts.hostname or ""
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            try:
+                port = parts.port
+            except ValueError:
+                port = None
+            netloc = host + (f":{port}" if port is not None else "")
+            return urlunsplit((parts.scheme, netloc, parts.path, "", ""))[:500]
+        except (TypeError, ValueError):
+            return raw.split("?", 1)[0].split("#", 1)[0][:500]
+
+    def _record_ticket_trace(
+        self, page: Page | object, phase: str, **fields: object
+    ) -> None:
+        """Append bounded, metadata-only Work Ticket diagnostics."""
+
+        raw_page_url = getattr(page, "url", "")
+        page_url = self._safe_trace_url(raw_page_url)
+        try:
+            observed_episode_id = parse_comicdays_episode_url(page_url)
+        except Exception:  # noqa: BLE001 - trace collection must never affect access
+            observed_episode_id = None
+        started = self._ticket_trace_started_monotonic or time.monotonic()
+        event: dict[str, object] = {
+            "timestamp_utc": datetime.now(UTC).isoformat(),
+            "monotonic_offset_ms": max(0, int((time.monotonic() - started) * 1000)),
+            "phase": phase,
+            "page_url": page_url,
+            "expected_episode_id": self._expected_external_id,
+            "observed_episode_id": observed_episode_id,
+            "observed_series_id": self._work_id,
+            "entry_only": self._ticket_entry_only,
+            **fields,
+        }
+        self._ticket_trace.append(event)
+        overflow = len(self._ticket_trace) - self.max_ticket_trace_events
+        if overflow > 0:
+            del self._ticket_trace[:overflow]
+
+    @staticmethod
+    def _iso_datetime(value: datetime | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    def _record_pre_click_decision(
+        self, page: Page, state: ComicDaysLiveAccessState, decision: str
+    ) -> None:
+        self._record_ticket_trace(
+            page,
+            "pre_click_decision",
+            access_mode=state.access_mode,
+            ticket_is_charged=state.ticket.is_charged,
+            charged_at=self._iso_datetime(state.ticket.charged_at),
+            viewer_unlocked=state.viewer_unlocked,
+            rental_term_hours=state.rental_term_hours,
+            ticket_control_count=state.ticket_control_count,
+            decision=decision,
+            observed_episode_id=state.episode_id,
+            observed_series_id=state.series_id,
+        )
+
+    def _record_entry_error(self, page: Page, error: BaseException) -> None:
+        if self._entry_error_recorded:
+            return
+        self._entry_error_recorded = True
+        self._record_ticket_trace(
+            page,
+            "entry_error",
+            error_type=type(error).__name__,
+        )
 
     def get_access_profile(self) -> AccessProfile:
         return comicdays_access_profile()
@@ -106,11 +192,17 @@ class ComicDaysAdapter(SiteAdapter):
         )
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
-        del page
         if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
                 f"ComicDaysAdapter does not support access_strategy={access_strategy!r}"
             )
+        self._ticket_trace = []
+        self._ticket_trace_started_monotonic = time.monotonic()
+        self._ticket_entry_only = False
+        self._ticket_click_started_monotonic = None
+        self._last_ticket_poll_signature = None
+        self._last_ticket_observe_error = None
+        self._entry_error_recorded = False
         self._access_strategy = access_strategy
         self._quota_resource = None
         self._access_consumption = AccessConsumption()
@@ -118,6 +210,7 @@ class ComicDaysAdapter(SiteAdapter):
         self._ticket_click_attempted = False
         self._preexisting_accessible = False
         self._target_url = None
+        self._record_ticket_trace(page, "entry_start")
 
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
         # Work.work_key is a site-neutral Catalog identity. Comic DAYS native
@@ -201,6 +294,7 @@ class ComicDaysAdapter(SiteAdapter):
             raise PageChangeTimeoutError("Comic DAYS viewer observation exceeded its time bound") from exc
 
     async def initialize(self, page: Page) -> None:
+        self._record_ticket_trace(page, "initialize_start")
         episode_id = parse_comicdays_episode_url(page.url)
         if episode_id is None:
             raise ValueError("Comic DAYS page URL is not a canonical episode URL")
@@ -214,7 +308,11 @@ class ComicDaysAdapter(SiteAdapter):
         self._initial_url, self._episode_id = canonical_url, episode_id
         self._work_id = await _series_id_from_page(page)
         if self._access_strategy == "quota":
-            await self._initialize_ticket_entry(page, entry_only=False)
+            try:
+                await self._initialize_ticket_entry(page, entry_only=False)
+            except BaseException as exc:
+                self._record_entry_error(page, exc)
+                raise
         else:
             try:
                 self._live_access = await observe_comicdays_live_access(
@@ -247,21 +345,26 @@ class ComicDaysAdapter(SiteAdapter):
     async def initialize_entry_only(self, page: Page) -> None:
         """Perform only the bounded Work Ticket entry and confirmation."""
 
-        episode_id = parse_comicdays_episode_url(page.url)
-        if episode_id is None or (self._episode_id and episode_id != self._episode_id):
-            if self._access_strategy == "quota":
-                raise AccessResourceUnavailableError(
-                    "comicdays_discovery_refresh_required"
+        self._record_ticket_trace(page, "initialize_entry_only_start")
+        try:
+            episode_id = parse_comicdays_episode_url(page.url)
+            if episode_id is None or (self._episode_id and episode_id != self._episode_id):
+                if self._access_strategy == "quota":
+                    raise AccessResourceUnavailableError(
+                        "comicdays_discovery_refresh_required"
+                    )
+                raise ValueError("Comic DAYS entry page did not match the target episode")
+            if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+                raise UnsupportedAccessStrategyError(
+                    "Comic DAYS entry-only execution requires quota/work_ticket"
                 )
-            raise ValueError("Comic DAYS entry page did not match the target episode")
-        if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
-            raise UnsupportedAccessStrategyError(
-                "Comic DAYS entry-only execution requires quota/work_ticket"
-            )
-        self._initial_url = canonical_comicdays_episode_url(page.url)
-        self._episode_id = episode_id
-        self._work_id = await _series_id_from_page(page)
-        await self._initialize_ticket_entry(page, entry_only=True)
+            self._initial_url = canonical_comicdays_episode_url(page.url)
+            self._episode_id = episode_id
+            self._work_id = await _series_id_from_page(page)
+            await self._initialize_ticket_entry(page, entry_only=True)
+        except BaseException as exc:
+            self._record_entry_error(page, exc)
+            raise
 
     async def _initialize_ticket_entry(self, page: Page, *, entry_only: bool) -> None:
         if self._work_id is None or self._episode_id is None:
@@ -270,25 +373,34 @@ class ComicDaysAdapter(SiteAdapter):
             raise UnsupportedAccessStrategyError(
                 "Comic DAYS Work Ticket action was already attempted; retry is forbidden"
             )
+        self._ticket_entry_only = entry_only
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
+        self._record_ticket_trace(page, "pre_observe_start")
         try:
             state = await self._observe_live_access(page, deadline)
         except ComicDaysTargetIdentityMismatch as exc:
+            self._record_ticket_trace(
+                page, "pre_click_decision", decision="identity_mismatch"
+            )
             raise AccessResourceUnavailableError(
                 "comicdays_discovery_refresh_required"
             ) from exc
         except ComicDaysLiveAccessError as exc:
+            self._record_ticket_trace(page, "pre_click_decision", decision="unknown")
             raise UnknownPageStateError(str(exc)) from exc
         self._live_access = state
         if state.access_mode == "unknown":
+            self._record_pre_click_decision(page, state, "unknown")
             raise UnknownPageStateError(
                 "Comic DAYS target access state was missing or ambiguous"
             )
         if state.access_mode != "quota":
+            self._record_pre_click_decision(page, state, "identity_mismatch")
             raise AccessResourceUnavailableError(
                 "comicdays_discovery_refresh_required"
             )
         if state.ticket.is_charged and state.ticket.charged_at is None:
+            self._record_pre_click_decision(page, state, "unknown")
             raise UnknownPageStateError(
                 "Comic DAYS charged ticket state omitted chargedAt"
             )
@@ -297,27 +409,52 @@ class ComicDaysAdapter(SiteAdapter):
             or state.rental_term_seconds != 259200
             or not _supported_ticket_rental_term(state.row)
         ):
+            self._record_pre_click_decision(page, state, "contract_mismatch")
             raise AccessResourceUnavailableError(
                 "comicdays_discovery_refresh_required", stop_resource_pass=True
             )
         if not state.ticket.is_charged:
+            self._record_pre_click_decision(page, state, "cooldown")
             raise AccessResourceUnavailableError("work_ticket_cooldown")
         remaining = self._remaining_ms(deadline)
         if remaining <= 0:
+            self._record_pre_click_decision(page, state, "unknown")
             raise PageChangeTimeoutError("Comic DAYS ticket control inspection exceeded its time bound")
         try:
             control = await asyncio.wait_for(
                 self._exact_ticket_control(page, deadline), timeout=remaining / 1000
             )
         except TimeoutError as exc:
+            self._record_pre_click_decision(page, state, "unknown")
             raise PageChangeTimeoutError("Comic DAYS ticket control inspection exceeded its time bound") from exc
+        except BaseException:
+            self._record_pre_click_decision(page, state, "unknown")
+            raise
+        self._record_pre_click_decision(page, state, "click")
         previous_charged_at = state.ticket.charged_at
         self._ticket_click_attempted = True
         try:
             remaining = self._remaining_ms(deadline)
             if remaining <= 0:
                 raise PageChangeTimeoutError("Comic DAYS Work Ticket entry exceeded its time bound")
-            await control.click(timeout=remaining, no_wait_after=True)
+            self._ticket_click_started_monotonic = time.monotonic()
+            self._record_ticket_trace(
+                page,
+                "click_start",
+                ticket_control_count=state.ticket_control_count,
+            )
+            try:
+                await control.click(timeout=remaining, no_wait_after=True)
+            except BaseException as exc:
+                self._record_ticket_trace(
+                    page, "click_error", error_type=type(exc).__name__
+                )
+                raise
+            self._record_ticket_trace(
+                page,
+                "click_returned",
+                ticket_control_count=state.ticket_control_count,
+            )
             confirmed = await self._poll_consumption(page, previous_charged_at, deadline)
             if not confirmed:
                 raise AccessConsumptionUnconfirmedError(
@@ -333,6 +470,7 @@ class ComicDaysAdapter(SiteAdapter):
             except BaseException as recovery_error:  # noqa: BLE001 - preserve the original click error
                 self._capture_debug["ticket_recovery_error"] = type(recovery_error).__name__
             raise
+        self._record_ticket_trace(page, "entry_success")
 
     async def _observe_live_access(self, page: Page, deadline: float) -> ComicDaysLiveAccessState:
         remaining = self._remaining_ms(deadline)
@@ -342,6 +480,9 @@ class ComicDaysAdapter(SiteAdapter):
             observe_comicdays_target_access(
                 page, series_id=self._work_id or "", episode_id=self._episode_id or "",
                 timeout_ms=remaining,
+                trace_sink=lambda phase, fields: self._record_ticket_trace(
+                    page, phase, **fields
+                ),
             ),
             timeout=remaining / 1000,
         )
@@ -353,8 +494,10 @@ class ComicDaysAdapter(SiteAdapter):
             return False
         try:
             state = await self._observe_live_access(page, deadline)
-        except Exception:  # noqa: BLE001 - post-click state is fail-closed
+        except Exception as exc:  # noqa: BLE001 - post-click state is fail-closed
+            self._last_ticket_observe_error = type(exc).__name__
             return False
+        self._last_ticket_observe_error = None
         self._live_access = state
         row = state.row
         purchase = row.get("purchase_info")
@@ -399,22 +542,80 @@ class ComicDaysAdapter(SiteAdapter):
     ) -> bool:
         """Poll read-only state after a click without ever retrying the click."""
 
+        poll_index = 0
+        last_fields: dict[str, object] | None = None
+        click_started = self._ticket_click_started_monotonic or time.monotonic()
+        self._last_ticket_poll_signature = None
         while self._remaining_ms(deadline) > 0:
+            poll_index += 1
             if not self._access_consumption.consumed:
                 await self._reobserve_consumption(page, previous_charged_at, deadline)
+            state = self._live_access
+            fields: dict[str, object] = {
+                "poll_index": poll_index,
+                "elapsed_ms": int((time.monotonic() - click_started) * 1000),
+                "access_mode": state.access_mode if state is not None else None,
+                "ticket_is_charged": (
+                    state.ticket.is_charged if state is not None else None
+                ),
+                "charged_at": (
+                    self._iso_datetime(state.ticket.charged_at)
+                    if state is not None
+                    else None
+                ),
+                "viewer_unlocked": state.viewer_unlocked if state is not None else False,
+                "private_viewer_count": (
+                    state.private_viewer_count if state is not None else 0
+                ),
+                "normal_viewer_count": (
+                    state.normal_viewer_count if state is not None else 0
+                ),
+                "normal_viewer_visible": (
+                    state.normal_viewer_visible if state is not None else False
+                ),
+                "ticket_control_count": (
+                    state.ticket_control_count if state is not None else 0
+                ),
+            }
+            if state is not None:
+                fields.update(
+                    observed_episode_id=state.episode_id,
+                    observed_series_id=state.series_id,
+                )
+            if self._last_ticket_observe_error is not None:
+                fields["observe_error_type"] = self._last_ticket_observe_error
+            signature = tuple(
+                value
+                for key, value in fields.items()
+                if key not in {"poll_index", "elapsed_ms"}
+            )
+            if signature != self._last_ticket_poll_signature:
+                self._record_ticket_trace(page, "post_click_poll", **fields)
+                self._last_ticket_poll_signature = signature
+            last_fields = fields
             # Target-local debit/unlock confirmation is the grant entry
             # contract.  Capture readiness belongs to normal initialize's
             # existing _normalize_viewer path and must not consume this
             # confirmation budget or make grant-only success depend on the
             # production capture hook.
             if self._access_consumption.consumed:
+                self._record_ticket_trace(page, "consumption_confirmed", **fields)
                 return True
             delay = min(200, self._remaining_ms(deadline))
             if delay <= 0:
                 break
             await page.wait_for_timeout(delay)
+        if last_fields is not None:
+            last_fields["final"] = True
+            last_fields["elapsed_ms"] = int((time.monotonic() - click_started) * 1000)
+            self._record_ticket_trace(page, "post_click_poll", **last_fields)
         if self._access_consumption.consumed:
             raise PageChangeTimeoutError("Comic DAYS post-grant viewer was not render-ready")
+        self._record_ticket_trace(
+            page,
+            "consumption_not_confirmed",
+            elapsed_ms=int((time.monotonic() - click_started) * 1000),
+        )
         return False
 
     async def _exact_ticket_control(self, page: Page, deadline: float) -> Locator:
@@ -1125,7 +1326,11 @@ class ComicDaysAdapter(SiteAdapter):
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
         del page
-        return {**self._capture_debug, "last_transition_observation": self._last_transition_observation}
+        return {
+            **self._capture_debug,
+            "last_transition_observation": self._last_transition_observation,
+            "ticket_trace": [dict(event) for event in self._ticket_trace],
+        }
 
     def get_output_metadata(self) -> dict[str, str | None]:
         return {"title": self._title, "author": self._author, "order": None, "genre": "漫画"}

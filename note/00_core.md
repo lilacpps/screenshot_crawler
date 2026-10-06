@@ -78,6 +78,19 @@ Catalog source before opening a page. Comic DAYS treats charged-without-
 baseline. CLI stop-pass output is neutral, while the adapter reason remains
 available for operators and metrics.
 
+## Entry-only success diagnostics (2026-10-06)
+
+The generic `BatchExecutor` now best-effort collects the adapter's existing
+`collect_debug_metadata()` after a confirmed grant-only entry and writes
+metadata-only `diagnostics/entry_trace.json` under that candidate's existing
+output directory. The file carries `item_id`, `source_id`, `target_id`, `site`,
+and `resource`; collection or write failure never changes the candidate result.
+This is a generic hook extension and has no site-name branch. Comic DAYS puts
+its bounded `ticket_trace` inside `adapter_debug`, and the existing Runner
+failure diagnostics expose the same field under `metadata.json`'s
+`adapter_debug`; no capture, retry, pacing, timeout, click, or Catalog
+semantics are changed.
+
 ## Zeblack Z5 current status (2026-09-30)
 
 ### Z5-6 production initial-navigation and Work Ticket flow
@@ -928,7 +941,9 @@ error.txt
 既知の制約:
 
 - diagnostics pathはrun-specific subdirectoryを自動生成しない
-- `SiteAdapter.collect_debug_metadata()` hookはcontractにあるがRunner未統合
+- `SiteAdapter.collect_debug_metadata()` is collected into failure diagnostics under
+  `adapter_debug`; confirmed grant-only runs additionally write the generic
+  metadata-only `diagnostics/entry_trace.json`.
 - diagnostics保存失敗は元例外を隠さない
 
 ## 19. CLI / packaging flow
@@ -1018,7 +1033,6 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 - `BrowserSession`の不要Page helper再発防止
 - explicit resume
-- Adapter `collect_debug_metadata()` のRunner統合
 - diagnostics run directory分離
 - config.yaml整理
 - identity/fingerprint dedupe再検討
