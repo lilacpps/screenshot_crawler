@@ -31,6 +31,7 @@ from screenshot_crawler.site_adapters.comicdays.adapter import ComicDaysAdapter
 from screenshot_crawler.site_adapters.comicdays.live_access import (
     ComicDaysLiveAccessError,
     ComicDaysLiveAccessState,
+    ComicDaysTargetIdentityMismatch,
     ComicDaysTicketState,
     observe_comicdays_target_access,
 )
@@ -171,7 +172,7 @@ async def _observe_real_target_with_graphql(
 
 
 @pytest.mark.parametrize(
-    ("state_name", "html", "charged"),
+    ("state_name", "html", "charged", "stop_resource_pass"),
     [
         (
             "free",
@@ -181,6 +182,7 @@ async def _observe_real_target_with_graphql(
                 1,
             ),
             True,
+            False,
         ),
         (
             "active_grant",
@@ -190,11 +192,13 @@ async def _observe_real_target_with_graphql(
                 1,
             ),
             False,
+            False,
         ),
         (
             "paid",
             _without_ticket_control(ENTRY_HTML),
             True,
+            False,
         ),
         (
             "unsupported_contract",
@@ -204,16 +208,18 @@ async def _observe_real_target_with_graphql(
                 1,
             ),
             True,
+            True,
         ),
     ],
 )
 @pytest.mark.parametrize("entry_only", [True, False])
-async def test_comicdays_real_target_positive_mismatch_stops_both_entry_modes(
+async def test_comicdays_target_access_mismatch_classifies_entry_scope(
     browser_page,
     monkeypatch: pytest.MonkeyPatch,
     state_name: str,
     html: str,
     charged: bool,
+    stop_resource_pass: bool,
     entry_only: bool,
 ) -> None:
     page = await _ticket_page(browser_page, html=html)
@@ -237,14 +243,14 @@ async def test_comicdays_real_target_positive_mismatch_stops_both_entry_modes(
     adapter = ComicDaysAdapter()
     await adapter.configure_run(page, "quota")
     await adapter.configure_quota_resource(page, "work_ticket")
-    await adapter.configure_target_identity("1", "comicdays:series:1")
+    await adapter.configure_target_identity("1", "uchu-kyodai")
 
     with pytest.raises(AccessResourceUnavailableError) as error:
         if entry_only:
             await adapter.initialize_entry_only(page)
         else:
             await adapter.initialize(page)
-    assert error.value.stop_resource_pass is True
+    assert error.value.stop_resource_pass is stop_resource_pass
     assert "comicdays_discovery_refresh_required" in str(error.value)
     assert await page.evaluate("() => window.ticketClicks") == 0
     assert await page.evaluate("() => window.paidClicks") == 0
@@ -304,19 +310,9 @@ async def test_comicdays_hidden_or_duplicate_ticket_control_is_unknown(
     assert state.ticket.is_charged is True
 
 
-@pytest.mark.parametrize(
-    ("external_id", "work_key", "reason"),
-    [
-        ("2", "comicdays:series:1", "comicdays_discovery_refresh_required"),
-        ("1", "other-work", "comicdays_work_identity_unavailable"),
-    ],
-)
-async def test_comicdays_quota_identity_gate_rejects_before_navigation(
+async def test_comicdays_quota_external_id_mismatch_skips_before_navigation(
     browser_page,
     monkeypatch: pytest.MonkeyPatch,
-    external_id: str,
-    work_key: str,
-    reason: str,
 ) -> None:
     page = await _ticket_page(browser_page)
     navigation_calls: list[str] = []
@@ -330,11 +326,26 @@ async def test_comicdays_quota_identity_gate_rejects_before_navigation(
     adapter = ComicDaysAdapter()
     await adapter.configure_run(page, "quota")
     await adapter.configure_quota_resource(page, "work_ticket")
-    await adapter.configure_target_identity(external_id, work_key)
-    with pytest.raises(AccessResourceUnavailableError, match=reason) as error:
+    await adapter.configure_target_identity("2", "uchu-kyodai")
+    with pytest.raises(
+        AccessResourceUnavailableError,
+        match="comicdays_discovery_refresh_required",
+    ) as error:
         adapter.resolve_initial_navigation_url("https://comic-days.com/episode/1")
-    assert error.value.stop_resource_pass is True
+    assert error.value.stop_resource_pass is False
     assert navigation_calls == []
+
+
+async def test_comicdays_quota_accepts_arbitrary_stable_work_key_before_navigation(
+    browser_page,
+) -> None:
+    adapter = ComicDaysAdapter()
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    await adapter.configure_target_identity("1", "uchu-kyodai")
+    assert adapter.resolve_initial_navigation_url(
+        "https://comic-days.com/episode/1"
+    ) == "https://comic-days.com/episode/1"
 
 
 async def test_comicdays_direct_identity_gate_keeps_arbitrary_work_key_supported(
@@ -349,7 +360,7 @@ async def test_comicdays_direct_identity_gate_keeps_arbitrary_work_key_supported
 
 
 @pytest.mark.parametrize("entry_only", [True, False])
-async def test_comicdays_native_work_identity_mismatch_stops_before_ticket(
+async def test_comicdays_live_identity_mismatch_is_candidate_local_before_ticket(
     browser_page,
     monkeypatch: pytest.MonkeyPatch,
     entry_only: bool,
@@ -361,14 +372,16 @@ async def test_comicdays_native_work_identity_mismatch_stops_before_ticket(
         ".addEventListener('click', () => window.ticketClicks++); }"
     )
 
-    async def unexpected_observe(*_args: object, **_kwargs: object):
-        raise AssertionError("target observer must not run after identity mismatch")
+    async def observe_mismatch(*_args: object, **_kwargs: object):
+        raise ComicDaysTargetIdentityMismatch(
+            "Comic DAYS target work identity did not match"
+        )
 
-    monkeypatch.setattr(ComicDaysAdapter, "_observe_live_access", unexpected_observe)
+    monkeypatch.setattr(ComicDaysAdapter, "_observe_live_access", observe_mismatch)
     adapter = ComicDaysAdapter()
     await adapter.configure_run(page, "quota")
     await adapter.configure_quota_resource(page, "work_ticket")
-    await adapter.configure_target_identity("1", "comicdays:series:2")
+    await adapter.configure_target_identity("1", "uchu-kyodai")
     with pytest.raises(
         AccessResourceUnavailableError,
         match="comicdays_discovery_refresh_required",
@@ -377,7 +390,7 @@ async def test_comicdays_native_work_identity_mismatch_stops_before_ticket(
             await adapter.initialize_entry_only(page)
         else:
             await adapter.initialize(page)
-    assert error.value.stop_resource_pass is True
+    assert error.value.stop_resource_pass is False
     assert await page.evaluate("() => window.ticketClicks") == 0
 
 
@@ -648,7 +661,7 @@ async def test_comicdays_real_planner_executor_grant_only_navigates_once(
 
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(
-        WorkInput(work_key="comicdays:series:1", title="Synthetic work")
+        WorkInput(work_key="uchu-kyodai", title="Synthetic work")
     )
     item = catalog.create_item(ItemInput(item_title="Episode 1"), work_id=work.id)
     source = catalog.create_source(
@@ -805,7 +818,7 @@ async def test_comicdays_real_planner_executor_normal_quota_reuses_page(
 
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(
-        WorkInput(work_key="comicdays:series:1", title="Synthetic work")
+        WorkInput(work_key="uchu-kyodai", title="Synthetic work")
     )
     item = catalog.create_item(ItemInput(item_title="Episode 1"), work_id=work.id)
     source = catalog.create_source(

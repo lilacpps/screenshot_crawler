@@ -138,25 +138,19 @@ matching episode identity inside the target locked
 `section.private-viewer.js-viewer[data-json-url]` JSON scope and its unique
 `.read-button-container`; the unlocked capture viewer uses the separate
 `section.viewer.js-viewer` scope. The sibling
-`[data-aggregate-id][data-type="episode"]` surface binds the work identity.
-Consuming Comic DAYS Batch requires a Work key matching
-`comicdays:series:<native-series-id>`. The adapter checks this Catalog/live
-binding before the first navigation and returns
-`comicdays_work_identity_unavailable` with `stop_resource_pass=True` for an
-arbitrary or malformed key, with no navigation or consumption. This is
-separate from the positive live mismatch reason
-`comicdays_discovery_refresh_required`. Free/direct candidates may use
-arbitrary Work keys; a manually invoked quota run without configured Catalog
-expectations retains the target-local contract checks. After a positive
-mismatch, rerun full Discovery against an isolated Catalog/watchlist, for
-example:
-
-```powershell
-.\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `
-  --site comicdays --mode full `
-  --watchlist output\comicdays-watchlist.yaml `
-  --catalog output\comicdays-refresh.sqlite
-```
+`[data-aggregate-id][data-type="episode"]` surface binds the native work
+identity. `Work.work_key` remains a site-neutral stable Catalog identity, so
+quota and grant-only runs accept arbitrary stable keys such as `uchu-kyodai`.
+The adapter does not derive or compare native series identity from that key.
+Before a Work Ticket click it validates the Catalog `Source.external_id`,
+canonical episode URL, live episode/series binding, private viewer, ticket
+control, and viewer JSON as one target-local site-native identity. A
+candidate-local mismatch uses `comicdays_discovery_refresh_required` with
+`stop_resource_pass=False` and performs no click or consumption accounting.
+Only a changed or unknown Work Ticket contract (for example, a non-72-hour
+rental) stops the resource pass. Work Ticket cooldown remains work-scoped
+(`work_id × site × resource`) and is based only on confirmed native
+consumption.
 
 Paid and premium controls are never fallback paths; the live Work5 guard
 observed the purchase control separately with a 90pt price. Consumption is latched
@@ -191,10 +185,12 @@ than the pre-click value and current observation time. It does not require
 body/capture readiness for grant-only. Normal quota continues on the same Page
 through the existing initialize, normalization, and capture guards. A
 subsequent viewer failure preserves the first observed consumption.
-Catalog/live disagreement stops the resource pass with
+Candidate-local Catalog/live disagreement skips only that candidate with
 `comicdays_discovery_refresh_required`; no alternate candidate or paid control
-is attempted. A positive work-ticket `isCharged=false` is reported separately
-as `work_ticket_cooldown`. Discovery and Policy never click or consume an access control.
+is attempted for it. A changed/unknown Work Ticket contract remains a
+pass-wide stop. A positive work-ticket `isCharged=false` is reported
+separately as `work_ticket_cooldown`. Discovery and Policy never click or
+consume an access control.
 
 The historical A/2R/3P raw directories under `output/tmp` are currently
 unavailable; their original Catalogs and raw evidence cannot be revalidated.

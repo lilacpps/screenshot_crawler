@@ -248,7 +248,9 @@ async def observe_comicdays_target_access(
         raise ValueError("timeout_ms must be a positive integer")
     current = parse_comicdays_episode_url(str(page.url))
     if current != str(episode_id):
-        raise ComicDaysLiveAccessError("Comic DAYS page URL did not match the target episode")
+        raise ComicDaysTargetIdentityMismatch(
+            "Comic DAYS page URL did not match the target episode"
+        )
     deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
     try:
         # The ticket GraphQL call can trigger a first-party route/viewer swap.

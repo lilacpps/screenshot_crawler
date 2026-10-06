@@ -13,6 +13,7 @@ from screenshot_crawler.batch import (
     BatchExecutionError,
     BatchExecutor,
     BatchInterruptedError,
+    BatchPlanner,
 )
 from screenshot_crawler.batch.executor import _cancel_task_bounded
 from screenshot_crawler.catalog import (
@@ -30,6 +31,7 @@ from screenshot_crawler.core.packaging import PackageResult
 from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import AccessConsumption
+from screenshot_crawler.site_adapters.comicdays.adapter import ComicDaysAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     ComicDaysSitePolicy,
@@ -572,6 +574,64 @@ async def test_populated_candidate_external_id_must_match_catalog_source(
         )
 
     assert service.list_crawl_runs() == []
+    assert service.list_artifacts() == []
+
+
+async def test_comicdays_candidate_local_identity_skip_does_not_record_consumption(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "comicdays-identity-skip.sqlite")
+    work = service.create_work(WorkInput(work_key="uchu-kyodai", title="Comic DAYS"))
+    item = service.create_item(ItemInput(order_label="Episode 1"), work_id=work.id)
+    source = service.create_source(
+        SourceInput(site="comicdays", external_id="2", access_mode="quota"),
+        item_id=item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(
+            backend="web", locator="https://comic-days.com/episode/1"
+        ),
+        source_id=source.id,
+    )
+    policies = SitePolicyRegistry()
+    policies.register("comicdays", ComicDaysSitePolicy)
+    adapters = AdapterRegistry()
+    adapters.register("comicdays", ComicDaysAdapter)
+    candidate = BatchPlanner(service, policies).plan(site="comicdays", now=NOW).candidates[0]
+
+    class Runner:
+        def __init__(self, config: RunConfig) -> None:
+            self.config = config
+
+        async def run(self, _page: object, adapter: ComicDaysAdapter) -> RunResult:
+            await adapter.configure_run(_page, self.config.access_strategy)
+            await adapter.configure_quota_resource(_page, self.config.quota_resource)
+            adapter.resolve_initial_navigation_url(
+                "https://comic-days.com/episode/1"
+            )
+            raise AssertionError("candidate-local identity mismatch should skip first")
+
+    executor = BatchExecutor(
+        service,
+        policies,
+        adapters,
+        runner_factory=Runner,  # type: ignore[arg-type]
+    )
+    with pytest.raises(
+        AccessResourceUnavailableError,
+        match="comicdays_discovery_refresh_required",
+    ) as error:
+        await executor.execute_grant_only_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+
+    assert error.value.stop_resource_pass is False
+    assert service.get_source(source.id).quota_started_at is None
+    assert service.get_source(source.id).access_granted_until is None
+    assert service.get_quota_resource_state(
+        work.id, site="comicdays", resource="work_ticket"
+    ) is None
+    assert service.get_item(item.id).status == "pending"
     assert service.list_artifacts() == []
 
 

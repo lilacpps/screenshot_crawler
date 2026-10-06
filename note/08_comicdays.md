@@ -129,10 +129,11 @@ pre-click value and current observation time. Grant-only does not require
 body/capture readiness. Normal quota continues on the same Page into the
 existing initialize, viewer normalization, and capture guards; if those
 guards fail closed, the recorded consumption is retained.
-Discovery and Policy never click or consume an access control. A positive
-Catalog/live mismatch stops the resource pass with
+Discovery and Policy never click or consume an access control. A
+candidate-local Catalog/live identity mismatch skips only that candidate with
 `comicdays_discovery_refresh_required`; no alternate candidate or paid fallback
-is attempted. Positive `isCharged=false` is a separate
+is attempted for that candidate. A changed or unknown Work Ticket contract is
+the pass-wide stop case. Positive `isCharged=false` is a separate
 `work_ticket_cooldown` outcome. The dated live evidence below predates this
 current resolver-free flow; resolver/replan references there are historical.
 Current isolated Test A evidence (2026-10-04) used seed
@@ -212,22 +213,24 @@ The charged ticket state must include a native `chargedAt` baseline before a
 click; a missing baseline is unknown and fails closed. Executor also rejects a
 populated candidate external ID that differs from the current Catalog source
 before any page is opened.
-Consuming Comic DAYS Batch also requires the Catalog Work key
-`comicdays:series:<native-series-id>`. The adapter checks this binding before
-navigation and returns `comicdays_work_identity_unavailable` with
-`stop_resource_pass=True` for an arbitrary or malformed key, without
-navigation or consumption. This differs from the positive live mismatch
-reason `comicdays_discovery_refresh_required`. Free/direct candidates may use
-arbitrary Work keys, and manually invoked quota runs without configured
-Catalog expectations retain the target-local contract checks. After a
-positive mismatch, rerun full Discovery with isolated paths, for example:
+Comic DAYS Batch treats `Work.work_key` as the site-neutral stable Catalog
+identity. Quota and grant-only execution therefore accepts arbitrary stable
+keys such as `uchu-kyodai`; it neither rewrites the key during Discovery nor
+uses it as the native series identity. Before a Work Ticket click, the adapter
+checks the Catalog `Source.external_id` against the canonical episode URL and
+then validates the live episode URL, native series/aggregate binding, private
+viewer, ticket control, and viewer JSON as one target-local site-native
+identity. The live series ID is used only for that page-local evidence and is
+never compared with `Work.work_key`.
 
-```powershell
-.\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `
-  --site comicdays --mode full `
-  --watchlist output\comicdays-watchlist.yaml `
-  --catalog output\comicdays-refresh.sqlite
-```
+Candidate-local identity or locator mismatches use
+`comicdays_discovery_refresh_required` with `stop_resource_pass=False`; they
+skip only that candidate, do not click, and do not record consumption. A
+changed/unknown Work Ticket contract such as a non-72-hour rental remains a
+pass-wide stop. Work Ticket cooldown remains work-scoped (`work_id × site ×
+resource`) and is written only from confirmed native consumption via the
+`after_observed_consumption` path. Free/direct candidates may use arbitrary
+Work keys as well.
 
 The repaired live verification used the shared CDP endpoint and isolated
 output/library paths. It captured 32 pages and reached `END`; manifest and
