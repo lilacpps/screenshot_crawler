@@ -413,8 +413,12 @@ endpoint優先順位:
 正常 `END` / `NEXT_CONTENT` 後、Coreがmanifest記載PNGだけをZIP化する。
 
 ```text
-output/Books/<genre>/<title>/<title>-<volume>-<author>.zip
+output/Books/<genre>/<title>/<volume>-<author>.zip
 ```
+
+上記のfilenameは正規化・サニタイズ後のtitleが50文字未満の場合の形式である。
+50文字以上の場合はtitleをfilenameから省略し、`<volume>-<author>.zip`とする。
+titleはどちらの場合もlibrary directoryに残り、completion status JSONは同じstemを使う。
 
 completion statusは `output/crawl-status/` 配下。
 

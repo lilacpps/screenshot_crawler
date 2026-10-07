@@ -882,8 +882,13 @@ Plannerはsite-scoped snapshotの全status Item/Sourceを対象に、既存の
 衝突するgroupのSourceだけへ`{site}-{Source.external_id}`を設定し、同一Itemの複数
 Sourceだけではsuffixを付けない。Manga ONE/Magapoke専用のnaming workaroundは廃止した。
 ZIP内部の画像はmanifestの相対パスをそのまま使い、作品stemのtop-level directoryは作成しない。
-archive filenameとcompletion status JSONのfilenameは従来どおり同じstemを使い、
-destination存在時の`FileExistsError`と自動連番なしの安全性を維持する。
+archive filenameとcompletion status JSONのfilenameは同じstemを使う。stemは
+`artifact_prefix-[title if sanitized title length < 50]-order-author[-artifact_disambiguator]`
+である。正規化・サニタイズ後タイトルが50文字以上の場合だけtitleを省略し、
+title自体は常にlibrary directoryに含める。50文字ちょうども省略対象である。
+filename要素がすべて空の場合は`archive`をfallbackにする。destination存在時の
+`FileExistsError`と自動連番なしの安全性を維持する。既存archive/status/Artifact
+locatorは通常Batchで変更せず、明示的なP4 renumberだけが現在のstemへ移行する。
 
 既存archiveのP4 renumberは `scripts/renumber_archives.py` が薄いCLI wrapperとして提供する。
 `--work-key`、`--site`、両方のAND、または`--all`の明示scopeが必須で、defaultはdry-run、

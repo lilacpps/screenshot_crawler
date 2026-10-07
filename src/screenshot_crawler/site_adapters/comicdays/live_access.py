@@ -29,6 +29,8 @@ from screenshot_crawler.site_adapters.comicdays.discovery import (
 )
 
 COMICDAYS_LIVE_ACCESS_TIMEOUT_MS = 15_000
+COMICDAYS_TARGET_ACCESS_STABILIZATION_MS = 2_000
+COMICDAYS_TARGET_ACCESS_POLL_MS = 50
 MAX_GRAPHQL_BODY = 100_000
 TraceSink = Callable[[str, dict[str, object]], None]
 TICKET_QUERY = """
@@ -50,11 +52,12 @@ class ComicDaysTargetIdentityMismatch(ComicDaysLiveAccessError):
 @dataclass(frozen=True, slots=True)
 class ComicDaysTicketState:
     series_id: str
-    is_charged: bool
+    is_charged: bool | None
     charged_at: datetime | None
     event_ticket_count: int | None = None
     graphql_status: int | None = None
     graphql_elapsed_ms: int | None = None
+    ticket_present: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +199,7 @@ async def observe_comicdays_ticket(
     is_charged: bool | None = None
     charged_at: datetime | None = None
     count: int | None = None
+    ticket_present = True
     try:
         try:
             remaining = _remaining_ms(deadline)
@@ -229,22 +233,26 @@ async def observe_comicdays_ticket(
             account = data["userAccount"]
         except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
             raise ComicDaysLiveAccessError("Comic DAYS ticket query had an invalid shape") from exc
-        if not isinstance(ticket, dict) or not isinstance(account, dict):
+        if not isinstance(account, dict):
             raise ComicDaysLiveAccessError("Comic DAYS ticket query omitted ticket state")
-        is_charged = ticket.get("isCharged")
-        if not isinstance(is_charged, bool):
-            raise ComicDaysLiveAccessError("Comic DAYS ticket readiness was malformed")
-        raw_charged_at = ticket.get("chargedAt")
-        if raw_charged_at is not None:
-            if not isinstance(raw_charged_at, str):
-                raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was malformed")
-            try:
-                charged_at = datetime.fromisoformat(raw_charged_at)
-            except ValueError as exc:
-                raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was invalid") from exc
-            if charged_at.tzinfo is None or charged_at.utcoffset() is None:
-                raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was timezone-naive")
-            charged_at = charged_at.astimezone(UTC)
+        if ticket is not None and not isinstance(ticket, dict):
+            raise ComicDaysLiveAccessError("Comic DAYS ticket query had an invalid shape")
+        ticket_present = ticket is not None
+        if ticket_present:
+            is_charged = ticket.get("isCharged")
+            if not isinstance(is_charged, bool):
+                raise ComicDaysLiveAccessError("Comic DAYS ticket readiness was malformed")
+            raw_charged_at = ticket.get("chargedAt")
+            if raw_charged_at is not None:
+                if not isinstance(raw_charged_at, str):
+                    raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was malformed")
+                try:
+                    charged_at = datetime.fromisoformat(raw_charged_at)
+                except ValueError as exc:
+                    raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was invalid") from exc
+                if charged_at.tzinfo is None or charged_at.utcoffset() is None:
+                    raise ComicDaysLiveAccessError("Comic DAYS ticket chargedAt was timezone-naive")
+                charged_at = charged_at.astimezone(UTC)
         count = account.get("eventTicketCount")
         if count is not None and (isinstance(count, bool) or not isinstance(count, int) or count < 0):
             raise ComicDaysLiveAccessError("Comic DAYS event ticket count was malformed")
@@ -255,6 +263,7 @@ async def observe_comicdays_ticket(
             count,
             graphql_status,
             int((time.monotonic() - query_started) * 1000),
+            ticket_present,
         )
     finally:
         _emit_trace(
@@ -263,6 +272,7 @@ async def observe_comicdays_ticket(
             {
                 "series_id": str(series_id),
                 "is_charged": is_charged,
+                "ticket_present": ticket_present,
                 "charged_at": charged_at.isoformat() if charged_at is not None else None,
                 "event_ticket_count": count,
                 "graphql_status": graphql_status,
@@ -293,6 +303,10 @@ async def observe_comicdays_live_access(
         )
     except (DiscoveryIncompleteError, StopIteration) as exc:
         raise ComicDaysLiveAccessError(str(exc)) from exc
+    if not listing.ticket.ticket_present and mode != "free":
+        raise ComicDaysLiveAccessError(
+            "Comic DAYS ticket-free series did not identify a free target"
+        )
     return ComicDaysLiveAccessState(str(series_id), str(episode_id), row, mode, expiry, observed, listing.ticket)
 
 
@@ -353,6 +367,174 @@ async def _observe_target_dom_snapshot(page: Page, *, timeout_ms: int) -> dict[s
     return value
 
 
+def _is_transient_hidden_ticket_state(
+    dom: dict[str, object],
+    *,
+    ticket_state: ComicDaysTicketState,
+    episode_id: str,
+) -> bool:
+    """Return whether a narrowly defined viewer-hydration race may be retried.
+
+    The page can briefly retain the locked viewer and its exact Work Ticket
+    control while the control is still hidden.  This is the only ambiguous
+    state that gets a short read-only re-observation window.  Duplicate,
+    malformed, identity-mismatched, or paid-only controls remain fail-closed.
+    """
+
+    if not ticket_state.ticket_present or ticket_state.is_charged is not True:
+        return False
+    private_rows = dom.get("private")
+    normal_rows = dom.get("normal")
+    ticket_rows = dom.get("ticket")
+    purchase_rows = dom.get("purchase")
+    if (
+        not isinstance(private_rows, list)
+        or len(private_rows) != 1
+        or not isinstance(normal_rows, list)
+        or len(normal_rows) != 0
+        or not isinstance(ticket_rows, list)
+        or len(ticket_rows) != 1
+        or not isinstance(purchase_rows, list)
+        or len(purchase_rows) > 1
+        or not isinstance(ticket_rows[0], dict)
+    ):
+        return False
+    control = ticket_rows[0]
+    return (
+        control.get("visible") is False
+        and control.get("enabled") is True
+        and control.get("rental_id") == str(episode_id)
+        and control.get("behaviour") == "button"
+        and control.get("buy_price") is None
+        and control.get("onclick") is None
+    )
+
+
+def _classify_comicdays_target_dom(
+    dom: dict[str, object],
+    *,
+    dom_trace: dict[str, object],
+    ticket_state: ComicDaysTicketState,
+    series_id: str,
+    episode_id: str,
+) -> ComicDaysLiveAccessState:
+    """Validate and classify one atomic target DOM snapshot."""
+
+    current = parse_comicdays_episode_url(str(dom.get("url", "")))
+    if current != str(episode_id):
+        raise ComicDaysTargetIdentityMismatch(
+            "Comic DAYS target page identity did not match"
+        )
+    aggregate = dom.get("aggregate")
+    if (
+        not isinstance(aggregate, list)
+        or len(aggregate) != 1
+        or not isinstance(aggregate[0], dict)
+    ):
+        raise ComicDaysLiveAccessError("Comic DAYS target work identity was missing or ambiguous")
+    aggregate_id = aggregate[0].get("aggregate_id")
+    if aggregate_id != str(series_id):
+        raise ComicDaysTargetIdentityMismatch(
+            "Comic DAYS target work identity did not match"
+        )
+    contract = dom.get("contract")
+    if (
+        not isinstance(contract, list)
+        or len(contract) != 1
+        or not isinstance(contract[0], dict)
+    ):
+        raise ComicDaysLiveAccessError("Comic DAYS target ticket contract was missing")
+    contract_id = contract[0].get("aggregate_id")
+    raw_term = contract[0].get("rental_term")
+    if contract_id != str(series_id) or not isinstance(raw_term, str) or not raw_term.isdigit():
+        raise ComicDaysLiveAccessError("Comic DAYS target ticket contract was unknown")
+    seconds = int(raw_term)
+    rental_term_hours = seconds // 3600
+    private_rows = dom.get("private")
+    viewer_rows = dom.get("normal")
+    private_count = len(private_rows) if isinstance(private_rows, list) else 0
+    viewer_count = len(viewer_rows) if isinstance(viewer_rows, list) else 0
+    if private_count == 1 and viewer_count == 1:
+        raise ComicDaysLiveAccessError("Comic DAYS viewer scopes were ambiguous")
+    if private_count > 1 or viewer_count > 1:
+        raise ComicDaysLiveAccessError("Comic DAYS viewer scope was ambiguous")
+    expected_json = f"https://comic-days.com/episode/{episode_id}.json"
+    viewer_unlocked = False
+    mode = "unknown"
+    row: dict[str, object] = {
+        "status": {"rental_term": rental_term_hours},
+        "purchase_info": {
+            "can_read": False,
+            "is_free": False,
+            "has_rented_via_ticket": False,
+        },
+    }
+    ticket_rows = dom.get("ticket")
+    purchase_rows = dom.get("purchase")
+    ticket_count = len(ticket_rows) if isinstance(ticket_rows, list) else 0
+    purchase_count = len(purchase_rows) if isinstance(purchase_rows, list) else 0
+    if private_count == 1:
+        private_json = private_rows[0].get("json") if isinstance(private_rows[0], dict) else None
+        if private_json != expected_json:
+            raise ComicDaysTargetIdentityMismatch(
+                "Comic DAYS locked viewer identity did not match"
+            )
+        # A positive work-level debit state is authoritative for cooldown.
+        # Evaluate it before interpreting stale/hidden controls or a paid
+        # control on the locked page.
+        if ticket_state.is_charged is False or (
+            ticket_count == 1
+            and isinstance(ticket_rows[0], dict)
+            and bool(ticket_rows[0].get("visible"))
+        ):
+            mode = "quota"
+        elif ticket_count != 0:
+            # A hidden or duplicate Work Ticket control is still a positive
+            # access-control surface. Never reinterpret it as a
+            # purchase-only page while hydration or routing is ambiguous.
+            mode = "unknown"
+        elif (
+            purchase_count == 1
+            and isinstance(purchase_rows[0], dict)
+            and bool(purchase_rows[0].get("visible"))
+        ):
+            mode = "paid"
+        else:
+            mode = "unknown"
+    elif viewer_count == 1:
+        normal = viewer_rows[0] if isinstance(viewer_rows[0], dict) else {}
+        if normal.get("json") != expected_json:
+            raise ComicDaysTargetIdentityMismatch(
+                "Comic DAYS viewer identity did not match"
+            )
+        mode = "free"
+        # Access mode is still free when the identity is correct, but the
+        # post-click success contract additionally requires a visible normal
+        # viewer. Keep that readiness bit explicit so a hidden viewer cannot
+        # be mistaken for positive consumption.
+        viewer_unlocked = bool(normal.get("visible"))
+        row["purchase_info"] = {
+            "can_read": True,
+            "is_free": True,
+            "has_rented_via_ticket": False,
+        }
+    else:
+        raise ComicDaysLiveAccessError("Comic DAYS viewer scope was missing or ambiguous")
+    return ComicDaysLiveAccessState(
+        str(series_id), str(episode_id), row, mode, None, mode == "quota",
+        ticket_state, viewer_unlocked, rental_term_hours, seconds,
+        str(dom.get("url")), private_count, viewer_count,
+        bool(viewer_rows[0].get("visible"))
+        if viewer_count == 1 and isinstance(viewer_rows[0], dict)
+        else False,
+        viewer_rows[0].get("json")
+        if viewer_count == 1 and isinstance(viewer_rows[0], dict)
+        else None,
+        ticket_count,
+        dom_trace,
+    )
+
+
 async def observe_comicdays_target_access(
     page: Page,
     *,
@@ -387,107 +569,87 @@ async def observe_comicdays_target_access(
         ticket_state = await observe_comicdays_ticket(
             page, str(series_id), timeout_ms=timeout_ms, trace_sink=trace_sink
         )
-        remaining = _remaining_ms(deadline)
-        if remaining <= 0:
-            raise ComicDaysLiveAccessError("Comic DAYS target access observation timed out")
-        dom = await _observe_target_dom_snapshot(page, timeout_ms=remaining)
-        dom_trace = _dom_trace_metadata(dom, expected_episode_id=str(episode_id))
-        _emit_trace(trace_sink, "dom_snapshot", dom_trace)
-        current = parse_comicdays_episode_url(str(dom.get("url", "")))
-        if current != str(episode_id):
-            raise ComicDaysTargetIdentityMismatch(
-                "Comic DAYS target page identity did not match"
+        if not ticket_state.ticket_present:
+            raise ComicDaysLiveAccessError(
+                "Comic DAYS target access requires ticket state"
             )
-        aggregate = dom.get("aggregate")
-        if not isinstance(aggregate, list) or len(aggregate) != 1:
-            raise ComicDaysLiveAccessError("Comic DAYS target work identity was missing or ambiguous")
-        aggregate_id = aggregate[0].get("aggregate_id")
-        if aggregate_id != str(series_id):
-            raise ComicDaysTargetIdentityMismatch(
-                "Comic DAYS target work identity did not match"
-            )
-        contract = dom.get("contract")
-        if not isinstance(contract, list) or len(contract) != 1:
-            raise ComicDaysLiveAccessError("Comic DAYS target ticket contract was missing")
-        contract_id = contract[0].get("aggregate_id")
-        raw_term = contract[0].get("rental_term")
-        if contract_id != str(series_id) or not isinstance(raw_term, str) or not raw_term.isdigit():
-            raise ComicDaysLiveAccessError("Comic DAYS target ticket contract was unknown")
-        seconds = int(raw_term)
-        rental_term_hours = seconds // 3600
-        private_rows = dom.get("private")
-        viewer_rows = dom.get("normal")
-        private_count = len(private_rows) if isinstance(private_rows, list) else 0
-        viewer_count = len(viewer_rows) if isinstance(viewer_rows, list) else 0
-        if private_count == 1 and viewer_count == 1:
-            raise ComicDaysLiveAccessError("Comic DAYS viewer scopes were ambiguous")
-        if private_count > 1 or viewer_count > 1:
-            raise ComicDaysLiveAccessError("Comic DAYS viewer scope was ambiguous")
-        expected_json = f"https://comic-days.com/episode/{episode_id}.json"
-        viewer_unlocked = False
-        mode = "unknown"
-        row: dict[str, object] = {
-            "status": {"rental_term": rental_term_hours},
-            "purchase_info": {
-                "can_read": False,
-                "is_free": False,
-                "has_rented_via_ticket": False,
-            },
-        }
-        ticket_rows = dom.get("ticket")
-        purchase_rows = dom.get("purchase")
-        ticket_count = len(ticket_rows) if isinstance(ticket_rows, list) else 0
-        purchase_count = len(purchase_rows) if isinstance(purchase_rows, list) else 0
-        if private_count == 1:
-            private_json = private_rows[0].get("json") if isinstance(private_rows[0], dict) else None
-            if private_json != expected_json:
-                raise ComicDaysTargetIdentityMismatch(
-                    "Comic DAYS locked viewer identity did not match"
-                )
-            # A positive work-level debit state is authoritative for cooldown.
-            # Evaluate it before interpreting stale/hidden controls or a paid
-            # control on the locked page.
-            if ticket_state.is_charged is False or (
-                ticket_count == 1 and bool(ticket_rows[0].get("visible"))
-            ):
-                mode = "quota"
-            elif ticket_count != 0:
-                # A hidden or duplicate Work Ticket control is still a
-                # positive access-control surface. Never reinterpret it as a
-                # purchase-only page while hydration or routing is ambiguous.
-                mode = "unknown"
-            elif purchase_count == 1 and bool(purchase_rows[0].get("visible")):
-                mode = "paid"
-            else:
-                mode = "unknown"
-        elif viewer_count == 1:
-            normal = viewer_rows[0] if isinstance(viewer_rows[0], dict) else {}
-            if normal.get("json") != expected_json:
-                raise ComicDaysTargetIdentityMismatch(
-                    "Comic DAYS viewer identity did not match"
-                )
-            mode = "free"
-            # Access mode is still free when the identity is correct, but the
-            # post-click success contract additionally requires a visible
-            # normal viewer.  Keep that readiness bit explicit so a hidden
-            # viewer cannot be mistaken for positive consumption.
-            viewer_unlocked = bool(normal.get("visible"))
-            row["purchase_info"] = {
-                "can_read": True,
-                "is_free": True,
-                "has_rented_via_ticket": False,
-            }
-        else:
-            raise ComicDaysLiveAccessError("Comic DAYS viewer scope was missing or ambiguous")
-        return ComicDaysLiveAccessState(
-            str(series_id), str(episode_id), row, mode, None, mode == "quota",
-            ticket_state, viewer_unlocked, rental_term_hours, seconds,
-            str(dom.get("url")), private_count, viewer_count,
-            bool(viewer_rows[0].get("visible")) if viewer_count == 1 and isinstance(viewer_rows[0], dict) else False,
-            viewer_rows[0].get("json") if viewer_count == 1 and isinstance(viewer_rows[0], dict) else None,
-            ticket_count,
-            dom_trace,
+        loop = asyncio.get_running_loop()
+        stabilization_deadline = min(
+            deadline,
+            loop.time() + COMICDAYS_TARGET_ACCESS_STABILIZATION_MS / 1000,
         )
+        stabilization_attempt = 0
+        last_state: ComicDaysLiveAccessState | None = None
+        while True:
+            remaining = _remaining_ms(deadline)
+            if remaining <= 0:
+                if last_state is not None:
+                    _emit_trace(
+                        trace_sink,
+                        "access_stabilization",
+                        {
+                            "attempt": stabilization_attempt,
+                            "status": "timeout",
+                            "reason": "hidden_ticket_control",
+                        },
+                    )
+                    return last_state
+                raise ComicDaysLiveAccessError("Comic DAYS target access observation timed out")
+            dom = await _observe_target_dom_snapshot(page, timeout_ms=remaining)
+            dom_trace = _dom_trace_metadata(dom, expected_episode_id=str(episode_id))
+            dom_trace["stabilization_attempt"] = stabilization_attempt
+            _emit_trace(trace_sink, "dom_snapshot", dom_trace)
+            state = _classify_comicdays_target_dom(
+                dom,
+                dom_trace=dom_trace,
+                ticket_state=ticket_state,
+                series_id=str(series_id),
+                episode_id=str(episode_id),
+            )
+            last_state = state
+            if state.access_mode != "unknown" or not _is_transient_hidden_ticket_state(
+                dom,
+                ticket_state=ticket_state,
+                episode_id=str(episode_id),
+            ):
+                if stabilization_attempt:
+                    _emit_trace(
+                        trace_sink,
+                        "access_stabilization",
+                        {
+                            "attempt": stabilization_attempt,
+                            "status": "resolved",
+                        },
+                    )
+                return state
+            remaining_stabilization = max(
+                0, int((stabilization_deadline - loop.time()) * 1000)
+            )
+            if remaining_stabilization <= 0:
+                _emit_trace(
+                    trace_sink,
+                    "access_stabilization",
+                    {
+                        "attempt": stabilization_attempt,
+                        "status": "timeout",
+                        "reason": "hidden_ticket_control",
+                    },
+                )
+                return state
+            stabilization_attempt += 1
+            _emit_trace(
+                trace_sink,
+                "access_stabilization",
+                {
+                    "attempt": stabilization_attempt,
+                    "status": "retry",
+                    "reason": "hidden_ticket_control",
+                    "remaining_ms": remaining_stabilization,
+                },
+            )
+            await asyncio.sleep(
+                min(COMICDAYS_TARGET_ACCESS_POLL_MS, remaining_stabilization) / 1000
+            )
     except (PlaywrightTimeoutError, TimeoutError) as exc:
         raise ComicDaysLiveAccessError("Comic DAYS target access observation timed out") from exc
 

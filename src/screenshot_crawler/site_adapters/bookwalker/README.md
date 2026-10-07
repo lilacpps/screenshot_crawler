@@ -132,8 +132,13 @@ For product-page entry, the adapter collects title/author/category/series metada
 On normal `END` / `NEXT_CONTENT`, manifest-declared PNGs are archived under:
 
 ```text
-output/Books/<genre>/<title>/<title>-<volume>-<author>.zip
+output/Books/<genre>/<title>/<volume>-<author>.zip
 ```
+
+This is the short-title form. When the sanitized title is 50 characters or
+longer, the ZIP and matching `crawl-status` JSON omit the title from the stem
+and use `<volume>-<author>` instead. The title remains the library directory in
+both cases.
 
 A completion record is kept under `output/crawl-status/`. The intermediate crawl directory is removed only when its complete contents are generated run artifacts (manifest, progress, and manifest-declared PNGs). If unrelated or extra files exist, the directory is retained rather than deleted.
 

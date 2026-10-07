@@ -1764,12 +1764,16 @@ Batch output uses the shared `archive_position_prefix()` helper. For a non-NULL
 remains the raw `order_label`; a NULL position passes no prefix and preserves
 the legacy order label. No value is inferred from `order_key`, IDs, title text,
 or numeric parsing. Core `archive_stem()` / `safe_component()` remains the
-final sanitization authority and assembles components in this order:
-`artifact_prefix -> title -> order -> author -> optional disambiguator`.
+final sanitization authority and assembles filename components in this order:
+`artifact_prefix -> optional title -> order -> author -> optional disambiguator`.
+The sanitized Work title is included when it is shorter than 50 characters and
+omitted at 50 characters or longer. The Work title always remains the library
+directory component.
 Therefore a positioned crawl uses the same desired stem for its ZIP and
 `crawl-status/<stem>.json` sidecar, for example
-`003-作品名-番外編.zip`. The prefix does not change the `genre/title`
-library directory.
+`003-作品名-番外編.zip` for a short title. A long-title equivalent omits the
+title, for example `103-第９５話-作者.zip`. The prefix does not change the
+`genre/title` library directory.
 
 Within one site planning snapshot, collision detection compares the sanitized
 base stem without a disambiguator, grouped by Work and base stem, across all

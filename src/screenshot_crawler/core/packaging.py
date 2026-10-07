@@ -16,6 +16,7 @@ from screenshot_crawler.core.progress import atomic_write_json
 
 _WINDOWS_FORBIDDEN = re.compile(r'[\\/:*?"<>|]')
 _OUTPUT_METADATA_FIELDS = ("title", "author", "order", "genre")
+_ARCHIVE_TITLE_OMIT_THRESHOLD = 50
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,15 +62,19 @@ def archive_stem(
     order = safe_component(order_value, fallback="") or None
     author = safe_component(metadata.get("author"), fallback="") or None
     prefix = safe_component(artifact_prefix, fallback="") or None
-    components = [component for component in (prefix, title) if component]
-    if order:
-        components.append(order)
-    if author:
-        components.append(author)
+    # Keep the work title in the library directory.  Include it in the
+    # archive/status stem for normal titles, but omit it for long titles so
+    # the complete Windows path stays within the legacy MAX_PATH boundary.
+    title_component = (
+        title if len(title) < _ARCHIVE_TITLE_OMIT_THRESHOLD else None
+    )
+    components = [
+        component for component in (prefix, title_component, order, author) if component
+    ]
     disambiguator = safe_component(artifact_disambiguator, fallback="") or None
     if disambiguator:
         components.append(disambiguator)
-    return "-".join(components), title, genre, order, author
+    return "-".join(components) or "archive", title, genre, order, author
 
 
 def resolve_output_metadata(

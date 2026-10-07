@@ -300,22 +300,26 @@ Three digits are a minimum width, not a maximum.
 The generic package stem component order is:
 
 ```text
-artifact_prefix-title-order-author[-artifact_disambiguator].zip
+artifact_prefix-[title when sanitized title length < 50]-order-author[-artifact_disambiguator].zip
 ```
 
-Example:
+Examples:
 
 ```text
 003-作品名-番外編.zip
+103-第９５話-作者.zip
 ```
 
 `artifact_prefix` is applied only to the archive/status filename stem. The
-library directory remains `genre/title`, so a position never creates a
-`001-作品名` directory. `archive_position_prefix()` is the shared primitive
+title remains in the library directory `genre/title`, so a position never
+creates a `001-作品名` directory. The sanitized title is included in the
+filename below 50 characters and omitted at 50 characters or longer.
+`archive_position_prefix()` is the shared primitive
 for converting a nullable `display_position` to the minimum-three-digit
 prefix. `archive_metadata_for_catalog()` keeps `order` as the raw
-`Item.order_label`; NULL position therefore retains the legacy
-`title-order-author` fallback without inference.
+`Item.order_label`; NULL position therefore retains the order/author filename
+components without inference. If all filename components are empty, packaging
+uses the `archive` fallback stem.
 
 ### 7.2 NULL position
 
@@ -720,9 +724,10 @@ IMPLEMENTED.
   and status paths. P5 real Catalog/output rollout and live verification are
   not performed by this implementation.
 - Because the old path authority remains `Artifact.locator`, P4 can be applied
-  again to archives produced by an earlier P4 naming rule, for example
-  `作品名-001-第01話.zip` -> `001-作品名-第01話.zip`, including a matching
-  crawl-status JSON sidecar.
+  again to archives produced by an earlier title-including naming rule, for
+  example `作品名-001-第01話.zip` -> `001-作品名-第01話.zip` for a short
+  title, including a matching crawl-status JSON sidecar. Long titles use the
+  title-omitted target instead.
 - Archives previously renamed using a scope-local position are repaired by the
   normal rollout: fixed full Discovery -> corrected `Source.display_position`
   -> `renumber_archives.py --dry-run` -> `renumber_archives.py --apply`. No

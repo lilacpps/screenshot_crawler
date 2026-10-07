@@ -75,7 +75,7 @@ def test_package_metadata_override_does_not_change_manifest_source_url(tmp_path)
     )
 
 
-def test_archive_stem_follows_title_rule() -> None:
+def test_archive_stem_includes_short_title_and_preserves_legacy_order() -> None:
     stem, title, genre, volume, author = archive_stem(
         {
             "title": "作品名",
@@ -105,7 +105,7 @@ def test_archive_stem_accepts_generic_order_for_episode_archives() -> None:
     assert (title, genre, order, author) == ("作品名", "漫画", "第01話-前編", None)
 
 
-def test_archive_stem_places_optional_prefix_before_title() -> None:
+def test_archive_stem_places_optional_prefix_before_order() -> None:
     stem, title, genre, order, author = archive_stem(
         {
             "title": "作品名",
@@ -142,13 +142,38 @@ def test_archive_stem_without_disambiguator_is_unchanged() -> None:
     assert stem == "作品名-第80話"
 
 
-def test_archive_stem_prefix_without_order_is_before_title() -> None:
+def test_archive_stem_prefix_without_order_is_retained() -> None:
     stem, *_ = archive_stem(
         {"title": "作品名", "genre": "漫画"},
         artifact_prefix="003",
     )
 
     assert stem == "003-作品名"
+
+
+def test_archive_stem_falls_back_when_all_filename_components_are_empty() -> None:
+    long_title = "長" * 50
+    stem, title, genre, order, author = archive_stem(
+        {"title": long_title, "genre": "漫画"}
+    )
+
+    assert stem == "archive"
+    assert (title, genre, order, author) == (long_title, "漫画", None, None)
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_in_stem"),
+    [("短" * 49, True), ("長" * 50, False)],
+)
+def test_archive_stem_uses_sanitized_title_length_threshold(
+    title: str, expected_in_stem: bool
+) -> None:
+    stem, *_ = archive_stem(
+        {"title": title, "order": "第01話", "genre": "漫画"}
+    )
+
+    expected_stem = f"{title}-第01話" if expected_in_stem else "第01話"
+    assert stem == expected_stem
 
 
 def test_position_prefixed_metadata_names_archive_and_status(tmp_path) -> None:
@@ -384,6 +409,34 @@ def test_package_same_disambiguated_destination_still_raises(tmp_path) -> None:
             artifact_disambiguator="mangaone-214131",
             library_dir=library_dir,
         )
+
+
+def test_long_title_stays_in_directory_and_not_archive_name(tmp_path) -> None:
+    crawl_dir = tmp_path / "crawl"
+    crawl_dir.mkdir()
+    (crawl_dir / "page-0001.png").write_bytes(b"png")
+    (crawl_dir / "manifest.json").write_text(
+        json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+    )
+    (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+    title = (
+        "追放されたチート付与魔術師は気ままなセカンドライフを謳歌する。 "
+        "～俺は武器だけじゃなく、あらゆるものに『強化ポイント』を付与できるし、"
+        "俺の意思でいつでも効果を解除できるけど、残った人たち大丈夫？～"
+    )
+
+    result = package_crawl_output(
+        crawl_dir,
+        {"title": title, "order": "第９５話", "author": "業務用餅六志麻あさｋｉｓｕｉ", "genre": "漫画"},
+        artifact_prefix="103",
+        library_dir=tmp_path / "Books",
+    )
+
+    assert result.archive_path.parent.name == title
+    assert result.archive_path.name == "103-第９５話-業務用餅六志麻あさｋｉｓｕｉ.zip"
+    assert title not in result.archive_path.name
+    assert result.status_path.name == result.archive_path.with_suffix(".json").name
+    assert len(str(result.archive_path)) < 260
 
 
 def test_package_fails_when_manifest_page_is_missing(tmp_path) -> None:

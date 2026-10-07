@@ -167,6 +167,41 @@ targets:
     enabled: true
     label: 水月の恋人
 
+  - key: maid-and-roid
+    work_key: maid-and-roid
+    site: mangaone
+    url: https://manga-one.com/manga/28129/chapter/355672
+    enabled: true
+    label: "メイド＆ロイドはお嬢様のお役に立ちたい！"
+
+  - key: shijou-saikyou-orc-san
+    work_key: shijou-saikyou-orc-san
+    site: mangaone
+    url: https://manga-one.com/manga/939/chapter/93060
+    enabled: true
+    label: "史上最強オークさんの楽しい異世界ハーレムづくり"
+
+  - key: monet-sensei-no-kakushigoto
+    work_key: monet-sensei-no-kakushigoto
+    site: mangaone
+    url: https://manga-one.com/manga/28411/chapter/357223
+    enabled: true
+    label: "モネ先生のカクシゴト！？"
+
+  - key: shio-taiou-no-satou-san
+    work_key: shio-taiou-no-satou-san
+    site: mangaone
+    url: https://manga-one.com/manga/1301/chapter/123482
+    enabled: true
+    label: "塩対応の佐藤さんが俺にだけ甘い＠comic"
+
+  - key: deatte-5-byou-de-battle
+    work_key: deatte-5-byou-de-battle
+    site: mangaone
+    url: https://manga-one.com/manga/66/chapter/355714
+    enabled: true
+    label: "出会って5秒でバトル"
+
   - key: nibanmekanojo
     work_key: nibanmekanojo
     site: bookwalker

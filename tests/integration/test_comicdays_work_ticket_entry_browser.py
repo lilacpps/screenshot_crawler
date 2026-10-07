@@ -134,7 +134,7 @@ async def _ticket_page(browser_page, *, html: str = ENTRY_HTML):
 
 
 async def _observe_real_target_with_graphql(
-    page, *, charged: bool, request_urls: list[str]
+    page, *, charged: bool, request_urls: list[str], trace_sink=None
 ) -> ComicDaysLiveAccessState:
     class Response:
         status = 200
@@ -168,6 +168,7 @@ async def _observe_real_target_with_graphql(
         series_id="1",
         episode_id="1",
         timeout_ms=2_000,
+        trace_sink=trace_sink,
     )
 
 
@@ -308,6 +309,36 @@ async def test_comicdays_hidden_or_duplicate_ticket_control_is_unknown(
     )
     assert state.access_mode == "unknown"
     assert state.ticket.is_charged is True
+
+
+async def test_comicdays_hidden_ticket_control_stabilizes_before_classification(
+    browser_page,
+) -> None:
+    page = await _ticket_page(
+        browser_page,
+        html=ENTRY_HTML.replace(
+            'data-ticket-rental-id="1"',
+            'data-ticket-rental-id="1" style="display:none"',
+            1,
+        ),
+    )
+    await page.evaluate("""() => setTimeout(() => {
+      const button = document.querySelector('[data-test-id="use-series-ticket-button"]');
+      if (button) button.style.display = 'block';
+    }, 50)""")
+    trace: list[tuple[str, dict[str, object]]] = []
+    state = await _observe_real_target_with_graphql(
+        page,
+        charged=True,
+        request_urls=[],
+        trace_sink=lambda phase, fields: trace.append((phase, fields)),
+    )
+    assert state.access_mode == "quota"
+    assert state.ticket_control_count == 1
+    assert any(
+        phase == "access_stabilization" and fields.get("status") == "resolved"
+        for phase, fields in trace
+    )
 
 
 async def test_comicdays_quota_external_id_mismatch_skips_before_navigation(
@@ -515,6 +546,49 @@ async def test_comicdays_target_observation_uses_dom_and_small_graphql_only(
             "free_only=1",
         )
     )
+
+
+async def test_comicdays_target_observation_rejects_absent_ticket_before_dom_or_click(
+    browser_page,
+) -> None:
+    page = await _ticket_page(browser_page)
+    await page.evaluate(
+        "() => { window.ticketClicks = 0; "
+        "document.querySelector('[data-test-id=use-series-ticket-button]')"
+        ".addEventListener('click', () => window.ticketClicks++); }"
+    )
+    evaluations: list[object] = []
+
+    class Response:
+        status = 200
+
+        async def body(self) -> bytes:
+            return (
+                b'{"data":{"userAccount":{"eventTicketCount":0},'
+                b'"series":{"ticket":null}}}'
+            )
+
+    class Request:
+        async def post(self, _url: str, **_kwargs: object) -> Response:
+            return Response()
+
+    async def evaluate(*args: object, **kwargs: object) -> object:
+        evaluations.append(args[0] if args else None)
+        return await page.evaluate(*args, **kwargs)
+
+    observed_page = SimpleNamespace(
+        url=page.url,
+        locator=page.locator,
+        evaluate=evaluate,
+        request=Request(),
+    )
+    with pytest.raises(ComicDaysLiveAccessError, match="requires ticket state"):
+        await observe_comicdays_target_access(
+            observed_page, series_id="1", episode_id="1", timeout_ms=2_000
+        )
+
+    assert evaluations == []
+    assert await page.evaluate("() => window.ticketClicks") == 0
 
 
 async def test_comicdays_target_trace_is_metadata_only_and_body_free(browser_page) -> None:

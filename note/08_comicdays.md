@@ -17,7 +17,14 @@ rental, and no expiry. The live Work5 listing also emits two free rows with
 `is_support_ticket=true`, numeric zero `rental_price`, and integer
 `rental_term=72`; this observed supporting metadata remains `free` and never
 becomes a quota candidate. Other malformed or contradictory combinations fail
-closed before any record is yielded.
+closed before any record is yielded. Work Ticket GraphQL may explicitly return
+`series.ticket=null` for a work with no Work Ticket contract. That state is
+preserved as Ticket-not-present (`is_charged=None`) and is accepted only for a
+direct target that is also present in the authoritative `free_only=1` feed and
+passes the coherent free readable-product checks. A missing field, malformed
+Ticket value, or Ticket-less non-free target remains fail-closed. Target-local
+quota and post-click consumption observations still require a Ticket object,
+so an absent Ticket can never be interpreted as an uncharged or consumed Ticket.
 
 The viewer adapter supports the observed horizontal RTL canvas viewer. It
 selects only the current slider spread's logically expected canvas-bearing page
@@ -27,7 +34,26 @@ falls back to locator capture for the entire spread when provenance or pixel
 mutation safety cannot be proven. A body spread is complete only when every
 expected area is visible with exactly one ready canvas; a missing or hidden
 second area remains loading. The 20-page leading-area live variant uses body
-areas 1..20 with sliders 1, 2, 4, ..., 20 and terminal sliders 22/23.
+areas 1..20 with sliders 1, 2, 4, ..., 20 and terminal sliders 22/23. A
+  front-prefix-tail variant has two supported forms. The `dummy-single` form
+  observed on episode 21652 has one dummy area and two exact `front-link-page`
+  areas before the body, followed by `back-link-page` full, `back-link-page`
+  half, ad, and colophon areas. Its slider 1 is the front-link prefix, slider 2
+  is the first single body area, and slider 4 onward uses the ordinary body
+  spread mapping. The `two-front-double` form has two exact front-link areas
+  with no dummy, followed by the same body and terminal structure. Its slider 1
+  is the prefix; the validated forward control moves once to slider 3, where
+  the first two consecutive body areas form the first spread. The variant is
+identified from that exact prefix, the contiguous body-area shells, and the
+ordered tail; it does not require the first mounted body canvas to remain at
+area 2. Canvas-backed areas, empty lazy-mount shells, and `page-image
+js-page-image` placeholders are allowed inside the validated body range,
+while unknown `page/js-page` panels, extra front links, and paid controls fail
+closed. Normal two-front spreads require exactly two consecutive areas whose
+viewport intersection ratio meets the existing readiness threshold, excluding
+clipped neighbors. At the tail boundary, the observed single final body area
+is accepted only when it is the structural last body area immediately before
+the full/half back-link pair; ordinary body states remain two-area spreads.
 Terminal state requires a completed forward
 transition to the visible colophon with no active body canvas. URL changes are
 reported as `NEXT_CONTENT`. Render readiness is tracked separately from native
@@ -40,7 +66,11 @@ slider position 1, then waits for the first fully ready spread. Missing, invalid
 or non-progressing slider/control state fails within the bounded initialization
 timeout. The same monotonic deadline covers viewer observation, control
 inspection/clicks, transition waits, and final readiness; initialization cannot
-return while the slider is later than position 1.
+  return while the slider is later than position 1 for ordinary layouts or before
+  the first body slider for the front-prefix-tail layout. The `dummy-single`
+  form normalizes to slider 2 and the `two-front-double` form normalizes to
+  slider 3 with its two-area first spread. Both forms use the validated forward
+  control exactly once and never click a front-link anchor.
 
 The live granted viewer also has a non-body tail between content and the
 colophon: body slider 17 advances to slider 19 with one on-screen
@@ -52,6 +82,97 @@ wrapped by exactly one `ad-nav-area-wrap page-content`), then advances to slider
 viewport-intersecting pattern as `AD`, tracks the actual pre-advance slider,
 and requires bounded monotonic progress. Unknown, blank, paid, mixed, repeated,
 or retrograde panels fail closed and are never captured or clicked.
+Colophon validation has two explicit resource families. A simple ordinary
+`#viewer-colophon` has exactly ten direct images, and a simple Colophon whose
+area has the `point-gettable-episode` class has exactly eleven. The live
+recommendation form has exactly one `viewer-colophon-info-wrapper` and one
+`days-viewer-colophon-recommend` block; ordinary recommendation thumbnails may
+vary in count, while the point-gettable form requires one
+`reading-completion-point-img` plus ten recommendation thumbnails. All forms
+retain the single outer `back-matter` and `back-matter-content` structure and
+reject canvas, iframe, unknown children, or unmarked image surfaces. Item `22362` observes the
+`leading-area-tail` sequence `body -> back-link-half -> ad -> point-gettable
+Colophon`; the adapter accepts this exact sequence and ends at the validated
+Colophon without another forward action. Eleven images without the marker,
+or any other image count, remains unknown and fails closed.
+The front-prefix-tail variant instead observes body slider 6 advancing to
+slider 7 with an on-screen full back-link and half back-link, then advances to
+the validated ad/colophon pair at slider 9. The full back-link has one link
+slot/image and the half back-link has two; the adapter keeps both distinct and
+does not accept malformed resource counts or unknown on-screen panels. In the
+two-front-double form, the body canvases may be unmounted by the time the tail
+is observed; the adapter retains the structural prefix and validates the tail
+  from its ordered DOM regions instead of requiring a body canvas to remain.
+For long episodes, the same prefix remains authoritative after intermediate
+lazy unmounts: the verified item `21750` body range is areas 2..42. Its
+slider 17 state selects areas 16/17 while clipped areas 15/18 remain excluded;
+slider 41 selects 40/41, slider 43 keeps the final area 42 as content while
+the back-link pages enter the viewport, slider 45 validates
+full-back/half-back/ad/colophon as `AD`, and slider 47 validates the colophon
+as `END`.
+
+An additional non-prefix terminal variant is `series-like-tail`: the ordered
+DOM is `body -> back-link-half -> series-like-page -> ad -> colophon`. The
+series-like region must be the exact `test-series-like-page` area containing
+one `series-like-page js-show-after-load` page with the two known direct blocks
+`series-like-content` and `like-page-app-content`, one image, one anchor, and
+one episode-like button, with no canvas, iframe, or extra child. Its preceding body
+range is derived from the validated tail and may contain empty lazy-mount
+placeholders; it is not inferred from the first currently mounted canvas. The
+tail is accepted only when the half back-link, series-like page, and ad are
+consecutive and on screen with the expected resource counts, and the series-
+like page is included in the known-page set so it is not rejected as an
+unknown panel. Item `22431` exposed this structure: areas 0/1..22/23/24/25/26
+were dummy/body/back-half/series-like/ad/ordinary-colophon, with slider 1/26.
+The initial failure was therefore a site-local layout mismatch in both the
+series-like page shape and the recommendation Colophon, not a network or
+Ticket operation; malformed or paid variants remain bounded fail-closed. The
+shared-CDP direct verification on 2026-10-07 then completed item `22431` from
+the first body page through `END`, produced
+`output/Books/漫画/税金で買った本/186-税金で買った本-１８５冊目 Ｌｉｂｒａｒｙ Ｉｎｓｔｒｕｃｔｉｏｎ ｆｏｒ ｌｉｂｒａｒｉａｎｓ-ずいの系山冏.zip`,
+and recorded 424 requests with no 403/429/5xx responses or purchase
+mutation.
+
+The direct shared-CDP verification on 2026-10-06 for item `21654` completed
+through colophon. It recognized slider 1 as the two-front-double prefix, made
+one validated forward action to slider 3, retained the first spread (areas 2
+and 3), captured the following spread (areas 4 and 5), and validated the
+full-back/half-back/ad/colophon tail. No ticket purchase, paid operation, or
+front-link anchor click occurred; the run recorded 355 requests with no
+403/429/5xx responses. The resulting long-title archive used the conditional
+titleless filename
+`101-夏休み特別休載漫画-業務用餅六志麻あさｋｉｓｕｉ.zip`, its status JSON used
+  the same stem, and the Catalog Artifact locator was `present`.
+
+The shared-CDP direct verification on 2026-10-06 for item `21750` completed
+the long-body variant through `END` and packaging. It retained the first
+spread after the single safe forward action, crossed slider 17 after lazy
+body mounting changes, retained the final body at slider 43, and validated
+the full-back/half-back/ad/colophon sequence at sliders 45/47. The run saved
+41 body pages, produced `005-第５話-業務用餅六志麻あさｋｉｓｕｉ.zip`, and wrote
+the matching `crawl-status` stem under the existing title directory; the
+Catalog Artifact locator was `present`. It made 470 requests with no
+403/429/5xx responses and performed no ticket purchase, paid operation, or
+front-link anchor click.
+
+The shared-CDP direct verification on 2026-10-07 for item `22358` completed
+the normal free path after the Work Ticket GraphQL response explicitly
+returned `series.ticket=null`. The target was present in the authoritative
+`free_only=1` feed and its coherent free row allowed direct capture without
+any DOM fallback or access-control operation. It saved two pages, reached the
+normal terminal state, produced a ZIP and matching `crawl-status` stem, and
+stored a present Catalog Artifact. The run recorded 308 requests with no
+403/429/5xx responses or retries; no Ticket, purchase, or paid operation was
+performed.
+
+The shared-CDP direct verification on 2026-10-07 for item `22362` completed
+the previously failing leading-area variant. It retained 38 body pages,
+recognized slider 40/41 as `back-link-half -> ad -> point-gettable Colophon`,
+and reached `END` without a further forward action after the Colophon. The
+run produced a ZIP and matching `crawl-status` stem under the existing title
+directory, with a present Catalog Artifact. It recorded 419 requests with no
+403/429/5xx responses or retries and no `Viewer_PurchaseViaTicket` or paid
+operation.
 
 Phase3A research used the hook's exact source URL/id and draw generation and
 isolated source bytes from the current shared-CDP viewer. The sampled JPEGs
@@ -117,9 +238,16 @@ matching episode/work identity inside the target locked
 `[data-aggregate-id][data-type="episode"]` surface binds the work. A separate
 paid control may coexist only when its price attributes are explicit and it is
 never used; the Work5 preflight observed a separate 90pt purchase control.
-If a Work Ticket control is hidden or duplicated while a purchase control is
-also present, the target state is `unknown` and the adapter fails closed; it is
-not reinterpreted as positive paid state during viewer hydration.
+If the exact target Work Ticket control is temporarily hidden immediately
+after the ticket query, the adapter performs a bounded, read-only
+re-observation window. This is allowed only when there is one matching locked
+viewer, one enabled series-ticket button with the expected rental id and
+button behavior, no identity conflict, and no more than one purchase surface.
+It never clicks while the ticket button is hidden. Once it becomes visible,
+the existing exact-control validation is still required. A persistent hidden
+control, duplicate control, malformed identity, or paid/ambiguous structure
+remains `unknown` and fails closed; it is not reinterpreted as positive paid
+state during viewer hydration.
 It clicks once only, latches the first positive native rental and
 work-level debit/recharge observation. The common positive confirmation
 requires the canonical target episode, work, and viewer JSON identities to
@@ -167,8 +295,24 @@ from crawler-side adapter traffic in
 The bounded diagnostic then observed the correct normal viewer and identity but
 the capture hook stayed incomplete with
 `expected_body_area_not_visible_or_extra` (expected area 2 and no visible body
-areas). This explains the known normal-crawl readiness failure for that target;
-grant-only confirmation uses the separate target-local debit/unlock evidence.
+areas). This was the normal-crawl readiness failure reproduced on the initial
+slider state. The 2026-10-06 fix keeps the capture hook fail-closed for
+unexpected or non-contiguous visibility, but accepts slider position 1 when
+exactly two consecutive body areas starting at the first body area are visible;
+that is the observed initial double-page spread without a leading dummy area.
+The corresponding browser regression covers the initial double spread and the
+existing single-page and later-spread families. Grant-only confirmation still
+uses the separate target-local debit/unlock evidence and does not depend on
+capture readiness.
+The 2026-10-06 shared-CDP direct Batch crawl of episode
+`12207421983796398402` used the new front-prefix path, saved 43 native pages,
+reached `END`, and completed Item/source 21652. Because the normalized work
+title is at least 50 characters, the resulting titleless ZIP and matching
+`crawl-status` JSON were persisted under the existing
+`genre/title` directory; the absolute archive path was 193 characters and the
+Catalog Artifact was `present`. The first captured identity was slider 2 /
+area 3 and the final body identity was area 44,45. No ticket purchase or
+front-link anchor click was performed.
 The historical A/2R/3P raw directories under `output/tmp` are currently
 unavailable; the original Catalogs, raw events, and positive-consumption files
 cannot be revalidated. The reviewer verified the A evidence before the raw
@@ -342,10 +486,13 @@ whose CRCs, SHA256 values, and dimensions matched the pre-package manifest.
 Retained evidence is under `output/comicdays_c3_evidence11/`; no ticket,
 point, coin, purchase, login, or next-episode action was used.
 The isolated C3 watchlist deliberately supplied a stable label as the initial
-Catalog Work title. The ZIP/archive title therefore follows the explicit
-Catalog metadata, while the manifest `content_context.title` records the
-verified Comic DAYS page title. This preserves the documented field-level
-metadata precedence while retaining the observed series title in crawl output.
+Catalog Work title. The library directory therefore follows the explicit
+Catalog metadata, while the titleless ZIP filename uses the order/author
+components because the title exceeds the 50-character threshold, and the
+manifest `content_context.title` records the verified Comic DAYS page title.
+Shorter titles include the title in the same stem. This preserves the documented
+field-level metadata precedence while retaining the observed series title in
+crawl output.
 
 The production hook reports render readiness only after the latest full-base
 generation has the observed four-column by four-row, non-overlapping integer
