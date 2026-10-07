@@ -311,6 +311,9 @@ CrawlerのZIPは、Windows上のパス長を抑えるため、正規化・サニ
 長いタイトル: 103-第９５話-業務用餅六志麻あさｋｉｓｕｉ.zip
 ```
 
+Completion status JSONもZIPと同じstemを使うが、Work間の衝突を避けるため、
+`output/crawl-status/<genre>/<title>/<stem>.json` に保存する。既存のstatus JSONは自動移行しない。
+
 ---
 
 ## 10. 使用しない文字

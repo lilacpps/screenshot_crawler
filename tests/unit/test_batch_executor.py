@@ -16,7 +16,10 @@ from screenshot_crawler.batch import (
     BatchInterruptedError,
     BatchPlanner,
 )
-from screenshot_crawler.batch.executor import _cancel_task_bounded
+from screenshot_crawler.batch.executor import (
+    _cancel_task_bounded,
+    _write_success_entry_trace,
+)
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -943,6 +946,98 @@ async def test_grant_only_work_ticket_persists_state_without_completion_or_artif
         candidate.site, candidate.quota_resource,
     }
     assert trace["adapter_debug"]["ticket_trace"] == [{"phase": "entry_success"}]
+
+
+async def test_success_entry_trace_ignores_collection_exception(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "trace-collection-error.sqlite")
+    candidate = _add_magapoke_candidate(service)
+
+    class FailingAdapter(FakeAdapter):
+        async def collect_debug_metadata(self, _page: object) -> dict[str, object]:
+            raise RuntimeError("diagnostics unavailable")
+
+    await _write_success_entry_trace(
+        object(),
+        FailingAdapter(),
+        candidate,
+        tmp_path / "batch",
+        RunResult(
+            pages=(),
+            stop_state=PageState.END,
+            stop_reason="entry_confirmed",
+            entry_confirmed=True,
+        ),
+    )
+
+    trace = json.loads(
+        (tmp_path / "batch" / "diagnostics" / "entry_trace.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert trace["adapter_debug"] == {"collection_error_type": "RuntimeError"}
+
+
+async def test_success_entry_trace_ignores_write_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = CatalogService(tmp_path / "trace-write-error.sqlite")
+    candidate = _add_magapoke_candidate(service)
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("diagnostics filesystem unavailable")
+
+    monkeypatch.setattr(batch_executor_module, "atomic_write_json", fail_write)
+    await _write_success_entry_trace(
+        object(),
+        FakeAdapter(),
+        candidate,
+        tmp_path / "batch",
+        RunResult(pages=(), stop_state=PageState.END, stop_reason="entry_confirmed"),
+    )
+
+
+@pytest.mark.parametrize("error_type", [asyncio.CancelledError, KeyboardInterrupt])
+async def test_success_entry_trace_propagates_control_exception_from_collection(
+    tmp_path: Path, error_type: type[BaseException]
+) -> None:
+    service = CatalogService(tmp_path / f"trace-collection-{error_type.__name__}.sqlite")
+    candidate = _add_magapoke_candidate(service)
+
+    class InterruptedAdapter(FakeAdapter):
+        async def collect_debug_metadata(self, _page: object) -> dict[str, object]:
+            raise error_type()
+
+    with pytest.raises(error_type):
+        await _write_success_entry_trace(
+            object(),
+            InterruptedAdapter(),
+            candidate,
+            tmp_path / "batch",
+            RunResult(pages=(), stop_state=PageState.END, stop_reason="entry_confirmed"),
+        )
+
+
+@pytest.mark.parametrize("error_type", [asyncio.CancelledError, KeyboardInterrupt])
+async def test_success_entry_trace_propagates_control_exception_from_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[BaseException],
+) -> None:
+    service = CatalogService(tmp_path / f"trace-write-{error_type.__name__}.sqlite")
+    candidate = _add_magapoke_candidate(service)
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise error_type()
+
+    monkeypatch.setattr(batch_executor_module, "atomic_write_json", fail_write)
+    with pytest.raises(error_type):
+        await _write_success_entry_trace(
+            object(),
+            FakeAdapter(),
+            candidate,
+            tmp_path / "batch",
+            RunResult(pages=(), stop_state=PageState.END, stop_reason="entry_confirmed"),
+        )
 
 
 async def test_grant_only_premium_ticket_persists_source_only(

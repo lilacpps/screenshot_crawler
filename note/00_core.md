@@ -886,7 +886,8 @@ archive filenameとcompletion status JSONのfilenameは同じstemを使う。ste
 `artifact_prefix-[title if sanitized title length < 50]-order-author[-artifact_disambiguator]`
 である。正規化・サニタイズ後タイトルが50文字以上の場合だけtitleを省略し、
 title自体は常にlibrary directoryに含める。50文字ちょうども省略対象である。
-filename要素がすべて空の場合は`archive`をfallbackにする。destination存在時の
+filename要素がすべて空の場合は`archive`をfallbackにする。statusは
+`output/crawl-status/<genre>/<title>/<stem>.json`へ保存し、Work間の同じstemでも衝突しないようにする。destination存在時の
 `FileExistsError`と自動連番なしの安全性を維持する。既存archive/status/Artifact
 locatorは通常Batchで変更せず、明示的なP4 renumberだけが現在のstemへ移行する。
 
@@ -906,8 +907,9 @@ collisionを検出してoverwriteを拒否する。実行時はZIPを短い
 `.status-renumber-{artifact_id}.tmp`へ移してからfinalへ移す二段階renameを使う。
 rollback時も`.archive-rollback-{artifact_id}.tmp`と
 `.status-rollback-{artifact_id}.tmp`を分離する。元の長いbasenameはtemp名へ含めない。
-`output/crawl-status/<old-stem>.json`はJSONの`archive_path`がold
-Artifact locatorと同一fileを指す場合だけmatchingとし、matching時だけrenameして`archive_path`のみ
+`output/crawl-status/<genre>/<title>/<old-stem>.json`はJSONの`archive_path`がold
+Artifact locatorと同一fileを指す場合だけmatchingとする。明示的なrenumberは旧形式の
+`output/crawl-status/<old-stem>.json`も後方互換で確認し、matching時だけrenameして`archive_path`のみ
 更新する。missing/mismatch statusはwarningでZIP renameをblockしない。Catalog側は
 `update_artifact_locators()`のcompare-and-set一括transactionでlocator/updated_atだけを更新し、
 SHA-256、byte size、state、CrawlRun、Item、historical Artifactを変更しない。Catalog更新失敗時（SQLite由来を含む通常の

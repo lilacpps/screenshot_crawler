@@ -274,6 +274,42 @@ def test_reapplies_p4_to_archive_with_position_inside_legacy_stem(tmp_path: Path
     assert catalog.get_artifact(artifact.id).locator == entry.new_path.as_posix()
 
 
+def test_renumber_follows_work_scoped_status_namespace(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work, item, source, target = _make_source(
+        catalog,
+        tmp_path,
+        title="Work Scoped",
+        genre="manga",
+        order_label="Episode",
+        display_position=1,
+    )
+    old = tmp_path / "legacy.zip"
+    _, artifact = _add_archive(catalog, item.id, source.id, target.id, old)
+    status_dir = tmp_path / "crawl-status"
+    status_path = status_dir / "manga" / "Work Scoped" / "legacy.json"
+    atomic_write_json(
+        status_path,
+        {"status": "completed", "archive_path": old.as_posix(), "keep": True},
+    )
+
+    plan = build_archive_renumber_plan(catalog, site="mangaone", status_dir=status_dir)
+    entry = plan.entries[0]
+    assert entry.status == "RENAME"
+    assert entry.new_status_path == (
+        status_dir / "manga" / "Work Scoped" / "001-Work Scoped-Episode.json"
+    )
+
+    result = apply_archive_renumber_plan(plan)
+
+    assert result.error is None
+    assert entry.new_path == tmp_path / "001-Work Scoped-Episode.zip"
+    assert entry.new_status_path.is_file()
+    assert not status_path.exists()
+    assert catalog.get_artifact(artifact.id).locator == entry.new_path.as_posix()
+    assert work.title == "Work Scoped"
+
+
 def test_dry_run_does_not_change_zip_status_catalog_or_mtime(tmp_path: Path) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     _, item, source, target = _make_source(catalog, tmp_path)

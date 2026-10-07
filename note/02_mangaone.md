@@ -362,7 +362,8 @@ output/Books/漫画/<title>/<title>-<order>-mangaone-<external_id>.zip
 ```
 
 ZIP内部の画像はmanifestの相対パスを使い、作品stemのtop-level directoryは作成しない。
-`crawl-status`のJSON filenameは従来どおりarchive stemを使う。
+`crawl-status`のJSON filenameは従来どおりarchive stemを使うが、
+`output/crawl-status/<genre>/<title>/` 配下へ保存してWork間の同名stem衝突を避ける。
 
 source crawl directoryは、manifest / progress / manifest記載artifact以外を含まない場合に限りcleanupされる。
 

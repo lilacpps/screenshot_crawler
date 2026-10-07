@@ -140,6 +140,10 @@ longer, the ZIP and matching `crawl-status` JSON omit the title from the stem
 and use `<volume>-<author>` instead. The title remains the library directory in
 both cases.
 
-A completion record is kept under `output/crawl-status/`. The intermediate crawl directory is removed only when its complete contents are generated run artifacts (manifest, progress, and manifest-declared PNGs). If unrelated or extra files exist, the directory is retained rather than deleted.
+A completion record is kept under `output/crawl-status/<genre>/<title>/` using the
+same stem as the ZIP. The intermediate crawl directory is removed only when its
+complete contents are generated run artifacts (manifest, progress, and
+manifest-declared PNGs). If unrelated or extra files exist, the directory is
+retained rather than deleted.
 
 Direct viewer URLs may lack product metadata and can produce an `unknown-title` archive name.

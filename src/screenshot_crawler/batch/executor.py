@@ -60,7 +60,9 @@ async def _write_success_entry_trace(
             value = await asyncio.wait_for(collect_debug(page), timeout=2)
             if isinstance(value, dict):
                 adapter_debug = value
-        except BaseException as exc:  # noqa: BLE001 - evidence must not mask success
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - evidence must not mask success
             adapter_debug = {"collection_error_type": type(exc).__name__}
     payload: dict[str, Any] = {
         "item_id": candidate.item_id,
@@ -75,7 +77,9 @@ async def _write_success_entry_trace(
     }
     try:
         atomic_write_json(output_dir / "diagnostics" / "entry_trace.json", payload)
-    except BaseException:  # noqa: BLE001 - evidence must not mask success
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        raise
+    except Exception:  # noqa: BLE001 - evidence must not mask success
         return
 
 

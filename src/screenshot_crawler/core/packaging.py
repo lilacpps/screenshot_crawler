@@ -217,7 +217,10 @@ def package_crawl_output(
         temporary_path.unlink(missing_ok=True)
         raise
 
-    status_dir = Path(library_dir).parent / "crawl-status"
+    # Keep completion status in the same genre/title namespace as the archive.
+    # The stem remains shared with the ZIP, while the work directory prevents
+    # long-title archives from colliding across different Works.
+    status_dir = Path(library_dir).parent / "crawl-status" / genre / title
     status_path = status_dir / f"{stem}.json"
     status = {
         "status": "completed",

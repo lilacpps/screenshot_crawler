@@ -420,7 +420,8 @@ output/Books/<genre>/<title>/<volume>-<author>.zip
 50文字以上の場合はtitleをfilenameから省略し、`<volume>-<author>.zip`とする。
 titleはどちらの場合もlibrary directoryに残り、completion status JSONは同じstemを使う。
 
-completion statusは `output/crawl-status/` 配下。
+completion statusは `output/crawl-status/<genre>/<title>/` 配下で、ZIPと同じstemを使う。
+Work間で同じstemになる場合もstatus JSONは衝突しない。
 
 中間crawl directoryは、内容がmanifest / progress / manifest記載PNGだけの場合に限り削除する。
 

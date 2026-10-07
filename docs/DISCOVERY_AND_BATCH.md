@@ -1464,7 +1464,7 @@ target collision、除外participantに依存する連鎖、status target collis
 overwriteはしない。実行対象はZIPを短い`.archive-renumber-{artifact_id}.tmp`へ、matching statusを
 `.status-renumber-{artifact_id}.tmp`へ移してからfinalへ移す二段階renameを使う。rollback時も
 `.archive-rollback-{artifact_id}.tmp`と`.status-rollback-{artifact_id}.tmp`を分離し、元の長い
-basenameはtemp名へ含めない。matching `crawl-status/<old-stem>.json` はJSONの`archive_path`がold locatorと同一fileを
+basenameはtemp名へ含めない。matching `crawl-status/<genre>/<title>/<old-stem>.json` はJSONの`archive_path`がold locatorと同一fileを
 指す場合だけrenameし、`archive_path`以外のfieldは保持する。status missing/mismatchはwarningで
 ZIPをblockしない。Catalogはlocator/updated_atだけを更新する一括compare-and-set transactionを
 使い、Catalog更新失敗時はZIP/statusをrollbackし、rollback不能時は`RECOVERY_REQUIRED`を出す。以前の
@@ -1770,7 +1770,7 @@ The sanitized Work title is included when it is shorter than 50 characters and
 omitted at 50 characters or longer. The Work title always remains the library
 directory component.
 Therefore a positioned crawl uses the same desired stem for its ZIP and
-`crawl-status/<stem>.json` sidecar, for example
+`crawl-status/<genre>/<title>/<stem>.json` sidecar, for example
 `003-作品名-番外編.zip` for a short title. A long-title equivalent omits the
 title, for example `103-第９５話-作者.zip`. The prefix does not change the
 `genre/title` library directory.

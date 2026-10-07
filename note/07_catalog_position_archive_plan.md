@@ -488,7 +488,7 @@ If filesystem rename succeeds but Catalog update fails, fail clearly and preserv
 Packaging also stores:
 
 ```text
-output/crawl-status/<stem>.json
+output/crawl-status/<genre>/<title>/<stem>.json
 ```
 
 When a matching completion-status JSON exists and safely identifies the same old archive path:
@@ -700,8 +700,10 @@ IMPLEMENTED.
   `COLLISION`; existing files are never overwritten. ZIPs use
   `old -> unique temporary sibling -> final` two-stage renames, so shifts and
   swaps are safe. Apply performs a final old/target/temp recheck.
-- Matching `output/crawl-status/<old-stem>.json` is accepted only when parsed
-  `archive_path` identifies the current old ZIP. `STATUS_MISSING` and
+- Matching `output/crawl-status/<genre>/<title>/<old-stem>.json` is accepted only
+  when parsed `archive_path` identifies the current old ZIP. For compatibility,
+  explicit renumber also checks the legacy flat `output/crawl-status/<old-stem>.json`.
+  `STATUS_MISSING` and
   `STATUS_MISMATCH` are warnings that do not block a ZIP rename. A matching
   status file is renamed safely and only its `archive_path` value is changed;
   target collisions block that Artifact.

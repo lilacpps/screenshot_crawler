@@ -195,7 +195,13 @@ def test_position_prefixed_metadata_names_archive_and_status(tmp_path) -> None:
     assert result.archive_path == (
         tmp_path / "Books" / "漫画" / "作品名" / "003-作品名-番外編.zip"
     )
-    assert result.status_path == tmp_path / "crawl-status" / "003-作品名-番外編.json"
+    assert result.status_path == (
+        tmp_path
+        / "crawl-status"
+        / result.genre
+        / result.title
+        / "003-作品名-番外編.json"
+    )
 
 
 def test_position_prefix_does_not_change_library_directory(tmp_path) -> None:
@@ -242,7 +248,11 @@ def test_package_crawl_output_creates_library_tree_and_zip(tmp_path) -> None:
         tmp_path / "Books" / "小説" / "作品名" / "作品名-第01巻-著者.zip"
     )
     assert result.status_path == (
-        tmp_path / "crawl-status" / "作品名-第01巻-著者.json"
+        tmp_path
+        / "crawl-status"
+        / result.genre
+        / result.title
+        / "作品名-第01巻-著者.json"
     )
     assert not crawl_dir.exists()
     with zipfile.ZipFile(result.archive_path) as archive:
@@ -369,7 +379,13 @@ def test_package_disambiguator_updates_archive_and_status_name_only(tmp_path) ->
     assert result.archive_path == (
         tmp_path / "Books" / "漫画" / "作品名" / f"{expected_stem}.zip"
     )
-    assert result.status_path == tmp_path / "crawl-status" / f"{expected_stem}.json"
+    assert result.status_path == (
+        tmp_path
+        / "crawl-status"
+        / result.genre
+        / result.title
+        / f"{expected_stem}.json"
+    )
     with zipfile.ZipFile(result.archive_path) as archive:
         assert archive.namelist() == ["page-0001.png"]
 
@@ -435,8 +451,48 @@ def test_long_title_stays_in_directory_and_not_archive_name(tmp_path) -> None:
     assert result.archive_path.parent.name == title
     assert result.archive_path.name == "103-第９５話-業務用餅六志麻あさｋｉｓｕｉ.zip"
     assert title not in result.archive_path.name
-    assert result.status_path.name == result.archive_path.with_suffix(".json").name
+    assert result.status_path == (
+        tmp_path
+        / "crawl-status"
+        / result.genre
+        / result.title
+        / result.archive_path.with_suffix(".json").name
+    )
     assert len(str(result.archive_path)) < 260
+
+
+def test_status_paths_are_work_scoped_for_same_long_titleless_stem(tmp_path) -> None:
+    def make_crawl(name: str) -> Path:
+        crawl_dir = tmp_path / name
+        crawl_dir.mkdir()
+        (crawl_dir / "page-0001.png").write_bytes(b"png")
+        (crawl_dir / "manifest.json").write_text(
+            json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+        )
+        (crawl_dir / "progress.json").write_text("{}\n", encoding="utf-8")
+        return crawl_dir
+
+    title_a = "A" * 50
+    title_b = "B" * 50
+    metadata = {"order": "001", "genre": "manga"}
+    first = package_crawl_output(
+        make_crawl("work-a"), {**metadata, "title": title_a}, library_dir=tmp_path / "Books"
+    )
+    second = package_crawl_output(
+        make_crawl("work-b"), {**metadata, "title": title_b}, library_dir=tmp_path / "Books"
+    )
+
+    assert first.archive_path.name == second.archive_path.name == "001.zip"
+    assert first.archive_path.parent != second.archive_path.parent
+    assert first.status_path == (
+        tmp_path / "crawl-status" / "manga" / title_a / "001.json"
+    )
+    assert second.status_path == (
+        tmp_path / "crawl-status" / "manga" / title_b / "001.json"
+    )
+    assert first.status_path != second.status_path
+    assert first.status_path.is_file()
+    assert second.status_path.is_file()
 
 
 def test_package_fails_when_manifest_page_is_missing(tmp_path) -> None:
