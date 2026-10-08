@@ -48,14 +48,19 @@ research now uses only Lead + Worker.
 
 ## Resume order
 
-1. Lead reads this checkpoint and the current Stage 02 README.
-2. Do **not** restore Reviewer/Critic merely to satisfy the old gate sequence.
-3. Pick the smallest direct unresolved manga or LN provenance question.
-4. Worker performs one bounded probe.
-5. Lead classifies the result A/B/C/D or asks one more bounded question.
-6. Stop research when another probe is unlikely to change the operational decision.
-7. If production code is implemented, invoke Reviewer.
-8. Invoke Critic only if a material risk trigger in the README applies.
+1. Continue on `research/bookwalker-source-native-20261005`; do not create a replacement
+   branch just because `main` has advanced.
+2. Fetch `origin` and merge the current `origin/main` into this branch before new
+   live research or production edits. Preserve both newer main behavior and this
+   checkpoint/runbook evidence when resolving conflicts.
+3. Lead reads this checkpoint and the current Stage 02 README after the merge.
+4. Do **not** restore Reviewer/Critic merely to satisfy the old gate sequence.
+5. Pick the smallest direct unresolved manga or LN provenance question.
+6. Worker performs one bounded probe.
+7. Lead classifies the result A/B/C/D or asks one more bounded question.
+8. Stop research when another probe is unlikely to change the operational decision.
+9. If production code is implemented, invoke Reviewer.
+10. Invoke Critic only if a material risk trigger in the README applies.
 
 ## Local ignored artifacts
 
