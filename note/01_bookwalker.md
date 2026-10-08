@@ -31,7 +31,7 @@ BookWalkerのseries-scoped Discovery、Site Policy、Batch実行は実装済み�
 した場合のstrategy defaultは`auto`で、`configure_run()`は`auto` / `direct` / `quota`を受け付け、
 run stateへ保存する。
 
-## 1.1 Current source-native baseline (2026-10-05)
+## 1.1 Historical Stage 01 source-native baseline (2026-10-05)
 
 The current production priority remains unchanged:
 
@@ -96,9 +96,10 @@ observations.
 
 ## 1.2 Stage 02 research status (2026-10-08, complete)
 
-Stage 02 has completed its bounded live acceptance. The direct implementation's final production Reviewer
-confirmed PASS with no remaining BLOCKING on code, tests, live evidence and
-document synchronization. The current source-native priority is original JPEG,
+Stage 02 has completed its bounded live acceptance. The prior baseline
+Reviewer passed the earlier implementation; the current cropped one-hop
+production extension has now passed its final Reviewer recheck. The current
+source-native priority is original JPEG,
 verified lossless reconstructed JPEG, source/native PNG, then rendered fallback.
 A small dimension difference alone is not a reason to require PNG.
 
@@ -106,7 +107,7 @@ A small dimension difference alone is not a reason to require PNG.
 | --- | --- |
 | Manga `9/159`, `11/159` | B; each spread yields two 844x1200 JPEGs from 848x1200 coded JPEG sources |
 | LN `3/314`, `4/314` | B; 2048x1456 coded source becomes 2048x1453 JPEG |
-| LN `2/314` | B at recovery-PoC level; verified 1443x2048 JPEG and exact replay to the displayed page region. Automatic capture still uses its fail-closed path |
+| LN `2/314` | B; automatic reconstructed JPEG capture passed the selected A/B/final ROI proof with zero differing pixels |
 | LN text `8/314`, `10/314` | A; existing reconstructed JPEG path at 960x1280 remains correct |
 | Current manga cover | D; adapter returns no native artifact; actual Core rendered-canvas PNG fallback at 1386x983 |
 | Current LN cover | D; native PNG fallback at 722x1024 |
@@ -133,13 +134,19 @@ Every new cropped part also matches its selected draw-time native snapshot
 with zero differing pixels, even while the older optional final-pixel flag is
 off. No rotation is inferred from dimensions; no content/page-number rule is used.
 
-The supported extension is direct-only: explicit coded S and visible V,
-right/bottom crop smaller than eight pixels, integer 8px-aligned geometry,
-complete coded source/destination coverage including invisible edge blocks,
-and supported SOF0 three-component 4:4:4 JPEG layout. Unsafe/ambiguous/missing
-proof, gaps/duplicates, work-bound excess, or failed intrinsic comparison
-falls back for the whole spread. Cropped mappings cannot become one-hop
-upstream proofs. Existing equal-size/one-hop behavior and the kill switch remain.
+The supported extension is direct-only for the cropped mapping itself:
+explicit coded S and visible V, right/bottom crop smaller than eight pixels,
+integer 8px-aligned geometry, complete coded source/destination coverage
+including invisible edge blocks, and supported SOF0 three-component 4:4:4 JPEG
+layout. A proven cropped mapping may feed exactly one origin-zero full-frame
+canvas scale only when native width/height setter reset boundaries, generation,
+clear target, tile draw target, and selected renderer identity are all retained.
+The runtime replays and compares the immutable A snapshot, B snapshot, and
+selected final ROI. Unsafe/ambiguous/missing proof, unknown mutation,
+gaps/duplicates, work-bound excess, or any comparison failure falls back for
+the whole spread. Existing equal-size/legacy one-hop behavior and the kill
+switch remain unchanged; arbitrary third hops, rotation, or left/top crops are
+unsupported.
 
 The subsequent user-requested LN2 follow-up joins one exact 1448x2048 coded
 JPEG, a complete 2,944-tile MCU mapping and immutable draw-time snapshots.
@@ -147,29 +154,29 @@ It recovers a 1443x2048 JPEG by coefficient reordering and right-edge clipping;
 all coefficients/quantizers/selectors and decoded pixels match. Replaying the
 recorded 722x1024 scale and final fractional source rectangle also gives zero
 pixel differences in the displayed page destination region. This establishes
-recovery-PoC B, without changing automatic capture. A reusable runtime mapping
-retention/selection contract is still missing. See section 20.25.
+runtime B, including the retained mapping selection and automatic JPEG path.
+See section 20.25.
 The earlier visible-dimension candidate filter, default-zero unattempted
 analysis fields and uncontrolled exploratory replays are excluded from negative
 source evidence. No attribution heuristic or color tolerance was introduced.
 
-Two manga body spreads, two changed LN openings, the initially unsupported LN2 case,
+Two manga body spreads, two changed LN openings, LN2 runtime acceptance,
 two ordinary-text controls and actual cover fallbacks were sufficient for the
 bounded direct production contract. The later focused LN2 verification is now
-also complete; it has not been promoted to cropped one-hop production support.
+also complete; the recovered chain remains bounded to the observed supported
+shape and has not been generalized to arbitrary multi-hop provenance.
 LN5–7 were only traversed, not newly captured. Manga2 was unused because no specific cross-title
 hypothesis required confirmation. Every independent probe checked actual
 counters, explicitly restored its anchor and verified page 1 before closing
 its dedicated Page. Shared Crawler Chrome and existing user tabs were preserved.
 No credential submission occurred after the user's final manual login.
 
-Validation remains 180 targeted tests and 46 browser-backed Integration tests,
+Validation is 195 targeted unit tests and 52 browser-backed Integration tests,
 including real Canvas nonuniform/nonidentity 40x40-to-37x36 right/bottom crop.
 Ruff and diff checks pass. Critic accepted the material partial-MCU contract;
-Reviewer requested that one Integration case, then confirmed no code/test/doc
-BLOCKING. Final Reviewer also accepted the completed live set, current cover
-fallback controls and synchronized notes. Stage 02 is complete with the D
-boundaries above; no additional broad research is required.
+the final Reviewer recheck passed with no remaining BLOCKING findings.
+Stage 02 remains bounded by the D cases above; no additional broad research is
+required.
 No full pytest or full-book/END live run is required for this site-local change.
 
 The existing branch contains fetched current `origin/main`
@@ -2685,6 +2692,9 @@ exception or mismatch returns source/native PNG for the whole spread. Older
 equal-size and one-hop paths retain their optional final-pixel diagnostic
 behavior. `BOOKWALKER_LOSSLESS_JPEG_OUTPUT` remains the BookWalker kill switch,
 and the all-parts-or-PNG spread rule remains unchanged.
+The final replay retains the actual renderer backing-canvas dimensions and
+destination offset, then compares only the recorded destination ROI; it does
+not move the draw to a new origin or introduce a color tolerance.
 
 Stage 02 live verification selected manga `9/159` and `11/159` as two direct
 parts after the explicit predecessor-to-target geometry-clear/native-arm
@@ -2712,22 +2722,20 @@ establish an empty raw trace. That acceptance window was D; the later recovery
 PoC in section 20.25 supersedes the research result without changing runtime
 support.
 The production unit path and site-local documentation are synchronized. The
-implementation was checked by 180 targeted unit tests and 46 browser-backed
+implementation was checked by 195 targeted unit tests and 52 browser-backed
 integration tests, including a real-canvas nonuniform permutation with
-`S=40x40` and `V=37x36`; Reviewer recheck found no blocking code, test, or
-documentation issue. The site-local MCU work bound rejects invalid or oversized
-mappings before expansion and allocation. Final production Reviewer also
-accepted the bounded live evidence and actual cover fallback controls with no
-remaining BLOCKING; Stage 02 is complete with the documented D limits.
-The later LN2 recovery PoC below supersedes its earlier research classification,
-while leaving this production path and its automatic-capture boundary unchanged.
+`S=40x40` and `V=37x36`, same-value reset and unknown-attribute boundaries, and
+three-stage pixel-gate failure cases. The site-local MCU work bound rejects
+invalid or oversized mappings before expansion and allocation. The final production Reviewer recheck passed after the B1-B4 contract fixes with no remaining BLOCKING findings. Stage 02 retains the documented D limits. Automatic capture now uses the bounded cropped one-hop contract only
+when runtime reset/identity and all three intrinsic pixel gates pass; otherwise
+the complete spread retains the native-PNG fallback.
 
-### 20.25 LN2 joined source-native recovery verification (2026-10-08)
+### 20.25 LN2 joined source-native recovery and runtime acceptance (2026-10-08)
 
 The user requested actual verification of the unique JPEG, tile map and final
-display chain. Only Lead and Worker performed this bounded research; no
-production code, durable test or tolerance policy changed. The accepted window
-checked actual positions `2/314 -> 1/314 -> 2/314 -> 1/314`.
+display chain. Lead and Worker performed one bounded window at actual positions
+`2/314 -> 1/314 -> 2/314 -> 1/314`; the resulting production path was then
+checked without a pixel tolerance.
 
 Three coded 1448x2048 candidates were compared with the actual retained bitmap
 source `2`. Exactly one was full-pixel exact, SHA-256
@@ -2762,15 +2770,14 @@ contains the full selected map, eager PNGs, coefficient readback and browser
 replay metrics. These remain ignored local research artifacts, never artwork
 fixtures. The Stage 02 checkpoint records the full acceptance and limitations.
 
-LN2 is **B for demonstrated recovery**, while automatic capture remains
-fail-closed. Production native-call recording excludes targets at or below
-1000px width, and clear-time canvas metadata can differ from draw-time size;
-the diagnostic retained actual draw-time images instead. Default-zero fields
-after an early missing-mapping rejection do not mean that no raw tiles exist.
-The instrumented probe itself interfered with the production capture lifecycle,
-so its zero-artifact result is not automatic-JPEG live acceptance. Earlier
-uninstrumented capture produced 722x1024 PNG fallback. Promoting this PoC into
-a reusable runtime contract is unimplemented.
+LN2 is **B**. Production now requires the bounded reset/identity chain and
+eager A/B/renderer snapshots before selecting the reconstructed JPEG. The
+optional empty downstream segment is transport-valid when its draw target is
+null; the retained upstream mapping must still prove every tile and identity.
+The final production capture used `reconstructed_jpeg`, with `spread_ready`,
+native pixel exactness, and all three browser comparisons true. Earlier
+unmapped captures produced a 722x1024 PNG fallback and remain historical
+fail-closed observations.
 
 An empty-canvas comparison and a later uncontrolled 300,842-pixel-difference
 replay were discarded. Multiple diagnostic variables changed, so no isolated
@@ -2779,6 +2786,11 @@ relax equality. The accepted comparison preserves recorded geometry and state
 and passes exactly. Existing production gates remain unchanged.
 
 Verification added immutable live capture, full coded MCU coverage, coefficient
-readback and browser stage replay. The prior 180 targeted and 46 browser-backed
-Integration passes remain the production baseline; they were not rerun for this
-research/documentation-only follow-up. No new Reviewer/Critic was required.
+readback and browser stage replay. The production update also uses the actual
+renderer backing-canvas dimensions and destination offset for the final replay;
+the focused browser integration covers that non-zero ROI placement. The current
+implementation and its targeted unit / browser-backed Integration passes are
+recorded in section 20.24. Production Reviewer confirmation remains the merge
+gate for this change.
+
+The final B1-B4 recheck window is immutable and separate from earlier files: LN2 `output/stage03-ln2-final-reviewfix-b1b4-20261008.json` (SHA-256 `E1ECA5D9C8EA224157E9DCB0519C18799480833ACFC8D2C414A3F10EC8CE9906`), LN3 `output/stage03-ln3-final-b1b4-20261008.json` (`6F6C968F1481364B0FB5B34E01B5BF8ED41A4B4A035310985968475AD8C42157`), and manga9 `output/stage03-manga9-final-b1b4-20261008.json` (`8B1297D7150D42F9B5EDEF7FA994A46541685CE5E3783D3B79C612B80DADD059`). Each restored its page-1 anchor; LN2 and the manga one-hop path passed three intrinsic comparisons with zero differences, while LN3 direct cropped capture passed native comparison with zero differences.

@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import copy
+from dataclasses import replace
 
 import pytest
 
@@ -662,6 +663,16 @@ def test_compact_decode_has_full_rich_proof_parity() -> None:
     assert rich_result.mapping.as_dict() == compact_result.mapping.as_dict()
 
 
+def test_compact_decode_preserves_null_draw_target_for_empty_segment() -> None:
+    payload = _compact_payload(_completed_record())
+    payload["compactMappings"][0]["segmentDrawTarget"] = None
+
+    decoded = decode_compact_completed_mappings(payload)
+
+    assert decoded is not None
+    assert decoded["completedMappings"][0]["segmentDrawTarget"] is None
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -940,8 +951,192 @@ def _scaled_chain_fixture() -> tuple[dict, dict, dict, dict]:
         "traceOperationIndex": 8,
         "canvasId": "canvas-renderer",
         "sourceCanvasId": "canvas-b",
+        "source": {"constructor": "HTMLCanvasElement", "canvasId": "canvas-b", "width": 16, "height": 16},
+        "sourceRect": {"x": 0, "y": 0, "width": 16, "height": 16},
+        "destination": {"x": 0, "y": 0, "width": 16, "height": 16},
+        "canvasWidth": 16,
+        "canvasHeight": 16,
     }
     return upstream, downstream, upstream_summary, downstream_draw
+
+
+def _cropped_scaled_chain_fixture() -> tuple[dict, dict, dict, dict]:
+    upstream = _completed_record(mapping_id="mapping-cropped", renderer_index=8, clear_index=1)
+    upstream["sourceCanvas"] = {"canvasId": "canvas-a", "width": 17, "height": 16, "resetEpoch": 1}
+    upstream["rendererTarget"] = {"canvasId": "canvas-b", "width": 8, "height": 8}
+    upstream["rendererSourceRect"] = {"x": 0, "y": 0, "width": 17, "height": 16}
+    upstream["rendererDestination"] = {"x": 0, "y": 0, "width": 8, "height": 8}
+    upstream["segmentClearRectangle"] = {"x": 0, "y": 0, "width": 17, "height": 16}
+    upstream["segmentClearTarget"] = {"canvasId": "canvas-a", "width": 17, "height": 16, "resetEpoch": 1}
+    upstream["segmentDrawTarget"] = {"canvasId": "canvas-a", "width": 17, "height": 16, "resetEpoch": 1}
+    upstream["segmentResetKind"] = "canvas_dimension_reset"
+    upstream["segmentResetEpoch"] = 1
+    upstream["segmentResetObservationAvailable"] = True
+    upstream["segmentMutationObserverAvailable"] = True
+    upstream["segmentMutationObserverTakeRecordsAvailable"] = True
+    upstream["segmentUnknownMutation"] = False
+    tile_positions = [(0, 0), (8, 0), (16, 0), (0, 8), (8, 8), (16, 8)]
+    upstream["tileDraws"] = [
+        {
+            "operationIndex": index,
+            "source": {"sourceId": "bitmap-a", "constructor": "ImageBitmap", "width": 24, "height": 16},
+            "target": {"canvasId": "canvas-a", "width": 17, "height": 16, "resetEpoch": 1},
+            "sourceRect": {"x": x, "y": y, "width": 8, "height": 8},
+            "destination": {"x": x, "y": y, "width": 8, "height": 8},
+            "transform": dict(IDENTITY), "globalAlpha": 1,
+            "globalCompositeOperation": "source-over", "filter": "none",
+        }
+        for index, (x, y) in enumerate(tile_positions, start=2)
+    ]
+    upstream["segmentFirstTileOperationIndex"] = 2
+    upstream["segmentLastTileOperationIndex"] = 7
+    upstream["segmentTileCount"] = 6
+    upstream["segmentExpectedTileCount"] = 6
+    downstream = _completed_record(mapping_id="mapping-downstream-cropped", renderer_index=10, clear_index=7)
+    downstream["sourceCanvas"] = {"canvasId": "canvas-b", "width": 8, "height": 8, "resetEpoch": 2}
+    downstream["rendererTarget"] = {"canvasId": "canvas-renderer", "width": 8, "height": 8}
+    downstream["rendererSourceRect"] = {"x": 0, "y": 0, "width": 8, "height": 8}
+    downstream["rendererDestination"] = {"x": 0, "y": 0, "width": 8, "height": 8}
+    downstream["segmentClearRectangle"] = {"x": 0, "y": 0, "width": 8, "height": 8}
+    downstream["segmentClearTarget"] = {"canvasId": "canvas-b", "width": 8, "height": 8, "resetEpoch": 2}
+    downstream["segmentDrawTarget"] = {"canvasId": "canvas-b", "width": 8, "height": 8, "resetEpoch": 2}
+    downstream["segmentResetKind"] = "canvas_dimension_reset"
+    downstream["segmentResetEpoch"] = 2
+    downstream["segmentResetObservationAvailable"] = True
+    downstream["segmentMutationObserverAvailable"] = True
+    downstream["segmentMutationObserverTakeRecordsAvailable"] = True
+    downstream["segmentUnknownMutation"] = False
+    downstream["segmentFirstTileOperationIndex"] = None
+    downstream["segmentLastTileOperationIndex"] = None
+    downstream["tileDraws"] = []
+    downstream["segmentTileCount"] = 0
+    downstream["segmentExpectedTileCount"] = None
+    downstream["unsafeOperationCount"] = 1
+    downstream["unsafeOperationTypes"] = ["non_image_bitmap_draw"]
+    downstream["nonImageBitmapDraws"] = [{
+        "operationIndex": 8,
+        "source": {"sourceId": "canvas-a-object", "constructor": "HTMLCanvasElement", "canvasId": "canvas-a", "width": 17, "height": 16, "resetEpoch": 1},
+        "target": {"canvasId": "canvas-b", "width": 8, "height": 8, "resetEpoch": 2},
+        "sourceRect": {"x": 0, "y": 0, "width": 17, "height": 16},
+        "destination": {"x": 0, "y": 0, "width": 8, "height": 8},
+        "transform": dict(IDENTITY), "globalAlpha": 1,
+        "globalCompositeOperation": "source-over", "filter": "none",
+        "imageSmoothingEnabled": True, "imageSmoothingQuality": "high",
+    }]
+    summary = {
+        "mappingId": "mapping-cropped", "sourceCanvasId": "canvas-a", "targetCanvasId": "canvas-b",
+        "rendererOperationIndex": 8, "segmentClearOperationIndex": 1,
+        "segmentFirstTileOperationIndex": 2, "segmentLastTileOperationIndex": 7,
+        "segmentTileCount": 6, "sourceImageBitmapIds": ["bitmap-a"],
+        "sourceDimensions": {"width": 17, "height": 16}, "targetDimensions": {"width": 8, "height": 8},
+        "sourceResetEpoch": 1, "targetResetEpoch": 2,
+        "clearTarget": {"canvasId": "canvas-a", "width": 17, "height": 16, "resetEpoch": 1},
+        "resetKind": "canvas_dimension_reset", "resetEpoch": 1,
+        "drawTarget": {"canvasId": "canvas-a", "width": 17, "height": 16, "resetEpoch": 1}, "unknownMutation": False,
+        "resetObservationAvailable": True,
+        "mutationObserverAvailable": True,
+        "mutationObserverTakeRecordsAvailable": True,
+    }
+    draw = {"mappingId": "mapping-downstream-cropped", "traceOperationIndex": 10,
+            "canvasId": "canvas-renderer", "sourceCanvasId": "canvas-b",
+            "source": {"constructor": "HTMLCanvasElement", "canvasId": "canvas-b",
+                       "width": 8, "height": 8, "resetEpoch": 2},
+            "sourceRect": {"x": 0, "y": 0, "width": 8, "height": 8},
+            "destination": {"x": 0, "y": 0, "width": 8, "height": 8},
+            "canvasWidth": 8, "canvasHeight": 8}
+    return upstream, downstream, summary, draw
+
+
+def test_scaled_canvas_source_accepts_only_observed_cropped_one_hop() -> None:
+    upstream, downstream, summary, downstream_draw = _cropped_scaled_chain_fixture()
+    downstream_analysis = analyze_purchased_mapping({"completedMappings": [downstream]}, downstream_draw)
+    candidate = resolve_scaled_canvas_source_candidate(downstream_analysis, downstream_draw, [summary])
+    assert candidate is not None
+    upstream_analysis = analyze_purchased_mapping({"completedMappings": [upstream]}, candidate.upstream_renderer_draw())
+    assert upstream_analysis.proven
+    assert upstream_analysis.mapping is not None
+    assert upstream_analysis.mapping.coded_dimensions == (24, 16)
+    assert upstream_analysis.mapping.visible_dimensions == (17, 16)
+    assert validate_scaled_canvas_source_analysis(upstream_analysis, candidate)
+    assert not validate_scaled_canvas_source_analysis(
+        upstream_analysis,
+        replace(candidate, selected_source_canvas_generation=3),
+    )
+    missing_observer = copy.deepcopy(upstream)
+    missing_observer["segmentMutationObserverAvailable"] = False
+    missing_observer_result = analyze_purchased_mapping(
+        {"completedMappings": [missing_observer]}, candidate.upstream_renderer_draw()
+    )
+    assert missing_observer_result.proven
+    assert missing_observer_result.mapping is not None
+    assert not validate_scaled_canvas_source_analysis(
+        missing_observer_result, candidate
+    )
+    left_offset_draw = copy.deepcopy(downstream_draw)
+    left_offset_draw["sourceRect"]["x"] = 1
+    assert resolve_scaled_canvas_source_candidate(
+        downstream_analysis, left_offset_draw, [summary]
+    ) is None
+    large_crop_draw = copy.deepcopy(downstream_draw)
+    large_crop_draw["sourceRect"]["width"] = 6
+    assert resolve_scaled_canvas_source_candidate(
+        downstream_analysis, large_crop_draw, [summary]
+    ) is None
+
+    old_clear = copy.deepcopy(upstream)
+    old_clear["segmentClearTarget"] = {"canvasId": "canvas-a", "width": 24, "height": 16, "resetEpoch": 1}
+    old_clear["segmentClearRectangle"] = {"x": 0, "y": 0, "width": 24, "height": 16}
+    old_clear_result = analyze_purchased_mapping({"completedMappings": [old_clear]}, candidate.upstream_renderer_draw())
+    assert not old_clear_result.proven
+
+    missing_reset = copy.deepcopy(upstream)
+    missing_reset.pop("segmentResetKind")
+    missing_reset.pop("segmentResetEpoch")
+    missing_reset.pop("segmentClearTarget")
+    missing_reset.pop("segmentDrawTarget")
+    missing_reset.pop("segmentUnknownMutation")
+    missing = analyze_purchased_mapping({"completedMappings": [missing_reset]}, candidate.upstream_renderer_draw())
+    assert missing.proven
+    assert not validate_scaled_canvas_source_analysis(missing, candidate)
+
+    unknown = copy.deepcopy(upstream)
+    unknown["segmentUnknownMutation"] = True
+    unknown_result = analyze_purchased_mapping({"completedMappings": [unknown]}, candidate.upstream_renderer_draw())
+    assert not unknown_result.proven
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        pytest.param("segmentUnknownMutation", True, id="target-unknown-mutation"),
+        pytest.param("segmentResetObservationAvailable", False, id="target-reset-observation"),
+        pytest.param("segmentMutationObserverAvailable", False, id="target-observer"),
+        pytest.param(
+            "segmentMutationObserverTakeRecordsAvailable",
+            False,
+            id="target-take-records",
+        ),
+    ],
+)
+def test_cropped_one_hop_rejects_unproven_downstream_target(
+    field: str,
+    value: object,
+) -> None:
+    _upstream, downstream, summary, downstream_draw = _cropped_scaled_chain_fixture()
+    downstream[field] = value
+    downstream_analysis = analyze_purchased_mapping(
+        {"completedMappings": [downstream]}, downstream_draw
+    )
+    assert not downstream_analysis.proven
+    candidate = resolve_scaled_canvas_source_candidate(
+        downstream_analysis, downstream_draw, [summary]
+    )
+    assert candidate is not None
+    upstream, _valid_downstream, _summary, _draw = _cropped_scaled_chain_fixture()
+    upstream_analysis = analyze_purchased_mapping(
+        {"completedMappings": [upstream]}, candidate.upstream_renderer_draw()
+    )
+    assert not validate_scaled_canvas_source_analysis(upstream_analysis, candidate)
 
 
 def test_scaled_canvas_source_resolves_exact_one_hop_and_reuses_upstream_proof() -> None:
@@ -967,6 +1162,29 @@ def test_scaled_canvas_source_resolves_exact_one_hop_and_reuses_upstream_proof()
     assert upstream_analysis.mapping is not None
     assert upstream_analysis.mapping.source_dimensions == (32, 32)
     assert upstream_analysis.mapping.destination_dimensions == (32, 32)
+
+
+def test_legacy_equal_size_one_hop_allows_clear_rect_b_without_reset_observer() -> None:
+    _upstream, downstream, summary, downstream_draw = _scaled_chain_fixture()
+    downstream["segmentResetKind"] = "clearRect"
+    downstream["segmentResetObservationAvailable"] = False
+    downstream["segmentMutationObserverAvailable"] = False
+    downstream["segmentMutationObserverTakeRecordsAvailable"] = False
+    downstream["segmentUnknownMutation"] = False
+    downstream["segmentResetEpoch"] = 2
+    downstream["segmentClearTarget"] = {
+        "canvasId": "canvas-b", "width": 16, "height": 16, "resetEpoch": 2,
+    }
+    downstream["segmentDrawTarget"] = {
+        "canvasId": "canvas-b", "width": 16, "height": 16, "resetEpoch": 2,
+    }
+    downstream_analysis = analyze_purchased_mapping(
+        {"completedMappings": [downstream]}, downstream_draw
+    )
+    candidate = resolve_scaled_canvas_source_candidate(
+        downstream_analysis, downstream_draw, [summary]
+    )
+    assert candidate is not None
 
 
 @pytest.mark.parametrize(

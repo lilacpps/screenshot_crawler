@@ -41,22 +41,32 @@ Current checkpoint:
 
 `02-provenance-resolution/CHECKPOINT.md`
 
-Current execution status (2026-10-08): **COMPLETE**.
+Current execution status (2026-10-08): **COMPLETE — LN2 production integration accepted**.
+The user authorized automatic capture integration after the successful LN2 PoC.
+Automatic LN2 capture now returns a 1443x2048 reconstructed JPEG through a
+bounded cropped one-hop provenance contract. Its A snapshot, B snapshot and
+final renderer destination region all match at zero differing pixels, with
+the optional older-path verification flag off. Regression evidence and document
+synchronization are complete; final production Reviewer confirmed PASS with
+no remaining BLOCKING.
 The research branch includes fetched current `origin/main`. The minimal direct
 partial-MCU path is implemented: manga `9/159` and `11/159` each return two
 844x1200 reconstructed JPEGs from 848x1200 coded sources; LN `3/314` and `4/314`
 return 2048x1453 JPEGs from 2048x1456 coded sources. Full coded MCU coverage,
 unique exact candidate, coefficient/quantization/selector equality and mandatory
 native pixel equality pass for every new cropped part. The user-requested LN2
-follow-up now proves B at recovery-PoC level: its 1443x2048 reconstructed JPEG,
-722x1024 intermediate and recorded final display region all match the eager
-snapshots exactly. Automatic LN2 capture still uses the existing fail-closed
-path; this diagnostic proof has not been promoted to production.
+follow-up proved B at recovery-PoC level and now has automatic-capture live
+acceptance. Its 722x1024 intermediate and selected 721.5x1024 source rectangle
+remain distinct. Final replay uses the actual 1904x985 backing canvas and
+destination offset; no color tolerance or heuristic attribution is used.
 Existing LN text controls 8/10 remain A.
 Current cover controls use actual fallback, separately from historical A.
-Local checks pass (180 targeted tests, 46 browser-backed Integration tests,
-Ruff/diff checks). For the implemented direct contract, final Reviewer confirmed PASS with no BLOCKING on code,
-tests, completed live evidence and synchronization. Manga2 was unnecessary.
+The direct-contract baseline passed 180 targeted tests, 46 browser-backed
+Integration tests and its final Reviewer gate. The LN2 extension currently
+passes 195 targeted tests, 52 browser-backed Integration tests and Ruff/diff
+checks, with zero skipped tests. Its separate production review passed after
+the explicit proof gates and legacy regression checks were completed. Manga2
+was unnecessary. Unproved covers and uncaptured LN5-7 retain D; no C is inferred.
 See the checkpoint for positions, hashes and D limits.
 
 Goals:

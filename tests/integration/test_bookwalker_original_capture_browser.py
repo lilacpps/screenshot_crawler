@@ -150,6 +150,196 @@ async def test_native_capture_mode_init_script_controls_trace(
     ) == {"mode": "canvas", "enabled": False, "installed": True}
 
 
+async def test_dimension_reset_epoch_and_cropped_one_hop_snapshots_are_recorded(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script("window.__bookwalkerCaptureMode = 'native';")
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    result = await browser_page.evaluate(
+        """
+        async () => {
+          const bitmapSource = document.createElement('canvas');
+          bitmapSource.width = 24; bitmapSource.height = 16;
+          const sourceContext = bitmapSource.getContext('2d');
+          sourceContext.fillStyle = 'rgb(20,40,60)'; sourceContext.fillRect(0, 0, 24, 16);
+          const bitmap = await createImageBitmap(bitmapSource);
+          const tileCanvas = document.createElement('canvas');
+          tileCanvas.width = 17; tileCanvas.height = 16;
+          const tileContext = tileCanvas.getContext('2d');
+          const positions = [[0,0],[8,0],[16,0],[0,8],[8,8],[16,8]];
+          for (const [x, y] of positions) {
+            tileContext.drawImage(bitmap, x, y, 8, 8, x, y, 8, 8);
+          }
+          // A same-value setter is still a destructive reset boundary.
+          tileCanvas.width = 17;
+          tileCanvas.height = 16;
+          for (const [x, y] of positions) {
+            tileContext.drawImage(bitmap, x, y, 8, 8, x, y, 8, 8);
+          }
+          const intermediate = document.createElement('canvas');
+          intermediate.width = 8; intermediate.height = 8;
+          intermediate.getContext('2d').drawImage(tileCanvas, 0, 0, 17, 16, 0, 0, 8, 8);
+          const renderer = document.createElement('canvas');
+          renderer.width = 1200; renderer.height = 600;
+          renderer.getContext('2d').drawImage(intermediate, 0, 0, 8, 8, 10, 10, 8, 8);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          const trace = window.__bookwalkerTransformTrace;
+          const completed = trace.completedMappings || [];
+          const mapping = completed.find(item => item.sourceCanvas?.width === 17);
+          const calls = window.__bookwalkerNativeDrawCalls || [];
+          const call = calls[calls.length - 1];
+          const unknownCanvas = document.createElement('canvas');
+          unknownCanvas.width = 4; unknownCanvas.height = 4;
+          unknownCanvas.setAttribute('width', '5');
+          const internalCanvas = document.createElement('canvas');
+          window.__bookwalkerMarkInternalCanvas(internalCanvas);
+          internalCanvas.width = 4; internalCanvas.height = 4;
+          internalCanvas.setAttribute('width', '5');
+          await new Promise(resolve => setTimeout(resolve, 0));
+          return {
+            resetObserved: trace.diagnostics.canvasResetObservationAvailable,
+            unknownMutations: trace.diagnostics.unknownCanvasMutationCount,
+            mapping: mapping ? {
+              resetKind: mapping.segmentResetKind,
+              resetEpoch: mapping.segmentResetEpoch,
+              clearTarget: mapping.segmentClearTarget,
+              drawTarget: mapping.segmentDrawTarget,
+              resetObservationAvailable: mapping.segmentResetObservationAvailable,
+              mutationObserverAvailable: mapping.segmentMutationObserverAvailable,
+              mutationObserverTakeRecordsAvailable:
+                mapping.segmentMutationObserverTakeRecordsAvailable,
+              tileCount: mapping.segmentTileCount,
+            } : null,
+            native: call ? {
+              fullSourceSnapshotId: call.fullSourceSnapshotId || null,
+              targetSnapshotId: call.targetSnapshotId || null,
+              sourceRect: call.sourceRect,
+              destination: call.destination,
+            } : null,
+            resetEpochs: completed.filter(item => item.sourceCanvas?.width === 17)
+              .map(item => item.segmentResetEpoch),
+          };
+        }
+        """
+    )
+    assert result["resetObserved"] is True
+    assert result["unknownMutations"] >= 1
+    assert result["mapping"]["resetKind"] == "canvas_dimension_reset"
+    assert result["mapping"]["resetEpoch"] is not None
+    assert result["mapping"]["clearTarget"]["width"] == 17
+    assert result["mapping"]["drawTarget"]["width"] == 17
+    assert result["mapping"]["resetObservationAvailable"] is True
+    assert result["mapping"]["mutationObserverAvailable"] is True
+    assert result["mapping"]["mutationObserverTakeRecordsAvailable"] is True
+    assert result["mapping"]["tileCount"] == 6
+    assert max(result["resetEpochs"]) >= 3
+    assert result["native"]["fullSourceSnapshotId"]
+    assert result["native"]["targetSnapshotId"]
+
+
+@pytest.mark.parametrize("failure_mode", ["partial_setter", "observer_unavailable"])
+async def test_cropped_reset_proof_fails_closed_when_observation_is_incomplete(
+    browser_page: Page,
+    failure_mode: str,
+) -> None:
+    if failure_mode == "partial_setter":
+        await browser_page.add_init_script(
+            """
+            (() => {
+              const descriptor = Object.getOwnPropertyDescriptor(
+                HTMLCanvasElement.prototype, 'height');
+              Object.defineProperty(HTMLCanvasElement.prototype, 'height', {
+                configurable: false,
+                enumerable: descriptor.enumerable,
+                get: descriptor.get,
+                set: descriptor.set,
+              });
+            })();
+            """
+        )
+    else:
+        await browser_page.add_init_script(
+            "Object.defineProperty(window, 'MutationObserver', {value: undefined, configurable: true});"
+        )
+    await browser_page.add_init_script("window.__bookwalkerCaptureMode = 'native';")
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    result = await browser_page.evaluate(
+        """
+        async () => {
+          const source = document.createElement('canvas');
+          source.width = 8; source.height = 8;
+          source.getContext('2d').fillRect(0, 0, 8, 8);
+          const bitmap = await createImageBitmap(source);
+          const tiled = document.createElement('canvas');
+          tiled.width = 8; tiled.height = 8;
+          tiled.getContext('2d').drawImage(bitmap, 0, 0, 8, 8, 0, 0, 8, 8);
+          const renderer = document.createElement('canvas');
+          renderer.width = 1200; renderer.height = 600;
+          renderer.getContext('2d').drawImage(tiled, 0, 0, 8, 8, 0, 0, 8, 8);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          const trace = window.__bookwalkerTransformTrace;
+          const mapping = (trace.completedMappings || [])
+            .find(item => item.sourceCanvas?.width === 8);
+          return {
+            hooks: trace.diagnostics.canvasResetObservationAvailable,
+            mapping: mapping ? {
+              resetObservationAvailable: mapping.segmentResetObservationAvailable,
+              mutationObserverAvailable: mapping.segmentMutationObserverAvailable,
+              mutationObserverTakeRecordsAvailable:
+                mapping.segmentMutationObserverTakeRecordsAvailable,
+            } : null,
+          };
+        }
+        """
+    )
+    assert result["hooks"] is (failure_mode != "partial_setter")
+    assert result["mapping"] is not None
+    assert result["mapping"]["resetObservationAvailable"] is False
+    assert result["mapping"]["mutationObserverAvailable"] is (
+        failure_mode != "observer_unavailable"
+    )
+    assert result["mapping"]["mutationObserverTakeRecordsAvailable"] is (
+        failure_mode != "observer_unavailable"
+    )
+
+
+async def test_same_task_canvas_attribute_mutation_is_flushed_before_mapping_freeze(
+    browser_page: Page,
+) -> None:
+    await browser_page.add_init_script("window.__bookwalkerCaptureMode = 'native';")
+    await browser_page.add_init_script(adapter_module._DRAW_TRACE_SCRIPT)
+    await browser_page.goto("data:text/html,<html><body></body></html>")
+    result = await browser_page.evaluate(
+        """
+        async () => {
+          const source = document.createElement('canvas');
+          source.width = 8; source.height = 8;
+          source.getContext('2d').fillRect(0, 0, 8, 8);
+          const bitmap = await createImageBitmap(source);
+          const tiled = document.createElement('canvas');
+          tiled.width = 8; tiled.height = 8;
+          tiled.getContext('2d').drawImage(bitmap, 0, 0, 8, 8, 0, 0, 8, 8);
+          // The mutation and selected renderer draw happen in the same task.
+          tiled.setAttribute('width', '8');
+          const renderer = document.createElement('canvas');
+          renderer.width = 1200; renderer.height = 600;
+          renderer.getContext('2d').drawImage(tiled, 0, 0, 8, 8, 0, 0, 8, 8);
+          const trace = window.__bookwalkerTransformTrace;
+          const mapping = (trace.completedMappings || [])
+            .find(item => item.sourceCanvas?.width === 8);
+          return {
+            unknownCount: trace.diagnostics.unknownCanvasMutationCount,
+            unknown: mapping?.segmentUnknownMutation === true,
+          };
+        }
+        """
+    )
+    assert result["unknownCount"] >= 1
+    assert result["unknown"] is True
+
+
 async def test_html_canvas_snapshot_is_pixel_stable_until_materialize(
     browser_page: Page,
 ) -> None:

@@ -69,6 +69,15 @@ class PurchasedMapping:
     mcu_dimensions: tuple[int, int] = (8, 8)
     renderer_canvas_id: str | None = None
     source_canvas_id: str | None = None
+    source_canvas_generation: int | None = None
+    source_snapshot_id: str | None = None
+    segment_reset_kind: str | None = None
+    segment_reset_observation_available: bool | None = None
+    segment_mutation_observer_available: bool | None = None
+    segment_mutation_observer_take_records_available: bool | None = None
+    segment_unknown_mutation: bool | None = None
+    segment_clear_canvas_generation: int | None = None
+    segment_clear_dimensions: tuple[int, int] | None = None
     imagebitmap_source_id: str | None = None
     renderer_draw_operation_index: int | None = None
     first_operation_index: int | None = None
@@ -149,6 +158,18 @@ class PurchasedMapping:
                 {"width": width, "height": height}
                 for width, height in self.tile_dimension_variants
             ],
+            "source_canvas_generation": self.source_canvas_generation,
+            "source_snapshot_id": self.source_snapshot_id,
+            "segment_reset_kind": self.segment_reset_kind,
+            "segment_reset_observation_available": self.segment_reset_observation_available,
+            "segment_mutation_observer_available": self.segment_mutation_observer_available,
+            "segment_mutation_observer_take_records_available": self.segment_mutation_observer_take_records_available,
+            "segment_unknown_mutation": self.segment_unknown_mutation,
+            "segment_clear_canvas_generation": self.segment_clear_canvas_generation,
+            "segment_clear_dimensions": (
+                list(self.segment_clear_dimensions)
+                if self.segment_clear_dimensions is not None else None
+            ),
             "complete_bijection": True,
         }
 
@@ -186,6 +207,15 @@ class MappingAnalysis:
     non_image_bitmap_draws: tuple[dict[str, Any], ...] = ()
     renderer_canvas_id: str | None = None
     source_canvas_id: str | None = None
+    source_canvas_generation: int | None = None
+    source_snapshot_id: str | None = None
+    segment_reset_kind: str | None = None
+    segment_reset_observation_available: bool | None = None
+    segment_mutation_observer_available: bool | None = None
+    segment_mutation_observer_take_records_available: bool | None = None
+    segment_unknown_mutation: bool | None = None
+    segment_clear_canvas_generation: int | None = None
+    segment_clear_dimensions: tuple[int, int] | None = None
 
     @property
     def proven(self) -> bool:
@@ -224,6 +254,18 @@ class MappingAnalysis:
             ],
             "renderer_canvas_id": self.renderer_canvas_id,
             "source_canvas_id": self.source_canvas_id,
+            "source_canvas_generation": self.source_canvas_generation,
+            "source_snapshot_id": self.source_snapshot_id,
+            "segment_reset_kind": self.segment_reset_kind,
+            "segment_reset_observation_available": self.segment_reset_observation_available,
+            "segment_mutation_observer_available": self.segment_mutation_observer_available,
+            "segment_mutation_observer_take_records_available": self.segment_mutation_observer_take_records_available,
+            "segment_unknown_mutation": self.segment_unknown_mutation,
+            "segment_clear_canvas_generation": self.segment_clear_canvas_generation,
+            "segment_clear_dimensions": (
+                list(self.segment_clear_dimensions)
+                if self.segment_clear_dimensions is not None else None
+            ),
         }
         if self.mapping is not None:
             result.update({
@@ -250,6 +292,18 @@ class MappingAnalysis:
                 "tile_dimension_variants": [
                     list(item) for item in self.mapping.tile_dimension_variants
                 ],
+                "source_canvas_generation": self.mapping.source_canvas_generation,
+                "source_snapshot_id": self.mapping.source_snapshot_id,
+                "segment_reset_kind": self.mapping.segment_reset_kind,
+                "segment_reset_observation_available": self.mapping.segment_reset_observation_available,
+                "segment_mutation_observer_available": self.mapping.segment_mutation_observer_available,
+                "segment_mutation_observer_take_records_available": self.mapping.segment_mutation_observer_take_records_available,
+                "segment_unknown_mutation": self.mapping.segment_unknown_mutation,
+                "segment_clear_canvas_generation": self.mapping.segment_clear_canvas_generation,
+                "segment_clear_dimensions": (
+                    list(self.mapping.segment_clear_dimensions)
+                    if self.mapping.segment_clear_dimensions is not None else None
+                ),
             })
         return result
 
@@ -277,6 +331,14 @@ class ScaledCanvasSourceCandidate:
     filter: str
     image_smoothing_enabled: bool | None = None
     image_smoothing_quality: str | None = None
+    source_canvas_generation: int | None = None
+    target_canvas_generation: int | None = None
+    selected_source_canvas_generation: int | None = None
+    target_reset_observation_available: bool | None = None
+    target_mutation_observer_available: bool | None = None
+    target_mutation_observer_take_records_available: bool | None = None
+    target_unknown_mutation: bool | None = None
+    target_clear_canvas_generation: int | None = None
 
     @property
     def scale_x(self) -> float:
@@ -299,6 +361,7 @@ class ScaledCanvasSourceCandidate:
                 "canvasId": self.source_canvas_id,
                 "width": self.source_dimensions[0],
                 "height": self.source_dimensions[1],
+                "resetEpoch": self.source_canvas_generation,
             },
             "sourceRect": dict(self.source_rect),
             "destination": dict(self.destination),
@@ -324,6 +387,14 @@ class ScaledCanvasSourceCandidate:
             },
             "provenance_scale_x": self.scale_x,
             "provenance_scale_y": self.scale_y,
+            "provenance_source_canvas_generation": self.source_canvas_generation,
+            "provenance_target_canvas_generation": self.target_canvas_generation,
+            "provenance_selected_source_canvas_generation": self.selected_source_canvas_generation,
+            "provenance_target_reset_observation_available": self.target_reset_observation_available,
+            "provenance_target_mutation_observer_available": self.target_mutation_observer_available,
+            "provenance_target_mutation_observer_take_records_available": self.target_mutation_observer_take_records_available,
+            "provenance_target_unknown_mutation": self.target_unknown_mutation,
+            "provenance_target_clear_canvas_generation": self.target_clear_canvas_generation,
         }
 
 
@@ -458,6 +529,8 @@ def _compact_canvas(value: object) -> dict[str, Any]:
         if not isinstance(constructor, str):
             raise ValueError("compact canvas constructor has an impossible type")
         result["constructor"] = constructor
+    if "resetEpoch" in value and value["resetEpoch"] is not None:
+        result["resetEpoch"] = _compact_integer(value["resetEpoch"])
     return result
 
 
@@ -466,9 +539,10 @@ def _decode_compact_sources(value: object) -> list[dict[str, Any]]:
         raise TypeError("compact sources table is not a list")
     sources: list[dict[str, Any]] = []
     for row in value:
-        if not isinstance(row, list) or len(row) != 5:
+        if not isinstance(row, list) or len(row) not in (5, 6):
             raise ValueError("compact source table row has the wrong length")
-        constructor, source_id, width, height, canvas_id = row
+        constructor, source_id, width, height, canvas_id = row[:5]
+        reset_epoch = row[5] if len(row) == 6 else None
         if not isinstance(constructor, str) or not isinstance(source_id, str):
             raise TypeError("compact source table string has an impossible type")
         width = _compact_number(width)
@@ -484,6 +558,8 @@ def _decode_compact_sources(value: object) -> list[dict[str, Any]]:
         if canvas_id is not None:
             source["canvasId"] = canvas_id
             source["sourceCanvasId"] = canvas_id
+        if reset_epoch is not None:
+            source["resetEpoch"] = _compact_integer(reset_epoch)
         sources.append(source)
     return sources
 
@@ -493,16 +569,20 @@ def _decode_compact_targets(value: object) -> list[dict[str, Any]]:
         raise TypeError("compact targets table is not a list")
     targets: list[dict[str, Any]] = []
     for row in value:
-        if not isinstance(row, list) or len(row) != 3:
+        if not isinstance(row, list) or len(row) not in (3, 4):
             raise ValueError("compact target table row has the wrong length")
-        canvas_id, width, height = row
+        canvas_id, width, height = row[:3]
+        reset_epoch = row[3] if len(row) == 4 else None
         if not isinstance(canvas_id, str):
             raise TypeError("compact target canvas id has an impossible type")
-        targets.append({
+        target = {
             "canvasId": canvas_id,
             "width": _compact_number(width),
             "height": _compact_number(height),
-        })
+        }
+        if reset_epoch is not None:
+            target["resetEpoch"] = _compact_integer(reset_epoch)
+        targets.append(target)
     return targets
 
 
@@ -621,6 +701,8 @@ def _decode_compact_non_image_bitmap_draws(value: object) -> list[dict[str, Any]
         if canvas_id is not None:
             source["canvasId"] = canvas_id
             source["sourceCanvasId"] = canvas_id
+        if source_value.get("resetEpoch") is not None:
+            source["resetEpoch"] = _compact_integer(source_value["resetEpoch"])
         draw = {
             "operationIndex": operation_index,
             "source": source,
@@ -700,6 +782,22 @@ def _decode_compact_mapping_summaries(value: object) -> list[dict[str, Any]]:
             if width <= 0 or height <= 0:
                 raise ValueError("compact mapping summary dimensions are invalid")
             result[key] = {"width": width, "height": height}
+        for key in ("clearTarget", "drawTarget"):
+            if item.get(key) is not None:
+                result[key] = _compact_canvas(item[key])
+        for key in ("sourceResetEpoch", "targetResetEpoch"):
+            if item.get(key) is not None:
+                result[key] = _compact_integer(item[key])
+        if item.get("resetKind") is not None:
+            if not isinstance(item["resetKind"], str):
+                raise TypeError("compact mapping summary reset kind is invalid")
+            result["resetKind"] = item["resetKind"]
+        if item.get("resetEpoch") is not None:
+            result["resetEpoch"] = _compact_integer(item["resetEpoch"])
+        if "unknownMutation" in item:
+            if not isinstance(item["unknownMutation"], bool):
+                raise TypeError("compact mapping summary mutation flag is invalid")
+            result["unknownMutation"] = item["unknownMutation"]
         summaries.append(result)
     return summaries
 
@@ -796,6 +894,46 @@ def _decode_compact_mapping(value: object) -> dict[str, Any]:
     )
     if segment_tile_count != len(tiles):
         raise ValueError("compact segment tile count does not match tile rows")
+    optional_fields: dict[str, Any] = {}
+    if "segmentClearTarget" in value:
+        clear_target = value["segmentClearTarget"]
+        optional_fields["segmentClearTarget"] = (
+            None if clear_target is None else _compact_canvas(clear_target)
+        )
+    if "segmentDrawTarget" in value:
+        draw_target = value["segmentDrawTarget"]
+        optional_fields["segmentDrawTarget"] = (
+            None if draw_target is None else _compact_canvas(draw_target)
+        )
+    if "segmentResetKind" in value:
+        if not isinstance(value["segmentResetKind"], str):
+            raise TypeError("compact reset kind has an impossible type")
+        optional_fields["segmentResetKind"] = value["segmentResetKind"]
+    if "segmentResetEpoch" in value:
+        optional_fields["segmentResetEpoch"] = _compact_integer(value["segmentResetEpoch"])
+    if "segmentUnknownMutation" in value:
+        if not isinstance(value["segmentUnknownMutation"], bool):
+            raise TypeError("compact mutation flag has an impossible type")
+        optional_fields["segmentUnknownMutation"] = value["segmentUnknownMutation"]
+    for key, label in (
+        ("segmentResetObservationAvailable", "reset observation flag"),
+        ("segmentMutationObserverAvailable", "mutation observer flag"),
+        ("segmentMutationObserverTakeRecordsAvailable", "mutation observer takeRecords flag"),
+    ):
+        if key in value:
+            if not isinstance(value[key], bool):
+                raise TypeError(f"compact {label} has an impossible type")
+            optional_fields[key] = value[key]
+    if "sourceSnapshotId" in value:
+        snapshot_id = value["sourceSnapshotId"]
+        if snapshot_id is not None and not isinstance(snapshot_id, str):
+            raise TypeError("compact source snapshot id has an impossible type")
+        optional_fields["sourceSnapshotId"] = snapshot_id
+    if "sourceSnapshotError" in value:
+        snapshot_error = value["sourceSnapshotError"]
+        if snapshot_error is not None and not isinstance(snapshot_error, str):
+            raise TypeError("compact source snapshot error has an impossible type")
+        optional_fields["sourceSnapshotError"] = snapshot_error
     return {
         "mappingId": mapping_id,
         "rendererOperationIndex": renderer_operation_index,
@@ -820,6 +958,7 @@ def _decode_compact_mapping(value: object) -> dict[str, Any]:
         "unsafeOperationTypes": list(unsafe_types),
         "segmentOverflow": value["segmentOverflow"],
         "nonImageBitmapDraws": non_image_bitmap_draws,
+        **optional_fields,
     }
 
 
@@ -1216,6 +1355,19 @@ def _safe_draw_operation(operation: Mapping[str, Any]) -> bool:
     return operation.get("filter") == "none"
 
 
+def _epoch(value: object) -> int | None:
+    if not isinstance(value, Mapping):
+        return None
+    raw = _first(value, "resetEpoch", "reset_epoch")
+    if raw is None:
+        return None
+    try:
+        result = _integer(raw)
+    except (TypeError, ValueError):
+        return None
+    return result if result >= 0 else None
+
+
 def _summary_dimensions(value: object) -> tuple[int, int] | None:
     return _dimensions(value)
 
@@ -1300,13 +1452,58 @@ def resolve_scaled_canvas_source_candidate(
 
     source_dimensions = _summary_dimensions(source)
     target_dimensions = _summary_dimensions(target)
+    source_canvas_generation = _epoch(source)
+    target_canvas_generation = _epoch(target)
+    selected_source_generation = _epoch(downstream_renderer_draw.get("source"))
+    target_clear_canvas_generation = downstream_analysis.segment_clear_canvas_generation
     if source_dimensions is None or target_dimensions is None:
         return None
+    selected_source_rect = _first(
+        downstream_renderer_draw, "sourceRect", "source_rect"
+    )
+    selected_source = _first(downstream_renderer_draw, "source")
+    selected_source_dimensions = _summary_dimensions(selected_source)
+    selected_target_dimensions = _summary_dimensions(
+        _first(downstream_renderer_draw, "target")
+    )
+    if selected_target_dimensions is None:
+        try:
+            selected_target_dimensions = (
+                _integer(downstream_renderer_draw["canvasWidth"]),
+                _integer(downstream_renderer_draw["canvasHeight"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            selected_target_dimensions = None
+    selected_destination = _first(
+        downstream_renderer_draw, "destination", "rendererDestination", "renderer_destination"
+    )
+    selected_rect = _numeric_rect(selected_source_rect)
+    selected_dest = _numeric_rect(selected_destination)
+    if selected_rect is None or selected_source_dimensions is None:
+        return None
+    if selected_rect[0] != 0.0 or selected_rect[1] != 0.0:
+        return None
+    source_width_delta = float(selected_source_dimensions[0]) - selected_rect[2]
+    source_height_delta = float(selected_source_dimensions[1]) - selected_rect[3]
+    if not (0.0 <= source_width_delta < 1.0 and 0.0 <= source_height_delta < 1.0):
+        return None
+    if selected_rect[2] <= 0 or selected_rect[3] <= 0:
+        return None
     if (
-        source_dimensions[0] * target_dimensions[1]
-        != source_dimensions[1] * target_dimensions[0]
+        selected_target_dimensions is None
+        or selected_dest is None
+        or selected_dest[0] < 0
+        or selected_dest[1] < 0
+        or selected_dest[2] <= 0
+        or selected_dest[3] <= 0
+        or selected_dest[0] + selected_dest[2] > selected_target_dimensions[0]
+        or selected_dest[1] + selected_dest[3] > selected_target_dimensions[1]
     ):
         return None
+    # A final MCU crop can make the visible source aspect differ from the
+    # destination by a fractional pixel.  The recorded full-frame rectangles
+    # and identity transform are the authority; an aspect-ratio heuristic is
+    # not used for attribution.
 
     source_rect = _full_frame_rect(non_image.get("sourceRect"), source_dimensions)
     destination = _full_frame_rect(non_image.get("destination"), target_dimensions)
@@ -1385,6 +1582,10 @@ def resolve_scaled_canvas_source_candidate(
             != target_dimensions
         ):
             continue
+        if source_canvas_generation is not None and summary.get("sourceResetEpoch") != source_canvas_generation:
+            continue
+        if target_canvas_generation is not None and summary.get("targetResetEpoch") != target_canvas_generation:
+            continue
         try:
             tile_count = _integer(summary["segmentTileCount"])
         except (KeyError, TypeError, ValueError):
@@ -1434,6 +1635,16 @@ def resolve_scaled_canvas_source_candidate(
         filter="none",
         image_smoothing_enabled=smoothing_enabled,
         image_smoothing_quality=smoothing_quality,
+        source_canvas_generation=source_canvas_generation,
+        target_canvas_generation=target_canvas_generation,
+        selected_source_canvas_generation=selected_source_generation,
+        target_reset_observation_available=downstream_analysis.segment_reset_observation_available,
+        target_mutation_observer_available=downstream_analysis.segment_mutation_observer_available,
+        target_mutation_observer_take_records_available=(
+            downstream_analysis.segment_mutation_observer_take_records_available
+        ),
+        target_unknown_mutation=downstream_analysis.segment_unknown_mutation,
+        target_clear_canvas_generation=target_clear_canvas_generation,
     )
 
 
@@ -1441,32 +1652,83 @@ def validate_scaled_canvas_source_analysis(
     analysis: MappingAnalysis,
     candidate: ScaledCanvasSourceCandidate,
 ) -> bool:
-    """Cross-check a full upstream proof against the downstream copy trace."""
+    """Cross-check a full upstream proof against the downstream copy trace.
+
+    The legacy equal-size one-hop contract remains valid.  A cropped upstream
+    is accepted only when the trace contains an observed canvas-dimension
+    reset boundary and the downstream copy consumes the upstream visible
+    frame exactly; this keeps coded JPEG dimensions separate from draw-time V.
+    """
 
     mapping = analysis.mapping
-    # A scaled-canvas hop may only consume an equal-size, coded frame.  A
-    # direct partial-MCU mapping has an explicit coded frame (S) and visible
-    # frame (V); allowing that mapping through this resolver would silently
-    # turn a crop into a one-hop provenance claim.
-    coded_dimensions = mapping.coded_dimensions if mapping is not None else None
-    visible_dimensions = mapping.visible_dimensions if mapping is not None else None
+    if not analysis.proven or mapping is None:
+        return False
     if (
-        not analysis.proven
-        or mapping is None
-        or mapping.mapping_id != candidate.upstream_mapping_id
+        mapping.mapping_id != candidate.upstream_mapping_id
         or mapping.renderer_draw_operation_index != candidate.copy_operation_index
         or mapping.source_canvas_id != candidate.source_canvas_id
         or mapping.renderer_canvas_id != candidate.target_canvas_id
-        or mapping.source_dimensions != candidate.source_dimensions
         or mapping.renderer_target_dimensions != candidate.target_dimensions
         or mapping.renderer_geometry_classification != PURE_RENDERER_SCALE
-        or mapping.source_dimensions != mapping.destination_dimensions
+    ):
+        return False
+    coded_dimensions = mapping.coded_dimensions or mapping.source_dimensions
+    visible_dimensions = mapping.visible_dimensions or mapping.destination_dimensions
+    equal_size = coded_dimensions == visible_dimensions
+    cropped = (
+        not equal_size
+        and mapping.mapping_provenance == "direct"
+        and mapping.segment_reset_kind == "canvas_dimension_reset"
+        and mapping.segment_reset_observation_available is True
+        and mapping.segment_mutation_observer_available is True
+        and mapping.segment_mutation_observer_take_records_available is True
+        and candidate.target_reset_observation_available is True
+        and candidate.target_mutation_observer_available is True
+        and candidate.target_mutation_observer_take_records_available is True
+        and candidate.target_unknown_mutation is False
+        and candidate.target_clear_canvas_generation is not None
+        and candidate.target_canvas_generation is not None
+        and candidate.target_clear_canvas_generation == candidate.target_canvas_generation
+        and mapping.source_canvas_generation is not None
+        and mapping.source_canvas_generation >= 0
+        and candidate.source_canvas_generation is not None
+        and candidate.target_canvas_generation is not None
+        and candidate.selected_source_canvas_generation is not None
+        and candidate.target_canvas_generation == candidate.selected_source_canvas_generation
+        and mapping.source_canvas_generation == candidate.source_canvas_generation
+        and mapping.segment_clear_dimensions is not None
+        and mapping.visible_dimensions == candidate.source_dimensions
+        and mapping.source_dimensions == coded_dimensions
+        and coded_dimensions[0] - visible_dimensions[0] in range(8)
+        and coded_dimensions[1] - visible_dimensions[1] in range(8)
+        and mapping.renderer_source_rect is not None
+        and _numeric_rect(mapping.renderer_source_rect)
+        == (0.0, 0.0, float(visible_dimensions[0]), float(visible_dimensions[1]))
+    )
+    if not equal_size and not cropped:
+        return False
+    if equal_size and (
+        mapping.source_dimensions != mapping.destination_dimensions
+        or mapping.source_dimensions != candidate.source_dimensions
         or (
-            coded_dimensions is not None
-            and visible_dimensions is not None
-            and coded_dimensions != visible_dimensions
+            mapping.source_dimensions[0] * candidate.target_dimensions[1]
+            != mapping.source_dimensions[1] * candidate.target_dimensions[0]
         )
     ):
+        return False
+    if (
+        mapping.source_canvas_generation is not None
+        and candidate.source_canvas_generation is not None
+        and mapping.source_canvas_generation != candidate.source_canvas_generation
+    ):
+        return False
+    if (
+        candidate.target_canvas_generation is not None
+        and candidate.selected_source_canvas_generation is not None
+        and candidate.target_canvas_generation != candidate.selected_source_canvas_generation
+    ):
+        return False
+    if not equal_size and mapping.destination_dimensions != visible_dimensions:
         return False
     return (
         _numeric_rect(mapping.renderer_source_rect) == _numeric_rect(candidate.source_rect)
@@ -1575,16 +1837,20 @@ def _completed_record_matches_renderer_identity(
     requested_source_canvas = _first(
         renderer_draw, "sourceCanvasId", "source_canvas_id"
     )
+    requested_source_value = _first(renderer_draw, "source")
+    requested_source_epoch = _epoch(requested_source_value)
     record_source = _first(record, "sourceCanvas", "source_canvas")
     record_source_canvas = _first(record, "sourceCanvasId", "source_canvas_id")
     if isinstance(record_source, Mapping):
         record_source_canvas = _first(
             record_source, "canvasId", "canvas_id"
         ) or record_source_canvas
-    return (
-        requested_source_canvas is None
-        or str(requested_source_canvas) == str(record_source_canvas or "")
-    )
+    if requested_source_canvas is not None and str(requested_source_canvas) != str(record_source_canvas or ""):
+        return False
+    record_source_epoch = _epoch(record_source)
+    if requested_source_epoch is not None and record_source_epoch is not None:
+        return requested_source_epoch == record_source_epoch
+    return True
 
 
 def _analyze_completed_mapping(
@@ -1644,6 +1910,73 @@ def _analyze_completed_mapping(
     )
     source_rect = _numeric_rect(source_rect_value)
     destination = _numeric_rect(destination_value)
+    clear_target_value = _record_segment_value(
+        record, segment, "segmentClearTarget", "segment_clear_target", "clearTarget", "clear_target"
+    )
+    draw_target_value = _record_segment_value(
+        record, segment, "segmentDrawTarget", "segment_draw_target", "drawTarget", "draw_target"
+    )
+    reset_kind_value = _record_segment_value(
+        record, segment, "segmentResetKind", "segment_reset_kind", "resetKind", "reset_kind"
+    )
+    reset_observation_value = _record_segment_value(
+        record,
+        segment,
+        "segmentResetObservationAvailable",
+        "segment_reset_observation_available",
+        "resetObservationAvailable",
+        "reset_observation_available",
+    )
+    observer_available_value = _record_segment_value(
+        record,
+        segment,
+        "segmentMutationObserverAvailable",
+        "segment_mutation_observer_available",
+        "mutationObserverAvailable",
+        "mutation_observer_available",
+    )
+    observer_take_records_value = _record_segment_value(
+        record,
+        segment,
+        "segmentMutationObserverTakeRecordsAvailable",
+        "segment_mutation_observer_take_records_available",
+        "mutationObserverTakeRecordsAvailable",
+        "mutation_observer_take_records_available",
+    )
+    reset_observation = (
+        reset_observation_value if isinstance(reset_observation_value, bool) else None
+    )
+    observer_available = (
+        observer_available_value if isinstance(observer_available_value, bool) else None
+    )
+    observer_take_records = (
+        observer_take_records_value
+        if isinstance(observer_take_records_value, bool) else None
+    )
+    reset_epoch_value = _record_segment_value(
+        record, segment, "segmentResetEpoch", "segment_reset_epoch", "resetEpoch", "reset_epoch"
+    )
+    source_snapshot_id = _record_segment_value(
+        record, segment, "sourceSnapshotId", "source_snapshot_id"
+    )
+    if source_snapshot_id is not None and not isinstance(source_snapshot_id, str):
+        return _reject_result("source canvas snapshot identity is invalid")
+    unknown_mutation_value = _record_segment_value(
+        record, segment, "segmentUnknownMutation", "segment_unknown_mutation", "unknownMutation", "unknown_mutation"
+    )
+    clear_target_dimensions = _dimensions(clear_target_value)
+    draw_target_dimensions = _dimensions(draw_target_value)
+    source_canvas_epoch = _epoch(source_canvas)
+    clear_target_epoch = _epoch(clear_target_value)
+    draw_target_epoch = _epoch(draw_target_value)
+    reset_epoch: int | None = None
+    if reset_epoch_value is not None:
+        try:
+            reset_epoch = _integer(reset_epoch_value)
+        except (TypeError, ValueError):
+            reset_epoch = None
+    if unknown_mutation_value is not None and not isinstance(unknown_mutation_value, bool):
+        unknown_mutation_value = None
     renderer_operation = {
         "transform": _record_segment_value(
             record, segment, "rendererTransform", "renderer_transform", "transform"
@@ -1676,6 +2009,15 @@ def _analyze_completed_mapping(
         "renderer_geometry_classification": classification,
         "renderer_canvas_id": str(_first(renderer_target, "canvasId", "canvas_id") or "") or None,
         "source_canvas_id": record_source_canvas_id,
+        "source_canvas_generation": draw_target_epoch if draw_target_epoch is not None else reset_epoch,
+        "source_snapshot_id": source_snapshot_id,
+        "segment_reset_kind": reset_kind_value if isinstance(reset_kind_value, str) else None,
+        "segment_reset_observation_available": reset_observation,
+        "segment_mutation_observer_available": observer_available,
+        "segment_mutation_observer_take_records_available": observer_take_records,
+        "segment_unknown_mutation": unknown_mutation_value,
+        "segment_clear_canvas_generation": clear_target_epoch,
+        "segment_clear_dimensions": clear_target_dimensions,
         "segment_clear_operation_index": _record_segment_value(
             record, segment, "segmentClearOperationIndex", "segment_clear_operation_index", "clearOperationIndex", "clear_operation_index"
         ),
@@ -1765,7 +2107,41 @@ def _analyze_completed_mapping(
     clear_rect = _rect(clear_rectangle)
     if clear_rect is None:
         return _reject_result("completed segment clear boundary geometry is unavailable", **base)
-    if clear_rect != (0, 0, *visible_dimensions):
+    has_reset_metadata = any(
+        value is not None
+        for value in (clear_target_value, draw_target_value, reset_kind_value, reset_epoch_value, unknown_mutation_value)
+    )
+    if has_reset_metadata:
+        metadata_common_invalid = (
+            clear_target_dimensions is None
+            or draw_target_dimensions is None
+            or unknown_mutation_value is not False
+            or clear_target_dimensions[0] <= 0
+            or clear_target_dimensions[1] <= 0
+            or clear_target_dimensions != draw_target_dimensions
+            or clear_target_dimensions != visible_dimensions
+            or draw_target_dimensions != visible_dimensions
+            or str(_first(draw_target_value, "canvasId", "canvas_id") or "") != str(record_source_canvas_id or "")
+            or str(_first(clear_target_value, "canvasId", "canvas_id") or "") != str(record_source_canvas_id or "")
+        )
+        if reset_kind_value == "canvas_dimension_reset":
+            metadata_common_invalid = metadata_common_invalid or (
+                reset_epoch is None
+                or reset_epoch < 0
+                or clear_rect != (0, 0, *clear_target_dimensions)
+                or source_canvas_epoch != reset_epoch
+                or clear_target_epoch != reset_epoch
+                or draw_target_epoch != reset_epoch
+            )
+        elif reset_kind_value == "clearRect":
+            metadata_common_invalid = metadata_common_invalid or (
+                clear_rect != (0, 0, *visible_dimensions)
+            )
+        else:
+            metadata_common_invalid = True
+        if metadata_common_invalid:
+            return _reject_result("canvas reset boundary metadata is unavailable or inconsistent", additional_pixel_processing=True, **base)
+    elif clear_rect != (0, 0, *visible_dimensions):
         return _reject_result("completed segment clear boundary is partial", additional_pixel_processing=True, **base)
 
     source_ids: set[str] = set()
@@ -1799,6 +2175,15 @@ def _analyze_completed_mapping(
             return _reject_result("tile target canvas identity is invalid", **base)
         if _dimensions(target) != source_dimensions:
             return _reject_result("tile target dimensions are invalid", **base)
+        tile_target_epoch = _epoch(target)
+        if (
+            draw_target_epoch is not None
+            and (
+                tile_target_epoch is None
+                or tile_target_epoch != draw_target_epoch
+            )
+        ):
+            return _reject_result("tile target reset epoch is inconsistent", **base)
         if not _safe_draw_operation({
             "transform": _first(tile, "transform"),
             "globalAlpha": _first(tile, "globalAlpha", "global_alpha"),
@@ -1817,13 +2202,8 @@ def _analyze_completed_mapping(
         tile_dimensions.add((sw, sh))
         source_positions.append((sx, sy))
         destination_positions.append((dx, dy))
-        source_out_of_bounds += int(sx < 0 or sy < 0 or sx + sw > source_dimensions[0] or sy + sh > source_dimensions[1])
-        destination_out_of_bounds += int(
-            dx < 0
-            or dy < 0
-            or coded_dimensions is not None
-            and (dx + dw > coded_dimensions[0] or dy + dh > coded_dimensions[1])
-        )
+        # Coded S may be wider/taller than the draw-time canvas V.  Bounds
+        # are recomputed against S after all tile source dimensions are known.
         try:
             operation_indices.append(_integer(_first(tile, "operationIndex", "operation_index")))
         except (TypeError, ValueError):
@@ -1852,6 +2232,8 @@ def _analyze_completed_mapping(
     ):
         return _reject_result("visible crop is outside the final MCU", **base)
     coded_mcu_count = (coded_dimensions[0] // 8) * (coded_dimensions[1] // 8)
+    if coded_mcu_count <= 0 or coded_mcu_count > MAX_MCU_WORK:
+        return _reject_result("completed segment exceeds MCU work bound", **base)
     tile_mcu_count = 0
     for item in mappings:
         width = item["width"]
@@ -1872,7 +2254,10 @@ def _analyze_completed_mapping(
             or item["destination_y"] + height > coded_dimensions[1]
         ):
             return _reject_result("tile mapping geometry is out of bounds", **base)
-        tile_mcu_count += (width // 8) * (height // 8)
+        tile_mcus = (width // 8) * (height // 8)
+        if tile_mcus <= 0 or tile_mcus > MAX_MCU_WORK:
+            return _reject_result("completed segment tile exceeds MCU work bound", **base)
+        tile_mcu_count += tile_mcus
         if coded_mcu_count + tile_mcu_count > MAX_MCU_WORK:
             return _reject_result("completed segment exceeds MCU work bound", **base)
     source_out_of_bounds = sum(
@@ -2003,6 +2388,15 @@ def _analyze_completed_mapping(
         visible_dimensions=visible_dimensions,
         tile_dimensions_uniform=len(tile_variants) == 1,
         tile_dimension_variants=tile_variants,
+        source_canvas_generation=draw_target_epoch if draw_target_epoch is not None else reset_epoch,
+        segment_reset_kind=reset_kind_value if isinstance(reset_kind_value, str) else None,
+        segment_reset_observation_available=reset_observation,
+        segment_mutation_observer_available=observer_available,
+        segment_mutation_observer_take_records_available=observer_take_records,
+        segment_unknown_mutation=unknown_mutation_value,
+        segment_clear_canvas_generation=clear_target_epoch,
+        segment_clear_dimensions=clear_target_dimensions,
+        source_snapshot_id=source_snapshot_id,
     )
     return MappingAnalysis(
         status=MAPPING_PROVEN,
@@ -2020,6 +2414,15 @@ def _analyze_completed_mapping(
         renderer_geometry_classification=classification,
         mapping_provenance="direct",
         non_image_bitmap_draws=(),
+        source_canvas_generation=draw_target_epoch if draw_target_epoch is not None else reset_epoch,
+        source_snapshot_id=source_snapshot_id,
+        segment_reset_kind=reset_kind_value if isinstance(reset_kind_value, str) else None,
+        segment_reset_observation_available=reset_observation,
+        segment_mutation_observer_available=observer_available,
+        segment_mutation_observer_take_records_available=observer_take_records,
+        segment_unknown_mutation=unknown_mutation_value,
+        segment_clear_canvas_generation=clear_target_epoch,
+        segment_clear_dimensions=clear_target_dimensions,
     )
 
 

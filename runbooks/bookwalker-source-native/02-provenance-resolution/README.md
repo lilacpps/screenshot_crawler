@@ -13,7 +13,13 @@ Latest published checkpoint before this workflow revision:
 Production implementation, bounded live acceptance and final production review
 of the proven direct partial-MCU recovery pattern are complete.
 
-Current execution status (2026-10-08): **COMPLETE**.
+Current execution status (2026-10-08): **COMPLETE — LN2 production integration accepted**.
+The user subsequently authorized integrating the proven LN2 recovery into
+automatic production capture. Its runtime contract now returns a 1443x2048
+reconstructed JPEG in bounded live acceptance, with exact A/B/final-region
+comparisons. Final regression evidence and synchronization are complete; the
+new production Reviewer gate passed with no remaining BLOCKING. The earlier
+completed baseline is described below.
 The original D-only closure was superseded by exact recovery proof. Manga
 `9/159` and `11/159` each return two 844x1200 reconstructed JPEGs from 848x1200
 coded sources. LN `3/314` and `4/314` return 2048x1453 JPEGs from 2048x1456
@@ -23,17 +29,21 @@ native pixel equality. These are B. A subsequent user-requested LN2 follow-up
 also proves B at recovery-PoC level: one exact coded JPEG, a complete 2,944-tile
 MCU mapping, unchanged coefficients and pixel-exact replay through the selected
 1443x2048 canvas, 722x1024 intermediate and final display region. Automatic
-capture still lacks the reusable selected-mapping contract and retains its
-fail-closed behavior; no production change was made for this follow-up.
+capture now retains successful native dimension resets, canvas generations,
+draw identities and eager A/B/final-region snapshots. The final replay uses
+the actual renderer backing-canvas dimensions and destination offset, and
+all three comparisons pass exactly without a color tolerance.
 LN text controls 8/10
 remain A under the existing equal-size reconstruction. Cover controls now use
 verified actual fallback; historical original-JPEG A is not a fresh run claim.
 No source-PNG (C) conclusion follows from fallback. Manga2 was not needed.
 
-Local checks pass: 180 targeted tests, 46 browser-backed Integration tests,
-Ruff and diff checks. Reviewer has no code/test/doc BLOCKING after one synthetic
-crop case was added. For the implemented direct contract, final Reviewer confirmed PASS on completed live evidence
-and document synchronization, including current cover fallback controls.
+The completed direct baseline passed 180 targeted tests, 46 browser-backed
+Integration tests and final Reviewer approval. The current LN2 extension passes
+195 targeted tests, 52 browser-backed Integration tests and Ruff/diff checks;
+zero tests were skipped. Its separate production review passed after the
+proof-gate and legacy regression corrections. Historical cover fallback
+controls remain scoped to their original windows.
 See [CHECKPOINT.md](CHECKPOINT.md) for actual positions, output/metadata hashes,
 remaining production boundaries and the bounded LN2 follow-up results.
 

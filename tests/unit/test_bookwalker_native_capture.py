@@ -610,6 +610,37 @@ async def test_lossless_output_spread_is_all_or_none(
 
 
 @pytest.mark.asyncio
+async def test_cropped_chain_pixel_gate_failure_returns_native_png(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    _add_purchased_candidate(adapter)
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
+
+    evaluation = _evaluation(adapter, None, spread_ready=False)
+    evaluation.debug["parts"] = [{
+        "mapping_provenance": "scaled_canvas_source_1hop",
+        "cropped_chain_pixel_exact": False,
+        "reason": "browser chain comparison failed",
+    }]
+
+    async def evaluate(*_args: object) -> adapter_module.LosslessReconstructionEvaluation:
+        return evaluation
+
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", evaluate)
+
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result[0].mime_type == "image/png"
+    debug = await adapter.collect_debug_metadata(page)  # type: ignore[arg-type]
+    assert debug["bookwalker_capture"]["returned_path"] == "native_png"
+    assert debug["bookwalker_capture"]["lossless_shadow"]["spread_ready"] is False
+
+
+@pytest.mark.asyncio
 async def test_lossless_shadow_spread_readiness_is_all_or_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1053,6 +1084,167 @@ async def test_scaled_source_uses_one_batched_upstream_fetch_and_source_dimensio
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_ready"),
+    [
+        (None, True),
+        ("source", False),
+        ("intermediate", False),
+        ("final", False),
+        ("unavailable", False),
+        ("dimensions", False),
+    ],
+    ids=["all-three-exact", "source-mismatch", "intermediate-mismatch",
+         "final-mismatch", "comparison-unavailable", "dimensions-mismatch"],
+)
+async def test_cropped_one_hop_evaluation_requires_all_three_intrinsic_gates(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str | None,
+    expected_ready: bool,
+) -> None:
+    monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
+    monkeypatch.setenv("BOOKWALKER_FINAL_PIXEL_VERIFY", "0")
+
+    class ShadowPage:
+        async def evaluate(self, expression: str, *_args: object) -> object:
+            if "__bookwalkerMaterializeNativeSourceCrop" in expression:
+                return {"dataUrl": "data:image/png;base64,source-a", "error": None}
+            return dict(EMPTY_COMPACT_PAYLOAD)
+
+    mapping = PurchasedMapping(
+        mapping=({
+            "source_x": 0, "source_y": 0,
+            "destination_x": 0, "destination_y": 0,
+            "width": 8, "height": 8,
+        },),
+        source_dimensions=(8, 8),
+        destination_dimensions=(8, 7),
+        coded_dimensions=(8, 8),
+        visible_dimensions=(8, 7),
+        tile_dimensions=(8, 8),
+        imagebitmap_source_id="bitmap-1",
+        source_canvas_id="canvas-a",
+        renderer_canvas_id="canvas-b",
+        renderer_draw_operation_index=10,
+        renderer_geometry_classification="PURE_RENDERER_SCALE",
+        renderer_source_rect={"x": 0, "y": 0, "width": 8, "height": 8},
+        renderer_destination={"x": 0, "y": 0, "width": 4, "height": 4},
+        renderer_target_dimensions=(4, 4),
+        source_snapshot_id="snapshot-a",
+        mapping_id="mapping-upstream",
+        mapping_sha256="mapping-1",
+    )
+    downstream = MappingAnalysis(
+        "MAPPING_UNAVAILABLE", "completed segment has no tile draws",
+        mapping_source="completed_segment", mapping_id="mapping-downstream",
+        renderer_operation_index=12, segment_tile_count=0,
+        segment_overflow=False, completed_mapping_evicted=False,
+        unsafe_operation_count=1,
+        unsafe_operation_types=("non_image_bitmap_draw",),
+        source_canvas_id="canvas-b", renderer_canvas_id="canvas-renderer",
+    )
+    upstream = MappingAnalysis(
+        MAPPING_PROVEN, "complete source/destination bijection", mapping=mapping,
+        mapping_source="completed_segment", mapping_id="mapping-upstream",
+        mapping_provenance="direct",
+    )
+    candidate = ScaledCanvasSourceCandidate(
+        upstream_mapping_id="mapping-upstream", copy_operation_index=10,
+        source_canvas_id="canvas-a", target_canvas_id="canvas-b",
+        source_dimensions=(8, 8), target_dimensions=(4, 4),
+        source_rect={"x": 0, "y": 0, "width": 8, "height": 8},
+        destination={"x": 0, "y": 0, "width": 4, "height": 4},
+        transform={"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+        global_alpha=1, global_composite_operation="source-over", filter="none",
+        image_smoothing_enabled=True, image_smoothing_quality="high",
+    )
+    analyses = iter((downstream, upstream))
+    monkeypatch.setattr(
+        adapter_module, "analyze_purchased_mapping",
+        lambda *_args, **_kwargs: next(analyses),
+    )
+    monkeypatch.setattr(
+        adapter_module, "resolve_scaled_canvas_source_candidate",
+        lambda *_args, **_kwargs: candidate,
+    )
+    monkeypatch.setattr(
+        adapter_module, "validate_scaled_canvas_source_analysis",
+        lambda *_args, **_kwargs: True,
+    )
+
+    async def same_signature(*_args: object, **_kwargs: object) -> str:
+        return "same"
+
+    async def exact_match(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"available": True, "exact": True}
+
+    monkeypatch.setattr(adapter_module, "image_signature", same_signature)
+    monkeypatch.setattr(adapter_module, "imagebitmap_signature", same_signature)
+    monkeypatch.setattr(adapter_module, "imagebitmap_pixel_exact_match", exact_match)
+    monkeypatch.setattr(
+        adapter_module,
+        "reconstruct_lossless_jpeg",
+        lambda *_args: LosslessJpegResult(
+            data=b"scaled-jpeg", width=8, height=7,
+            tile_dimensions=(8, 8), mcu_dimensions=(8, 8),
+            mapping_sha256="mapping-1",
+            coefficient_validation={
+                "mismatched_blocks": 0,
+                "mismatched_coefficients": 0,
+                "quantization_tables_equal": True,
+                "component_quantization_selectors_equal": True,
+            }, available=True,
+        ),
+    )
+    adapter = BookWalkerAdapter()
+
+    def stage_result(name: str) -> dict[str, object]:
+        stage = {
+            "available": True,
+            "dimensions_equal": True,
+            "exact": True,
+            "differing_pixel_count": 0,
+            "max_channel_difference": 0,
+        }
+        if failure_stage == name:
+            stage["exact"] = False
+            stage["differing_pixel_count"] = 1
+        if failure_stage == "unavailable" and name == "intermediate":
+            stage["available"] = False
+        if failure_stage == "dimensions" and name == "final":
+            stage["dimensions_equal"] = False
+        return stage
+
+    async def cropped_compare(*_args: object, **_kwargs: object) -> dict[str, object]:
+        source = stage_result("source")
+        intermediate = stage_result("intermediate")
+        final = stage_result("final")
+        return {
+            "available": all(item["available"] is True for item in (source, intermediate, final)),
+            "dimensions_equal": all(item["dimensions_equal"] is True for item in (source, intermediate, final)),
+            "exact": all(item["exact"] is True for item in (source, intermediate, final)),
+            "source": source, "intermediate": intermediate, "final": final,
+        }
+
+    adapter._browser_cropped_one_hop_pixel_exact = cropped_compare  # type: ignore[method-assign]
+    candidate_jpeg = candidate_from_jpeg(
+        JPEG_1X1,
+        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        sequence=1,
+    )
+    assert candidate_jpeg is not None
+    candidate_jpeg.width = 8
+    candidate_jpeg.height = 8
+    adapter._original_candidates.add(candidate_jpeg)
+    result = await adapter._evaluate_lossless_reconstruction(
+        ShadowPage(), (CaptureResult(PNG_1X1, 4, 4),), [{"mappingId": "mapping-downstream"}],
+    )
+    assert result["spread_ready"] is expected_ready
+    assert result["parts"][0]["final_pixel_compare_performed"] is True
+    assert result["parts"][0]["cropped_chain_pixel_exact"] is expected_ready
+
+
 def test_cropped_mapping_cannot_be_used_as_one_hop_upstream() -> None:
     mapping = PurchasedMapping(
         mapping=(
@@ -1250,6 +1442,53 @@ async def test_intrinsic_pixel_compare_exception_fails_closed() -> None:
         "available": False,
         "exact": False,
         "reason": "browser comparison failed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cropped_chain_pixel_compare_exception_fails_closed() -> None:
+    class FailingPage:
+        async def evaluate(self, _expression: str, *_args: object) -> object:
+            raise RuntimeError("synthetic browser chain comparison failure")
+
+    candidate = ScaledCanvasSourceCandidate(
+        upstream_mapping_id="upstream",
+        copy_operation_index=1,
+        source_canvas_id="canvas-a",
+        target_canvas_id="canvas-b",
+        source_dimensions=(8, 8),
+        target_dimensions=(4, 4),
+        source_rect={"x": 0, "y": 0, "width": 8, "height": 8},
+        destination={"x": 0, "y": 0, "width": 4, "height": 4},
+        transform={"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+        global_alpha=1,
+        global_composite_operation="source-over",
+        filter="none",
+        image_smoothing_enabled=True,
+        image_smoothing_quality="high",
+    )
+    result = await BookWalkerAdapter()._browser_cropped_one_hop_pixel_exact(
+        FailingPage(),
+        b"reconstructed",
+        {
+            "fullSourcePng": "data:image/png;base64,source",
+            "targetCropPng": "data:image/png;base64,target",
+            "canvasWidth": 4,
+            "canvasHeight": 4,
+            "sourceRect": {"x": 0, "y": 0, "width": 1, "height": 1},
+            "destination": {"x": 0, "y": 0, "width": 1, "height": 1},
+            "imageSmoothingEnabled": True,
+            "imageSmoothingQuality": "high",
+        },
+        candidate,
+        None,
+        "data:image/png;base64,source-a",
+    )
+
+    assert result == {
+        "available": False,
+        "exact": False,
+        "reason": "browser chain comparison failed",
     }
 
 

@@ -94,6 +94,16 @@ _DRAW_TRACE_SCRIPT = """
   let nextSourceId = 1;
   const canvasIds = new WeakMap();
   const sourceIds = new WeakMap();
+  const canvasResetEpochs = new WeakMap();
+  const canvasUnknownMutations = new WeakSet();
+  const knownAttributeMutations = new WeakMap();
+  const canvasMutationObservers = new WeakMap();
+  const canvasMutationObserverStates = new WeakMap();
+  const internalCanvases = new WeakSet();
+  window.__bookwalkerCanvasResetObservationAvailable = false;
+  window.__bookwalkerMarkInternalCanvas = canvas => {
+    if (canvas) internalCanvases.add(canvas);
+  };
 
   const newTrace = () => ({
     nextOperationIndex: 0,
@@ -107,6 +117,9 @@ _DRAW_TRACE_SCRIPT = """
       drawImageCount: 0,
       clearRectCount: 0,
       unsafeOperationCount: 0,
+        canvasResetObservationAvailable: window.__bookwalkerCanvasResetObservationAvailable === true,
+        canvasResetFailureCount: 0,
+        unknownCanvasMutationCount: 0,
     },
   });
   window.__bookwalkerTransformTrace = newTrace();
@@ -189,6 +202,7 @@ _DRAW_TRACE_SCRIPT = """
     if (constructor === 'HTMLCanvasElement') {
       info.canvasId = getCanvasId(source);
       info.sourceCanvasId = info.canvasId;
+      info.resetEpoch = canvasResetEpochs.get(source) || 0;
     }
     return info;
   };
@@ -197,12 +211,15 @@ _DRAW_TRACE_SCRIPT = """
     constructor: canvas?.constructor?.name || null,
     width: Number(canvas?.width),
     height: Number(canvas?.height),
+    resetEpoch: canvasResetEpochs.get(canvas) || 0,
   });
   const recordOperation = (operation, context, details = {}) => {
     const trace = window.__bookwalkerTransformTrace;
     if (!trace || window.__bookwalkerCaptureMode !== 'native') return null;
     const canvas = context?.canvas;
     if (!canvas) return null;
+    if (internalCanvases.has(canvas)) return null;
+    flushCanvasMutationObserver(canvas);
     const index = ++trace.nextOperationIndex;
     trace.diagnostics.observedOperationCount = index;
     trace.diagnostics[`${operation}Count`] =
@@ -247,7 +264,9 @@ _DRAW_TRACE_SCRIPT = """
     }
     if (trace?.diagnostics) trace.diagnostics.unsafeOperationCount += 1;
   };
-  const newSegment = (canvas, operationIndex, rectangle) => {
+  const newSegment = (
+    canvas, operationIndex, rectangle, resetKind = 'clearRect', resetEpoch = null,
+  ) => {
     const trace = window.__bookwalkerTransformTrace;
     const canvasId = getCanvasId(canvas);
     const active = trace.activeSegments;
@@ -271,6 +290,14 @@ _DRAW_TRACE_SCRIPT = """
       clearOperationIndex: operationIndex,
       clearRectangle: rectangle,
       target: targetInfo(canvas),
+      clearTarget: targetInfo(canvas),
+      resetObservationAvailable: false,
+      mutationObserverAvailable: false,
+      mutationObserverTakeRecordsAvailable: false,
+      resetKind,
+      resetEpoch: resetEpoch ?? (canvasResetEpochs.get(canvas) || 0),
+      tileTarget: null,
+      unknownMutation: canvasUnknownMutations.has(canvas),
       tileDraws: [],
       sourceIds: [],
       unsafeOperationCount: 0,
@@ -315,7 +342,7 @@ _DRAW_TRACE_SCRIPT = """
     }
     trace.completedMappings.push(mapping);
   };
-  const freezeCompletedMapping = (operation, sourceInfo, geometry) => {
+  const freezeCompletedMapping = (operation, sourceInfo, geometry, sourceObject) => {
     if (sourceInfo?.constructor !== 'HTMLCanvasElement' || !sourceInfo.canvasId) {
       return null;
     }
@@ -323,11 +350,18 @@ _DRAW_TRACE_SCRIPT = """
     const segment = trace?.activeSegments?.[sourceInfo.canvasId];
     if (!segment) return null;
     const mappingId = `mapping-${operation.index}`;
+    let sourceSnapshotId = null;
+    let sourceSnapshotError = null;
+    if (segment.tileDraws.length > 0 && sourceObject?.constructor?.name === 'HTMLCanvasElement') {
+      const snapshot = snapshotCanvasFull(sourceObject);
+      sourceSnapshotId = snapshot.snapshotId;
+      sourceSnapshotError = snapshot.error;
+    }
     const mapping = {
       mappingId,
       rendererOperationIndex: operation.index,
       rendererTarget: operation.target,
-      sourceCanvas: segment.target,
+      sourceCanvas: segment.tileTarget || segment.target,
       rendererSourceRect: geometry.sourceRect,
       rendererDestination: geometry.destination,
       rendererTransform: operation.transform,
@@ -356,11 +390,25 @@ _DRAW_TRACE_SCRIPT = """
       firstUnsafeOperationIndex: segment.firstUnsafeOperationIndex,
       unsafeOperationTypes: [...segment.unsafeOperationTypes],
       segmentOverflow: segment.overflow,
+      segmentClearTarget: segment.clearTarget,
+      segmentResetKind: segment.resetKind,
+      segmentResetEpoch: segment.resetEpoch,
+      segmentDrawTarget: segment.tileTarget,
+      segmentUnknownMutation: segment.unknownMutation,
+      segmentResetObservationAvailable: segment.resetObservationAvailable,
+      segmentMutationObserverAvailable: segment.mutationObserverAvailable,
+      segmentMutationObserverTakeRecordsAvailable: segment.mutationObserverTakeRecordsAvailable,
+      sourceSnapshotId,
+      sourceSnapshotError,
     };
     retainCompletedMapping(mapping);
     return {mappingId, sourceCanvasId: sourceInfo.canvasId};
   };
   const recordDraw = (context, source, geometry) => {
+    flushCanvasMutationObserver(context?.canvas);
+    if (source?.constructor?.name === 'HTMLCanvasElement') {
+      flushCanvasMutationObserver(source);
+    }
     const operation = recordOperation('drawImage', context, {
       source: traceSourceInfo(source),
       sourceRect: geometry.sourceRect,
@@ -411,6 +459,19 @@ _DRAW_TRACE_SCRIPT = """
       } else if (segment.tileDraws.length >= MAX_TILE_DRAWS_PER_SEGMENT) {
         segment.overflow = true;
       } else {
+        const currentTarget = operation.target;
+        if (!segment.tileTarget) {
+          segment.tileTarget = currentTarget;
+        } else if (
+          segment.tileTarget.canvasId !== currentTarget.canvasId
+          || segment.tileTarget.width !== currentTarget.width
+          || segment.tileTarget.height !== currentTarget.height
+          || segment.tileTarget.resetEpoch !== currentTarget.resetEpoch
+        ) {
+          markUnsafe(canvas, operation.index, 'target_canvas_dimension_change');
+          segment.unknownMutation = true;
+        }
+        if (segment.unknownMutation) return;
         const tile = {
           operationIndex: operation.index,
           source: sourceInfo,
@@ -431,7 +492,7 @@ _DRAW_TRACE_SCRIPT = """
     }
     return {
       operation,
-      completed: freezeCompletedMapping(operation, sourceInfo, geometry),
+      completed: freezeCompletedMapping(operation, sourceInfo, geometry, source),
     };
   };
   const snapshotSourceCrop = (source, sourceRect) => {
@@ -439,6 +500,7 @@ _DRAW_TRACE_SCRIPT = """
       return {snapshotId: null, error: 'invalid source rectangle'};
     }
     const target = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(target);
     target.width = Math.round(sourceRect.width);
     target.height = Math.round(sourceRect.height);
     const context = target.getContext('2d');
@@ -461,6 +523,14 @@ _DRAW_TRACE_SCRIPT = """
       return {snapshotId: null, error: String(error)};
     }
   };
+  const snapshotCanvasFull = source => {
+    if (!source || source.constructor?.name !== 'HTMLCanvasElement') {
+      return {snapshotId: null, error: 'full canvas snapshot requires HTMLCanvasElement'};
+    }
+    return snapshotSourceCrop(source, {
+      x: 0, y: 0, width: source.width, height: source.height,
+    });
+  };
   const materializeNativeCrop = ({sourceId, snapshotId, sourceConstructor, sourceRect}) => {
     if (sourceConstructor === 'HTMLCanvasElement') {
       const snapshot = window.__bookwalkerNativeSnapshots.get(String(snapshotId));
@@ -476,6 +546,7 @@ _DRAW_TRACE_SCRIPT = """
       return {dataUrl: null, error: 'native source crop unavailable'};
     }
     const target = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(target);
     target.width = Math.round(sourceRect.width);
     target.height = Math.round(sourceRect.height);
     const context = target.getContext('2d');
@@ -494,7 +565,9 @@ _DRAW_TRACE_SCRIPT = """
   };
   window.__bookwalkerMaterializeNativeSourceCrop = materializeNativeCrop;
   CanvasRenderingContext2D.prototype.drawImage = function(...args) {
+    if (internalCanvases.has(this.canvas)) return original.apply(this, args);
     let recorded = null;
+    let nativeCall = null;
     try {
       const values = args.slice(1).map(value => Number(value));
       const geometry = sourceRectAndDestination(args[0], values);
@@ -523,13 +596,14 @@ _DRAW_TRACE_SCRIPT = """
         if (window.__bookwalkerNativeCaptureEnabled && args[0] && geometry.destination) {
           const source = args[0];
           const sourceInfo = recorded?.operation?.source || traceSourceInfo(source);
-          const nativeCall = {
+          nativeCall = {
             timestamp: performance.now(),
             canvasId: getCanvasId(canvas),
             canvasWidth: canvas.width,
             canvasHeight: canvas.height,
             sourceId: sourceInfo?.sourceId || getSourceId(source),
             source: sourceInfo,
+            _bookwalkerSourceObject: source,
             sourceCanvasId: sourceInfo?.canvasId || null,
             sourceRect: geometry.sourceRect,
             destination: geometry.destination,
@@ -540,20 +614,47 @@ _DRAW_TRACE_SCRIPT = """
             globalAlpha: this.globalAlpha,
             globalCompositeOperation: this.globalCompositeOperation,
             filter: this.filter,
+            imageSmoothingEnabled: typeof this.imageSmoothingEnabled === 'boolean'
+              ? this.imageSmoothingEnabled : null,
+            imageSmoothingQuality: typeof this.imageSmoothingQuality === 'string'
+              ? this.imageSmoothingQuality : null,
           };
           if (source?.constructor?.name === 'HTMLCanvasElement') {
             const snapshot = snapshotSourceCrop(source, geometry.sourceRect);
             nativeCall.snapshotId = snapshot.snapshotId;
             nativeCall.snapshotError = snapshot.error;
           }
-          window.__bookwalkerNativeDrawCalls.push(nativeCall);
-          if (window.__bookwalkerNativeDrawCalls.length > 100) {
-            window.__bookwalkerNativeDrawCalls.shift();
-          }
+          nativeCall._bookwalkerPendingTargetSnapshot = true;
+          nativeCall._bookwalkerPendingFullSourceSnapshot = source?.constructor?.name === 'HTMLCanvasElement';
         }
       }
     } catch (error) {}
-    return original.apply(this, args);
+    const result = original.apply(this, args);
+    if (nativeCall) {
+      try {
+        if (nativeCall._bookwalkerPendingFullSourceSnapshot) {
+          const full = snapshotCanvasFull(nativeCall._bookwalkerSourceObject);
+          nativeCall.fullSourceSnapshotId = full.snapshotId;
+          nativeCall.fullSourceSnapshotError = full.error;
+        }
+        if (nativeCall._bookwalkerPendingFullSourceSnapshot) {
+          const targetSnapshot = snapshotSourceCrop(this.canvas, nativeCall.destination);
+          nativeCall.targetSnapshotId = targetSnapshot.snapshotId;
+          nativeCall.targetSnapshotError = targetSnapshot.error;
+        }
+      } catch (error) {
+        nativeCall.targetSnapshotId = null;
+        nativeCall.targetSnapshotError = String(error);
+      }
+      delete nativeCall._bookwalkerPendingTargetSnapshot;
+      delete nativeCall._bookwalkerPendingFullSourceSnapshot;
+      delete nativeCall._bookwalkerSourceObject;
+      window.__bookwalkerNativeDrawCalls.push(nativeCall);
+      if (window.__bookwalkerNativeDrawCalls.length > 100) {
+        window.__bookwalkerNativeDrawCalls.shift();
+      }
+    }
+    return result;
   };
   const rectangleDetails = args => {
     const values = args.slice(0, 4).map(value => Number(value));
@@ -564,6 +665,162 @@ _DRAW_TRACE_SCRIPT = """
         : null,
     };
   };
+  const processCanvasMutationRecords = (canvas, records) => {
+    for (const record of records) {
+      if (record.type !== 'attributes' || (record.attributeName !== 'width' && record.attributeName !== 'height')) continue;
+      const queue = knownAttributeMutations.get(canvas) || [];
+      const current = canvas.getAttribute(record.attributeName);
+      const matchIndex = queue.findIndex(item => (
+        item.attributeName === record.attributeName
+        && item.oldValue === record.oldValue
+        && (item.newValue === null || item.newValue === current)
+      ));
+      if (matchIndex >= 0) {
+        queue.splice(matchIndex, 1);
+        if (queue.length) knownAttributeMutations.set(canvas, queue);
+        else knownAttributeMutations.delete(canvas);
+        continue;
+      }
+      canvasUnknownMutations.add(canvas);
+      const trace = window.__bookwalkerTransformTrace;
+      if (trace?.diagnostics) trace.diagnostics.unknownCanvasMutationCount += 1;
+      const active = trace?.activeSegments?.[getCanvasId(canvas)];
+      if (active) active.unknownMutation = true;
+    }
+  };
+  const observeCanvasMutations = canvas => {
+    if (!canvas) return;
+    if (canvasMutationObserverStates.has(canvas)) {
+      return canvasMutationObserverStates.get(canvas);
+    }
+    const state = {
+      available: false,
+      takeRecordsAvailable: false,
+    };
+    canvasMutationObserverStates.set(canvas, state);
+    if (typeof MutationObserver !== 'function') return state;
+    try {
+      const observer = new MutationObserver(records => processCanvasMutationRecords(canvas, records));
+      observer.observe(canvas, {attributes: true, attributeOldValue: true, attributeFilter: ['width', 'height']});
+      canvasMutationObservers.set(canvas, observer);
+      state.available = true;
+      state.takeRecordsAvailable = typeof observer.takeRecords === 'function';
+    } catch (error) {}
+    return state;
+  };
+  const flushCanvasMutationObserver = canvas => {
+    const observer = canvasMutationObservers.get(canvas);
+    if (!observer || typeof observer.takeRecords !== 'function') return;
+    processCanvasMutationRecords(canvas, observer.takeRecords());
+  };
+  const queueKnownAttributeMutation = (canvas, attributeName, oldValue, newValue) => {
+    const queue = knownAttributeMutations.get(canvas) || [];
+    const expected = {attributeName, oldValue, newValue};
+    queue.push(expected);
+    while (queue.length > 8) queue.shift();
+    knownAttributeMutations.set(canvas, queue);
+    setTimeout(() => {
+      const current = knownAttributeMutations.get(canvas);
+      if (current === queue) knownAttributeMutations.delete(canvas);
+    }, 0);
+    return expected;
+  };
+  const installCanvasDimensionResetTrace = property => {
+    const prototype = HTMLCanvasElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, property);
+    if (!descriptor || typeof descriptor.get !== 'function'
+        || typeof descriptor.set !== 'function' || !descriptor.configurable) {
+      return false;
+    }
+    try {
+      Object.defineProperty(prototype, property, {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        get: descriptor.get,
+        set(value) {
+          const canvas = this;
+          if (internalCanvases.has(canvas)) return descriptor.set.call(canvas, value);
+          const trace = window.__bookwalkerTransformTrace;
+          const before = {
+            width: Number(canvas.width), height: Number(canvas.height),
+          };
+          const oldAttributeValue = canvas.getAttribute(property);
+          const shouldObserve = Boolean(
+            trace && window.__bookwalkerCaptureMode === 'native',
+          );
+          const observerState = shouldObserve ? observeCanvasMutations(canvas) : null;
+          const expectedMutation = shouldObserve
+            ? queueKnownAttributeMutation(canvas, property, oldAttributeValue, null)
+            : null;
+          let result;
+          try {
+            result = descriptor.set.call(canvas, value);
+          } catch (error) {
+            const queue = knownAttributeMutations.get(canvas);
+            if (queue && expectedMutation) {
+              const index = queue.indexOf(expectedMutation);
+              if (index >= 0) queue.splice(index, 1);
+            }
+            if (trace?.diagnostics) trace.diagnostics.canvasResetFailureCount += 1;
+            const active = trace?.activeSegments?.[getCanvasId(canvas)];
+            if (active) active.unknownMutation = true;
+            throw error;
+          }
+          if (!shouldObserve) return result;
+          flushCanvasMutationObserver(canvas);
+          const pendingQueue = knownAttributeMutations.get(canvas);
+          if (pendingQueue) {
+            const index = expectedMutation ? pendingQueue.indexOf(expectedMutation) : -1;
+            if (index >= 0) pendingQueue.splice(index, 1);
+            if (!pendingQueue.length) knownAttributeMutations.delete(canvas);
+          }
+          const after = {
+            width: Number(canvas.width), height: Number(canvas.height),
+          };
+          canvasUnknownMutations.delete(canvas);
+          const canvasId = getCanvasId(canvas);
+          const operationIndex = ++trace.nextOperationIndex;
+          trace.diagnostics.observedOperationCount = operationIndex;
+          const resetEpoch = (canvasResetEpochs.get(canvas) || 0) + 1;
+          canvasResetEpochs.set(canvas, resetEpoch);
+          const active = trace.activeSegments?.[canvasId];
+          if (active) {
+            active.unknownMutation = true;
+            active.mutationObserverAvailable = observerState?.available === true;
+            active.mutationObserverTakeRecordsAvailable = observerState?.takeRecordsAvailable === true;
+          }
+          newSegment(
+            canvas,
+            operationIndex,
+            {x: 0, y: 0, width: after.width, height: after.height},
+            'canvas_dimension_reset',
+            resetEpoch,
+          );
+          const resetSegment = trace.activeSegments?.[canvasId];
+          if (resetSegment) {
+            resetSegment.mutationObserverAvailable = observerState?.available === true;
+            resetSegment.mutationObserverTakeRecordsAvailable = observerState?.takeRecordsAvailable === true;
+            resetSegment.resetObservationAvailable = Boolean(
+              window.__bookwalkerCanvasResetObservationAvailable === true
+              && resetSegment.mutationObserverAvailable
+              && resetSegment.mutationObserverTakeRecordsAvailable
+            );
+          }
+          return result;
+        },
+      });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+  const canvasWidthResetObserved = installCanvasDimensionResetTrace('width');
+  const canvasHeightResetObserved = installCanvasDimensionResetTrace('height');
+  window.__bookwalkerCanvasResetObservationAvailable =
+    canvasWidthResetObserved && canvasHeightResetObserved;
+  window.__bookwalkerTransformTrace.diagnostics.canvasResetObservationAvailable =
+    window.__bookwalkerCanvasResetObservationAvailable;
+
   const clearRect = CanvasRenderingContext2D.prototype.clearRect;
   const fillRect = CanvasRenderingContext2D.prototype.fillRect;
   const putImageData = CanvasRenderingContext2D.prototype.putImageData;
@@ -695,11 +952,13 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
           required(source, 'width'),
           required(source, 'height'),
           sourceCanvasId,
+          source.resetEpoch ?? null,
         ];
         const targetRow = [
           required(target, 'canvasId'),
           required(target, 'width'),
           required(target, 'height'),
+          target.resetEpoch ?? null,
         ];
         const sourceIndex = addTableValue(sources, sourceIndexes, sourceRow);
         const targetIndex = addTableValue(targets, targetIndexes, targetRow);
@@ -754,6 +1013,17 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
         'segmentOverflow',
         'sourceIds',
       ]) compact[key] = required(mapping, key);
+      for (const key of [
+        'segmentClearTarget', 'segmentResetKind', 'segmentResetEpoch',
+        'segmentDrawTarget', 'segmentUnknownMutation',
+        'segmentResetObservationAvailable',
+        'segmentMutationObserverAvailable',
+        'segmentMutationObserverTakeRecordsAvailable',
+        'sourceSnapshotId',
+        'sourceSnapshotError',
+      ]) {
+        if (has(mapping, key)) compact[key] = mapping[key];
+      }
       compact.nonImageBitmapDraws = has(mapping, 'nonImageBitmapDraws')
         ? required(mapping, 'nonImageBitmapDraws') : [];
       compact.sources = sources;
@@ -794,6 +1064,17 @@ _SELECTED_COMPLETED_MAPPINGS_COMPACT_SCRIPT = """
           width: required(mapping, 'rendererTarget').width,
           height: required(mapping, 'rendererTarget').height,
         },
+        sourceResetEpoch: required(mapping, 'sourceCanvas').resetEpoch ?? null,
+        targetResetEpoch: required(mapping, 'rendererTarget').resetEpoch ?? null,
+        clearTarget: mapping.segmentClearTarget || null,
+        resetKind: mapping.segmentResetKind || null,
+        resetEpoch: mapping.segmentResetEpoch ?? null,
+        drawTarget: mapping.segmentDrawTarget || null,
+        unknownMutation: mapping.segmentUnknownMutation === true,
+        resetObservationAvailable: mapping.segmentResetObservationAvailable === true,
+        mutationObserverAvailable: mapping.segmentMutationObserverAvailable === true,
+        mutationObserverTakeRecordsAvailable:
+          mapping.segmentMutationObserverTakeRecordsAvailable === true,
       };
     };
     const activeTileCount = activeSegments.reduce((total, segment) => (
@@ -846,9 +1127,17 @@ _MATERIALIZE_NATIVE_SOURCE_SCRIPT = """
 items => items.map(item => {
   try {
     const copy = window.__bookwalkerMaterializeNativeSourceCrop?.(item);
+    const full = item.fullSourceSnapshotId == null ? null
+      : window.__bookwalkerMaterializeNativeSourceCrop?.({...item, snapshotId: item.fullSourceSnapshotId});
+    const target = item.targetSnapshotId == null ? null
+      : window.__bookwalkerMaterializeNativeSourceCrop?.({...item, snapshotId: item.targetSnapshotId});
     return {
       dataUrl: copy?.dataUrl || null,
       error: copy ? copy.error : 'native source crop unavailable',
+      fullSourceDataUrl: full?.dataUrl || null,
+      fullSourceError: full ? full.error : null,
+      targetDataUrl: target?.dataUrl || null,
+      targetError: target ? target.error : null,
     };
   } catch (error) {
     return {dataUrl: null, error: String(error)};
@@ -869,6 +1158,7 @@ async ({reconstructed, native}) => {
       return {available: true, dimensions_equal: false, exact: false};
     }
     const canvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(canvas);
     canvas.width = left.width;
     canvas.height = left.height;
     const context = canvas.getContext('2d', {willReadFrequently: true});
@@ -922,6 +1212,7 @@ async ({reconstructed, native, sourceRect, destination, targetDimensions,
     // source-native JPEG into a source-size canvas before reproducing the
     // scaled draw so the diagnostic uses the same source kind as the trace.
     const sourceCanvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(sourceCanvas);
     sourceCanvas.width = left.width;
     sourceCanvas.height = left.height;
     const sourceContext = sourceCanvas.getContext('2d');
@@ -937,6 +1228,7 @@ async ({reconstructed, native, sourceRect, destination, targetDimensions,
       return {available: true, dimensions_equal: false, exact: false};
     }
     const canvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(canvas);
     canvas.width = targetWidth;
     canvas.height = targetHeight;
     const context = canvas.getContext('2d', {willReadFrequently: true});
@@ -977,6 +1269,139 @@ async ({reconstructed, native, sourceRect, destination, targetDimensions,
   } finally {
     left.close();
     right.close();
+  }
+}
+"""
+
+
+_CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT = """
+async ({reconstructed, intermediate, finalTarget, copySourceRect, copyDestination,
+        finalSourceRect, finalDestination, intermediateDimensions,
+        finalCanvasDimensions,
+        sourceSnapshot,
+        copySmoothingEnabled, copySmoothingQuality, finalSmoothingEnabled,
+        finalSmoothingQuality}) => {
+  async function load(dataUrl) {
+    if (typeof dataUrl !== 'string' || !dataUrl) return null;
+    const response = await fetch(dataUrl);
+    return await createImageBitmap(await response.blob());
+  }
+  const left = await load(reconstructed);
+  const expectedSource = await load(sourceSnapshot);
+  const expectedIntermediate = await load(intermediate);
+  const expectedFinal = await load(finalTarget);
+  if (!left || !expectedSource || !expectedIntermediate || !expectedFinal) {
+    left?.close(); expectedSource?.close(); expectedIntermediate?.close(); expectedFinal?.close();
+    return {available: false, exact: false, reason: 'immutable chain snapshot unavailable'};
+  }
+  const compare = (actual, expected, width, height, actualX = 0, actualY = 0) => {
+    if (expected.width !== width || expected.height !== height) {
+      return {available: true, dimensions_equal: false, exact: false};
+    }
+    const expectedCanvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(expectedCanvas);
+    expectedCanvas.width = width; expectedCanvas.height = height;
+    const expectedContext = expectedCanvas.getContext('2d');
+    if (!expectedContext) return {available: false, exact: false, reason: 'expected context unavailable'};
+    expectedContext.drawImage(expected, 0, 0);
+    if (actualX < 0 || actualY < 0
+        || actualX + width > actual.canvas.width || actualY + height > actual.canvas.height) {
+      return {available: true, dimensions_equal: true, exact: false,
+        reason: 'comparison rectangle outside replay canvas'};
+    }
+    const actualData = actual.getImageData(actualX, actualY, width, height).data;
+    const expectedData = expectedContext.getImageData(0, 0, width, height).data;
+    let differing = 0; let maxDifference = 0;
+    for (let index = 0; index < actualData.length; index += 4) {
+      let pixelDifferent = false;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const difference = Math.abs(actualData[index + channel] - expectedData[index + channel]);
+        maxDifference = Math.max(maxDifference, difference);
+        pixelDifferent ||= difference !== 0;
+      }
+      if (pixelDifferent) differing += 1;
+    }
+    return {available: true, dimensions_equal: true, exact: differing === 0,
+      differing_pixel_count: differing, max_channel_difference: maxDifference};
+  };
+  try {
+    if (typeof copySmoothingEnabled !== 'boolean' || typeof finalSmoothingEnabled !== 'boolean'
+        || !['low', 'medium', 'high'].includes(copySmoothingQuality)
+        || !['low', 'medium', 'high'].includes(finalSmoothingQuality)) {
+      return {available: false, exact: false, reason: 'chain smoothing metadata unavailable'};
+    }
+    const intermediateWidth = Number(intermediateDimensions?.width);
+    const intermediateHeight = Number(intermediateDimensions?.height);
+    if (!Number.isInteger(intermediateWidth) || !Number.isInteger(intermediateHeight)
+        || intermediateWidth <= 0 || intermediateHeight <= 0) {
+      return {available: false, exact: false, reason: 'intermediate dimensions unavailable'};
+    }
+    const sourceCanvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(sourceCanvas);
+    sourceCanvas.width = left.width; sourceCanvas.height = left.height;
+    const sourceContext = sourceCanvas.getContext('2d');
+    if (!sourceContext) return {available: false, exact: false, reason: 'source context unavailable'};
+    sourceContext.drawImage(left, 0, 0);
+    const sourceComparison = compare(sourceContext, expectedSource, left.width, left.height);
+    if (!sourceComparison.exact) {
+      return {available: sourceComparison.available === true, exact: false,
+        dimensions_equal: sourceComparison.dimensions_equal === true,
+        source: sourceComparison,
+        intermediate: {available: false, exact: false, reason: 'source mismatch'},
+        final: {available: false, exact: false, reason: 'source mismatch'}};
+    }
+    const bCanvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(bCanvas);
+    bCanvas.width = intermediateWidth; bCanvas.height = intermediateHeight;
+    const bContext = bCanvas.getContext('2d');
+    if (!bContext) return {available: false, exact: false, reason: 'intermediate context unavailable'};
+    bContext.imageSmoothingEnabled = copySmoothingEnabled;
+    bContext.imageSmoothingQuality = copySmoothingQuality;
+    bContext.drawImage(sourceCanvas,
+      Number(copySourceRect.x), Number(copySourceRect.y), Number(copySourceRect.width), Number(copySourceRect.height),
+      Number(copyDestination.x), Number(copyDestination.y), Number(copyDestination.width), Number(copyDestination.height));
+    const intermediateComparison = compare(bContext, expectedIntermediate, intermediateWidth, intermediateHeight);
+    if (!intermediateComparison.exact) {
+      return {available: intermediateComparison.available === true, exact: false,
+        dimensions_equal: intermediateComparison.dimensions_equal === true,
+        source: sourceComparison,
+        intermediate: intermediateComparison,
+        final: {available: false, exact: false, reason: 'intermediate mismatch'}};
+    }
+    const finalWidth = Number(finalDestination.width);
+    const finalHeight = Number(finalDestination.height);
+    if (!Number.isInteger(finalWidth) || !Number.isInteger(finalHeight)
+        || finalWidth <= 0 || finalHeight <= 0) {
+      return {available: false, exact: false, reason: 'final destination dimensions unavailable'};
+    }
+    const finalCanvasWidth = Number(finalCanvasDimensions?.width);
+    const finalCanvasHeight = Number(finalCanvasDimensions?.height);
+    const finalX = Number(finalDestination.x);
+    const finalY = Number(finalDestination.y);
+    if (!Number.isInteger(finalCanvasWidth) || !Number.isInteger(finalCanvasHeight)
+        || finalCanvasWidth <= 0 || finalCanvasHeight <= 0
+        || !Number.isInteger(finalX) || !Number.isInteger(finalY)
+        || finalX < 0 || finalY < 0
+        || finalX + finalWidth > finalCanvasWidth || finalY + finalHeight > finalCanvasHeight) {
+      return {available: false, exact: false, reason: 'final replay canvas geometry unavailable'};
+    }
+    const finalCanvas = document.createElement('canvas');
+    window.__bookwalkerMarkInternalCanvas?.(finalCanvas);
+    finalCanvas.width = finalCanvasWidth; finalCanvas.height = finalCanvasHeight;
+    const finalContext = finalCanvas.getContext('2d');
+    if (!finalContext) return {available: false, exact: false, reason: 'final context unavailable'};
+    finalContext.imageSmoothingEnabled = finalSmoothingEnabled;
+    finalContext.imageSmoothingQuality = finalSmoothingQuality;
+    finalContext.drawImage(bCanvas,
+      Number(finalSourceRect.x), Number(finalSourceRect.y), Number(finalSourceRect.width), Number(finalSourceRect.height),
+      finalX, finalY, finalWidth, finalHeight);
+    const finalComparison = compare(finalContext, expectedFinal, finalWidth, finalHeight, finalX, finalY);
+    return {available: Boolean(sourceComparison.available && intermediateComparison.available && finalComparison.available),
+      dimensions_equal: Boolean(sourceComparison.dimensions_equal && intermediateComparison.dimensions_equal && finalComparison.dimensions_equal),
+      exact: Boolean(sourceComparison.exact && intermediateComparison.exact && finalComparison.exact),
+      source: sourceComparison, intermediate: intermediateComparison, final: finalComparison};
+  } finally {
+    left.close(); expectedSource.close(); expectedIntermediate.close(); expectedFinal.close();
   }
 }
 """
@@ -1590,6 +2015,7 @@ class BookWalkerAdapter(SiteAdapter):
                     """
                     element => {
                       const probe = document.createElement('canvas');
+                      window.__bookwalkerMarkInternalCanvas?.(probe);
                       probe.width = 64;
                       probe.height = 64;
                       const probeContext = probe.getContext('2d');
@@ -2678,6 +3104,8 @@ class BookWalkerAdapter(SiteAdapter):
             "final_pixel_verify_enabled": final_pixel_verify_enabled,
             "final_pixel_compare_performed": False,
             "native_pixel_exact": None,
+            "cropped_chain_pixel_exact": None,
+            "cropped_chain_pixel_comparison": None,
             "final_pixel_comparison_mode": None,
             "reconstructed_dimensions_match": False,
             "reconstructed_source_dimensions_match": False,
@@ -2785,6 +3213,108 @@ class BookWalkerAdapter(SiteAdapter):
             "available": False,
             "exact": False,
             "reason": "browser comparison returned invalid data",
+        }
+
+    async def _materialize_canvas_snapshot(
+        self, page: Page, snapshot_id: str | None
+    ) -> str | None:
+        if not snapshot_id:
+            return None
+        try:
+            result = await page.evaluate(
+                """
+                snapshotId => window.__bookwalkerMaterializeNativeSourceCrop?.({
+                  sourceConstructor: 'HTMLCanvasElement', snapshotId,
+                }) || null
+                """,
+                snapshot_id,
+            )
+        except Exception:  # noqa: BLE001 - required provenance gate fails closed
+            return None
+        if not isinstance(result, dict) or result.get("error") is not None:
+            return None
+        data_url = result.get("dataUrl")
+        return data_url if isinstance(data_url, str) and data_url else None
+
+    async def _browser_cropped_one_hop_pixel_exact(
+        self,
+        page: Page,
+        reconstructed: bytes,
+        selected_call: dict[str, Any],
+        provenance_candidate: Any,
+        mapping: Any,
+        source_snapshot: str | None,
+    ) -> dict[str, object]:
+        """Replay the proven A->B copy and selected B->renderer ROI."""
+
+        intermediate = selected_call.get("fullSourcePng")
+        final_target = selected_call.get("targetCropPng")
+        final_source_rect = selected_call.get("sourceRect")
+        final_destination = selected_call.get("destination")
+        if (
+            not isinstance(source_snapshot, str)
+            or not isinstance(intermediate, str)
+            or not isinstance(final_target, str)
+        ):
+            return {"available": False, "exact": False, "reason": "immutable chain snapshot unavailable"}
+        if not isinstance(final_source_rect, dict) or not isinstance(final_destination, dict):
+            return {"available": False, "exact": False, "reason": "selected renderer geometry unavailable"}
+        final_canvas_width = selected_call.get("canvasWidth")
+        final_canvas_height = selected_call.get("canvasHeight")
+        if (
+            not isinstance(final_canvas_width, int)
+            or isinstance(final_canvas_width, bool)
+            or not isinstance(final_canvas_height, int)
+            or isinstance(final_canvas_height, bool)
+            or final_canvas_width <= 0
+            or final_canvas_height <= 0
+        ):
+            return {
+                "available": False,
+                "exact": False,
+                "reason": "selected renderer backing-canvas dimensions unavailable",
+            }
+        copy_smoothing_enabled = provenance_candidate.image_smoothing_enabled
+        copy_smoothing_quality = provenance_candidate.image_smoothing_quality
+        final_smoothing_enabled = selected_call.get("imageSmoothingEnabled")
+        final_smoothing_quality = selected_call.get("imageSmoothingQuality")
+        if copy_smoothing_enabled is None or copy_smoothing_quality not in {"low", "medium", "high"}:
+            return {"available": False, "exact": False, "reason": "copy smoothing metadata unavailable"}
+        if not isinstance(final_smoothing_enabled, bool) or final_smoothing_quality not in {"low", "medium", "high"}:
+            return {"available": False, "exact": False, "reason": "renderer smoothing metadata unavailable"}
+        encoded = base64.b64encode(reconstructed).decode("ascii")
+        try:
+            result = await page.evaluate(
+                _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+                {
+                    "reconstructed": f"data:image/jpeg;base64,{encoded}",
+                    "sourceSnapshot": source_snapshot,
+                    "intermediate": intermediate,
+                    "finalTarget": final_target,
+                    "copySourceRect": provenance_candidate.source_rect,
+                    "copyDestination": provenance_candidate.destination,
+                    "finalSourceRect": final_source_rect,
+                    "finalDestination": final_destination,
+                    "finalCanvasDimensions": {
+                        "width": final_canvas_width,
+                        "height": final_canvas_height,
+                    },
+                    "intermediateDimensions": {
+                        "width": provenance_candidate.target_dimensions[0],
+                        "height": provenance_candidate.target_dimensions[1],
+                    },
+                    "copySmoothingEnabled": copy_smoothing_enabled,
+                    "copySmoothingQuality": copy_smoothing_quality,
+                    "finalSmoothingEnabled": final_smoothing_enabled,
+                    "finalSmoothingQuality": final_smoothing_quality,
+                },
+            )
+        except Exception:  # noqa: BLE001 - provenance validation fails closed
+            return {"available": False, "exact": False, "reason": "browser chain comparison failed"}
+        return result if isinstance(result, dict) else {
+            "available": False,
+            "exact": False,
+            "reason": "browser chain comparison returned invalid data",
         }
 
     async def _evaluate_lossless_reconstruction(
@@ -3070,6 +3600,9 @@ class BookWalkerAdapter(SiteAdapter):
                 "first_unsafe_operation_index",
                 "unsafe_operation_types",
                 "non_image_bitmap_draws",
+                "segment_reset_observation_available",
+                "segment_mutation_observer_available",
+                "segment_mutation_observer_take_records_available",
             ):
                 if key in analysis_debug:
                     part[key] = analysis_debug[key]
@@ -3235,6 +3768,43 @@ class BookWalkerAdapter(SiteAdapter):
                         provenance_candidate is not None
                         and part.get("mapping_provenance")
                         == "scaled_canvas_source_1hop"
+                        and cropped_coded_frame
+                    ):
+                        source_snapshot = await self._materialize_canvas_snapshot(
+                            page, mapping.source_snapshot_id
+                        )
+                        part["source_snapshot_id"] = mapping.source_snapshot_id
+                        part["source_snapshot_available"] = source_snapshot is not None
+                        comparison = await self._browser_cropped_one_hop_pixel_exact(
+                            page,
+                            result.data,
+                            draw_call,
+                            provenance_candidate,
+                            mapping,
+                            source_snapshot,
+                        )
+                        part["cropped_chain_pixel_comparison"] = comparison
+                        stage_comparisons = (
+                            comparison.get("source"),
+                            comparison.get("intermediate"),
+                            comparison.get("final"),
+                        )
+                        part["cropped_chain_pixel_exact"] = bool(
+                            comparison.get("available") is True
+                            and comparison.get("dimensions_equal") is True
+                            and comparison.get("exact") is True
+                            and all(
+                                isinstance(stage, dict)
+                                and stage.get("available") is True
+                                and stage.get("dimensions_equal") is True
+                                and stage.get("exact") is True
+                                for stage in stage_comparisons
+                            )
+                        )
+                    elif (
+                        provenance_candidate is not None
+                        and part.get("mapping_provenance")
+                        == "scaled_canvas_source_1hop"
                     ):
                         comparison = await self._browser_scaled_source_pixel_exact(
                             page,
@@ -3276,8 +3846,11 @@ class BookWalkerAdapter(SiteAdapter):
                 if (
                     (
                         cropped_coded_frame
-                        and part["reconstructed_dimensions_match"]
                         and part["reconstructed_visible_dimensions_match"]
+                        and (
+                            part.get("mapping_provenance") != "scaled_canvas_source_1hop"
+                            or part.get("cropped_chain_pixel_exact") is True
+                        )
                     )
                     or (
                         not cropped_coded_frame
@@ -3335,7 +3908,11 @@ class BookWalkerAdapter(SiteAdapter):
             and (
                 (
                     part.get("coded_dimensions") != part.get("visible_dimensions")
-                    and part.get("native_pixel_exact") is True
+                    and (
+                        part.get("cropped_chain_pixel_exact") is True
+                        if part.get("mapping_provenance") == "scaled_canvas_source_1hop"
+                        else part.get("native_pixel_exact") is True
+                    )
                 )
                 or (
                     part.get("coded_dimensions") == part.get("visible_dimensions")
@@ -3421,6 +3998,8 @@ class BookWalkerAdapter(SiteAdapter):
             {
                 "sourceId": call.get("sourceId"),
                 "snapshotId": call.get("snapshotId"),
+                "fullSourceSnapshotId": call.get("fullSourceSnapshotId"),
+                "targetSnapshotId": call.get("targetSnapshotId"),
                 "sourceConstructor": (
                     call.get("source", {}).get("constructor")
                     if isinstance(call.get("source"), dict)
@@ -3447,6 +4026,10 @@ class BookWalkerAdapter(SiteAdapter):
             enriched = dict(call)
             enriched["sourceCropPng"] = result.get("dataUrl")
             enriched["sourceCropPngError"] = result.get("error")
+            enriched["fullSourcePng"] = result.get("fullSourceDataUrl")
+            enriched["fullSourcePngError"] = result.get("fullSourceError")
+            enriched["targetCropPng"] = result.get("targetDataUrl")
+            enriched["targetCropPngError"] = result.get("targetError")
             materialized.append(enriched)
         return materialized
 
@@ -3500,6 +4083,7 @@ class BookWalkerAdapter(SiteAdapter):
             selected_draw_calls = selected
             materialization_started = time.perf_counter()
             selected = await self._materialize_native_source_crops(page, selected)
+            selected_draw_calls = selected
             self._capture_debug["bookwalker_capture"]["timing_ms"][
                 "native_materialization_ms"
             ] = _elapsed_ms(materialization_started)
@@ -3911,6 +4495,7 @@ class BookWalkerAdapter(SiteAdapter):
                 .forEach(element => element.remove());
               for (const box of boxes) {
                 const target = document.createElement('canvas');
+                window.__bookwalkerMarkInternalCanvas?.(target);
                 target.width = box.width;
                 target.height = box.height;
                 target.dataset.bookwalkerCaptureRun = run;

@@ -1,16 +1,120 @@
 # Stage 02 checkpoint — 2026-10-08
 
-Status: **COMPLETE**. Authority is [README.md](README.md).
+Status: **COMPLETE — LN2 production integration accepted**. Authority is [README.md](README.md).
 
 This checkpoint preserves the useful evidence from the earlier heavier workflow while
 making clear that Reviewer/Critic are no longer required for ordinary research.
 
-## Current Lead decision
+## Current Lead decision — production follow-up complete
+
+The user authorized production integration after the successful LN2 recovery
+PoC. Lead fetched and merged current `origin/main` again (already up to date
+at `96fd5fff84567a4e2c644978d2b4c297174fa2ca`) on the existing research branch
+at `cfb308a`. Unrelated untracked `debug.log` is preserved. Baseline sync is not
+research evidence. Worker owns the site-local implementation, tests and live
+viewer; Lead owns classification and this stage checkpoint. Production review
+is mandatory after the implementation and acceptance evidence are ready.
+No heuristic attribution or pixel tolerance is authorized by this integration.
+The completed baseline below is historical to this new implementation step.
+
+Lead accepted a bounded cropped one-hop extension of the existing shape
+`tile canvas A -> scale canvas B -> selected renderer`, not a new recursive
+canvas graph. One risk-driven Critic consultation required actual successful
+native dimension-setter resets as new boundaries (including same-value resets),
+strict canvas/generation joins, rejection of unknown width/height attribute
+mutations and exclusion of internal snapshot/replay canvases. Clear-time
+dimensions cannot be reinterpreted as draw-time dimensions without observed
+reset authority. Mandatory A, B and final destination-region comparisons must
+all be available and pixel exact, independently of the optional older-path
+comparison flag. Actual A-to-B destination 722x1024 and selected source rectangle
+721.5x1024 remain distinct recorded geometry.
+
+Automatic `capture_page()` now returns the 1443x2048 reconstructed JPEG for LN2
+in `output/stage03-ln2-final-reviewfix-b1b4-20261008.json`
+(SHA-256 `e1eca5d9c8ea224157e9dcb0519c18799480833acfc8d2c414a3f10ec8ce9906`).
+The actual counter is 2/314 and the probe returns to verified 1/314. The output
+hash is the same `8e16bc...21d21f` as the accepted recovery PoC. Source A,
+intermediate B and final destination-region comparisons are all available,
+dimension-equal and zero-difference, with the optional old-path verification
+flag off. No color tolerance was introduced.
+
+A prior replay into a 695x983 canvas at origin zero differed in 125 pixels by
+at most one channel level at the final stage, despite exact A/B comparisons.
+Replaying at the actual destination `(605,0,695,983)` on the actual 1904x985
+renderer-sized canvas removes that difference. The destination ROI remains
+the comparison scope; this does not claim whole-UI/compositor equality.
+The first production review identified four BLOCKING contracts:
+reset/observer availability and source/target mutation/epoch joins must be proof
+gates; the selected B source rectangle must be origin-zero with less than one
+pixel removed at each right/bottom edge; actual final backing-canvas dimensions
+cannot have a fallback; and real-evaluation tests must exercise every mandatory
+pixel gate and whole-spread failure. Worker has corrected these without relaxing
+pixel equality or widening the legacy/direct recovery scope. The final local
+checks pass: 195 targeted Unit tests, 52 browser-backed Integration tests,
+`ruff check src tests` and `git diff --check` (zero skipped tests). The last
+scope correction defers new observation availability requirements to cropped
+one-hop validation and restores the legacy equal-size aspect constraint;
+regression tests cover runtime-like full-clear B metadata and anisotropic
+legacy rejection. Trace, pixel comparison and DCT reconstruction did not change,
+so the Reviewer confirmed the already-verified live windows need no repetition.
+Final production Reviewer confirmed **PASS with no remaining BLOCKING** after
+independently rechecking legacy full-clear success, equal-size anisotropic
+rejection and cropped B observation/unknown-mutation rejection. The Reviewer
+also accepted the synchronized contract and immutable live evidence. Stage 02
+is complete. Manga body9/11 and LN2/3/4 are B for supported automatic JPEG
+recovery; existing LN text8/10 remain A. No C was established. Current cover
+provenance and uncaptured LN5-7 retain their documented D limits below.
+Manga2 was unnecessary: the runtime gates validate each supported lineage,
+and no unresolved concrete cross-title hypothesis required another sample.
+Further broad research or full viewer reverse engineering would not improve
+the bounded production decision. One material-risk Critic consultation and
+production-change Reviewer checks were used; ordinary probes remained Lead/Worker.
+The thread cap remains 2 and the note states the current source-native priority.
+
+Final local verification commands:
+
+```text
+uv run pytest -q tests/unit/test_bookwalker_native_capture.py tests/unit/test_bookwalker_purchased_mapping.py tests/unit/test_bookwalker_lossless_jpeg.py tests/unit/test_bookwalker_adapter.py tests/unit/test_bookwalker_original_capture.py
+# 195 passed, 0 skipped
+uv run pytest -q tests/integration/test_bookwalker_adapter_browser.py tests/integration/test_bookwalker_original_capture_browser.py
+# 52 passed, 0 skipped
+uv run ruff check src tests
+git diff --check
+```
+
+No shared Core/browser/packaging contract changed. The affected BookWalker
+capture suites, browser-backed Integration and bounded live windows cover this
+site-local contract; a full pytest/full-book/END live run was not needed.
+Fresh post-fix live evidence is:
+
+| Case | Actual positions | Automatic output / proof |
+| --- | --- | --- |
+| LN `2/314` | 3 -> 2 -> verified 1 -> 2 -> restored 1 | B; JPEG 1443x2048, unique exact candidate and 2,944 tiles, all coefficients/quantizers/selectors exact, A/B/final ROI each zero difference |
+| LN `3/314` | 1 -> verified 1 -> predecessor 2 -> 3 -> restored 1 | B; JPEG 2048x1453, unique exact candidate and 2,944 tiles, coefficient/quantizer/selector equality and native zero difference |
+| Manga `9/159` | 9 -> verified 1 -> predecessor 7 -> 9 -> restored 1 | B; two JPEGs 844x1200, unique exact candidate and 1,026 tiles per part, coefficient/quantizer/selector equality and native zero difference for both parts |
+
+All three windows have `spread_ready=true`, `output_used=true` and the older
+optional final-pixel flag off. Metadata remains ignored local output:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `output/stage03-ln2-final-reviewfix-b1b4-20261008.json` | `e1eca5d9c8ea224157e9dcb0519c18799480833acfc8d2c414a3f10ec8ce9906` |
+| `output/stage03-ln3-final-b1b4-20261008.json` | `6f6c968f1481364b0fb5b34e01b5bf8ed41a4b4a035310985968475ad8c42157` |
+| `output/stage03-manga9-final-b1b4-20261008.json` | `8b1297d7150d42f9b5edef7fa994a46541685ce5e3783d3b79c612b80dadd059` |
+
+Manga `11/159` also passed the earlier current-task regression window in
+`output/stage03-cropped-live-verify-manga-20261008.json`, SHA-256
+`0a4493715780c6820af46e1998bdab68667a90dcb6463bb8411d02e5cc315b6d`;
+the final trace changes were rechecked on manga9 rather than expanding sampling.
+The completed baseline material below predates this follow-up;
+its automatic-LN2 limitations are historical and superseded by this section.
+
+## Completed baseline before the active production follow-up
 
 Required bounded live verification is complete after the user logged in again.
 The original production Reviewer confirmed PASS with no remaining BLOCKING, including
 the live evidence, current cover fallback controls and synchronized documents.
-Stage 02 is complete, including the subsequent user-requested LN2 verification
+That baseline was complete, including the subsequent user-requested LN2 verification
 described below. LN2 is now B at recovery-PoC level; automatic capture has not
 been changed to consume that proof. No production code changed during either
 this acceptance continuation or the LN2 follow-up. Local validation remains 180 targeted
