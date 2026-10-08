@@ -94,29 +94,73 @@ ordinary research is Lead + Worker only, Reviewer is change-driven, and Critic
 is risk-driven. No production implementation has been approved from these
 observations.
 
-## 1.2 Stage 02 current research status (2026-10-08, incomplete / access precheck blocked)
+## 1.2 Stage 02 final research status (2026-10-08, complete / no production change)
 
 Production capture code and its source-native priority remain unchanged.
-No new B/C classification or recovery rule has been approved. The latest bounded
-manga probe (R5) verified the normal native-canvas lineage at `9/159`, but did
-not establish exact encoded-source attribution, complete pixel coverage, or
-JPEG reconstruction proof. Its cover capture used rendered fallback and is
-not a fresh original-JPEG regression pass. No fresh manga or light-novel
-provenance probe completed in the 2026-10-08 continuation.
+No B/C artifact recovery rule has been approved. Fresh manga research remained
+bounded to `9/159`, with `1/159` anchors verified before and after each probe.
+R7 connected renderer canvas 3, source canvas 6 (844x1200), exact completed
+mappings `mapping-3092` / `mapping-4124`, and their two 848x1200 ImageBitmaps
+through 1,026 tiles each. Full-pixel comparison without resize found exactly one
+JPEG among 19 available candidates for each bitmap. This is new exact upstream
+tile-JPEG attribution; the JPEGs are not established as finished-page artifacts.
+
+The source canvas was drawn full-frame with identity transform, source-over and
+filter none to 998x1416 display rectangles. A separate bottom-edge image did not
+overlap those body rectangles. A third transition geometry box prevented the
+production selector from returning a capture, and complete visible-output plus
+848-to-844 edge/crop/padding and reconstruction proof remain missing. Manga's
+operational classification is D; no source-PNG claim or recovery implementation
+is justified. R6's legacy helper discarded the target trace, so its empty-trace
+ambiguity is a collector limitation rather than site evidence. R5's clip count
+is historical and is not a fresh R7 measurement. Manga 2 remains unused because
+no safe new recovery pattern needs a cross-title test.
+
+LN `2/314` was freshly probed after observing actual entry `3/314`, explicitly
+returning to `1/314`, and verifying `1/314 -> 2/314 -> 1/314`. One selected
+1443x2048 canvas draw used a full source rectangle, identity transform and safe
+draw state, scaled to `(931,0,1000,1416)`. Its renderer operation was 2946 but
+had no mapping ID; the bounded production trace had zero completed mappings
+despite recording 2,960 operations. One native PNG at 1443x2048 was returned.
+Seven JPEG candidates had no full-pixel exact match to that PNG; this does not
+contradict the historical 1448x2048 JPEG/bitmap match. The selected canvas's
+upstream identity, crop/padding and complete visible-page attribution remain
+unproven, so LN `2/314` remains D.
+
+LN `3/314` entered at actual `2/314`; Worker explicitly verified `1/314`, probed
+`3/314` via `2/314`, then restored and verified `1/314`. Production selected
+mapping `mapping-8852`: renderer canvas 1, source canvas 4 at 2048x1453, full
+source rectangle and destination `(431,0,1999,1416)`. The completed segment had
+2,944 tiles from ImageBitmap 7 at 2048x1456; clear 5903, tiles 5908-8851 and
+renderer draw 8852 were explicitly ordered. Tile/renderer transforms were
+identity, alpha 1, source-over and filter none. Full-pixel comparison found one
+exact upstream JPEG among eight available candidates. The trace had no reported
+overflow/eviction, and exact compact fetch returned the requested mapping.
+Production returned a 2048x1453 native PNG and rejected reconstruction because
+the ImageBitmap dimensions differ from the source canvas. None of the eight
+candidates exactly matched that native PNG. Edge coverage, crop/padding/coded
+mapping and complete output proof remain unproven; LN `3/314` remains D.
+
+Stage 02 is complete with operational D for representative manga body and LN
+`2/314` / `3/314`, historical A cover controls unchanged, and no B/C artifact
+contract adopted. Exact upstream JPEG matches do not justify saving scrambled
+tile JPEGs as pages. Further samples would not supply the missing edge-aware
+reconstruction/source-canvas proof, so the existing native/rendered fallback is
+retained. No production code/tests changed, and Reviewer/Critic were unnecessary.
+Research checks covered actual counters/anchor restoration, exact mapping and
+full-pixel comparisons where available, metadata JSON/hash consistency and diff
+checks. Production Unit/Integration/full pytest and full-book/END live regression
+were not rerun; no pytest skips occurred because pytest was not invoked.
 
 The active research branch was synchronized with fetched `origin/main`
 `96fd5fff84567a4e2c644978d2b4c297174fa2ca` before any access attempt. This is
-baseline synchronization, not provenance evidence. The normal login helper
-submitted configured credentials once in a dedicated new Page and observed a
-viewer destination with the login form gone; that Page was then closed. Neither
-the manga nor LN product exposed an owned reader control in the subsequent
-strict-direct precheck. The reason for the missing control is unproven; these
-observations do not establish purchase entitlement or a source format. No quota
-control was clicked, and no resource consumption was reported. Actual page
-counters could not be obtained, so there is no fresh anchor/probe/restoration
-claim. The requested manga spread and LN `2/314` / `3/314` remain pending an
-accessible target viewer. Historical D classifications remain unchanged; the
-access failure is not additional D evidence.
+baseline synchronization, not provenance evidence. Initial access-only attempts
+could not obtain target counters, even after the normal login helper submitted
+once in a dedicated Page. The user subsequently corrected login and requested
+resumption; strict-direct manga entry then succeeded at `1/159`. The initial
+access failure is historical and is not D evidence. No quota control was clicked
+or resource consumption reported; remote Chrome and the shared profile remain
+the session authority.
 
 Earlier diagnostic ticket/producer controls remain unreviewed and are not
 source-format or production authority. Under the revised workflow there is no
@@ -236,7 +280,7 @@ BookWalker本文は主にCanvas renderer。
 
 fallbackとして `#renderer canvas:not(.dummy)` も見る。
 
-CanvasはCore `capture.py` がraw PNG bufferを取得する。browser UIや周辺DOMを避ける。
+rendered-canvas fallbackではCore `capture.py` がraw PNG bufferを取得する。browser UIや周辺DOMを避ける。
 
 ## 4. drawImage geometry trace
 

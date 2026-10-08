@@ -12,12 +12,16 @@ Latest published checkpoint before this workflow revision:
 
 Production capture code is still unchanged.
 
-Current execution status (2026-10-08): **INCOMPLETE / ACCESS PRECHECK BLOCKED**.
-The main-sync preflight below has completed for this continuation. Fresh
-provenance probes remain pending: neither target exposed an owned reader control
-after the normal login helper ran. See [CHECKPOINT.md](CHECKPOINT.md) for the
-baseline, access-only observations, and exact next question. An inaccessible
-viewer is not evidence that its source is D, and Stage 02 is not closed.
+Current execution status (2026-10-08): **COMPLETE / NO PRODUCTION CHANGE**.
+The main-sync preflight completed, the user corrected login, and bounded fresh
+research finished on manga `9/159` and LN `2/314` / `3/314`. All three remain D
+at the safe artifact-recovery boundary. Manga and LN `3/314` now have unique
+exact upstream JPEG attribution, but edge/crop/padding and complete output proof
+are incomplete; LN `2/314` lacks the selected upstream mapping. No B/C recovery
+contract was adopted and manga 2 was unnecessary. Historical cover A controls
+remain unchanged. See [CHECKPOINT.md](CHECKPOINT.md) for final decisions, actual
+positions, evidence limits and the reason to stop. The earlier access-only
+failure is historical, not provenance evidence.
 
 The previous workflow attempted frequent Reviewer/Critic gates and hit agent-thread
 capacity. This revised Stage 02 removes those gates from ordinary research.
@@ -57,7 +61,11 @@ Do not reinterpret unrelated `main` changes as BookWalker provenance findings.
 If the merge causes a material BookWalker behavior conflict, Lead should resolve that
 conflict before resuming the provenance investigation.
 
-## 3. Known evidence
+## 3. Starting evidence from Stage 01 / R5 (historical)
+
+The observations in this section predate the post-login R6/R7 continuation.
+The final current conclusions and new upstream JPEG evidence are recorded in
+[CHECKPOINT.md](CHECKPOINT.md); retain these starting facts as historical scope.
 
 ### Manga 1
 

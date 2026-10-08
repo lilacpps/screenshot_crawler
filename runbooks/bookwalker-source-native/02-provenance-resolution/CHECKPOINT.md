@@ -1,9 +1,43 @@
 # Stage 02 checkpoint — 2026-10-08
 
-Status: **INCOMPLETE / ACCESS PRECHECK BLOCKED**. Authority is [README.md](README.md).
+Status: **COMPLETE / NO PRODUCTION CHANGE**. Authority is [README.md](README.md).
 
 This checkpoint preserves the useful evidence from the earlier heavier workflow while
 making clear that Reviewer/Critic are no longer required for ordinary research.
+
+## Final Lead decision
+
+| Investigated case | Final classification | Evidence and remaining boundary |
+| --- | --- | --- |
+| Manga cover | A, historical control | No fresh cover regression is claimed |
+| Manga ordinary body, representative `9/159` | D | Two exact upstream tile JPEGs; complete selected-visible-output and 848-to-844 edge/crop/padding/reconstruction proof missing |
+| LN `2/314` | D | Native 1443x2048 output obtained, but exact selected-canvas to upstream bitmap identity/geometry missing |
+| LN `3/314` | D | Exact upstream JPEG and completed mapping; 2048x1456 to 2048x1453 edge/crop/padding and complete output proof missing |
+
+No B artifact recovery contract or C/source-PNG case was established. The
+source-native priority and all production proof/fail-closed gates remain
+unchanged. Exact upstream JPEG/bitmap equality alone is not a finished-page
+artifact proof, and PNG output alone is not source-PNG evidence.
+
+Research stops here because the operational crawler decision is already safe:
+retain native/rendered fallback. Continuing would require new proof of
+partial-edge tile coverage, encoded-grid/padding correspondence and safe
+reconstruction, or a broader trace contract for the unjoined LN source canvas.
+The current observations do not justify that contract change. Repeating more
+spreads, fixing a transition box alone, or adding another title would not supply
+those missing proofs. Manga 2 was not used. Uninvestigated LN opening pages
+`4/314` through `7/314` retain their historical D status without new claims.
+
+Only Lead + Worker participated. Reviewer was not needed because no production
+or durable test/diagnostic contract changed. Critic was not triggered: no gate
+was weakened, no heuristic attribution was adopted, and no cross-title or
+shared abstraction was proposed.
+
+Final verification: metadata-only live research at manga `9/159` (R6/R7), LN
+`2/314` and `3/314`; verified restoration to `1/159` or `1/314` after each
+independent probe. Production regression/END/full-book live runs were not
+required or claimed. Cleanup retains thread limit 2 and the corrected note
+scope. Final local artifact identities and checks are recorded below.
 
 ## Baseline synchronization completed (not research evidence)
 
@@ -22,7 +56,160 @@ making clear that Reviewer/Critic are no longer required for ordinary research.
 
 These SHAs record this execution, not a pinned main requirement for a future run.
 
-## 2026-10-08 access-only precheck
+## Post-login continuation — accepted manga findings
+
+The user corrected the login state and requested resumption. A new fetch found
+the same current `origin/main`; merging it again reported already up to date.
+The existing branch and unrelated `debug.log` were preserved. The access block
+below is historical and no longer prevents the bounded research.
+
+Manga R6 observed only `9/159` as the ordinary-body sample: actual entry/anchor
+`1/159`, navigation `1 -> 3 -> 5 -> 7 -> 9`, observation start/end `9/159`,
+and verified restoration to `1/159`. It recorded two 844x1200 native canvas
+sources and full-frame, identity-transform renderer draws scaled to 998x1416.
+Its dimension-ranked 848x1200 JPEGs were **not** candidate attribution evidence.
+The legacy transform helper discarded its initial trace after initialization;
+its empty trace and `PART_MAPPING_AMBIGUOUS` are collector limitations, not a
+proven site ambiguity. R6's earlier cover-only attempt is excluded from body
+evidence and is not a fresh cover regression.
+
+R7 repeated the same spread with the corrected lifecycle: verify `1/159`, arm
+native capture before the final `7/159 -> 9/159` turn, snapshot before any
+trace-clearing capture/comparison, then restore and verify `1/159`.
+
+- The production trace contained 4,133 observed operations; exact compact fetch
+  returned both requested mapping IDs, with zero missing mappings.
+- Renderer canvas 3 drew source canvas 6 at 844x1200 through exact completed
+  mappings `mapping-3092` / `mapping-4124` and renderer operations 3092 / 4124.
+- Each mapping contained 1,026 tiles. Its unique ImageBitmap source was 23 / 25,
+  respectively, both 848x1200. Identity transform, source-over and filter none
+  were observed in both the tile and renderer draws. No rotation is inferred
+  from dimensions.
+- The renderer used full source rectangles `(0,0,844,1200)` and destinations
+  `(1430,0,998,1416)` / `(432,0,998,1416)`: a display scale is explicit.
+- Existing `imagebitmap_pixel_exact_match` compared full decoded pixels without
+  resize against 19 candidates per source. All 19 comparisons per source were
+  available; exactly one JPEG matched each bitmap. This proves upstream tile
+  JPEG attribution within the observed bounded candidate pool, not a complete
+  page artifact or an original finished-page JPEG.
+- A separate 400x1 HTMLImageElement was drawn to `(1230,1416,400,2)` outside
+  the two body rectangles. It is not evidence of composition inside the body.
+- The production selector retained a third transition geometry box and returned
+  no capture. The diagnostic's two mapping-bearing calls are upstream evidence,
+  not a substitute for successful production visible-page selection. A default
+  `returned_path=native_png` debug field with zero captures is not PNG success.
+
+Lead classification: **D / unsupported or incomplete artifact proof**. JPEG
+source identity is now established, but complete selected-visible-output proof
+and the 848-to-844 partial-edge/crop/padding correspondence remain unproven for
+safe source-native recovery. No B artifact contract or C/source-PNG conclusion
+is adopted. R5's 38 destination-edge clips remain historical evidence; they
+must not be silently counted as a fresh R7 measurement.
+
+No further manga live sample is warranted in this stage: fixing the transition
+box alone would not establish the missing edge/padding and reconstruction
+proof. A new partial-edge recovery contract would go beyond the bounded
+attribution question. Manga 2 remains unused because no safe new recovery
+pattern was established that needs cross-title confirmation.
+
+## Post-login continuation — LN `2/314`
+
+Actual entry was `3/314`, not an assumed page 1. Worker explicitly returned to
+and verified `1/314`, probed `2/314` only, then returned to and verified `1/314`.
+
+- The production selector chose one draw on renderer canvas 3 (2861x1418).
+  Its source was canvas 4 at 1443x2048, full source rectangle
+  `(0,0,1443,2048)`, destination `(931,0,1000,1416)`, identity transform,
+  alpha 1, source-over and filter none. Display scale is explicit. No upstream
+  rotation or padding interpretation is inferred from dimensions.
+- The selected renderer operation was 2946, but `mappingId` was absent and
+  `completedMappings` was empty. The trace was not generally empty: it recorded
+  2,960 operations / 2,956 draws / one clear. This bounded production trace did
+  not establish upstream bitmap identity or geometry for the selected draw.
+  It does not prove that the site has no upstream lineage.
+- Production returned one native PNG at 1443x2048 and the reconstruction path
+  failed closed with `selected renderer draw mapping identity unavailable`.
+- Seven JPEG candidates were compared against that returned native PNG without
+  resizing. None was exact; the sole same-dimension candidate was not exact.
+  This comparison is against the visible native output, **not** the previously
+  observed 1448x2048 bitmap. The historical full-pixel bitmap/JPEG match is not
+  contradicted or promoted into visible-output proof by this result.
+
+Lead classification: **D**. The missing evidence is the exact selected-canvas
+to upstream-bitmap mapping, including source/destination rectangles and
+crop/padding/composition, followed by complete candidate-to-page attribution.
+The current PNG remains a fail-closed native output; no source-PNG claim is made.
+
+## Post-login continuation — LN `3/314`
+
+Actual entry was `2/314`. Worker explicitly restored/verified `1/314`, navigated
+through `2/314` to observe only `3/314`, then returned via `2/314` and verified
+`1/314`. No previous end position was assumed.
+
+- The production selector accepted one geometry box. Renderer canvas 1
+  (2861x1418) used exact mapping `mapping-8852`, renderer operation 8852, source
+  canvas 4 at 2048x1453, full rectangle `(0,0,2048,1453)` and destination
+  `(431,0,1999,1416)`. Transform was identity, alpha 1, source-over, filter none.
+- The selected completed segment contained 2,944 tiles from ImageBitmap source 7
+  at 2048x1456. Clear operation 5903, tile operations 5908-8851 and renderer
+  operation 8852 establish the observed ordering. Tile transform was also
+  identity with source-over/filter none; no rotation is inferred from a
+  width/height swap.
+- The trace contained 8,860 operations. Exact compact fetch returned one
+  requested mapping, with zero missing mappings, no reported trace overflow and
+  no completed-mapping eviction.
+- Full decoded-pixel comparison without resize against eight candidates was
+  available for all eight and found exactly one JPEG matching ImageBitmap 7.
+- Production returned one native PNG at 2048x1453. The mapping validator rejected
+  reconstruction with `ImageBitmap dimensions differ from source canvas`.
+  Eight JPEG candidates had zero exact matches against this native PNG, a
+  separate comparison from the successful upstream bitmap match.
+
+Lead classification: **D**. Selected mapping and unique upstream JPEG identity
+are established. Full tile-edge coverage, crop versus padding semantics, coded
+mapping/reconstruction safety and complete candidate-to-visible-output proof
+are not. Identity transforms do not resolve that boundary; no direct original
+JPEG, reconstructed JPEG or source-PNG claim is adopted from it.
+
+## Final checks and artifact identities
+
+The live helpers reused production selection, compact mapping, candidate and
+full-resolution comparison mechanisms where available. R6's legacy empty trace
+was excluded and replaced by the corrected R7 lifecycle. No diagnostic was
+promoted into a supported production or test contract. Artifact hashes identify
+local metadata; relevant observations are recorded above so a fresh clone need
+not contain the ignored files. Mapping/source IDs are capture-window-local.
+
+PASS: final JSON parsing, report SHA-256 consistency, final D fields, anchor
+restoration fields, thread-limit-2 TOML parsing and `git diff --check`. The
+earlier Ruff PASS below applies to the same unchanged `src`/`tests` baseline.
+No pytest was invoked (zero pytest skips). Unit, browser-backed Integration and
+full suite were not rerun because production and tests were unchanged. Research
+trust checks were the actual-counter/anchor protocol, corrected snapshot order,
+nonempty trace/exact mapping checks where available, production selector result,
+existing full-pixel comparisons, and metadata/hash consistency checks. No new
+synthetic producer matrix or full viewer reverse engineering was attempted.
+
+No image bytes, signed URLs, credentials, Cookie or storage state were committed.
+The remote Chrome/profile was preserved. `debug.log` remains unrelated user data.
+
+| Metadata-only local artifact | Final SHA-256 |
+| --- | --- |
+| `output/stage02-manga1-r6-summary-20261008.json` | `561423769fb7b8a1f96ebf548c27151e040309a002e7e48232f6c436bb1cdb03` |
+| `output/stage02-manga1-r7-summary-20261008.json` | `a549bc41bf9117725f695ea9d74ec962106c5cd727643014b4901089a66c8d94` |
+| `output/stage02-ln2-r7-summary-20261008.json` | `ea84e876e5d2720310372697aa105c8ef7dd72fcaba88f607dc7fd8a822cbabf` |
+| `output/stage02-ln3-r7-summary-20261008.json` | `d75461cfec7ba214f8c7f9cf9d7602bbdbe22a7c004b4cf20bd89edf46dabe8b` |
+| `output/stage02-offline-audit-20261008.json` | `e5acc0ff66a94e7d6d856fb0fa76ac56f675a66268f23488353e979023eb9002` |
+
+The final audit adds Lead's D decision to the manga R7 metadata; its earlier
+upstream-only B-candidate wording is explicitly superseded. R7 manga edge-clip
+count, full tile-coverage bounds, overflow and eviction fields were not retained
+in the local metadata summary and remain unreported. Do not infer their values
+from R5 or from a successful two-record compact fetch. The earlier LN2 hash was
+superseded by the offline evidence-separation clarification; final hashes above
+identify the accepted metadata versions.
+
+## 2026-10-08 access-only precheck (historical; resolved before R6/R7)
 
 The Lead selected one fresh manga question: can the selected ordinary-body bitmap
 at `9/159` be attributed one-to-one to an exact upstream encoded source? The
@@ -63,8 +250,9 @@ It records the seven entry/login attempts without image bytes or secrets. Its
 structural observations are summarized above so the ignored local report is
 not required to understand this checkpoint.
 
-Stage 02 is **not complete**. Access failure does not establish D. Current
-classification remains the historical evidence below:
+At this precheck, Stage 02 was **not complete**. Access failure did not establish
+D. Classification was retained from the historical evidence below; the later
+R7 attribution above supersedes the manga's missing-upstream-source statement:
 
 | Case | Retained classification | Still missing |
 | --- | --- | --- |
@@ -73,11 +261,10 @@ classification remains the historical evidence below:
 | LN `2/314` | D | Exact selected-output lineage from the all-pixel-matched 1448x2048 JPEG/bitmap |
 | LN `3/314` | D | Exact selected-output lineage, crop/padding/coded mapping and complete visible-output proof |
 
-Manga 2 remains unused: no new renderer/provenance pattern was obtained that
-requires a cross-title test. Research has paused for target access, not because
-additional provenance research was judged unproductive.
+At this precheck, manga 2 remained unused and research stopped for target access,
+not because further provenance research had been judged unproductive.
 
-## Checks and cleanup in this continuation
+## Checks and cleanup before the post-login probes
 
 - PASS: `.codex/config.toml` parses with `tomllib`; spawned-thread limit is 2.
 - PASS: `.venv/Scripts/ruff.exe check src tests`.
@@ -94,7 +281,7 @@ additional provenance research was judged unproductive.
 - Reviewer/Critic were not invoked: no production change, proof-gate change,
   heuristic attribution, or broader generalization was proposed.
 
-## Immediate next action
+## Precheck resume instruction (subsequently followed)
 
 After the intended account can open the targets in the shared Crawler Chrome,
 Worker must recheck actual counters and strict access. Do not assume the login
@@ -104,7 +291,7 @@ second spread. Then probe LN `2/314`, inspect the result, and only then select
 the bounded `3/314` question. Do not rerun credentials or choose another resource
 merely to bypass the missing owned control.
 
-## Accepted current evidence
+## Historical Stage 01 / R5 evidence
 
 - Production capture code remains unchanged.
 - Stage 01 cover A and ordinary LN-text A evidence remain historical controls.
@@ -112,7 +299,7 @@ merely to bypass the missing owned control.
 - LN opening remains D.
 - Manga 2 has not been used.
 
-Latest live manga R5:
+Historical manga R5:
 
 - actual initial position was `9/159`;
 - Worker rewound and verified `1/159`;
@@ -145,7 +332,7 @@ There is no requirement to finish OBJECT-B/C or a synthetic producer matrix.
 The earlier agent-thread-capacity problem no longer blocks research because normal
 research now uses only Lead + Worker.
 
-## Resume order
+## Historical workflow-revision resume order (superseded by completion)
 
 1. Continue on `research/bookwalker-source-native-20261005`; do not create a replacement
    branch just because `main` has advanced.

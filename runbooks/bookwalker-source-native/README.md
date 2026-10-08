@@ -41,10 +41,11 @@ Current checkpoint:
 
 `02-provenance-resolution/CHECKPOINT.md`
 
-Current execution status (2026-10-08): **INCOMPLETE / ACCESS PRECHECK BLOCKED**.
+Current execution status (2026-10-08): **COMPLETE / NO PRODUCTION CHANGE**.
 The active research branch contains the fetched current `origin/main` baseline.
-Fresh manga/LN provenance probes have not run because strict owned entry was
-unavailable after a normal login attempt; this is not new A/B/C/D evidence.
+Fresh manga `9/159` and LN `2/314` / `3/314` remain D at the safe page-artifact
+boundary. Exact upstream JPEGs were established for manga and LN `3/314`, but
+complete output/reconstruction proof was not. See the checkpoint for limits.
 
 Goals:
 
