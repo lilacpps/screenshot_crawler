@@ -2232,8 +2232,12 @@ async def test_grant_only_local_skip_does_not_open_page_or_delay(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason", ["comicdays_discovery_refresh_required", "already_accessible", "work_ticket_unavailable"]
+)
 async def test_grant_only_candidate_local_resource_skip_continues_to_later_candidates(
     monkeypatch: pytest.MonkeyPatch,
+    reason: str,
 ) -> None:
     events: list[str] = []
 
@@ -2255,9 +2259,7 @@ async def test_grant_only_candidate_local_resource_skip_continues_to_later_candi
         ) -> object:
             events.append(f"execute:{candidate.item_id}")
             if candidate.item_id == 1:
-                raise cli.AccessResourceUnavailableError(
-                    "comicdays_discovery_refresh_required"
-                )
+                raise cli.AccessResourceUnavailableError(reason)
             return SimpleNamespace(
                 resource="work_ticket", resource_consumed=True, stop_reason="entry_confirmed"
             )

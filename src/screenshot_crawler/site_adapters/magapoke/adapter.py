@@ -230,6 +230,7 @@ _PREMIUM_TICKET_TEXT = "プレミアムチケットで読む"
 _WORK_TICKET_CLASS = "c-btn-icon-primary--ticket"
 _PREMIUM_TICKET_CLASS = "c-btn-icon-primary--premium-ticket"
 _PREMIUM_TICKET_LABEL = "プレミアムチケット"
+_POINT_PURCHASE_TEXT = re.compile(r"^[1-9]\d*ポイントで購入$")
 
 
 def parse_premium_ticket_count(value: str | None) -> int | None:
@@ -659,10 +660,22 @@ class MagapokeAdapter(SiteAdapter):
                         ((classes.includes('p-episode-comment-btn--pc') && href === '#comment') ||
                          (classes.includes('p-episode-comment-btn--sp') &&
                           href === 'javascript:void(0);'));
-                    if (knownCommentNavigation) return null;
+                    const text = (element.innerText || '').replace(/\\s+/g, ' ').trim();
+                    const knownPointGuideNavigation = tagName === 'a' &&
+                        classes.includes('p-episode-purchase__point-guide-btn') &&
+                        classes.includes('c-btn-icon-primary--free-point') &&
+                        !classes.some(name => [
+                            'c-btn-icon-primary--ticket',
+                            'c-btn-icon-primary--premium-ticket',
+                            'c-btn-icon-primary--point',
+                        ].includes(name)) &&
+                        text === '無料ポイント獲得' &&
+                        element.getAttribute('target') === '_blank' &&
+                        (href || '').startsWith('https://ow.skyflag.jp/ad/p/ow/index?');
+                    if (knownCommentNavigation || knownPointGuideNavigation) return null;
                     return {
                         index,
-                        text: (element.innerText || '').replace(/\\s+/g, ' ').trim(),
+                        text,
                         classes,
                     };
                 })
@@ -672,6 +685,20 @@ class MagapokeAdapter(SiteAdapter):
         if not isinstance(value, list):
             return []
         return [entry for entry in value if isinstance(entry, dict)]
+
+    @staticmethod
+    def _point_purchase_only(controls: list[tuple[Locator, str, set[str]]]) -> bool:
+        """Recognize the observed locked point-only panel without buying anything."""
+
+        if len(controls) != 1:
+            return False
+        _, text, classes = controls[0]
+        return bool(
+            "c-btn-icon-primary--point" in classes
+            and _WORK_TICKET_CLASS not in classes
+            and _PREMIUM_TICKET_CLASS not in classes
+            and _POINT_PURCHASE_TEXT.fullmatch(text)
+        )
 
     async def _wait_for_quota_entry_state(
         self, page: Page
@@ -738,6 +765,8 @@ class MagapokeAdapter(SiteAdapter):
             )
         if len(work) > 1 or len(premium) > 1:
             raise UnsupportedAccessStrategyError("Magapoke ticket controls are ambiguous")
+        if self._point_purchase_only(controls):
+            raise AccessResourceUnavailableError("work_ticket_unavailable")
         # A Premium-only screen is normal for a charging Work Ticket; never fallback to it.
         if len(controls) == 1 and len(premium) == 1 and not work:
             raise AccessResourceUnavailableError("work_ticket_unavailable")
@@ -748,6 +777,7 @@ class MagapokeAdapter(SiteAdapter):
 
         rows = await self._canvas_rows(page)
         if rows or await self._viewer_canvas_visible(page):
+            self._preexisting_accessible = True
             return
 
         control = work[0][0]
@@ -794,6 +824,8 @@ class MagapokeAdapter(SiteAdapter):
             )
         if len(work) > 1 or len(premium) > 1:
             raise UnsupportedAccessStrategyError("Magapoke ticket controls are ambiguous")
+        if self._point_purchase_only(controls):
+            raise AccessResourceUnavailableError("premium_ticket_unavailable")
         if len(work) + len(premium) != len(controls):
             raise UnsupportedAccessStrategyError(
                 "Magapoke Premium Ticket entry UI is unknown or ambiguous"
@@ -1140,6 +1172,8 @@ class MagapokeAdapter(SiteAdapter):
 
         self._initialization_mode = "entry_only"
         await self._initialize_access_entry(page)
+        if self._preexisting_accessible and not self._ticket_click_attempted:
+            raise AccessResourceUnavailableError("already_accessible")
 
     async def initialize(self, page: Page) -> None:
         self._initialization_mode = "full"

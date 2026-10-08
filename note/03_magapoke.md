@@ -35,6 +35,13 @@ behavior remain out of scope.
   unknown purchase controls are never clicked. A Premium-only screen during
   Work Ticket pass is `work_ticket_unavailable`; a Work-only screen during
   Premium pass is `premium_ticket_unavailable`.
+  A unique exact `Nポイントで購入` action with
+  `.c-btn-icon-primary--point` and no ticket/unknown action is also the
+  requested resource's expected unavailable skip. The known external
+  `無料ポイント獲得` guide is excluded only with its exact text, guide/free-point
+  classes, `_blank` target, and observed Skyflag offer-wall URL prefix.
+  Neither purchase nor guide is clicked; extra/duplicate/conflicting actions
+  remain fatal. This state does not prove prior manual ticket consumption.
 - Existing viewer content is entered without a ticket click. Consumption is
   reported only after the unique Work Ticket click, control disappearance, and
   viewer canvas content are all observed.
@@ -126,8 +133,9 @@ behavior remain out of scope.
 - Entry now polls at bounded intervals until canvas content is usable, visible
   access actions can be classified, or `page_change_timeout_ms` expires. A
   visible `.c-viewer` wrapper without canvas content is not treated as access.
-  Only the known comment navigation anchor classes/hrefs are excluded from
-  access-action classification. Unknown visible actions remain fail-closed.
+  Known comment navigation anchor classes/hrefs and the narrowly recognized
+  external free-point guide are excluded from access-action classification.
+  Unknown visible actions remain fail-closed.
   Ticket click and `AccessConsumption` confirmation semantics are unchanged.
   Runner allows Magapoke initialization up to five bounded page-change windows
   plus the Core grace, so readiness, ticket confirmation, and viewer setup are
@@ -859,8 +867,12 @@ sequential Locator waits; a transient Playwright/DOM probe error is recorded
 and retried within the remaining bounded window. If viewer content is already
 accessible before the requested Ticket click, the state is recorded as
 preexisting access and does not create a
-grant or resource-consumption record. Missing confirmed consumption in
-entry-only execution is reported as `AccessConsumptionUnconfirmedError`.
+grant or resource-consumption record. Magapoke entry-only execution returns
+`AccessResourceUnavailableError("already_accessible")` before Core's consumption
+check when content is observed before any ticket click, so grant-only skips to
+the next planned candidate. Missing confirmed consumption after an attempted
+ticket click remains a failure; Core's generic
+`AccessConsumptionUnconfirmedError` contract is unchanged.
 Candidate site-operation failures stop the Batch after the current candidate
 cleanup, while cooldown/resource-unavailable outcomes remain skips. Operator cancellation records
 `interrupted`, preserves only confirmed consumption, and prevents later
@@ -874,6 +886,21 @@ remain empty; normal crawl capture and navigation keep their existing native
 row requirements. AccessGuard and browser/page cleanup are bounded, and an
 initialization error remains the primary failure if cancellation occurs during
 cleanup.
+
+The unavailable/preexisting skips leave the Item pending, write no grant or
+Work Ticket cooldown, and create no content artifact. Site-contacting skips
+retain the existing `--limit` counting, page cleanup, and inter-candidate pacing.
+The Work Ticket plan still has at most one candidate per Work; continuation
+means the next planned candidate, without a new same-Work retry.
+
+On 2026-10-09 the saved diagnostics for item/source `2363`, episode
+`00002/2558`, showed a unique `60ポイントで購入` action, no ticket controls or
+viewer canvas, plus comment and external free-point guide links. This supports
+the point-only unavailable classification; it does not establish why that
+episode became unavailable. Synthetic browser fixtures cover this panel,
+preexisting immediate/delayed viewer access for both resources, and unknown UI
+rejection. Executor/CLI tests cover no persistence and continuation. No new
+live ticket consumption or fresh live Batch run was performed for this fix.
 
 ### Phase 1 runtime pacing / Batch ordering
 

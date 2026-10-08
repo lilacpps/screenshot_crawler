@@ -122,6 +122,14 @@ If cooldown permits checking but the live page does not offer a usable Work Tick
 - close the page safely,
 - apply shared inter-candidate pacing because the site was contacted.
 
+A uniquely recognized point-only purchase panel (exact `Nポイントで購入`
+label and `c-btn-icon-primary--point` class, with no ticket or unknown action)
+is also expected resource-unavailable for the requested Work/Premium Ticket.
+Known comment navigation and the exact external `無料ポイント獲得` guide link
+are not purchase choices. No point action or guide is clicked. Additional,
+duplicate, malformed, or conflicting actions remain fail-closed. This panel
+proves ticket unavailability at observation time, not prior manual consumption.
+
 ### 5.4 Work Ticket consumed
 
 Only after one Work Ticket click is confirmed by viewer availability:
@@ -192,6 +200,15 @@ This prevents a detection bug from accidentally consuming a different resource.
 ## 7. Grant-only behavior for Magapoke
 
 The shared grant-only contract is defined in `docs/ACCESS_CONTROL_AND_PACING.md`.
+
+If usable viewer content is observed before any ticket click, Magapoke
+grant-only returns the expected candidate skip `already_accessible` and
+continues with the next planned candidate. It creates no consumption timestamp,
+grant, cooldown state, content artifact, or Item completion. Normal crawling
+still captures preexisting viewer access. Unknown UI and unconfirmed entry
+after a ticket click remain failures. A site-contacting skip still counts
+toward `--limit` and uses shared pacing. Work Ticket planning still selects
+at most one candidate per Work; this skip does not add a same-Work retry.
 
 Supported Magapoke forms are intended to be:
 

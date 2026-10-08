@@ -1119,6 +1119,72 @@ async def _ready_rows():
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("resource", ["work_ticket", "premium_ticket"])
+@pytest.mark.parametrize("with_guide", [False, True])
+async def test_point_only_panel_skips_requested_ticket_without_click(
+    browser_page: Page, resource: str, with_guide: bool,
+) -> None:
+    page = browser_page
+    guide = '''
+        <a class="c-btn-icon-primary--free-point p-episode-purchase__point-guide-btn"
+           href="https://ow.skyflag.jp/ad/p/ow/index?_owp=synthetic" target="_blank">
+           無料ポイント獲得</a>
+    ''' if with_guide else ""
+    await page.set_content('''
+      <div class="p-episode-purchase">
+        <a class="c-btn-icon-primary c-btn-icon-primary--point"
+           href="javascript:void(0);">60ポイントで購入</a>
+        <a class="p-episode-comment-btn p-episode-comment-btn--pc" href="#comment">
+          コメント (-)</a>
+    ''' + guide + '''</div>
+      <script>window.clicks=0; document.querySelectorAll('a').forEach(a=>
+        a.onclick=e=>{e.preventDefault();window.clicks++;});</script>
+    ''')
+    adapter = MagapokeAdapter()
+    await adapter.configure_run(page, "quota")
+    await adapter.configure_quota_resource(page, resource)
+    with pytest.raises(AccessResourceUnavailableError, match=f"^{resource}_unavailable$"):
+        await adapter.initialize_entry_only(page)
+    assert await page.evaluate("window.clicks") == 0
+    assert adapter.get_access_consumption().consumed is False
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("resource", ["work_ticket", "premium_ticket"])
+@pytest.mark.parametrize("delayed", [False, True])
+async def test_grant_only_preexisting_viewer_skips_without_consumption(
+    browser_page: Page, resource: str, delayed: bool,
+) -> None:
+    page = browser_page
+    await page.set_content('''
+      <div class="c-viewer__comic"></div>
+      <script>
+        window.clicks=0;
+        document.addEventListener('click',()=>window.clicks++);
+        window.showViewer=()=>{
+          document.querySelector('.c-viewer__comic').innerHTML=
+            '<canvas width="10" height="10"></canvas>';
+        };
+      </script>
+    ''')
+    adapter = MagapokeAdapter()
+    adapter.page_change_timeout_ms = 1000
+    await adapter.configure_run(page, "quota")
+    await adapter.configure_quota_resource(page, resource)
+    if delayed:
+        await page.evaluate("setTimeout(window.showViewer, 100)")
+    else:
+        await page.evaluate("window.showViewer()")
+    with pytest.raises(AccessResourceUnavailableError, match="^already_accessible$"):
+        await adapter.initialize_entry_only(page)
+    assert await page.evaluate("window.clicks") == 0
+    assert adapter.get_access_consumption().consumed is False
+    debug = await adapter.collect_debug_metadata(page)
+    assert debug["magapoke_entry_confirmation"]["preexisting_accessible"] is True
+    assert debug["magapoke_entry_confirmation"]["ticket_click_attempted"] is False
+
+
+@pytest.mark.asyncio(loop_scope="module")
 @pytest.mark.parametrize(
     "markup",
     [
@@ -1128,9 +1194,34 @@ async def _ready_rows():
         ),
         '<a class="c-btn-icon-primary c-btn-icon-primary--ticket c-btn-icon-primary--premium-ticket">作品チケットで読む</a>',
         '<button class="point-purchase">ポイントで購入</button>',
+        '<a class="c-btn-icon-primary--point">購入</a>',
+        '<a class="c-btn-icon-primary--point c-btn-icon-primary--ticket">60ポイントで購入</a>',
+        (
+            '<a class="c-btn-icon-primary--point">60ポイントで購入</a>'
+            '<button>別の購入方法</button>'
+        ),
+        (
+            '<a class="c-btn-icon-primary--point">60ポイントで購入</a>'
+            '<a class="c-btn-icon-primary--free-point p-episode-purchase__point-guide-btn" '
+            'href="javascript:void(0);" target="_blank">無料ポイント獲得</a>'
+        ),
+        (
+            '<a class="c-btn-icon-primary--point">60ポイントで購入</a>'
+            '<a class="c-btn-icon-primary--point">60ポイントで購入</a>'
+        ),
+        (
+            '<a class="c-btn-icon-primary--point">60ポイントで購入</a>'
+            '<a class="c-btn-icon-primary--free-point p-episode-purchase__point-guide-btn '
+            'c-btn-icon-primary--ticket" '
+            'href="https://ow.skyflag.jp/ad/p/ow/index?_owp=synthetic" target="_blank">'
+            '無料ポイント獲得</a>'
+        ),
     ],
 )
-async def test_ambiguous_or_unknown_access_ui_fails_without_click(browser_page: Page, markup: str) -> None:
+@pytest.mark.parametrize("resource", ["work_ticket", "premium_ticket"])
+async def test_ambiguous_or_unknown_access_ui_fails_without_click(
+    browser_page: Page, markup: str, resource: str,
+) -> None:
     page = browser_page
     await page.set_content(
         '<div class="p-episode-purchase">' + markup + '</div>'
@@ -1138,7 +1229,10 @@ async def test_ambiguous_or_unknown_access_ui_fails_without_click(browser_page: 
     )
     adapter = MagapokeAdapter()
     with pytest.raises(UnsupportedAccessStrategyError):
-        await adapter._enter_with_work_ticket(page)
+        if resource == "work_ticket":
+            await adapter._enter_with_work_ticket(page)
+        else:
+            await adapter._enter_with_premium_ticket(page)
     assert await page.evaluate("window.clicks") == 0
 
 

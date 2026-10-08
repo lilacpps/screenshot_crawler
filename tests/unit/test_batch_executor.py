@@ -1373,18 +1373,28 @@ async def test_resolver_access_guard_stop_is_bounded_for_cancellation_resistant_
         )
 
 
+@pytest.mark.parametrize("grant_only", [False, True])
+@pytest.mark.parametrize("reason", ["work_ticket_unavailable", "already_accessible"])
 async def test_unavailable_and_already_accessible_do_not_record_consumption(
-    tmp_path: Path,
+    tmp_path: Path, grant_only: bool, reason: str,
 ) -> None:
     service = CatalogService(tmp_path / "unavailable.sqlite")
     candidate = _add_magapoke_candidate(service)
     executor = _make_magapoke_executor(
         service, AccessConsumption(),
-        failure=AccessResourceUnavailableError("work_ticket_unavailable"),
+        failure=AccessResourceUnavailableError(reason),
     )
-    with pytest.raises(AccessResourceUnavailableError):
-        await executor.execute_candidate(object(), candidate, now=NOW)
-    assert service.get_source(candidate.source_id).quota_started_at is None
+    with pytest.raises(AccessResourceUnavailableError, match=f"^{reason}$"):
+        if grant_only:
+            await executor.execute_grant_only_candidate(object(), candidate, now=NOW)
+        else:
+            await executor.execute_candidate(object(), candidate, now=NOW)
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at is None
+    assert source.access_granted_until is None
+    assert service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id, site="magapoke", resource="work_ticket"
+    ) is None
     assert service.get_item(candidate.item_id).status == "pending"
     assert service.list_artifacts() == []
     assert service.list_crawl_runs()[0].status == "failed"
