@@ -19,7 +19,38 @@ The previous unreviewed OBJECT-A/B/C diagnostic work is **not repository authori
 Use it only if Lead decides it is the shortest path to a concrete unanswered question.
 It is valid to retire it.
 
-## 2. Known evidence
+## 2. Preflight — synchronize the active branch with latest main
+
+Continue on the existing branch:
+
+`research/bookwalker-source-native-20261005`
+
+Do **not** create a replacement branch merely because `main` has advanced.
+
+Before any new live research or production edit:
+
+1. verify the current branch and worktree;
+2. preserve unrelated user changes;
+3. fetch `origin`;
+4. merge the current `origin/main` into this research branch;
+5. resolve conflicts without discarding the BookWalker checkpoint/runbook evidence or
+   newer `main` behavior;
+6. verify that this Stage 02 README, `CHECKPOINT.md`, and the relevant
+   `note/01_bookwalker.md` state are still present and internally consistent;
+7. only then resume Lead + Worker research.
+
+At the time this instruction was added, remote `main` was observed at
+`96fd5fff84567a4e2c644978d2b4c297174fa2ca`, while this research branch was at
+`0209a8791a3d2bc7b11b0bff8018a7c039a24b8c`. Those hashes are historical
+checkpoints, not pinned requirements: always merge the current `origin/main`.
+
+Treat the merge as a baseline synchronization, not as Stage 02 research evidence.
+Do not reinterpret unrelated `main` changes as BookWalker provenance findings.
+
+If the merge causes a material BookWalker behavior conflict, Lead should resolve that
+conflict before resuming the provenance investigation.
+
+## 4. Known evidence
 
 ### Manga 1
 
@@ -56,7 +87,7 @@ Known:
 - `3/314`: a 2048x1456 bitmap had one exact JPEG candidate, but
   crop/padding/coded-mapping/output proof was incomplete.
 
-## 3. Goal
+## 4. Goal
 
 Get to an operationally useful classification with the least additional work.
 
@@ -71,7 +102,7 @@ Stage 02 may finish with zero production changes.
 
 The goal is not complete viewer reverse engineering.
 
-## 4. Active roles
+## 5. Active roles
 
 ### Lead — GPT-6.1 Sol
 
@@ -119,7 +150,7 @@ Invoke only if Lead proposes:
 - large/shared abstraction;
 - another change with material silent-wrong-artifact risk.
 
-## 5. Resume policy after the previous checkpoint
+## 6. Resume policy after the previous checkpoint
 
 The previous `agent thread limit reached` problem no longer blocks research under this
 runbook.
@@ -139,7 +170,7 @@ Instead:
 Unreviewed OBJECT-A output may not be used as production/source-format authority.
 If not needed, leave it unused.
 
-## 6. Manga research
+## 7. Manga research
 
 Start with at most two representative ordinary-body spreads unless evidence requires
 more.
@@ -176,7 +207,7 @@ decision.
 
 Do not probe all unresolved spreads merely to increase confidence.
 
-## 7. Light-novel research
+## 8. Light-novel research
 
 Focus first on `2/314` and `3/314`.
 
@@ -197,14 +228,14 @@ A width/height swap is not itself proof of rotation.
 If the exact lineage cannot be proven with a bounded probe, D is an acceptable final
 classification.
 
-## 8. Optional manga 2
+## 9. Optional manga 2
 
 Use manga 2 only when manga 1 has produced a concrete pattern whose generalization needs
 cross-title confirmation.
 
 Do not use it for sample-size inflation.
 
-## 9. Production implementation
+## 10. Production implementation
 
 Only B cases are candidates.
 
@@ -231,7 +262,7 @@ After implementation:
 3. Worker fixes all `BLOCKING`.
 4. Reviewer confirms no `BLOCKING`.
 
-## 10. Tests
+## 11. Tests
 
 Research diagnostics only need enough checking to trust the immediate probe.
 
@@ -250,7 +281,7 @@ For production recovery logic, test:
 
 Use browser-backed Integration when the proof depends on Canvas/ImageBitmap behavior.
 
-## 11. Live verification
+## 12. Live verification
 
 If production changes are made, verify a bounded set covering:
 
@@ -271,7 +302,7 @@ Always check and restore actual viewer position.
 If no production changes are made, additional regression live runs are optional unless
 Lead needs them to support the final classification.
 
-## 12. Completion
+## 13. Completion
 
 ### No production change
 
@@ -296,7 +327,22 @@ Stage 02 completes when:
 - Critic has no unresolved challenge **only if Critic was triggered by a material risk
   condition**.
 
-## 13. Final report
+### Completion cleanup
+
+Before declaring the stage complete, Lead should also review two small repository-cleanup
+items introduced by the earlier heavier workflow:
+
+1. `.codex/config.toml`: reconsider whether
+   `max_concurrent_threads_per_session = 4` is still needed. The lightweight workflow
+   normally uses only Lead + Worker, so restoring the previous value `2` is preferred
+   unless there is a concrete reason to keep `4`.
+2. `note/01_bookwalker.md`: ensure the current-scope wording does not still describe
+   BookWalker as universally "PNG saving". The note should reflect the actual
+   source-native priority, including original/reconstructed JPEG and PNG fallback paths.
+
+These are cleanup/synchronization tasks, not reasons to prolong provenance research.
+
+## 14. Final report
 
 Report:
 
