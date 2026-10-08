@@ -47,11 +47,15 @@ partial-MCU path is implemented: manga `9/159` and `11/159` each return two
 844x1200 reconstructed JPEGs from 848x1200 coded sources; LN `3/314` and `4/314`
 return 2048x1453 JPEGs from 2048x1456 coded sources. Full coded MCU coverage,
 unique exact candidate, coefficient/quantization/selector equality and mandatory
-native pixel equality pass for every new cropped part. LN2 remains D with
-incomplete retained upstream proof. Existing LN text controls 8/10 remain A.
+native pixel equality pass for every new cropped part. The user-requested LN2
+follow-up now proves B at recovery-PoC level: its 1443x2048 reconstructed JPEG,
+722x1024 intermediate and recorded final display region all match the eager
+snapshots exactly. Automatic LN2 capture still uses the existing fail-closed
+path; this diagnostic proof has not been promoted to production.
+Existing LN text controls 8/10 remain A.
 Current cover controls use actual fallback, separately from historical A.
 Local checks pass (180 targeted tests, 46 browser-backed Integration tests,
-Ruff/diff checks). Final Reviewer confirmed PASS with no BLOCKING on code,
+Ruff/diff checks). For the implemented direct contract, final Reviewer confirmed PASS with no BLOCKING on code,
 tests, completed live evidence and synchronization. Manga2 was unnecessary.
 See the checkpoint for positions, hashes and D limits.
 

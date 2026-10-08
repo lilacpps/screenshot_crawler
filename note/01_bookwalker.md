@@ -96,7 +96,7 @@ observations.
 
 ## 1.2 Stage 02 research status (2026-10-08, complete)
 
-Stage 02 has completed its bounded live acceptance. Final production Reviewer
+Stage 02 has completed its bounded live acceptance. The direct implementation's final production Reviewer
 confirmed PASS with no remaining BLOCKING on code, tests, live evidence and
 document synchronization. The current source-native priority is original JPEG,
 verified lossless reconstructed JPEG, source/native PNG, then rendered fallback.
@@ -106,7 +106,7 @@ A small dimension difference alone is not a reason to require PNG.
 | --- | --- |
 | Manga `9/159`, `11/159` | B; each spread yields two 844x1200 JPEGs from 848x1200 coded JPEG sources |
 | LN `3/314`, `4/314` | B; 2048x1456 coded source becomes 2048x1453 JPEG |
-| LN `2/314` | D; stable native PNG fallback at 722x1024 with incomplete usable upstream mapping |
+| LN `2/314` | B at recovery-PoC level; verified 1443x2048 JPEG and exact replay to the displayed page region. Automatic capture still uses its fail-closed path |
 | LN text `8/314`, `10/314` | A; existing reconstructed JPEG path at 960x1280 remains correct |
 | Current manga cover | D; adapter returns no native artifact; actual Core rendered-canvas PNG fallback at 1386x983 |
 | Current LN cover | D; native PNG fallback at 722x1024 |
@@ -141,20 +141,23 @@ proof, gaps/duplicates, work-bound excess, or failed intrinsic comparison
 falls back for the whole spread. Cropped mappings cannot become one-hop
 upstream proofs. Existing equal-size/one-hop behavior and the kill switch remain.
 
-LN2 has a historical unique full-pixel 1448x2048 JPEG/bitmap match. Its current
-selected mapping ID does not supply usable retained tile rows, dimensions or
-source identity; the complete same-window join to selected output is missing.
-The earlier candidate filter using visible rather than coded dimensions was
-invalid negative evidence and is excluded. A stable repeat has a different PNG
-hash from the cover, but that alone is not source attribution. No no-clear,
-canvas-reset, dimension, filename, order, timing or visual-similarity heuristic
-has been introduced to bridge the missing proof.
+The subsequent user-requested LN2 follow-up joins one exact 1448x2048 coded
+JPEG, a complete 2,944-tile MCU mapping and immutable draw-time snapshots.
+It recovers a 1443x2048 JPEG by coefficient reordering and right-edge clipping;
+all coefficients/quantizers/selectors and decoded pixels match. Replaying the
+recorded 722x1024 scale and final fractional source rectangle also gives zero
+pixel differences in the displayed page destination region. This establishes
+recovery-PoC B, without changing automatic capture. A reusable runtime mapping
+retention/selection contract is still missing. See section 20.25.
+The earlier visible-dimension candidate filter, default-zero unattempted
+analysis fields and uncontrolled exploratory replays are excluded from negative
+source evidence. No attribution heuristic or color tolerance was introduced.
 
-Two manga body spreads, two changed LN openings, the unsupported LN2 case,
-two ordinary-text controls and actual cover fallbacks are sufficient for this
-bounded direct renderer contract. LN5–7 were only traversed, not newly captured.
-Further cached-canvas or cropped one-hop research is a different contract and
-is not needed for Stage 02. Manga2 was unused because no specific cross-title
+Two manga body spreads, two changed LN openings, the initially unsupported LN2 case,
+two ordinary-text controls and actual cover fallbacks were sufficient for the
+bounded direct production contract. The later focused LN2 verification is now
+also complete; it has not been promoted to cropped one-hop production support.
+LN5–7 were only traversed, not newly captured. Manga2 was unused because no specific cross-title
 hypothesis required confirmation. Every independent probe checked actual
 counters, explicitly restored its anchor and verified page 1 before closing
 its dedicated Page. Shared Crawler Chrome and existing user tabs were preserved.
@@ -2702,10 +2705,12 @@ rendered-canvas PNG fallback at `1386x983`; its original-JPEG matcher had zero
 attempts and zero candidates in the unattempted matcher diagnostics; those
 counters are not a raw-response inventory. This current observation is separate from
 the historical cover A/original-JPEG evidence. The stable current `2/314`
-LN record retained a completed-segment mapping ID but had zero segment tiles,
-no coded/visible dimensions or source identity, and was therefore rejected as
-not reconstruction-ready; this remains D rather than evidence that the
-historical bitmap candidate does not exist.
+LN record reported a completed-segment mapping ID but left its analysis fields
+at zero tiles and absent coded/visible dimensions/source identity, and was
+rejected as not reconstruction-ready. These default analysis fields do not
+establish an empty raw trace. That acceptance window was D; the later recovery
+PoC in section 20.25 supersedes the research result without changing runtime
+support.
 The production unit path and site-local documentation are synchronized. The
 implementation was checked by 180 targeted unit tests and 46 browser-backed
 integration tests, including a real-canvas nonuniform permutation with
@@ -2714,3 +2719,66 @@ documentation issue. The site-local MCU work bound rejects invalid or oversized
 mappings before expansion and allocation. Final production Reviewer also
 accepted the bounded live evidence and actual cover fallback controls with no
 remaining BLOCKING; Stage 02 is complete with the documented D limits.
+The later LN2 recovery PoC below supersedes its earlier research classification,
+while leaving this production path and its automatic-capture boundary unchanged.
+
+### 20.25 LN2 joined source-native recovery verification (2026-10-08)
+
+The user requested actual verification of the unique JPEG, tile map and final
+display chain. Only Lead and Worker performed this bounded research; no
+production code, durable test or tolerance policy changed. The accepted window
+checked actual positions `2/314 -> 1/314 -> 2/314 -> 1/314`.
+
+Three coded 1448x2048 candidates were compared with the actual retained bitmap
+source `2`. Exactly one was full-pixel exact, SHA-256
+`4dbc98638f1d8b5fcbbc2f59a4e7761a5b9af48142efc83e675b87c7229e061f`.
+The first complete source/destination 8x8 MCU bijection comprises 2,944 tiles;
+later repeated rows were excluded. The helper checks stable recorded row metadata,
+not per-row ImageBitmap object IDs. Its complete reconstructed image is separately
+checked against the actual immutable selected-canvas snapshot.
+
+The chain is coded 1448x2048 -> canvas `4` at 1443x2048 -> canvas `5` at
+722x1024 -> renderer `3`. The coded-to-visible step clips the rightmost five
+columns. The final draw uses source `(0,0,721.5,1024)` and destination
+`(605,0,695,983)`, with identity transform, alpha 1, `source-over`, no filter,
+smoothing enabled/`low`, and actual `willReadFrequently=false`. The canvas-5
+target and subsequent renderer source have both the same object ID and PNG hash
+`25ded8f423cc2797108c33c6164a355c10cfeabc85d6cbf64fd3104b28afa4b1`.
+
+The recovered 1443x2048 JPEG preserves all 8,896,512 coefficient values,
+quantization tables and component selectors `[0,1,1]`. It matches the eager
+canvas-4 snapshot at every pixel, including in the browser. The recorded scale
+to canvas `5` and draw into the final 695x983 opaque page destination likewise
+have zero differing pixels and zero maximum channel difference. The final
+comparison covers the page destination region, not UI/background pixels outside
+it; no compositor screenshot equivalence is claimed. Color tolerance was not
+needed for this sample.
+
+The JPEG is 629,786 bytes, SHA-256
+`8e16bc0541fd95970ab25486e1d5894db97510d9a7d6d8f936f337d9ab21d21f`, at
+`output/stage02-ln2-freeze-20261008/reconstructed-1443x2048.jpg`.
+Proof metadata is `output/stage02-ln2-freeze-proof-20261008.json`; its directory
+contains the full selected map, eager PNGs, coefficient readback and browser
+replay metrics. These remain ignored local research artifacts, never artwork
+fixtures. The Stage 02 checkpoint records the full acceptance and limitations.
+
+LN2 is **B for demonstrated recovery**, while automatic capture remains
+fail-closed. Production native-call recording excludes targets at or below
+1000px width, and clear-time canvas metadata can differ from draw-time size;
+the diagnostic retained actual draw-time images instead. Default-zero fields
+after an early missing-mapping rejection do not mean that no raw tiles exist.
+The instrumented probe itself interfered with the production capture lifecycle,
+so its zero-artifact result is not automatic-JPEG live acceptance. Earlier
+uninstrumented capture produced 722x1024 PNG fallback. Promoting this PoC into
+a reusable runtime contract is unimplemented.
+
+An empty-canvas comparison and a later uncontrolled 300,842-pixel-difference
+replay were discarded. Multiple diagnostic variables changed, so no isolated
+cause is asserted for that earlier difference. It does not establish a need to
+relax equality. The accepted comparison preserves recorded geometry and state
+and passes exactly. Existing production gates remain unchanged.
+
+Verification added immutable live capture, full coded MCU coverage, coefficient
+readback and browser stage replay. The prior 180 targeted and 46 browser-backed
+Integration passes remain the production baseline; they were not rerun for this
+research/documentation-only follow-up. No new Reviewer/Critic was required.

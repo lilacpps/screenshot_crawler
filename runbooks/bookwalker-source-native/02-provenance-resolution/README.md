@@ -19,18 +19,23 @@ The original D-only closure was superseded by exact recovery proof. Manga
 coded sources. LN `3/314` and `4/314` return 2048x1453 JPEGs from 2048x1456
 coded sources. Each new cropped part has complete coded MCU mapping, one exact
 upstream candidate, unchanged coefficients/quantization/selectors and mandatory
-native pixel equality. These are B. LN2 remains D because its selected mapping
-ID has no usable retained upstream tile/source proof. LN text controls 8/10
+native pixel equality. These are B. A subsequent user-requested LN2 follow-up
+also proves B at recovery-PoC level: one exact coded JPEG, a complete 2,944-tile
+MCU mapping, unchanged coefficients and pixel-exact replay through the selected
+1443x2048 canvas, 722x1024 intermediate and final display region. Automatic
+capture still lacks the reusable selected-mapping contract and retains its
+fail-closed behavior; no production change was made for this follow-up.
+LN text controls 8/10
 remain A under the existing equal-size reconstruction. Cover controls now use
 verified actual fallback; historical original-JPEG A is not a fresh run claim.
 No source-PNG (C) conclusion follows from fallback. Manga2 was not needed.
 
 Local checks pass: 180 targeted tests, 46 browser-backed Integration tests,
 Ruff and diff checks. Reviewer has no code/test/doc BLOCKING after one synthetic
-crop case was added. Final Reviewer confirmed PASS on completed live evidence
+crop case was added. For the implemented direct contract, final Reviewer confirmed PASS on completed live evidence
 and document synchronization, including current cover fallback controls.
 See [CHECKPOINT.md](CHECKPOINT.md) for actual positions, output/metadata hashes,
-remaining D boundaries and why additional research is not warranted.
+remaining production boundaries and the bounded LN2 follow-up results.
 
 The previous workflow attempted frequent Reviewer/Critic gates and hit agent-thread
 capacity. This revised Stage 02 removes those gates from ordinary research.

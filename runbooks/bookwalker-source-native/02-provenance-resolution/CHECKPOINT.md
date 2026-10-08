@@ -8,10 +8,12 @@ making clear that Reviewer/Critic are no longer required for ordinary research.
 ## Current Lead decision
 
 Required bounded live verification is complete after the user logged in again.
-Final production Reviewer confirmed PASS with no remaining BLOCKING, including
+The original production Reviewer confirmed PASS with no remaining BLOCKING, including
 the live evidence, current cover fallback controls and synchronized documents.
-Stage 02 is complete with the explicit D boundaries below. No production
-code changed during this continuation. Local validation remains 180 targeted
+Stage 02 is complete, including the subsequent user-requested LN2 verification
+described below. LN2 is now B at recovery-PoC level; automatic capture has not
+been changed to consume that proof. No production code changed during either
+this acceptance continuation or the LN2 follow-up. Local validation remains 180 targeted
 BookWalker tests and 46 browser-backed Integration tests, with Ruff/diff checks
 passing. No credentials were submitted during the successful continuation.
 
@@ -19,7 +21,7 @@ passing. No credentials were submitted during the successful continuation.
 | --- | --- | --- |
 | Manga body `9/159`, `11/159` | B | Two 844x1200 reconstructed JPEG parts per spread from 848x1200 coded sources; unique exact candidate, complete coded MCU bijection, coefficient/qtable/selector equality and mandatory native comparison at zero differing pixels for every part |
 | LN `3/314`, `4/314` | B | 2048x1456 coded source to 2048x1453 JPEG; complete 2,944-tile mapping, unique exact candidate, unchanged coefficients/quantization/selectors and native pixel equality |
-| LN `2/314` | D | Stable native PNG fallback at 722x1024; selected mapping ID exists but its usable upstream tile/source proof is unavailable (zero retained tile rows/dimensions/source identity). Historical 1448x2048 exact JPEG/bitmap evidence is not joined to this output |
+| LN `2/314` | B, recovery PoC; automatic capture remains fail-closed | Same-window unique exact 1448x2048 JPEG and complete 2,944-tile mapping recover a 1443x2048 JPEG. All coefficients/quantizers/selectors and all pixels match; recorded scaling and final renderer destination region also match exactly. Reusable production mapping retention/selection remains unsupported |
 | LN ordinary text `8/314`, `10/314` | A | Existing equal-size reconstructed JPEG path remains correct at 960x1280, with 1,200-tile proofs and unique exact input per part; optional old-path final-pixel comparison remains off |
 | Manga cover, current run | D; historical A retained | Current native adapter selection returns no artifact, with zero original-match attempts/candidates. Actual Core rendered-canvas PNG fallback was captured at 1386x983; no current original-JPEG success or source-PNG claim |
 | LN cover, current run | D; historical A retained | Current native PNG fallback at 722x1024; the historical full-resolution original-JPEG control was not reproduced, so it is not claimed as a fresh A pass |
@@ -34,7 +36,8 @@ Zero original-match counters on a path with no native selection are unattempted
 matcher diagnostics, not proof that the raw response pool contains no JPEGs.
 Current cover provenance remains D; no underlying source-format change is inferred.
 
-The recovery cause is direct, safe, completed tile mapping with separate coded
+For the implemented manga and LN3/4 cases, the recovery cause is direct, safe,
+completed tile mapping with separate coded
 S and visible V dimensions, not a content label or page number. The raw exact
 JPEG is a scrambled recovery input. Reordered coefficients plus rightmost four
 columns (manga) or bottom three rows (LN) of visible-frame clipping reproduce
@@ -44,12 +47,12 @@ New cropped output always requires available, dimension-equal intrinsic browser
 pixel comparison even when the optional older-path flag is off. Rotation is
 not inferred from dimensions; unsafe state and unsupported lineage fail closed.
 
-Additional research is no longer warranted for this stage. Two representative
-manga body spreads, two changed LN opening pages, one unsupported opening and
-two ordinary-text controls cover the bounded contract. LN2 and current covers
-would require a different retained upstream/selection proof, not a looser
-size/filename/timing/similarity rule. Expanding into cached-canvas/no-clear or
-cropped one-hop recovery is outside this proven direct contract. Full viewer
+The original acceptance scope covered the bounded direct production contract.
+The later user-requested LN2 follow-up supplies a separate exact recovery PoC,
+without extending that production contract. Automatic LN2 capture and current
+covers still need usable runtime retention/selection proof, not a looser
+size/filename/timing/similarity rule. Cached-canvas/no-clear or cropped one-hop
+production recovery remains outside the implemented direct contract. Full viewer
 reverse engineering and all-seven-spread sampling are unnecessary. LN `5/314`
 through `7/314` were not captured as new samples and retain their historical
 D status; traversal is not capture evidence. Manga 2 was unused because no
@@ -70,6 +73,91 @@ preserving pending changes and unrelated `debug.log`. This is baseline sync,
 not provenance evidence. The earlier CDP/login access failures were resolved
 by the user's Chrome restart and subsequent intended-account login. Existing
 user tabs and remote Chrome were preserved; only Worker drove the viewer.
+
+## User-requested LN2 joined verification (2026-10-08)
+
+This follow-up answers whether the unique exact JPEG, its complete tile map and
+the final displayed page can be joined and reconstructed, rather than treating
+the earlier missing production mapping as proof of an unsupported source format.
+Lead fetched and merged current `origin/main` again (already up to date at
+`96fd5fff84567a4e2c644978d2b4c297174fa2ca`); this is baseline synchronization.
+Only Lead and Worker were active. No production/test contract was changed, so
+no new Reviewer/Critic gate was needed.
+
+The accepted immutable window was `2/314 -> verified 1/314 -> 2/314 -> 1/314`.
+The candidate pool had three 1448x2048 JPEGs. Exactly one matched the retained
+ImageBitmap source `2` at every pixel: SHA-256
+`4dbc98638f1d8b5fcbbc2f59a4e7761a5b9af48142efc83e675b87c7229e061f`.
+The other two differed at 2,963,835 and 2,964,990 pixels. Full source/destination
+8x8 MCU occupancy identified the first complete 2,944-tile epoch; later repeated
+rows in the capped diagnostic buffer were excluded. Per-row ImageBitmap object
+IDs were not retained by this helper: its row identity check is recorded metadata
+equality, not a reusable object-identity contract. Correctness of the recovered
+artifact is additionally established by full-pixel equality with the actual eager
+selected canvas snapshot.
+
+The observed chain is coded 1448x2048 -> canvas `4` at 1443x2048 (rightmost
+five columns clipped) -> canvas `5` at 722x1024 -> renderer canvas `3`.
+The last draw uses source rectangle `(0,0,721.5,1024)` and destination
+`(605,0,695,983)`. Recorded transforms are identity, alpha is 1, composition
+is `source-over`, filter is `none`, smoothing is enabled/`low`, and the actual
+context has `willReadFrequently=false`. No rotation, left/top crop or added
+padding was inferred. The two canvas-5 snapshots have the same object ID and
+identical encoded PNG SHA-256
+`25ded8f423cc2797108c33c6164a355c10cfeabc85d6cbf64fd3104b28afa4b1`.
+
+| Verification | Result |
+| --- | --- |
+| JPEG DCT reorder/readback | All 8,896,512 coefficient values, quantization tables and component selectors `[0,1,1]` preserved; zero mismatches |
+| Reconstructed 1443x2048 JPEG vs eager canvas-4 snapshot | Zero differing pixels in both offline decode and intrinsic browser comparison |
+| Reconstructed JPEG through recorded scale vs eager 722x1024 canvas-5 snapshot | Zero differing pixels |
+| Canvas-5 pixels through recorded fractional source rectangle vs final renderer destination | All 695x983 destination-region pixels match; zero difference |
+
+The final comparison covers the recorded opaque page destination region, not
+the entire 1904x985 UI canvas: its pre-draw background was not retained. This
+is an intrinsic canvas-pixel comparison, not a CSS/compositor screenshot claim.
+The verified stages join by equal intermediate pixels and canvas-5 identity.
+
+The recovered JPEG is 629,786 bytes, SHA-256
+`8e16bc0541fd95970ab25486e1d5894db97510d9a7d6d8f936f337d9ab21d21f`.
+Artifacts remain ignored local research output, not committed artwork fixtures:
+
+- `output/stage02-ln2-freeze-20261008/reconstructed-1443x2048.jpg`
+- `output/stage02-ln2-freeze-20261008/tile-map-epoch-01.json`
+- `output/stage02-ln2-freeze-20261008/offline-dct-comparison.json`
+- `output/stage02-ln2-freeze-20261008/browser-replay-comparison.json`
+- `output/stage02-ln2-freeze-proof-20261008.json`
+
+The compact proof metadata SHA-256 is
+`d6348008f1500a5b054257300e364572b52354bfbfaf64aa6d66f3d0af9b254e`.
+
+An earlier empty-canvas comparison and an uncontrolled exploratory replay
+reporting 300,842 differing pixels are excluded. Epoch, snapshot handling and
+context settings were corrected together; no isolated cause is claimed for
+that exploratory difference. It is not evidence for a necessary color tolerance.
+The accepted reconstruction and recorded rendering stages match exactly, so
+no tolerance or fail-closed gate was relaxed.
+
+LN2 is therefore **B for demonstrated source-native recovery**. The existing
+automatic collector still cannot supply the reusable selected-mapping proof;
+earlier uninstrumented capture used 722x1024 PNG fallback. The diagnostic wrapper
+also interfered with capture lifecycle and returned zero artifacts, so its
+production-control result is not live acceptance of automatic JPEG output.
+Default-zero analysis fields on an early identity rejection are unattempted
+diagnostics, not proof that no completed tile records exist. Production native
+recording skips targets at or below 1000px width, and clear-time canvas metadata
+can differ from draw-time dimensions; the PoC explicitly retained draw-time
+snapshots instead of inferring a join from those stale/default fields.
+
+This completes the requested bounded verification. No new full-book sampling,
+manga-2 probe, automatic-save implementation, or tolerance policy was needed.
+The earlier 180 targeted / 46 browser-backed Integration passes remain the
+production baseline; this follow-up adds live immutable capture, coefficient
+readback and browser replay evidence only. Full suite and production regression
+tests were not repeated because production and durable tests were unchanged.
+Lead independently rechecked strict JSON, artifact hashes, recorded positions,
+all 2,944 tiles' full coded MCU bijection and all four zero-difference browser
+comparison results; these checks and `git diff --check` passed.
 
 ## Final bounded live evidence (2026-10-08)
 
@@ -358,7 +446,7 @@ rewound through `2/314` and verified `1/314`. Login is valid; no credential or
 resource operation was needed. No target lineage is claimed from the access
 checks. LN2/manga bounded provenance research resumes from the verified baseline.
 
-### LN `2/314` bounded continuation
+### LN `2/314` bounded continuation (historical; superseded by joined verification above)
 
 Correct shared-CDP probes verified actual entry `2/314`, explicit anchor
 `1/314`, target `2/314`, and restoration to `1/314` in successful runs.
@@ -382,9 +470,10 @@ Correct shared-CDP probes verified actual entry `2/314`, explicit anchor
   Neither failure is added to provenance D evidence. No login or resource
   switch was attempted.
 
-LN2 remains **D** for supported recovery: the complete mapping and candidate
-identity observations have not yet been joined in one verified recovery window,
-and no exact candidate-to-native reconstruction is claimed. Production does
+At this checkpoint LN2 remained **D** for supported recovery: the complete mapping
+and candidate identity observations had not been joined in one verified recovery
+window. The later joined verification above establishes exact recovery-PoC B.
+Production does
 not infer an upstream mapping or add an unobserved canvas-reset recovery path.
 
 ### Manga `9/159` — corrected-window B proof
