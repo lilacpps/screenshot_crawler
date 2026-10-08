@@ -12,6 +12,13 @@ Latest published checkpoint before this workflow revision:
 
 Production capture code is still unchanged.
 
+Current execution status (2026-10-08): **INCOMPLETE / ACCESS PRECHECK BLOCKED**.
+The main-sync preflight below has completed for this continuation. Fresh
+provenance probes remain pending: neither target exposed an owned reader control
+after the normal login helper ran. See [CHECKPOINT.md](CHECKPOINT.md) for the
+baseline, access-only observations, and exact next question. An inaccessible
+viewer is not evidence that its source is D, and Stage 02 is not closed.
+
 The previous workflow attempted frequent Reviewer/Critic gates and hit agent-thread
 capacity. This revised Stage 02 removes those gates from ordinary research.
 

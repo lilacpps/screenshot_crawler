@@ -4,18 +4,20 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-10-06
+最終同期: 2026-10-08
 
 ## 1. 目的と現在のscope
 
-BookWalkerの商品ページまたはviewer URLから、現在コンテンツの本文だけを順番にPNG保存する。
+BookWalkerの商品ページまたはviewer URLから、現在コンテンツの本文だけを読書順で保存する。
+優先順位はoriginal JPEG、検証済みlossless reconstructed JPEG、source/native pixelsのPNG、
+rendered-canvas PNG fallbackである。PNG出力だけでは配信sourceがPNGだったとは判定しない。
 
 現在対応している主な挙動:
 
 - 商品ページからreader候補を見つけてviewerへ移動
 - Canvas本文取得
 - 単ページ / 横長ページ / 見開き
-- 見開きを右→左の読書順で個別PNG化
+- 見開きを右→左の読書順で個別artifact化
 - loading待ちとbounded retry
 - 最終本文を保存した後のBookWalker logo等を保存しない
 - NEXT_CONTENTをcaptureせず停止
@@ -92,15 +94,29 @@ ordinary research is Lead + Worker only, Reviewer is change-driven, and Critic
 is risk-driven. No production implementation has been approved from these
 observations.
 
-## 1.2 Stage 02 current research status (2026-10-06, incomplete)
+## 1.2 Stage 02 current research status (2026-10-08, incomplete / access precheck blocked)
 
 Production capture code and its source-native priority remain unchanged.
 No new B/C classification or recovery rule has been approved. The latest bounded
 manga probe (R5) verified the normal native-canvas lineage at `9/159`, but did
 not establish exact encoded-source attribution, complete pixel coverage, or
 JPEG reconstruction proof. Its cover capture used rendered fallback and is
-not a fresh original-JPEG regression pass. No new light-novel live probe has
-completed in Stage 02.
+not a fresh original-JPEG regression pass. No fresh manga or light-novel
+provenance probe completed in the 2026-10-08 continuation.
+
+The active research branch was synchronized with fetched `origin/main`
+`96fd5fff84567a4e2c644978d2b4c297174fa2ca` before any access attempt. This is
+baseline synchronization, not provenance evidence. The normal login helper
+submitted configured credentials once in a dedicated new Page and observed a
+viewer destination with the login form gone; that Page was then closed. Neither
+the manga nor LN product exposed an owned reader control in the subsequent
+strict-direct precheck. The reason for the missing control is unproven; these
+observations do not establish purchase entitlement or a source format. No quota
+control was clicked, and no resource consumption was reported. Actual page
+counters could not be obtained, so there is no fresh anchor/probe/restoration
+claim. The requested manga spread and LN `2/314` / `3/314` remain pending an
+accessible target viewer. Historical D classifications remain unchanged; the
+access failure is not additional D evidence.
 
 Earlier diagnostic ticket/producer controls remain unreviewed and are not
 source-format or production authority. Under the revised workflow there is no
@@ -113,7 +129,9 @@ The committed [Stage 02 checkpoint](../runbooks/bookwalker-source-native/02-prov
 records accepted observations, local artifact identities, and the revised
 resume policy. Production remains unchanged; Reviewer becomes mandatory only
 if production code is changed, and Critic is used only for material design-risk
-conditions.
+conditions. The earlier thread-capacity workaround was removed by restoring
+`.codex/config.toml`'s `max_concurrent_threads_per_session` from 4 to 2; ordinary
+research still uses only Lead + Worker.
 
 ## 2. Entry flow
 
@@ -246,7 +264,7 @@ manifestには複数target時に `part` / `parts` を記録する。
 
 最初の番号付きページが見開きの場合は表紙見開きとして扱い、通常の本文
 見開きのように `page-0001` / `page-0002` へ分割せず、draw geometryの
-外接範囲を1つのcapture targetとしてPNG保存する。複数のdraw rectangleが
+外接範囲を1つのcapture targetとしてrendered PNG fallbackで保存する。複数のdraw rectangleが
 ある場合も外側のviewer余白だけを除いた1枚に結合する。draw geometry自体が
 取れない場合は、表紙のrendered pixelから非白色領域を検出して切り出す。
 geometryとpixel boundsのどちらも取れない場合だけ、表紙artworkを推測で
@@ -403,7 +421,7 @@ alter the normal ArrowLeft/click-fallback navigation path.
 
 共通仕様は `note/00_core.md`。
 
-BookWalker captureでも保存dedupeは各PNGのSHA-256 fingerprint。
+BookWalker captureでも保存dedupeは各artifactのSHA-256 fingerprint。
 
 主guard:
 
@@ -496,7 +514,8 @@ endpoint優先順位:
 
 ## 17. Output / packaging
 
-正常 `END` / `NEXT_CONTENT` 後、Coreがmanifest記載PNGだけをZIP化する。
+正常 `END` / `NEXT_CONTENT` 後、Coreがmanifest記載artifactだけをZIP化する。
+BookWalkerの現行出力はcapture proofに応じたJPEGまたはPNGである。
 
 ```text
 output/Books/<genre>/<title>/<volume>-<author>.zip
@@ -509,7 +528,7 @@ titleはどちらの場合もlibrary directoryに残り、completion status JSON
 completion statusは `output/crawl-status/<genre>/<title>/` 配下で、ZIPと同じstemを使う。
 Work間で同じstemになる場合もstatus JSONは衝突しない。
 
-中間crawl directoryは、内容がmanifest / progress / manifest記載PNGだけの場合に限り削除する。
+中間crawl directoryは、内容がmanifest / progress / manifest記載artifactだけの場合に限り削除する。
 
 ## 18. 実サイト確認済み事項
 
