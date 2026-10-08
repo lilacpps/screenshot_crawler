@@ -50,7 +50,7 @@ Do not reinterpret unrelated `main` changes as BookWalker provenance findings.
 If the merge causes a material BookWalker behavior conflict, Lead should resolve that
 conflict before resuming the provenance investigation.
 
-## 4. Known evidence
+## 3. Known evidence
 
 ### Manga 1
 
