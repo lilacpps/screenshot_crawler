@@ -288,14 +288,48 @@ async def observe_comicdays_live_access(
     episode_id: str,
     timeout_ms: int = COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
 ) -> ComicDaysLiveAccessState:
-    """Validate one complete listing and return the target's current state."""
+    """Observe the target without refreshing a complete work listing.
+
+    A present Work Ticket object is sufficient to use the target-local
+    GraphQL/DOM contract. A complete listing is retained only for the explicit
+    ``ticket: null`` path, where the official free-only feed is the authority
+    for allowing a direct free target.
+    """
 
     if not str(series_id).isdigit() or not str(episode_id).isdigit():
         raise ComicDaysLiveAccessError("Comic DAYS access identity is not numeric")
+    if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
+        raise ValueError("timeout_ms must be a positive integer")
     current = parse_comicdays_episode_url(str(page.url))
     if current != str(episode_id):
         raise ComicDaysLiveAccessError("Comic DAYS page URL did not match the target episode")
-    listing = await observe_comicdays_listing(page, series_id=series_id, episode_id=episode_id, timeout_ms=timeout_ms)
+    deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
+    remaining = _remaining_ms(deadline)
+    if remaining <= 0:
+        raise ComicDaysLiveAccessError("Comic DAYS access observation exceeded its time bound")
+    ticket = await observe_comicdays_ticket(
+        page, str(series_id), timeout_ms=remaining
+    )
+    if ticket.ticket_present:
+        return await _observe_target_access_after_ticket(
+            page,
+            series_id=str(series_id),
+            episode_id=str(episode_id),
+            ticket_state=ticket,
+            deadline=deadline,
+            trace_sink=None,
+        )
+    remaining = _remaining_ms(deadline)
+    if remaining <= 0:
+        raise ComicDaysLiveAccessError("Comic DAYS access observation exceeded its time bound")
+    listing = await _observe_comicdays_listing(
+        page,
+        series_id=str(series_id),
+        episode_id=str(episode_id),
+        timeout_ms=remaining,
+        ticket_state=ticket,
+        deadline=deadline,
+    )
     try:
         row = next(row for row in listing.rows if str(row.get("readable_product_id")) == str(episode_id))
         mode, expiry, observed = comicdays_access_observation(
@@ -535,52 +569,39 @@ def _classify_comicdays_target_dom(
     )
 
 
-async def observe_comicdays_target_access(
+async def _observe_target_access_after_ticket(
     page: Page,
     *,
     series_id: str,
     episode_id: str,
-    timeout_ms: int = COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
+    ticket_state: ComicDaysTicketState,
+    deadline: float,
     trace_sink: TraceSink | None = None,
 ) -> ComicDaysLiveAccessState:
-    """Observe only the selected episode and work-level ticket state.
-
-    Discovery owns the complete listing.  Batch entry intentionally reads the
-    target page's identity, contract metadata, access controls, and the small
-    work-ticket GraphQL state without refreshing the whole episode listing.
-    """
-
-    if not str(series_id).isdigit() or not str(episode_id).isdigit():
-        raise ComicDaysLiveAccessError("Comic DAYS target identity is not numeric")
-    if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
-        raise ValueError("timeout_ms must be a positive integer")
-    current = parse_comicdays_episode_url(str(page.url))
-    if current != str(episode_id):
-        raise ComicDaysTargetIdentityMismatch(
-            "Comic DAYS page URL did not match the target episode"
+    if not ticket_state.ticket_present:
+        raise ComicDaysLiveAccessError(
+            "Comic DAYS target access requires ticket state"
         )
-    deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
+    loop = asyncio.get_running_loop()
+    stabilization_deadline = min(
+        deadline,
+        loop.time() + COMICDAYS_TARGET_ACCESS_STABILIZATION_MS / 1000,
+    )
+    stabilization_attempt = 0
+    last_state: ComicDaysLiveAccessState | None = None
     try:
-        # The ticket GraphQL call can trigger a first-party route/viewer swap.
-        # Never retain counts or Locators across that await.  The atomic DOM
-        # snapshot below is evaluated after GraphQL and has its own bounded
-        # timeout, so a removed scope cannot consume Playwright's default
-        # 30-second Locator wait.
-        ticket_state = await observe_comicdays_ticket(
-            page, str(series_id), timeout_ms=timeout_ms, trace_sink=trace_sink
-        )
-        if not ticket_state.ticket_present:
-            raise ComicDaysLiveAccessError(
-                "Comic DAYS target access requires ticket state"
-            )
-        loop = asyncio.get_running_loop()
-        stabilization_deadline = min(
-            deadline,
-            loop.time() + COMICDAYS_TARGET_ACCESS_STABILIZATION_MS / 1000,
-        )
-        stabilization_attempt = 0
-        last_state: ComicDaysLiveAccessState | None = None
         while True:
+            if last_state is not None and loop.time() >= stabilization_deadline:
+                _emit_trace(
+                    trace_sink,
+                    "access_stabilization",
+                    {
+                        "attempt": stabilization_attempt,
+                        "status": "timeout",
+                        "reason": "hidden_ticket_control",
+                    },
+                )
+                return last_state
             remaining = _remaining_ms(deadline)
             if remaining <= 0:
                 if last_state is not None:
@@ -594,7 +615,9 @@ async def observe_comicdays_target_access(
                         },
                     )
                     return last_state
-                raise ComicDaysLiveAccessError("Comic DAYS target access observation timed out")
+                raise ComicDaysLiveAccessError(
+                    "Comic DAYS target access observation timed out"
+                )
             dom = await _observe_target_dom_snapshot(page, timeout_ms=remaining)
             dom_trace = _dom_trace_metadata(dom, expected_episode_id=str(episode_id))
             dom_trace["stabilization_attempt"] = stabilization_attempt
@@ -651,21 +674,72 @@ async def observe_comicdays_target_access(
                 min(COMICDAYS_TARGET_ACCESS_POLL_MS, remaining_stabilization) / 1000
             )
     except (PlaywrightTimeoutError, TimeoutError) as exc:
-        raise ComicDaysLiveAccessError("Comic DAYS target access observation timed out") from exc
+        raise ComicDaysLiveAccessError(
+            "Comic DAYS target access observation timed out"
+        ) from exc
 
 
-async def observe_comicdays_listing(
+async def observe_comicdays_target_access(
     page: Page,
     *,
     series_id: str,
     episode_id: str,
     timeout_ms: int = COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
+    trace_sink: TraceSink | None = None,
+) -> ComicDaysLiveAccessState:
+    """Observe only the selected episode and work-level ticket state.
+
+    Discovery owns the complete listing.  Batch entry intentionally reads the
+    target page's identity, contract metadata, access controls, and the small
+    work-ticket GraphQL state without refreshing the whole episode listing.
+    """
+
+    if not str(series_id).isdigit() or not str(episode_id).isdigit():
+        raise ComicDaysLiveAccessError("Comic DAYS target identity is not numeric")
+    if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
+        raise ValueError("timeout_ms must be a positive integer")
+    current = parse_comicdays_episode_url(str(page.url))
+    if current != str(episode_id):
+        raise ComicDaysTargetIdentityMismatch(
+            "Comic DAYS page URL did not match the target episode"
+        )
+    deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
+    remaining = _remaining_ms(deadline)
+    if remaining <= 0:
+        raise ComicDaysLiveAccessError("Comic DAYS target access observation timed out")
+    # The ticket GraphQL call can trigger a first-party route/viewer swap.
+    # Never retain counts or Locators across that await.  The atomic DOM
+    # snapshot below is evaluated after GraphQL and has its own bounded
+    # timeout, so a removed scope cannot consume Playwright's default
+    # 30-second Locator wait.
+    ticket_state = await observe_comicdays_ticket(
+        page, str(series_id), timeout_ms=remaining, trace_sink=trace_sink
+    )
+    return await _observe_target_access_after_ticket(
+        page,
+        series_id=str(series_id),
+        episode_id=str(episode_id),
+        ticket_state=ticket_state,
+        deadline=deadline,
+        trace_sink=trace_sink,
+    )
+
+
+async def _observe_comicdays_listing(
+    page: Page,
+    *,
+    series_id: str,
+    episode_id: str,
+    timeout_ms: int = COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
+    ticket_state: ComicDaysTicketState | None = None,
+    deadline: float | None = None,
 ) -> ComicDaysListingState:
-    """Validate one complete listing and one work-level ticket query."""
+    """Validate one complete listing, optionally reusing its ticket state."""
 
     if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
         raise ValueError("timeout_ms must be a positive integer")
-    deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
+    if deadline is None:
+        deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
     current = parse_comicdays_episode_url(str(page.url))
     if current != str(episode_id):
         raise ComicDaysLiveAccessError("Comic DAYS page URL did not match the target episode")
@@ -700,10 +774,29 @@ async def observe_comicdays_listing(
     remaining = _remaining_ms(deadline)
     if remaining <= 0:
         raise ComicDaysLiveAccessError("Comic DAYS listing observation exceeded its time bound")
-    ticket = await _bounded_call(
-        observe_comicdays_ticket(page, str(series_id), timeout_ms=remaining), deadline
-    )
+    ticket = ticket_state
+    if ticket is None:
+        ticket = await _bounded_call(
+            observe_comicdays_ticket(page, str(series_id), timeout_ms=remaining), deadline
+        )
     return ComicDaysListingState(str(series_id), tuple(rows), frozenset(free_ids), ticket)
+
+
+async def observe_comicdays_listing(
+    page: Page,
+    *,
+    series_id: str,
+    episode_id: str,
+    timeout_ms: int = COMICDAYS_LIVE_ACCESS_TIMEOUT_MS,
+) -> ComicDaysListingState:
+    """Validate one complete listing and one work-level ticket query."""
+
+    return await _observe_comicdays_listing(
+        page,
+        series_id=series_id,
+        episode_id=episode_id,
+        timeout_ms=timeout_ms,
+    )
 
 
 def _remaining_ms(deadline: float) -> int:

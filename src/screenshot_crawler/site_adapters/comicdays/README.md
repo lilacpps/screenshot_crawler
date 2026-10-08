@@ -21,6 +21,18 @@ authoritative `free_only=1` feed and its readable-product row is a coherent
 free row. Missing fields and malformed Ticket values still fail closed. The
 target-local quota and post-click consumption path requires a Ticket object;
 `null` is never treated as `isCharged=false`.
+For normal Batch/direct initialization, a present Ticket object is followed by
+the target-local GraphQL and viewer-DOM contract; the adapter does not refresh
+the complete work listing again. Only the explicit `ticket: null` branch
+performs the bounded full Atom, free-only Atom, pagination, and readable-product
+checks needed to prove that a direct target is free. This keeps free access
+fail-closed while avoiding transient full-feed/pagination snapshot mismatches
+on long or actively changing works.
+
+The shared-CDP direct verification on 2026-10-08 for item `21804` completed
+from the initial page through packaging. It used the target-local Ticket/DOM
+path instead of the whole-work listing preflight and did not perform a Ticket
+purchase operation.
 
 The verified viewer mode is the horizontal RTL canvas viewer. Active pages are
 selected from the runtime slider and an explicit body-area layout, rather than

@@ -25,6 +25,18 @@ passes the coherent free readable-product checks. A missing field, malformed
 Ticket value, or Ticket-less non-free target remains fail-closed. Target-local
 quota and post-click consumption observations still require a Ticket object,
 so an absent Ticket can never be interpreted as an uncharged or consumed Ticket.
+For normal Batch/direct initialization, a present Ticket object is now followed
+by the target-local GraphQL and viewer-DOM contract without refreshing the
+complete work listing. Only the explicit `ticket: null` branch repeats the
+bounded full Atom, free-only Atom, pagination, and readable-product checks
+needed to prove a direct target is free. This preserves the free-only
+fail-closed authority while avoiding transient full-feed/pagination snapshot
+mismatches on long or actively changing works.
+
+The shared-CDP direct verification on 2026-10-08 for item `21804` completed
+from the initial page through packaging. The adapter used the target-local
+Ticket/DOM path and did not stop on the previously observed full-listing
+observation timeout; the run completed without a Ticket purchase operation.
 
 The viewer adapter supports the observed horizontal RTL canvas viewer. It
 selects only the current slider spread's logically expected canvas-bearing page

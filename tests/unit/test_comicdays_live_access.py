@@ -185,6 +185,56 @@ async def test_live_access_allows_absent_ticket_only_for_free_feed_target() -> N
 
 
 @pytest.mark.asyncio
+async def test_live_access_uses_target_contract_when_ticket_is_present() -> None:
+    class TargetRequest:
+        async def get(self, *_args: object, **_kwargs: object) -> _Response:
+            raise AssertionError("target access must not refresh the whole listing")
+
+        async def post(self, *_args: object, **_kwargs: object) -> _Response:
+            return _Response(
+                {
+                    "data": {
+                        "userAccount": {"eventTicketCount": 0},
+                        "series": {
+                            "ticket": {
+                                "isCharged": True,
+                                "chargedAt": "1999-01-01T00:00:00Z",
+                            }
+                        },
+                    }
+                }
+            )
+
+    class TargetPage:
+        url = "https://comic-days.com/episode/1"
+        request = TargetRequest()
+
+        async def evaluate(self, _script: str) -> dict[str, object]:
+            return {
+                "url": self.url,
+                "private": [],
+                "normal": [
+                    {
+                        "json": "https://comic-days.com/episode/1.json",
+                        "visible": True,
+                    }
+                ],
+                "aggregate": [{"aggregate_id": "9"}],
+                "contract": [{"aggregate_id": "9", "rental_term": "259200"}],
+                "ticket": [],
+                "purchase": [],
+            }
+
+    observed = await observe_comicdays_live_access(
+        TargetPage(), series_id="9", episode_id="1"
+    )
+
+    assert observed.access_mode == "free"
+    assert observed.normal_viewer_count == 1
+    assert observed.ticket.ticket_present is True
+
+
+@pytest.mark.asyncio
 async def test_live_access_rejects_absent_ticket_for_nonfree_target() -> None:
     page = _page()
     page.request._gets = iter(  # type: ignore[attr-defined]
