@@ -43,9 +43,12 @@ Current checkpoint:
 
 Current execution status (2026-10-08): **COMPLETE / NO PRODUCTION CHANGE**.
 The active research branch contains the fetched current `origin/main` baseline.
-Fresh manga `9/159` and LN `2/314` / `3/314` remain D at the safe page-artifact
-boundary. Exact upstream JPEGs were established for manga and LN `3/314`, but
-complete output/reconstruction proof was not. See the checkpoint for limits.
+Fresh manga `9/159` and LN `2/314` / `3/314` remain D at the supported JPEG-recovery
+boundary. A subsequent LN `3/314` image audit proved that reordering its unique
+exact upstream JPEG and clipping the reconstructed bottom three rows reproduces
+the native output pixel-for-pixel. The remaining LN `3/314` question is safe
+coefficient-level JPEG recovery, not source attribution or unknown crop position.
+See the checkpoint for the bounded evidence and limits.
 
 Goals:
 

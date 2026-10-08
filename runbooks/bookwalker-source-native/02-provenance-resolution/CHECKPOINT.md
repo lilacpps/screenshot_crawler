@@ -12,20 +12,22 @@ making clear that Reviewer/Critic are no longer required for ordinary research.
 | Manga cover | A, historical control | No fresh cover regression is claimed |
 | Manga ordinary body, representative `9/159` | D | Two exact upstream tile JPEGs; complete selected-visible-output and 848-to-844 edge/crop/padding/reconstruction proof missing |
 | LN `2/314` | D | Native 1443x2048 output obtained, but exact selected-canvas to upstream bitmap identity/geometry missing |
-| LN `3/314` | D | Exact upstream JPEG and completed mapping; 2048x1456 to 2048x1453 edge/crop/padding and complete output proof missing |
+| LN `3/314` | D, unsupported JPEG recovery | Unique exact upstream JPEG; tile reordering plus bottom-three-row clipping reproduces native output exactly; coefficient-level JPEG recovery unverified |
 
 No B artifact recovery contract or C/source-PNG case was established. The
 source-native priority and all production proof/fail-closed gates remain
 unchanged. Exact upstream JPEG/bitmap equality alone is not a finished-page
 artifact proof, and PNG output alone is not source-PNG evidence.
 
-Research stops here because the operational crawler decision is already safe:
-retain native/rendered fallback. Continuing would require new proof of
-partial-edge tile coverage, encoded-grid/padding correspondence and safe
-reconstruction, or a broader trace contract for the unjoined LN source canvas.
-The current observations do not justify that contract change. Repeating more
-spreads, fixing a transition box alone, or adding another title would not supply
-those missing proofs. Manga 2 was not used. Uninvestigated LN opening pages
+The initial closure retained native/rendered fallback while edge/output proof
+was missing. The user's size/crop question then prompted the single-page image
+audit below, which resolved that boundary for LN `3/314`. That case is now a
+concrete recovery candidate, but no coefficient-level JPEG artifact has been
+verified and no production contract is changed. Further live samples are not
+needed to answer this image question; any next LN `3/314` work can start with
+offline JPEG recovery from the proven mapping. Manga's missing proof and LN
+`2/314`'s unjoined source canvas remain separate questions. Manga 2 was not used.
+Uninvestigated LN opening pages
 `4/314` through `7/314` retain their historical D status without new claims.
 
 Only Lead + Worker participated. Reviewer was not needed because no production
@@ -34,7 +36,8 @@ was weakened, no heuristic attribution was adopted, and no cross-title or
 shared abstraction was proposed.
 
 Final verification: metadata-only live research at manga `9/159` (R6/R7), LN
-`2/314` and `3/314`; verified restoration to `1/159` or `1/314` after each
+`2/314` and `3/314`, followed by one LN `3/314` image audit saved only under
+ignored `output/`; verified restoration to `1/159` or `1/314` after each
 independent probe. Production regression/END/full-book live runs were not
 required or claimed. Cleanup retains thread limit 2 and the corrected note
 scope. Final local artifact identities and checks are recorded below.
@@ -165,11 +168,63 @@ through `2/314` to observe only `3/314`, then returned via `2/314` and verified
   Eight JPEG candidates had zero exact matches against this native PNG, a
   separate comparison from the successful upstream bitmap match.
 
-Lead classification: **D**. Selected mapping and unique upstream JPEG identity
-are established. Full tile-edge coverage, crop versus padding semantics, coded
-mapping/reconstruction safety and complete candidate-to-visible-output proof
-are not. Identity transforms do not resolve that boundary; no direct original
-JPEG, reconstructed JPEG or source-PNG claim is adopted from it.
+Initial R7 Lead classification: **D**. Selected mapping and unique upstream JPEG
+identity were established, while edge coverage and complete output proof were
+still missing. The image audit below supersedes those missing-output claims;
+safe encoded JPEG recovery remains unverified. No source-PNG claim is adopted.
+
+## Follow-up image audit — LN `3/314`
+
+The user's question about the small dimension difference warranted one direct
+image comparison instead of treating the initial stopping decision as final.
+The branch was fetched and merged with current `origin/main` again (already
+up to date at the baseline above). This synchronization is not research evidence.
+Worker observed actual entry `2/314`, explicitly verified anchor `1/314`, visited
+only target `3/314` via `2/314`, and restored/verified `1/314` afterward.
+
+- Renderer selected source canvas 4 (2048x1453), full source rectangle,
+  destination `(431,0,1999,1416)`, mapping `mapping-5896`. The upstream JPEG
+  hash is `c6eade9c2c94d7dd7c47eb630a08765e88e1c4765f848400ac116cd11b6e0555`,
+  matching the exact R7 candidate. In this new window, full-pixel comparison
+  against the retained selected-mapping source object 7 was available for all
+  eight candidates and again found exactly one match. IDs are window-local.
+- Direct inspection of the raw 2048x1456 JPEG shows scrambled image tiles, not
+  a readable page. Cropping it at vertical offsets 0, 1, 2 or 3 does not match
+  the native output; approximately 99.5% of pixels differ in each comparison.
+- The recorded 2,944 source rectangles cover the full encoded image. Tiles are
+  32x32 or 32x16 and are copied without tile resizing/rotation. Replaying the
+  exact source/destination rectangles into a 2048x1453 image fills every pixel
+  once, with no holes or overlaps. It matches the native PNG at **zero differing
+  pixels**. This is diagnostic RGB reconstruction, not a JPEG re-encode or a
+  supported production recovery implementation.
+- Clipping occurs at the **reconstructed page's bottom edge**, zero-based rows
+  1453–1455 across its full 2048-pixel width. Sixty-four destination tiles cross
+  that boundary. Because the JPEG is scrambled, their omitted source fragments
+  are scattered through the raw JPEG; this is not simply its bottom-three-row
+  crop. The visible output has no missing coverage or inserted padding.
+- The JPEG has RGB 4:4:4 sampling. Every source/destination tile coordinate and
+  dimension is divisible by eight. This is promising for coefficient reordering,
+  but does not itself verify a recovered JPEG, its quantization/layout, or the
+  final partial-MCU crop. The production uniform-tile/same-dimension contract
+  has not been broadened.
+
+Local evidence: `output/stage02-ln3-image-audit-20261008/audit.json`, SHA-256
+`64443bbe278980c443309eeaf46ef62f1a662dc1bd846b0fb3770e264912e697`.
+Raw JPEG, native PNG, complete selected tile metadata, full 2048x1456 RGB
+reconstruction and bottom-edge strip are ignored research artifacts in that
+directory. Image hashes and source-object comparison metadata are in the audit.
+PASS: reconstruction/coverage assertions, restored anchor, image hashes,
+unrelated `debug.log` hash preservation and `git diff --check`. No production
+or test code changed; Unit/Integration/full pytest were not run for this follow-up.
+
+Thus the uniquely attributed JPEG is the right **input for recovery**, but
+saving its original bytes directly would save the scrambled transport image.
+The current fallback is an implementation-support boundary, not evidence that
+this page's source format is PNG or that a three-pixel difference makes JPEG
+recovery inherently invalid. A next recovery investigation should preserve the
+JPEG coefficients while handling the observed nonuniform tiles and final crop;
+it must verify the recovered artifact before adopting B. No production gate was
+weakened, and no Reviewer/Critic was required for this image-only research.
 
 ## Final checks and artifact identities
 

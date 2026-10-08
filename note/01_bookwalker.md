@@ -138,15 +138,33 @@ exact upstream JPEG among eight available candidates. The trace had no reported
 overflow/eviction, and exact compact fetch returned the requested mapping.
 Production returned a 2048x1453 native PNG and rejected reconstruction because
 the ImageBitmap dimensions differ from the source canvas. None of the eight
-candidates exactly matched that native PNG. Edge coverage, crop/padding/coded
-mapping and complete output proof remain unproven; LN `3/314` remains D.
+candidates exactly matched that native PNG. A subsequent one-page image audit
+resolved the edge/output question: the raw JPEG is visibly scrambled, and the
+recorded 2,944 tile copies (32x32 or 32x16) plus clipping the reconstructed
+bottom three rows reproduce the 2048x1453 native output with zero differing
+pixels and no holes/overlaps. Clipping is at destination rows 1453–1455, not
+simply at the raw JPEG's bottom edge; affected source fragments are scattered.
+Worker again observed actual `2/314`, verified anchor `1/314`, visited only
+`3/314` via `2/314`, then restored/verified `1/314`. Image bytes remain only in
+ignored `output/stage02-ln3-image-audit-20261008/`.
+
+LN `3/314` remains operational D because safe coefficient-level JPEG recovery
+has not been verified, but exact source-to-native output is now proven. The
+unique exact JPEG is the correct recovery input, not a directly saveable page.
+A small dimension difference alone does not establish that PNG is the native
+format or that lossless JPEG recovery is impossible. The next bounded question
+for this case is offline coefficient reordering with nonuniform tiles and the
+final bottom crop; another live sample is unnecessary for that question. The
+observed JPEG is 4:4:4 and all tile coordinates/dimensions are 8px aligned, so
+coefficient recovery has a concrete basis to investigate without RGB re-encoding.
 
 Stage 02 is complete with operational D for representative manga body and LN
 `2/314` / `3/314`, historical A cover controls unchanged, and no B/C artifact
 contract adopted. Exact upstream JPEG matches do not justify saving scrambled
-tile JPEGs as pages. Further samples would not supply the missing edge-aware
-reconstruction/source-canvas proof, so the existing native/rendered fallback is
-retained. No production code/tests changed, and Reviewer/Critic were unnecessary.
+tile JPEGs as pages. Manga's edge/output proof and LN `2/314`'s source-canvas
+proof remain missing; LN `3/314` now has complete pixel reconstruction proof
+but needs an encoded JPEG recovery proof. The existing native/rendered fallback
+is retained. No production code/tests changed, and Reviewer/Critic were unnecessary.
 Research checks covered actual counters/anchor restoration, exact mapping and
 full-pixel comparisons where available, metadata JSON/hash consistency and diff
 checks. Production Unit/Integration/full pytest and full-book/END live regression

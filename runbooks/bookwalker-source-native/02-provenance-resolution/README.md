@@ -15,9 +15,11 @@ Production capture code is still unchanged.
 Current execution status (2026-10-08): **COMPLETE / NO PRODUCTION CHANGE**.
 The main-sync preflight completed, the user corrected login, and bounded fresh
 research finished on manga `9/159` and LN `2/314` / `3/314`. All three remain D
-at the safe artifact-recovery boundary. Manga and LN `3/314` now have unique
-exact upstream JPEG attribution, but edge/crop/padding and complete output proof
-are incomplete; LN `2/314` lacks the selected upstream mapping. No B/C recovery
+at the supported JPEG-recovery boundary. Manga and LN `3/314` have unique
+exact upstream JPEG attribution. A follow-up LN `3/314` image audit also proved
+complete pixel-exact output by tile reordering and clipping the reconstructed
+bottom three rows. Safe coefficient-level recovery is still unverified; manga's
+edge/output proof and LN `2/314`'s selected upstream mapping remain incomplete. No B/C recovery
 contract was adopted and manga 2 was unnecessary. Historical cover A controls
 remain unchanged. See [CHECKPOINT.md](CHECKPOINT.md) for final decisions, actual
 positions, evidence limits and the reason to stop. The earlier access-only
