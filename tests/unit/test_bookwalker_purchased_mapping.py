@@ -243,6 +243,173 @@ def _completed_draw(record: dict) -> dict:
     }
 
 
+def _cropped_completed_record(
+    *, visible_width: int = 36, mapping_id: str = "mapping-cropped"
+) -> dict:
+    """A small nonuniform 40px coded frame cropped to a 36px visible frame."""
+
+    tiles: list[dict] = []
+    operation = 102
+    for y in (0, 16):
+        tiles.extend(
+            [
+                {
+                    "operationIndex": operation,
+                    "source": {
+                        "sourceId": "bitmap-cropped",
+                        "constructor": "ImageBitmap",
+                        "width": 40,
+                        "height": 32,
+                    },
+                    "target": {
+                        "canvasId": "source-canvas",
+                        "width": visible_width,
+                        "height": 32,
+                    },
+                    "sourceRect": {"x": 0, "y": y, "width": 16, "height": 16},
+                    "destination": {"x": 16, "y": y, "width": 16, "height": 16},
+                    "transform": dict(IDENTITY),
+                    "globalAlpha": 1,
+                    "globalCompositeOperation": "source-over",
+                    "filter": "none",
+                },
+                {
+                    "operationIndex": operation + 1,
+                    "source": {
+                        "sourceId": "bitmap-cropped",
+                        "constructor": "ImageBitmap",
+                        "width": 40,
+                        "height": 32,
+                    },
+                    "target": {
+                        "canvasId": "source-canvas",
+                        "width": visible_width,
+                        "height": 32,
+                    },
+                    "sourceRect": {"x": 16, "y": y, "width": 16, "height": 16},
+                    "destination": {"x": 0, "y": y, "width": 16, "height": 16},
+                    "transform": dict(IDENTITY),
+                    "globalAlpha": 1,
+                    "globalCompositeOperation": "source-over",
+                    "filter": "none",
+                },
+                {
+                    "operationIndex": operation + 2,
+                    "source": {
+                        "sourceId": "bitmap-cropped",
+                        "constructor": "ImageBitmap",
+                        "width": 40,
+                        "height": 32,
+                    },
+                    "target": {
+                        "canvasId": "source-canvas",
+                        "width": visible_width,
+                        "height": 32,
+                    },
+                    "sourceRect": {"x": 32, "y": y, "width": 8, "height": 16},
+                    "destination": {"x": 32, "y": y, "width": 8, "height": 16},
+                    "transform": dict(IDENTITY),
+                    "globalAlpha": 1,
+                    "globalCompositeOperation": "source-over",
+                    "filter": "none",
+                },
+            ]
+        )
+        operation += 3
+    record = _completed_record(
+        mapping_id=mapping_id,
+        renderer_index=110,
+        clear_index=101,
+        tile_draws=tiles,
+        source_rect={"x": 0, "y": 0, "width": visible_width, "height": 32},
+        destination={"x": 0, "y": 0, "width": visible_width, "height": 32},
+        segmentExpectedTileCount=len(tiles),
+    )
+    record["rendererTarget"] = {"canvasId": "renderer", "width": 64, "height": 32}
+    record["sourceCanvas"] = {
+        "canvasId": "source-canvas",
+        "width": visible_width,
+        "height": 32,
+    }
+    record["segmentClearRectangle"] = {
+        "x": 0,
+        "y": 0,
+        "width": visible_width,
+        "height": 32,
+    }
+    record["segmentFirstTileOperationIndex"] = 102
+    record["segmentLastTileOperationIndex"] = operation - 1
+    record["sourceIds"] = ["bitmap-cropped"]
+    return record
+
+
+def test_completed_mapping_proves_nonuniform_final_mcu_crop() -> None:
+    record = _cropped_completed_record()
+
+    result = analyze_purchased_mapping(
+        {"completedMappings": [record]}, _completed_draw(record)
+    )
+
+    assert result.proven
+    assert result.mapping is not None
+    assert result.mapping.coded_dimensions == (40, 32)
+    assert result.mapping.visible_dimensions == (36, 32)
+    assert result.mapping.tile_dimensions_uniform is False
+    assert result.mapping.tile_dimension_variants == ((8, 16), (16, 16))
+
+
+@pytest.mark.parametrize("visible_width", [32, 41])
+def test_completed_mapping_rejects_crop_outside_final_mcu(visible_width: int) -> None:
+    record = _cropped_completed_record(visible_width=visible_width)
+
+    result = analyze_purchased_mapping(
+        {"completedMappings": [record]}, _completed_draw(record)
+    )
+
+    assert not result.proven
+
+
+def test_completed_mapping_rejects_excessive_mcu_work_before_expansion() -> None:
+    record = _completed_record()
+    record["rendererTarget"] = {
+        "canvasId": "renderer", "width": 8192, "height": 8192,
+    }
+    record["sourceCanvas"] = {
+        "canvasId": "source-canvas", "width": 8192, "height": 8192,
+    }
+    record["rendererSourceRect"] = {
+        "x": 0, "y": 0, "width": 8192, "height": 8192,
+    }
+    record["rendererDestination"] = {
+        "x": 0, "y": 0, "width": 8192, "height": 8192,
+    }
+    record["segmentClearRectangle"] = {
+        "x": 0, "y": 0, "width": 8192, "height": 8192,
+    }
+    record["segmentExpectedTileCount"] = 1
+    record["tileDraws"] = [
+        {
+            **record["tileDraws"][0],
+            "source": {
+                "sourceId": "bitmap-a", "constructor": "ImageBitmap",
+                "width": 8192, "height": 8192,
+            },
+            "target": {
+                "canvasId": "source-canvas", "width": 8192, "height": 8192,
+            },
+            "sourceRect": {"x": 0, "y": 0, "width": 8192, "height": 8192},
+            "destination": {"x": 0, "y": 0, "width": 8192, "height": 8192},
+        }
+    ]
+
+    result = analyze_purchased_mapping(
+        {"completedMappings": [record]}, _completed_draw(record)
+    )
+
+    assert not result.proven
+    assert result.reason == "completed segment exceeds MCU work bound"
+
+
 def _compact_payload(record: dict) -> dict:
     sources: list[list[object]] = []
     targets: list[list[object]] = []

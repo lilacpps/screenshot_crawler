@@ -41,14 +41,19 @@ Current checkpoint:
 
 `02-provenance-resolution/CHECKPOINT.md`
 
-Current execution status (2026-10-08): **COMPLETE / NO PRODUCTION CHANGE**.
-The active research branch contains the fetched current `origin/main` baseline.
-Fresh manga `9/159` and LN `2/314` / `3/314` remain D at the supported JPEG-recovery
-boundary. A subsequent LN `3/314` image audit proved that reordering its unique
-exact upstream JPEG and clipping the reconstructed bottom three rows reproduces
-the native output pixel-for-pixel. The remaining LN `3/314` question is safe
-coefficient-level JPEG recovery, not source attribution or unknown crop position.
-See the checkpoint for the bounded evidence and limits.
+Current execution status (2026-10-08): **COMPLETE**.
+The research branch includes fetched current `origin/main`. The minimal direct
+partial-MCU path is implemented: manga `9/159` and `11/159` each return two
+844x1200 reconstructed JPEGs from 848x1200 coded sources; LN `3/314` and `4/314`
+return 2048x1453 JPEGs from 2048x1456 coded sources. Full coded MCU coverage,
+unique exact candidate, coefficient/quantization/selector equality and mandatory
+native pixel equality pass for every new cropped part. LN2 remains D with
+incomplete retained upstream proof. Existing LN text controls 8/10 remain A.
+Current cover controls use actual fallback, separately from historical A.
+Local checks pass (180 targeted tests, 46 browser-backed Integration tests,
+Ruff/diff checks). Final Reviewer confirmed PASS with no BLOCKING on code,
+tests, completed live evidence and synchronization. Manga2 was unnecessary.
+See the checkpoint for positions, hashes and D limits.
 
 Goals:
 

@@ -2674,12 +2674,18 @@ class BookWalkerAdapter(SiteAdapter):
             "jpeg_supported": False,
             "strict_mcu_aligned": False,
             "coefficient_exact": False,
+            "component_quantization_selectors_equal": False,
             "final_pixel_verify_enabled": final_pixel_verify_enabled,
             "final_pixel_compare_performed": False,
             "native_pixel_exact": None,
             "final_pixel_comparison_mode": None,
             "reconstructed_dimensions_match": False,
             "reconstructed_source_dimensions_match": False,
+            "reconstructed_visible_dimensions_match": False,
+            "coded_dimensions": None,
+            "visible_dimensions": None,
+            "tile_dimensions_uniform": None,
+            "tile_dimension_variants": [],
             "mapping_source": None,
             "mapping_id": None,
             "selected_mapping_id": None,
@@ -3056,6 +3062,10 @@ class BookWalkerAdapter(SiteAdapter):
                 "mapping_provenance",
                 "renderer_canvas_id",
                 "source_canvas_id",
+                "coded_dimensions",
+                "visible_dimensions",
+                "tile_dimensions_uniform",
+                "tile_dimension_variants",
                 "unsafe_operation_count",
                 "first_unsafe_operation_index",
                 "unsafe_operation_types",
@@ -3081,6 +3091,13 @@ class BookWalkerAdapter(SiteAdapter):
             part["mapping_sha256"] = mapping.mapping_sha256
             part["tile_dimensions"] = list(mapping.tile_dimensions)
             part["mcu_dimensions"] = list(mapping.mcu_dimensions)
+            coded_dimensions = mapping.coded_dimensions or mapping.source_dimensions
+            visible_dimensions = mapping.visible_dimensions or mapping.destination_dimensions
+            cropped_coded_frame = coded_dimensions != visible_dimensions
+            part["coded_dimensions"] = list(coded_dimensions)
+            part["visible_dimensions"] = list(visible_dimensions)
+            part["tile_dimensions_uniform"] = mapping.tile_dimensions_uniform
+            part["tile_dimension_variants"] = [list(item) for item in mapping.tile_dimension_variants]
             part["strict_mcu_aligned"] = all(
                 value % 8 == 0
                 for item in mapping.mapping
@@ -3167,11 +3184,17 @@ class BookWalkerAdapter(SiteAdapter):
             part["jpeg_supported"] = result.available
             part["coefficient_validation"] = result.coefficient_validation
             part["lossless_timing_ms"] = dict(result.timing)
+            selectors_equal = (
+                result.coefficient_validation.get(
+                    "component_quantization_selectors_equal"
+                ) is True
+            )
             part["coefficient_exact"] = bool(
                 result.available
                 and result.coefficient_validation.get("mismatched_blocks") == 0
                 and result.coefficient_validation.get("mismatched_coefficients") == 0
                 and result.coefficient_validation.get("quantization_tables_equal") is True
+                and (selectors_equal if cropped_coded_frame else True)
             )
             part["mismatched_blocks"] = result.coefficient_validation.get(
                 "mismatched_blocks"
@@ -3182,6 +3205,9 @@ class BookWalkerAdapter(SiteAdapter):
             part["quantization_tables_equal"] = result.coefficient_validation.get(
                 "quantization_tables_equal"
             )
+            part["component_quantization_selectors_equal"] = result.coefficient_validation.get(
+                "component_quantization_selectors_equal"
+            )
             part["reconstruction_reason"] = result.reason
             if result.available and result.data is not None:
                 part["reconstructed_byte_size"] = len(result.data)
@@ -3190,15 +3216,20 @@ class BookWalkerAdapter(SiteAdapter):
                     result.width == native.width and result.height == native.height
                 )
                 part["reconstructed_source_dimensions_match"] = (
-                    result.width == mapping.source_dimensions[0]
-                    and result.height == mapping.source_dimensions[1]
+                    result.width == coded_dimensions[0]
+                    and result.height == coded_dimensions[1]
+                )
+                part["reconstructed_visible_dimensions_match"] = (
+                    result.width == visible_dimensions[0]
+                    and result.height == visible_dimensions[1]
                 )
                 part["final_pixel_comparison_mode"] = (
                     "scaled_source_to_native"
                     if part.get("mapping_provenance") == "scaled_canvas_source_1hop"
                     else "intrinsic"
                 )
-                if self.final_pixel_verify_enabled:
+                mandatory_intrinsic_verify = coded_dimensions != visible_dimensions
+                if self.final_pixel_verify_enabled or mandatory_intrinsic_verify:
                     final_compare_started = time.perf_counter()
                     if (
                         provenance_candidate is not None
@@ -3227,9 +3258,13 @@ class BookWalkerAdapter(SiteAdapter):
                     part_timing["final_browser_pixel_compare_ms"] = final_compare_elapsed
                     evaluation_timing["final_browser_pixel_compare"] += final_compare_elapsed
                     part["final_pixel_compare_performed"] = True
+                    comparison_dimensions_equal = comparison.get("dimensions_equal") is True
                     part["native_pixel_exact"] = bool(
-                        comparison.get("available") and comparison.get("exact")
+                        comparison.get("available")
+                        and comparison_dimensions_equal
+                        and comparison.get("exact")
                     )
+                    part["native_pixel_dimensions_equal"] = comparison_dimensions_equal
                     part["native_pixel_comparison"] = {
                         key: value
                         for key, value in comparison.items()
@@ -3238,7 +3273,21 @@ class BookWalkerAdapter(SiteAdapter):
                             "differing_pixel_count", "max_channel_difference", "reason",
                         }
                     }
-                if part["reconstructed_source_dimensions_match"]:
+                if (
+                    (
+                        cropped_coded_frame
+                        and part["reconstructed_dimensions_match"]
+                        and part["reconstructed_visible_dimensions_match"]
+                    )
+                    or (
+                        not cropped_coded_frame
+                        and (
+                            part["reconstructed_source_dimensions_match"]
+                            or part.get("mapping_provenance")
+                            == "scaled_canvas_source_1hop"
+                        )
+                    )
+                ):
                     reconstructed_captures.append(
                         CaptureResult(
                             data=result.data,
@@ -3264,7 +3313,16 @@ class BookWalkerAdapter(SiteAdapter):
             and part.get("strict_mcu_aligned") is True
             and part.get("coefficient_exact") is True
             and part.get("quantization_tables_equal") is True
-            and part.get("reconstructed_source_dimensions_match") is True
+            and (
+                part.get("component_quantization_selectors_equal") is True
+                if part.get("coded_dimensions") != part.get("visible_dimensions")
+                else True
+            )
+            and (
+                part.get("reconstructed_source_dimensions_match") is True
+                if part.get("coded_dimensions") == part.get("visible_dimensions")
+                else part.get("reconstructed_visible_dimensions_match") is True
+            )
             and (
                 part.get("mapping_provenance") == "direct"
                 and part.get("reconstructed_dimensions_match") is True
@@ -3275,8 +3333,17 @@ class BookWalkerAdapter(SiteAdapter):
                 )
             )
             and (
-                not self.final_pixel_verify_enabled
-                or part.get("native_pixel_exact") is True
+                (
+                    part.get("coded_dimensions") != part.get("visible_dimensions")
+                    and part.get("native_pixel_exact") is True
+                )
+                or (
+                    part.get("coded_dimensions") == part.get("visible_dimensions")
+                    and (
+                        not self.final_pixel_verify_enabled
+                        or part.get("native_pixel_exact") is True
+                    )
+                )
             )
             for part in parts
         )

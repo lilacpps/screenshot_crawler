@@ -172,6 +172,114 @@ async def test_reconstructed_jpeg_matches_expected_native_pixels_in_browser(
     }
 
 
+async def test_nonuniform_right_bottom_crop_matches_draw_time_native_snapshot(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise coded S=40x40 to visible V=37x36 in a real browser canvas."""
+
+    monkeypatch.setenv("BOOKWALKER_FINAL_PIXEL_VERIFY", "0")
+    source = Image.new("RGB", (40, 40))
+    for y in range(40):
+        for x in range(40):
+            source.putpixel(
+                (x, y),
+                ((x * 13 + y * 5) % 256, (x * 7 + y * 17) % 256, (x * 19 + y * 3) % 256),
+            )
+    jpeg_buffer = io.BytesIO()
+    source.save(jpeg_buffer, format="JPEG", quality=90, subsampling=0, progressive=False)
+    jpeg_bytes = jpeg_buffer.getvalue()
+    jpeg_data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode("ascii")
+
+    columns = ((0, 16), (16, 16), (32, 8))
+    rows = ((0, 16), (16, 16), (32, 8))
+    source_cells = [
+        (source_x, source_y, width, height)
+        for source_y, height in rows
+        for source_x, width in columns
+    ]
+    destination_cells = [
+        (16, 0, 16, 16), (0, 0, 16, 16), (32, 0, 8, 16),
+        (0, 16, 16, 16), (16, 16, 16, 16), (32, 16, 8, 16),
+        (0, 32, 16, 8), (16, 32, 16, 8), (32, 32, 8, 8),
+    ]
+    mapping = [
+        {
+            "source_x": source_x,
+            "source_y": source_y,
+            "destination_x": destination_x,
+            "destination_y": destination_y,
+            "width": width,
+            "height": height,
+        }
+        for (source_x, source_y, width, height),
+        (destination_x, destination_y, _destination_width, _destination_height)
+        in zip(source_cells, destination_cells, strict=True)
+    ]
+    assert any(
+        item["source_x"] != item["destination_x"]
+        or item["source_y"] != item["destination_y"]
+        for item in mapping
+    )
+    result = reconstruct_lossless_jpeg(
+        jpeg_bytes,
+        {
+            "source_dimensions": {"width": 40, "height": 40},
+            "target_dimensions": {"width": 37, "height": 36},
+            "tile_dimensions": {"width": 16, "height": 16},
+            "mapping_sha256": mapping_sha256(mapping),
+            "mapping": mapping,
+        },
+    )
+    assert result.success
+    assert (result.width, result.height) == (37, 36)
+    assert result.coefficient_validation["mismatched_coefficients"] == 0
+    assert result.coefficient_validation["quantization_tables_equal"] is True
+    assert result.coefficient_validation[
+        "component_quantization_selectors_equal"
+    ] is True
+
+    await browser_page.goto("data:text/html,<html></html>")
+    native_data_url = await browser_page.evaluate(
+        """
+        async ({jpeg, mapping}) => {
+          const image = new Image();
+          image.src = jpeg;
+          await image.decode();
+          const source = document.createElement('canvas');
+          source.width = 40;
+          source.height = 40;
+          const sourceContext = source.getContext('2d');
+          sourceContext.drawImage(image, 0, 0);
+          const target = document.createElement('canvas');
+          target.width = 37;
+          target.height = 36;
+          const targetContext = target.getContext('2d');
+          for (const item of mapping) {
+            targetContext.drawImage(
+              source,
+              item.source_x, item.source_y, item.width, item.height,
+              item.destination_x, item.destination_y, item.width, item.height,
+            );
+          }
+          return target.toDataURL('image/png');
+        }
+        """,
+        {"jpeg": jpeg_data_url, "mapping": mapping},
+    )
+    native_bytes = base64.b64decode(native_data_url.split(",", 1)[1])
+    comparison = await BookWalkerAdapter()._browser_pixel_exact(
+        browser_page, result.data, native_bytes
+    )
+    assert comparison == {
+        "available": True,
+        "dimensions_equal": True,
+        "exact": True,
+        "differing_pixel_count": 0,
+        "max_channel_difference": 0,
+    }
+
+
 async def test_bookwalker_strict_quota_clicks_only_maruyomi(browser_page: Page) -> None:
     controls = """
     <a data-action-label="trial_reading" href="https://viewer.bookwalker.jp/trial">試し読み</a>

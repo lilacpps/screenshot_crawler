@@ -94,106 +94,89 @@ ordinary research is Lead + Worker only, Reviewer is change-driven, and Critic
 is risk-driven. No production implementation has been approved from these
 observations.
 
-## 1.2 Stage 02 final research status (2026-10-08, complete / no production change)
+## 1.2 Stage 02 research status (2026-10-08, complete)
 
-Production capture code and its source-native priority remain unchanged.
-No B/C artifact recovery rule has been approved. Fresh manga research remained
-bounded to `9/159`, with `1/159` anchors verified before and after each probe.
-R7 connected renderer canvas 3, source canvas 6 (844x1200), exact completed
-mappings `mapping-3092` / `mapping-4124`, and their two 848x1200 ImageBitmaps
-through 1,026 tiles each. Full-pixel comparison without resize found exactly one
-JPEG among 19 available candidates for each bitmap. This is new exact upstream
-tile-JPEG attribution; the JPEGs are not established as finished-page artifacts.
+Stage 02 has completed its bounded live acceptance. Final production Reviewer
+confirmed PASS with no remaining BLOCKING on code, tests, live evidence and
+document synchronization. The current source-native priority is original JPEG,
+verified lossless reconstructed JPEG, source/native PNG, then rendered fallback.
+A small dimension difference alone is not a reason to require PNG.
 
-The source canvas was drawn full-frame with identity transform, source-over and
-filter none to 998x1416 display rectangles. A separate bottom-edge image did not
-overlap those body rectangles. A third transition geometry box prevented the
-production selector from returning a capture, and complete visible-output plus
-848-to-844 edge/crop/padding and reconstruction proof remain missing. Manga's
-operational classification is D; no source-PNG claim or recovery implementation
-is justified. R6's legacy helper discarded the target trace, so its empty-trace
-ambiguity is a collector limitation rather than site evidence. R5's clip count
-is historical and is not a fresh R7 measurement. Manga 2 remains unused because
-no safe new recovery pattern needs a cross-title test.
+| Case | Classification / current behavior |
+| --- | --- |
+| Manga `9/159`, `11/159` | B; each spread yields two 844x1200 JPEGs from 848x1200 coded JPEG sources |
+| LN `3/314`, `4/314` | B; 2048x1456 coded source becomes 2048x1453 JPEG |
+| LN `2/314` | D; stable native PNG fallback at 722x1024 with incomplete usable upstream mapping |
+| LN text `8/314`, `10/314` | A; existing reconstructed JPEG path at 960x1280 remains correct |
+| Current manga cover | D; adapter returns no native artifact; actual Core rendered-canvas PNG fallback at 1386x983 |
+| Current LN cover | D; native PNG fallback at 722x1024 |
 
-LN `2/314` was freshly probed after observing actual entry `3/314`, explicitly
-returning to `1/314`, and verifying `1/314 -> 2/314 -> 1/314`. One selected
-1443x2048 canvas draw used a full source rectangle, identity transform and safe
-draw state, scaled to `(931,0,1000,1416)`. Its renderer operation was 2946 but
-had no mapping ID; the bounded production trace had zero completed mappings
-despite recording 2,960 operations. One native PNG at 1443x2048 was returned.
-Seven JPEG candidates had no full-pixel exact match to that PNG; this does not
-contradict the historical 1448x2048 JPEG/bitmap match. The selected canvas's
-upstream identity, crop/padding and complete visible-page attribution remain
-unproven, so LN `2/314` remains D.
+The historical cover A/original-JPEG observations in section 1.1 remain
+historical controls; neither is claimed as a fresh original-JPEG success in
+this run. Current fallback is not proof of a PNG source, so no C is established.
+The original matcher and original-JPEG priority were not changed. Its existing
+regression tests pass; current manga cover had zero match attempts/candidates.
+Those unattempted matcher counters are not a raw-response inventory or proof
+that no JPEG source exists; current cover provenance simply remains unproved.
+A debug default `native_png` with zero returned captures is not PNG success:
+the manga cover control actually invoked the existing Core canvas capture.
 
-LN `3/314` entered at actual `2/314`; Worker explicitly verified `1/314`, probed
-`3/314` via `2/314`, then restored and verified `1/314`. Production selected
-mapping `mapping-8852`: renderer canvas 1, source canvas 4 at 2048x1453, full
-source rectangle and destination `(431,0,1999,1416)`. The completed segment had
-2,944 tiles from ImageBitmap 7 at 2048x1456; clear 5903, tiles 5908-8851 and
-renderer draw 8852 were explicitly ordered. Tile/renderer transforms were
-identity, alpha 1, source-over and filter none. Full-pixel comparison found one
-exact upstream JPEG among eight available candidates. The trace had no reported
-overflow/eviction, and exact compact fetch returned the requested mapping.
-Production returned a 2048x1453 native PNG and rejected reconstruction because
-the ImageBitmap dimensions differ from the source canvas. None of the eight
-candidates exactly matched that native PNG. A subsequent one-page image audit
-resolved the edge/output question: the raw JPEG is visibly scrambled, and the
-recorded 2,944 tile copies (32x32 or 32x16) plus clipping the reconstructed
-bottom three rows reproduce the 2048x1453 native output with zero differing
-pixels and no holes/overlaps. Clipping is at destination rows 1453–1455, not
-simply at the raw JPEG's bottom edge; affected source fragments are scattered.
-Worker again observed actual `2/314`, verified anchor `1/314`, visited only
-`3/314` via `2/314`, then restored/verified `1/314`. Image bytes remain only in
-ignored `output/stage02-ln3-image-audit-20261008/`.
+The unique exact upstream JPEG is the recovery input, but its tiles are
+scrambled. Recorded source/destination rectangles, safe draw state and a full
+coded MCU bijection establish reconstruction. Manga has 1,026 tiles per part;
+LN3/4 have 2,944 tiles. The visible frame omits reconstructed manga columns
+844–847 or LN rows 1453–1455. Their corresponding raw-source fragments are
+scattered, so simply cropping or saving the raw JPEG is not the recovered page.
+Reordering quantized DCT coefficients and setting visible frame dimensions
+preserves all Y/Cb/Cr coefficients, quantization tables and table-selector IDs.
+Every new cropped part also matches its selected draw-time native snapshot
+with zero differing pixels, even while the older optional final-pixel flag is
+off. No rotation is inferred from dimensions; no content/page-number rule is used.
 
-LN `3/314` remains operational D because safe coefficient-level JPEG recovery
-has not been verified, but exact source-to-native output is now proven. The
-unique exact JPEG is the correct recovery input, not a directly saveable page.
-A small dimension difference alone does not establish that PNG is the native
-format or that lossless JPEG recovery is impossible. The next bounded question
-for this case is offline coefficient reordering with nonuniform tiles and the
-final bottom crop; another live sample is unnecessary for that question. The
-observed JPEG is 4:4:4 and all tile coordinates/dimensions are 8px aligned, so
-coefficient recovery has a concrete basis to investigate without RGB re-encoding.
+The supported extension is direct-only: explicit coded S and visible V,
+right/bottom crop smaller than eight pixels, integer 8px-aligned geometry,
+complete coded source/destination coverage including invisible edge blocks,
+and supported SOF0 three-component 4:4:4 JPEG layout. Unsafe/ambiguous/missing
+proof, gaps/duplicates, work-bound excess, or failed intrinsic comparison
+falls back for the whole spread. Cropped mappings cannot become one-hop
+upstream proofs. Existing equal-size/one-hop behavior and the kill switch remain.
 
-Stage 02 is complete with operational D for representative manga body and LN
-`2/314` / `3/314`, historical A cover controls unchanged, and no B/C artifact
-contract adopted. Exact upstream JPEG matches do not justify saving scrambled
-tile JPEGs as pages. Manga's edge/output proof and LN `2/314`'s source-canvas
-proof remain missing; LN `3/314` now has complete pixel reconstruction proof
-but needs an encoded JPEG recovery proof. The existing native/rendered fallback
-is retained. No production code/tests changed, and Reviewer/Critic were unnecessary.
-Research checks covered actual counters/anchor restoration, exact mapping and
-full-pixel comparisons where available, metadata JSON/hash consistency and diff
-checks. Production Unit/Integration/full pytest and full-book/END live regression
-were not rerun; no pytest skips occurred because pytest was not invoked.
+LN2 has a historical unique full-pixel 1448x2048 JPEG/bitmap match. Its current
+selected mapping ID does not supply usable retained tile rows, dimensions or
+source identity; the complete same-window join to selected output is missing.
+The earlier candidate filter using visible rather than coded dimensions was
+invalid negative evidence and is excluded. A stable repeat has a different PNG
+hash from the cover, but that alone is not source attribution. No no-clear,
+canvas-reset, dimension, filename, order, timing or visual-similarity heuristic
+has been introduced to bridge the missing proof.
 
-The active research branch was synchronized with fetched `origin/main`
-`96fd5fff84567a4e2c644978d2b4c297174fa2ca` before any access attempt. This is
-baseline synchronization, not provenance evidence. Initial access-only attempts
-could not obtain target counters, even after the normal login helper submitted
-once in a dedicated Page. The user subsequently corrected login and requested
-resumption; strict-direct manga entry then succeeded at `1/159`. The initial
-access failure is historical and is not D evidence. No quota control was clicked
-or resource consumption reported; remote Chrome and the shared profile remain
-the session authority.
+Two manga body spreads, two changed LN openings, the unsupported LN2 case,
+two ordinary-text controls and actual cover fallbacks are sufficient for this
+bounded direct renderer contract. LN5–7 were only traversed, not newly captured.
+Further cached-canvas or cropped one-hop research is a different contract and
+is not needed for Stage 02. Manga2 was unused because no specific cross-title
+hypothesis required confirmation. Every independent probe checked actual
+counters, explicitly restored its anchor and verified page 1 before closing
+its dedicated Page. Shared Crawler Chrome and existing user tabs were preserved.
+No credential submission occurred after the user's final manual login.
 
-Earlier diagnostic ticket/producer controls remain unreviewed and are not
-source-format or production authority. Under the revised workflow there is no
-requirement to finish that diagnostic framework or restore Reviewer before
-continuing research. The prior `agent thread limit reached` problem is therefore
-not a Stage 02 research blocker. Lead may retire the unreviewed diagnostic path
-and continue with simpler bounded manga/LN probes.
+Validation remains 180 targeted tests and 46 browser-backed Integration tests,
+including real Canvas nonuniform/nonidentity 40x40-to-37x36 right/bottom crop.
+Ruff and diff checks pass. Critic accepted the material partial-MCU contract;
+Reviewer requested that one Integration case, then confirmed no code/test/doc
+BLOCKING. Final Reviewer also accepted the completed live set, current cover
+fallback controls and synchronized notes. Stage 02 is complete with the D
+boundaries above; no additional broad research is required.
+No full pytest or full-book/END live run is required for this site-local change.
 
-The committed [Stage 02 checkpoint](../runbooks/bookwalker-source-native/02-provenance-resolution/CHECKPOINT.md)
-records accepted observations, local artifact identities, and the revised
-resume policy. Production remains unchanged; Reviewer becomes mandatory only
-if production code is changed, and Critic is used only for material design-risk
-conditions. The earlier thread-capacity workaround was removed by restoring
-`.codex/config.toml`'s `max_concurrent_threads_per_session` from 4 to 2; ordinary
-research still uses only Lead + Worker.
+The existing branch contains fetched current `origin/main`
+`96fd5fff84567a4e2c644978d2b4c297174fa2ca`; the continuation merge was already
+up to date. This is not provenance evidence. `debug.log` remains untouched,
+`.codex/config.toml` retains `max_concurrent_threads_per_session = 2`, and
+unreviewed OBJECT-A/B/C diagnostics are not production/source-format authority.
+The [Stage 02 checkpoint](../runbooks/bookwalker-source-native/02-provenance-resolution/CHECKPOINT.md)
+records exact accepted positions, output/metadata hashes, excluded diagnostic
+failures and the historical access issues. Artwork is not committed as fixtures.
 
 ## 2. Entry flow
 
@@ -2670,3 +2653,64 @@ evaluation 898.70 ms, final browser comparison 149.03 ms/part), this run was
 evaluation. The final comparison cost is now 0 ms by default. The runs are
 bounded live samples rather than a controlled benchmark suite, so these
 differences are directional only.
+
+### 20.24 Direct partial-MCU reconstructed JPEG path (Stage 02 implementation)
+
+The current BookWalker source-native priority is:
+
+```text
+verified original JPEG
+    -> verified lossless reconstructed JPEG
+    -> source/native PNG
+    -> rendered-canvas PNG fallback
+```
+
+The direct completed-mapping path keeps coded source dimensions `S` separate
+from visible intermediate dimensions `V`. It accepts baseline SOF0, three-component
+4:4:4 JPEGs with a unique full-resolution candidate, exact quantized-DCT
+reconstruction, unchanged quantization tables and component table-selector IDs.
+A cropped frame may differ from `V` by fewer than eight pixels only on the final
+right or bottom MCU; all geometry is integer and 8-pixel aligned, and recorded
+source/destination rectangles must form a complete non-overlapping MCU bijection.
+Unsafe state, hidden edge gaps, duplicates, out-of-bounds records, overflow,
+eviction, or ambiguous candidates fail closed.
+
+For this direct cropped path, browser comparison against the selected native
+snapshot is mandatory even when `BOOKWALKER_FINAL_PIXEL_VERIFY` is disabled.
+The comparison must be available, dimension-equal and zero-difference; an
+exception or mismatch returns source/native PNG for the whole spread. Older
+equal-size and one-hop paths retain their optional final-pixel diagnostic
+behavior. `BOOKWALKER_LOSSLESS_JPEG_OUTPUT` remains the BookWalker kill switch,
+and the all-parts-or-PNG spread rule remains unchanged.
+
+Stage 02 live verification selected manga `9/159` and `11/159` as two direct
+parts after the explicit predecessor-to-target geometry-clear/native-arm
+boundary. Both spreads proved `S=848x1200` and `V=844x1200`, 1,026 tiles,
+complete coded MCU coverage, coefficient/qtable/selector equality, one exact
+JPEG candidate per part, and native snapshot pixel equality with zero differing
+pixels. Bounded LN acceptance likewise proved the direct reconstructed-JPEG
+path on `3/314`, `4/314`, `8/314`, and `10/314`: the first two used
+`S=2048x1456` and `V=2048x1453` with 2,944 tiles, while the latter two used
+equal `S=V=960x1280` with 1,200 tiles. Each had one exact JPEG candidate and
+coefficient/qtable/selector equality; the cropped pages also passed mandatory
+native comparison with zero differing pixels. `2/314` remained source/native
+PNG fallback because usable upstream mapping proof for the selected renderer
+was unavailable; the mapping ID alone is insufficient.
+The stable current manga cover probe entered at `5/159`, explicitly restored
+`1/159`, and returned no native capture parts. Core then materialized one
+rendered-canvas PNG fallback at `1386x983`; its original-JPEG matcher had zero
+attempts and zero candidates in the unattempted matcher diagnostics; those
+counters are not a raw-response inventory. This current observation is separate from
+the historical cover A/original-JPEG evidence. The stable current `2/314`
+LN record retained a completed-segment mapping ID but had zero segment tiles,
+no coded/visible dimensions or source identity, and was therefore rejected as
+not reconstruction-ready; this remains D rather than evidence that the
+historical bitmap candidate does not exist.
+The production unit path and site-local documentation are synchronized. The
+implementation was checked by 180 targeted unit tests and 46 browser-backed
+integration tests, including a real-canvas nonuniform permutation with
+`S=40x40` and `V=37x36`; Reviewer recheck found no blocking code, test, or
+documentation issue. The site-local MCU work bound rejects invalid or oversized
+mappings before expansion and allocation. Final production Reviewer also
+accepted the bounded live evidence and actual cover fallback controls with no
+remaining BLOCKING; Stage 02 is complete with the documented D limits.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import tempfile
 import time
 from collections.abc import Mapping
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import mapping_sha256
+
+MAX_MCU_WORK = 262_144
 
 _TIMING_KEYS = (
     "jpeg_header_and_validation_ms",
@@ -63,8 +66,8 @@ class LosslessJpegResult:
 def _mapping_values(mapping: object) -> tuple[list[dict[str, Any]], tuple[int, int] | None, tuple[int, int] | None, tuple[int, int] | None, str | None]:
     if hasattr(mapping, "mapping"):
         items = mapping.mapping  # type: ignore[attr-defined]
-        source = getattr(mapping, "source_dimensions", None)
-        destination = getattr(mapping, "destination_dimensions", None)
+        source = getattr(mapping, "coded_dimensions", None) or getattr(mapping, "source_dimensions", None)
+        destination = getattr(mapping, "visible_dimensions", None) or getattr(mapping, "destination_dimensions", None)
         tiles = getattr(mapping, "tile_dimensions", None)
         mapping_hash = getattr(mapping, "mapping_sha256", None)
     elif isinstance(mapping, Mapping):
@@ -72,8 +75,8 @@ def _mapping_values(mapping: object) -> tuple[list[dict[str, Any]], tuple[int, i
         if isinstance(payload.get("permutation"), Mapping):
             payload = payload["permutation"]
         items = payload.get("mapping")
-        source = payload.get("source_dimensions")
-        destination = payload.get("target_dimensions") or payload.get("destination_dimensions")
+        source = payload.get("coded_dimensions") or payload.get("source_dimensions")
+        destination = payload.get("visible_dimensions") or payload.get("target_dimensions") or payload.get("destination_dimensions")
         tiles = payload.get("tile_dimensions")
         mapping_hash = payload.get("mapping_sha256")
     elif isinstance(mapping, (list, tuple)):
@@ -88,36 +91,55 @@ def _mapping_values(mapping: object) -> tuple[list[dict[str, Any]], tuple[int, i
     def dimensions(value: object) -> tuple[int, int] | None:
         if isinstance(value, Mapping):
             try:
-                result = (int(value["width"]), int(value["height"]))
+                result = (_strict_integer(value["width"]), _strict_integer(value["height"]))
             except (KeyError, TypeError, ValueError):
                 return None
         elif isinstance(value, (tuple, list)) and len(value) == 2:
             try:
-                result = (int(value[0]), int(value[1]))
+                result = (_strict_integer(value[0]), _strict_integer(value[1]))
             except (TypeError, ValueError):
                 return None
         else:
             return None
         return result if min(result) > 0 else None
 
+    normalized_source = dimensions(source)
+    normalized_destination = dimensions(destination)
+    normalized_tiles = dimensions(tiles)
+    if (
+        (source is not None and normalized_source is None)
+        or (destination is not None and normalized_destination is None)
+        or (tiles is not None and normalized_tiles is None)
+    ):
+        return [], None, None, None, mapping_hash
+
     normalized: list[dict[str, Any]] = []
     if not isinstance(items, (list, tuple)):
-        return [], dimensions(source), dimensions(destination), dimensions(tiles), mapping_hash
+        return [], normalized_source, normalized_destination, normalized_tiles, mapping_hash
     for item in items:
         if not isinstance(item, Mapping):
-            return [], dimensions(source), dimensions(destination), dimensions(tiles), mapping_hash
+            return [], normalized_source, normalized_destination, normalized_tiles, mapping_hash
         try:
             normalized.append({
-                "source_x": int(item["source_x"] if "source_x" in item else item["sx"]),
-                "source_y": int(item["source_y"] if "source_y" in item else item["sy"]),
-                "destination_x": int(item["destination_x"] if "destination_x" in item else item["dx"]),
-                "destination_y": int(item["destination_y"] if "destination_y" in item else item["dy"]),
-                "width": int(item["width"] if "width" in item else item["sw"]),
-                "height": int(item["height"] if "height" in item else item["sh"]),
+                "source_x": _strict_integer(item["source_x"] if "source_x" in item else item["sx"]),
+                "source_y": _strict_integer(item["source_y"] if "source_y" in item else item["sy"]),
+                "destination_x": _strict_integer(item["destination_x"] if "destination_x" in item else item["dx"]),
+                "destination_y": _strict_integer(item["destination_y"] if "destination_y" in item else item["dy"]),
+                "width": _strict_integer(item["width"] if "width" in item else item["sw"]),
+                "height": _strict_integer(item["height"] if "height" in item else item["sh"]),
             })
         except (KeyError, TypeError, ValueError):
-            return [], dimensions(source), dimensions(destination), dimensions(tiles), mapping_hash
-    return normalized, dimensions(source), dimensions(destination), dimensions(tiles), mapping_hash
+            return [], normalized_source, normalized_destination, normalized_tiles, mapping_hash
+    return normalized, normalized_source, normalized_destination, normalized_tiles, mapping_hash
+
+
+def _strict_integer(value: object) -> int:
+    if isinstance(value, bool):
+        raise TypeError("boolean is not integer geometry")
+    number = float(value)
+    if not math.isfinite(number) or number != round(number):
+        raise ValueError("fractional or non-finite geometry")
+    return int(number)
 
 
 def _fail(
@@ -144,7 +166,7 @@ def _fail(
     )
 
 
-def _jpeg_header(data: bytes) -> tuple[str, int, int, int, list[tuple[int, int, tuple[int, ...]]]] | None:
+def _jpeg_header(data: bytes) -> tuple[str, int, int, int, list[tuple[int, int, tuple[int, ...]]], tuple[int, ...]] | None:
     if not data.startswith(b"\xff\xd8"):
         return None
     offset = 2
@@ -194,12 +216,19 @@ def _jpeg_header(data: bytes) -> tuple[str, int, int, int, list[tuple[int, int, 
         if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
             if len(payload) < 6:
                 return None
+            components = payload[5]
+            if len(payload) < 6 + (3 * components):
+                return None
+            component_selectors = tuple(
+                payload[8 + (3 * index)] for index in range(components)
+            )
             return (
                 {0xC0: "SOF0", 0xC1: "SOF1", 0xC2: "SOF2", 0xC3: "SOF3"}.get(marker, f"0x{marker:02x}"),
                 int.from_bytes(payload[3:5], "big"),
                 int.from_bytes(payload[1:3], "big"),
-                payload[5],
+                components,
                 quantization,
+                component_selectors,
             )
         offset += length
     return None
@@ -303,7 +332,7 @@ def reconstruct_lossless_jpeg(
     header = _jpeg_header(jpeg_bytes)
     if header is None:
         return _fail("invalid JPEG structure", tiles=tile_dimensions, mapping_hash=mapping_hash)
-    sof, header_width, header_height, header_components, quantization = header
+    sof, header_width, header_height, header_components, quantization, component_selectors = header
     if source_dimensions is None:
         source_dimensions = (header_width, header_height)
     if destination_dimensions is None:
@@ -329,31 +358,75 @@ def reconstruct_lossless_jpeg(
         mapping_hash = computed_mapping_hash
     if sof != "SOF0" or header_components != 3:
         return _fail("UNSUPPORTED_JPEG_LAYOUT", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
-    if source_dimensions != destination_dimensions or source_dimensions != (header_width, header_height):
-        return _fail("dimension mismatch", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
+    if source_dimensions != (header_width, header_height):
+        return _fail("coded JPEG dimensions do not match mapping", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
+    if destination_dimensions is None or any(value <= 0 for value in destination_dimensions):
+        return _fail("visible dimensions are unavailable", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
+    cropped = destination_dimensions != source_dimensions
+    if (
+        destination_dimensions[0] > source_dimensions[0]
+        or destination_dimensions[1] > source_dimensions[1]
+        or source_dimensions[0] - destination_dimensions[0] >= 8
+        or source_dimensions[1] - destination_dimensions[1] >= 8
+    ):
+        return _fail("visible crop is outside the final MCU", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
     if not items or tile_dimensions is None:
         return _fail("mapping is unavailable", width=header_width, height=header_height, mapping_hash=mapping_hash)
     if header_width % 8 or header_height % 8:
         return _fail("partial edge MCU is outside the supported scope", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
     if any(value % 8 for item in items for value in (item["source_x"], item["source_y"], item["destination_x"], item["destination_y"], item["width"], item["height"])):
         return _fail("mapping is not strict MCU aligned", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
-    if any((item["width"], item["height"]) != tile_dimensions for item in items):
+    if not cropped and any((item["width"], item["height"]) != tile_dimensions for item in items):
         return _fail("mapping tile dimensions are not uniform", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
     if min(tile_dimensions) <= 0:
         return _fail("mapping tile dimensions are invalid", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
-    if header_width % tile_dimensions[0] or header_height % tile_dimensions[1]:
+    if not cropped and (header_width % tile_dimensions[0] or header_height % tile_dimensions[1]):
         return _fail("mapping tile grid is incomplete", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
-    expected = {(x, y) for y in range(0, header_height, tile_dimensions[1]) for x in range(0, header_width, tile_dimensions[0])}
-    source_positions = [(item["source_x"], item["source_y"]) for item in items]
-    destination_positions = [(item["destination_x"], item["destination_y"]) for item in items]
+    coded_mcu_count = (header_width // 8) * (header_height // 8)
+    tile_mcu_count = 0
+    for item in items:
+        if item["width"] <= 0 or item["height"] <= 0:
+            return _fail("mapping tile dimensions are invalid", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
+        if (
+            item["source_x"] < 0
+            or item["source_y"] < 0
+            or item["destination_x"] < 0
+            or item["destination_y"] < 0
+            or item["source_x"] + item["width"] > header_width
+            or item["source_y"] + item["height"] > header_height
+            or item["destination_x"] + item["width"] > header_width
+            or item["destination_y"] + item["height"] > header_height
+        ):
+            return _fail("mapping geometry is out of bounds", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
+        tile_mcu_count += (item["width"] // 8) * (item["height"] // 8)
+        if coded_mcu_count + tile_mcu_count > MAX_MCU_WORK:
+            return _fail("mapping exceeds MCU work bound", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
+    expected = {(x, y) for y in range(0, header_height, 8) for x in range(0, header_width, 8)}
+    source_positions = []
+    destination_positions = []
+    for item in items:
+        source_positions.extend(
+            (x, y)
+            for y in range(item["source_y"], item["source_y"] + item["height"], 8)
+            for x in range(item["source_x"], item["source_x"] + item["width"], 8)
+        )
+        destination_positions.extend(
+            (x, y)
+            for y in range(item["destination_y"], item["destination_y"] + item["height"], 8)
+            for x in range(item["destination_x"], item["destination_x"] + item["width"], 8)
+        )
     if (
-        len(items) != len(expected)
-        or set(source_positions) != expected
+        set(source_positions) != expected
         or set(destination_positions) != expected
         or len(set(source_positions)) != len(source_positions)
         or len(set(destination_positions)) != len(destination_positions)
         or any(item["source_x"] + item["width"] > header_width or item["source_y"] + item["height"] > header_height for item in items)
         or any(item["destination_x"] + item["width"] > header_width or item["destination_y"] + item["height"] > header_height for item in items)
+        or any(
+            (x >= destination_dimensions[0] and x != header_width - 8)
+            or (y >= destination_dimensions[1] and y != header_height - 8)
+            for x, y in destination_positions
+        )
     ):
         return _fail("mapping is not a complete bijection", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash)
 
@@ -400,6 +473,14 @@ def reconstruct_lossless_jpeg(
                 expected_arrays[name][destination_y:destination_y + height, destination_x:destination_x + width] = original[name][source_y:source_y + height, source_x:source_x + width]
             checked_blocks += width * height
         timing["coefficient_rearrange_ms"] = _elapsed_ms(rearrange_started)
+        if cropped:
+            # jpeglib keeps the coded MCU arrays while changing only the SOF
+            # visible frame.  This is the encoded equivalent of clipping
+            # the final destination MCU row/column; it does not decode/
+            # re-encode RGB.
+            source_dct.width = destination_dimensions[0]
+            output_height = destination_dimensions[1]
+            source_dct.height = output_height
         output_bytes, output_path = _write_dct(
             source_dct,
             expected_arrays,
@@ -442,6 +523,11 @@ def reconstruct_lossless_jpeg(
                     "mismatched_coefficients": int(difference.sum()),
                 }
             quantization_tables_equal = _array_equal(source_dct.qt, output_dct.qt)
+            output_component_selectors = _jpeg_header(output_bytes)
+            component_selectors_equal = bool(
+                output_component_selectors is not None
+                and output_component_selectors[5] == component_selectors
+            )
             coefficient_validation = {
                 "components_checked": 3,
                 "source_blocks_checked": checked_blocks * 3,
@@ -450,6 +536,12 @@ def reconstruct_lossless_jpeg(
                 "mismatched_blocks": mismatched_blocks,
                 "mismatched_coefficients": mismatched_coefficients,
                 "quantization_tables_equal": quantization_tables_equal,
+                "component_quantization_selectors_equal": component_selectors_equal,
+                "source_component_quantization_selectors": list(component_selectors),
+                "output_component_quantization_selectors": (
+                    list(output_component_selectors[5])
+                    if output_component_selectors is not None else None
+                ),
                 "by_component": by_component,
             }
             timing["coefficient_readback_compare_ms"] = _elapsed_ms(compare_started)
@@ -457,13 +549,15 @@ def reconstruct_lossless_jpeg(
                 return _fail("COEFFICIENT_MAPPING_MISMATCH", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash, coefficients=coefficient_validation)
             if not quantization_tables_equal:
                 return _fail("QUANTIZATION_TABLE_MISMATCH", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash, coefficients=coefficient_validation)
+            if not component_selectors_equal:
+                return _fail("COMPONENT_QUANTIZATION_SELECTOR_MISMATCH", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash, coefficients=coefficient_validation)
             output_header = _jpeg_header(output_bytes)
-            if output_header is None or output_header[0] != "SOF0" or output_header[1:4] != (header_width, header_height, 3) or output_header[4] != quantization:
+            if output_header is None or output_header[0] != "SOF0" or output_header[1:4] != (destination_dimensions[0], destination_dimensions[1], 3) or output_header[4] != quantization or output_header[5] != component_selectors:
                 return _fail("JPEG structure changed during reconstruction", width=header_width, height=header_height, tiles=tile_dimensions, mapping_hash=mapping_hash, coefficients=coefficient_validation)
             return LosslessJpegResult(
                 data=output_bytes,
-                width=header_width,
-                height=header_height,
+                width=destination_dimensions[0],
+                height=destination_dimensions[1],
                 tile_dimensions=tile_dimensions,
                 mcu_dimensions=(8, 8),
                 mapping_sha256=mapping_hash,

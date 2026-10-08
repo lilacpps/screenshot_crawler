@@ -28,6 +28,7 @@ from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
     MappingAnalysis,
     PurchasedMapping,
     ScaledCanvasSourceCandidate,
+    validate_scaled_canvas_source_analysis,
 )
 
 PNG_1X1 = (
@@ -653,7 +654,7 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
         return "signature"
 
     async def fake_pixels(*_args: object, **_kwargs: object) -> dict[str, object]:
-        return {"available": True, "exact": True}
+        return {"available": True, "dimensions_equal": True, "exact": True}
 
     def fake_reconstruct(*_args: object, **_kwargs: object) -> LosslessJpegResult:
         return LosslessJpegResult(
@@ -771,7 +772,11 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
         final_pixel_calls += 1
         if final_exact is None:
             pytest.fail("final browser pixel comparison must be skipped")
-        return {"available": True, "exact": final_exact}
+        return {
+            "available": True,
+            "dimensions_equal": True,
+            "exact": final_exact,
+        }
 
     def fake_reconstruct(*_args: object, **_kwargs: object) -> LosslessJpegResult:
         return LosslessJpegResult(
@@ -1046,6 +1051,206 @@ async def test_scaled_source_uses_one_batched_upstream_fetch_and_source_dimensio
         result["timing_ms"]["selected_trace_fetch_ms"]
         + result["timing_ms"]["upstream_trace_fetch_ms"]
     )
+
+
+def test_cropped_mapping_cannot_be_used_as_one_hop_upstream() -> None:
+    mapping = PurchasedMapping(
+        mapping=(
+            {
+                "source_x": 0,
+                "source_y": 0,
+                "destination_x": 0,
+                "destination_y": 0,
+                "width": 8,
+                "height": 16,
+            },
+        ),
+        source_dimensions=(8, 16),
+        destination_dimensions=(8, 15),
+        coded_dimensions=(8, 16),
+        visible_dimensions=(8, 15),
+        tile_dimensions=(8, 8),
+        mapping_id="cropped-upstream",
+        source_canvas_id="canvas-a",
+        renderer_canvas_id="canvas-b",
+        renderer_draw_operation_index=10,
+        renderer_target_dimensions=(8, 15),
+        renderer_geometry_classification="PURE_RENDERER_SCALE",
+        renderer_source_rect={"x": 0, "y": 0, "width": 8, "height": 16},
+        renderer_destination={"x": 0, "y": 0, "width": 8, "height": 15},
+    )
+    analysis = MappingAnalysis(
+        MAPPING_PROVEN,
+        "complete source/destination bijection",
+        mapping=mapping,
+        mapping_source="completed_segment",
+        mapping_id="cropped-upstream",
+    )
+    candidate = ScaledCanvasSourceCandidate(
+        upstream_mapping_id="cropped-upstream",
+        copy_operation_index=10,
+        source_canvas_id="canvas-a",
+        target_canvas_id="canvas-b",
+        source_dimensions=(8, 16),
+        target_dimensions=(8, 15),
+        source_rect={"x": 0, "y": 0, "width": 8, "height": 16},
+        destination={"x": 0, "y": 0, "width": 8, "height": 15},
+        transform={"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0},
+        global_alpha=1,
+        global_composite_operation="source-over",
+        filter="none",
+        image_smoothing_enabled=True,
+        image_smoothing_quality="high",
+    )
+
+    assert not validate_scaled_canvas_source_analysis(analysis, candidate)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pixel_result", "expected_ready"),
+    [
+        (
+            {"available": True, "dimensions_equal": True, "exact": True},
+            True,
+        ),
+        (
+            {"available": True, "dimensions_equal": True, "exact": False},
+            False,
+        ),
+        (
+            {"available": False, "dimensions_equal": False, "exact": True},
+            False,
+        ),
+        (
+            {"available": True, "dimensions_equal": False, "exact": True},
+            False,
+        ),
+    ],
+    ids=["exact", "mismatch", "unavailable", "dimensions-mismatch"],
+)
+async def test_cropped_mapping_requires_intrinsic_pixel_gate_even_when_flag_off(
+    monkeypatch: pytest.MonkeyPatch,
+    pixel_result: dict[str, object],
+    expected_ready: bool,
+) -> None:
+    monkeypatch.delenv("BOOKWALKER_FINAL_PIXEL_VERIFY", raising=False)
+
+    class ShadowPage:
+        async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
+            return dict(EMPTY_COMPACT_PAYLOAD)
+
+    mapping = PurchasedMapping(
+        mapping=(
+            {
+                "source_x": 0,
+                "source_y": 0,
+                "destination_x": 0,
+                "destination_y": 0,
+                "width": 8,
+                "height": 16,
+            },
+        ),
+        source_dimensions=(8, 16),
+        destination_dimensions=(8, 15),
+        coded_dimensions=(8, 16),
+        visible_dimensions=(8, 15),
+        tile_dimensions=(8, 8),
+        tile_dimensions_uniform=True,
+        tile_dimension_variants=((8, 8),),
+        imagebitmap_source_id="bitmap-cropped",
+        mapping_sha256="mapping-cropped",
+    )
+    ready = MappingAnalysis(
+        MAPPING_PROVEN,
+        "ready",
+        mapping,
+        mapping_source="completed_segment",
+    )
+
+    async def async_value(value: object) -> object:
+        return value
+
+    monkeypatch.setattr(adapter_module, "analyze_purchased_mapping", lambda *_args: ready)
+    monkeypatch.setattr(
+        adapter_module,
+        "image_signature",
+        lambda *_args: async_value("signature"),
+    )
+    monkeypatch.setattr(
+        adapter_module,
+        "imagebitmap_signature",
+        lambda *_args: async_value("signature"),
+    )
+    monkeypatch.setattr(
+        adapter_module,
+        "imagebitmap_pixel_exact_match",
+        lambda *_args: async_value({"available": True, "exact": True}),
+    )
+    monkeypatch.setattr(
+        adapter_module,
+        "reconstruct_lossless_jpeg",
+        lambda *_args: LosslessJpegResult(
+            data=b"cropped-reconstructed",
+            width=8,
+            height=15,
+            tile_dimensions=(8, 8),
+            mcu_dimensions=(8, 8),
+            mapping_sha256="mapping-cropped",
+            coefficient_validation={
+                "mismatched_blocks": 0,
+                "mismatched_coefficients": 0,
+                "quantization_tables_equal": True,
+                "component_quantization_selectors_equal": True,
+            },
+            available=True,
+        ),
+    )
+    adapter = BookWalkerAdapter()
+
+    async def fake_pixels(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return dict(pixel_result)
+
+    adapter._browser_pixel_exact = fake_pixels  # type: ignore[method-assign]
+    candidate = candidate_from_jpeg(
+        JPEG_1X1,
+        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        sequence=1,
+    )
+    assert candidate is not None
+    candidate.width = 8
+    candidate.height = 16
+    adapter._original_candidates.add(candidate)
+
+    result = await adapter._evaluate_lossless_reconstruction(
+        ShadowPage(),
+        (CaptureResult(PNG_1X1, 8, 15),),
+        [{"part": 1, "mappingId": "mapping-cropped"}],
+    )
+
+    part = result["parts"][0]
+    assert part["final_pixel_verify_enabled"] is False
+    assert part["final_pixel_compare_performed"] is True
+    assert part["native_pixel_dimensions_equal"] is pixel_result["dimensions_equal"]
+    assert part["native_pixel_exact"] is expected_ready
+    assert result["spread_ready"] is expected_ready
+
+
+@pytest.mark.asyncio
+async def test_intrinsic_pixel_compare_exception_fails_closed() -> None:
+    class FailingPage:
+        async def evaluate(self, _expression: str, *_args: object) -> object:
+            raise RuntimeError("synthetic browser comparison failure")
+
+    result = await BookWalkerAdapter()._browser_pixel_exact(
+        FailingPage(), b"reconstructed", PNG_1X1
+    )
+
+    assert result == {
+        "available": False,
+        "exact": False,
+        "reason": "browser comparison failed",
+    }
 
 
 def test_trace_payload_stats_count_bounded_records() -> None:

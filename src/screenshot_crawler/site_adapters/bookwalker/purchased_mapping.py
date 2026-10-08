@@ -24,6 +24,9 @@ TRACE_OPERATION_LIMIT = 5_000
 MAX_TILE_DRAW_RECORDS = 16_384
 MAX_COMPLETED_MAPPINGS = 12
 MAX_COMPLETED_TILE_RECORDS = 20_000
+# Keep geometry validation bounded before expanding each tile into 8x8 MCU
+# coordinates. The observed 848x1200 pages are well below this budget.
+MAX_MCU_WORK = 262_144
 MAPPING_PROVEN = "MAPPING_PROVEN"
 MAPPING_UNAVAILABLE = "MAPPING_UNAVAILABLE"
 
@@ -84,6 +87,13 @@ class PurchasedMapping:
     first_unsafe_operation_index: int | None = None
     unsafe_operation_types: tuple[str, ...] = ()
     mapping_provenance: str = "direct"
+    # The coded ImageBitmap frame and the visible intermediate canvas may
+    # differ by only the final right/bottom MCU.  Keep both dimensions
+    # explicit so the JPEG header is never confused with the visible frame.
+    coded_dimensions: tuple[int, int] | None = None
+    visible_dimensions: tuple[int, int] | None = None
+    tile_dimensions_uniform: bool = True
+    tile_dimension_variants: tuple[tuple[int, int], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         """Return the small JSON-compatible contract used by diagnostics."""
@@ -126,6 +136,19 @@ class PurchasedMapping:
             "first_unsafe_operation_index": self.first_unsafe_operation_index,
             "unsafe_operation_types": list(self.unsafe_operation_types),
             "mapping_provenance": self.mapping_provenance,
+            "coded_dimensions": {
+                "width": (self.coded_dimensions or self.source_dimensions)[0],
+                "height": (self.coded_dimensions or self.source_dimensions)[1],
+            },
+            "visible_dimensions": {
+                "width": (self.visible_dimensions or self.destination_dimensions)[0],
+                "height": (self.visible_dimensions or self.destination_dimensions)[1],
+            },
+            "tile_dimensions_uniform": self.tile_dimensions_uniform,
+            "tile_dimension_variants": [
+                {"width": width, "height": height}
+                for width, height in self.tile_dimension_variants
+            ],
             "complete_bijection": True,
         }
 
@@ -217,6 +240,16 @@ class MappingAnalysis:
                 "imagebitmap_source_id": self.mapping.imagebitmap_source_id,
                 "renderer_canvas_id": self.mapping.renderer_canvas_id,
                 "mapping_id": self.mapping.mapping_id,
+                "coded_dimensions": list(
+                    self.mapping.coded_dimensions or self.mapping.source_dimensions
+                ),
+                "visible_dimensions": list(
+                    self.mapping.visible_dimensions or self.mapping.destination_dimensions
+                ),
+                "tile_dimensions_uniform": self.mapping.tile_dimensions_uniform,
+                "tile_dimension_variants": [
+                    list(item) for item in self.mapping.tile_dimension_variants
+                ],
             })
         return result
 
@@ -1411,6 +1444,12 @@ def validate_scaled_canvas_source_analysis(
     """Cross-check a full upstream proof against the downstream copy trace."""
 
     mapping = analysis.mapping
+    # A scaled-canvas hop may only consume an equal-size, coded frame.  A
+    # direct partial-MCU mapping has an explicit coded frame (S) and visible
+    # frame (V); allowing that mapping through this resolver would silently
+    # turn a crop into a one-hop provenance claim.
+    coded_dimensions = mapping.coded_dimensions if mapping is not None else None
+    visible_dimensions = mapping.visible_dimensions if mapping is not None else None
     if (
         not analysis.proven
         or mapping is None
@@ -1421,6 +1460,12 @@ def validate_scaled_canvas_source_analysis(
         or mapping.source_dimensions != candidate.source_dimensions
         or mapping.renderer_target_dimensions != candidate.target_dimensions
         or mapping.renderer_geometry_classification != PURE_RENDERER_SCALE
+        or mapping.source_dimensions != mapping.destination_dimensions
+        or (
+            coded_dimensions is not None
+            and visible_dimensions is not None
+            and coded_dimensions != visible_dimensions
+        )
     ):
         return False
     return (
@@ -1585,7 +1630,11 @@ def _analyze_completed_mapping(
     renderer_target: Mapping[str, Any] = (
         renderer_target_value if isinstance(renderer_target_value, Mapping) else {}
     )
-    source_dimensions = _dimensions(source_canvas)
+    # ``source_canvas`` is the visible intermediate canvas (V).  The
+    # ImageBitmap tile source may have a coded frame (S) padded to the final
+    # MCU; S is established from the tile source records below.
+    visible_dimensions = _dimensions(source_canvas)
+    source_dimensions = visible_dimensions
     renderer_dimensions = _dimensions(renderer_target)
     source_rect_value = _record_segment_value(
         record, segment, "rendererSourceRect", "renderer_source_rect", "sourceRect", "source_rect"
@@ -1685,7 +1734,7 @@ def _analyze_completed_mapping(
             "renderer geometry crops or applies pixel processing",
             **base,
         )
-    if source_dimensions is None or renderer_dimensions is None or source_rect is None or destination is None:
+    if visible_dimensions is None or renderer_dimensions is None or source_rect is None or destination is None:
         return _reject_result("renderer geometry is unavailable", **base)
     if renderer_index is None or record_source_canvas_id is None:
         return _reject_result("source canvas identity is unavailable", **base)
@@ -1716,7 +1765,7 @@ def _analyze_completed_mapping(
     clear_rect = _rect(clear_rectangle)
     if clear_rect is None:
         return _reject_result("completed segment clear boundary geometry is unavailable", **base)
-    if clear_rect != (0, 0, *source_dimensions):
+    if clear_rect != (0, 0, *visible_dimensions):
         return _reject_result("completed segment clear boundary is partial", additional_pixel_processing=True, **base)
 
     source_ids: set[str] = set()
@@ -1727,6 +1776,7 @@ def _analyze_completed_mapping(
     operation_indices: list[int] = []
     source_out_of_bounds = 0
     destination_out_of_bounds = 0
+    coded_dimensions: tuple[int, int] | None = None
     for tile in tile_draws_value:
         if not isinstance(tile, Mapping):
             return _reject_result("completed segment contains an invalid tile record", **base)
@@ -1738,8 +1788,13 @@ def _analyze_completed_mapping(
         if not source_id:
             return _reject_result("ImageBitmap source identity is unavailable", **base)
         source_ids.add(source_id)
-        if _dimensions(source) != source_dimensions:
-            return _reject_result("ImageBitmap dimensions differ from source canvas", **base)
+        tile_source_dimensions = _dimensions(source)
+        if tile_source_dimensions is None:
+            return _reject_result("ImageBitmap dimensions are unavailable", **base)
+        if coded_dimensions is None:
+            coded_dimensions = tile_source_dimensions
+        if tile_source_dimensions != coded_dimensions:
+            return _reject_result("completed segment maps multiple coded dimensions", **base)
         if not isinstance(target, Mapping) or str(_first(target, "canvasId", "canvas_id") or "") != record_source_canvas_id:
             return _reject_result("tile target canvas identity is invalid", **base)
         if _dimensions(target) != source_dimensions:
@@ -1763,7 +1818,12 @@ def _analyze_completed_mapping(
         source_positions.append((sx, sy))
         destination_positions.append((dx, dy))
         source_out_of_bounds += int(sx < 0 or sy < 0 or sx + sw > source_dimensions[0] or sy + sh > source_dimensions[1])
-        destination_out_of_bounds += int(dx < 0 or dy < 0 or dx + dw > source_dimensions[0] or dy + dh > source_dimensions[1])
+        destination_out_of_bounds += int(
+            dx < 0
+            or dy < 0
+            or coded_dimensions is not None
+            and (dx + dw > coded_dimensions[0] or dy + dh > coded_dimensions[1])
+        )
         try:
             operation_indices.append(_integer(_first(tile, "operationIndex", "operation_index")))
         except (TypeError, ValueError):
@@ -1778,51 +1838,128 @@ def _analyze_completed_mapping(
         })
     if len(source_ids) != 1:
         return _reject_result("completed segment maps multiple ImageBitmap sources", **base)
-    if len(tile_dimensions) != 1:
-        return _reject_result("tile dimensions are not uniform", **base)
-    tile_width, tile_height = next(iter(tile_dimensions))
-    if source_dimensions[0] % tile_width or source_dimensions[1] % tile_height:
-        return _reject_result("tile grid does not cover complete source dimensions", **base)
+    if coded_dimensions is None:
+        return _reject_result("ImageBitmap dimensions are unavailable", **base)
+    if any(value <= 0 or value % 8 for value in coded_dimensions):
+        return _reject_result("coded dimensions are not MCU aligned", **base)
+    if any(value <= 0 for value in visible_dimensions):
+        return _reject_result("coded or visible dimensions are not MCU aligned", **base)
+    if (
+        visible_dimensions[0] > coded_dimensions[0]
+        or visible_dimensions[1] > coded_dimensions[1]
+        or coded_dimensions[0] - visible_dimensions[0] >= 8
+        or coded_dimensions[1] - visible_dimensions[1] >= 8
+    ):
+        return _reject_result("visible crop is outside the final MCU", **base)
+    coded_mcu_count = (coded_dimensions[0] // 8) * (coded_dimensions[1] // 8)
+    tile_mcu_count = 0
+    for item in mappings:
+        width = item["width"]
+        height = item["height"]
+        geometry = (
+            item["source_x"], item["source_y"],
+            item["destination_x"], item["destination_y"],
+            width, height,
+        )
+        if any(value <= 0 for value in (width, height)):
+            return _reject_result("tile mapping geometry is non-positive", **base)
+        if any(value % 8 for value in geometry):
+            return _reject_result("tile mapping is not strict MCU aligned", **base)
+        if (
+            item["source_x"] + width > coded_dimensions[0]
+            or item["source_y"] + height > coded_dimensions[1]
+            or item["destination_x"] + width > coded_dimensions[0]
+            or item["destination_y"] + height > coded_dimensions[1]
+        ):
+            return _reject_result("tile mapping geometry is out of bounds", **base)
+        tile_mcu_count += (width // 8) * (height // 8)
+        if coded_mcu_count + tile_mcu_count > MAX_MCU_WORK:
+            return _reject_result("completed segment exceeds MCU work bound", **base)
+    source_out_of_bounds = sum(
+        int(
+            item["source_x"] < 0
+            or item["source_y"] < 0
+            or item["source_x"] + item["width"] > coded_dimensions[0]
+            or item["source_y"] + item["height"] > coded_dimensions[1]
+        )
+        for item in mappings
+    )
+    destination_out_of_bounds = sum(
+        int(
+            item["destination_x"] < 0
+            or item["destination_y"] < 0
+            or item["destination_x"] + item["width"] > coded_dimensions[0]
+            or item["destination_y"] + item["height"] > coded_dimensions[1]
+        )
+        for item in mappings
+    )
+    tile_variants = tuple(sorted(tile_dimensions))
+    tile_width, tile_height = next(iter(tile_variants))
+    if any(width <= 0 or height <= 0 for width, height in tile_variants):
+        return _reject_result("tile dimensions are invalid", **base)
+    # Validate coverage at the actual 8x8 coded grid.  Individual trace tiles
+    # may be 32x32 or 32x16, but no tile may overlap or omit an MCU.
     expected_positions = {
         (x, y)
-        for y in range(0, source_dimensions[1], tile_height)
-        for x in range(0, source_dimensions[0], tile_width)
+        for y in range(0, coded_dimensions[1], 8)
+        for x in range(0, coded_dimensions[0], 8)
     }
+    source_mcu_positions: list[tuple[int, int]] = []
+    destination_mcu_positions: list[tuple[int, int]] = []
+    for item in mappings:
+        width = item["width"]
+        height = item["height"]
+        for y in range(item["source_y"], item["source_y"] + height, 8):
+            for x in range(item["source_x"], item["source_x"] + width, 8):
+                source_mcu_positions.append((x, y))
+        for y in range(item["destination_y"], item["destination_y"] + height, 8):
+            for x in range(item["destination_x"], item["destination_x"] + width, 8):
+                destination_mcu_positions.append((x, y))
+    if (
+        source_out_of_bounds
+        or destination_out_of_bounds
+        or set(source_mcu_positions) != expected_positions
+        or set(destination_mcu_positions) != expected_positions
+        or len(source_mcu_positions) != len(set(source_mcu_positions))
+        or len(destination_mcu_positions) != len(set(destination_mcu_positions))
+    ):
+        duplicate_source_positions = (
+            source_positions
+            if len(tile_variants) == 1
+            else source_mcu_positions
+        )
+        duplicate_destination_positions = (
+            destination_positions
+            if len(tile_variants) == 1
+            else destination_mcu_positions
+        )
+        return _reject_result(
+            "tile mapping is not a complete MCU bijection",
+            source_duplicate_tile_count=sum(max(0, count - 1) for count in Counter(duplicate_source_positions).values()),
+            destination_duplicate_tile_count=sum(max(0, count - 1) for count in Counter(duplicate_destination_positions).values()),
+            source_tile_gap_count=len(expected_positions - set(source_mcu_positions)),
+            destination_tile_gap_count=len(expected_positions - set(destination_mcu_positions)),
+            source_out_of_bounds_count=source_out_of_bounds,
+            destination_out_of_bounds_count=destination_out_of_bounds,
+            **base,
+        )
+    # Only the final coded MCU row/column may be clipped by V.  Any coded
+    # MCU outside V must therefore be the last 8-pixel row/column.
+    for x, y in destination_mcu_positions:
+        if x >= visible_dimensions[0] and x != coded_dimensions[0] - 8:
+            return _reject_result("destination crop is not at the final MCU column", **base)
+        if y >= visible_dimensions[1] and y != coded_dimensions[1] - 8:
+            return _reject_result("destination crop is not at the final MCU row", **base)
     expected_count = base["segment_expected_tile_count"]
     if expected_count is not None:
         try:
             expected_count = _integer(expected_count)
         except (TypeError, ValueError):
             return _reject_result("completed segment expected tile count is invalid", **base)
-        if expected_count != len(expected_positions):
+        if expected_count != len(mappings):
             return _reject_result("completed segment expected tile count is invalid", **base)
     else:
-        expected_count = len(expected_positions)
-    source_counts = Counter(source_positions)
-    destination_counts = Counter(destination_positions)
-    source_duplicates = sum(max(0, count - 1) for count in source_counts.values())
-    destination_duplicates = sum(max(0, count - 1) for count in destination_counts.values())
-    source_gaps = len(expected_positions - set(source_positions))
-    destination_gaps = len(expected_positions - set(destination_positions))
-    if (
-        source_out_of_bounds
-        or destination_out_of_bounds
-        or source_duplicates
-        or destination_duplicates
-        or source_gaps
-        or destination_gaps
-        or len(mappings) != expected_count
-    ):
-        return _reject_result(
-            "tile mapping is not a complete bijection",
-            source_duplicate_tile_count=source_duplicates,
-            destination_duplicate_tile_count=destination_duplicates,
-            source_tile_gap_count=source_gaps,
-            destination_tile_gap_count=destination_gaps,
-            source_out_of_bounds_count=source_out_of_bounds,
-            destination_out_of_bounds_count=destination_out_of_bounds,
-            **base,
-        )
+        expected_count = len(mappings)
     first_tile = min(operation_indices)
     last_tile = max(operation_indices)
     if len(set(operation_indices)) != len(operation_indices):
@@ -1839,9 +1976,9 @@ def _analyze_completed_mapping(
     ordered = tuple(_canonical_mapping(mappings))
     proven = PurchasedMapping(
         mapping=ordered,
-        source_dimensions=source_dimensions,
-        destination_dimensions=source_dimensions,
-        tile_dimensions=(tile_width, tile_height),
+        source_dimensions=coded_dimensions,
+        destination_dimensions=visible_dimensions,
+        tile_dimensions=(tile_width, tile_height) if len(tile_variants) == 1 else (8, 8),
         renderer_canvas_id=str(_first(renderer_target, "canvasId", "canvas_id") or "") or None,
         source_canvas_id=record_source_canvas_id,
         imagebitmap_source_id=next(iter(source_ids)),
@@ -1862,6 +1999,10 @@ def _analyze_completed_mapping(
         first_unsafe_operation_index=None,
         unsafe_operation_types=(),
         mapping_provenance="direct",
+        coded_dimensions=coded_dimensions,
+        visible_dimensions=visible_dimensions,
+        tile_dimensions_uniform=len(tile_variants) == 1,
+        tile_dimension_variants=tile_variants,
     )
     return MappingAnalysis(
         status=MAPPING_PROVEN,

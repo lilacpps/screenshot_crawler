@@ -1,46 +1,125 @@
 # Stage 02 checkpoint — 2026-10-08
 
-Status: **COMPLETE / NO PRODUCTION CHANGE**. Authority is [README.md](README.md).
+Status: **COMPLETE**. Authority is [README.md](README.md).
 
 This checkpoint preserves the useful evidence from the earlier heavier workflow while
 making clear that Reviewer/Critic are no longer required for ordinary research.
 
-## Final Lead decision
+## Current Lead decision
 
-| Investigated case | Final classification | Evidence and remaining boundary |
+Required bounded live verification is complete after the user logged in again.
+Final production Reviewer confirmed PASS with no remaining BLOCKING, including
+the live evidence, current cover fallback controls and synchronized documents.
+Stage 02 is complete with the explicit D boundaries below. No production
+code changed during this continuation. Local validation remains 180 targeted
+BookWalker tests and 46 browser-backed Integration tests, with Ruff/diff checks
+passing. No credentials were submitted during the successful continuation.
+
+| Investigated case | Classification | Accepted current evidence / boundary |
 | --- | --- | --- |
-| Manga cover | A, historical control | No fresh cover regression is claimed |
-| Manga ordinary body, representative `9/159` | D | Two exact upstream tile JPEGs; complete selected-visible-output and 848-to-844 edge/crop/padding/reconstruction proof missing |
-| LN `2/314` | D | Native 1443x2048 output obtained, but exact selected-canvas to upstream bitmap identity/geometry missing |
-| LN `3/314` | D, unsupported JPEG recovery | Unique exact upstream JPEG; tile reordering plus bottom-three-row clipping reproduces native output exactly; coefficient-level JPEG recovery unverified |
+| Manga body `9/159`, `11/159` | B | Two 844x1200 reconstructed JPEG parts per spread from 848x1200 coded sources; unique exact candidate, complete coded MCU bijection, coefficient/qtable/selector equality and mandatory native comparison at zero differing pixels for every part |
+| LN `3/314`, `4/314` | B | 2048x1456 coded source to 2048x1453 JPEG; complete 2,944-tile mapping, unique exact candidate, unchanged coefficients/quantization/selectors and native pixel equality |
+| LN `2/314` | D | Stable native PNG fallback at 722x1024; selected mapping ID exists but its usable upstream tile/source proof is unavailable (zero retained tile rows/dimensions/source identity). Historical 1448x2048 exact JPEG/bitmap evidence is not joined to this output |
+| LN ordinary text `8/314`, `10/314` | A | Existing equal-size reconstructed JPEG path remains correct at 960x1280, with 1,200-tile proofs and unique exact input per part; optional old-path final-pixel comparison remains off |
+| Manga cover, current run | D; historical A retained | Current native adapter selection returns no artifact, with zero original-match attempts/candidates. Actual Core rendered-canvas PNG fallback was captured at 1386x983; no current original-JPEG success or source-PNG claim |
+| LN cover, current run | D; historical A retained | Current native PNG fallback at 722x1024; the historical full-resolution original-JPEG control was not reproduced, so it is not claimed as a fresh A pass |
 
-No B artifact recovery contract or C/source-PNG case was established. The
-source-native priority and all production proof/fail-closed gates remain
-unchanged. Exact upstream JPEG/bitmap equality alone is not a finished-page
-artifact proof, and PNG output alone is not source-PNG evidence.
+No source-PNG authority (C) was established. Historical cover A observations
+remain valid for their original windows; current unavailable original/native
+selection is a separate fail-closed observation, not proof of a PNG source.
+The existing original-JPEG path and its priority were not changed. The cover
+control verifies actual fallback output, while original-JPEG regression remains
+covered by the passing Unit/Integration suites and historical live evidence.
+Zero original-match counters on a path with no native selection are unattempted
+matcher diagnostics, not proof that the raw response pool contains no JPEGs.
+Current cover provenance remains D; no underlying source-format change is inferred.
 
-The initial closure retained native/rendered fallback while edge/output proof
-was missing. The user's size/crop question then prompted the single-page image
-audit below, which resolved that boundary for LN `3/314`. That case is now a
-concrete recovery candidate, but no coefficient-level JPEG artifact has been
-verified and no production contract is changed. Further live samples are not
-needed to answer this image question; any next LN `3/314` work can start with
-offline JPEG recovery from the proven mapping. Manga's missing proof and LN
-`2/314`'s unjoined source canvas remain separate questions. Manga 2 was not used.
-Uninvestigated LN opening pages
-`4/314` through `7/314` retain their historical D status without new claims.
+The recovery cause is direct, safe, completed tile mapping with separate coded
+S and visible V dimensions, not a content label or page number. The raw exact
+JPEG is a scrambled recovery input. Reordered coefficients plus rightmost four
+columns (manga) or bottom three rows (LN) of visible-frame clipping reproduce
+the selected native snapshot exactly. Source/destination mapping is MCU-aligned
+and bijective across the entire coded frame, including hidden edge blocks.
+New cropped output always requires available, dimension-equal intrinsic browser
+pixel comparison even when the optional older-path flag is off. Rotation is
+not inferred from dimensions; unsafe state and unsupported lineage fail closed.
 
-Only Lead + Worker participated. Reviewer was not needed because no production
-or durable test/diagnostic contract changed. Critic was not triggered: no gate
-was weakened, no heuristic attribution was adopted, and no cross-title or
-shared abstraction was proposed.
+Additional research is no longer warranted for this stage. Two representative
+manga body spreads, two changed LN opening pages, one unsupported opening and
+two ordinary-text controls cover the bounded contract. LN2 and current covers
+would require a different retained upstream/selection proof, not a looser
+size/filename/timing/similarity rule. Expanding into cached-canvas/no-clear or
+cropped one-hop recovery is outside this proven direct contract. Full viewer
+reverse engineering and all-seven-spread sampling are unnecessary. LN `5/314`
+through `7/314` were not captured as new samples and retain their historical
+D status; traversal is not capture evidence. Manga 2 was unused because no
+specific cross-title hypothesis needed confirmation.
 
-Final verification: metadata-only live research at manga `9/159` (R6/R7), LN
-`2/314` and `3/314`, followed by one LN `3/314` image audit saved only under
-ignored `output/`; verified restoration to `1/159` or `1/314` after each
-independent probe. Production regression/END/full-book live runs were not
-required or claimed. Cleanup retains thread limit 2 and the corrected note
-scope. Final local artifact identities and checks are recorded below.
+Research used Lead + Worker. Critic was invoked once for the material risk of
+the partial-MCU contract and accepted its explicit S/V/full-coverage/mandatory
+pixel gates. Production Reviewer required one real-Canvas nonuniform,
+nonidentity 40x40-to-37x36 crop case; Worker added it and Reviewer confirmed
+no remaining code/test/doc BLOCKING. Final live-evidence review was the last
+completion gate and passed with no remaining BLOCKING; this was not a routine
+research review. No additional broad research is required.
+
+The active branch remains `research/bookwalker-source-native-20261005`.
+Before the successful continuation, Lead fetched `origin` and merged current
+`origin/main` `96fd5fff84567a4e2c644978d2b4c297174fa2ca` (already up to date),
+preserving pending changes and unrelated `debug.log`. This is baseline sync,
+not provenance evidence. The earlier CDP/login access failures were resolved
+by the user's Chrome restart and subsequent intended-account login. Existing
+user tabs and remote Chrome were preserved; only Worker drove the viewer.
+
+## Final bounded live evidence (2026-10-08)
+
+Each independent probe verified actual counters, explicitly returned to its
+anchor as necessary, and verified page 1 before closing its dedicated Page.
+Mapping/source IDs are window-local; repeated IDs across files are not joins.
+
+| Case | Actual start / verified anchor / target / final position |
+| --- | --- |
+| Manga `9/159` | 7 -> 1 -> predecessor 7 -> 9 -> 1 |
+| Manga `11/159` | 7 -> 1 -> predecessor 9 -> 11 -> 1 |
+| Manga cover | 5 -> 3 -> 1; render-ready/capture/end all at 1 |
+| LN `3/314` | probe entry 1 -> 2 -> 3 -> 1 |
+| LN `4/314` | 2 -> 1 -> predecessor 3 -> 4 -> 1 |
+| LN `2/314` stable fallback | 3 -> 1 -> 2 -> 1 |
+| LN cover | 6 -> 1 -> capture/end 1 |
+| LN `8/314` | probe entry 1 -> observed pages 2 through 7 -> 8 -> 1 |
+| LN `10/314` | 4 -> 1 -> predecessor 8 -> 10 -> 1 |
+
+The first combined helper overshot requested manga 9 and LN10 because an
+arithmetic predecessor ignored spread counters. Those error cases are excluded;
+exact counter-verified replacement probes establish manga9/11 and LN10. Only
+successful LN3 and LN8 entries in that combined report are accepted. Its early
+cover/LN2 records are superseded by stable controls with distinct hashes. The
+LN10 helper originally had a copied manga label; Worker confirmed its requested
+LN URL and corrected the filename/title, rather than inferring title from 314
+or dimensions. A debug default `native_png` with zero captures is never PNG
+success: manga cover acceptance uses actual Core fallback bytes instead.
+
+| Ignored local metadata | SHA-256 |
+| --- | --- |
+| `output/stage02-manga9-exact-acceptance-20261008.json` | `cadc7dd4df15f5db87243b2a124aefa0ca96c7155eebc3b2cbfe0013c2693767` |
+| `output/stage02-manga11-exact-acceptance-20261008.json` | `d3208c9d97d18ce9a1b6328474345f0e5e95250c41fce6f9dc947cdb98763993` |
+| `output/stage02-ln4-stable-20261008.json` | `a8b64b2cafa5bdcb560c720df7edc75f9451a3d5660979b1a45901d49eef8826` |
+| `output/stage02-ln10-exact-acceptance-20261008.json` | `780e740ec8728080e461cfcc644811be794c718b97d3c8fc19b0346c6f3a8d0c` |
+| `output/stage02-stable-cover-ln2-20261008.json` | `7680c9f05537e4f4960156d2e05eb9874487b0f520fe1f3300791864c74e072f` |
+| `output/stage02-manga-cover-fresh-control-20261008.json` | `db9c78f9fdcffda117eaa3711c58fddf25e7badbfd79955fba466d72868077c2` |
+| `output/stage02-live-acceptance-20261008.json` (LN3/LN8 entries only) | `4f87fee1d55bb9a518ab5c08caf08a6d2894110147c5c8f66b4013c4c517052b` |
+
+Manga9 output hashes match the earlier production proof below. Manga11 outputs
+(right-to-left) are `317f6050ba53d017e42c8459c8c266aa044e7c8bb8e09b11988aaa610e0265b8`
+and `347db891d426716d11659d7bde298cf2a72c8ae9f1855709eab9fafe7109166a`.
+LN3 output is `99021c156581961ed0d9c1b70babd575d0f98e50ac4c8a8d326a4b778cf61496`;
+LN4 is `180a062387ab818e9a61ba4bf4fd0be0b86f372a02cd255e339a08244b0e49e9`.
+Actual rendered manga-cover PNG is `40221421b46e8cd041c4f97d3159286de12fd0b6d841d5c18371e9f747a64ae9`.
+The stable LN cover and LN2 native PNG hashes differ, respectively
+`b3a388bf46c2aee65291d7f568f4677033afdbd74cc8ebfcf74db3b3c5c5d3ef`
+and `ec4a1483b90ed5e51a76bcfdfec3f584afda3f37239976d08c0bb6dd9f6034b5`.
+Image bytes remain ignored; none is a committed fixture. Full-book/END live
+runs were not required for this local capture contract.
 
 ## Baseline synchronization completed (not research evidence)
 
@@ -59,7 +138,7 @@ scope. Final local artifact identities and checks are recorded below.
 
 These SHAs record this execution, not a pinned main requirement for a future run.
 
-## Post-login continuation — accepted manga findings
+## Initial post-login continuation — manga findings (superseded below)
 
 The user corrected the login state and requested resumption. A new fetch found
 the same current `origin/main`; merging it again reported already up to date.
@@ -102,20 +181,21 @@ trace-clearing capture/comparison, then restore and verify `1/159`.
   not a substitute for successful production visible-page selection. A default
   `returned_path=native_png` debug field with zero captures is not PNG success.
 
-Lead classification: **D / unsupported or incomplete artifact proof**. JPEG
+Initial Lead classification: **D / unsupported or incomplete artifact proof**. JPEG
 source identity is now established, but complete selected-visible-output proof
 and the 848-to-844 partial-edge/crop/padding correspondence remain unproven for
 safe source-native recovery. No B artifact contract or C/source-PNG conclusion
 is adopted. R5's 38 destination-edge clips remain historical evidence; they
 must not be silently counted as a fresh R7 measurement.
 
-No further manga live sample is warranted in this stage: fixing the transition
+At that initial decision, no further manga live sample was warranted: fixing the transition
 box alone would not establish the missing edge/padding and reconstruction
 proof. A new partial-edge recovery contract would go beyond the bounded
 attribution question. Manga 2 remains unused because no safe new recovery
-pattern was established that needs cross-title confirmation.
+pattern was established that needs cross-title confirmation. The later bounded
+MCU/crop proof and successful production capture supersede this stopping decision.
 
-## Post-login continuation — LN `2/314`
+## Initial post-login continuation — LN `2/314`
 
 Actual entry was `3/314`, not an assumed page 1. Worker explicitly returned to
 and verified `1/314`, probed `2/314` only, then returned to and verified `1/314`.
@@ -143,7 +223,7 @@ to upstream-bitmap mapping, including source/destination rectangles and
 crop/padding/composition, followed by complete candidate-to-page attribution.
 The current PNG remains a fail-closed native output; no source-PNG claim is made.
 
-## Post-login continuation — LN `3/314`
+## Initial post-login continuation — LN `3/314` (superseded below)
 
 Actual entry was `2/314`. Worker explicitly restored/verified `1/314`, navigated
 through `2/314` to observe only `3/314`, then returned via `2/314` and verified
@@ -171,7 +251,8 @@ through `2/314` to observe only `3/314`, then returned via `2/314` and verified
 Initial R7 Lead classification: **D**. Selected mapping and unique upstream JPEG
 identity were established, while edge coverage and complete output proof were
 still missing. The image audit below supersedes those missing-output claims;
-safe encoded JPEG recovery remains unverified. No source-PNG claim is adopted.
+the later DCT PoC also supersedes the unsupported-recovery classification for
+this exact LN `3/314` case. No source-PNG claim is adopted.
 
 ## Follow-up image audit — LN `3/314`
 
@@ -208,7 +289,7 @@ only target `3/314` via `2/314`, and restored/verified `1/314` afterward.
   final partial-MCU crop. The production uniform-tile/same-dimension contract
   has not been broadened.
 
-Local evidence: `output/stage02-ln3-image-audit-20261008/audit.json`, SHA-256
+Original image-audit evidence: `output/stage02-ln3-image-audit-20261008/audit.json`, SHA-256
 `64443bbe278980c443309eeaf46ef62f1a662dc1bd846b0fb3770e264912e697`.
 Raw JPEG, native PNG, complete selected tile metadata, full 2048x1456 RGB
 reconstruction and bottom-edge strip are ignored research artifacts in that
@@ -226,7 +307,157 @@ JPEG coefficients while handling the observed nonuniform tiles and final crop;
 it must verify the recovered artifact before adopting B. No production gate was
 weakened, and no Reviewer/Critic was required for this image-only research.
 
-## Final checks and artifact identities
+## Reopened continuation — DCT recovery proof and implementation contract
+
+The user requested continuation for LN opening pages and manga. A fresh fetch
+and merge again found `origin/main` already included. Unrelated `debug.log`
+remained untouched. This preflight is not source evidence.
+
+Worker used the stored LN `3/314` raw JPEG and exact selected mapping offline:
+
+- SOF0 baseline, three components, 4:4:4; 46,592 source and destination MCU
+  positions each covered exactly once by the observed 2,944 variable-size tiles.
+- Reordered the quantized Y/Cb/Cr DCT blocks and wrote a full 2048x1456 JPEG,
+  then a 2048x1453 JPEG with the same coded MCU grid. Neither step re-encoded RGB.
+- Read back both artifacts: all component coefficient arrays, quantization
+  tables and component table selector IDs match. The cropped JPEG matches the
+  selected native PNG with zero differing pixels. Full-height JPEG pixel
+  comparison is against the full-height RGB reconstruction, not the shorter PNG.
+- Cropped JPEG SHA-256:
+  `e34139bf76c7bb16e1852e0266299e875a468b68e17567d538043d56bf1425d6`.
+  Full-height JPEG SHA-256:
+  `776e97cc10f3275ce76589b73ea36e5023ce04de73c7e990fab3d6d351e62f3a`.
+- `dct-poc-summary.json` SHA-256:
+  `918bb0636c87c5f4cf6f29bc911a92edcafe14825bb9147e135f5f42be11dd3a`.
+  Updated `audit.json` SHA-256:
+  `5d1dd97c1948945f02eff88454a8aa9a472b64916a4f4bdf6d3b9c78fcc46b08`.
+  Files remain in ignored `output/stage02-ln3-image-audit-20261008/`.
+
+Lead adopts **B for this observed recovery pattern**, not for direct raw-JPEG
+saving. The minimal implementation must retain separate coded dimensions S and
+visible dimensions V, require S = round-up-to-8(V), prove the entire S-grid
+bijection including invisible edge blocks, preserve strict source/operation/
+completed-mapping identities and safe draw state, and verify output V header
+plus S coefficient grid, quantization and layout. New-path intrinsic browser
+pixel comparison against the selected draw-time native snapshot is mandatory
+even when the optional existing final-pixel setting is off. Direct mappings
+only; existing uniform/one-hop capture and spread all-or-none behavior remain.
+
+A focused Critic accepted this narrow design with those safeguards; another
+Critic gate is not needed unless the design materially changes. Worker owns
+implementation and targeted/local browser tests. Bounded live verification and
+Reviewer approval remain required before completion.
+
+The first attempted LN2 access check mistakenly used ordinary CUA Chrome,
+not the shared crawler CDP. Its login redirect and missing retained viewer tabs
+are excluded as crawler-access evidence. Lead corrected the unnecessary login
+request. OS preflight confirms Chrome listening on 9222 with `.chrome-crawler`.
+The corrected `configure_run(direct)` / `prepare_page` / product navigation /
+`initialize` entry through Playwright CDP succeeded: actual `3/314`, explicitly
+rewound through `2/314` and verified `1/314`. Login is valid; no credential or
+resource operation was needed. No target lineage is claimed from the access
+checks. LN2/manga bounded provenance research resumes from the verified baseline.
+
+### LN `2/314` bounded continuation
+
+Correct shared-CDP probes verified actual entry `2/314`, explicit anchor
+`1/314`, target `2/314`, and restoration to `1/314` in successful runs.
+
+- `output/stage02-ln2-live-20261008/ln2-final-summary.json` re-established a
+  unique full-pixel match from ImageBitmap source 2 (1448x2048) to one of three
+  same-size JPEGs, hash
+  `4dbc98638f1d8b5fcbbc2f59a4e7761a5b9af48142efc83e675b87c7229e061f`.
+- A separate repeat run retained exact selected mapping `mapping-8848`,
+  2,944 tile rows, source bitmap 1448x2048, renderer source canvas 1443x2048,
+  one returned mapping, two retained mappings, no eviction. Its diagnostic
+  erroneously compared the 1443x2048 cover candidate instead of the bitmap's
+  1448x2048 candidates. That negative comparison is excluded.
+- The local canvas observer recorded 2,944 tile draws on one actual canvas,
+  but did not retain a full selected-source/output replay. Missing completed
+  mapping in another window does not prove the viewer lacked a full clear or
+  used an implicit resize reset. The lifecycle cause remains unresolved.
+- The one corrective same-window attempt ended at the owned entry with
+  `BookWalker read button did not navigate to a viewer`; a prior observer
+  retry also ended before evidence collection on viewer render timeout.
+  Neither failure is added to provenance D evidence. No login or resource
+  switch was attempted.
+
+LN2 remains **D** for supported recovery: the complete mapping and candidate
+identity observations have not yet been joined in one verified recovery window,
+and no exact candidate-to-native reconstruction is claimed. Production does
+not infer an upstream mapping or add an unobserved canvas-reset recovery path.
+
+### Manga `9/159` — corrected-window B proof
+
+Worker used shared-CDP strict direct entry. Actual position was `1/159`;
+navigation was `1 -> 3 -> 5 -> 7 -> 9`, with explicit geometry clear followed
+by native arming immediately before `7 -> 9`. Restoration was
+`9 -> 7 -> 5 -> 3 -> 1`, final `1/159` verified.
+
+Production selected two body parts successfully. Exact selected mappings were
+`mapping-3092` and `mapping-4124`; the diagnostic compact inventory also included
+an earlier mapping, which is not treated as a third selected body part.
+
+- Each selected segment has 1,026 tiles, no overflow/eviction, one unique
+  full-pixel JPEG source match (19 total candidates, 18 coded-size candidates,
+  one signature match and one full exact match per part).
+- Coded size is 848x1200, visible/native size 844x1200. Recorded tile variants
+  are 16x16, 16x32, 32x16 and 32x32. The full coded source/destination MCU grid
+  is a bijection, including the partially visible right-edge blocks.
+- Both output JPEGs are 844x1200, coefficient/quantization/component-selector
+  exact. The optional old final-pixel flag was **off**, but the new-path
+  comparison ran for both selected draw-time native snapshots and reported
+  available, equal dimensions, zero differing pixels and zero max difference.
+- Production returned `reconstructed_jpeg`, spread ready true, two JPEG parts.
+  The original R7 geometry ambiguity is resolved for this corrected collection
+  window; no content-label or dimension-based candidate attribution was used.
+- Raw individual source hashes were not exported by this diagnostic (the
+  native-call ring is not source inventory authority). Exact source identity
+  is established by the production completed-mapping/object comparison proof,
+  not by assigning historical hashes to current parts.
+
+Lead classification: **B** for this observed renderer/provenance pattern.
+Local helper and summary are under ignored
+`output/stage02-manga-edge-probe-20261008/`. Summary SHA-256:
+`4af336509611b70aad1b70a270102c22082df25a117279708982d4d2a003fe85`.
+Output JPEG hashes in right-to-left order:
+`cf87a40f8a9d25af44dec8e26f2c7e2121b172eda8eef19156113b3b3e7100d5`,
+`c384df393523ebd8190d419f41a1c9414a9268ca7d295d951576ee6e6202a82f`.
+Targeted/local tests pass. The later final live set above also completed the
+second body-spread verification and LN controls. Initial production
+Reviewer found no concrete wrong-artifact defect and requested one synthetic
+browser-backed nonuniform/permuted right-and-bottom crop case. Worker extended
+the existing Integration test (40x40 coded to 37x36 visible); the two affected
+browser suites pass 46 tests. Reviewer confirmed no remaining code/test/doc
+BLOCKING. The 180 targeted unit tests remain passing; no production code change
+was needed for the review fix.
+
+## Current production validation
+
+- PASS: `uv run pytest -q tests/unit/test_bookwalker_native_capture.py tests/unit/test_bookwalker_purchased_mapping.py tests/unit/test_bookwalker_lossless_jpeg.py tests/unit/test_bookwalker_adapter.py tests/unit/test_bookwalker_original_capture.py` — 180 passed.
+- PASS: `uv run pytest -q tests/integration/test_bookwalker_adapter_browser.py tests/integration/test_bookwalker_original_capture_browser.py` — 46 passed after the review fix.
+- The added synthetic browser case uses a nonidentity, nonuniform tile mapping
+  from a 40x40 coded JPEG to a 37x36 Canvas snapshot, cropping both right and
+  bottom edges. The real browser's intrinsic comparison is pixel exact. Unit
+  tests separately prove the new mandatory gate runs with its optional flag off.
+- PASS: affected-file Ruff; root also ran `uv run ruff check src tests`.
+- PASS: `git diff --check`. No pytest skips were reported.
+- Reviewer recheck: no remaining code/test/doc BLOCKING. The initial browser
+  coverage finding and the contradictory same-dimension/historical wording
+  were resolved. The later final live set above completes required live
+  acceptance; final evidence/document Reviewer also confirmed PASS with no
+  remaining BLOCKING. Stage 02 is complete.
+- Full pytest was not run: this is a BookWalker-local change with targeted
+  capture tests and the affected browser-backed Integration suites passing.
+  No Core/shared abstraction changed. Full-book/END live verification is outside
+  this bounded acceptance set.
+
+## Historical initial no-change closure — checks and artifact identities
+
+This subsection describes the initial documentation/research-only closure,
+before the later B classification and production implementation. Its statements
+about unchanged production/tests and no pytest invocation are historical, not
+the current verification status. Current results and completion decision are above.
 
 The live helpers reused production selection, compact mapping, candidate and
 full-resolution comparison mechanisms where available. R6's legacy empty trace

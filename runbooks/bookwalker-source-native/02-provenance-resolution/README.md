@@ -10,20 +10,27 @@ Latest published checkpoint before this workflow revision:
 
 `efbadb8a4a1f503705546b1eb37375c30a9e6beb`
 
-Production capture code is still unchanged.
+Production implementation, bounded live acceptance and final production review
+of the proven direct partial-MCU recovery pattern are complete.
 
-Current execution status (2026-10-08): **COMPLETE / NO PRODUCTION CHANGE**.
-The main-sync preflight completed, the user corrected login, and bounded fresh
-research finished on manga `9/159` and LN `2/314` / `3/314`. All three remain D
-at the supported JPEG-recovery boundary. Manga and LN `3/314` have unique
-exact upstream JPEG attribution. A follow-up LN `3/314` image audit also proved
-complete pixel-exact output by tile reordering and clipping the reconstructed
-bottom three rows. Safe coefficient-level recovery is still unverified; manga's
-edge/output proof and LN `2/314`'s selected upstream mapping remain incomplete. No B/C recovery
-contract was adopted and manga 2 was unnecessary. Historical cover A controls
-remain unchanged. See [CHECKPOINT.md](CHECKPOINT.md) for final decisions, actual
-positions, evidence limits and the reason to stop. The earlier access-only
-failure is historical, not provenance evidence.
+Current execution status (2026-10-08): **COMPLETE**.
+The original D-only closure was superseded by exact recovery proof. Manga
+`9/159` and `11/159` each return two 844x1200 reconstructed JPEGs from 848x1200
+coded sources. LN `3/314` and `4/314` return 2048x1453 JPEGs from 2048x1456
+coded sources. Each new cropped part has complete coded MCU mapping, one exact
+upstream candidate, unchanged coefficients/quantization/selectors and mandatory
+native pixel equality. These are B. LN2 remains D because its selected mapping
+ID has no usable retained upstream tile/source proof. LN text controls 8/10
+remain A under the existing equal-size reconstruction. Cover controls now use
+verified actual fallback; historical original-JPEG A is not a fresh run claim.
+No source-PNG (C) conclusion follows from fallback. Manga2 was not needed.
+
+Local checks pass: 180 targeted tests, 46 browser-backed Integration tests,
+Ruff and diff checks. Reviewer has no code/test/doc BLOCKING after one synthetic
+crop case was added. Final Reviewer confirmed PASS on completed live evidence
+and document synchronization, including current cover fallback controls.
+See [CHECKPOINT.md](CHECKPOINT.md) for actual positions, output/metadata hashes,
+remaining D boundaries and why additional research is not warranted.
 
 The previous workflow attempted frequent Reviewer/Critic gates and hit agent-thread
 capacity. This revised Stage 02 removes those gates from ordinary research.
