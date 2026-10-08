@@ -78,6 +78,19 @@ Catalog source before opening a page. Comic DAYS treats charged-without-
 baseline. CLI stop-pass output is neutral, while the adapter reason remains
 available for operators and metrics.
 
+## Entry-only success diagnostics (2026-10-06)
+
+The generic `BatchExecutor` now best-effort collects the adapter's existing
+`collect_debug_metadata()` after a confirmed grant-only entry and writes
+metadata-only `diagnostics/entry_trace.json` under that candidate's existing
+output directory. The file carries `item_id`, `source_id`, `target_id`, `site`,
+and `resource`; collection or write failure never changes the candidate result.
+This is a generic hook extension and has no site-name branch. Comic DAYS puts
+its bounded `ticket_trace` inside `adapter_debug`, and the existing Runner
+failure diagnostics expose the same field under `metadata.json`'s
+`adapter_debug`; no capture, retry, pacing, timeout, click, or Catalog
+semantics are changed.
+
 ## Zeblack Z5 current status (2026-09-30)
 
 ### Z5-6 production initial-navigation and Work Ticket flow
@@ -869,8 +882,14 @@ Plannerはsite-scoped snapshotの全status Item/Sourceを対象に、既存の
 衝突するgroupのSourceだけへ`{site}-{Source.external_id}`を設定し、同一Itemの複数
 Sourceだけではsuffixを付けない。Manga ONE/Magapoke専用のnaming workaroundは廃止した。
 ZIP内部の画像はmanifestの相対パスをそのまま使い、作品stemのtop-level directoryは作成しない。
-archive filenameとcompletion status JSONのfilenameは従来どおり同じstemを使い、
-destination存在時の`FileExistsError`と自動連番なしの安全性を維持する。
+archive filenameとcompletion status JSONのfilenameは同じstemを使う。stemは
+`artifact_prefix-[title if sanitized title length < 50]-order-author[-artifact_disambiguator]`
+である。正規化・サニタイズ後タイトルが50文字以上の場合だけtitleを省略し、
+title自体は常にlibrary directoryに含める。50文字ちょうども省略対象である。
+filename要素がすべて空の場合は`archive`をfallbackにする。statusは
+`output/crawl-status/<genre>/<title>/<stem>.json`へ保存し、Work間の同じstemでも衝突しないようにする。destination存在時の
+`FileExistsError`と自動連番なしの安全性を維持する。既存archive/status/Artifact
+locatorは通常Batchで変更せず、明示的なP4 renumberだけが現在のstemへ移行する。
 
 既存archiveのP4 renumberは `scripts/renumber_archives.py` が薄いCLI wrapperとして提供する。
 `--work-key`、`--site`、両方のAND、または`--all`の明示scopeが必須で、defaultはdry-run、
@@ -888,8 +907,9 @@ collisionを検出してoverwriteを拒否する。実行時はZIPを短い
 `.status-renumber-{artifact_id}.tmp`へ移してからfinalへ移す二段階renameを使う。
 rollback時も`.archive-rollback-{artifact_id}.tmp`と
 `.status-rollback-{artifact_id}.tmp`を分離する。元の長いbasenameはtemp名へ含めない。
-`output/crawl-status/<old-stem>.json`はJSONの`archive_path`がold
-Artifact locatorと同一fileを指す場合だけmatchingとし、matching時だけrenameして`archive_path`のみ
+`output/crawl-status/<genre>/<title>/<old-stem>.json`はJSONの`archive_path`がold
+Artifact locatorと同一fileを指す場合だけmatchingとする。明示的なrenumberは旧形式の
+`output/crawl-status/<old-stem>.json`も後方互換で確認し、matching時だけrenameして`archive_path`のみ
 更新する。missing/mismatch statusはwarningでZIP renameをblockしない。Catalog側は
 `update_artifact_locators()`のcompare-and-set一括transactionでlocator/updated_atだけを更新し、
 SHA-256、byte size、state、CrawlRun、Item、historical Artifactを変更しない。Catalog更新失敗時（SQLite由来を含む通常の
@@ -928,7 +948,9 @@ error.txt
 既知の制約:
 
 - diagnostics pathはrun-specific subdirectoryを自動生成しない
-- `SiteAdapter.collect_debug_metadata()` hookはcontractにあるがRunner未統合
+- `SiteAdapter.collect_debug_metadata()` is collected into failure diagnostics under
+  `adapter_debug`; confirmed grant-only runs additionally write the generic
+  metadata-only `diagnostics/entry_trace.json`.
 - diagnostics保存失敗は元例外を隠さない
 
 ## 19. CLI / packaging flow
@@ -1018,7 +1040,6 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 - `BrowserSession`の不要Page helper再発防止
 - explicit resume
-- Adapter `collect_debug_metadata()` のRunner統合
 - diagnostics run directory分離
 - config.yaml整理
 - identity/fingerprint dedupe再検討
@@ -1452,6 +1473,35 @@ and per-artifact capture fingerprint.
 The following historical summary predates Z4-1; the current production
 bounded adapters include both Jump+ and Zeblack. Site Policy and Batch
 changes remain outside the Zeblack Discovery phase.
+
+### Archive health check and recrawl preparation (implemented)
+
+`scripts/prepare_recrawl.py` inspects only `completed` Catalog Items in an
+exact `--site` and/or Work title scope. It does not run Discovery or modify
+sources, source targets, crawl runs, or ZIP contents. The current site policy
+mapping is intentionally limited to the confirmed production capture paths:
+Comic DAYS and Magapoke prefer JPEG (`.jpg`/`.jpeg`) with PNG fallback, while
+MANGA ONE prefers source-native WebP with PNG fallback. An explicitly unknown
+site fails closed; work-only scans skip sources whose policy is undefined.
+
+ZIP page members are inspected at archive root with case-insensitive
+extensions. `PREFERRED_ONLY`, `FALLBACK_INCLUDED`, `UNEXPECTED_FORMAT`,
+`BROKEN`, `MISSING`, and `AMBIGUOUS_ARTIFACT` are reported using site-neutral
+classifications. Default output lists only problems; `--show-all` also lists
+preferred items. `--ignore-missing` keeps MISSING in the classification
+summary but excludes it from problems, recrawl candidates, and apply changes;
+with `--show-all` it is printed as `MISSING (ignored)`.
+
+The default is dry-run. With `--apply`, fallback/unexpected/broken archives
+are moved to `output/reimport-backup/<timestamp>/` while preserving their
+relative path under `output/Books` where possible, then their Catalog locator
+is updated and the Item is returned to `pending`. Missing artifacts retain
+their locator, are marked `missing`, and then return to `pending`. Ambiguous
+artifacts and ignored missing artifacts are never mutated. Move, artifact, and
+pending failures are reported as partial failures without a rollback
+framework. Synthetic ZIP coverage is in
+`tests/unit/test_prepare_recrawl.py`; no real Catalog `--apply` run is part of
+the implementation verification.
 
 B1/B2/B3/B4/B5/B6ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、BookWalker、Magapoke、Manga ONE以外ではJump+だけproduction bounded Discoveryを実装している。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 

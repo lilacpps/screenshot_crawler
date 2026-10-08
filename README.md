@@ -300,22 +300,21 @@ Work Ticket candidate per work (`quota_limit=1`). Batch opens the selected
 episode once, performs strict target-local safety validation, clicks the exact
 Work Ticket control once, confirms positive consumption, and continues from
 the same Page for normal quota crawling. Grant-only leaves the Item pending
-without an Artifact. Catalog/live mismatch stops the resource pass and
-requires a fresh full Discovery; a positive ticket cooldown is reported
-separately. The generic live resolver remains for sites whose Discovery cannot
-classify native ticket state, such as Zebrack.
+without an Artifact. Candidate-local Catalog/live identity mismatch skips only
+that candidate; a changed or unknown Work Ticket contract stops the resource
+pass. A positive ticket cooldown is reported separately. The generic live
+resolver remains for sites whose Discovery cannot classify native ticket state,
+such as Zebrack.
 For live verification, the supplied episode URL seeds full Discovery for its
 native work; the natural Planner candidate may be another episode in that same
 work, while Catalog access facts and ordering remain authoritative.
-For a consuming Comic DAYS Batch candidate, the Catalog Work key must match
-`comicdays:series:<native-series-id>`. The adapter validates that identity
-before navigation and returns `comicdays_work_identity_unavailable` with no
-navigation or consumption for an arbitrary or malformed key. This is distinct
-from `comicdays_discovery_refresh_required`, which means a positive live
-mismatch after a valid Catalog identity. Free/direct candidates may retain
-arbitrary Work keys; a manually invoked quota run without configured Catalog
-expectations keeps the adapter's target-local contract checks.
-After a positive mismatch, refresh the isolated Catalog with full Discovery:
+For a consuming Comic DAYS Batch candidate, `Work.work_key` remains a
+site-neutral stable Catalog identity and may be arbitrary (for example,
+`uchu-kyodai`). The adapter instead validates Catalog `Source.external_id`,
+canonical episode URL, and live site-native episode/series/viewer/ticket
+evidence before navigation and consumption. Candidate-local mismatches use
+`comicdays_discovery_refresh_required` without stopping later candidates;
+changed or unknown Work Ticket contracts are the pass-wide stop case.
 
 ```powershell
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `

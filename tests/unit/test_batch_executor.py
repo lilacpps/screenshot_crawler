@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -13,8 +14,12 @@ from screenshot_crawler.batch import (
     BatchExecutionError,
     BatchExecutor,
     BatchInterruptedError,
+    BatchPlanner,
 )
-from screenshot_crawler.batch.executor import _cancel_task_bounded
+from screenshot_crawler.batch.executor import (
+    _cancel_task_bounded,
+    _write_success_entry_trace,
+)
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -30,6 +35,7 @@ from screenshot_crawler.core.packaging import PackageResult
 from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.base import AccessConsumption
+from screenshot_crawler.site_adapters.comicdays.adapter import ComicDaysAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     ComicDaysSitePolicy,
@@ -45,6 +51,9 @@ COMPLETED_NOW = datetime(2026, 9, 17, 15, 30, tzinfo=JST)
 class FakeAdapter:
     def get_output_metadata(self) -> dict[str, str]:
         return {"title": "Adapter title", "genre": "漫画"}
+
+    async def collect_debug_metadata(self, _page: object) -> dict[str, object]:
+        return {"ticket_trace": [{"phase": "entry_success"}]}
 
 
 class CancellationResistantResolverAdapter:
@@ -575,6 +584,64 @@ async def test_populated_candidate_external_id_must_match_catalog_source(
     assert service.list_artifacts() == []
 
 
+async def test_comicdays_candidate_local_identity_skip_does_not_record_consumption(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "comicdays-identity-skip.sqlite")
+    work = service.create_work(WorkInput(work_key="uchu-kyodai", title="Comic DAYS"))
+    item = service.create_item(ItemInput(order_label="Episode 1"), work_id=work.id)
+    source = service.create_source(
+        SourceInput(site="comicdays", external_id="2", access_mode="quota"),
+        item_id=item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(
+            backend="web", locator="https://comic-days.com/episode/1"
+        ),
+        source_id=source.id,
+    )
+    policies = SitePolicyRegistry()
+    policies.register("comicdays", ComicDaysSitePolicy)
+    adapters = AdapterRegistry()
+    adapters.register("comicdays", ComicDaysAdapter)
+    candidate = BatchPlanner(service, policies).plan(site="comicdays", now=NOW).candidates[0]
+
+    class Runner:
+        def __init__(self, config: RunConfig) -> None:
+            self.config = config
+
+        async def run(self, _page: object, adapter: ComicDaysAdapter) -> RunResult:
+            await adapter.configure_run(_page, self.config.access_strategy)
+            await adapter.configure_quota_resource(_page, self.config.quota_resource)
+            adapter.resolve_initial_navigation_url(
+                "https://comic-days.com/episode/1"
+            )
+            raise AssertionError("candidate-local identity mismatch should skip first")
+
+    executor = BatchExecutor(
+        service,
+        policies,
+        adapters,
+        runner_factory=Runner,  # type: ignore[arg-type]
+    )
+    with pytest.raises(
+        AccessResourceUnavailableError,
+        match="comicdays_discovery_refresh_required",
+    ) as error:
+        await executor.execute_grant_only_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+
+    assert error.value.stop_resource_pass is False
+    assert service.get_source(source.id).quota_started_at is None
+    assert service.get_source(source.id).access_granted_until is None
+    assert service.get_quota_resource_state(
+        work.id, site="comicdays", resource="work_ticket"
+    ) is None
+    assert service.get_item(item.id).status == "pending"
+    assert service.list_artifacts() == []
+
+
 def test_batch_output_directory_is_unique_and_windows_safe(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = add_candidate(service, access_mode="free")
@@ -868,6 +935,109 @@ async def test_grant_only_work_ticket_persists_state_without_completion_or_artif
     run = service.get_crawl_run(result.crawl_run_id)
     assert run.status == "succeeded"
     assert run.page_count == 0
+    trace_files = list((tmp_path / "batch" / "magapoke").glob("*/diagnostics/entry_trace.json"))
+    assert len(trace_files) == 1
+    trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
+    assert {
+        trace["item_id"], trace["source_id"], trace["target_id"],
+        trace["site"], trace["resource"],
+    } == {
+        candidate.item_id, candidate.source_id, candidate.target_id,
+        candidate.site, candidate.quota_resource,
+    }
+    assert trace["adapter_debug"]["ticket_trace"] == [{"phase": "entry_success"}]
+
+
+async def test_success_entry_trace_ignores_collection_exception(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "trace-collection-error.sqlite")
+    candidate = _add_magapoke_candidate(service)
+
+    class FailingAdapter(FakeAdapter):
+        async def collect_debug_metadata(self, _page: object) -> dict[str, object]:
+            raise RuntimeError("diagnostics unavailable")
+
+    await _write_success_entry_trace(
+        object(),
+        FailingAdapter(),
+        candidate,
+        tmp_path / "batch",
+        RunResult(
+            pages=(),
+            stop_state=PageState.END,
+            stop_reason="entry_confirmed",
+            entry_confirmed=True,
+        ),
+    )
+
+    trace = json.loads(
+        (tmp_path / "batch" / "diagnostics" / "entry_trace.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert trace["adapter_debug"] == {"collection_error_type": "RuntimeError"}
+
+
+async def test_success_entry_trace_ignores_write_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = CatalogService(tmp_path / "trace-write-error.sqlite")
+    candidate = _add_magapoke_candidate(service)
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("diagnostics filesystem unavailable")
+
+    monkeypatch.setattr(batch_executor_module, "atomic_write_json", fail_write)
+    await _write_success_entry_trace(
+        object(),
+        FakeAdapter(),
+        candidate,
+        tmp_path / "batch",
+        RunResult(pages=(), stop_state=PageState.END, stop_reason="entry_confirmed"),
+    )
+
+
+@pytest.mark.parametrize("error_type", [asyncio.CancelledError, KeyboardInterrupt])
+async def test_success_entry_trace_propagates_control_exception_from_collection(
+    tmp_path: Path, error_type: type[BaseException]
+) -> None:
+    service = CatalogService(tmp_path / f"trace-collection-{error_type.__name__}.sqlite")
+    candidate = _add_magapoke_candidate(service)
+
+    class InterruptedAdapter(FakeAdapter):
+        async def collect_debug_metadata(self, _page: object) -> dict[str, object]:
+            raise error_type()
+
+    with pytest.raises(error_type):
+        await _write_success_entry_trace(
+            object(),
+            InterruptedAdapter(),
+            candidate,
+            tmp_path / "batch",
+            RunResult(pages=(), stop_state=PageState.END, stop_reason="entry_confirmed"),
+        )
+
+
+@pytest.mark.parametrize("error_type", [asyncio.CancelledError, KeyboardInterrupt])
+async def test_success_entry_trace_propagates_control_exception_from_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[BaseException],
+) -> None:
+    service = CatalogService(tmp_path / f"trace-write-{error_type.__name__}.sqlite")
+    candidate = _add_magapoke_candidate(service)
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise error_type()
+
+    monkeypatch.setattr(batch_executor_module, "atomic_write_json", fail_write)
+    with pytest.raises(error_type):
+        await _write_success_entry_trace(
+            object(),
+            FakeAdapter(),
+            candidate,
+            tmp_path / "batch",
+            RunResult(pages=(), stop_state=PageState.END, stop_reason="entry_confirmed"),
+        )
 
 
 async def test_grant_only_premium_ticket_persists_source_only(

@@ -109,6 +109,10 @@ independently for that visible page if the source bytes remain unavailable or
 invalid. Deterministic validation failures do not trigger extra retrieval.
 Episode parts remain separate archives.
 
+The ZIP and matching `crawl-status` JSON include the sanitized title in their
+stem when it is shorter than 50 characters. At 50 characters or longer, the
+title is omitted from both stems while remaining in the library directory.
+
 ## Live verification
 
 Shared-profile live verification confirmed Manga ONE login and crawl, coexistence with the BookWalker session, dedicated login Page cleanup, remote Chrome preservation, and no regression in the adapter-specific capture, navigation, or END behavior.

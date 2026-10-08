@@ -82,6 +82,150 @@ HTML = """
 """
 
 
+FRONT_PREFIX_TAIL_HTML = """
+<section class="viewer js-viewer" data-json-url="https://comic-days.com/episode/1.json" style="position:relative;width:900px;height:400px">
+  <div class="content-inner scroll-horizontal js-horizontal-viewer">
+    <div class="image-container js-viewer-content is-spread">
+      <div class="page-area js-page-area" id="dummy"><div class="page-dummy js-page"></div></div>
+      <div class="page-area js-page-area" id="front-one"><div class="page js-page front-link-page link-page js-link-page js-front-link-page link-page-full"><div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/front-one"><p>front</p></a></div></div></div></div>
+      <div class="page-area js-page-area" id="front-two"><div class="page js-page front-link-page link-page js-link-page js-front-link-page link-page-full"><div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/front-two"><p>front</p></a></div></div></div></div>
+      <div class="page-area js-page-area" id="body-one" style="display:none"><canvas class="page-image js-page-image"></canvas></div>
+      <div class="page-area js-page-area" id="body-two" style="display:none;position:absolute;left:300px"><canvas class="page-image js-page-image"></canvas></div>
+      <div class="page-area js-page-area" id="body-three" style="display:none;position:absolute;left:0"><canvas class="page-image js-page-image"></canvas></div>
+      <div class="page-area js-page-area" id="body-four" style="display:none"><canvas class="page-image js-page-image"></canvas></div>
+      <div class="page-area js-page-area" id="back-full" style="display:none"><div class="page js-page back-link-page link-page js-link-page js-back-link-page link-page-full"><div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/back"><p>back</p></a></div></div></div></div>
+      <div class="page-area js-page-area" id="back-half" style="display:none;position:absolute;left:300px"><div class="page js-page back-link-page link-page js-link-page js-back-link-page link-page-half"><div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/back-one"><p>back</p></a></div><div class="link-slot"><img><a href="https://example.test/back-two"><p>back</p></a></div></div></div></div>
+      <div class="page-area js-page-area" id="tail-ad" style="display:none"><div class="page js-page page-ad js-page-ad"><div class="ad-nav-area-wrap page-content"><iframe></iframe><iframe></iframe></div></div></div>
+      <div id="viewer-colophon" class="page-area js-page-area" style="display:none;width:300px;height:300px"><div class="back-matter js-back-matter"><div class="back-matter-content"><img><img><img><img><img><img><img><img><img><img></div></div></div>
+    </div>
+  </div>
+  <span class="js-viewer-slider-pagenum-now">1</span><span class="js-viewer-slider-pagenum-last">10</span>
+  <button class="page-navigation-backward js-slide-backward" disabled>back</button>
+  <button class="page-navigation-forward js-slide-forward">next</button>
+</section>
+<script>
+  const now = document.querySelector('.js-viewer-slider-pagenum-now');
+  const ids = ['body-one','body-two','body-three','body-four','back-full','back-half','tail-ad','viewer-colophon'];
+  const show = (...names) => { for (const area of document.querySelectorAll('.page-area')) area.style.display = 'none'; for (const id of names) document.getElementById(id).style.display = 'block'; };
+  const forward = document.querySelector('.js-slide-forward');
+  const backward = document.querySelector('.js-slide-backward');
+  forward.onclick = () => {
+    const current = Number(now.textContent);
+    const next = current === 1 ? 2 : current === 2 ? 4 : current === 4 ? 6 : current === 6 ? 7 : 9;
+    now.textContent = String(next); backward.disabled = false;
+    if (next === 2) show('body-one');
+    if (next === 4) show('body-two','body-three');
+    if (next === 6) show('body-four');
+    if (next === 7) show('back-full','back-half');
+    if (next === 9) show('tail-ad','viewer-colophon');
+  };
+  backward.onclick = () => { now.textContent = '1'; show('dummy','front-one','front-two'); backward.disabled = true; };
+  show('dummy','front-one','front-two');
+</script>
+"""
+
+
+FRONT_PREFIX_DOUBLE_TAIL_HTML = (
+    FRONT_PREFIX_TAIL_HTML
+    .replace(
+        '      <div class="page-area js-page-area" id="dummy"><div class="page-dummy js-page"></div></div>\n',
+        "",
+    )
+    .replace(
+        "    const next = current === 1 ? 2 : current === 2 ? 4 : current === 4 ? 6 : current === 6 ? 7 : 9;",
+        "    const next = current === 1 ? 3 : current === 3 ? 4 : current === 4 ? 6 : 9;",
+    )
+    .replace(
+        "    if (next === 2) show('body-one');\n    if (next === 4) show('body-two','body-three');\n    if (next === 6) show('body-four');\n    if (next === 7) show('back-full','back-half');\n    if (next === 9) show('tail-ad','viewer-colophon');",
+        "    if (next === 3) show('body-one','body-two');\n    if (next === 4) show('body-three','body-four');\n    if (next === 6) show('back-full','back-half','tail-ad');\n    if (next === 9) show('viewer-colophon');",
+    )
+    .replace("    show('dummy','front-one','front-two');", "    show('front-one','front-two');")
+)
+
+
+def _long_front_prefix_tail_html() -> str:
+    body_areas = "\n".join(
+        f'      <div class="page-area js-page-area" id="body-{index}" '
+        'style="display:none;position:absolute;top:0;width:300px;height:400px">'
+        '<canvas class="page-image js-page-image" style="width:300px;height:400px"></canvas></div>'
+        for index in range(2, 43)
+    )
+    return """
+<section class="viewer js-viewer" data-json-url="https://comic-days.com/episode/1.json" style="position:relative;width:1200px;height:500px">
+  <div class="content-inner scroll-horizontal js-horizontal-viewer">
+    <div class="image-container js-viewer-content is-spread" style="position:relative;width:1200px;height:500px">
+      <div class="page-area js-page-area" id="front-one" style="position:absolute;left:0;top:0;width:300px;height:400px">
+        <div class="page js-page front-link-page link-page js-link-page js-front-link-page link-page-full" style="width:300px;height:400px">
+          <div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/front-one"><p>front</p></a></div></div>
+        </div>
+      </div>
+      <div class="page-area js-page-area" id="front-two" style="position:absolute;left:310px;top:0;width:300px;height:400px">
+        <div class="page js-page front-link-page link-page js-link-page js-front-link-page link-page-full" style="width:300px;height:400px">
+          <div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/front-two"><p>front</p></a></div></div>
+        </div>
+      </div>
+      BODY_AREAS
+      <div class="page-area js-page-area" id="back-full" style="display:none;position:absolute;left:0;top:0;width:300px;height:400px">
+        <div class="page js-page back-link-page link-page js-link-page js-back-link-page link-page-full" style="width:300px;height:400px">
+          <div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/back"><p>back</p></a></div></div>
+        </div>
+      </div>
+      <div class="page-area js-page-area" id="back-half" style="display:none;position:absolute;left:310px;top:0;width:300px;height:400px">
+        <div class="page js-page back-link-page link-page js-link-page js-back-link-page link-page-half" style="width:300px;height:400px">
+          <div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/back-one"><p>back</p></a></div><div class="link-slot"><img><a href="https://example.test/back-two"><p>back</p></a></div></div>
+        </div>
+      </div>
+      <div class="page-area js-page-area" id="tail-ad" style="display:none;position:absolute;left:620px;top:0;width:300px;height:400px">
+        <div class="page js-page page-ad js-page-ad" style="width:300px;height:400px"><div class="ad-nav-area-wrap page-content"><iframe></iframe><iframe></iframe></div></div>
+      </div>
+      <div id="viewer-colophon" class="page-area js-page-area" style="display:none;position:absolute;left:930px;top:0;width:300px;height:400px">
+        <div class="back-matter js-back-matter"><div class="back-matter-content"><img><img><img><img><img><img><img><img><img><img></div></div>
+      </div>
+    </div>
+  </div>
+  <span class="js-viewer-slider-pagenum-now">1</span><span class="js-viewer-slider-pagenum-last">47</span>
+  <button class="page-navigation-backward js-slide-backward" disabled>back</button>
+  <button class="page-navigation-forward js-slide-forward">next</button>
+</section>
+<script>
+  const now = document.querySelector('.js-viewer-slider-pagenum-now');
+  const forward = document.querySelector('.js-slide-forward');
+  const allAreas = () => document.querySelectorAll('.page-area.js-page-area');
+  const hideAll = () => allAreas().forEach(area => { area.style.display = 'none'; });
+  const showPrefix = () => { hideAll(); document.querySelector('#front-one').style.display = 'block'; document.querySelector('#front-two').style.display = 'block'; };
+  const showBody = first => {
+    hideAll();
+    for (const index of [first, first + 1]) {
+      const area = document.querySelector(`#body-${index}`); area.style.display = 'block';
+      area.style.left = index === first ? '0px' : '310px';
+    }
+  };
+  const showTail = (...ids) => { hideAll(); for (const id of ids) document.querySelector(`#${id}`).style.display = 'block'; };
+  const unmountLeadingBody = () => {
+    for (let index = 2; index < 16; index++) {
+      const area = document.querySelector(`#body-${index}`);
+      area.replaceChildren(Object.assign(document.createElement('div'), {className: 'page-image js-page-image'}));
+    }
+  };
+  forward.onclick = () => {
+    const current = Number(now.textContent);
+    const next = current === 1 ? 3 : current === 3 ? 17 : current === 17 ? 41 : current === 41 ? 43 : current === 43 ? 45 : 47;
+    now.textContent = String(next);
+    if (next === 3) showBody(2);
+    if (next === 17) { unmountLeadingBody(); showBody(16); }
+    if (next === 41) showBody(40);
+    if (next === 43) { hideAll(); document.querySelector('#body-42').style.display = 'block'; document.querySelector('#body-42').style.left = '0px'; document.querySelector('#back-full').style.display = 'block'; document.querySelector('#back-full').style.left = '310px'; document.querySelector('#back-half').style.display = 'block'; document.querySelector('#back-half').style.left = '620px'; }
+    if (next === 45) showTail('back-full', 'back-half', 'tail-ad', 'viewer-colophon');
+    if (next === 47) showTail('tail-ad', 'viewer-colophon');
+  };
+  showPrefix();
+</script>
+""".replace("BODY_AREAS", body_areas)
+
+
+LONG_FRONT_PREFIX_TAIL_HTML = _long_front_prefix_tail_html()
+
+
 RUNNER_HTML = HTML.replace(
     "const one = document.querySelector('#body-one'); const two = document.querySelector('#body-two'); const three = document.querySelector('#body-three');",
     "const one = document.querySelector('#body-one'); const two = document.querySelector('#body-two'); const three = document.querySelector('#body-three'); const four = document.querySelector('#body-four');",
@@ -152,6 +296,70 @@ TAIL_HTML = """
 """
 
 
+SERIES_LIKE_TAIL_HTML = """
+<section class="viewer js-viewer" data-json-url="https://comic-days.com/episode/1.json" style="position:relative;width:1300px;height:500px">
+  <div class="content-inner scroll-horizontal js-horizontal-viewer">
+    <div class="image-container js-viewer-content is-spread" style="position:relative;width:1300px;height:500px">
+      <div class="page-area js-page-area" id="dummy" style="display:block;position:absolute;left:0;top:0;width:300px;height:400px"><div class="page-dummy js-page"></div></div>
+      <div class="page-area js-page-area" id="body-one" style="display:block;position:absolute;left:0;top:0;width:300px;height:400px"><canvas class="page-image js-page-image" style="width:300px;height:400px"></canvas></div>
+      <div class="page-area js-page-area" id="body-two" style="display:none;position:absolute;left:310px;top:0;width:300px;height:400px"><canvas class="page-image js-page-image" style="width:300px;height:400px"></canvas></div>
+      <div class="page-area js-page-area" id="body-three" style="display:none;position:absolute;left:0;top:0;width:300px;height:400px"><canvas class="page-image js-page-image" style="width:300px;height:400px"></canvas></div>
+      <div class="page-area js-page-area" id="body-four" style="display:none;position:absolute;left:0;top:0;width:300px;height:400px"><canvas class="page-image js-page-image" style="width:300px;height:400px"></canvas></div>
+      <div class="page-area js-page-area" id="back-half" style="display:none;position:absolute;left:0;top:0;width:300px;height:400px"><div class="page js-page back-link-page link-page js-link-page js-back-link-page link-page-half" style="width:300px;height:400px"><div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/back-one">back</a></div><div class="link-slot"><img><a href="https://example.test/back-two">back</a></div></div></div></div>
+      <div class="page-area js-page-area test-series-like-page" id="series-like" style="display:none;position:absolute;left:310px;top:0;width:300px;height:400px"><div class="page js-page series-like-page js-show-after-load" style="width:300px;height:400px"><div class="series-like-content"><p class="series-like-description">like</p><button class="series-like-button js-episode-like-button">like</button></div><div class="like-page-app-content"><p class="like-page-app-content-text">app</p><a class="like-page-app-content-link" href="https://comic-days.com/info/app"><img class="like-page-app-content-icon" alt="app"></a></div></div></div>
+      <div class="page-area js-page-area" id="tail-ad" style="display:none;position:absolute;left:620px;top:0;width:300px;height:400px"><div class="page js-page page-ad js-page-ad" style="width:300px;height:400px"><div class="ad-nav-area-wrap page-content"><iframe></iframe><iframe></iframe></div></div></div>
+      <div id="viewer-colophon" class="page-area js-page-area" style="display:none;position:absolute;left:930px;top:0;width:300px;height:400px"><div class="back-matter js-back-matter"><div class="back-matter-content"><img><img><img><img><img><img><img><img><img><img></div></div></div>
+    </div>
+  </div>
+  <span class="js-viewer-slider-pagenum-now">1</span><span class="js-viewer-slider-pagenum-last">8</span>
+  <button class="page-navigation-backward js-slide-backward" disabled>back</button>
+  <button class="page-navigation-forward js-slide-forward">next</button>
+</section>
+<script>
+  const now = document.querySelector('.js-viewer-slider-pagenum-now');
+  const allAreas = () => document.querySelectorAll('.page-area.js-page-area');
+  const show = (...ids) => { for (const area of allAreas()) area.style.display = 'none'; for (const id of ids) document.querySelector('#' + id).style.display = 'block'; };
+  document.querySelector('.js-slide-forward').onclick = () => {
+    const current = Number(now.textContent);
+    const next = current === 1 ? 2 : current === 2 ? 4 : current === 4 ? 5 : 8;
+    now.textContent = String(next);
+    if (next === 2) show('body-two', 'body-three');
+    if (next === 4) show('body-four');
+    if (next === 5) show('back-half', 'series-like', 'tail-ad');
+    if (next === 8) show('viewer-colophon');
+  };
+</script>
+"""
+
+
+def _recommendation_colophon_html(*, point_gettable: bool = False, recommendation_count: int = 20) -> str:
+    point_image = '<img class="reading-completion-point-img">' if point_gettable else ""
+    recommendation_images = ''.join(
+        '<img class="days-viewer-colophon-recommend-thumb">'
+        for _ in range(recommendation_count)
+    )
+    marker = ' point-gettable-episode' if point_gettable else ''
+    return (
+        f'<div id="viewer-colophon" class="page-area js-page-area{marker}" '
+        'style="display:none;position:absolute;left:930px;top:0;width:300px;height:400px">'
+        '<div class="back-matter js-back-matter"><div class="back-matter-content">'
+        '<div class="viewer-colophon-info-wrapper"><div class="viewer-colophon-info">'
+        f'{point_image}<p class="viewer-colophon-next-episode"><a href="/episode/2">next</a></p>'
+        '</div></div>'
+        '<aside class="days-viewer-colophon-recommend">'
+        '<h3 class="days-viewer-colophon-recommend-title">recommend</h3>'
+        '<ul class="days-viewer-colophon-recommend-list"></ul>'
+        f'<div class="swiper">{recommendation_images}</div>'
+        '</aside></div></div></div>'
+    )
+
+
+SERIES_LIKE_RECOMMENDATION_TAIL_HTML = SERIES_LIKE_TAIL_HTML.replace(
+    '<div id="viewer-colophon" class="page-area js-page-area" style="display:none;position:absolute;left:930px;top:0;width:300px;height:400px"><div class="back-matter js-back-matter"><div class="back-matter-content"><img><img><img><img><img><img><img><img><img><img></div></div></div>',
+    _recommendation_colophon_html(),
+)
+
+
 OFFSET_TAIL_HTML = (
     TAIL_HTML.replace(
         '<div class="image-container js-viewer-content is-spread"><canvas',
@@ -170,6 +378,15 @@ OFFSET_TAIL_HTML = (
         "window.__tailState.sliderNow === 19",
         "window.__tailState.sliderNow === 20",
     )
+)
+
+
+POINT_GETTABLE_OFFSET_TAIL_HTML = OFFSET_TAIL_HTML.replace(
+    'id="viewer-colophon" class="page-area js-page-area"',
+    'id="viewer-colophon" class="page-area js-page-area point-gettable-episode"',
+).replace(
+    '<div class="back-matter-content">' + '<img>' * 10,
+    '<div class="back-matter-content">' + '<img>' * 11,
 )
 
 
@@ -198,6 +415,24 @@ DIRECT_TERMINAL_HTML = """
 
 PRODUCTION_HOOK_CASES = [
     pytest.param("legacy-even", HTML, 8, [(1, [1]), (3, [2, 3]), (5, [4])], id="legacy-even"),
+    pytest.param("series-like-tail", SERIES_LIKE_TAIL_HTML, 8, [(1, [1]), (2, [2, 3]), (4, [4])], id="series-like-tail"),
+    pytest.param(
+        "series-like-recommendation-tail",
+        SERIES_LIKE_RECOMMENDATION_TAIL_HTML,
+        8,
+        [(1, [1]), (2, [2, 3]), (4, [4])],
+        id="series-like-recommendation-tail",
+    ),
+    pytest.param(
+        "initial-double-spread",
+        HTML.replace(
+            'id="body-two" style="display:none;position:absolute;left:300px"',
+            'id="body-two" style="display:block;position:absolute;left:300px"',
+        ),
+        8,
+        [(1, [2, 1]), (3, [2, 3]), (5, [4])],
+        id="initial-double-spread",
+    ),
     pytest.param(
         "legacy-odd",
         HTML.replace('<div class="page-area js-page-area" id="body-four" style="display:none;position:absolute;left:300px"><canvas class="page-image js-page-image"></canvas></div>\n', ""),
@@ -477,6 +712,303 @@ async def test_comicdays_production_hook_covers_tail_family_and_body_parity(
         assert captures is not None and len(captures) == len(expected_areas)
 
 
+async def test_comicdays_production_hook_handles_front_prefix_and_two_back_tail(
+    browser_page,
+) -> None:
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(FRONT_PREFIX_TAIL_HTML)
+    await _paint_sources(browser_page, "canvas.page-image")
+
+    initial = await adapter._active(browser_page)
+    assert initial["complete"] is False
+    assert initial["reason"] == "front_link_prefix"
+    assert initial["frontPrefix"] is True
+
+    for slider, ids in [(2, ["body-one"]), (4, ["body-two", "body-three"]), (6, ["body-four"])]:
+        if slider == 4:
+            # The live viewer lazily unmounts earlier canvases while scrolling.
+            # Body-area discovery must remain structural, not depend on the
+            # first body canvas still being mounted.
+            await browser_page.evaluate("document.querySelector('#body-one canvas').remove()")
+        await browser_page.evaluate(
+            """value => {
+              document.querySelector('.js-viewer-slider-pagenum-now').textContent = String(value.slider);
+              for (const area of document.querySelectorAll('.page-area')) area.style.display = 'none';
+              for (const id of value.ids) document.getElementById(id).style.display = 'block';
+            }""",
+            {"slider": slider, "ids": ids},
+        )
+        state = await adapter._active(browser_page)
+        assert state["complete"] is True
+        expected_indices = {"body-one": 3, "body-two": 4, "body-three": 5, "body-four": 6}
+        assert [row["areaIndex"] for row in state["rows"]] == [expected_indices[id] for id in ids]
+
+
+async def test_comicdays_front_prefix_normalizes_without_clicking_links_and_reaches_end(
+    browser_page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
+    monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
+    monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(FRONT_PREFIX_TAIL_HTML)
+    await _paint_sources(browser_page, "canvas.page-image")
+    await browser_page.evaluate(
+        """() => {
+          window.__frontLinkClicks = 0;
+          for (const link of document.querySelectorAll('.front-link-page a')) {
+            link.addEventListener('click', () => { window.__frontLinkClicks += 1; });
+          }
+        }"""
+    )
+
+    await adapter.initialize(browser_page)
+    identity = await adapter.get_content_identity(browser_page)
+    assert identity.page_number == 2
+    assert identity.page_id == "3"
+    assert await browser_page.evaluate("window.__frontLinkClicks") == 0
+
+    for expected_id in ("4,5", "6"):
+        previous = identity
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, previous)
+        assert await adapter.detect_state(browser_page) is PageState.CONTENT
+        identity = await adapter.get_content_identity(browser_page)
+        assert identity.page_id == expected_id
+
+    previous = identity
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.END
+
+
+async def test_comicdays_two_front_double_prefix_normalizes_to_first_spread(
+    browser_page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
+    monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
+    monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(FRONT_PREFIX_DOUBLE_TAIL_HTML)
+    await _paint_sources(browser_page, "canvas.page-image")
+    await browser_page.evaluate(
+        """() => {
+          window.__frontLinkClicks = 0;
+          for (const link of document.querySelectorAll('.front-link-page a')) {
+            link.addEventListener('click', () => { window.__frontLinkClicks += 1; });
+          }
+        }"""
+    )
+
+    initial = await adapter._active(browser_page)
+    assert initial["complete"] is False
+    assert initial["reason"] == "front_link_prefix"
+    assert initial["frontPrefix"] is True
+    assert initial["frontPrefixMode"] == "two-front-double"
+
+    await adapter.initialize(browser_page)
+    identity = await adapter.get_content_identity(browser_page)
+    assert identity.page_number == 3
+    assert set(identity.page_id.split(",")) == {"2", "3"}
+    assert await browser_page.evaluate("window.__frontLinkClicks") == 0
+
+    previous = identity
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    identity = await adapter.get_content_identity(browser_page)
+    assert identity.page_number == 4
+    assert set(identity.page_id.split(",")) == {"4", "5"}
+
+    previous = identity
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.END
+    assert await browser_page.evaluate("window.__frontLinkClicks") == 0
+
+
+async def test_comicdays_long_two_front_prefix_survives_lazy_unmount_and_reaches_end(
+    browser_page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
+    monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
+    monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(LONG_FRONT_PREFIX_TAIL_HTML)
+    await _paint_sources(browser_page, "canvas.page-image")
+    await browser_page.evaluate(
+        """() => {
+          window.__frontLinkClicks = 0;
+          for (const link of document.querySelectorAll('.front-link-page a')) {
+            link.addEventListener('click', () => { window.__frontLinkClicks += 1; });
+          }
+        }"""
+    )
+
+    initial = await adapter._active(browser_page)
+    assert initial["reason"] == "front_link_prefix"
+    assert initial["frontPrefixMode"] == "two-front-double"
+
+    await adapter.initialize(browser_page)
+    identity = await adapter.get_content_identity(browser_page)
+    assert identity.page_number == 3
+    assert set(identity.page_id.split(",")) == {"2", "3"}
+
+    for expected_ids in ({"16", "17"}, {"40", "41"}):
+        previous = identity
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, previous)
+        assert await adapter.detect_state(browser_page) is PageState.CONTENT
+        identity = await adapter.get_content_identity(browser_page)
+        assert set(identity.page_id.split(",")) == expected_ids
+
+    # A partly clipped neighboring body area must not become a third selected page.
+    await browser_page.evaluate(
+        """() => {
+          const partial = document.querySelector('#body-39');
+          partial.style.display = 'block'; partial.style.left = '-290px';
+        }"""
+    )
+    state = await adapter._active(browser_page)
+    assert state["complete"] is True
+    assert {row["areaIndex"] for row in state["rows"]} == {40, 41}
+
+    previous = identity
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    identity = await adapter.get_content_identity(browser_page)
+    assert identity.page_id == "42"
+
+    previous = identity
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.END
+    assert await browser_page.evaluate("window.__frontLinkClicks") == 0
+
+
+@pytest.mark.parametrize("mutation", ["missing_front", "extra_front", "blank_prefix"])
+async def test_comicdays_two_front_double_prefix_rejects_ambiguous_prefix(
+    browser_page, mutation: str,
+) -> None:
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(FRONT_PREFIX_DOUBLE_TAIL_HTML)
+    if mutation == "missing_front":
+        await browser_page.evaluate("document.querySelector('#front-two').remove()")
+    elif mutation == "extra_front":
+        await browser_page.evaluate(
+            """() => document.querySelector('#body-one').insertAdjacentHTML(
+              'beforebegin',
+              '<div class="page-area js-page-area"><div class="page js-page front-link-page link-page js-link-page js-front-link-page link-page-full"><div class="link-page-content"><div class="link-slot"><img><a href="https://example.test/extra">front</a></div></div></div></div>'
+            )"""
+        )
+    else:
+        await browser_page.evaluate(
+            """() => document.querySelector('#body-one').insertAdjacentHTML(
+              'beforebegin',
+              '<div class="page-area js-page-area"><div class="page js-page unknown-panel">unknown</div></div>'
+            )"""
+        )
+    state = await adapter._active(browser_page)
+    assert state["complete"] is False
+    assert state["reason"] == "unknown_body_layout"
+
+
+async def test_comicdays_front_prefix_rewinds_shared_state_before_advancing(
+    browser_page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adapter_module, "parse_comicdays_episode_url", lambda _url: "1")
+    monkeypatch.setattr(adapter_module, "canonical_comicdays_episode_url", lambda _url: "https://comic-days.com/episode/1")
+    monkeypatch.setattr(adapter_module, "_series_id_from_page", lambda _page: _completed("series"))
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(FRONT_PREFIX_TAIL_HTML)
+    await _paint_sources(browser_page, "canvas.page-image")
+    await browser_page.evaluate(
+        """() => {
+          window.__frontLinkClicks = 0;
+          for (const link of document.querySelectorAll('.front-link-page a')) {
+            link.addEventListener('click', () => { window.__frontLinkClicks += 1; });
+          }
+          const now = document.querySelector('.js-viewer-slider-pagenum-now');
+          now.textContent = '4';
+          for (const area of document.querySelectorAll('.page-area')) area.style.display = 'none';
+          document.querySelector('#body-two').style.display = 'block';
+          document.querySelector('#body-three').style.display = 'block';
+          document.querySelector('.js-slide-backward').disabled = false;
+        }"""
+    )
+
+    await adapter.initialize(browser_page)
+    identity = await adapter.get_content_identity(browser_page)
+    assert identity.page_number == 2
+    assert identity.page_id == "3"
+    assert await browser_page.evaluate("window.__frontLinkClicks") == 0
+
+
+@pytest.mark.parametrize("mutation", ["back_full", "back_half", "ad", "colophon"])
+async def test_comicdays_front_prefix_tail_rejects_malformed_resources(
+    browser_page, mutation: str,
+) -> None:
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(FRONT_PREFIX_TAIL_HTML)
+    await _paint_sources(browser_page, "canvas.page-image")
+    adapter._episode_id = "1"
+    await browser_page.evaluate(
+        """() => {
+          document.querySelector('.js-viewer-slider-pagenum-now').textContent = '6';
+          for (const area of document.querySelectorAll('.page-area')) area.style.display = 'none';
+          document.querySelector('#body-four').style.display = 'block';
+        }""",
+    )
+    previous = await adapter.get_content_identity(browser_page)
+    await browser_page.evaluate(
+        """mutation => {
+          if (mutation === 'back_full') document.querySelector('#back-full img').remove();
+          if (mutation === 'back_half') document.querySelector('#back-half .link-slot').remove();
+          if (mutation === 'ad') document.querySelector('#tail-ad .js-page-ad').append(document.createElement('span'));
+          if (mutation === 'colophon') document.querySelector('#viewer-colophon .back-matter').append(document.createElement('span'));
+        }""",
+        mutation,
+    )
+    await adapter.go_next(browser_page)
+    adapter.page_change_timeout_ms = 300
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.wait_for_change(browser_page, previous)
+
+
 async def test_comicdays_initialize_rewinds_from_colophon_before_first_ready_spread(
     browser_page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -539,6 +1071,144 @@ async def test_comicdays_leading_area_tail_variant_reaches_end(browser_page) -> 
     await adapter.go_next(browser_page)
     await adapter.wait_for_change(browser_page, previous)
     assert await adapter.detect_state(browser_page) is PageState.END
+
+
+async def test_comicdays_series_like_tail_variant_reaches_end(browser_page) -> None:
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(SERIES_LIKE_TAIL_HTML)
+    await _paint_sources(browser_page, "canvas.page-image")
+    adapter._episode_id = "1"
+
+    identity = await adapter.get_content_identity(browser_page)
+    assert identity.page_id == "1"
+    for expected_id in ("2,3", "4"):
+        previous = identity
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, previous)
+        assert await adapter.detect_state(browser_page) is PageState.CONTENT
+        identity = await adapter.get_content_identity(browser_page)
+        assert identity.page_id == expected_id
+
+    previous = identity
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+    assert adapter._last_transition_observation["tailVariant"] == "series-like-tail"
+
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.END
+
+
+async def test_comicdays_recommendation_colophon_is_known_terminal_shape(browser_page) -> None:
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(SERIES_LIKE_RECOMMENDATION_TAIL_HTML)
+    await _paint_sources(browser_page, "canvas.page-image")
+    adapter._episode_id = "1"
+
+    identity = await adapter.get_content_identity(browser_page)
+    for expected_id in ("2,3", "4"):
+        previous = identity
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, previous)
+        assert await adapter.detect_state(browser_page) is PageState.CONTENT
+        identity = await adapter.get_content_identity(browser_page)
+        assert identity.page_id == expected_id
+
+    previous = identity
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+    assert adapter._last_transition_observation["colophon"]["colophonShape"] == "standard-recommendation"
+
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.END
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_marker",
+        "extra_image",
+        "extra_canvas",
+        "extra_button",
+        "extra_series_child",
+    ],
+)
+async def test_comicdays_series_like_tail_requires_exact_shape(browser_page, mutation: str) -> None:
+    await browser_page.goto("data:text/html,<html></html>")
+    adapter = ComicDaysAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.reload()
+    await browser_page.set_content(SERIES_LIKE_TAIL_HTML)
+    await browser_page.evaluate(
+        """mutation => {
+          const page = document.querySelector('#series-like .series-like-page');
+          if (mutation === 'missing_marker') page.classList.remove('js-show-after-load');
+          if (mutation === 'extra_image') page.querySelector('.series-like-content').append(document.createElement('img'));
+          if (mutation === 'extra_canvas') page.querySelector('.series-like-content').append(document.createElement('canvas'));
+          if (mutation === 'extra_button') page.querySelector('.series-like-content').append(document.createElement('button'));
+          if (mutation === 'extra_series_child') page.append(document.createElement('span'));
+        }""",
+        mutation,
+    )
+    state = await adapter._active(browser_page)
+    assert state["complete"] is False
+    assert state["reason"] == "unknown_body_layout"
+
+
+async def test_comicdays_point_gettable_colophon_variant_reaches_end(browser_page) -> None:
+    await browser_page.set_content(POINT_GETTABLE_OFFSET_TAIL_HTML)
+    await browser_page.evaluate(
+        """() => {
+          window.__forwardClicks = 0;
+          document.querySelector('.js-slide-forward').addEventListener('click', () => {
+            window.__forwardClicks += 1;
+          });
+        }""",
+    )
+    adapter = ComicDaysAdapter()
+    adapter._episode_id = "1"
+    previous = ContentIdentity(page_id="17", page_number=17, source_id="1", fingerprint="body")
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.AD
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    assert await adapter.detect_state(browser_page) is PageState.END
+    assert await browser_page.evaluate("window.__forwardClicks") == 2
+
+
+@pytest.mark.parametrize("mutation", ["missing_marker", "images10", "images12", "canvas", "iframe", "extra_child"])
+async def test_comicdays_point_gettable_colophon_requires_exact_shape(
+    browser_page, mutation: str,
+) -> None:
+    await browser_page.set_content(POINT_GETTABLE_OFFSET_TAIL_HTML)
+    scripts = {
+        "missing_marker": "document.querySelector('#viewer-colophon').classList.remove('point-gettable-episode')",
+        "images10": "document.querySelector('#viewer-colophon .back-matter-content img').remove()",
+        "images12": "document.querySelector('#viewer-colophon .back-matter-content').append(document.createElement('img'))",
+        "canvas": "document.querySelector('#viewer-colophon .back-matter-content').append(document.createElement('canvas'))",
+        "iframe": "document.querySelector('#viewer-colophon .back-matter-content').append(document.createElement('iframe'))",
+        "extra_child": "document.querySelector('#viewer-colophon .back-matter').append(document.createElement('span'))",
+    }
+    await browser_page.evaluate(scripts[mutation])
+    adapter = ComicDaysAdapter()
+    adapter._episode_id = "1"
+    adapter.page_change_timeout_ms = 200
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(
+            browser_page,
+            ContentIdentity(page_id="17", page_number=17, source_id="1", fingerprint="body"),
+        )
 
 
 async def test_comicdays_direct_colophon_terminal_variant_reaches_end(
@@ -662,6 +1332,8 @@ async def test_comicdays_terminal_resource_shape_must_match_observation(
     await browser_page.reload()
     await browser_page.set_content(DIRECT_TERMINAL_HTML)
     await _paint_sources(browser_page, "#body-final canvas")
+    adapter._episode_id = "1"
+    previous = await adapter.get_content_identity(browser_page)
     if mutation == "back_extra":
         script = "document.querySelector('.js-back-link-page').append(document.createElement('span'))"
     elif mutation == "back_missing":
@@ -681,8 +1353,6 @@ async def test_comicdays_terminal_resource_shape_must_match_observation(
     else:
         script = "document.querySelector('.image-container').insertAdjacentHTML('beforeend', '<div class=\"page-area js-page-area\" style=\"display:block;pointer-events:none;position:absolute;left:0;top:0;width:300px;height:300px\"><div class=\"page js-page paid-panel\">paid</div></div>')"
     await browser_page.evaluate(script)
-    adapter._episode_id = "1"
-    previous = await adapter.get_content_identity(browser_page)
     await adapter.go_next(browser_page)
     adapter.page_change_timeout_ms = 200
     with pytest.raises(PageChangeTimeoutError):

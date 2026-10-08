@@ -280,7 +280,7 @@ Batchで`order_key`がNULLの非定型item（例: `おまけ`、`特別編`、PR
 `order`の人間向け表記は変更せず、`Source.external_id`から作った
 `mangaone-{external_id}`をarchive stem末尾のdisambiguatorとして付ける。
 そのため、同じ作品の`おまけ`でもchapterごとに
-`作品名-おまけ-mangaone-214131.zip`のように安定して分離される。
+`獣王と薬草-おまけ-mangaone-214131.zip`のように安定して分離される。
 通常の`order_key`を持つ話、手動crawl、同じchapterの再packageは従来の命名と
 destination存在時の停止動作を維持する。
 
@@ -351,6 +351,10 @@ endpoint優先順位:
 output/Books/漫画/<title>/<title>-<order>.zip
 ```
 
+上記は正規化・サニタイズ後のtitleが50文字未満の場合である。50文字以上の場合は
+filenameからtitleを省略し、`output/Books/漫画/<title>/<order>.zip`とする。
+50文字ちょうども省略対象で、title directoryとcrawl-statusのstem共有はどちらも維持する。
+
 BatchのManga ONE非定型itemだけは、次のようにstable disambiguatorが付く。
 
 ```text
@@ -358,7 +362,8 @@ output/Books/漫画/<title>/<title>-<order>-mangaone-<external_id>.zip
 ```
 
 ZIP内部の画像はmanifestの相対パスを使い、作品stemのtop-level directoryは作成しない。
-`crawl-status`のJSON filenameは従来どおりarchive stemを使う。
+`crawl-status`のJSON filenameは従来どおりarchive stemを使うが、
+`output/crawl-status/<genre>/<title>/` 配下へ保存してWork間の同名stem衝突を避ける。
 
 source crawl directoryは、manifest / progress / manifest記載artifact以外を含まない場合に限りcleanupされる。
 

@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from playwright.async_api import Page
 
@@ -26,7 +27,7 @@ from screenshot_crawler.core.access_guard import AccessEvent, AccessGuard
 from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult, package_crawl_output
-from screenshot_crawler.core.progress import normalize_path
+from screenshot_crawler.core.progress import atomic_write_json, normalize_path
 from screenshot_crawler.core.runner import CrawlerRunner, RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.runtime_settings import (
@@ -41,6 +42,45 @@ from screenshot_crawler.site_policies.base import SitePolicy
 RunnerFactory = Callable[[RunConfig], CrawlerRunner]
 PackageFunction = Callable[..., PackageResult]
 _RESOLVER_CLEANUP_TIMEOUT_SECONDS = 5
+
+
+async def _write_success_entry_trace(
+    page: Page,
+    adapter: SiteAdapter,
+    candidate: BatchCandidate,
+    output_dir: Path,
+    crawl_result: RunResult,
+) -> None:
+    """Persist metadata-only entry evidence without affecting Batch success."""
+
+    adapter_debug: dict[str, Any] = {}
+    collect_debug = getattr(adapter, "collect_debug_metadata", None)
+    if callable(collect_debug):
+        try:
+            value = await asyncio.wait_for(collect_debug(page), timeout=2)
+            if isinstance(value, dict):
+                adapter_debug = value
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - evidence must not mask success
+            adapter_debug = {"collection_error_type": type(exc).__name__}
+    payload: dict[str, Any] = {
+        "item_id": candidate.item_id,
+        "source_id": candidate.source_id,
+        "target_id": candidate.target_id,
+        "site": candidate.site,
+        "resource": candidate.quota_resource,
+        "grant_only": True,
+        "entry_confirmed": crawl_result.entry_confirmed,
+        "stop_reason": crawl_result.stop_reason,
+        "adapter_debug": adapter_debug,
+    }
+    try:
+        atomic_write_json(output_dir / "diagnostics" / "entry_trace.json", payload)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        raise
+    except Exception:  # noqa: BLE001 - evidence must not mask success
+        return
 
 
 def _consume_finished_task(task: asyncio.Task[object]) -> None:
@@ -527,6 +567,9 @@ class BatchExecutor:
             if not observed:
                 reason = policy.grant_only_unavailable_reason(candidate.quota_resource)
                 raise AccessResourceUnavailableError(reason)
+            await _write_success_entry_trace(
+                page, adapter, candidate, output_dir, crawl_result
+            )
             self.catalog.mark_crawl_run_succeeded(
                 run_id,
                 page_count=0,

@@ -1,9 +1,12 @@
 import io
+from copy import deepcopy
 
+import numpy as np
 import pytest
 from PIL import Image
 
 from screenshot_crawler.site_adapters.comicdays.native_capture import (
+    _jpeg_dct_read,
     _jpeg_header,
     _jpeg_normalize_writer_metadata,
     reconstruct_jpeg,
@@ -120,6 +123,87 @@ def test_reconstruct_jpeg_preserves_coefficients_and_edge() -> None:
     assert result.mime_type == "image/jpeg"
     assert result.file_extension == ".jpg"
     assert Image.open(io.BytesIO(result.data)).size == (1125, 1600)
+
+
+def _jpeg_row_720(*, color: bool = False, subsampling: int = 0, progressive: bool = False) -> tuple[dict, bytes]:
+    image = Image.new("RGB" if color else "L", (720, 1024))
+    for y in range(1024):
+        for x in range(720):
+            value = (x * 7 + y * 11 + (x // 16) * (y // 16)) % 256
+            image.putpixel((x, y), (value, (value * 3) % 256, (value * 5) % 256) if color else value)
+    if progressive and color:
+        image = Image.new("RGB", (720, 1024), (127, 127, 127))
+    data = io.BytesIO()
+    image.save(data, format="JPEG", quality=85, subsampling=subsampling, progressive=progressive)
+    safe = {"a": 1, "b": 0, "c": 0, "d": 1, "e": 0, "f": 0, "alpha": 1, "composite": "source-over", "filter": "none"}
+    source_url = "blob:comicdays-jpeg-720"
+    def draw(args: list[int], sequence: int) -> dict:
+        return {"sequence": sequence, "canvasWidth": 720, "canvasHeight": 1024, "sourceId": 1, "sourceUrl": source_url, "source": {"id": 1, "url": source_url, "width": 720, "height": 1024}, "args": args, "state": safe}
+    base = draw([0, 0, 720, 1024, 0, 0, 720, 1024], 1)
+    tiles = []
+    sequence = 2
+    for dest_y in range(4):
+        for dest_x in range(4):
+            tiles.append(draw([dest_y * 176, dest_x * 256, 176, 256, dest_x * 176, dest_y * 256, 176, 256], sequence))
+            sequence += 1
+    return {"canvasWidth": 720, "canvasHeight": 1024, "base": base, "mapping": tiles, "mutations": []}, data.getvalue()
+
+
+def test_reconstruct_jpeg_preserves_coefficients_for_720_grayscale_layout() -> None:
+    row, source = _jpeg_row_720()
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    result = reconstruct_jpeg(source, plan)
+    png = reconstruct_png(source, plan)
+    assert result is not None and png is not None
+    with Image.open(io.BytesIO(result.data)) as jpeg_image, Image.open(io.BytesIO(png.data)) as png_image:
+        assert jpeg_image.convert("L").tobytes() == png_image.convert("L").tobytes()
+    source_dct, source_path = _jpeg_dct_read(source)
+    result_dct, result_path = _jpeg_dct_read(result.data)
+    try:
+        expected = np.array(source_dct.Y, copy=True)
+        for draw in plan["tiles"]:
+            sx, sy, sw, sh, dx, dy, dw, dh = draw["args"]
+            expected[dy // 8 : (dy + dh) // 8, dx // 8 : (dx + dw) // 8] = source_dct.Y[sy // 8 : (sy + sh) // 8, sx // 8 : (sx + sw) // 8]
+        assert np.array_equal(expected, result_dct.Y)
+        assert np.array_equal(source_dct.qt, result_dct.qt)
+        assert np.array_equal(source_dct.Y[:, 88:], result_dct.Y[:, 88:])
+    finally:
+        source_dct.close(); result_dct.close(); source_path.unlink(missing_ok=True); result_path.unlink(missing_ok=True)
+
+
+def test_720_layout_rejects_color_and_invalid_geometry() -> None:
+    row, source = _jpeg_row_720(color=True)
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    assert reconstruct_jpeg(source, plan) is None
+    gray_row, gray_source = _jpeg_row_720()
+    gray_plan = strict_canvas_sequence(gray_row)
+    assert gray_plan is not None
+    missing = deepcopy(gray_plan); missing["tiles"] = missing["tiles"][:-1]
+    assert reconstruct_jpeg(gray_source, missing) is None
+    shifted = deepcopy(gray_plan)
+    shifted["tiles"][0]["args"][0] += 1
+    assert reconstruct_jpeg(gray_source, shifted) is None
+    mismatch = deepcopy(gray_plan); mismatch["width"] = 721
+    assert reconstruct_jpeg(gray_source, mismatch) is None
+
+
+@pytest.mark.parametrize("subsampling", [1, 2])
+def test_720_layout_rejects_subsampled_color_to_png(subsampling: int) -> None:
+    row, source = _jpeg_row_720(color=True, subsampling=subsampling)
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    assert reconstruct_jpeg(source, plan) is None
+    assert reconstruct_png(source, plan) is not None
+
+
+def test_720_layout_rejects_progressive_grayscale_to_png() -> None:
+    row, source = _jpeg_row_720(progressive=True)
+    plan = strict_canvas_sequence(row)
+    assert plan is not None
+    assert reconstruct_jpeg(source, plan) is None
+    assert reconstruct_png(source, plan) is not None
 
 
 @pytest.mark.parametrize("subsampling", [1, 2])

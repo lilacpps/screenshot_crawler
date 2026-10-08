@@ -7,8 +7,10 @@ import base64
 import hashlib
 import json
 import re
+import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from playwright.async_api import Locator, Page
 
@@ -41,8 +43,6 @@ from screenshot_crawler.site_adapters.comicdays.live_access import (
     observe_comicdays_target_access,
 )
 
-_COMICDAYS_WORK_KEY = re.compile(r"^comicdays:series:(?P<series_id>[0-9]+)$")
-
 
 def _supported_ticket_rental_term(row: dict[str, object]) -> bool:
     """Accept only the observed 72-hour episode rental contract."""
@@ -70,6 +70,7 @@ class ComicDaysAdapter(SiteAdapter):
     canvas_selector = "section.viewer.js-viewer .image-container.js-viewer-content canvas.page-image.js-page-image"
     forward_selector = "section.viewer.js-viewer .page-navigation-forward.js-slide-forward"
     ticket_recovery_window_ms = 3_000
+    max_ticket_trace_events = 160
 
     def __init__(self) -> None:
         self._access_strategy: AccessStrategy = "auto"
@@ -94,7 +95,89 @@ class ComicDaysAdapter(SiteAdapter):
         self._preexisting_accessible = False
         self._target_url: str | None = None
         self._expected_external_id: str | None = None
-        self._expected_work_key: str | None = None
+        self._ticket_trace: list[dict[str, object]] = []
+        self._ticket_trace_started_monotonic = 0.0
+        self._ticket_entry_only = False
+        self._ticket_click_started_monotonic: float | None = None
+        self._last_ticket_poll_signature: tuple[object, ...] | None = None
+        self._last_ticket_observe_error: str | None = None
+        self._entry_error_recorded = False
+
+    @staticmethod
+    def _safe_trace_url(value: object) -> str:
+        raw = str(value or "")
+        try:
+            parts = urlsplit(raw)
+            host = parts.hostname or ""
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            try:
+                port = parts.port
+            except ValueError:
+                port = None
+            netloc = host + (f":{port}" if port is not None else "")
+            return urlunsplit((parts.scheme, netloc, parts.path, "", ""))[:500]
+        except (TypeError, ValueError):
+            return raw.split("?", 1)[0].split("#", 1)[0][:500]
+
+    def _record_ticket_trace(
+        self, page: Page | object, phase: str, **fields: object
+    ) -> None:
+        """Append bounded, metadata-only Work Ticket diagnostics."""
+
+        raw_page_url = getattr(page, "url", "")
+        page_url = self._safe_trace_url(raw_page_url)
+        try:
+            observed_episode_id = parse_comicdays_episode_url(page_url)
+        except Exception:  # noqa: BLE001 - trace collection must never affect access
+            observed_episode_id = None
+        started = self._ticket_trace_started_monotonic or time.monotonic()
+        event: dict[str, object] = {
+            "timestamp_utc": datetime.now(UTC).isoformat(),
+            "monotonic_offset_ms": max(0, int((time.monotonic() - started) * 1000)),
+            "phase": phase,
+            "page_url": page_url,
+            "expected_episode_id": self._expected_external_id,
+            "observed_episode_id": observed_episode_id,
+            "observed_series_id": self._work_id,
+            "entry_only": self._ticket_entry_only,
+            **fields,
+        }
+        self._ticket_trace.append(event)
+        overflow = len(self._ticket_trace) - self.max_ticket_trace_events
+        if overflow > 0:
+            del self._ticket_trace[:overflow]
+
+    @staticmethod
+    def _iso_datetime(value: datetime | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    def _record_pre_click_decision(
+        self, page: Page, state: ComicDaysLiveAccessState, decision: str
+    ) -> None:
+        self._record_ticket_trace(
+            page,
+            "pre_click_decision",
+            access_mode=state.access_mode,
+            ticket_is_charged=state.ticket.is_charged,
+            charged_at=self._iso_datetime(state.ticket.charged_at),
+            viewer_unlocked=state.viewer_unlocked,
+            rental_term_hours=state.rental_term_hours,
+            ticket_control_count=state.ticket_control_count,
+            decision=decision,
+            observed_episode_id=state.episode_id,
+            observed_series_id=state.series_id,
+        )
+
+    def _record_entry_error(self, page: Page, error: BaseException) -> None:
+        if self._entry_error_recorded:
+            return
+        self._entry_error_recorded = True
+        self._record_ticket_trace(
+            page,
+            "entry_error",
+            error_type=type(error).__name__,
+        )
 
     def get_access_profile(self) -> AccessProfile:
         return comicdays_access_profile()
@@ -109,11 +192,17 @@ class ComicDaysAdapter(SiteAdapter):
         )
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
-        del page
         if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
                 f"ComicDaysAdapter does not support access_strategy={access_strategy!r}"
             )
+        self._ticket_trace = []
+        self._ticket_trace_started_monotonic = time.monotonic()
+        self._ticket_entry_only = False
+        self._ticket_click_started_monotonic = None
+        self._last_ticket_poll_signature = None
+        self._last_ticket_observe_error = None
+        self._entry_error_recorded = False
         self._access_strategy = access_strategy
         self._quota_resource = None
         self._access_consumption = AccessConsumption()
@@ -121,10 +210,14 @@ class ComicDaysAdapter(SiteAdapter):
         self._ticket_click_attempted = False
         self._preexisting_accessible = False
         self._target_url = None
+        self._record_ticket_trace(page, "entry_start")
 
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
+        # Work.work_key is a site-neutral Catalog identity. Comic DAYS native
+        # series identity is observed from the target page and is not derived
+        # from or compared with this value.
+        del work_key
         self._expected_external_id = str(external_id)
-        self._expected_work_key = str(work_key)
 
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
         del page
@@ -151,15 +244,7 @@ class ComicDaysAdapter(SiteAdapter):
             and self._episode_id != self._expected_external_id
         ):
             raise AccessResourceUnavailableError(
-                "comicdays_discovery_refresh_required", stop_resource_pass=True
-            )
-        if (
-            self._access_strategy == "quota"
-            and self._expected_work_key is not None
-            and _COMICDAYS_WORK_KEY.fullmatch(self._expected_work_key) is None
-        ):
-            raise AccessResourceUnavailableError(
-                "comicdays_work_identity_unavailable", stop_resource_pass=True
+                "comicdays_discovery_refresh_required"
             )
         return self._target_url
 
@@ -209,6 +294,7 @@ class ComicDaysAdapter(SiteAdapter):
             raise PageChangeTimeoutError("Comic DAYS viewer observation exceeded its time bound") from exc
 
     async def initialize(self, page: Page) -> None:
+        self._record_ticket_trace(page, "initialize_start")
         episode_id = parse_comicdays_episode_url(page.url)
         if episode_id is None:
             raise ValueError("Comic DAYS page URL is not a canonical episode URL")
@@ -216,14 +302,17 @@ class ComicDaysAdapter(SiteAdapter):
         if self._target_url is not None and canonical_url != self._target_url:
             if self._access_strategy == "quota":
                 raise AccessResourceUnavailableError(
-                    "comicdays_discovery_refresh_required", stop_resource_pass=True
+                    "comicdays_discovery_refresh_required"
                 )
             raise ValueError("Comic DAYS page URL did not match the requested target")
         self._initial_url, self._episode_id = canonical_url, episode_id
         self._work_id = await _series_id_from_page(page)
-        self._validate_expected_work_identity()
         if self._access_strategy == "quota":
-            await self._initialize_ticket_entry(page, entry_only=False)
+            try:
+                await self._initialize_ticket_entry(page, entry_only=False)
+            except BaseException as exc:
+                self._record_entry_error(page, exc)
+                raise
         else:
             try:
                 self._live_access = await observe_comicdays_live_access(
@@ -256,35 +345,26 @@ class ComicDaysAdapter(SiteAdapter):
     async def initialize_entry_only(self, page: Page) -> None:
         """Perform only the bounded Work Ticket entry and confirmation."""
 
-        episode_id = parse_comicdays_episode_url(page.url)
-        if episode_id is None or (self._episode_id and episode_id != self._episode_id):
-            if self._access_strategy == "quota":
-                raise AccessResourceUnavailableError(
-                    "comicdays_discovery_refresh_required", stop_resource_pass=True
+        self._record_ticket_trace(page, "initialize_entry_only_start")
+        try:
+            episode_id = parse_comicdays_episode_url(page.url)
+            if episode_id is None or (self._episode_id and episode_id != self._episode_id):
+                if self._access_strategy == "quota":
+                    raise AccessResourceUnavailableError(
+                        "comicdays_discovery_refresh_required"
+                    )
+                raise ValueError("Comic DAYS entry page did not match the target episode")
+            if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+                raise UnsupportedAccessStrategyError(
+                    "Comic DAYS entry-only execution requires quota/work_ticket"
                 )
-            raise ValueError("Comic DAYS entry page did not match the target episode")
-        if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
-            raise UnsupportedAccessStrategyError(
-                "Comic DAYS entry-only execution requires quota/work_ticket"
-            )
-        self._initial_url = canonical_comicdays_episode_url(page.url)
-        self._episode_id = episode_id
-        self._work_id = await _series_id_from_page(page)
-        self._validate_expected_work_identity()
-        await self._initialize_ticket_entry(page, entry_only=True)
-
-    def _validate_expected_work_identity(self) -> None:
-        if self._access_strategy != "quota" or self._expected_work_key is None:
-            return
-        match = _COMICDAYS_WORK_KEY.fullmatch(self._expected_work_key)
-        if match is None:
-            raise AccessResourceUnavailableError(
-                "comicdays_work_identity_unavailable", stop_resource_pass=True
-            )
-        if self._work_id != match.group("series_id"):
-            raise AccessResourceUnavailableError(
-                "comicdays_discovery_refresh_required", stop_resource_pass=True
-            )
+            self._initial_url = canonical_comicdays_episode_url(page.url)
+            self._episode_id = episode_id
+            self._work_id = await _series_id_from_page(page)
+            await self._initialize_ticket_entry(page, entry_only=True)
+        except BaseException as exc:
+            self._record_entry_error(page, exc)
+            raise
 
     async def _initialize_ticket_entry(self, page: Page, *, entry_only: bool) -> None:
         if self._work_id is None or self._episode_id is None:
@@ -293,25 +373,34 @@ class ComicDaysAdapter(SiteAdapter):
             raise UnsupportedAccessStrategyError(
                 "Comic DAYS Work Ticket action was already attempted; retry is forbidden"
             )
+        self._ticket_entry_only = entry_only
         deadline = asyncio.get_running_loop().time() + self.page_change_timeout_ms / 1000
+        self._record_ticket_trace(page, "pre_observe_start")
         try:
             state = await self._observe_live_access(page, deadline)
         except ComicDaysTargetIdentityMismatch as exc:
+            self._record_ticket_trace(
+                page, "pre_click_decision", decision="identity_mismatch"
+            )
             raise AccessResourceUnavailableError(
-                "comicdays_discovery_refresh_required", stop_resource_pass=True
+                "comicdays_discovery_refresh_required"
             ) from exc
         except ComicDaysLiveAccessError as exc:
+            self._record_ticket_trace(page, "pre_click_decision", decision="unknown")
             raise UnknownPageStateError(str(exc)) from exc
         self._live_access = state
         if state.access_mode == "unknown":
+            self._record_pre_click_decision(page, state, "unknown")
             raise UnknownPageStateError(
                 "Comic DAYS target access state was missing or ambiguous"
             )
         if state.access_mode != "quota":
+            self._record_pre_click_decision(page, state, "identity_mismatch")
             raise AccessResourceUnavailableError(
-                "comicdays_discovery_refresh_required", stop_resource_pass=True
+                "comicdays_discovery_refresh_required"
             )
         if state.ticket.is_charged and state.ticket.charged_at is None:
+            self._record_pre_click_decision(page, state, "unknown")
             raise UnknownPageStateError(
                 "Comic DAYS charged ticket state omitted chargedAt"
             )
@@ -320,27 +409,52 @@ class ComicDaysAdapter(SiteAdapter):
             or state.rental_term_seconds != 259200
             or not _supported_ticket_rental_term(state.row)
         ):
+            self._record_pre_click_decision(page, state, "contract_mismatch")
             raise AccessResourceUnavailableError(
                 "comicdays_discovery_refresh_required", stop_resource_pass=True
             )
         if not state.ticket.is_charged:
+            self._record_pre_click_decision(page, state, "cooldown")
             raise AccessResourceUnavailableError("work_ticket_cooldown")
         remaining = self._remaining_ms(deadline)
         if remaining <= 0:
+            self._record_pre_click_decision(page, state, "unknown")
             raise PageChangeTimeoutError("Comic DAYS ticket control inspection exceeded its time bound")
         try:
             control = await asyncio.wait_for(
                 self._exact_ticket_control(page, deadline), timeout=remaining / 1000
             )
         except TimeoutError as exc:
+            self._record_pre_click_decision(page, state, "unknown")
             raise PageChangeTimeoutError("Comic DAYS ticket control inspection exceeded its time bound") from exc
+        except BaseException:
+            self._record_pre_click_decision(page, state, "unknown")
+            raise
+        self._record_pre_click_decision(page, state, "click")
         previous_charged_at = state.ticket.charged_at
         self._ticket_click_attempted = True
         try:
             remaining = self._remaining_ms(deadline)
             if remaining <= 0:
                 raise PageChangeTimeoutError("Comic DAYS Work Ticket entry exceeded its time bound")
-            await control.click(timeout=remaining, no_wait_after=True)
+            self._ticket_click_started_monotonic = time.monotonic()
+            self._record_ticket_trace(
+                page,
+                "click_start",
+                ticket_control_count=state.ticket_control_count,
+            )
+            try:
+                await control.click(timeout=remaining, no_wait_after=True)
+            except BaseException as exc:
+                self._record_ticket_trace(
+                    page, "click_error", error_type=type(exc).__name__
+                )
+                raise
+            self._record_ticket_trace(
+                page,
+                "click_returned",
+                ticket_control_count=state.ticket_control_count,
+            )
             confirmed = await self._poll_consumption(page, previous_charged_at, deadline)
             if not confirmed:
                 raise AccessConsumptionUnconfirmedError(
@@ -356,6 +470,7 @@ class ComicDaysAdapter(SiteAdapter):
             except BaseException as recovery_error:  # noqa: BLE001 - preserve the original click error
                 self._capture_debug["ticket_recovery_error"] = type(recovery_error).__name__
             raise
+        self._record_ticket_trace(page, "entry_success")
 
     async def _observe_live_access(self, page: Page, deadline: float) -> ComicDaysLiveAccessState:
         remaining = self._remaining_ms(deadline)
@@ -365,6 +480,9 @@ class ComicDaysAdapter(SiteAdapter):
             observe_comicdays_target_access(
                 page, series_id=self._work_id or "", episode_id=self._episode_id or "",
                 timeout_ms=remaining,
+                trace_sink=lambda phase, fields: self._record_ticket_trace(
+                    page, phase, **fields
+                ),
             ),
             timeout=remaining / 1000,
         )
@@ -376,8 +494,10 @@ class ComicDaysAdapter(SiteAdapter):
             return False
         try:
             state = await self._observe_live_access(page, deadline)
-        except Exception:  # noqa: BLE001 - post-click state is fail-closed
+        except Exception as exc:  # noqa: BLE001 - post-click state is fail-closed
+            self._last_ticket_observe_error = type(exc).__name__
             return False
+        self._last_ticket_observe_error = None
         self._live_access = state
         row = state.row
         purchase = row.get("purchase_info")
@@ -422,22 +542,80 @@ class ComicDaysAdapter(SiteAdapter):
     ) -> bool:
         """Poll read-only state after a click without ever retrying the click."""
 
+        poll_index = 0
+        last_fields: dict[str, object] | None = None
+        click_started = self._ticket_click_started_monotonic or time.monotonic()
+        self._last_ticket_poll_signature = None
         while self._remaining_ms(deadline) > 0:
+            poll_index += 1
             if not self._access_consumption.consumed:
                 await self._reobserve_consumption(page, previous_charged_at, deadline)
+            state = self._live_access
+            fields: dict[str, object] = {
+                "poll_index": poll_index,
+                "elapsed_ms": int((time.monotonic() - click_started) * 1000),
+                "access_mode": state.access_mode if state is not None else None,
+                "ticket_is_charged": (
+                    state.ticket.is_charged if state is not None else None
+                ),
+                "charged_at": (
+                    self._iso_datetime(state.ticket.charged_at)
+                    if state is not None
+                    else None
+                ),
+                "viewer_unlocked": state.viewer_unlocked if state is not None else False,
+                "private_viewer_count": (
+                    state.private_viewer_count if state is not None else 0
+                ),
+                "normal_viewer_count": (
+                    state.normal_viewer_count if state is not None else 0
+                ),
+                "normal_viewer_visible": (
+                    state.normal_viewer_visible if state is not None else False
+                ),
+                "ticket_control_count": (
+                    state.ticket_control_count if state is not None else 0
+                ),
+            }
+            if state is not None:
+                fields.update(
+                    observed_episode_id=state.episode_id,
+                    observed_series_id=state.series_id,
+                )
+            if self._last_ticket_observe_error is not None:
+                fields["observe_error_type"] = self._last_ticket_observe_error
+            signature = tuple(
+                value
+                for key, value in fields.items()
+                if key not in {"poll_index", "elapsed_ms"}
+            )
+            if signature != self._last_ticket_poll_signature:
+                self._record_ticket_trace(page, "post_click_poll", **fields)
+                self._last_ticket_poll_signature = signature
+            last_fields = fields
             # Target-local debit/unlock confirmation is the grant entry
             # contract.  Capture readiness belongs to normal initialize's
             # existing _normalize_viewer path and must not consume this
             # confirmation budget or make grant-only success depend on the
             # production capture hook.
             if self._access_consumption.consumed:
+                self._record_ticket_trace(page, "consumption_confirmed", **fields)
                 return True
             delay = min(200, self._remaining_ms(deadline))
             if delay <= 0:
                 break
             await page.wait_for_timeout(delay)
+        if last_fields is not None:
+            last_fields["final"] = True
+            last_fields["elapsed_ms"] = int((time.monotonic() - click_started) * 1000)
+            self._record_ticket_trace(page, "post_click_poll", **last_fields)
         if self._access_consumption.consumed:
             raise PageChangeTimeoutError("Comic DAYS post-grant viewer was not render-ready")
+        self._record_ticket_trace(
+            page,
+            "consumption_not_confirmed",
+            elapsed_ms=int((time.monotonic() - click_started) * 1000),
+        )
         return False
 
     async def _exact_ticket_control(self, page: Page, deadline: float) -> Locator:
@@ -445,7 +623,7 @@ class ComicDaysAdapter(SiteAdapter):
             raise UnknownPageStateError("Comic DAYS ticket target identity is unavailable")
         if parse_comicdays_episode_url(str(page.url)) != self._episode_id:
             raise AccessResourceUnavailableError(
-                "comicdays_discovery_refresh_required", stop_resource_pass=True
+                "comicdays_discovery_refresh_required"
             )
         # The locked access page uses the observed private viewer scope.  The
         # unlocked capture viewer is a different class and is validated after
@@ -458,7 +636,7 @@ class ComicDaysAdapter(SiteAdapter):
         ) + ".json"
         if await viewer.get_attribute("data-json-url") != expected_json_url:
             raise AccessResourceUnavailableError(
-                "comicdays_discovery_refresh_required", stop_resource_pass=True
+                "comicdays_discovery_refresh_required"
             )
         container = viewer.locator("div.read-button-container")
         if await container.count() != 1:
@@ -477,16 +655,20 @@ class ComicDaysAdapter(SiteAdapter):
             raise AccessResourceUnavailableError("work_ticket_control_label_mismatch")
         if await ticket.get_attribute("data-ticket-rental-id") != self._episode_id:
             raise AccessResourceUnavailableError(
-                "comicdays_discovery_refresh_required", stop_resource_pass=True
+                "comicdays_discovery_refresh_required"
             )
         contract = page.locator(
             '.js-readable-products-pagination[data-type="episode"][data-aggregate-id]'
         )
         if await contract.count() != 1:
-            raise AccessResourceUnavailableError("work_ticket_contract_unknown")
+            raise AccessResourceUnavailableError(
+                "work_ticket_contract_unknown", stop_resource_pass=True
+            )
         raw_term = await contract.get_attribute("data-rental-term")
         if raw_term is None or not raw_term.isdigit():
-            raise AccessResourceUnavailableError("work_ticket_contract_unknown")
+            raise AccessResourceUnavailableError(
+                "work_ticket_contract_unknown", stop_resource_pass=True
+            )
         if int(raw_term) != 259200:
             raise AccessResourceUnavailableError(
                 "comicdays_discovery_refresh_required", stop_resource_pass=True
@@ -499,7 +681,7 @@ class ComicDaysAdapter(SiteAdapter):
         panel_identity = await areas.get_attribute("data-aggregate-id")
         if panel_identity != self._work_id:
             raise AccessResourceUnavailableError(
-                "comicdays_discovery_refresh_required", stop_resource_pass=True
+                "comicdays_discovery_refresh_required"
             )
         if await ticket.get_attribute("data-behaviour") != "button":
             raise AccessResourceUnavailableError("work_ticket_control_operation_mismatch")
@@ -532,6 +714,83 @@ class ComicDaysAdapter(SiteAdapter):
         # fallback.
         return ticket
 
+    async def _advance_front_prefix(self, page: Page, deadline: float) -> None:
+        """Advance once from the observed front-link prefix to the first body page."""
+
+        state = await self._active_until(page, deadline)
+        slider = self._valid_slider_state(state)
+        front_prefix_mode = state.get("frontPrefixMode")
+        target_slider = {"dummy-single": 2, "two-front-double": 3}.get(front_prefix_mode)
+        if (
+            slider is None
+            or slider[0] != 1
+            or state.get("frontPrefix") is not True
+            or target_slider is None
+        ):
+            raise PageChangeTimeoutError(
+                "Comic DAYS front-link prefix was not at the first slider"
+            )
+        button = page.locator(self.forward_selector)
+        remaining = self._remaining_ms(deadline)
+        if await button.count() != 1 or not await button.is_visible(timeout=min(1_000, remaining)):
+            raise PageChangeTimeoutError(
+                "Comic DAYS front-link prefix has no uniquely visible forward control"
+            )
+        values = " ".join(
+            str(value or "")
+            for value in [
+                await button.inner_text(timeout=min(1_000, remaining)),
+                await button.get_attribute("aria-label", timeout=min(1_000, remaining)),
+                await button.get_attribute("title", timeout=min(1_000, remaining)),
+                await button.get_attribute("href", timeout=min(1_000, remaining)),
+                await button.get_attribute("class", timeout=min(1_000, remaining)),
+            ]
+        )
+        href = await button.get_attribute("href", timeout=min(1_000, remaining))
+        if _FORBIDDEN.search(values) or (href and "/episode/" in href):
+            raise PageChangeTimeoutError(
+                "Comic DAYS front-link prefix forward control failed safety validation"
+            )
+        await button.click(timeout=min(1_000, remaining), no_wait_after=True)
+        for _ in range(20):
+            remaining = self._remaining_ms(deadline)
+            if remaining <= 0:
+                break
+            await page.wait_for_timeout(min(100, remaining))
+            after = await self._active_until(page, deadline)
+            after_slider = self._valid_slider_state(after)
+            if after_slider is None:
+                continue
+            if after_slider[0] < slider[0] or after_slider[0] > after_slider[1]:
+                raise PageChangeTimeoutError(
+                    "Comic DAYS front-link prefix slider moved out of range"
+                )
+            if after_slider[0] > slider[0]:
+                if after_slider[0] != target_slider:
+                    raise PageChangeTimeoutError(
+                        "Comic DAYS front-link prefix skipped the first body slider"
+                    )
+                if after.get("ready") is not True or not after.get("rows"):
+                    raise PageChangeTimeoutError(
+                        "Comic DAYS front-link prefix first body spread was not ready"
+                    )
+                row_indices = sorted(
+                    int(row["areaIndex"])
+                    for row in after.get("rows", [])
+                    if isinstance(row, dict) and isinstance(row.get("areaIndex"), int)
+                )
+                expected_count = 1 if front_prefix_mode == "dummy-single" else 2
+                if not row_indices or len(row_indices) != expected_count or row_indices != list(
+                    range(row_indices[0], row_indices[0] + expected_count)
+                ):
+                    raise PageChangeTimeoutError(
+                        "Comic DAYS front-link prefix first body spread was malformed"
+                    )
+                return
+        raise PageChangeTimeoutError(
+            "Comic DAYS front-link prefix did not advance within the step bound"
+        )
+
     async def _normalize_viewer(self, page: Page, deadline: float) -> None:
         horizontal_seen = False
         while self._remaining_ms(deadline) > 0:
@@ -554,6 +813,7 @@ class ComicDaysAdapter(SiteAdapter):
                 raise PageChangeTimeoutError("Comic DAYS horizontal viewer was not positively identified")
             raise PageChangeTimeoutError("Comic DAYS viewer did not expose a valid slider")
 
+        front_prefix_advanced = False
         while self._remaining_ms(deadline) > 0:
             state = await self._active_until(page, deadline)
             current = state.get("sliderNow")
@@ -561,9 +821,25 @@ class ComicDaysAdapter(SiteAdapter):
             if state.get("rows") and state.get("ready") is True:
                 if not isinstance(current, int) or not isinstance(last, int) or not 1 <= current <= last:
                     raise PageChangeTimeoutError("Comic DAYS first spread exposed an invalid slider")
-                if current == 1:
+                if current == 1 or (
+                    state.get("frontPrefixMode") == "dummy-single"
+                    and current == 2
+                    and front_prefix_advanced
+                ) or (
+                    state.get("frontPrefixMode") == "two-front-double"
+                    and current == 3
+                    and front_prefix_advanced
+                ):
                     return
                 await self._rewind_to_first(page, deadline=deadline)
+                continue
+            if (
+                state.get("frontPrefix") is True
+                and current == 1
+                and not front_prefix_advanced
+            ):
+                await self._advance_front_prefix(page, deadline)
+                front_prefix_advanced = True
                 continue
             await page.wait_for_timeout(min(100, self._remaining_ms(deadline)))
         raise PageChangeTimeoutError("Comic DAYS first content spread did not become ready")
@@ -827,6 +1103,10 @@ class ComicDaysAdapter(SiteAdapter):
             canvasCount: element.querySelectorAll('canvas').length,
             imageCount: element.querySelectorAll('img').length,
             iframeCount: element.querySelectorAll('iframe').length,
+            linkCount: element.querySelectorAll('a').length,
+            buttonCount: element.querySelectorAll('button').length,
+            linkSlotCount: element.querySelectorAll('.link-slot').length,
+            adContainerCount: element.querySelectorAll('.js-ad-container').length,
             childCount: element.children.length,
             childTags: [...element.children].map(child => child.tagName.toLowerCase()),
             childClasses: [...element.children].map(child => child.className || ''),
@@ -839,36 +1119,185 @@ class ComicDaysAdapter(SiteAdapter):
           const areas = viewer ? [...viewer.querySelectorAll('.page-area.js-page-area')] : [];
           const sliderNow = Number(document.querySelector('.js-viewer-slider-pagenum-now')?.textContent?.trim());
           const sliderLast = Number(document.querySelector('.js-viewer-slider-pagenum-last')?.textContent?.trim());
-          const isBack = element => element.classList.contains('page') && element.classList.contains('js-page') &&
+          const isLegacyBack = element => element.classList.contains('page') && element.classList.contains('js-page') &&
             element.classList.contains('back-link-page') && element.classList.contains('js-link-page') &&
             element.classList.contains('js-back-link-page') && element.children.length === 1 &&
             element.children[0].tagName === 'DIV' && element.children[0].className === 'link-page-content' &&
             element.querySelectorAll('img').length === 2 && element.querySelectorAll('canvas,iframe').length === 0;
+          const linkContent = element => element.children.length === 1 &&
+            element.children[0].tagName === 'DIV' && element.children[0].className === 'link-page-content';
+          const isBackFull = element => element.classList.contains('page') && element.classList.contains('js-page') &&
+            element.classList.contains('back-link-page') && element.classList.contains('js-link-page') &&
+            element.classList.contains('js-back-link-page') && element.classList.contains('link-page-full') &&
+            linkContent(element) && element.querySelectorAll('.link-slot').length === 1 &&
+            element.querySelectorAll('img').length === 1 && element.querySelectorAll('canvas,iframe').length === 0;
+          const isBackHalf = element => element.classList.contains('page') && element.classList.contains('js-page') &&
+            element.classList.contains('back-link-page') && element.classList.contains('js-link-page') &&
+            element.classList.contains('js-back-link-page') && element.classList.contains('link-page-half') &&
+            linkContent(element) && element.querySelectorAll('.link-slot').length === 2 &&
+            element.querySelectorAll('img').length === 2 && element.querySelectorAll('canvas,iframe').length === 0;
+          const isBack = element => isLegacyBack(element) || isBackFull(element) || isBackHalf(element);
           const isAd = element => element.classList.contains('page') && element.classList.contains('js-page') &&
             element.classList.contains('js-page-ad') && element.children.length === 1 &&
-            element.children[0].tagName === 'DIV' && element.children[0].className === 'ad-nav-area-wrap page-content' &&
-            element.querySelectorAll('iframe').length === 2 && element.querySelectorAll('canvas,img').length === 0;
-          const isColophon = element => element?.id === 'viewer-colophon' &&
+            element.children[0].tagName === 'DIV' && element.children[0].classList.contains('ad-nav-area-wrap') &&
+            element.children[0].classList.contains('page-content') && element.querySelectorAll('canvas,img').length === 0 &&
+            ((element.querySelectorAll('iframe').length === 2 && element.querySelectorAll('.js-ad-container').length === 0) ||
+             element.querySelectorAll('.js-ad-container').length === 2);
+          const isSeriesLikePage = element => element.classList.contains('page') && element.classList.contains('js-page') &&
+            element.classList.contains('series-like-page') && element.classList.contains('js-show-after-load') &&
+            element.children.length === 2 &&
+            element.children[0].tagName === 'DIV' && element.children[0].className === 'series-like-content' &&
+            element.children[0].children.length === 2 &&
+            element.children[0].children[0].tagName === 'P' &&
+            element.children[0].children[0].className === 'series-like-description' &&
+            element.children[0].children[1].tagName === 'BUTTON' &&
+            element.children[0].children[1].className === 'series-like-button js-episode-like-button' &&
+            element.children[1].tagName === 'DIV' && element.children[1].className === 'like-page-app-content' &&
+            element.children[1].children.length === 2 &&
+            element.children[1].children[0].tagName === 'P' &&
+            element.children[1].children[0].className === 'like-page-app-content-text' &&
+            element.children[1].children[1].tagName === 'A' &&
+            element.children[1].children[1].className === 'like-page-app-content-link' &&
+            element.children[1].children[1].querySelectorAll('img').length === 1 &&
+            element.children[1].children[1].querySelector('img')?.className === 'like-page-app-content-icon' &&
+            element.querySelectorAll('img').length === 1 && element.querySelectorAll('a').length === 1 &&
+            element.querySelectorAll('button').length === 1 &&
+            element.querySelectorAll('button.js-episode-like-button').length === 1 &&
+            element.querySelectorAll('canvas,iframe').length === 0;
+          const isSeriesLikeArea = area => area?.classList.contains('test-series-like-page') &&
+            area.children.length === 1 && [...area.children].filter(isSeriesLikePage).length === 1;
+          const colophonStructure = element => element?.id === 'viewer-colophon' &&
             element.children.length === 1 &&
             element.children[0].classList.contains('back-matter') &&
             element.children[0].classList.contains('js-back-matter') &&
             element.children[0].children.length === 1 &&
             element.children[0].children[0].tagName === 'DIV' &&
             element.children[0].children[0].className === 'back-matter-content' &&
-            element.querySelectorAll('img').length === 10 &&
             element.querySelectorAll('canvas,iframe').length === 0;
+          const simpleColophonShape = (element, expectedImages) => {
+            const content = element.children[0].children[0];
+            return content.children.length === expectedImages &&
+              [...content.children].every(child => child.tagName === 'IMG');
+          };
+          const recommendationColophonShape = (element, pointGettable) => {
+            const content = element.children[0].children[0];
+            const children = [...content.children];
+            if (children.length !== 2) return false;
+            const info = children[0], recommendations = children[1];
+            const infoValid = info.tagName === 'DIV' && info.className === 'viewer-colophon-info-wrapper' &&
+              info.children.length === 1 && info.children[0].tagName === 'DIV' &&
+              info.children[0].className === 'viewer-colophon-info' &&
+              info.querySelectorAll('canvas,iframe').length === 0;
+            const recommendationChildren = [...recommendations.children];
+            const recommendationImages = [...recommendations.querySelectorAll('img')];
+            const recommendationsValid = recommendations.tagName === 'ASIDE' &&
+              recommendations.className === 'days-viewer-colophon-recommend' &&
+              recommendationChildren.length === 3 &&
+              recommendationChildren[0].tagName === 'H3' &&
+              recommendationChildren[0].classList.contains('days-viewer-colophon-recommend-title') &&
+              recommendationChildren[1].tagName === 'UL' &&
+              recommendationChildren[1].classList.contains('days-viewer-colophon-recommend-list') &&
+              recommendationChildren[2].tagName === 'DIV' &&
+              recommendationChildren[2].classList.contains('swiper') &&
+              recommendationImages.length > 0 &&
+              recommendationImages.every(image => image.className === 'days-viewer-colophon-recommend-thumb') &&
+              recommendations.querySelectorAll('canvas,iframe').length === 0;
+            if (!infoValid || !recommendationsValid) return false;
+            const infoImages = info.querySelectorAll('img');
+            return pointGettable
+              ? infoImages.length === 1 && infoImages[0].className === 'reading-completion-point-img' &&
+                recommendationImages.length === 10
+              : infoImages.length === 0;
+          };
+          const isStandardColophon = element => colophonStructure(element) &&
+            !element.classList.contains('point-gettable-episode') &&
+            (simpleColophonShape(element, 10) || recommendationColophonShape(element, false));
+          const isPointGettableColophon = element => colophonStructure(element) &&
+            element.classList.contains('point-gettable-episode') &&
+            (simpleColophonShape(element, 11) || recommendationColophonShape(element, true));
+          const colophonShape = element => {
+            if (!colophonStructure(element)) return null;
+            if (element.classList.contains('point-gettable-episode')) {
+              if (simpleColophonShape(element, 11)) return 'point-gettable-simple';
+              if (recommendationColophonShape(element, true)) return 'point-gettable-recommendation';
+            } else {
+              if (simpleColophonShape(element, 10)) return 'standard-simple';
+              if (recommendationColophonShape(element, false)) return 'standard-recommendation';
+            }
+            return null;
+          };
+          const isColophon = element => isStandardColophon(element) || isPointGettableColophon(element);
+          const colophonVariant = element => isPointGettableColophon(element) ? 'point-gettable' :
+            isStandardColophon(element) ? 'standard' : null;
+          const isFrontLink = element => element.classList.contains('page') && element.classList.contains('js-page') &&
+            element.classList.contains('front-link-page') && element.classList.contains('js-link-page') &&
+            element.classList.contains('js-front-link-page') && element.classList.contains('link-page-full') &&
+            linkContent(element) && element.querySelectorAll('.link-slot').length === 1 &&
+            element.querySelectorAll('img').length === 1 && element.querySelectorAll('canvas,iframe').length === 0;
+          const isBodyAreaShell = area => {
+            if (!area) return false;
+            const children = [...area.children];
+            if (children.length === 0) return true;
+            if (children.length !== 1 || !children[0].classList.contains('page-image') ||
+                !children[0].classList.contains('js-page-image')) return false;
+            return children[0].className === 'page-image js-page-image' &&
+              children[0].querySelectorAll('img,iframe').length === 0;
+          };
+          const canvasFirst = areas.findIndex(area => area.querySelector('canvas.page-image.js-page-image'));
+          const firstTail = areas.findIndex(area =>
+            [...area.children].some(isLegacyBack) || [...area.children].some(isBackFull) ||
+            [...area.children].some(isBackHalf) || isSeriesLikeArea(area) || [...area.children].some(isAd) || isColophon(area));
+          const colophonIndex = areas.findIndex(isColophon);
+          const twoFrontBodyEnd = colophonIndex - 4;
+          const twoFrontBodyShell = twoFrontBodyEnd >= 2 &&
+            areas.slice(2, twoFrontBodyEnd + 1).every(isBodyAreaShell);
+          const dummyFrontPrefix = areas.length > 3 && areas[0]?.children.length === 1 &&
+            areas[0].children[0].classList.contains('page-dummy') && areas[0].children[0].classList.contains('js-page') &&
+            areas[1] && areas[2] && [...areas[1].children].filter(element => element.classList.contains('page') && isFrontLink(element)).length === 1 &&
+            [...areas[2].children].filter(element => element.classList.contains('page') && isFrontLink(element)).length === 1 &&
+            ![...areas[3].children].some(element => element.classList.contains('page') && element.classList.contains('js-page'));
+          const twoFrontDoublePrefix = areas.length > 2 &&
+            [...areas[0].children].filter(element => element.classList.contains('page') && isFrontLink(element)).length === 1 &&
+            [...areas[1].children].filter(element => element.classList.contains('page') && isFrontLink(element)).length === 1 &&
+            twoFrontBodyShell &&
+            !areas.slice(2).some(area => area.querySelector('.front-link-page')) &&
+            ![...areas[2].children].some(element => element.classList.contains('page') && element.classList.contains('js-page'));
+          const frontPrefixMode = dummyFrontPrefix ? 'dummy-single' : twoFrontDoublePrefix ? 'two-front-double' : null;
+          const frontPrefix = frontPrefixMode !== null;
+          const firstBody = frontPrefixMode === 'dummy-single' ? 3 : frontPrefixMode === 'two-front-double' ? 2 : canvasFirst;
           const layouts = Number.isFinite(sliderLast) ? [
             {name: 'legacy-tail', body: sliderLast - 4, back: sliderLast - 3, ad: sliderLast - 2, colophon: sliderLast - 1},
             {name: 'leading-area-tail', body: sliderLast - 3, back: sliderLast - 2, ad: sliderLast - 1, colophon: sliderLast},
+            {name: 'series-like-tail', body: colophonIndex - 4, back: colophonIndex - 3, seriesLike: colophonIndex - 2, ad: colophonIndex - 1, colophon: colophonIndex},
+            {name: 'front-prefix-tail', body: colophonIndex - 4, backFull: colophonIndex - 3, backHalf: colophonIndex - 2, ad: colophonIndex - 1, colophon: colophonIndex, frontPrefix},
           ] : [];
           const layoutFor = layout => {
-            const back = areas[layout.back], ad = areas[layout.ad], colophon = areas[layout.colophon];
+            const ad = areas[layout.ad], colophon = areas[layout.colophon];
+            if (layout.name === 'front-prefix-tail') {
+              const backFull = areas[layout.backFull], backHalf = areas[layout.backHalf];
+              return layout.frontPrefix === true && firstBody >= 0 && layout.body >= firstBody &&
+                layout.body < firstTail && !!backFull && !!backHalf && !!ad && !!colophon &&
+                [...backFull.children].filter(isBackFull).length === 1 &&
+                [...backHalf.children].filter(isBackHalf).length === 1 &&
+                [...ad.children].filter(isAd).length === 1 && isColophon(colophon);
+            }
+            if (layout.name === 'series-like-tail') {
+              return !frontPrefix && layout.body >= firstBody && layout.body < firstTail &&
+                [...areas[layout.back].children].filter(isBackHalf).length === 1 &&
+                isSeriesLikeArea(areas[layout.seriesLike]) &&
+                [...ad.children].filter(isAd).length === 1 && isColophon(colophon);
+            }
+            const back = areas[layout.back];
             return !!back && !!ad && !!colophon &&
-              [...back.children].filter(isBack).length === 1 &&
+              layout.body < firstTail &&
+              [...back.children].filter(isLegacyBack).length === 1 &&
               [...ad.children].filter(isAd).length === 1 && isColophon(colophon);
           };
           const layout = layouts.find(layoutFor) || null;
-          const backArea = layout ? areas[layout.back] : null;
+          const backArea = layout && layout.name !== 'front-prefix-tail' ? areas[layout.back] : null;
+          const seriesLikeArea = layout?.name === 'series-like-tail' ? areas[layout.seriesLike] : null;
+          const backFullArea = layout?.name === 'front-prefix-tail' ? areas[layout.backFull] : null;
+          const backHalfArea = layout?.name === 'front-prefix-tail' ? areas[layout.backHalf] : null;
           const adArea = layout ? areas[layout.ad] : null;
           const colophonArea = layout ? areas[layout.colophon] : null;
           const pageChildren = areas.flatMap((area) => [...area.children]
@@ -877,26 +1306,36 @@ class ComicDaysAdapter(SiteAdapter):
           const directPageChildren = viewer ? [...viewer.children]
             .filter((element) => element.classList.contains('page') && element.classList.contains('js-page'))
             .map((element) => ({element, areaIndex: null})) : [];
-          const knownPage = element => isBack(element) || isAd(element);
+          const knownPage = element => isBack(element) || isAd(element) || isSeriesLikePage(element);
           const knownArea = (area, index) => {
             if (!layout) return false;
             if (index === layout.body) return area.querySelectorAll('canvas.page-image.js-page-image').length > 0;
+            if (layout.name === 'front-prefix-tail' && index === layout.backFull) return [...area.children].filter(isBackFull).length === 1;
+            if (layout.name === 'front-prefix-tail' && index === layout.backHalf) return [...area.children].filter(isBackHalf).length === 1;
+            if (layout.name === 'series-like-tail' && index === layout.seriesLike) return isSeriesLikeArea(area);
             if (index === layout.back) return [...area.children].filter(isBack).length === 1;
             if (index === layout.ad) return [...area.children].filter(isAd).length === 1;
             if (index === layout.colophon) return isColophon(area);
             return false;
           };
           const expectedTailIndices = layout
-            ? new Set([layout.body, layout.back, layout.ad, layout.colophon]) : new Set();
+            ? new Set(layout.name === 'front-prefix-tail'
+              ? [layout.body, layout.backFull, layout.backHalf, layout.ad, layout.colophon]
+              : layout.name === 'series-like-tail'
+              ? [layout.body, layout.back, layout.seriesLike, layout.ad, layout.colophon]
+              : [layout.body, layout.back, layout.ad, layout.colophon]) : new Set();
           const unknownOnScreenAreas = areas.filter((area, index) =>
             visibleOnScreen(area) && (!expectedTailIndices.has(index) || !knownArea(area, index))
           ).map((area) => ({...summary(area), areaIndex: areas.indexOf(area)}));
           const otherOnScreen = [...pageChildren, ...directPageChildren]
             .filter(({element}) => visibleOnScreen(element) && !knownPage(element));
-          const back = backArea ? [...backArea.children].filter(isBack).map((element) => ({...summary(element), areaIndex: areas.indexOf(backArea)})) : [];
+          const back = backArea ? [...backArea.children].filter(isLegacyBack).map((element) => ({...summary(element), areaIndex: areas.indexOf(backArea)})) : [];
+          const backFull = backFullArea ? [...backFullArea.children].filter(isBackFull).map((element) => ({...summary(element), areaIndex: areas.indexOf(backFullArea)})) : [];
+          const backHalf = backHalfArea ? [...backHalfArea.children].filter(isBackHalf).map((element) => ({...summary(element), areaIndex: areas.indexOf(backHalfArea)})) : [];
+          const seriesLike = seriesLikeArea ? [...seriesLikeArea.children].filter(isSeriesLikePage).map((element) => ({...summary(element), areaIndex: areas.indexOf(seriesLikeArea)})) : [];
           const ads = adArea ? [...adArea.children].filter(isAd).map((element) => ({...summary(element), areaIndex: areas.indexOf(adArea)})) : [];
           const colophon = colophonArea && isColophon(colophonArea) ?
-            {...summary(colophonArea), areaIndex: areas.indexOf(colophonArea)} : null;
+            {...summary(colophonArea), colophonShape: colophonShape(colophonArea), areaIndex: areas.indexOf(colophonArea)} : null;
           return {
             scopeValid, viewerCount: viewers.length,
             sliderNow: Number.isFinite(sliderNow) ? sliderNow : null,
@@ -908,8 +1347,12 @@ class ComicDaysAdapter(SiteAdapter):
               onScreen: visibleOnScreen(element),
               children: [...element.children].slice(0, 8).map(summary),
             })),
-            tailVariant: layout?.name || null, tailIndices: layout ? {body: layout.body, back: layout.back, ad: layout.ad, colophon: layout.colophon} : null,
-            back, ads,
+             tailVariant: layout?.name || null, frontPrefixMode: layout?.name === 'front-prefix-tail' ? frontPrefixMode : null, colophonVariant: colophonArea ? colophonVariant(colophonArea) : null, colophonShape: colophonArea ? colophonShape(colophonArea) : null, tailIndices: layout ? (layout.name === 'front-prefix-tail'
+              ? {body: layout.body, backFull: layout.backFull, backHalf: layout.backHalf, ad: layout.ad, colophon: layout.colophon}
+              : layout.name === 'series-like-tail'
+              ? {body: layout.body, back: layout.back, seriesLike: layout.seriesLike, ad: layout.ad, colophon: layout.colophon}
+              : {body: layout.body, back: layout.back, ad: layout.ad, colophon: layout.colophon}) : null,
+            back, backFull, backHalf, seriesLike, ads,
             otherOnScreen: otherOnScreen.map(({element, areaIndex}) => ({...summary(element), areaIndex})),
             unknownOnScreenAreas, colophon,
           };
@@ -935,6 +1378,102 @@ class ComicDaysAdapter(SiteAdapter):
 
     @staticmethod
     def _is_observed_tail(observation: dict[str, Any]) -> bool:
+        if observation.get("scopeValid") is not True:
+            return False
+        variant = observation.get("tailVariant")
+        if variant == "series-like-tail":
+            back, series_like, ads = (
+                observation.get("back"),
+                observation.get("seriesLike"),
+                observation.get("ads"),
+            )
+            indices = observation.get("tailIndices")
+            if not all(isinstance(value, list) and len(value) == 1 for value in (back, series_like, ads)):
+                return False
+            if not isinstance(indices, dict):
+                return False
+            back_item, series_item, ad_item = back[0], series_like[0], ads[0]
+            expected = (
+                indices.get("back"),
+                indices.get("seriesLike"),
+                indices.get("ad"),
+            )
+            if not all(isinstance(value, int) for value in expected) or expected != tuple(range(expected[0], expected[0] + 3)):
+                return False
+            series_classes = set(str(series_item.get("className", "")).split()) if isinstance(series_item, dict) else set()
+            return (
+                all(isinstance(item, dict) for item in (back_item, series_item, ad_item))
+                and back_item.get("areaIndex") == expected[0]
+                and series_item.get("areaIndex") == expected[1]
+                and ad_item.get("areaIndex") == expected[2]
+                and back_item.get("onScreen") is True
+                and series_item.get("onScreen") is True
+                and ad_item.get("onScreen") is True
+                and back_item.get("canvasCount") == 0
+                and back_item.get("imageCount") == 2
+                and back_item.get("iframeCount") == 0
+                and back_item.get("linkSlotCount") == 2
+                and series_classes >= {"page", "js-page", "series-like-page", "js-show-after-load"}
+                and series_item.get("canvasCount") == 0
+                and series_item.get("imageCount") == 1
+                and series_item.get("iframeCount") == 0
+                and series_item.get("linkCount") == 1
+                and series_item.get("buttonCount") == 1
+                and series_item.get("childCount") == 2
+                and series_item.get("childTags") == ["div", "div"]
+                and series_item.get("childClasses") == ["series-like-content", "like-page-app-content"]
+                and ad_item.get("canvasCount") == 0
+                and ad_item.get("imageCount") == 0
+                and (ad_item.get("iframeCount") == 2 or ad_item.get("adContainerCount") == 2)
+                and ad_item.get("childCount") == 1
+                and ad_item.get("childTags") == ["div"]
+                and ad_item.get("childClasses") == ["ad-nav-area-wrap page-content"]
+                and observation.get("unknownOnScreenAreas") == []
+                and observation.get("otherOnScreen") == []
+            )
+        if variant == "front-prefix-tail":
+            full, half, ads = (
+                observation.get("backFull"),
+                observation.get("backHalf"),
+                observation.get("ads"),
+            )
+            indices = observation.get("tailIndices")
+            if not all(isinstance(value, list) and len(value) == 1 for value in (full, half, ads)):
+                return False
+            if not isinstance(indices, dict):
+                return False
+            full_item, half_item, ad_item = full[0], half[0], ads[0]
+            expected = (
+                indices.get("backFull"),
+                indices.get("backHalf"),
+                indices.get("ad"),
+            )
+            if not all(isinstance(value, int) for value in expected) or expected != tuple(range(expected[0], expected[0] + 3)):
+                return False
+            return (
+                all(isinstance(item, dict) for item in (full_item, half_item, ad_item))
+                and full_item.get("areaIndex") == expected[0]
+                and half_item.get("areaIndex") == expected[1]
+                and ad_item.get("areaIndex") == expected[2]
+                and full_item.get("onScreen") is True
+                and half_item.get("onScreen") is True
+                and full_item.get("canvasCount") == 0
+                and full_item.get("imageCount") == 1
+                and full_item.get("iframeCount") == 0
+                and full_item.get("linkSlotCount") == 1
+                and half_item.get("canvasCount") == 0
+                and half_item.get("imageCount") == 2
+                and half_item.get("iframeCount") == 0
+                and half_item.get("linkSlotCount") == 2
+                and ad_item.get("canvasCount") == 0
+                and ad_item.get("imageCount") == 0
+                and (ad_item.get("iframeCount") == 2 or ad_item.get("adContainerCount") == 2)
+                and ad_item.get("childCount") == 1
+                and ad_item.get("childTags") == ["div"]
+                and ad_item.get("childClasses") == ["ad-nav-area-wrap page-content"]
+                and observation.get("unknownOnScreenAreas") == []
+                and observation.get("otherOnScreen") == []
+            )
         back, ads = observation.get("back"), observation.get("ads")
         if not isinstance(back, list) or not isinstance(ads, list) or len(back) != 1 or len(ads) != 1:
             return False
@@ -942,7 +1481,6 @@ class ComicDaysAdapter(SiteAdapter):
         last = observation.get("sliderLast")
         if not isinstance(last, int):
             return False
-        variant = observation.get("tailVariant")
         expected = {
             "legacy-tail": (last - 3, last - 2),
             "leading-area-tail": (last - 2, last - 1),
@@ -951,7 +1489,6 @@ class ComicDaysAdapter(SiteAdapter):
             return False
         return (
             isinstance(back_item, dict) and isinstance(ad_item, dict)
-            and observation.get("scopeValid") is True
             and (back_item.get("areaIndex"), ad_item.get("areaIndex")) == expected
             and back_item.get("onScreen") is True and ad_item.get("onScreen") is True
             and back_item.get("canvasCount") == 0 and back_item.get("imageCount") == 2
@@ -969,44 +1506,96 @@ class ComicDaysAdapter(SiteAdapter):
         )
 
     @staticmethod
+    def _is_valid_colophon_summary(colophon: Any) -> bool:
+        if not isinstance(colophon, dict):
+            return False
+        class_name = colophon.get("className")
+        if not isinstance(class_name, str):
+            return False
+        point_gettable = "point-gettable-episode" in class_name.split()
+        shape = colophon.get("colophonShape")
+        if shape == "standard-simple":
+            return not point_gettable and colophon.get("imageCount") == 10
+        if shape == "point-gettable-simple":
+            return point_gettable and colophon.get("imageCount") == 11
+        if shape == "standard-recommendation":
+            return not point_gettable and isinstance(colophon.get("imageCount"), int) and colophon.get("imageCount") > 0
+        if shape == "point-gettable-recommendation":
+            return point_gettable and colophon.get("imageCount") == 11
+        return False
+
+    @staticmethod
     def _is_observed_colophon(observation: dict[str, Any]) -> bool:
         colophon = observation.get("colophon")
-        back, ads = observation.get("back"), observation.get("ads")
-        last = observation.get("sliderLast")
+        if not isinstance(colophon, dict) or observation.get("scopeValid") is not True:
+            return False
         variant = observation.get("tailVariant")
-        expected = {
-            "legacy-tail": (last - 3, last - 2) if isinstance(last, int) else None,
-            "leading-area-tail": (last - 2, last - 1) if isinstance(last, int) else None,
-        }.get(variant)
-        back_item = back[0] if isinstance(back, list) and len(back) == 1 else None
-        ad_item = ads[0] if isinstance(ads, list) and len(ads) == 1 else None
-        resources_valid = (
-            expected is not None
-            and isinstance(back_item, dict) and isinstance(ad_item, dict)
-            and (back_item.get("areaIndex"), ad_item.get("areaIndex")) == expected
-            and back_item.get("canvasCount") == 0
-            and back_item.get("imageCount") == 2
-            and back_item.get("iframeCount") == 0
-            and back_item.get("childCount") == 1
-            and back_item.get("childTags") == ["div"]
-            and back_item.get("childClasses") == ["link-page-content"]
-            and ad_item.get("canvasCount") == 0
-            and ad_item.get("imageCount") == 0
-            and ad_item.get("iframeCount") == 2
-            and ad_item.get("childCount") == 1
-            and ad_item.get("childTags") == ["div"]
-            and ad_item.get("childClasses") == ["ad-nav-area-wrap page-content"]
-        )
+        if variant == "front-prefix-tail":
+            full = observation.get("backFull")
+            half = observation.get("backHalf")
+            ads = observation.get("ads")
+            indices = observation.get("tailIndices")
+            if not all(isinstance(value, list) and len(value) == 1 for value in (full, half, ads)) or not isinstance(indices, dict):
+                return False
+            full_item, half_item, ad_item = full[0], half[0], ads[0]
+            resources_valid = (
+                isinstance(full_item, dict) and isinstance(half_item, dict) and isinstance(ad_item, dict)
+                and full_item.get("areaIndex") == indices.get("backFull")
+                and half_item.get("areaIndex") == indices.get("backHalf")
+                and ad_item.get("areaIndex") == indices.get("ad")
+                and full_item.get("imageCount") == 1
+                and full_item.get("linkSlotCount") == 1
+                and half_item.get("imageCount") == 2
+                and half_item.get("linkSlotCount") == 2
+                and (ad_item.get("iframeCount") == 2 or ad_item.get("adContainerCount") == 2)
+            )
+            expected_colophon = indices.get("colophon")
+        elif variant == "series-like-tail":
+            back, series_like, ads = observation.get("back"), observation.get("seriesLike"), observation.get("ads")
+            indices = observation.get("tailIndices")
+            back_item = back[0] if isinstance(back, list) and len(back) == 1 else None
+            series_item = series_like[0] if isinstance(series_like, list) and len(series_like) == 1 else None
+            ad_item = ads[0] if isinstance(ads, list) and len(ads) == 1 else None
+            series_classes = set(str(series_item.get("className", "")).split()) if isinstance(series_item, dict) else set()
+            resources_valid = (
+                isinstance(indices, dict)
+                and isinstance(back_item, dict) and isinstance(series_item, dict) and isinstance(ad_item, dict)
+                and (back_item.get("areaIndex"), series_item.get("areaIndex"), ad_item.get("areaIndex")) == (
+                    indices.get("back"), indices.get("seriesLike"), indices.get("ad")
+                )
+                and back_item.get("imageCount") == 2
+                and back_item.get("linkSlotCount") == 2
+                and series_classes >= {"page", "js-page", "series-like-page", "js-show-after-load"}
+                and series_item.get("imageCount") == 1
+                and series_item.get("linkCount") == 1
+                and series_item.get("buttonCount") == 1
+                and (ad_item.get("iframeCount") == 2 or ad_item.get("adContainerCount") == 2)
+            )
+            expected_colophon = indices.get("colophon") if isinstance(indices, dict) else None
+        else:
+            back, ads = observation.get("back"), observation.get("ads")
+            last = observation.get("sliderLast")
+            expected = {
+                "legacy-tail": (last - 3, last - 2) if isinstance(last, int) else None,
+                "leading-area-tail": (last - 2, last - 1) if isinstance(last, int) else None,
+            }.get(variant)
+            back_item = back[0] if isinstance(back, list) and len(back) == 1 else None
+            ad_item = ads[0] if isinstance(ads, list) and len(ads) == 1 else None
+            resources_valid = (
+                expected is not None
+                and isinstance(back_item, dict) and isinstance(ad_item, dict)
+                and (back_item.get("areaIndex"), ad_item.get("areaIndex")) == expected
+                and back_item.get("imageCount") == 2
+                and ad_item.get("imageCount") == 0
+                and ad_item.get("iframeCount") == 2
+            )
+            expected_colophon = last - 1 if variant == "legacy-tail" and isinstance(last, int) else last
         return (
-            isinstance(colophon, dict)
-            and observation.get("scopeValid") is True
-            and variant in {"legacy-tail", "leading-area-tail"}
-            and isinstance(last, int)
-            and resources_valid
-            and colophon.get("areaIndex") == (last - 1 if variant == "legacy-tail" else last)
+            resources_valid
+            and colophon.get("areaIndex") == expected_colophon
             and colophon.get("onScreen") is True
             and colophon.get("canvasCount") == 0
-            and colophon.get("imageCount") == 10
+            and ComicDaysAdapter._is_valid_colophon_summary(colophon)
             and colophon.get("iframeCount") == 0
             and colophon.get("childCount") == 1
             and colophon.get("childTags") == ["div"]
@@ -1040,6 +1629,9 @@ class ComicDaysAdapter(SiteAdapter):
             state.get("sliderNow"), state.get("sliderLast"), state.get("colophon"),
             observation.get("sliderNow"), observation.get("sliderLast"),
             tuple(marker(item) for item in observation.get("back", []) if isinstance(item, dict)),
+            tuple(marker(item) for item in observation.get("backFull", []) if isinstance(item, dict)),
+            tuple(marker(item) for item in observation.get("backHalf", []) if isinstance(item, dict)),
+            tuple(marker(item) for item in observation.get("seriesLike", []) if isinstance(item, dict)),
             tuple(marker(item) for item in observation.get("ads", []) if isinstance(item, dict)),
             marker(observation.get("colophon")),
             tuple(marker(item) for item in observation.get("otherOnScreen", []) if isinstance(item, dict)),
@@ -1092,6 +1684,23 @@ class ComicDaysAdapter(SiteAdapter):
                             signature = self._nonbody_signature(observation, state)
                             nonbody_stable = nonbody_stable + 1 if signature == nonbody_previous else 1
                             nonbody_previous = signature
+                    tail_indices = observation.get("tailIndices") if isinstance(observation, dict) else None
+                    new_tail_transition = (
+                        isinstance(observation, dict)
+                        and observation.get("tailVariant") in {"front-prefix-tail", "series-like-tail"}
+                        and isinstance(tail_indices, dict)
+                        and advance_from is not None
+                        and current > advance_from
+                        and current <= last
+                    )
+                    new_colophon_transition = (
+                        isinstance(observation, dict)
+                        and observation.get("tailVariant") in {"front-prefix-tail", "series-like-tail"}
+                        and isinstance(tail_indices, dict)
+                        and self._known_tail_slider is not None
+                        and current > self._known_tail_slider
+                        and current <= last
+                    )
                     if (
                         observation is not None
                         and nonbody_stable >= 2
@@ -1099,6 +1708,7 @@ class ComicDaysAdapter(SiteAdapter):
                         and (
                             (current == last and self._known_tail_slider in {last - 2, last - 1})
                             or (current == last - 1 and self._known_tail_slider is None)
+                            or new_colophon_transition
                         )
                         and self._is_observed_colophon(observation)
                     ):
@@ -1109,7 +1719,15 @@ class ComicDaysAdapter(SiteAdapter):
                     elif (
                         observation is not None
                         and nonbody_stable >= 2
-                        and current in {last - 2, last - 1}
+                        and (
+                            current in {last - 2, last - 1}
+                            or (
+                                isinstance(observation, dict)
+                                and observation.get("tailVariant") == "series-like-tail"
+                                and current == last - 3
+                            )
+                            or new_tail_transition
+                        )
                         and self._is_observed_tail(observation)
                     ):
                         if self._known_tail_slider is not None or self._known_nonbody_passes >= 1:
@@ -1144,7 +1762,11 @@ class ComicDaysAdapter(SiteAdapter):
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
         del page
-        return {**self._capture_debug, "last_transition_observation": self._last_transition_observation}
+        return {
+            **self._capture_debug,
+            "last_transition_observation": self._last_transition_observation,
+            "ticket_trace": [dict(event) for event in self._ticket_trace],
+        }
 
     def get_output_metadata(self) -> dict[str, str | None]:
         return {"title": self._title, "author": self._author, "order": None, "genre": "漫画"}

@@ -18,6 +18,7 @@ from screenshot_crawler.catalog import (
     Source,
     Work,
 )
+from screenshot_crawler.core.packaging import safe_component
 from screenshot_crawler.core.progress import atomic_write_json
 
 
@@ -356,21 +357,32 @@ def _select_current_archive(
 def _inspect_status_candidate(entry: RenumberEntry, status_dir: Path) -> None:
     assert entry.old_path is not None
     assert entry.new_path is not None
-    candidate = status_dir / f"{entry.old_path.stem}.json"
-    new_candidate = status_dir / f"{entry.new_path.stem}.json"
-    entry.new_status_path = new_candidate
-    if not candidate.is_file():
-        entry.status_warning = "STATUS_MISSING"
+    namespaced_dir = status_dir / safe_component(
+        entry.work.genre, fallback="小説"
+    ) / safe_component(entry.work.title, fallback="unknown-title")
+    candidates = (
+        namespaced_dir / f"{entry.old_path.stem}.json",
+        # Keep explicit renumber compatible with status JSON produced before
+        # work-scoped status directories were introduced.
+        status_dir / f"{entry.old_path.stem}.json",
+    )
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        payload = _read_matching_status(candidate, entry.old_path)
+        if payload is None:
+            entry.status_warning = "STATUS_MISMATCH"
+            return
+        entry.status_path = candidate
+        entry.new_status_path = candidate.with_name(f"{entry.new_path.stem}.json")
+        entry.status_payload = payload
+        entry.status_temporary_path = _temporary_sibling(
+            candidate, entry.artifact.id, "status-renumber"
+        )  # type: ignore[union-attr]
         return
-    payload = _read_matching_status(candidate, entry.old_path)
-    if payload is None:
-        entry.status_warning = "STATUS_MISMATCH"
-        return
-    entry.status_path = candidate
-    entry.status_payload = payload
-    entry.status_temporary_path = _temporary_sibling(
-        candidate, entry.artifact.id, "status-renumber"
-    )  # type: ignore[union-attr]
+
+    entry.new_status_path = status_dir / f"{entry.new_path.stem}.json"
+    entry.status_warning = "STATUS_MISSING"
 
 
 def _read_matching_status(path: Path, old_path: Path | None) -> dict[str, Any] | None:

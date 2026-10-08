@@ -75,9 +75,97 @@ COMICDAYS_CAPTURE_HOOK = r"""
     const usable=tiles.filter(x=>!outside(x));
     const valid=!!base&&safe(base)&&usable.length>0&&usable.every(x=>safe(x)&&Array.isArray(x.args)&&x.args.length===8&&x.args.every(Number.isFinite)&&x.args[2]===x.args[6]&&x.args[3]===x.args[7]&&x.args[2]>0&&x.args[3]>0&&x.args[0]>=0&&x.args[1]>=0&&x.args[0]+x.args[2]<=base.source.width&&x.args[1]+x.args[3]<=base.source.height&&x.args[4]>=0&&x.args[5]>=0&&x.args[4]+x.args[6]<=x.canvasWidth&&x.args[5]+x.args[7]<=x.canvasHeight);
     const dest=valid?exactUnion(usable.map(x=>x.args.slice(4,8)),base.canvasWidth,base.canvasHeight):null;const src=valid?exactUnion(usable.map(x=>x.args.slice(0,4)),base.source.width,base.source.height):null;const latest=usable.length?Math.max(...usable.map(x=>x.sequence)):base?.sequence;const clipDuring=!!base&&s.clipUnsafe.has(id)&&Number(s.clipSequence.get(id))<=Number(latest);const renderReady=!!base&&!!dest&&!!src&&!clipDuring&&(base.canvasWidth-dest.maxX===base.source.width-src.maxX);return {areaIndex:ai,canvasId:id,probeId:id,sliderNow:Number(document.querySelector('.js-viewer-slider-pagenum-now')?.textContent?.trim())||null,sliderLast:Number(document.querySelector('.js-viewer-slider-pagenum-last')?.textContent?.trim())||null,rect:{x:r.x,y:r.y,width:r.width,height:r.height},base:base,mapping:tiles,renderReady,clipUnsafe:s.clipUnsafe.has(id),unsafeSequence:s.unsafeSequence.get(c)??null,mutations:s.mutations.filter(x=>x.canvasId===id&&(!base||x.sequence>=base.sequence))};};
-  const activeBody=()=>{const root=document.querySelector('section.viewer.js-viewer .image-container.js-viewer-content');if(!root)return {rows:[],sliderNow:null,sliderLast:null,colophon:false,complete:false,expectedAreaIndices:[],visibleBodyAreaIndices:[],reason:'missing_viewer'};const areas=[...root.querySelectorAll('.page-area.js-page-area')],allCanvases=[...root.querySelectorAll('canvas.page-image.js-page-image')];const now=Number(document.querySelector('.js-viewer-slider-pagenum-now')?.textContent?.trim()),last=Number(document.querySelector('.js-viewer-slider-pagenum-last')?.textContent?.trim());const isBack=a=>[...a.children].filter(p=>p.classList.contains('page')&&p.classList.contains('js-page')&&p.classList.contains('back-link-page')&&p.classList.contains('js-link-page')&&p.classList.contains('js-back-link-page')).length===1;const isAd=a=>[...a.children].filter(p=>p.classList.contains('page')&&p.classList.contains('js-page')&&p.classList.contains('js-page-ad')).length===1;const isTail=a=>a.id==='viewer-colophon'||a.classList.contains('back-matter-area')||isBack(a)||isAd(a);const firstTail=areas.findIndex(isTail);const firstBody=areas.findIndex(a=>a.querySelector('canvas.page-image.js-page-image'));const layouts=Number.isFinite(last)?[{name:'legacy-tail',body:last-4,back:last-3,ad:last-2,colophon:last-1},{name:'leading-area-tail',body:last-3,back:last-2,ad:last-1,colophon:last}]:[];const layoutFor=x=>{const back=areas[x.back],ad=areas[x.ad],colophon=areas[x.colophon];return !!back&&!!ad&&!!colophon&&isBack(back)&&isAd(ad)&&colophon.id==='viewer-colophon'};const layout=layouts.find(x=>layoutFor(x)&&x.body>=0&&firstBody>=0&&firstBody<=x.body&&x.body<firstTail)||null;const bodyIndices=layout?Array.from({length:layout.body-firstBody+1},(_,n)=>firstBody+n):[];const visibleBody=bodyIndices.filter(i=>visible(areas[i]));let expected=[];let reason=null;if(!layout)reason='unknown_body_layout';else if(!Number.isFinite(now)||!Number.isFinite(last)||now<1||now>last)reason='invalid_slider';else if(now===1)expected=[firstBody];else {const candidates=layout.name==='legacy-tail'?[now-1,now]:[now,now+1];expected=candidates.filter(i=>bodyIndices.includes(i));if(!expected.length)reason='non_body_slider';}if(!reason&&(!expected.every(i=>bodyIndices.includes(i))||new Set(visibleBody).size!==new Set(expected).size||visibleBody.some(i=>!expected.includes(i))))reason='expected_body_area_not_visible_or_extra';const rows=[];if(!reason){for(const ai of expected){const cs=areas[ai].querySelectorAll('canvas.page-image.js-page-image');if(cs.length!==1){reason=cs.length===0?'body_canvas_missing':'body_canvas_count';break}const value=row(cs[0],areas);if(!value){reason='body_canvas_invisible_or_unsafe';break}value.canvasIndex=allCanvases.indexOf(cs[0]);rows.push(value)}}const complete=!reason&&expected.length>0&&expected.length<=${MAX_ROWS}&&rows.length===expected.length;if(!complete)return {rows:[],sliderNow:Number.isFinite(now)?now:null,sliderLast:Number.isFinite(last)?last:null,colophon:!!document.querySelector('#viewer-colophon')&&visible(document.querySelector('#viewer-colophon')),complete:false,expectedAreaIndices:expected,visibleBodyAreaIndices:visibleBody,reason:reason||'body_area_count'};rows.sort((a,b)=>b.rect.x-a.rect.x);return {rows,sliderNow:Number.isFinite(now)?now:null,sliderLast:Number.isFinite(last)?last:null,colophon:!!document.querySelector('#viewer-colophon')&&visible(document.querySelector('#viewer-colophon')),complete:true,expectedAreaIndices:expected,visibleBodyAreaIndices:visibleBody};};
+  const activeBody=()=>{const root=document.querySelector('section.viewer.js-viewer .image-container.js-viewer-content');if(!root)return {rows:[],sliderNow:null,sliderLast:null,colophon:false,complete:false,expectedAreaIndices:[],visibleBodyAreaIndices:[],reason:'missing_viewer'};const areas=[...root.querySelectorAll('.page-area.js-page-area')],allCanvases=[...root.querySelectorAll('canvas.page-image.js-page-image')];const now=Number(document.querySelector('.js-viewer-slider-pagenum-now')?.textContent?.trim()),last=Number(document.querySelector('.js-viewer-slider-pagenum-last')?.textContent?.trim());const isBack=a=>[...a.children].filter(p=>p.classList.contains('page')&&p.classList.contains('js-page')&&p.classList.contains('back-link-page')&&p.classList.contains('js-link-page')&&p.classList.contains('js-back-link-page')).length===1;const isAd=a=>[...a.children].filter(p=>p.classList.contains('page')&&p.classList.contains('js-page')&&p.classList.contains('js-page-ad')).length===1;const isTail=a=>a.id==='viewer-colophon'||a.classList.contains('back-matter-area')||isBack(a)||isAd(a);const firstTail=areas.findIndex(isTail);const firstBody=areas.findIndex(a=>a.querySelector('canvas.page-image.js-page-image'));const layouts=Number.isFinite(last)?[{name:'legacy-tail',body:last-4,back:last-3,ad:last-2,colophon:last-1},{name:'leading-area-tail',body:last-3,back:last-2,ad:last-1,colophon:last}]:[];const layoutFor=x=>{const back=areas[x.back],ad=areas[x.ad],colophon=areas[x.colophon];return !!back&&!!ad&&!!colophon&&isBack(back)&&isAd(ad)&&colophon.id==='viewer-colophon'};const layout=layouts.find(x=>layoutFor(x)&&x.body>=0&&firstBody>=0&&firstBody<=x.body&&x.body<firstTail)||null;const bodyIndices=layout?Array.from({length:layout.body-firstBody+1},(_,n)=>firstBody+n):[];const visibleBody=bodyIndices.filter(i=>visible(areas[i]));let expected=[];let reason=null;if(!layout)reason='unknown_body_layout';else if(!Number.isFinite(now)||!Number.isFinite(last)||now<1||now>last)reason='invalid_slider';else if(now===1){expected=[firstBody];const initialDouble=visibleBody.length===2&&visibleBody[0]===firstBody&&visibleBody[1]===firstBody+1;if(initialDouble)expected=visibleBody;}else {const candidates=layout.name==='legacy-tail'?[now-1,now]:[now,now+1];expected=candidates.filter(i=>bodyIndices.includes(i));if(!expected.length)reason='non_body_slider';}if(!reason&&(!expected.every(i=>bodyIndices.includes(i))||new Set(visibleBody).size!==new Set(expected).size||visibleBody.some(i=>!expected.includes(i))))reason='expected_body_area_not_visible_or_extra';const rows=[];if(!reason){for(const ai of expected){const cs=areas[ai].querySelectorAll('canvas.page-image.js-page-image');if(cs.length!==1){reason=cs.length===0?'body_canvas_missing':'body_canvas_count';break}const value=row(cs[0],areas);if(!value){reason='body_canvas_invisible_or_unsafe';break}value.canvasIndex=allCanvases.indexOf(cs[0]);rows.push(value)}}const complete=!reason&&expected.length>0&&expected.length<=${MAX_ROWS}&&rows.length===expected.length;if(!complete)return {rows:[],sliderNow:Number.isFinite(now)?now:null,sliderLast:Number.isFinite(last)?last:null,colophon:!!document.querySelector('#viewer-colophon')&&visible(document.querySelector('#viewer-colophon')),complete:false,expectedAreaIndices:expected,visibleBodyAreaIndices:visibleBody,reason:reason||'body_area_count'};rows.sort((a,b)=>b.rect.x-a.rect.x);return {rows,sliderNow:Number.isFinite(now)?now:null,sliderLast:Number.isFinite(last)?last:null,colophon:!!document.querySelector('#viewer-colophon')&&visible(document.querySelector('#viewer-colophon')),complete:true,expectedAreaIndices:expected,visibleBodyAreaIndices:visibleBody};};
+  const activeBodyV2=()=>{
+    const root=document.querySelector('section.viewer.js-viewer .image-container.js-viewer-content');
+    if(!root)return {rows:[],sliderNow:null,sliderLast:null,colophon:false,complete:false,expectedAreaIndices:[],visibleBodyAreaIndices:[],reason:'missing_viewer'};
+    const areas=[...root.querySelectorAll('.page-area.js-page-area')];
+    const allCanvases=[...root.querySelectorAll('canvas.page-image.js-page-image')];
+    const now=Number(document.querySelector('.js-viewer-slider-pagenum-now')?.textContent?.trim());
+    const last=Number(document.querySelector('.js-viewer-slider-pagenum-last')?.textContent?.trim());
+    const pageChild=(area,predicate)=>{if(!area)return false;const children=[...area.children].filter(p=>p.classList.contains('page')&&p.classList.contains('js-page'));return children.length===1&&predicate(children[0])};
+    const linkContent=page=>page.children.length===1&&page.children[0].tagName==='DIV'&&page.children[0].className==='link-page-content';
+    const isLegacyBackPage=page=>page.classList.contains('back-link-page')&&page.classList.contains('js-link-page')&&page.classList.contains('js-back-link-page');
+    const isFrontPage=page=>page.classList.contains('front-link-page')&&page.classList.contains('js-link-page')&&page.classList.contains('js-front-link-page')&&page.classList.contains('link-page-full')&&linkContent(page)&&page.querySelectorAll('.link-slot').length===1&&page.querySelectorAll('img').length===1&&page.querySelectorAll('canvas,iframe').length===0;
+    const isBackFullPage=page=>isLegacyBackPage(page)&&page.classList.contains('link-page-full')&&linkContent(page)&&page.querySelectorAll('.link-slot').length===1&&page.querySelectorAll('img').length===1&&page.querySelectorAll('canvas,iframe').length===0;
+    const isBackHalfPage=page=>isLegacyBackPage(page)&&page.classList.contains('link-page-half')&&linkContent(page)&&page.querySelectorAll('.link-slot').length===2&&page.querySelectorAll('img').length===2&&page.querySelectorAll('canvas,iframe').length===0;
+    const isLegacyBackArea=area=>pageChild(area,isLegacyBackPage);
+    const isBackFullArea=area=>pageChild(area,page=>isLegacyBackPage(page)&&page.classList.contains('link-page-full'));
+    const isBackHalfArea=area=>pageChild(area,page=>isLegacyBackPage(page)&&page.classList.contains('link-page-half'));
+    const isFrontArea=area=>pageChild(area,isFrontPage);
+    const isDummyArea=area=>!!area&&area.children.length===1&&area.children[0].classList.contains('page-dummy')&&area.children[0].classList.contains('js-page')&&area.querySelectorAll('canvas,img,iframe').length===0;
+    const isAdPage=page=>page.classList.contains('page-ad')&&page.classList.contains('js-page-ad');
+    const isAdArea=area=>pageChild(area,isAdPage);
+    const isSeriesLikePage=page=>page.classList.contains('series-like-page')&&page.classList.contains('js-show-after-load')&&page.children.length===2&&page.children[0].tagName==='DIV'&&page.children[0].className==='series-like-content'&&page.children[0].children.length===2&&page.children[0].children[0].tagName==='P'&&page.children[0].children[0].className==='series-like-description'&&page.children[0].children[1].tagName==='BUTTON'&&page.children[0].children[1].className==='series-like-button js-episode-like-button'&&page.children[1].tagName==='DIV'&&page.children[1].className==='like-page-app-content'&&page.children[1].children.length===2&&page.children[1].children[0].tagName==='P'&&page.children[1].children[0].className==='like-page-app-content-text'&&page.children[1].children[1].tagName==='A'&&page.children[1].children[1].className==='like-page-app-content-link'&&page.children[1].children[1].querySelectorAll('img').length===1&&page.children[1].children[1].querySelector('img')?.className==='like-page-app-content-icon'&&page.querySelectorAll('img').length===1&&page.querySelectorAll('a').length===1&&page.querySelectorAll('button').length===1&&page.querySelectorAll('button.js-episode-like-button').length===1&&page.querySelectorAll('canvas,iframe').length===0;
+    const isSeriesLikeArea=area=>!!area&&area.classList.contains('test-series-like-page')&&area.children.length===1&&pageChild(area,isSeriesLikePage);
+    const colophonStructure=area=>!!area&&area.id==='viewer-colophon'&&area.children.length===1&&area.children[0].classList.contains('back-matter')&&area.children[0].classList.contains('js-back-matter')&&area.children[0].children.length===1&&area.children[0].children[0].tagName==='DIV'&&area.children[0].children[0].className==='back-matter-content'&&area.querySelectorAll('canvas,iframe').length===0;
+    const simpleColophon= (area,expectedImages)=>{const content=area.children[0].children[0];return content.children.length===expectedImages&&[...content.children].every(child=>child.tagName==='IMG');};
+    const recommendationColophon=(area,point)=>{const content=area.children[0].children[0],children=[...content.children];if(children.length!==2)return false;const info=children[0],recommendations=children[1],infoValid=info.tagName==='DIV'&&info.className==='viewer-colophon-info-wrapper'&&info.children.length===1&&info.children[0].tagName==='DIV'&&info.children[0].className==='viewer-colophon-info'&&info.querySelectorAll('canvas,iframe').length===0,recommendationChildren=[...recommendations.children],images=[...recommendations.querySelectorAll('img')],recommendationsValid=recommendations.tagName==='ASIDE'&&recommendations.className==='days-viewer-colophon-recommend'&&recommendationChildren.length===3&&recommendationChildren[0].tagName==='H3'&&recommendationChildren[0].classList.contains('days-viewer-colophon-recommend-title')&&recommendationChildren[1].tagName==='UL'&&recommendationChildren[1].classList.contains('days-viewer-colophon-recommend-list')&&recommendationChildren[2].tagName==='DIV'&&recommendationChildren[2].classList.contains('swiper')&&images.length>0&&images.every(image=>image.className==='days-viewer-colophon-recommend-thumb')&&recommendations.querySelectorAll('canvas,iframe').length===0;if(!infoValid||!recommendationsValid)return false;const infoImages=info.querySelectorAll('img');return point?infoImages.length===1&&infoImages[0].className==='reading-completion-point-img'&&images.length===10:infoImages.length===0;};
+    const isColophonArea=area=>{if(!colophonStructure(area))return false;const point=area.classList.contains('point-gettable-episode');return point?(simpleColophon(area,11)||recommendationColophon(area,true)):(simpleColophon(area,10)||recommendationColophon(area,false));};
+    const isBodyAreaShell=area=>{
+      if(!area)return false;
+      const children=[...area.children];
+      if(children.length===0)return true;
+      if(children.length!==1||!children[0].classList.contains('page-image')||!children[0].classList.contains('js-page-image'))return false;
+      return children[0].className==='page-image js-page-image'&&children[0].querySelectorAll('img,iframe').length===0;
+    };
+    const isTail=area=>isColophonArea(area)||isLegacyBackArea(area)||isSeriesLikeArea(area)||isAdArea(area);
+    const firstTail=areas.findIndex(isTail);
+    const canvasFirst=areas.findIndex(area=>area.querySelector('canvas.page-image.js-page-image'));
+    const colophon=areas.findIndex(isColophonArea);
+    const twoFrontBodyEnd=colophon-4;
+    const twoFrontBodyShell=twoFrontBodyEnd>=2&&areas.slice(2,twoFrontBodyEnd+1).every(isBodyAreaShell);
+    const dummyFrontPrefix=areas.length>3&&isDummyArea(areas[0])&&isFrontArea(areas[1])&&isFrontArea(areas[2])&&
+      !isTail(areas[3])&&!([...areas[3].children].some(page=>page.classList.contains('page')&&page.classList.contains('js-page')));
+    const twoFrontDoublePrefix=areas.length>2&&isFrontArea(areas[0])&&isFrontArea(areas[1])&&twoFrontBodyShell&&
+      !isTail(areas[2])&&!areas.slice(2).some(area=>area.querySelector('.front-link-page'))&&
+      !([...areas[2].children].some(page=>page.classList.contains('page')&&page.classList.contains('js-page')));
+    const frontPrefixMode=dummyFrontPrefix?'dummy-single':twoFrontDoublePrefix?'two-front-double':null;
+    const frontPrefix=frontPrefixMode!==null;
+    const firstBody=frontPrefixMode==='dummy-single'?3:frontPrefixMode==='two-front-double'?2:canvasFirst;
+    const layouts=Number.isFinite(last)?[
+      {name:'legacy-tail',body:last-4,back:last-3,ad:last-2,colophon:last-1},
+      {name:'leading-area-tail',body:last-3,back:last-2,ad:last-1,colophon:last},
+      {name:'series-like-tail',body:colophon-4,back:colophon-3,seriesLike:colophon-2,ad:colophon-1,colophon},
+      {name:'front-prefix-tail',body:colophon-4,backFull:colophon-3,backHalf:colophon-2,ad:colophon-1,colophon,frontPrefix},
+    ]:[];
+    const layoutFor=layout=>{
+      const col=areas[layout.colophon],ad=areas[layout.ad];
+      if(layout.name==='series-like-tail')return !frontPrefix&&layout.body>=firstBody&&layout.body<firstTail&&isBackHalfArea(areas[layout.back])&&isSeriesLikeArea(areas[layout.seriesLike])&&isAdArea(ad)&&isColophonArea(col)&&areas.slice(firstBody,layout.body+1).every(isBodyAreaShell);
+      if(layout.name==='front-prefix-tail')return layout.frontPrefix===true&&frontPrefix&&layout.body>=firstBody&&layout.body<firstTail&&isBackFullArea(areas[layout.backFull])&&isBackHalfArea(areas[layout.backHalf])&&isAdArea(ad)&&isColophonArea(col);
+      return !!areas[layout.body]&&!!areas[layout.back]&&!!ad&&!!col&&layout.body<firstTail&&isLegacyBackArea(areas[layout.back])&&isAdArea(ad)&&isColophonArea(col);
+    };
+    const layout=layouts.find(layoutFor)||null;
+    const bodyEnd=layout?.body??-1;
+    const bodyIndices=layout&&firstBody>=0&&firstBody<=bodyEnd?Array.from({length:bodyEnd-firstBody+1},(_,n)=>firstBody+n):[];
+    const visibleBody=bodyIndices.filter(i=>visible(areas[i]));
+    let expected=[];
+    let reason=null;
+    if(!layout)reason='unknown_body_layout';
+    else if(!Number.isFinite(now)||!Number.isFinite(last)||now<1||now>last)reason='invalid_slider';
+    else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='dummy-single'&&now===1){reason='front_link_prefix';}
+    else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='dummy-single'&&now===2){expected=[firstBody];}
+    else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='two-front-double'&&now===1){reason='front_link_prefix';}
+    else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='two-front-double'&&now===3){expected=[firstBody,firstBody+1];}
+    else if(layout.name==='front-prefix-tail'&&frontPrefixMode==='two-front-double'){
+      expected=[...visibleBody];
+      const terminalSingle=now===last-4&&expected.length===1&&expected[0]===bodyEnd;
+      if((!terminalSingle&&expected.length!==2)||expected[0]<firstBody||
+         (!terminalSingle&&expected[1]!==expected[0]+1)||expected[expected.length-1]>bodyEnd)reason='non_body_slider';
+    }
+    else if(now===1){expected=[firstBody];const initialDouble=visibleBody.length===2&&visibleBody[0]===firstBody&&visibleBody[1]===firstBody+1;if(initialDouble)expected=visibleBody;}
+    else {const candidates=layout.name==='legacy-tail'?[now-1,now]:[now,now+1];expected=candidates.filter(i=>bodyIndices.includes(i));if(!expected.length)reason='non_body_slider';}
+    if(!reason&&(!expected.every(i=>bodyIndices.includes(i))||new Set(visibleBody).size!==new Set(expected).size||visibleBody.some(i=>!expected.includes(i))))reason='expected_body_area_not_visible_or_extra';
+    const rows=[];
+    if(!reason){for(const ai of expected){const cs=areas[ai].querySelectorAll('canvas.page-image.js-page-image');if(cs.length!==1){reason=cs.length===0?'body_canvas_missing':'body_canvas_count';break}const value=row(cs[0],areas);if(!value){reason='body_canvas_invisible_or_unsafe';break}value.canvasIndex=allCanvases.indexOf(cs[0]);rows.push(value)}}
+    const base={sliderNow:Number.isFinite(now)?now:null,sliderLast:Number.isFinite(last)?last:null,colophon:!!areas[colophon]&&visible(areas[colophon]),complete:false,expectedAreaIndices:expected,visibleBodyAreaIndices:visibleBody,layoutVariant:layout?.name||null,frontPrefix:layout?.name==='front-prefix-tail',frontPrefixMode:layout?.name==='front-prefix-tail'?frontPrefixMode:null};
+    const complete=!reason&&expected.length>0&&expected.length<=${MAX_ROWS}&&rows.length===expected.length;
+    if(!complete)return {rows:[],...base,reason:reason||'body_area_count'};
+    rows.sort((a,b)=>b.rect.x-a.rect.x);
+    return {rows,...base,complete:true};
+  };
   const b64=a=>{let out='',u=new Uint8Array(a);for(let i=0;i<u.length;i+=0x8000)out+=String.fromCharCode(...u.subarray(i,i+0x8000));return btoa(out)};
-  window.__comicDaysProductionCapture={active:activeBody, snapshot:async ids=>{const out=[];for(const id of ids||[]){const im=s.imageRefs.get(Number(id));if(!im)continue;const url=im.currentSrc||im.src||'';if(!url.startsWith('blob:')||url.length>4096){out.push({id:Number(id),error:'source_not_blob'});continue}let timer=null;try{const controller=new AbortController();timer=setTimeout(()=>controller.abort(),4000);const r=await fetch(url,{signal:controller.signal});if(!r.ok){out.push({id:Number(id),error:'source_fetch'});continue}const length=Number(r.headers.get('content-length')||0);if(length>${MAX_SOURCE_BYTES}){out.push({id:Number(id),error:'source_too_large'});continue}const b=await r.arrayBuffer();if(b.byteLength>${MAX_SOURCE_BYTES}){out.push({id:Number(id),error:'source_too_large'});continue}out.push({id:Number(id),url,bytes:b64(b),type:r.headers.get('content-type')||im.type||null})}catch(e){out.push({id:Number(id),error:'source_unavailable'})}finally{if(timer!==null)clearTimeout(timer)}}return out},debug:()=>({draws:s.draws.length,mutations:s.mutations.length,images:s.imageRefs.size})};
+  window.__comicDaysProductionCapture={active:activeBodyV2, snapshot:async ids=>{const out=[];for(const id of ids||[]){const im=s.imageRefs.get(Number(id));if(!im)continue;const url=im.currentSrc||im.src||'';if(!url.startsWith('blob:')||url.length>4096){out.push({id:Number(id),error:'source_not_blob'});continue}let timer=null;try{const controller=new AbortController();timer=setTimeout(()=>controller.abort(),4000);const r=await fetch(url,{signal:controller.signal});if(!r.ok){out.push({id:Number(id),error:'source_fetch'});continue}const length=Number(r.headers.get('content-length')||0);if(length>${MAX_SOURCE_BYTES}){out.push({id:Number(id),error:'source_too_large'});continue}const b=await r.arrayBuffer();if(b.byteLength>${MAX_SOURCE_BYTES}){out.push({id:Number(id),error:'source_too_large'});continue}out.push({id:Number(id),url,bytes:b64(b),type:r.headers.get('content-type')||im.type||null})}catch(e){out.push({id:Number(id),error:'source_unavailable'})}finally{if(timer!==null)clearTimeout(timer)}}return out},debug:()=>({draws:s.draws.length,mutations:s.mutations.length,images:s.imageRefs.size})};
 })();
 """
 COMICDAYS_CAPTURE_HOOK = COMICDAYS_CAPTURE_HOOK.replace("${MAX_ROWS}", str(MAX_ROWS)).replace("${MAX_SOURCE_BYTES}", str(MAX_SOURCE_BYTES))
@@ -409,6 +497,7 @@ def reconstruct_jpeg(source_bytes: bytes, plan: dict[str, Any]) -> CaptureResult
             return None
         source_rectangles: list[tuple[int, int, int, int]] = []
         destination_rectangles: list[tuple[int, int, int, int]] = []
+        tile_geometry: tuple[int, int, int] | None = None
         for draw in tiles:
             args = draw["args"]
             if not isinstance(args, list) or len(args) != 8 or any(
@@ -416,16 +505,25 @@ def reconstruct_jpeg(source_bytes: bytes, plan: dict[str, Any]) -> CaptureResult
             ):
                 return None
             sx, sy, sw, sh, dx, dy, dw, dh = args
-            if (sw, sh, dw, dh) != (280, 400, 280, 400):
+            if (sw, sh, dw, dh) == (280, 400, 280, 400):
+                tile_geometry = tile_geometry or (280, 400, 1120)
+            elif (sw, sh, dw, dh) == (176, 256, 176, 256) and (width, height) == (720, 1024):
+                tile_geometry = tile_geometry or (176, 256, 704)
+            else:
+                return None
+            if tile_geometry not in {(280, 400, 1120), (176, 256, 704)}:
                 return None
             if min(sx, sy, dx, dy) < 0 or sx + sw > width or sy + sh > height or dx + dw > width or dy + dh > height:
                 return None
             source_rectangles.append((sx, sy, sw, sh))
             destination_rectangles.append((dx, dy, dw, dh))
+        if tile_geometry is None:
+            return None
+        tile_width, tile_height, tiled_width = tile_geometry
         expected_rectangles = {
-            (x, y, 280, 400)
-            for y in range(0, 1600, 400)
-            for x in range(0, 1120, 280)
+            (x, y, tile_width, tile_height)
+            for y in range(0, height, tile_height)
+            for x in range(0, tiled_width, tile_width)
         }
         if set(source_rectangles) != expected_rectangles or set(destination_rectangles) != expected_rectangles:
             return None
@@ -441,6 +539,8 @@ def reconstruct_jpeg(source_bytes: bytes, plan: dict[str, Any]) -> CaptureResult
         return None
     components = sof["components"]
     if len(components) not in {1, 3} or any((item["h"], item["v"]) != (1, 1) for item in components):
+        return None
+    if (width, height, tile_geometry) == (720, 1024, (176, 256, 704)) and len(components) != 1:
         return None
     try:
         import numpy as np
@@ -471,7 +571,7 @@ def reconstruct_jpeg(source_bytes: bytes, plan: dict[str, Any]) -> CaptureResult
         for draw in tiles:
             args = draw["args"]
             sx, sy, sw, sh, dx, dy, dw, dh = args
-            if any(value % 8 for value in args) or (sw, sh) != (280, 400):
+            if any(value % 8 for value in args) or (sw, sh) != (tile_width, tile_height):
                 return None
             bx, by, dbx, dby = sx // 8, sy // 8, dx // 8, dy // 8
             bw, bh = sw // 8, sh // 8

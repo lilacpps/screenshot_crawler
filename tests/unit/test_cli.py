@@ -2232,6 +2232,74 @@ async def test_grant_only_local_skip_does_not_open_page_or_delay(
 
 
 @pytest.mark.asyncio
+async def test_grant_only_candidate_local_resource_skip_continues_to_later_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeSession:
+        async def new_page(self) -> object:
+            page = object()
+            events.append("new")
+            return page
+
+        async def close_page(self, _page: object) -> None:
+            events.append("close")
+
+    class FakeExecutor:
+        def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
+            return None
+
+        async def execute_grant_only_candidate(
+            self, _page: object, candidate: object, **_kwargs: object
+        ) -> object:
+            events.append(f"execute:{candidate.item_id}")
+            if candidate.item_id == 1:
+                raise cli.AccessResourceUnavailableError(
+                    "comicdays_discovery_refresh_required"
+                )
+            return SimpleNamespace(
+                resource="work_ticket", resource_consumed=True, stop_reason="entry_confirmed"
+            )
+
+    args = SimpleNamespace(
+        output_root=Path("output/batch"),
+        library_dir=Path("output/Books"),
+        max_pages=1000,
+        max_same_content=3,
+        keep_open=False,
+    )
+    candidates = [
+        SimpleNamespace(
+            item_id=1, source_id=11, metadata={}, access_strategy="quota", quota_resource="work_ticket"
+        ),
+        SimpleNamespace(
+            item_id=2, source_id=22, metadata={}, access_strategy="quota", quota_resource="work_ticket"
+        ),
+        SimpleNamespace(
+            item_id=3, source_id=33, metadata={}, access_strategy="quota", quota_resource="work_ticket"
+        ),
+    ]
+
+    processed, should_continue = await cli._execute_batch_candidates(
+        args,
+        FakeSession(),
+        FakeExecutor(),
+        candidates,
+        phase="grant-only",
+        inter_candidate_delay_ms=0,
+        grant_only=True,
+    )
+
+    assert (processed, should_continue) == (3, True)
+    assert events == [
+        "new", "execute:1", "close",
+        "new", "execute:2", "close",
+        "new", "execute:3", "close",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_normal_work_cooldown_skip_does_not_open_page_or_delay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
