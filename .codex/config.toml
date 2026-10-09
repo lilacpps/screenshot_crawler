@@ -9,6 +9,28 @@ default_subagent_model = "gpt-5.6-luna"
 default_subagent_reasoning_effort = "high"
 max_concurrent_threads_per_session = 2
 
+# New Site Adapter workflow. Legacy site_adapter_worker remains for older tasks.
+[agents.site_adapter_explorer]
+description = """
+Read-only investigator for existing adapters, Piccoma/site specifications, and
+risk identification. Record evidence vs hypotheses; no source edits.
+"""
+config_file = "agents/site-adapter-explorer.toml"
+
+[agents.site_adapter_implementer]
+description = """
+Single production writer for approved Site Adapter phases; probes, code,
+tests and site notes. Does not consume tickets/paid resources in free-only work.
+"""
+config_file = "agents/site-adapter-implementer.toml"
+
+[agents.site_adapter_tester]
+description = """
+Optional independent E2E/live and output validator. May write isolated
+test artifacts/logs but never production code.
+"""
+config_file = "agents/site-adapter-tester.toml"
+
 [agents.site_adapter_worker]
 description = """
 Implementation worker for new Site Adapters. Use this role for browser probes, PoCs,
