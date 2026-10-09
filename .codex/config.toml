@@ -33,17 +33,17 @@ config_file = "agents/site-adapter-tester.toml"
 
 [agents.site_adapter_worker]
 description = """
-Implementation worker for new Site Adapters. Use this role for browser probes, PoCs,
-production implementation, targeted tests, and live verification. This is the only
-subagent role that may modify production files during the gated workflow.
+Legacy worker for existing or already-started workflows. For new Site Adapter
+work, use site_adapter_explorer and site_adapter_implementer instead.
+Do not select this role for the new Piccoma runbook.
 """
 config_file = "agents/site-adapter-worker.toml"
 
 [agents.site_adapter_reviewer]
 description = """
-Read-only quality gate for new Site Adapter work. Use this role after each worker
-iteration to compare the implementation with repository authorities, observed live-site
-evidence, acceptance criteria, tests, and regression risk. It must not edit files.
+Independent read-only quality gate after each material Implementer iteration.
+Compare actual diff with authorities, live evidence, acceptance criteria,
+security, tests, and regression risk. Never edit production files.
 """
 config_file = "agents/site-adapter-reviewer.toml"
 
