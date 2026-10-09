@@ -235,8 +235,6 @@ Style-only preferences are NON-BLOCKING unless material to maintainability.
 
 ## 10. Completion contract
 
-
-
 A new adapter is complete only when:
 
 - the requested supported access scope is explicit;
@@ -247,6 +245,8 @@ A new adapter is complete only when:
 - output/manifest behavior is consistent with repository contracts;
 - relevant note/README documentation reflects current behavior;
 - reviewer has no remaining `BLOCKING` findings;
+- independent Tester has checked actual images/E2E when the work is high risk
+  and a usable live browser is available;
 - remaining limitations and unverified behavior are listed explicitly.
 
 At the end, the root reports:
