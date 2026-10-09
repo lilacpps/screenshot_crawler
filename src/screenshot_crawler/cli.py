@@ -62,6 +62,7 @@ from screenshot_crawler.site_policies import (
     JumpPlusSitePolicy,
     MagapokeSitePolicy,
     MangaOneSitePolicy,
+    PiccomaSitePolicy,
     SitePolicyRegistry,
     ZeblackSitePolicy,
 )
@@ -483,6 +484,7 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("zeblack", ZeblackSitePolicy)
     from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
     registry.register("comicdays", ComicDaysSitePolicy)
+    registry.register("piccoma", PiccomaSitePolicy)
     return registry
 
 

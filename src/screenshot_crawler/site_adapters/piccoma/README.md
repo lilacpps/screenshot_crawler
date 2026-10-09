@@ -4,7 +4,7 @@
 
 Piccoma Discovery and the free-only horizontal viewer/Capture adapter are implemented. The Discovery adapter validates complete product episode lists and classifies access conservatively. The viewer adapter rechecks the target's current listing state before entering the viewer and captures rendered body pages through the existing Core capture helper.
 
-Phase 03 Viewer/Capture passed independent review with BLOCKING 0. The Piccoma Site Policy, full Batch orchestration, and production Manifest/ZIP end-to-end flow are not implemented or verified yet; Phase 04 and Phase 05 remain open.
+Phase 03 Viewer/Capture passed independent review with BLOCKING 0. Phase 04 adds a direct-only Piccoma Site Policy and validates the standard local Batch/Manifest/ZIP path with synthetic browser pages. Independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped); the two-product live Discovery-to-ZIP E2E remains pending.
 
 ## Discovery and identity
 
@@ -22,6 +22,12 @@ Unconditional free requires exactly one `PCM-epList_status_free` marker across t
 
 At viewer initialization, the adapter opens the product listing again and confirms that the exact target still has the free marker and exact zero price. It then requires HTTP 200 at the requested product/episode viewer path. `auto` and `direct` use this same fresh-free route; quota and other unsupported access strategies stop without fallback. The caller's work key is retained as opaque metadata.
 
+## Batch policy
+
+The registered `PiccomaSitePolicy` admits a source only when Catalog says `available=true` and `access_mode=free`. It returns `direct` with reason `free`; quota, paid, owned, grant, rental, unknown, and unavailable sources are rejected regardless of grant timestamps. A grant timestamp does not disqualify a source that remains available and classified as free. The policy exposes no quota/access resources, grant-only support, or additional passes. The generic Planner retains Catalog ordering, composite source identity, whole-work display position, and metadata. Standard Batch execution still performs stale-candidate validation and the adapter's fresh exact-free listing check before viewer entry.
+
+A local Playwright fixture test exercises the standard Planner, `BatchExecutor`, `CrawlerRunner`, adapter, manifest, packager, and Catalog completion path using a synthetic three-page episode. Failure fixtures cover stale-free state, a wrong composite candidate identity, and a redirected viewer; they assert no ZIP, no completed Item/Artifact, and no quota/resource mutation. This verifies the local integration contract only; live Batch remains unverified until Phase 05.
+
 ## Viewer and capture
 
 The supported observed reader is horizontal and has body classes `PCM-stt_horizontal` and `PCM-prop_scroll_l`. Body wrappers must form a complete contiguous `p1..pN` list, with one additional `last` wrapper. The observed page sequence was p1 through pN using the in-episode next control; native DOM wrapper order is reversed. A page is ready only when its expected ID is uniquely active and its single canvas is loaded, stable, and fully visible through every ancestor. The adapter advances only through the in-episode next control and waits for each expected ID. It accepts terminal END only after advancing from pN to the active `last` wrapper containing `#js_viewerEnd`.
@@ -38,4 +44,4 @@ These two live seeds verify the observed viewer and capture contract only. They 
 
 ## Tests
 
-Focused browser-fixture and affected Discovery/Catalog/CLI tests passed: 174 passed, 288 pytest-asyncio event-loop-policy deprecation warnings, 0 skipped. Independent Phase 03 review passed with BLOCKING 0 (174 passed, 0 skipped). `ruff check src tests` passed. The live probe used shared Crawler Chrome via the existing CDP/BrowserSession integration; it did not launch a browser or commit copyrighted payloads.
+Phase 03 focused browser-fixture and affected Discovery/Catalog/CLI tests passed: 174 passed, 288 pytest-asyncio event-loop-policy deprecation warnings, 0 skipped; its independent review passed with BLOCKING 0. Phase 04 policy/CLI tests passed (96 passed, 0 skipped), Piccoma Batch browser integration passed (34 passed, 0 skipped), and the combined affected suite passed (310 passed, 743 pytest-asyncio deprecation warnings, 0 skipped). `ruff check src tests` passed. Independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped). The live viewer probe used shared Crawler Chrome through existing CDP/BrowserSession integration; no browser was launched and no copyrighted payloads were committed.

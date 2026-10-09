@@ -2,7 +2,7 @@
 
 ## Piccoma current adapter registration (2026-10-09)
 
-The Discovery registry includes `PiccomaDiscoveryAdapter`; the manual crawl and Batch adapter registries include `PiccomaAdapter`. The adapter is site-local and uses the existing BrowserSession/CDP Page contract. Its manual access strategies are limited to `auto` and `direct`, both requiring a fresh exact-free product-listing check. No Piccoma Site Policy has been added, so registry presence does not complete Batch execution. Viewer/Capture implementation and bounded live verification are summarized in `note/09_piccoma.md`; the full Discovery-to-ZIP route remains pending.
+The Discovery registry includes `PiccomaDiscoveryAdapter`; the manual crawl and Batch adapter registries include `PiccomaAdapter`; and the Batch Site Policy registry includes `PiccomaSitePolicy`. The adapters use the existing BrowserSession/CDP Page contract. Manual access strategies are limited to `auto` and `direct`, both requiring a fresh exact-free product-listing check. Batch policy admits only available sources classified as free and uses the normal direct path; all other access modes are rejected with no resource or grant-only passes. Viewer/Capture and local Batch integration behavior are summarized in `note/09_piccoma.md`; independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped); full live Discovery-to-ZIP verification remains pending.
 
 ## Read-only episode-list helper CLI (2026-10-01)
 
@@ -1159,7 +1159,7 @@ Crawl Request
 
 現行実装には、BookWalker quotaの実サイトlive click検証と、quotaのサーバー側実消費をCatalogだけから検証する機能は存在しない。
 
-Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request最小基盤、Schema v6 Batch Planner / Executor、Site Policy registry / Manga ONE・BookWalker Policyは実装済みである。Discoveryはtargetの`work_key`でWorkをfind/createし、`label`は新規Workのtitle初期値にだけ使う。新規recordはWork配下にItem、Source、web/default targetを原子的に作成し、既存recordはItemを再利用する。Batch PlannerはWork metadataとItem order metadataからcandidateを生成し、enabledなweb targetを`priority ASC, target.id ASC`で選ぶ。Batch Executorはstale validation後にCrawlRunを作成し、quota記録、Crawler、packaging、Artifact / Run / Itemの成功確定を順序づける。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。
+Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request最小基盤、Schema v6 Batch Planner / Executor、Site Policy registry / Manga ONE・BookWalker・Piccoma Policyは実装済みである。Discoveryはtargetの`work_key`でWorkをfind/createし、`label`は新規Workのtitle初期値にだけ使う。新規recordはWork配下にItem、Source、web/default targetを原子的に作成し、既存recordはItemを再利用する。Batch PlannerはWork metadataとItem order metadataからcandidateを生成し、enabledなweb targetを`priority ASC, target.id ASC`で選ぶ。Batch Executorはstale validation後にCrawlRunを作成し、quota記録、Crawler、packaging、Artifact / Run / Itemの成功確定を順序づける。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。
 
 主要仕様:
 
@@ -1245,7 +1245,7 @@ remains `auto`/`direct`; quota entry remains rejected.
 
 `DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。targetの`work_key`でWorkをfind/createし、Work titleは新規作成時だけ`label`から初期化する。author/genreは観測値が非NULLでWork側がNULLの場合だけ補完し、既存値を上書きしない。
 
-`DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。現行のreal-site用AdapterはManga ONE、BookWalker、Magapoke、Piccomaである。Piccomaは作品のepisode listingからDiscoveryするが、viewer / Batch / captureは未実装。BookWalkerはWatchlistのseries list targetだけを対象にする。
+`DiscoveryAdapter.iter_records()` yields site-neutral `DiscoveredRecord` values. Adapters do not access Catalog; the service injects `site` and `discovery_key` from the target. Current real-site adapters include Manga ONE, BookWalker, Magapoke, and Piccoma. Piccoma supports episode-list Discovery, fresh-free viewer/capture, and an available+free-only direct Batch Policy. Synthetic local Batch integration is implemented; the live two-product Discovery-to-ZIP route remains unverified. BookWalker Discovery accepts Watchlist series-list targets only.
 
 Discovery Serviceは各recordについて、canonical titleをItemへ保存せず、kind/orderをItemへ、title/author/genreをWorkへ反映する。新規recordではItem/Source/web-default targetを一つのtransactionで作成し、既存sourceでは既存Itemを再利用して外部状態と非NULL Item metadataだけを更新する。観測した`DiscoveredSource.url`は`SourceTargetInput(backend="web", target_key="default", locator=...)`として同じsourceへupsertする。URL変更は同じ`(source_id, web, default)` targetのlocator更新になり、既存androidやweb/direct等の別targetは変更しない。sourceのfull-sync missing reconciliationは`available=false`だけを更新し、targetの削除や自動disableは行わない。既存sourceの`discovery_key` scope不一致、または既存Itemが別Workに属する場合はincompleteとして扱い、reparentや部分的な新規graph作成を行わない。
 
@@ -1472,7 +1472,7 @@ and per-artifact capture fingerprint.
 - Jump+ bounded buffering: **IMPLEMENTED**。scope付きfull / incrementalとも全rangeをbufferしてからboundary sliceをyieldし、後続range失敗時にpartial recordをyieldしない。scopeなしincrementalの既存streamingとscopeなしfullの既存全件bufferは維持する
 - Jump+ / bounded cross-site no-merge regression: **IMPLEMENTED**。bounded対応Fakeを使った共通回帰で、同じ`work_key`でもsiteをまたぐItem自動mergeを行わないことを確認している
 - Zeblack production Adapter bounded support: **IMPLEMENTED**。strict chapter-list / viewer parser、DOM/protobuf exact-set validation、latest-first canonical order、raw DOM oldest-first index由来のglobal position、chapter_id boundary slice、およびyield前bufferingを`ZeblackDiscoveryAdapter`で実装済み。Z4-1時点ではDiscovery registryのみ登録し、Z5でBatch Policy registryにも登録した
-- Piccoma bounded Discovery: **IMPLEMENTED**。canonical viewer URLからproduct / episode identityを厳密にparseし、完全なproduct listingをbuffer・検証してからlatest-first順のinclusive rangeを選択する。global display positionはoldest-first native DOM index + 1でslice前に付与し、status wrapperとdescendantsにある`PCM-epList_status_*` marker集合が`PCM-epList_status_free`のみ、かつexact `¥0`の場合に限りfreeとする。Viewer accessの再確認、Viewer / Batch / captureは未実装
+- Piccoma bounded Discovery: **IMPLEMENTED**. Strictly parses canonical viewer URL product/episode identity, buffers and validates the complete product listing, then selects an inclusive latest-first range. Assigns whole-work `display_position` from oldest-first native DOM index + 1 before slicing. Free classification requires exactly the `PCM-epList_status_free` marker set across wrapper and descendants plus exact `¥0`. Fresh viewer preflight, horizontal viewer/capture, and the available+free-only direct Site Policy with local Batch integration are implemented; live Batch-to-ZIP E2E remains unverified.
 - 他siteのbounded range boundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
 
 The following historical summary predates Z4-1; the current production

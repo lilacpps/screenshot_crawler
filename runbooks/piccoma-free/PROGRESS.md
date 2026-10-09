@@ -2,20 +2,20 @@
 
 Date: 2026-10-09
 Branch: `feat/piccoma-adapter`
-Last committed checkpoint: `053cf79a6490e10e31089c2fc639c2c809614a59` (Phase 02)
-Current status: Phase 01 accepted; Phase 02 Reviewer PASS; Phase 03 independent Reviewer PASS with BLOCKING 0. Phase 04 Site Policy/Batch and Phase 05 full Discovery-to-ZIP E2E are not started.
+Last committed checkpoint: `4350026` (Phase 03)
+Current status: Phase 01 accepted; Phase 02 and Phase 03 independent review PASS; Phase 04 PASS, independent review PASS with BLOCKING 0 (130 passed, 0 skipped); Phase 05 full live Discovery-to-ZIP E2E is not started.
 
 | Phase | Status | Evidence |
 | --- | --- | --- |
 | 01 Site probe | Accepted | Complete listings and conservative access signals observed for products 28600 and 28606. Viewer evidence is summarized below. |
 | 02 Discovery | PASS, BLOCKING 0 | Independent review passed with 60 tests passed and 0 skipped. Commit `053cf79`. |
 | 03 Viewer/Capture | PASS, BLOCKING 0 | Independent review reported 174 passed and 0 skipped. Both free seeds traversed from p1 through explicit END; first/middle/last rendered captures were inspected. |
-| 04 Site Policy/Batch | Not started | No Piccoma Site Policy or quota/resource fallback exists. |
+| 04 Site Policy/Batch | PASS, BLOCKING 0 | Independent review reported 130 passed and 0 skipped; local policy/Planner and standard Batch/Manifest/ZIP/Catalog tests pass. | Direct-only policy and synthetic three-page standard Batch/Manifest/ZIP/Catalog integration; no resource or grant-only path. |
 | 05 E2E | Not started | Full Discovery -> Catalog -> Batch -> Crawl -> Manifest -> ZIP is not yet verified. |
 
 ## Phase 01 listing and access evidence
 
-The Phase 01 probes used the existing shared Crawler Chrome through BrowserSession/CDP and closed only their own pages. Phase 01 diagnostic files are sanitized metadata only; they contain no page image payloads, cookies, storage state, or signed URLs. The six Phase 03 rendered QA PNGs are separate local artifacts under ignored `output/piccoma_experiment/`; they are not committed.
+The Phase 01 probes used the existing shared Crawler Chrome through BrowserSession/CDP and closed only their own pages. Phase 01 diagnostic evidence is sanitized metadata only and contains no page image payloads, cookies, storage state, or signed URLs. Separate Phase 03 rendered QA PNGs and Phase 04 synthetic Batch artifacts are local ignored test outputs; they are not committed.
 
 On 2026-10-09, the product listing pages returned HTTP 200. Each exposed one `#js_episodeList.PCM-list_asc`; the live row count matched the declared count, IDs were unique, product IDs matched, titles were present, and the requested seed episode was present. Native DOM order is oldest-to-newest. Discovery reverses rows to canonical latest-to-oldest while assigning global display position as original DOM index + 1 before applying inclusive bounds.
 
@@ -68,4 +68,12 @@ The adapter and browser-fixture tests cover strict identity and fresh-free prefl
 
 ## Remaining work and limits
 
-Phase 03 passed independent review with BLOCKING 0. The Piccoma Policy, Batch flow, production Manifest/ZIP path, and isolated end-to-end Catalog updates are not implemented or verified yet. No Site Policy or quota/ticket/point fallback is included in this phase. Live image provenance remains unproven; rendered PNG screenshot capture is the only accepted capture mode. Preserve the pre-existing user edit to `watchlist.yaml` and untracked `debug.log`.
+Phase 03 passed independent review with BLOCKING 0. Phase 04 implementation now adds the direct-only Site Policy and passes local policy/Planner plus standard Batch integration tests. Independent Phase 04 review is pending. The actual two-product live Discovery-to-ZIP route remains Phase 05 work. Live image provenance remains unproven; rendered PNG screenshot capture is the only accepted capture mode. Preserve the pre-existing user edit to `watchlist.yaml` and untracked `debug.log`.
+
+## Phase 04 Site Policy and local Batch checkpoint
+
+`PiccomaSitePolicy` is registered for Batch. Only `available=true` plus `access_mode=free` produces an eligible `direct` decision. Quota, paid, owned, grant, rental, unknown, unavailable, and unrecognized states reject. Grant timestamps are ignored: available+free remains eligible, and active or expired grants never make non-free modes eligible. Piccoma declares no supported resource, resource pass, or grant-only flow. The generic Planner preserves Catalog ordering, composite identity, display-position prefix, and metadata. No Core or Catalog schema changes were made.
+
+The synthetic local browser integration runs the standard Planner, BatchExecutor, Runner, Piccoma adapter, manifest, packager, and Catalog success update for a three-page source. It verifies ordered p1..p3 manifest entries and PNG members in the ZIP, a completed Item, successful CrawlRun and Artifact, and no quota/resource mutation. Stale-free listing, wrong composite candidate ID, and redirected viewer cases produce no ZIP, completed Item, or Artifact and do not mutate resource state.
+
+Verification: policy/CLI unit tests 96 passed; Piccoma local browser integration 34 passed; combined affected Batch/Catalog/packaging/CLI/Piccoma suite 310 passed, 743 pytest-asyncio deprecation warnings, 0 skipped. `ruff check src tests` passed. Independent Phase 04 review: PASS, BLOCKING 0; 130 passed, 0 skipped.

@@ -1,10 +1,10 @@
 # Piccoma current implementation snapshot
 
-Updated: 2026-10-09. Phase 01 evidence is accepted; Phase 02 Discovery and Phase 03 Viewer/Capture passed independent review (Phase 03 BLOCKING 0). Phase 04 Piccoma Site Policy/Batch and Phase 05 full E2E remain unimplemented.
+Updated: 2026-10-09. Phase 01 evidence is accepted; Phase 02 Discovery and Phase 03 Viewer/Capture passed independent review (Phase 03 BLOCKING 0). Phase 04 Piccoma Site Policy and local standard Batch integration are implemented and tested; independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped); Phase 05 full live E2E remains pending.
 
 ## Current adapter and CLI registration
 
-`PiccomaDiscoveryAdapter` is registered with Discovery. `PiccomaAdapter` is registered in the manual crawl and Batch adapter registries. Registration provides the viewer adapter implementation; it does not supply a Piccoma Site Policy or make the full Batch path available. Manual adapter entry supports only `auto` and `direct`, both bound to the same freshly verified unconditional-free path. Quota, paid, unknown, and unsupported states stop without fallback.
+`PiccomaDiscoveryAdapter` is registered with Discovery. `PiccomaAdapter` is registered in the manual crawl and Batch adapter registries, and `PiccomaSitePolicy` is registered with the generic Batch Planner. Manual adapter entry supports only `auto` and `direct`, both bound to the same freshly verified unconditional-free path. Batch policy supports only the ordinary direct path for available Catalog sources classified as free. Quota, paid, owned, grant, rental, unknown, unavailable, and unsupported states stop without fallback.
 
 The adapter uses the existing BrowserSession/CDP lifecycle and receives an owned Playwright Page. It does not launch Chrome, resolve endpoints, connect over CDP, or read/write Catalog directly. The generic Discovery service remains the Catalog writer. No Core, shared schema, or shared runtime changes were made for Piccoma.
 
@@ -27,6 +27,12 @@ Status markers are collected from both `.PCM-epList_status` and its descendants.
 At viewer initialization, the adapter obtains the product listing again and requires the target composite row to remain uniquely present and exact-free. It then navigates to the canonical viewer and requires HTTP 200 and the same product/episode identity. Redirects, quota/paid/unknown status, duplicate/missing rows, and unexpected dialogs fail closed. It does not use tickets, points, coins, waiting, purchases, rentals, unlocks, or access-control bypass.
 
 On the 2026-10-09 snapshot, product 28600 exposed 432/432 exact-free rows. Product 28606 exposed 12 exact-free rows, 167 wait/binge-free rows, and 39 point-priced rows. These are observations, not constants. Seeds 28600/1910027, 28600/4142286, and 28606/2001009 appeared at native DOM indices 0, 421, and 1 respectively.
+
+## Batch policy
+
+The policy returns an eligible `direct` decision only when `Source.available is True` and `Source.access_mode == "free"`. It ignores grant timestamps: an available source classified as free remains eligible regardless of grant timestamp, while active or expired grants never make quota, paid, owned, grant, or rental sources eligible. Every other state is rejected. Piccoma declares no supported access resource, resource pass, or grant-only resource. Explicit resource selection therefore fails in the generic Planner. Catalog ordering, source composite ID, display-position artifact prefix, and Work/Item metadata are supplied by the existing generic Planner.
+
+The standard `BatchExecutor` revalidates the candidate against current Catalog state. Before opening a viewer, `PiccomaAdapter` independently refreshes the listing and requires the exact-free target row and matching composite identity. The adapter does not consume or fall back to tickets, points, coins, waiting, purchases, rentals, or grants.
 
 ## Viewer state and navigation
 
@@ -54,4 +60,6 @@ Phase 01 evidence files are sanitized metadata only and contain no image payload
 
 Phase 02 independent review: 60 passed, 0 skipped, BLOCKING 0. Phase 03 independent review: PASS, BLOCKING 0, 174 passed, 0 skipped. The focused implementation run also passed 174 tests with 288 pytest-asyncio event-loop-policy deprecation warnings. `ruff check src tests` passed. Browser-fixture tests cover entry and identity guards, delayed/exact/unknown dialog handling, complete/partial/duplicate readiness, transitions, unapproved jump/rewind rejection, END, guide restoration, canvas/ancestor visibility before and after capture, geometry, and PNG format/dimensions; guide checks reject appended text and unknown elements.
 
-The full route `Discovery -> Catalog -> Batch -> Crawl -> Manifest -> ZIP`, dedicated Site Policy behavior, production Catalog updates through Batch, and ZIP contents remain unverified. The two-seed live test verifies viewer/capture only. Phase 03 passed independent review; Phase 04 has not started.
+A local synthetic-browser Batch integration test exercises Planner -> BatchExecutor -> Runner -> Piccoma adapter -> Manifest -> ZIP -> Catalog completion for a three-page episode. Stale-free listing, wrong composite candidate identity, and redirected viewer failures create no ZIP, completed Item, or Artifact and do not mutate quota/resource state. Phase 04 local policy/CLI tests passed (96 passed, 0 skipped), its browser Batch integration passed (34 passed, 0 skipped), and the combined affected suite passed (310 passed, 743 pytest-asyncio event-loop-policy deprecation warnings, 0 skipped); `ruff check src tests` passed. Independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped).
+
+The actual live route `Discovery -> Catalog -> Batch -> Crawl -> Manifest -> ZIP` for products 28600 and 28606 remains unverified. The two-seed live check verifies viewer/capture only; Phase 05 Tester validation is pending. Live image provenance remains unproven, and the accepted capture is a rendered Locator screenshot PNG.

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import datetime
 from io import BytesIO
+from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 import pytest_asyncio
@@ -9,6 +13,20 @@ from PIL import Image
 from playwright.async_api import Browser, Page
 
 import screenshot_crawler.site_adapters.piccoma.adapter as piccoma_adapter_module
+from screenshot_crawler.batch import (
+    BatchExecutionError,
+    BatchExecutor,
+    BatchPlanner,
+    CandidateExecutionError,
+)
+from screenshot_crawler.catalog import (
+    CatalogService,
+    ItemInput,
+    SourceInput,
+    SourceTargetInput,
+    WorkInput,
+)
+from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.errors import (
     AccessResourceUnavailableError,
     PageChangeTimeoutError,
@@ -16,8 +34,12 @@ from screenshot_crawler.core.errors import (
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import ContentIdentity
+from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.runtime_settings import SiteRuntimeSettings
 from screenshot_crawler.site_adapters.piccoma.adapter import PiccomaAdapter
+from screenshot_crawler.site_adapters.registry import AdapterRegistry
+from screenshot_crawler.site_policies import PiccomaSitePolicy, SitePolicyRegistry
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -28,6 +50,7 @@ WORK_KEY = "caller-owned-opaque-work-key"
 PAGE_WIDTH = 20
 PAGE_HEIGHT = 30
 PAGE_COLOR = (16, 40, 80)
+BATCH_NOW = datetime(2026, 10, 9, 12, tzinfo=JST)
 
 
 @pytest_asyncio.fixture(loop_scope="module")
@@ -648,3 +671,190 @@ async def test_piccoma_work_key_is_opaque_and_quota_strategy_is_rejected(
     assert adapter._work_key == WORK_KEY
     with pytest.raises(UnsupportedAccessStrategyError):
         await adapter.configure_run(browser_page, "quota")
+
+
+def _piccoma_batch_setup(tmp_path: Path):
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(
+        WorkInput(
+            work_key=WORK_KEY,
+            title="Fixture Work",
+            author="Fixture Author",
+            genre="Fixture Genre",
+        )
+    )
+    item = catalog.create_item(
+        ItemInput(item_title="Episode 1", order_label="Episode 1"),
+        work_id=work.id,
+    )
+    source = catalog.create_source(
+        SourceInput(
+            site="piccoma",
+            external_id=f"{PRODUCT_ID}:{EPISODE_ID}",
+            discovery_key=PRODUCT_ID,
+            access_mode="free",
+            available=True,
+            display_position=3,
+        ),
+        item_id=item.id,
+    )
+    target = catalog.create_source_target(
+        SourceTargetInput(backend="web", locator=SOURCE_URL),
+        source_id=source.id,
+    )
+    policies = SitePolicyRegistry()
+    policies.register("piccoma", PiccomaSitePolicy)
+    adapters = AdapterRegistry()
+    adapters.register("piccoma", PiccomaAdapter)
+    candidate = BatchPlanner(catalog, policies).plan(
+        site="piccoma", now=BATCH_NOW
+    ).candidates[0]
+    return catalog, work, item, source, target, policies, adapters, candidate
+
+
+async def test_piccoma_batch_executor_captures_manifest_packages_zip_and_completes(
+    browser_page: Page, tmp_path: Path
+) -> None:
+    catalog, work, item, source, target, policies, adapters, candidate = (
+        _piccoma_batch_setup(tmp_path)
+    )
+    route_counts = await _route_fixture(browser_page)
+    manifest_snapshots: list[dict[str, object]] = []
+
+    def package_with_manifest_copy(output_dir, metadata, **kwargs):
+        manifest_snapshots.append(
+            json.loads((Path(output_dir) / "manifest.json").read_text(encoding="utf-8"))
+        )
+        return package_crawl_output(output_dir, metadata, **kwargs)
+
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        package_function=package_with_manifest_copy,
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+    )
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch-output",
+        library_dir=tmp_path / "library",
+        max_pages=3,
+        now=BATCH_NOW,
+    )
+
+    assert route_counts["viewer"] == 1
+    assert result.stop_reason == "end"
+    assert result.page_count == 3
+    assert result.archive_path.is_file()
+    assert len(manifest_snapshots) == 1
+    manifest = manifest_snapshots[0]
+    assert manifest["source_url"] == SOURCE_URL
+    assert manifest["site"] == "piccoma"
+    assert manifest["content_context"]["work_id"] == WORK_KEY
+    pages = manifest["pages"]
+    assert [page["sequence"] for page in pages] == [1, 2, 3]
+    assert [page["identity"]["page_id"] for page in pages] == ["p1", "p2", "p3"]
+    assert [page["identity"]["page_number"] for page in pages] == [1, 2, 3]
+    assert all(page["identity"]["source_id"] == f"{PRODUCT_ID}:{EPISODE_ID}" for page in pages)
+    with ZipFile(result.archive_path) as archive:
+        assert archive.namelist() == [page["file"] for page in pages]
+        for page_path in archive.namelist():
+            with Image.open(BytesIO(archive.read(page_path))) as image:
+                assert image.size == (PAGE_WIDTH, PAGE_HEIGHT)
+
+    updated_item = catalog.get_item(item.id)
+    assert updated_item.status == "completed"
+    assert updated_item.completed_at is not None
+    run = catalog.get_crawl_run(result.crawl_run_id)
+    assert run.status == "succeeded"
+    assert run.stop_reason == "end"
+    assert run.page_count == 3
+    assert (run.source_id, run.target_id) == (source.id, target.id)
+    artifacts = catalog.list_artifacts(crawl_run_id=result.crawl_run_id)
+    assert len(artifacts) == 1
+    assert artifacts[0].id == result.artifact_id
+    assert (artifacts[0].format, artifacts[0].state) == ("zip", "present")
+    status = json.loads(result.status_path.read_text(encoding="utf-8"))
+    assert status["status"] == "completed"
+    assert status["page_count"] == 3
+    persisted_source = catalog.get_source(source.id)
+    assert persisted_source.access_mode == "free"
+    assert persisted_source.quota_started_at is None
+    assert persisted_source.access_granted_until is None
+    assert catalog.get_quota_resource_state(
+        work.id, site="piccoma", resource="work_ticket"
+    ) is None
+
+
+@pytest.mark.parametrize("failure", ["stale_free", "wrong_id", "redirect"])
+async def test_piccoma_batch_failures_never_package_complete_or_mutate_resources(
+    browser_page: Page, tmp_path: Path, failure: str
+) -> None:
+    catalog, work, item, source, _target, policies, adapters, candidate = (
+        _piccoma_batch_setup(tmp_path)
+    )
+    if failure == "stale_free":
+        route_counts = await _route_fixture(browser_page, status="quota")
+    elif failure == "redirect":
+        route_counts = await _route_fixture(
+            browser_page,
+            viewer_redirect="https://piccoma.com/web/viewer/900/999",
+        )
+    else:
+        route_counts = await _route_fixture(browser_page)
+        candidate = replace(candidate, external_id="900:999")
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+    )
+
+    if failure == "stale_free":
+        with pytest.raises(AccessResourceUnavailableError, match="no longer unconditionally free"):
+            await executor.execute_candidate(
+                browser_page,
+                candidate,
+                output_root=tmp_path / "batch-output",
+                library_dir=tmp_path / "library",
+                now=BATCH_NOW,
+            )
+        assert route_counts["viewer"] == 0
+    elif failure == "wrong_id":
+        with pytest.raises(BatchExecutionError, match="stale batch candidate.*external_id"):
+            await executor.execute_candidate(
+                browser_page,
+                candidate,
+                output_root=tmp_path / "batch-output",
+                library_dir=tmp_path / "library",
+                now=BATCH_NOW,
+            )
+        assert route_counts["viewer"] == 0
+    else:
+        with pytest.raises(CandidateExecutionError, match="redirected outside the target episode"):
+            await executor.execute_candidate(
+                browser_page,
+                candidate,
+                output_root=tmp_path / "batch-output",
+                library_dir=tmp_path / "library",
+                now=BATCH_NOW,
+            )
+        assert route_counts["viewer"] == 1
+
+    assert list((tmp_path / "library").rglob("*.zip")) == []
+    assert catalog.get_item(item.id).status == "pending"
+    assert catalog.list_artifacts(item_id=item.id) == []
+    source_after = catalog.get_source(source.id)
+    assert source_after.access_mode == "free"
+    assert source_after.quota_started_at is None
+    assert source_after.access_granted_until is None
+    assert catalog.get_quota_resource_state(
+        work.id, site="piccoma", resource="work_ticket"
+    ) is None
+    runs = catalog.list_crawl_runs()
+    if failure == "wrong_id":
+        assert runs == []
+    else:
+        assert len(runs) == 1
+        assert runs[0].status == "failed"
