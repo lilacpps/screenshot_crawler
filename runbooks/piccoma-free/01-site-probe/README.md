@@ -1,6 +1,6 @@
 # 01 — Evidence-first site reconnaissance
 
-Status: PLANNED. [Parent runbook](../README.md).
+Status: ACCEPTED. [Parent runbook](../README.md); [PROGRESS](../PROGRESS.md).
 Lead owns the decision; Explorer gathers read-only evidence. Implementer may
 create a minimal bounded PoC only when read-only observation is insufficient.
 

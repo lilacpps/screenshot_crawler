@@ -1,8 +1,8 @@
 # Piccoma Free-Only Site Adapter — Autonomous Runbook
 
-Status: PLANNED / NOT IMPLEMENTED (2026-10-09).
+Status: COMPLETE. All five phases accepted; see [PROGRESS](PROGRESS.md) for evidence and limits.
 Execution branch: feat/piccoma-adapter.
-This file defines the task; it does not claim live-site verification.
+The execution contract is defined below; verified observations, artifact checks and remaining limits are recorded in [PROGRESS](PROGRESS.md).
 
 ## Goal and authority
 
@@ -81,9 +81,10 @@ episode IDs or numbering relative to a bounded range. Honor the existing
 global position and archive naming contracts. Never hard-code live episode
 counts, which change.
 
-Real Playwright viewer DOM, network response types, exact source-image bytes,
-page controls and terminal state remain UNVERIFIED until probed via the shared
-Crawler Chrome/CDP environment.
+Live listing, viewer navigation, terminal state, and the selected two-product
+Discovery-to-ZIP path were verified through shared Crawler Chrome/CDP. Exact
+source-image response-to-canvas provenance remains UNVERIFIED; capture is a
+rendered PNG. See PROGRESS.md for observed counts, outputs, and scope limits.
 
 ## Required stages
 

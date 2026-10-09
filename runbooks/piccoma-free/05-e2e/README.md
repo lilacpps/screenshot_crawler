@@ -1,6 +1,6 @@
 # 05 — Independent E2E and final gate
 
-Status: PLANNED. Entry: all production phases reviewed.
+Status: PASS, BLOCKING 0. Independent Tester and final audit passed; results: [PROGRESS](../PROGRESS.md).
 Tester (when available) validates separately; Lead owns sign-off.
 Tester may write only its isolated test data/logs, not production files.
 

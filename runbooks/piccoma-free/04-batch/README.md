@@ -1,6 +1,6 @@
 # 04 — Direct-only Policy / Batch
 
-Status: PLANNED. Entry: Phase 02 + 03 accepted.
+Status: PASS, BLOCKING 0 (130 passed, 0 skipped). Local policy verification and the Phase 05 live E2E: [PROGRESS](../PROGRESS.md).
 Implementer writes; Reviewer performs independent access-safety review.
 
 ## Goal

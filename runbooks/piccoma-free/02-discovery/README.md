@@ -1,6 +1,6 @@
 # 02 — Discovery and Catalog integration
 
-Status: PLANNED. Entry: accepted Phase 01 native listing and access facts.
+Status: PASS, BLOCKING 0 (60 passed, 0 skipped). Entry evidence and results: [PROGRESS](../PROGRESS.md).
 Implementer is the only production writer; Reviewer gates completion.
 
 ## Objective and changes

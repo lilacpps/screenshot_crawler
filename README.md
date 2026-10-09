@@ -64,7 +64,7 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - Manga ONE Adapter
 - Magapoke Adapter（scrambled JPEGのtile再構成PNG、canvas screenshot fallback）
 - Comic DAYS Adapter (free/active-grant discovery, Work Ticket policy, horizontal RTL canvas, lossless JPEG-first native capture with reconstructed-PNG and locator fallbacks)
-- Piccoma Adapter (complete-list Discovery and direct-only Batch policy for currently available unconditional-free episodes; see [site README](src/screenshot_crawler/site_adapters/piccoma/README.md); live Discovery-to-ZIP E2E pending)
+- Piccoma Adapter (complete-list Discovery and direct-only Batch policy for currently available unconditional-free episodes; selected two-product live Discovery-to-ZIP E2E passed; see [site README](src/screenshot_crawler/site_adapters/piccoma/README.md) for tested limits)
 - 既存ChromeへCDP接続するcrawl/loginフロー
 - 共通Crawler Chrome launcher (`scripts/start_crawler_chrome.ps1`)
 - BookWalker canvas / spread capture
@@ -260,8 +260,15 @@ Manga ONEのplan候補を順番に実行し、正常なcrawlとpackagingが完�
 
 Piccoma Batch admits only Catalog sources with `available=true` and
 `access_mode=free`, using the normal `direct` path. Quota, paid, owned, grant, rental, and unknown access modes are excluded; a grant timestamp never promotes a non-free source, while an available free source remains eligible. No resource or grant-only pass is available. The adapter rechecks the current listing and
-composite product/episode identity before opening a viewer. Use isolated
-Watchlist, Catalog, crawl output, and library paths:
+composite product/episode identity before opening a viewer. The bounded example
+uses `--limit 1` and isolated Watchlist, Catalog, crawl output, and library
+paths. For redirected or piped CLI output in Windows PowerShell, set task-local
+UTF-8 output so episode titles outside the active code page are preserved:
+
+```powershell
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+```
 
 ```powershell
 New-Item -ItemType Directory -Force output\piccoma_experiment | Out-Null
@@ -284,10 +291,10 @@ New-Item -ItemType Directory -Force output\piccoma_experiment | Out-Null
 
 For product 28606, add a second Watchlist entry with a product 28606 viewer
 URL and unique key/work key. Discovery records the whole listing and Batch
-selects only currently free, available sources. Phase 04 local integration
-passes; Phase 04 independent review passed with BLOCKING 0 (130 passed,
-0 skipped). The independent two-product live Batch / Manifest / ZIP verification
-remains Phase 05 work.
+selects only currently free, available sources. Phase 05 independently passed
+for selected free episodes from both products; counts are observations from that
+run, not constants. See the linked site README and runbook progress for evidence
+and capture limitations.
 
 ### CatalogのCSV export
 

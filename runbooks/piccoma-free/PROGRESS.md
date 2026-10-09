@@ -2,16 +2,16 @@
 
 Date: 2026-10-09
 Branch: `feat/piccoma-adapter`
-Last committed checkpoint: `4350026` (Phase 03)
-Current status: Phase 01 accepted; Phase 02 and Phase 03 independent review PASS; Phase 04 PASS, independent review PASS with BLOCKING 0 (130 passed, 0 skipped); Phase 05 full live Discovery-to-ZIP E2E is not started.
+Last committed implementation checkpoint: `1e29fc8` (Phase 04)
+Current status: Phases 01-05 accepted. Phase 02, 03, 04 independent reviews and Phase 05 Tester/final audit all PASS with BLOCKING 0. Full suite and Ruff pass.
 
 | Phase | Status | Evidence |
 | --- | --- | --- |
 | 01 Site probe | Accepted | Complete listings and conservative access signals observed for products 28600 and 28606. Viewer evidence is summarized below. |
 | 02 Discovery | PASS, BLOCKING 0 | Independent review passed with 60 tests passed and 0 skipped. Commit `053cf79`. |
 | 03 Viewer/Capture | PASS, BLOCKING 0 | Independent review reported 174 passed and 0 skipped. Both free seeds traversed from p1 through explicit END; first/middle/last rendered captures were inspected. |
-| 04 Site Policy/Batch | PASS, BLOCKING 0 | Independent review reported 130 passed and 0 skipped; local policy/Planner and standard Batch/Manifest/ZIP/Catalog tests pass. | Direct-only policy and synthetic three-page standard Batch/Manifest/ZIP/Catalog integration; no resource or grant-only path. |
-| 05 E2E | Not started | Full Discovery -> Catalog -> Batch -> Crawl -> Manifest -> ZIP is not yet verified. |
+| 04 Site Policy/Batch | PASS, BLOCKING 0 | Independent review reported 130 passed and 0 skipped; local policy/Planner and standard Batch/Manifest/ZIP/Catalog tests pass. |
+| 05 E2E | PASS, BLOCKING 0 | Independent Tester and final audit verified Discovery, Catalog, Batch, Crawl, Manifest and ZIP for one currently free episode from each product. |
 
 ## Phase 01 listing and access evidence
 
@@ -66,9 +66,9 @@ The latest focused command was:
 
 The adapter and browser-fixture tests cover strict identity and fresh-free preflight, redirected/wrong target failures, exact numeric and last-page resume prompts, delayed prompt, unknown-dialog rejection, current-page readiness/renderability and geometry, approved cursor transitions, rejection of unrequested jumps/rewinds, explicit END, the two observed guide class sets with exclusion/restoration, and PNG dimensions. Visibility regressions cover display, visibility, or zero opacity on the canvas and ancestors before capture, and visibility changes during capture. Guide tests reject unknown interactive nodes, appended text, and unexpected visible child elements. No real-image fixtures are stored in tests.
 
-## Remaining work and limits
+## Final result and limits
 
-Phase 03 passed independent review with BLOCKING 0. Phase 04 implementation now adds the direct-only Site Policy and passes local policy/Planner plus standard Batch integration tests. Independent Phase 04 review is pending. The actual two-product live Discovery-to-ZIP route remains Phase 05 work. Live image provenance remains unproven; rendered PNG screenshot capture is the only accepted capture mode. Preserve the pre-existing user edit to `watchlist.yaml` and untracked `debug.log`.
+All five phases are accepted; Phase 04 review and Phase 05 Tester/final artifact audit passed with BLOCKING 0. The selected two-product live Discovery-to-ZIP route succeeded. Remaining limits are the observed horizontal layout at 1904x1200/DPR 1, rendered PNG capture with unproven source JPEG provenance, and unsupported paid/quota/resource flows. Preserve the pre-existing user edit to `watchlist.yaml` and untracked `debug.log`.
 
 ## Phase 04 Site Policy and local Batch checkpoint
 
@@ -77,3 +77,20 @@ Phase 03 passed independent review with BLOCKING 0. Phase 04 implementation now 
 The synthetic local browser integration runs the standard Planner, BatchExecutor, Runner, Piccoma adapter, manifest, packager, and Catalog success update for a three-page source. It verifies ordered p1..p3 manifest entries and PNG members in the ZIP, a completed Item, successful CrawlRun and Artifact, and no quota/resource mutation. Stale-free listing, wrong composite candidate ID, and redirected viewer cases produce no ZIP, completed Item, or Artifact and do not mutate resource state.
 
 Verification: policy/CLI unit tests 96 passed; Piccoma local browser integration 34 passed; combined affected Batch/Catalog/packaging/CLI/Piccoma suite 310 passed, 743 pytest-asyncio deprecation warnings, 0 skipped. `ruff check src tests` passed. Independent Phase 04 review: PASS, BLOCKING 0; 130 passed, 0 skipped.
+
+## Phase 05 live E2E and final audit
+
+On the 2026-10-09 isolated run, full CLI Discovery exhausted both product listings: 28600 returned 432/432 and 28606 returned 218/218, with contiguous whole-work positions. Incremental Discovery observed five known rows per product, added zero, and stopped at the existing `known_streak` rule. The read-only Batch plan selected 444 available/free candidates as direct and skipped 206 non-free candidates (`unsupported_access_mode`); quota was zero and there were no quota-resource rows. These are run observations, not constants.
+
+| Product/episode | Body pages | PNG dimensions | Final result |
+| --- | ---: | --- | --- |
+| 28600/1910027 | 24 | 844x1200 | active END, unchanged target URL, succeeded Run, completed Item, ZIP Artifact present |
+| 28606/2001009 | 15 | 842x1200 | active END, unchanged target URL, succeeded Run, completed Item, ZIP Artifact present |
+
+The independent Tester used the normal BatchExecutor, Runner, production packager and Catalog finalization path. Each Manifest contained contiguous unique page IDs and the ZIP had exactly the Manifest members; ZIP CRC, capture-to-member hashes, Artifact checksum/size, page dimensions and status metadata passed. First/middle/last PNGs for both episodes were visually checked. Per-episode image audits found 24/24 unique SHA256s and 15/15 unique SHA256s, with zero duplicate groups. The wrapper only copied diagnostic Manifest/progress and image-hash metadata before delegating to the standard packager. No rights-consuming action was used; AccessGuard remained enabled for 403/429/challenge/CAPTCHA and configured max_pages/same-content bounds were retained.
+
+Evidence reports are local ignored files at `output/piccoma_experiment/phase05_tester/evidence/phase05_tester_report.json`, `phase05_final_independent_audit.json`, and per-episode `image_audit_before_package.json`. No image payload, credentials or signed URL was committed. Live listing checks confirmed current free access before entry and `last_seen_at` was populated, but `access_checked_at` remained NULL; the live verification is evidenced by the run, not by that Catalog timestamp.
+
+On Windows PowerShell, redirected/piped Batch Planner output initially failed under cp932 for a title containing U+8E20. The read-only command passed with task-local `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1`; no shared CLI change or lossy title conversion was made.
+
+Final verification on implementation checkpoint `1e29fc8`: full `pytest -q` reported 1827 passed, 0 skipped in 330.93 seconds; `ruff check src tests` and `git diff --check` passed. Warnings were existing pytest-asyncio event-loop-policy deprecations and the intentional duplicate-ZIP-member fixture warning. Phase 05 Tester and independent final audit passed.

@@ -1,6 +1,6 @@
 # 03 — Free Viewer / Capture
 
-Status: PLANNED. Entry: proven free-viewer evidence and Phase 02 identity.
+Status: PASS, BLOCKING 0 (174 passed, 0 skipped). Live viewer/capture evidence: [PROGRESS](../PROGRESS.md).
 Explorer researches unknown variants; Implementer writes; Reviewer gates;
 Tester independently checks tricky captures when needed.
 
