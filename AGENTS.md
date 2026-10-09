@@ -77,27 +77,43 @@ shared profileでBookWalker/MANGA ONEのlogin・crawl・session共存と既存vi
 
 ## Multi-agent workflow for new Site Adapters
 
-ユーザーが新規Site Adapterについてmulti-agent / 自律実装を明示的に依頼した場合は、`docs/MULTI_AGENT_SITE_ADAPTER_WORKFLOW.md` に従う。
+新規Site Adapterを自律/マルチエージェントで実装する場合は
+`docs/MULTI_AGENT_SITE_ADAPTER_WORKFLOW.md` を使用する。
+ピッコマの無料公開分については `runbooks/piccoma-free/README.md` と
+各Stageを実行契約とする。Runbookは上位authorityを上書きしない。
 
-基本役割:
+標準役割（モデル表記はCodexのID、Very Highは `xhigh`）:
 
-- root orchestrator: GPT-6.1 Sol。結果を見ながら現在Phase・追加Probe・修正方針・次Phaseを決める。
-- `site_adapter_worker`: GPT-5.6 Luna。Probe / PoC / production実装 / test / live verificationを担当する唯一のproduction writer。
-- `site_adapter_reviewer`: GPT-6.1 Sol、read-only。各worker iteration後の品質ゲートを担当する。
+- Lead/root: `gpt-6.1-sol` / `xhigh`。全体整合性、設計判断、進捗・Phase管理。
+- `site_adapter_explorer`: `gpt-6-luna` / `xhigh`。独立調査、仕様確認、リスク抽出。read-only。
+- `site_adapter_implementer`: `gpt-6-luna` / `xhigh`。唯一のproduction writer、テスト・note更新。
+- `site_adapter_reviewer`: `gpt-6.1-sol` / `high`。独立read-only品質ゲート。
+- `site_adapter_tester`（必要時）: `gpt-6-luna` / `high`。独立実サイト/E2E・ログ/成果物検証。production fileは変更禁止。
+
+既存の `site_adapter_worker` は過去の互換性のために残すが、新規運用の
+Implementerとしては使わない。BookWalker固有のrole/configは変更しない。
+Rootモデルはセッション単位で選択し、repo全体には固定しない。
 
 必須ルール:
 
-- rootは最初に全手順を固定して機械的に消化しない。実サイト観測・テスト・review結果に応じてPhaseを分割、追加、反復、差し替えしてよい。
-- 各Phaseでrootは目的、既知事実、未確認事項、変更範囲、制約、受け入れ条件、必要なtest/live verificationをworkerへ明示する。
-- worker完了後は必ずreviewerへreviewを委譲する。
-- reviewerの`BLOCKING`が1件でも残る間は次Phaseへ進まない。workerによる追加Probe/修正後に再reviewする。
-- 不明な実サイト挙動を推測でproduction実装へ落とさない。必要ならProbe/PoCへ戻る。
-- production writeを行うsubagentは同時に1つだけとする。並列化は独立したread-heavy調査に限定する。
-- reviewerはファイルを変更しない。追加testや実行確認が必要ならroot経由でworkerへ依頼する。
-- 新規Site Adapterのproduction変更前にfeature branch上であることを確認する。未commitのユーザー変更を破棄・上書きしない。
-- free-only scopeではticket / point / coin / paid resource等を消費しない。
-- 実験用Catalogが指定されている場合、通常の`catalog.sqlite`へ暗黙fallbackしない。
-- root sessionのモデルはrepository全体へ固定しない。multi-agent Site Adapter作業開始時にGPT-6.1 Solを選択する。
+- Leadは観測結果を元にPhase契約（目的、既知事実/未知、変更範囲、制約、
+  受け入れ条件、必要なテスト、checkpoint）を定義する。
+- Explorerは証拠と仮説を分離し、根拠がない場合は追加Probeを要求する。
+  read-only sandboxで実行不可のProbeはImplementerへ有界に委譲する。
+- Implementer後のmaterial diffはReviewerが必ず独立に検証する。
+  BLOCKINGはImplementerが修正し、再Reviewしてから次へ進む。
+- TesterはE2E/実サイト/成果物の独立評価が必要な場面で投入する。
+  Testerの検証用書き込みは隔離した出力だけでproduction codeを変えない。
+- 並列は独立read-only調査のみ。production writerは一人、共有実ブラウザ
+  のoperatorも同時には一人。Explorer/Testerの実サイト操作もLeadが排他調整する。
+- 実サイト未確認の推測を本番実装にしない。データ欠落、UNKNOWN、
+  END未確認、権利不明はfail-closedとする。
+- feature branchで実装し、ユーザーの未commit変更を破棄しない。
+  専用Catalog / Watchlist / 出力を使い、通常のCatalogへfallbackしない。
+- free-onlyの場合はticket、チャージ、コイン、ポイント、決済、購入済み等の
+  権利を消費/利用してfreeと解釈しない。アクセス制御やDRMを回避しない。
+- 同一Phaseのレビューと必要なテストが完了して初めてLeadが進める。
+  外部事情で未検証の場合は未検証を明示し、成功扱いにしない。
 
 ## Multi-agent workflow for existing BookWalker capture research
 
