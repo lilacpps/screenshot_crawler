@@ -32,7 +32,12 @@ For a purchased product, the product control may expose
 strict-direct entry. The purchased viewer's page JPEGs are fetched as XHR responses from
 `bw-bv-epubs.bookwalker.jp`. Trial/free viewer JPEGs continue to use the
 `viewer-epubs*.bookwalker.jp` family. Both are subject to the same conservative matching and
-all-parts-or-PNG fallback rules. The purchased viewer's intermediate
+all-parts-or-PNG fallback rules. Lossless reconstruction accepts candidates from the
+explicit purchased host `bw-bv-epubs.bookwalker.jp` and maruyomi 10-minute host
+`viewer-epubs-ptrial.bookwalker.jp`. Eligibility does not establish provenance: the
+same selected mapping, unique full-resolution raw-JPEG match, MCU/DCT and pixel
+gates apply to both. Other trial/free hosts retain original-JPEG matching and PNG
+fallback until their reconstruction path is verified. The purchased viewer's intermediate
 `HTMLCanvasElement` source is accepted only with the existing identity-transform and
 composition checks, and its mutable source canvas uses eager per-draw crop capture.
 An `HTMLCanvasElement` without an eager crop is rejected before deferred materialization.

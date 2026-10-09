@@ -240,10 +240,17 @@ class OriginalJpegCandidate:
     signature: str | None = None
 
 
-def is_purchased_jpeg_candidate(candidate: OriginalJpegCandidate) -> bool:
-    """Return whether a cached candidate came from the purchased image host."""
+def is_reconstruction_jpeg_candidate(candidate: OriginalJpegCandidate) -> bool:
+    """Limit reconstruction inputs to purchased and verified maruyomi hosts.
 
-    return urlsplit(candidate.redacted_url).netloc.lower() == "bw-bv-epubs.bookwalker.jp"
+    Host eligibility only selects candidates for the existing provenance,
+    full-resolution source match, and lossless reconstruction checks.
+    """
+
+    return urlsplit(candidate.redacted_url).netloc.lower() in {
+        "bw-bv-epubs.bookwalker.jp",
+        "viewer-epubs-ptrial.bookwalker.jp",
+    }
 
 
 def candidate_from_jpeg(

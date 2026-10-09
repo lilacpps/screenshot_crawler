@@ -15,6 +15,7 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     imagebitmap_pixel_exact_match,
     imagebitmap_signature,
     is_jpeg_bytes,
+    is_reconstruction_jpeg_candidate,
     jpeg_dimensions,
 )
 
@@ -63,6 +64,28 @@ def test_invalid_jpeg_magic_or_dimensions_is_rejected() -> None:
         url="https://viewer-epubs-trial.bookwalker.jp/page.jpeg",
         sequence=1,
     ) is None
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("bw-bv-epubs.bookwalker.jp", True),
+        ("viewer-epubs-ptrial.bookwalker.jp", True),
+        ("VIEWER-EPUBS-PTRIAL.BOOKWALKER.JP", True),
+        ("viewer-epubs-trial.bookwalker.jp", False),
+        ("viewer-epubs.bookwalker.jp", False),
+        ("viewer-epubs-ptrial.bookwalker.jp.example.org", False),
+        ("other.bookwalker.jp", False),
+    ],
+)
+def test_reconstruction_candidate_requires_explicit_supported_host(
+    host: str, expected: bool,
+) -> None:
+    candidate = candidate_from_jpeg(
+        JPEG_1X1, url=f"https://{host}/page.jpeg", sequence=1,
+    )
+    assert candidate is not None
+    assert is_reconstruction_jpeg_candidate(candidate) is expected
 
 
 @pytest.mark.asyncio

@@ -43,6 +43,15 @@ JPEG_1X1 = (
     b"\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9"
 )
 
+
+@pytest.fixture(params=(
+    "bw-bv-epubs.bookwalker.jp",
+    "viewer-epubs-ptrial.bookwalker.jp",
+), ids=("purchased", "maruyomi"))
+def reconstruction_host(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
 EMPTY_COMPACT_PAYLOAD = {
     "transportVersion": 1,
     "compactMappings": [],
@@ -313,7 +322,7 @@ async def test_canvas_mode_returns_none_without_touching_native_capture(
     monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
     page = _FakePage([])
     adapter = _TestBookWalkerAdapter()
-    _add_purchased_candidate(adapter)
+    _add_reconstruction_candidate(adapter)
     reconstruction_called = False
 
     async def unexpected_reconstruction(*_args: object) -> object:
@@ -370,15 +379,16 @@ async def test_existing_original_jpeg_wins_before_lossless_shadow(
 
 
 @pytest.mark.asyncio
-async def test_purchased_direct_original_jpeg_is_returned_byte_for_byte(
+async def test_supported_direct_original_jpeg_is_returned_byte_for_byte(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
 ) -> None:
     monkeypatch.delenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", raising=False)
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
     candidate = candidate_from_jpeg(
         JPEG_1X1,
-        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        url=f"https://{reconstruction_host}/page.jpeg",
         sequence=1,
     )
     assert candidate is not None
@@ -421,10 +431,12 @@ async def test_purchased_direct_original_jpeg_is_returned_byte_for_byte(
     assert debug["bookwalker_capture"]["timing_ms"]["original_retry_wait_ms"] == 0
 
 
-def _add_purchased_candidate(adapter: BookWalkerAdapter) -> None:
+def _add_reconstruction_candidate(
+    adapter: BookWalkerAdapter, host: str = "bw-bv-epubs.bookwalker.jp",
+) -> None:
     candidate = candidate_from_jpeg(
         JPEG_1X1,
-        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        url=f"https://{host}/page.jpeg",
         sequence=1,
     )
     assert candidate is not None
@@ -457,13 +469,37 @@ async def _no_original_capture(
 
 
 @pytest.mark.asyncio
+async def test_unsupported_host_skips_reconstruction_and_explains_native_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = _FakePage([_native_call_fixture()])
+    adapter = _TestBookWalkerAdapter()
+    _add_reconstruction_candidate(adapter, "viewer-epubs-trial.bookwalker.jp")
+    monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
+
+    async def unexpected_evaluation(*_args: object) -> None:
+        pytest.fail("an unverified response host must not start reconstruction")
+
+    monkeypatch.setattr(adapter, "_evaluate_lossless_reconstruction", unexpected_evaluation)
+    result = await adapter.capture_page(page)  # type: ignore[arg-type]
+    assert result == (CaptureResult(PNG_1X1, 1, 1),)
+    debug = (await adapter.collect_debug_metadata(page))["bookwalker_capture"]  # type: ignore[arg-type]
+    assert debug["returned_path"] == "native_png"
+    assert debug["lossless_shadow"]["attempted"] is False
+    assert debug["lossless_shadow"]["reason"] == (
+        "no JPEG candidates from supported reconstruction hosts"
+    )
+
+
+@pytest.mark.asyncio
 async def test_lossless_output_switch_off_keeps_verified_shadow_native_png(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
 ) -> None:
     monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "0")
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
-    _add_purchased_candidate(adapter)
+    _add_reconstruction_candidate(adapter, reconstruction_host)
     monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
     native = CaptureResult(PNG_1X1, 1, 1)
     reconstructed = CaptureResult(
@@ -494,11 +530,12 @@ async def test_lossless_output_switch_off_keeps_verified_shadow_native_png(
 @pytest.mark.asyncio
 async def test_lossless_output_switch_returns_verified_bytes_without_reencoding(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
 ) -> None:
     monkeypatch.delenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", raising=False)
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
-    _add_purchased_candidate(adapter)
+    _add_reconstruction_candidate(adapter, reconstruction_host)
     monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
     verified_bytes = b"unique-verified-reconstructed-jpeg"
     reconstructed = CaptureResult(verified_bytes, 1, 1, "image/jpeg", ".jpg")
@@ -536,6 +573,7 @@ async def test_lossless_output_switch_returns_verified_bytes_without_reencoding(
 @pytest.mark.asyncio
 async def test_lossless_output_spread_is_all_or_none(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
 ) -> None:
     monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
     first = _native_call_fixture(constructor="HTMLCanvasElement")
@@ -565,7 +603,7 @@ async def test_lossless_output_spread_is_all_or_none(
 
     page = _FakePage([first, second])
     adapter = SpreadAdapter()
-    _add_purchased_candidate(adapter)
+    _add_reconstruction_candidate(adapter, reconstruction_host)
     monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
     jpeg_captures = (
         CaptureResult(b"jpeg-right", 1, 1, "image/jpeg", ".jpg"),
@@ -588,7 +626,7 @@ async def test_lossless_output_spread_is_all_or_none(
 
     page = _FakePage([first, second])
     adapter = SpreadAdapter()
-    _add_purchased_candidate(adapter)
+    _add_reconstruction_candidate(adapter, reconstruction_host)
     monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
     partial = _evaluation(adapter, (jpeg_captures[0],), spread_ready=False)
 
@@ -612,11 +650,12 @@ async def test_lossless_output_spread_is_all_or_none(
 @pytest.mark.asyncio
 async def test_cropped_chain_pixel_gate_failure_returns_native_png(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
 ) -> None:
     monkeypatch.setenv("BOOKWALKER_LOSSLESS_JPEG_OUTPUT", "1")
     page = _FakePage([_native_call_fixture()])
     adapter = _TestBookWalkerAdapter()
-    _add_purchased_candidate(adapter)
+    _add_reconstruction_candidate(adapter, reconstruction_host)
     monkeypatch.setattr(adapter, "_capture_original_jpegs", _no_original_capture)
 
     evaluation = _evaluation(adapter, None, spread_ready=False)
@@ -643,6 +682,7 @@ async def test_cropped_chain_pixel_gate_failure_returns_native_png(
 @pytest.mark.asyncio
 async def test_lossless_shadow_spread_readiness_is_all_or_none(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
 ) -> None:
     monkeypatch.setenv("BOOKWALKER_FINAL_PIXEL_VERIFY", "1")
     class ShadowPage:
@@ -712,7 +752,7 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
     adapter._browser_pixel_exact = fake_pixels  # type: ignore[method-assign]
     candidate = candidate_from_jpeg(
         JPEG_1X1,
-        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        url=f"https://{reconstruction_host}/page.jpeg",
         sequence=1,
     )
     assert candidate is not None
@@ -746,6 +786,7 @@ async def test_lossless_shadow_spread_readiness_is_all_or_none(
 )
 async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
     env_value: str | None,
     final_exact: bool | None,
     expected_ready: bool,
@@ -844,7 +885,7 @@ async def test_lossless_shadow_prefilters_candidates_before_full_resolution(
     for index in range(32):
         candidate = candidate_from_jpeg(
             JPEG_1X1 + f"candidate-{index:02d}".encode(),
-            url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+            url=f"https://{reconstruction_host}/page.jpeg",
             sequence=index + 1,
         )
         assert candidate is not None
@@ -1323,6 +1364,7 @@ def test_cropped_mapping_cannot_be_used_as_one_hop_upstream() -> None:
 )
 async def test_cropped_mapping_requires_intrinsic_pixel_gate_even_when_flag_off(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
     pixel_result: dict[str, object],
     expected_ready: bool,
 ) -> None:
@@ -1406,7 +1448,7 @@ async def test_cropped_mapping_requires_intrinsic_pixel_gate_even_when_flag_off(
     adapter._browser_pixel_exact = fake_pixels  # type: ignore[method-assign]
     candidate = candidate_from_jpeg(
         JPEG_1X1,
-        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        url=f"https://{reconstruction_host}/page.jpeg",
         sequence=1,
     )
     assert candidate is not None
@@ -1606,6 +1648,7 @@ async def test_lossless_shadow_without_mapping_id_fails_closed_without_full_trac
 @pytest.mark.asyncio
 async def test_lossless_shadow_full_resolution_ambiguity_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
 ) -> None:
     class ShadowPage:
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
@@ -1650,12 +1693,12 @@ async def test_lossless_shadow_full_resolution_ambiguity_fails_closed(
     adapter = BookWalkerAdapter()
     candidate_one = candidate_from_jpeg(
         JPEG_1X1 + b"one",
-        url="https://bw-bv-epubs.bookwalker.jp/one.jpeg",
+        url=f"https://{reconstruction_host}/one.jpeg",
         sequence=1,
     )
     candidate_two = candidate_from_jpeg(
         JPEG_1X1 + b"two",
-        url="https://bw-bv-epubs.bookwalker.jp/two.jpeg",
+        url=f"https://{reconstruction_host}/two.jpeg",
         sequence=2,
     )
     assert candidate_one is not None and candidate_two is not None
@@ -1682,6 +1725,7 @@ async def test_lossless_shadow_full_resolution_ambiguity_fails_closed(
 @pytest.mark.asyncio
 async def test_lossless_shadow_signature_mismatch_skips_full_resolution(
     monkeypatch: pytest.MonkeyPatch,
+    reconstruction_host: str,
 ) -> None:
     class ShadowPage:
         async def evaluate(self, _expression: str, *_args: object) -> dict[str, object]:
@@ -1706,7 +1750,7 @@ async def test_lossless_shadow_signature_mismatch_skips_full_resolution(
     )
     candidate = candidate_from_jpeg(
         JPEG_1X1 + b"candidate",
-        url="https://bw-bv-epubs.bookwalker.jp/page.jpeg",
+        url=f"https://{reconstruction_host}/page.jpeg",
         sequence=1,
     )
     assert candidate is not None

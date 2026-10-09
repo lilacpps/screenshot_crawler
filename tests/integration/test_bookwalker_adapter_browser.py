@@ -22,6 +22,7 @@ from screenshot_crawler.site_adapters.bookwalker.login import (
 from screenshot_crawler.site_adapters.bookwalker.lossless_jpeg import (
     reconstruct_lossless_jpeg,
 )
+from screenshot_crawler.site_adapters.bookwalker.original_capture import candidate_from_jpeg
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import mapping_sha256
 
 PRODUCT_ID = "6de7534d-7022-481d-b2d3-05f03f384454"
@@ -173,9 +174,14 @@ async def test_reconstructed_jpeg_matches_expected_native_pixels_in_browser(
     }
 
 
+@pytest.mark.parametrize("candidate_host", (
+    "bw-bv-epubs.bookwalker.jp",
+    "viewer-epubs-ptrial.bookwalker.jp",
+), ids=("purchased", "maruyomi"))
 async def test_nonuniform_right_bottom_crop_matches_draw_time_native_snapshot(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,
+    candidate_host: str,
 ) -> None:
     """Exercise coded S=40x40 to visible V=37x36 in a real browser canvas."""
 
@@ -240,22 +246,25 @@ async def test_nonuniform_right_bottom_crop_matches_draw_time_native_snapshot(
         "component_quantization_selectors_equal"
     ] is True
 
-    await browser_page.goto("data:text/html,<html></html>")
+    adapter = BookWalkerAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.goto(
+        "data:text/html,<div id='renderer'><div class='currentScreen'>"
+        "<canvas width='1200' height='600'></canvas></div></div>"
+        "<span id='pageSliderCounter'>2/3</span>"
+    )
     native_data_url = await browser_page.evaluate(
         """
         async ({jpeg, mapping}) => {
           const image = new Image();
           image.src = jpeg;
           await image.decode();
-          const source = document.createElement('canvas');
-          source.width = 40;
-          source.height = 40;
-          const sourceContext = source.getContext('2d');
-          sourceContext.drawImage(image, 0, 0);
+          const source = await createImageBitmap(image);
           const target = document.createElement('canvas');
           target.width = 37;
           target.height = 36;
           const targetContext = target.getContext('2d');
+          targetContext.clearRect(0, 0, 37, 36);
           for (const item of mapping) {
             targetContext.drawImage(
               source,
@@ -263,13 +272,35 @@ async def test_nonuniform_right_bottom_crop_matches_draw_time_native_snapshot(
               item.destination_x, item.destination_y, item.width, item.height,
             );
           }
+          const renderer = document.querySelector('#renderer canvas');
+          renderer.getContext('2d').drawImage(target, 0, 0, 37, 36, 0, 0, 370, 360);
           return target.toDataURL('image/png');
         }
         """,
         {"jpeg": jpeg_data_url, "mapping": mapping},
     )
     native_bytes = base64.b64decode(native_data_url.split(",", 1)[1])
-    comparison = await BookWalkerAdapter()._browser_pixel_exact(
+    candidate = candidate_from_jpeg(
+        jpeg_bytes, url=f"https://{candidate_host}/page.jpeg", sequence=1,
+    )
+    assert candidate is not None
+    adapter._original_candidates.add(candidate)
+    captures = await adapter.capture_page(browser_page)
+    assert captures is not None and len(captures) == 1
+    assert captures[0].mime_type == "image/jpeg"
+    assert captures[0].data == result.data
+    assert (captures[0].width, captures[0].height) == (37, 36)
+    debug = (await adapter.collect_debug_metadata(browser_page))["bookwalker_capture"]
+    assert debug["returned_path"] == "reconstructed_jpeg"
+    shadow = debug["lossless_shadow"]
+    assert shadow["output_used"] is True
+    part = shadow["parts"][0]
+    assert part["candidate_count_full_exact"] == 1
+    assert part["raw_jpeg_exact"] is True
+    assert part["coefficient_exact"] is True
+    assert part["native_pixel_exact"] is True
+    assert part["native_pixel_comparison"]["differing_pixel_count"] == 0
+    comparison = await adapter._browser_pixel_exact(
         browser_page, result.data, native_bytes
     )
     assert comparison == {

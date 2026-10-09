@@ -4,13 +4,17 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-10-08
+最終同期: 2026-10-10
 
 ## 1. 目的と現在のscope
 
 BookWalkerの商品ページまたはviewer URLから、現在コンテンツの本文だけを読書順で保存する。
 優先順位はoriginal JPEG、検証済みlossless reconstructed JPEG、source/native pixelsのPNG、
 rendered-canvas PNG fallbackである。PNG出力だけでは配信sourceがPNGだったとは判定しない。
+lossless再構成の候補hostは購入済みの`bw-bv-epubs.bookwalker.jp`と、まる読み10分の
+`viewer-epubs-ptrial.bookwalker.jp`を明示的に許可する。host一致は候補選択だけに使い、
+選択drawとのmapping証明、raw JPEGの一意な全画素一致、MCU/DCT・量子化table・selector検証、
+crop時の必須画素比較を通った場合だけJPEGを返す。
 
 現在対応している主な挙動:
 
@@ -187,6 +191,66 @@ unreviewed OBJECT-A/B/C diagnostics are not production/source-format authority.
 The [Stage 02 checkpoint](../runbooks/bookwalker-source-native/02-provenance-resolution/CHECKPOINT.md)
 records exact accepted positions, output/metadata hashes, excluded diagnostic
 failures and the historical access issues. Artwork is not committed as fixtures.
+
+## 1.3 まる読み10分のlossless JPEG再構成（2026-10-10）
+
+`original_capture.is_reconstruction_jpeg_candidate()`は購入済みhostと
+`viewer-epubs-ptrial.bookwalker.jp`の2hostだけを再構成候補として許可する。
+`capture_page()`の起動条件と`_evaluate_lossless_reconstruction()`内部の候補filterは
+同じpredicateを使用する。他のtrial/free hostは既存のoriginal-JPEG matchingと
+PNG fallbackを維持し、未確認の再構成経路へ一般化しない。
+
+元JPEGが一意にmatchすれば再構成を呼ばず、そのbytesを返す。matchしない場合に限り、
+上記hostの候補へ既存のmapping identity、raw JPEG/ImageBitmap全画素一致、完全なMCU対応、
+DCT係数・量子化table・component selector同一性の検証を適用する。
+partial-MCU cropの必須画素比較、見開きall-or-none、bounded trace/cacheは従来どおり。
+source PNGをJPEGへencodeする処理は追加していない。
+`BOOKWALKER_LOSSLESS_JPEG_OUTPUT`（default on、`0`でJPEG出力停止）と
+`BOOKWALKER_FINAL_PIXEL_VERIFY`（default off）の意味も維持する。
+候補hostがない場合は`lossless_shadow.attempted=false`に加え、
+`reason="no JPEG candidates from supported reconstruction hosts"`を残す。
+
+発端の04:55開始Batchはitem/source 117、作品ID
+`0f84d33a-1e6f-4f1b-a1ec-2d906e05c0e5`で、保存80枚中original JPEGが1枚、
+native PNGが79枚だった。79枚とも再構成未実行・JPEG出力設定有効で、画像配信はptrial
+hostのHTTP 200 JPEGだった。以前の購入済みhost限定filterが再構成を除外していた。
+Ctrl+Cによる`interrupted`は終了理由であり、先行するPNG fallbackの原因ではない。
+
+同作品のshared Crawler Chrome/CDPによるbounded確認を実施した。
+診断窓は実位置`82/537 -> Home -> 1/537 -> 6/537 -> 1/537`。
+2、3、6のcoded 1448x2048 -> visible 1443x2048と、4、5の
+2048x1096 -> 2048x1090は既存のdirect cropped mappingで復元でき、
+raw JPEG一意一致、係数/table/selector同一性、必須native比較の画素差0を確認した。
+
+続く修正済みproduction code（候補predicateのmonkeypatchなし、optional final verify off）
+では`1/537 -> 13/537 -> 1/537`で12 JPEG artifactsを取得した。
+挿絵5枚に加えて本文8、10、12の各見開きと13の単ページは960x1280で再構成できた。
+すべてraw JPEG一意一致、mapping/DCT証明に合格。等寸本文のoptional最終画素比較は
+実行しておらず、`native_pixel_exact=null`のままである。
+最初のcoverはadapterからnative artifactが返らず、debug defaultの`native_png`だけを
+PNG保存成功とは扱わない。coverの実際の保存経路は次の通常Runnerで別途確認した。
+production probeは`output/bookwalker-maruyomi-20261010-production/proof.json`
+（SHA-256 `23637b7fcf9426fdc0b75503c0dbb08645576255a12c934172f2e7eeb25a1bd1`）。
+
+通常CLI/Runnerでもstrict quota・同作品・専用output・`--max-pages 14`を使用した。
+manifestには表紙original JPEG 1枚とreconstructed JPEG 12枚の計13枚を保存し、
+次の2-part spreadを加えると上限を超えるため`MaxPagesExceededError`で有界終了した。
+全artifactのSHA-256と寸法がmanifestに一致した。検証後に実位置`15/537`を確認し、
+明示的に`1/537`へ戻した。通常Catalog、Watchlist、既存Batch outputへwriteしていない。
+manifestは`output/bookwalker-maruyomi-20261010-runner/manifest.json`
+（SHA-256 `cb0f436ce781e5c2c8030bf6633743482715cbe1d49d621150102d682beaece6`）、
+検証metadataは`output/bookwalker-maruyomi-20261010-runner-proof.json`。
+画像はignored local outputsにのみ置き、fixtureへ保存していない。
+
+検証はcapture関連6fileのUnit 225 passed、BookWalker capture/adapterの
+browser-backed Integration 53 passed、skip 0、`ruff check src tests`とdiff checkがPASS。
+既存testを両hostへparameterizeし、original優先、出力switch、見開きall-or-none、
+候補曖昧性、signature mismatch、crop画素gate失敗時のPNG維持を確認した。
+人工画像のブラウザtestは40x40 -> 37x36の非一様tile並べ替えから、
+実draw trace・candidate選択・`capture_page()`によるJPEG出力まで両hostで確認する。
+site-localの候補選択変更なのでfull suite、独立Research/PoC test群、full-book/END、
+購入済み作品の追加live runは実行していない。上記作品の序盤以外は新規live確認しておらず、
+証拠不足や未対応mappingは従来のPNG fallbackを維持する。
 
 ## 2. Entry flow
 
@@ -1517,11 +1581,13 @@ resource names; normal direct/quota planning remains unchanged.
 
 ### 20.11 Phase P1 production shadow integration
 
-The current adapter keeps the existing original JPEG path first for trial
-pages, trial covers, and purchased covers. A unique full-resolution exact
-candidate is returned byte-for-byte, and the purchased lossless helper is not
-called after that path succeeds. When the original path fails, native source
-PNG remains the returned output.
+The current adapter keeps the existing original JPEG path first for trial,
+maruyomi and purchased pages/covers. A unique dimension-and-64x64-signature
+candidate is returned byte-for-byte, and the lossless helper is not called
+after that path succeeds. When the original path fails, candidates from the
+explicit purchased and maruyomi reconstruction hosts are evaluated under the
+existing full-resolution provenance and lossless proof gates. Unsupported or
+unproven results return native source PNG for the whole spread.
 
 In `native` mode only, the production trace uses a monotonic absolute
 operation counter and does not retain a global operations list. Each source
@@ -1544,7 +1610,7 @@ rectangle is the complete source canvas and renderer geometry remains within
 the target bounds; source crops and partial-edge source/target dimensions
 remain unsupported.
 
-For purchased responses, `site_adapters/bookwalker/purchased_mapping.py`
+For eligible purchased/maruyomi responses, `site_adapters/bookwalker/purchased_mapping.py`
 requires one proven renderer -> source `HTMLCanvasElement` -> one `ImageBitmap`
 chain and a unique full-resolution browser pixel match between the raw JPEG
 candidate and retained `ImageBitmap`. The synchronous

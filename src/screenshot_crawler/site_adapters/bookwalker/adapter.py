@@ -52,7 +52,7 @@ from screenshot_crawler.site_adapters.bookwalker.original_capture import (
     image_signature,
     imagebitmap_pixel_exact_match,
     imagebitmap_signature,
-    is_purchased_jpeg_candidate,
+    is_reconstruction_jpeg_candidate,
 )
 from screenshot_crawler.site_adapters.bookwalker.purchased_mapping import (
     MappingAnalysis,
@@ -3323,7 +3323,7 @@ class BookWalkerAdapter(SiteAdapter):
         native_captures: tuple[CaptureResult, ...],
         selected_draw_calls: list[dict[str, Any]],
     ) -> LosslessReconstructionEvaluation:
-        """Evaluate purchased JPEG reconstruction and retain verified captures."""
+        """Evaluate supported source JPEG reconstruction and retain verified captures."""
 
         evaluation_started = time.perf_counter()
         evaluation_timing = _evaluation_timing_defaults()
@@ -3372,16 +3372,16 @@ class BookWalkerAdapter(SiteAdapter):
             shadow["lossless_evaluation_total_ms"] = evaluation_timing[
                 "evaluation_total"
             ]
-        purchased_candidates = tuple(
+        reconstruction_candidates = tuple(
             candidate
             for candidate in self._original_candidates.values()
-            if is_purchased_jpeg_candidate(candidate)
+            if is_reconstruction_jpeg_candidate(candidate)
         )
         if len(selected_draw_calls) != len(native_captures):
             shadow["reason"] = "native capture and renderer draw counts differ"
             shadow["parts"] = [
                 self._shadow_part_defaults(
-                    len(purchased_candidates),
+                    len(reconstruction_candidates),
                     final_pixel_verify_enabled=self.final_pixel_verify_enabled,
                 )
                 for _ in native_captures
@@ -3397,7 +3397,7 @@ class BookWalkerAdapter(SiteAdapter):
                 shadow["reason"] = "selected renderer draw mapping identity unavailable"
                 shadow["parts"] = [
                     self._shadow_part_defaults(
-                        len(purchased_candidates),
+                        len(reconstruction_candidates),
                         final_pixel_verify_enabled=self.final_pixel_verify_enabled,
                     )
                     for _ in native_captures
@@ -3427,7 +3427,7 @@ class BookWalkerAdapter(SiteAdapter):
             shadow["reason"] = "compact trace unavailable or invalid"
             shadow["parts"] = [
                 self._shadow_part_defaults(
-                    len(purchased_candidates),
+                    len(reconstruction_candidates),
                     final_pixel_verify_enabled=self.final_pixel_verify_enabled,
                 )
                 for _ in native_captures
@@ -3562,7 +3562,7 @@ class BookWalkerAdapter(SiteAdapter):
             strict=True,
         ):
             part = self._shadow_part_defaults(
-                len(purchased_candidates),
+                len(reconstruction_candidates),
                 final_pixel_verify_enabled=self.final_pixel_verify_enabled,
             )
             part_timing = _part_timing_defaults()
@@ -3646,12 +3646,12 @@ class BookWalkerAdapter(SiteAdapter):
                 continue
             dimension_candidates = tuple(
                 candidate
-                for candidate in purchased_candidates
+                for candidate in reconstruction_candidates
                 if (candidate.width, candidate.height) == mapping.source_dimensions
             )
             part["candidate_count_dimension_match"] = len(dimension_candidates)
             if not dimension_candidates:
-                part["reason"] = "no purchased JPEG candidate has matching dimensions"
+                part["reason"] = "no reconstruction JPEG candidate has matching dimensions"
                 parts.append(part)
                 continue
             imagebitmap_signature_started = time.perf_counter()
@@ -3680,7 +3680,7 @@ class BookWalkerAdapter(SiteAdapter):
             evaluation_timing["candidate_signature_total"] += candidate_signature_elapsed
             part["candidate_count_signature_match"] = len(signature_candidates)
             if not signature_candidates:
-                part["reason"] = "no purchased JPEG candidate has matching signature"
+                part["reason"] = "no reconstruction JPEG candidate has matching signature"
                 parts.append(part)
                 continue
             matches: list[Any] = []
@@ -4155,12 +4155,12 @@ class BookWalkerAdapter(SiteAdapter):
                 }
                 await self._clear_geometry_trace(page)
                 return original_captures
-            purchased_candidates = tuple(
+            reconstruction_candidates = tuple(
                 candidate
                 for candidate in self._original_candidates.values()
-                if is_purchased_jpeg_candidate(candidate)
+                if is_reconstruction_jpeg_candidate(candidate)
             )
-            if purchased_candidates:
+            if reconstruction_candidates:
                 try:
                     evaluation = await self._evaluate_lossless_reconstruction(
                         page,
@@ -4200,6 +4200,10 @@ class BookWalkerAdapter(SiteAdapter):
                     )
                     await self._clear_geometry_trace(page)
                     return evaluation.captures
+            else:
+                self._capture_debug["bookwalker_capture"]["lossless_shadow"][
+                    "reason"
+                ] = "no JPEG candidates from supported reconstruction hosts"
             await self._clear_geometry_trace(page)
             self._capture_debug["bookwalker_capture"]["returned_path"] = "native_png"
             return native_captures
