@@ -3,7 +3,7 @@
 Date: 2026-10-09
 Branch: `feat/piccoma-adapter`
 Last committed implementation checkpoint: `1e29fc8` (Phase 04)
-Current status: Phases 01-05 accepted. Phase 02, 03, 04 independent reviews and Phase 05 Tester/final audit all PASS with BLOCKING 0. Full suite and Ruff pass.
+Current status: Phases 01-05 accepted. Phase 06-B passed final independent Reviewer review (PASS, BLOCKING 0) and independent Tester E2E (PASS). All 39 pages in the two-product live Batch-to-ZIP run used the strict source-derived PNG replay contract below. The full suite passed on the checkpoint immediately before the final NamedNodeMap argument-forwarding compatibility fix; that fix passed its separate focused browser test and final Reviewer gate.
 
 | Phase | Status | Evidence |
 | --- | --- | --- |
@@ -12,6 +12,7 @@ Current status: Phases 01-05 accepted. Phase 02, 03, 04 independent reviews and 
 | 03 Viewer/Capture | PASS, BLOCKING 0 | Independent review reported 174 passed and 0 skipped. Both free seeds traversed from p1 through explicit END; first/middle/last rendered captures were inspected. |
 | 04 Site Policy/Batch | PASS, BLOCKING 0 | Independent review reported 130 passed and 0 skipped; local policy/Planner and standard Batch/Manifest/ZIP/Catalog tests pass. |
 | 05 E2E | PASS, BLOCKING 0 | Independent Tester and final audit verified Discovery, Catalog, Batch, Crawl, Manifest and ZIP for one currently free episode from each product. |
+| 06-B source-derived PNG | PASS, BLOCKING 0; independent Tester PASS | Exact single-JPEG/408-tile replay handled all 39 pages in the final two-product live E2E with no fallback; six selected same-page RGB comparisons and visual checks passed. Unsupported or mutated states fail closed or use the unchanged Core capture fallback only when target generation is stable. |
 
 ## Phase 01 listing and access evidence
 
@@ -38,9 +39,9 @@ The observed reader root is `#react_ViewerApp`. The supported layout is horizont
 
 A late resume prompt was observed. The adapter allows a bounded 1.5-second attachment grace and cancels only the unique, exact observed resume dialog with its two expected enabled buttons and no link. In addition to the numeric-page prompt, a last-page prompt was observed with exact normalized text `前回最後のページを 読んでいました。 最後のページに移動しますか？`; mixed numeric/last wording or extra text remains rejected. Other or ambiguous dialogs fail closed. The single #js_scrollTypeSing reading-direction sign is hidden only during capture after its root classes match one of two observed sets (base sign class alone, or base plus `_sh` and `_show`), while the two child groups, three expected image labels/classes, no meaningful text/interactive nodes, and empty pseudo-element content remain strictly checked; its prior inline style and visibility are restored. Unknown or duplicate guide markup fails closed.
 
-The owned Page is prepared at a 1904x1200 viewport before navigation. Capture uses the existing Core `capture_locator` hierarchy and emits rendered PNG. Raw canvas readback raised `SecurityError`; captures therefore used the rendered Locator screenshot path. This output is a screenshot of the rendered canvas element, not source-native image bytes or a claim of source pixel identity. Before and after capture, the adapter checks computed display, visibility, opacity, and content-visibility for the canvas and each ancestor, along with the expected page cursor, geometry, and PNG dimensions. Hidden, translucent, changed, or unsupported output fails closed before any unverified Core fallback.
+The owned Page is prepared at a 1904x1200 viewport before navigation. Phase 03 used Core `capture_locator` and rendered screenshot PNG because raw canvas readback raised `SecurityError`. Phase 06-B subsequently proved a narrow source-derived path: one stable loaded HTML image and unique exact JPEG response account for all 408 tile draws into the selected body canvas. A detached canvas replays exact fractional source/destination rectangles and recorded context state through the browser's normal decoder; Pillow then composites the transparent replay PNG onto the separately proven solid-white backdrop. The raw tiled JPEG is never saved as a page.
 
-The image responses observed in the browser were decodable JPEGs matching the visible canvas dimensions, but the final response-to-visible-canvas chain is not proven. Some observed drawing calls used 50x50 source regions with differing destination offsets; that alone does not establish scrambling. Since the final mapping remains unknown and canvas readback is tainted, the implementation does not select those response bytes or attempt reconstruction/DRM work.
+Native replay output requires stable source-load generation, complete bounded canvas traces, unchanged active-target generation through final materialization, supported drawing state/operations, exact response identity, and the known white backdrop paint chain. Per-canvas dimension observers are retained only for source candidates/current capture targets, disconnected on retirement, and catch same-value NamedNodeMap mutations while a target is detached. White composition requires `background-clip:border-box`, `clip:auto`, zero border widths/radius, and the other validated covering-white paint conditions. Other image, attribution, trace, backdrop, and replay conditions fall back to Core `capture_locator` only while the active target generation remains unchanged; target mutation during either path fails closed. Successful output metadata marks `native_tile_replay_png`, `source_native=true`, `source_mime=image/jpeg`, and `source_backdrop=verified_solid_white`; safe fallback identifies `source_native=false` and a sanitized reason. No signed URL, response body, or image payload is stored in repository evidence.
 
 ## Phase 03 live QA
 
@@ -68,7 +69,7 @@ The adapter and browser-fixture tests cover strict identity and fresh-free prefl
 
 ## Final result and limits
 
-All five phases are accepted; Phase 04 review and Phase 05 Tester/final artifact audit passed with BLOCKING 0. The selected two-product live Discovery-to-ZIP route succeeded. Remaining limits are the observed horizontal layout at 1904x1200/DPR 1, rendered PNG capture with unproven source JPEG provenance, and unsupported paid/quota/resource flows. Preserve the pre-existing user edit to `watchlist.yaml` and untracked `debug.log`.
+Phases 01-05 are accepted; Phase 04 review and Phase 05 Tester/final artifact audit passed with BLOCKING 0. Phase 06-B final Reviewer and independent Tester gates also passed with BLOCKING 0. The two-product live route completed all 39 pages using source-derived PNG replay and reached explicit END. Remaining limits are the observed horizontal layout at 1904x1200/DPR 1, unsupported draw/backdrop/resource variants, and paid/quota flows. Preserve the pre-existing user edit to `watchlist.yaml` and untracked `debug.log`.
 
 ## Phase 04 Site Policy and local Batch checkpoint
 
@@ -94,3 +95,38 @@ Evidence reports are local ignored files at `output/piccoma_experiment/phase05_t
 On Windows PowerShell, redirected/piped Batch Planner output initially failed under cp932 for a title containing U+8E20. The read-only command passed with task-local `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1`; no shared CLI change or lossy title conversion was made.
 
 Final verification on implementation checkpoint `1e29fc8`: full `pytest -q` reported 1827 passed, 0 skipped in 330.93 seconds; `ruff check src tests` and `git diff --check` passed. Warnings were existing pytest-asyncio event-loop-policy deprecations and the intentional duplicate-ZIP-member fixture warning. Phase 05 Tester and independent final audit passed.
+
+## Phase 06-B source-derived capture implementation checkpoint
+
+The Phase 06 research gate established an exact source image → visible canvas graph for the observed horizontal rendering path. Production support is deliberately narrower than the research harness: one HTML image with a stable load generation, one uniquely matching exact JPEG response, and a complete 408-call canvas trace. The replay preserves original fractional source/destination rectangles (including observed `50.01` source-height values), context attributes and state, browser decoding, tile order, and canvas dimensions. No raw tiled JPEG is written as a page. Transparent replay is composited only after materialization, using the validated white backdrop gate.
+
+The active target's generation is snapshotted independently of source-proof eligibility and checked through both native output and every screenshot fallback. Same-value dimension resets, namespace/Attr mutation paths, paint/draw changes, and active-target mutation during materialization fail closed. Source reassignment/reload without target mutation invalidates only the native optimization and may use the guarded existing Core screenshot fallback. Trace eviction clears retained event/source references while preserving lightweight generation monitoring; global overflow retires heavy traces and stops adding heavy data. Response, source-byte, event, and runtime limits remain enforced.
+
+On 2026-10-09, production-method live validation rechecked exact-free listing entries and composite targets before using the existing shared CDP Page. For 28600/1910027 (24 body pages), p1/p12/p24 produced 844x1200 PNGs; for 28606/2001009 (15 body pages), p1/p8/p15 produced 842x1200 PNGs. Each reported `native_tile_replay_png`, `source_native=true`, `source_mime=image/jpeg`, and `source_backdrop=verified_solid_white`. RGB pixels matched the unchanged, clean Locator screenshot exactly on all six selected pages. Both runs reached explicit active END on the unchanged requested viewer URL. The guide stayed excluded/restored, and no paid/quota/entitlement action occurred. These six checks validate the observed replay path only; detached-canvas attribute-reset and `background-clip:text` rejection are synthetic browser regressions, not additional observed site variants. The sanitized summary is ignored at `output/piccoma_experiment/source_capture_research/phase06b_production_selected_live_evidence.json`; no response URL, image bytes, or image payload was committed.
+
+## Phase 06 final independent Tester E2E (2026-10-09)
+
+The independent Tester report is at ignored `output/piccoma_experiment/phase06_tester/runs/20261009T053043Z-08fcc951/evidence/phase06_tester_report.json`. Full Discovery exhausted 432/432 rows for product 28600 and 218/218 for product 28606. Incremental Discovery observed five known rows per product, added none, and stopped at `known_streak`. The read-only Batch plan had 444 eligible/direct candidates, 206 skipped non-free candidates, and zero quota candidates. Runtime protections remained active for 403, 429, challenge, and CAPTCHA responses, with `max_pages=1000` and `max_same_content=3`. These are run counts, not constants.
+
+| Product/episode | Pages | Output | Final state |
+| --- | ---: | --- | --- |
+| 28600/1910027 | 24 | 844x1200 PNG | `native_tile_replay_png` on all pages; explicit END; succeeded Run; completed Item; ZIP Artifact present |
+| 28606/2001009 | 15 | 842x1200 PNG | `native_tile_replay_png` on all pages; explicit END; succeeded Run; completed Item; ZIP Artifact present |
+
+The normal BatchExecutor -> Runner -> packager -> Catalog path produced all 39 pages with `source_native=true`, JPEG source MIME, and `verified_solid_white`; no page used fallback. Page IDs were ordered and unique, every page hash in each episode was distinct, ZIP members exactly matched the Manifest, and CRC/member hashes plus Catalog Artifact checks passed. Six current first/middle/last same-page RGB comparisons and six visual checks passed. Sources remained available/free, quota/grant fields were unchanged, and quota resource rows remained 0 before and after. Both viewers stayed on the requested URL through END. No paid or entitlement action occurred.
+
+The final Reviewer independently audited actual ZIPs against the Manifest and read-only Catalog data and verified the six current image comparisons: PASS, BLOCKING 0.
+
+Current verification and review status: the blocker-focused selection passed 16 tests with 72 deselected and five existing pytest-asyncio warnings. It covers detached same-value NamedNodeMap reset, background-clip:text rejection on partial-alpha pixels, white-backdrop invariants, and related paint-gate regressions. The affected suite also covers the target-reset fallback race, RGB-difference detection, partial-alpha compositing, bounded trace eviction/overflow, source reload, and visible overlapping sibling fallback. The broader scoped suite passed 249 tests, 306 pytest-asyncio deprecation warnings, and 0 skipped. `ruff check src tests` and `git diff --check` passed; new-file whitespace/EOF checks passed. Final independent Reviewer gate: PASS, BLOCKING 0. The full `pytest -q` run passed on the checkpoint immediately before the final compatibility fix (1881 passed, 3558 warnings, 0 skipped, 353.38 seconds); the final fix was tested separately and is covered by the final Reviewer pass. Unsupported layouts, unobserved source/draw graphs, changed/unknown backdrops, missing/ambiguous responses, overflow, and target mutation remain unsupported or fail closed.
+
+The final compatibility regression passed 1 browser test (48 deselected, 0 skipped, five existing pytest-asyncio warnings): the hooked two-argument namespace-removal call on a non-canvas `div` matched the native method's returned attribute and removal result. Final Reviewer gate: PASS, BLOCKING 0.
+
+Exact test selections:
+
+```text
+.venv/Scripts/pytest.exe -q tests/unit/test_piccoma_native_capture.py tests/integration/test_piccoma_adapter_browser.py -k "detached_named_map or background_clip_text or white_backdrop_gate"
+16 passed, 72 deselected, 5 warnings
+
+.venv/Scripts/pytest.exe -q tests/unit/test_piccoma_native_capture.py tests/unit/test_piccoma_discovery.py tests/unit/test_piccoma_policy.py tests/integration/test_piccoma_discovery_browser.py tests/integration/test_piccoma_adapter_browser.py tests/unit/test_comicdays_native_capture.py tests/unit/test_bookwalker_native_capture.py
+249 passed, 306 warnings, 0 skipped
+```

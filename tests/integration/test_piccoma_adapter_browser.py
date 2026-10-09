@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import replace
 from datetime import datetime
@@ -9,7 +10,7 @@ from zipfile import ZipFile
 
 import pytest
 import pytest_asyncio
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 from playwright.async_api import Browser, Page
 
 import screenshot_crawler.site_adapters.piccoma.adapter as piccoma_adapter_module
@@ -38,6 +39,13 @@ from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.runtime_settings import SiteRuntimeSettings
 from screenshot_crawler.site_adapters.piccoma.adapter import PiccomaAdapter
+from screenshot_crawler.site_adapters.piccoma.native_capture import (
+    TRACE_INIT_SCRIPT,
+    composite_replay_png_on_white,
+    snapshot_native_trace,
+    target_generation_signature,
+    validate_white_paint_path,
+)
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import PiccomaSitePolicy, SitePolicyRegistry
 
@@ -50,6 +58,9 @@ WORK_KEY = "caller-owned-opaque-work-key"
 PAGE_WIDTH = 20
 PAGE_HEIGHT = 30
 PAGE_COLOR = (16, 40, 80)
+NATIVE_WIDTH = 844
+NATIVE_HEIGHT = 1200
+NATIVE_SOURCE_URL = "https://pcm.kakaocdn.net/dna/a/b/c/i123.jpg?token=fixture"
 BATCH_NOW = datetime(2026, 10, 9, 12, tzinfo=JST)
 
 
@@ -232,6 +243,528 @@ def _synthetic_png() -> bytes:
     output = BytesIO()
     Image.new("RGB", (PAGE_WIDTH, PAGE_HEIGHT), PAGE_COLOR).save(output, format="PNG")
     return output.getvalue()
+
+
+def _synthetic_tile_jpeg() -> bytes:
+    image = Image.new("RGB", (NATIVE_WIDTH, NATIVE_HEIGHT), "white")
+    draw = ImageDraw.Draw(image)
+    for row in range(24):
+        for column in range(17):
+            left, top = column * 50, row * 50
+            width = min(50, NATIVE_WIDTH - left)
+            index = row * 17 + column
+            color = ((index * 37) % 256, (index * 71) % 256, (index * 113) % 256)
+            draw.rectangle((left, top, left + width - 1, top + 49), fill=color)
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=95, subsampling=0)
+    return output.getvalue()
+
+
+def _native_viewer_html(
+    *, extra_paint: bool = False, overlay_sibling: bool = False
+) -> str:
+    extra = "ctx.clearRect(0, 0, 1, 1);" if extra_paint else ""
+    overlay = '<div class="fixtureOverlay"></div>' if overlay_sibling else ""
+    return f"""<!doctype html><html><head><style>
+      html,body {{ margin:0; }}
+      #js_frame {{ position:relative; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; margin:0 auto; }}
+      #react_PageListApp {{ position:absolute; inset:0; }}
+      .PCM-viewer2_pageWrapper {{ position:absolute; inset:0; display:none; }}
+      .PCM-viewer2_pageWrapper.current {{ display:block; }}
+      .PCM-viewer2_canvasWrapper {{ position:absolute; inset:0; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; }}
+      .PCM-viewer2_zoomPageWrap {{ position:absolute; inset:0; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; background:rgb(255,255,255); }}
+      .PCM-viewer2_canvasWrapper canvas {{ display:block; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; }}
+      .fixtureOverlay {{ position:absolute; inset:0; z-index:2; background:rgb(255,0,0); }}
+      #js_scrollTypeSing {{ position:fixed; left:0; top:0; width:10px; height:10px; }}
+      #js_scrollTypeSing > div {{ display:none; }}
+      .PCM-viewer2_pagingBtn_next {{ position:fixed; left:10px; top:20px; }}
+      .PCM-viewer2_pagingBtn_prev {{ position:fixed; left:10px; top:50px; }}
+    </style></head><body class="PCM-viewer2 PCM-stt_horizontal PCM-prop_scroll_l">
+      <div id="react_ViewerApp"><div id="js_frame" class="PCM-viewer2_frame">
+       <section id="react_PageListApp">
+        <section id="last" class="PCM-viewer2_pageWrapper"><div id="js_viewerEnd" class="PCM-viewer2_endPage"></div></section>
+        <section id="p1" class="PCM-viewer2_pageWrapper current">
+          <div class="PCM-viewer2_canvasWrapper"><div class="PCM-viewer2_zoomPageWrap">
+            <canvas width="300" height="150"></canvas>{overlay}
+          </div></div>
+        </section>
+       </section>
+      </div>
+      <div id="js_scrollTypeSing" class="PCM-viewer2_scrollTypeSign PCM-viewer2_scrollTypeSign_sh PCM-viewer2_scrollTypeSign_show">
+        <div class="PCM-viewer2_scrollTypeSign_v"><img alt="タテ読み"></div>
+        <div class="PCM-viewer2_scrollTypeSign_h"><img class="PCM-viewer2_scrollTypeSign_l" alt="ヨコ読み"><img class="PCM-viewer2_scrollTypeSign_r" alt="ヨコ読み"></div>
+      </div></div>
+      <button class="PCM-viewer2_pagingBtn_prev">Previous</button>
+      <button class="PCM-viewer2_pagingBtn_next">Next</button>
+      <script>
+        window.forbiddenClicks=0;
+        document.querySelectorAll('button').forEach(button=>
+          button.addEventListener('click',()=>window.forbiddenClicks++));
+        const canvas=document.querySelector('#p1 canvas');
+        const wrapper=document.querySelector('#p1 .PCM-viewer2_canvasWrapper');
+        const ctx=canvas.getContext('2d');
+        canvas.width={NATIVE_WIDTH}; canvas.height={NATIVE_HEIGHT};
+        const image=new Image();
+        window.__piccomaFixtureImage=image;
+        image.onload=()=>{{
+          {extra}
+          for(let destination=0;destination<408;destination++){{
+            const source=(destination*37)%408;
+            const dc=destination%17, dr=Math.floor(destination/17);
+            const sc=source%17, sr=Math.floor(source/17);
+            const dx=dc*50, dy=dr*50, sx=sc*50, sy=sr*50;
+            const dw=Math.min(50,{NATIVE_WIDTH}-dx), sw=Math.min(50,{NATIVE_WIDTH}-sx);
+            ctx.drawImage(image,sx,sy,sw,50.01,dx,dy,dw,50);
+          }}
+          wrapper.classList.add('loaded');
+          canvas.dataset.drawn='true';
+        }};
+        image.src={json.dumps(NATIVE_SOURCE_URL)};
+      </script>
+    </body></html>"""
+
+
+async def _start_native_fixture(
+    adapter: PiccomaAdapter,
+    page: Page,
+    *,
+    extra_paint: bool = False,
+    overlay_sibling: bool = False,
+) -> None:
+    body = _synthetic_tile_jpeg()
+
+    async def route_handler(route: object) -> None:
+        request = route.request  # type: ignore[attr-defined]
+        url = request.url
+        path = url.split("?", 1)[0]
+        if path == "https://pcm.kakaocdn.net/dna/a/b/c/i123.jpg":
+            await route.fulfill(status=200, body=body, content_type="image/jpeg")  # type: ignore[attr-defined]
+        elif path.endswith(f"/web/product/{PRODUCT_ID}/episodes"):
+            await route.fulfill(status=200, body=_listing_html(), content_type="text/html; charset=utf-8")  # type: ignore[attr-defined]
+        elif path.endswith(f"/web/viewer/{PRODUCT_ID}/{EPISODE_ID}"):
+            await route.fulfill(
+                status=200,
+                body=_native_viewer_html(
+                    extra_paint=extra_paint, overlay_sibling=overlay_sibling
+                ),
+                content_type="text/html; charset=utf-8",
+            )  # type: ignore[attr-defined]
+        else:
+            await route.fulfill(status=404, body="missing")  # type: ignore[attr-defined]
+
+    await page.route("**/*", route_handler)
+    listing_url = await _configure(adapter, page)
+    await page.goto(listing_url, wait_until="commit")
+    await adapter.initialize(page)
+    await page.wait_for_function("document.querySelector('#p1 canvas')?.dataset.drawn === 'true'")
+
+
+async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    canvas = browser_page.locator("#p1 canvas")
+
+    captures = await adapter.capture_page(browser_page)
+
+    assert captures is not None and len(captures) == 1
+    captured = captures[0]
+    assert (captured.width, captured.height) == (NATIVE_WIDTH, NATIVE_HEIGHT)
+    assert captured.mime_type == "image/png"
+    metadata = await adapter.collect_debug_metadata(browser_page)
+    assert metadata["piccoma_capture"] == {
+        "method": "native_tile_replay_png",
+        "source_native": True,
+        "source_mime": "image/jpeg",
+        "source_backdrop": "verified_solid_white",
+        "fallback_reason": None,
+        "page_count": 1,
+        "access_strategy": "auto",
+        "viewport": [1904, 1200],
+    }
+    assert await canvas.evaluate(
+        "node => { try { node.toDataURL('image/png'); return false; } "
+        "catch (error) { return error.name === 'SecurityError'; } }"
+    ) is True
+
+    snapshot = await adapter._reader_snapshot(browser_page)
+    guide_style = await adapter._hide_reading_guide(browser_page, snapshot)
+    try:
+        expected = await canvas.screenshot(animations="disabled")
+    finally:
+        await adapter._restore_reading_guide(browser_page, guide_style)
+    with (
+        Image.open(BytesIO(captured.data)) as native_image,
+        Image.open(BytesIO(expected)) as rendered_image,
+    ):
+        native_rgb = native_image.convert("RGB")
+        rendered_rgb = rendered_image.convert("RGB")
+        assert ImageChops.difference(native_rgb, rendered_rgb).getbbox() is None
+        different = rendered_rgb.copy()
+        pixel = different.getpixel((0, 0))
+        different.putpixel((0, 0), ((pixel[0] + 1) % 256, pixel[1], pixel[2]))
+        assert ImageChops.difference(rendered_rgb, different).getbbox() is not None
+    assert await browser_page.evaluate("window.forbiddenClicks") == 0
+    assert await browser_page.locator("#js_scrollTypeSing").evaluate(
+        "node => getComputedStyle(node).display"
+    ) != "none"
+
+
+async def test_piccoma_native_tile_replay_uses_screenshot_when_target_has_extra_paint(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page, extra_paint=True)
+
+    captures = await adapter.capture_page(browser_page)
+
+    assert captures is not None and len(captures) == 1
+    assert (captures[0].width, captures[0].height) == (NATIVE_WIDTH, NATIVE_HEIGHT)
+    metadata = await adapter.collect_debug_metadata(browser_page)
+    assert metadata["piccoma_capture"]["method"] == "core_canvas_or_locator_png"
+    assert metadata["piccoma_capture"]["source_native"] is False
+    assert metadata["piccoma_capture"]["fallback_reason"] == "unsupported_target_operation_count"
+    assert await browser_page.evaluate("window.forbiddenClicks") == 0
+
+
+async def test_piccoma_native_replay_falls_back_for_visible_overlapping_sibling(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page, overlay_sibling=True)
+
+    captures = await adapter.capture_page(browser_page)
+
+    assert captures is not None and len(captures) == 1
+    metadata = await adapter.collect_debug_metadata(browser_page)
+    assert metadata["piccoma_capture"]["method"] == "core_canvas_or_locator_png"
+    assert metadata["piccoma_capture"]["source_native"] is False
+    assert metadata["piccoma_capture"]["fallback_reason"] == "white_backdrop_unproven"
+    with Image.open(BytesIO(captures[0].data)).convert("RGB") as screenshot:
+        assert screenshot.getpixel((0, 0)) == (255, 0, 0)
+
+
+async def test_piccoma_screenshot_fallback_stops_if_target_resets_during_capture(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page, extra_paint=True)
+    real_capture = piccoma_adapter_module.capture_locator
+
+    async def reset_before_screenshot(locator: object):
+        await browser_page.locator("#p1 canvas").evaluate(
+            "canvas => canvas.width = canvas.width"
+        )
+        return await real_capture(locator)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(piccoma_adapter_module, "capture_locator", reset_before_screenshot)
+    with pytest.raises(UnknownPageStateError, match="canvas changed during capture"):
+        await adapter.capture_page(browser_page)
+
+
+async def test_piccoma_fallback_monitors_untraced_canvas_generation(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start(adapter, browser_page)
+    await browser_page.evaluate(
+        "window.__piccomaNativeCapture.retire(document.querySelector('#p1 canvas'))"
+    )
+    target = await adapter.get_capture_target(browser_page)
+    baseline = await snapshot_native_trace(browser_page, target)
+    assert baseline is not None and baseline["events"] == []
+    assert baseline["retired"] is True
+    real_capture = piccoma_adapter_module.capture_locator
+
+    async def reset_before_screenshot(locator: object):
+        await browser_page.locator("#p1 canvas").evaluate(
+            "canvas => canvas.width = canvas.width"
+        )
+        return await real_capture(locator)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(piccoma_adapter_module, "capture_locator", reset_before_screenshot)
+    with pytest.raises(UnknownPageStateError, match="canvas changed during capture"):
+        await adapter.capture_page(browser_page)
+
+
+@pytest.mark.parametrize(
+    "reset_kind", ["property", "namespace", "attr_value", "detached_named_map"]
+)
+async def test_piccoma_native_replay_stops_on_same_value_canvas_reset(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, reset_kind: str
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    await browser_page.evaluate(
+        """resetKind => {
+          const api = window.__piccomaNativeCapture;
+          const original = api.replay;
+          api.replay = async (...args) => {
+            const result = await original(...args);
+            const canvas = document.querySelector('#p1 canvas');
+            if (resetKind === 'property') canvas.width = canvas.width;
+            else if (resetKind === 'namespace')
+              canvas.setAttributeNS(null, 'width', String(canvas.width));
+            else if (resetKind === 'attr_value')
+              canvas.getAttributeNode('width').value = String(canvas.width);
+            else {
+              const parent = canvas.parentElement;
+              canvas.remove();
+              await new Promise(resolve => setTimeout(resolve, 0));
+              const copiedWidth = canvas.getAttributeNode('width').cloneNode();
+              canvas.attributes.setNamedItem(copiedWidth);
+              parent.append(canvas);
+            }
+            return result;
+          };
+        }""",
+        reset_kind,
+    )
+    fallback_calls = 0
+
+    async def unexpected_fallback(_locator: object):
+        nonlocal fallback_calls
+        fallback_calls += 1
+        raise AssertionError("active target reset must not fall back to a screenshot")
+
+    monkeypatch.setattr(piccoma_adapter_module, "capture_locator", unexpected_fallback)
+    with pytest.raises(UnknownPageStateError, match="changed during source-native capture"):
+        await adapter.capture_page(browser_page)
+    assert fallback_calls == 0
+
+
+async def test_piccoma_named_node_map_remove_named_item_ns_preserves_native_result(
+    browser_page: Page,
+) -> None:
+    native_result = await browser_page.evaluate(
+        """() => {
+          const namespace = 'urn:piccoma-test';
+          const div = document.createElement('div');
+          div.setAttributeNS(namespace, 'test:mark', 'value');
+          const removed = NamedNodeMap.prototype.removeNamedItemNS.call(
+            div.attributes, namespace, 'mark'
+          );
+          return {
+            name: removed.name,
+            localName: removed.localName,
+            namespaceURI: removed.namespaceURI,
+            value: removed.value,
+            remains: div.hasAttributeNS(namespace, 'mark'),
+          };
+        }"""
+    )
+
+    await browser_page.evaluate(TRACE_INIT_SCRIPT)
+    hooked_result = await browser_page.evaluate(
+        """() => {
+          const namespace = 'urn:piccoma-test';
+          const div = document.createElement('div');
+          div.setAttributeNS(namespace, 'test:mark', 'value');
+          const removed = div.attributes.removeNamedItemNS(namespace, 'mark');
+          return {
+            name: removed.name,
+            localName: removed.localName,
+            namespaceURI: removed.namespaceURI,
+            value: removed.value,
+            remains: div.hasAttributeNS(namespace, 'mark'),
+          };
+        }"""
+    )
+
+    assert hooked_result == native_result
+
+
+async def test_piccoma_native_replay_falls_back_when_source_reloads_same_url(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    await browser_page.evaluate(
+        """() => {
+          const api = window.__piccomaNativeCapture;
+          const original = api.replay;
+          api.replay = async (...args) => {
+            const result = await original(...args);
+            const image = window.__piccomaFixtureImage;
+            image.onload = null;
+            image.src = image.src;
+            return result;
+          };
+        }"""
+    )
+
+    captures = await adapter.capture_page(browser_page)
+
+    assert captures is not None and len(captures) == 1
+    metadata = await adapter.collect_debug_metadata(browser_page)
+    assert metadata["piccoma_capture"]["method"] == "core_canvas_or_locator_png"
+    assert metadata["piccoma_capture"]["source_native"] is False
+    assert metadata["piccoma_capture"]["fallback_reason"] == "source_generation_changed_during_replay"
+    assert (captures[0].width, captures[0].height) == (NATIVE_WIDTH, NATIVE_HEIGHT)
+    assert await browser_page.evaluate("window.forbiddenClicks") == 0
+
+
+async def test_piccoma_native_trace_eviction_releases_heavy_canvas_references(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    await browser_page.evaluate(
+        """() => {
+          const image = window.__piccomaFixtureImage;
+          for (let index = 0; index < 16; index++) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 2;
+            canvas.height = 2;
+            document.body.append(canvas);
+            canvas.getContext('2d').drawImage(image, 0, 0);
+          }
+        }"""
+    )
+    target = await adapter.get_capture_target(browser_page)
+    evicted = await snapshot_native_trace(browser_page, target)
+    assert evicted is not None
+    assert evicted["retained"] is False
+    assert evicted["retired"] is True
+    assert evicted["events"] == []
+    assert evicted["sourceStates"] == []
+    baseline = target_generation_signature(evicted)
+    assert baseline is not None
+
+    await target.evaluate("canvas => canvas.width = canvas.width")
+    changed = await snapshot_native_trace(browser_page, target)
+    assert target_generation_signature(changed) != baseline
+
+
+async def test_piccoma_global_trace_overflow_keeps_only_lightweight_generations(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    await browser_page.evaluate(
+        """() => {
+          for (let index = 0; index < 40; index++) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 2; canvas.height = 2;
+            document.body.append(canvas);
+            const context = canvas.getContext('2d');
+            for (let event = 0; event < 500; event++) context.fillRect(0, 0, 1, 1);
+          }
+        }"""
+    )
+    await browser_page.evaluate(
+        """() => {
+          const canvas = document.createElement('canvas');
+          document.body.append(canvas);
+          canvas.getContext('2d').fillRect(0, 0, 1, 1);
+          window.__piccomaPostOverflowCanvas = canvas;
+        }"""
+    )
+    post_overflow = browser_page.locator("canvas").last
+    snapshot = await snapshot_native_trace(browser_page, post_overflow)
+    assert snapshot is not None
+    assert snapshot["totalOverflow"] is True
+    assert snapshot["retired"] is True
+    assert snapshot["events"] == []
+    assert snapshot["sourceStates"] == []
+    baseline = target_generation_signature(snapshot)
+    assert baseline is not None
+
+    await post_overflow.evaluate("canvas => canvas.height = canvas.height")
+    changed = await snapshot_native_trace(browser_page, post_overflow)
+    assert target_generation_signature(changed) != baseline
+
+
+async def test_piccoma_white_composite_matches_fractional_partial_alpha_browser_pixels(
+    browser_page: Page,
+) -> None:
+    await browser_page.set_content(
+        """<!doctype html><html><body style="margin:0;background:white">
+          <canvas id="target" width="16" height="16" style="display:block"></canvas>
+        </body></html>"""
+    )
+    target = browser_page.locator("#target")
+    raw_data_url = await target.evaluate(
+        """canvas => {
+          const source = document.createElement('canvas');
+          source.width = 3; source.height = 3;
+          const sourceContext = source.getContext('2d');
+          const pixels = sourceContext.createImageData(3, 3);
+          for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) {
+            const offset = (y * 3 + x) * 4;
+            pixels.data[offset] = 177; pixels.data[offset + 1] = 19;
+            pixels.data[offset + 2] = 91;
+            pixels.data[offset + 3] = [0, 128, 255][x];
+          }
+          sourceContext.putImageData(pixels, 0, 0);
+          const context = canvas.getContext('2d');
+          context.drawImage(source, 0, 0, 3, 3, 0.25, 0.25, 15.5, 15.5);
+          return canvas.toDataURL('image/png');
+        }"""
+    )
+    raw_png = base64.b64decode(raw_data_url.split(",", 1)[1])
+    with Image.open(BytesIO(raw_png)) as image:
+        alpha = image.getchannel("A")
+        assert alpha.getextrema()[0] < 255
+        assert alpha.getextrema()[1] == 255
+        assert any(0 < value < 255 for value in alpha.tobytes())
+    screenshot = await target.screenshot(animations="disabled")
+    composited = composite_replay_png_on_white(raw_png, width=16, height=16)
+    with (
+        Image.open(BytesIO(screenshot)) as browser_pixels,
+        Image.open(BytesIO(composited)) as native_pixels,
+    ):
+        browser_rgb = browser_pixels.convert("RGB")
+        native_rgb = native_pixels.convert("RGB")
+        assert ImageChops.difference(browser_rgb, native_rgb).getbbox() is None
+
+
+async def test_piccoma_white_backdrop_gate_rejects_background_clip_text_for_partial_alpha(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await adapter.prepare_page(browser_page)
+    await browser_page.set_content(
+        """<!doctype html><html><body style="margin:0;background:rgb(255,0,0)">
+          <div id="cover" style="width:16px;height:16px;background:white;
+              background-clip:text;color:transparent">
+            <canvas id="target" width="16" height="16" style="display:block"></canvas>
+          </div>
+        </body></html>"""
+    )
+    await browser_page.evaluate(TRACE_INIT_SCRIPT)
+    target = browser_page.locator("#target")
+    png_data_url = await target.evaluate(
+        """canvas => {
+          const ctx = canvas.getContext('2d');
+          const pixels = ctx.createImageData(16, 16);
+          for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+            const offset = (y * 16 + x) * 4;
+            pixels.data[offset] = 30; pixels.data[offset + 1] = 60;
+            pixels.data[offset + 2] = 90; pixels.data[offset + 3] = x < 8 ? 0 : 128;
+          }
+          ctx.putImageData(pixels, 0, 0);
+          return canvas.toDataURL('image/png');
+        }"""
+    )
+    raw_png = base64.b64decode(png_data_url.split(",", 1)[1])
+    paint = await target.evaluate(
+        "canvas => window.__piccomaNativeCapture.paintSnapshot(canvas)"
+    )
+    assert paint["ancestors"][1]["backgroundClip"] == "text"
+    assert not validate_white_paint_path(paint, width=16, height=16)
+
+    locator_png = await target.screenshot(animations="disabled")
+    assumed_white = composite_replay_png_on_white(raw_png, width=16, height=16)
+    with (
+        Image.open(BytesIO(locator_png)) as rendered,
+        Image.open(BytesIO(assumed_white)) as white_composite,
+    ):
+        assert ImageChops.difference(
+            rendered.convert("RGB"), white_composite.convert("RGB")
+        ).getbbox() is not None
 
 
 async def _configure(adapter: PiccomaAdapter, page: Page, *, mode: str = "auto") -> str:

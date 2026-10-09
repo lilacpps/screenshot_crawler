@@ -1,6 +1,6 @@
 # Piccoma current implementation snapshot
 
-Updated: 2026-10-09. Phase 01 evidence is accepted; Phase 02 Discovery and Phase 03 Viewer/Capture passed independent review (Phase 03 BLOCKING 0). Phase 04 Piccoma Site Policy and local standard Batch integration are implemented and tested; independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped); Phase 05 live E2E and final independent audit passed for the two tested products.
+Updated: 2026-10-09. Phases 01-05 remain accepted, including Phase 05 live Discovery-to-ZIP and independent artifact audit. Phase 06-B's strict JPEG tile replay to source-derived PNG passed the final independent Reviewer and Tester gates with BLOCKING 0. The full suite passed on the immediately preceding reviewed checkpoint; the final NamedNodeMap argument-forwarding fix has its own passing focused browser test and final Reviewer pass.
 
 ## Current adapter and CLI registration
 
@@ -46,11 +46,13 @@ One late resume prompt was observed. After a bounded 1.5-second attachment grace
 
 Before navigation, the owned Page viewport is set to 1904x1200, the observed supported layout. Before and after each capture the adapter verifies the same viewer identity, expected page cursor, active page ID, loaded canvas, computed display/visibility/opacity/content-visibility on the canvas and every ancestor, frame/canvas geometry, viewport, and PNG dimensions. A hidden or translucent canvas, cursor change, geometry change, or identity change fails closed without entering an unverified Core fallback.
 
-Capture calls Core `capture_locator` on the current body canvas. This preserves the Core capture hierarchy. Live canvas `getImageData` raised `SecurityError`; the accepted capture mode is therefore the rendered Locator screenshot PNG. This is rendered screenshot output, not source-native image data, even where output and canvas dimensions match. Live captures were 844x1200 for product 28600 and 842x1200 for product 28606.
+Live canvas `getImageData` raised `SecurityError`, so direct canvas readback remains unavailable. Phase 06-B supports one strictly observed horizontal rendering path: a single loaded HTML image bound to a unique exact first-party JPEG response and stable load generation supplies exactly 408 accounted tile draws to the selected canvas. The adapter records the complete draw arguments and supported 2D context state without changing the page renderer. It replays those exact fractional source/destination rectangles and state into a detached canvas using the browser's normal image decoder, encodes the source-derived pixels as PNG, and composites transparency over a separately validated solid-white paint ancestor. It does not save the tiled raw JPEG as a page or change canvas security/backing settings. Unique exact JPEG-response to loaded-image attribution is a mandatory replay gate; the output is the reconstructed/composited PNG, not the raw tiled JPEG.
 
-Browser-observed image responses were decodable JPEGs matching visible canvas dimensions, but exact response-to-visible-canvas attribution remains unproven. Some draw calls used 50x50 source regions with differing destination offsets. That observation alone does not prove scrambling; the final visible chain remains unknown. The adapter does not use those response bytes, alter canvas security/backing settings, or attempt reconstruction.
+The trace and response registry are bounded. Per-canvas dimension MutationObservers are attached only to retained source candidates or the current capture target and are disconnected on eviction/capture cleanup; this also detects same-value NamedNodeMap changes while a canvas is detached. Missing/ambiguous responses, source reloads, canvas reset or unsupported paint/clip/state operations, overflow, unproven backdrop, or replay mismatch make the optimization unavailable. White compositing requires computed `background-clip:border-box`, `clip:auto`, no border widths/radius, and the other validated covering-white paint conditions. Core `capture_locator` is then allowed only when the active target canvas generation stayed unchanged for the entire capture; target mutation during any path fails closed. Successful native output reports `native_tile_replay_png`, `source_native=true`, `source_mime=image/jpeg`, and `source_backdrop=verified_solid_white`; screenshot fallback reports `source_native=false` and a sanitized reason. No signed URL, source bytes, or response body enters metadata.
 
 ## Live verification and artifacts
+
+The `NamedNodeMap` trace wrappers preserve the browser API contract by forwarding every argument to the native method and returning its native result. A synthetic browser regression confirms two-argument `removeNamedItemNS(namespace, localName)` behavior on a non-canvas `div`; canvas dimension invalidation remains owned by the bounded per-canvas observer.
 
 On 2026-10-09, after the Reviewer fixes, each seed was rechecked as exact-free in its current listing, entered at the requested viewer path, traversed from p1 through every page to explicit active END, and captured at first/middle/last. Product 28600/1910027 had 24 body pages and captures p1/p12/p24 (844x1200). Product 28606/2001009 had 15 body pages and captures p1/p8/p15 (842x1200). Both viewer paths were unchanged at END. The reading guide was visible before and after all six captures. All six latest ignored PNGs were visually inspected; the body filled the frame sharply without reader chrome. The Lead also inspected product 28600 p1.
 
@@ -68,4 +70,29 @@ The independent Tester ran the real `BatchExecutor -> CrawlerRunner -> package_c
 
 The live listing was freshly checked before viewer entry; both resulting Sources remained `available=true` and `access_mode=free`, with quota/grant timestamps NULL and no quota resource rows. `last_seen_at` was populated, but Catalog `access_checked_at` remained NULL; live free revalidation is therefore evidenced by the run, not represented by that Catalog timestamp. Windows PowerShell redirection/piping of the planner output failed once under cp932 on title code point U+8E20. The command passed with task-local `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1`; no lossy title conversion or shared CLI change was made.
 
-The accepted viewer limit remains the observed horizontal mode at 1904x1200 and DPR 1. Other layouts/resources remain unsupported. Capture is rendered Locator PNG, not source-native data; exact source JPEG attribution remains unproven. The final full test suite passed 1827 tests with 0 skipped; warnings were pytest-asyncio event-loop-policy deprecations and an intentional duplicate-ZIP-member fixture warning. `ruff check src tests` passed.
+The accepted viewer limit remains the observed horizontal mode at 1904x1200 and DPR 1. In the 2026-10-09 Phase 06-B selected live check, both products used native replay for p1/middle/last: product 28600 pages p1/p12/p24 were 844x1200; product 28606 p1/p8/p15 were 842x1200. All six reconstructed PNGs were pixel-identical in RGB to the unchanged Locator screenshot path; both episodes reached explicit END on the same viewer URL. These six checks validate the observed replay path only. Detached-canvas attribute-reset and `background-clip:text` rejection cases are synthetic browser regressions, not additional observed site variants. Other layouts, draw graphs, backdrop structures, and resources remain unsupported. The Phase 05 full suite result was 1827 passed, 0 skipped. For Phase 06-B, the focused Piccoma/affected native-capture suite passed 249 tests with 306 existing pytest-asyncio deprecation warnings and 0 skipped; `ruff check src tests` passed. The final full Phase 06-B suite passed on the checkpoint immediately before the last NamedNodeMap compatibility fix: 1881 passed, 3558 warnings, 0 skipped in 353.38 seconds. The final compatibility fix was covered separately by its focused browser test and final Reviewer pass.
+
+The final API compatibility check passed 1 browser test (48 deselected, 0 skipped, five existing pytest-asyncio warnings). It compares the native and hooked `removeNamedItemNS(namespace, localName)` result and confirms the attribute is removed from a non-canvas element. Final independent Reviewer review passed with BLOCKING 0.
+
+Phase 06-B verification commands:
+
+```text
+.venv/Scripts/pytest.exe -q tests/unit/test_piccoma_native_capture.py tests/integration/test_piccoma_adapter_browser.py -k "detached_named_map or background_clip_text or white_backdrop_gate"
+16 passed, 72 deselected, 5 pytest-asyncio warnings
+
+.venv/Scripts/pytest.exe -q tests/unit/test_piccoma_native_capture.py tests/unit/test_piccoma_discovery.py tests/unit/test_piccoma_policy.py tests/integration/test_piccoma_discovery_browser.py tests/integration/test_piccoma_adapter_browser.py tests/unit/test_comicdays_native_capture.py tests/unit/test_bookwalker_native_capture.py
+249 passed, 306 pytest-asyncio warnings, 0 skipped
+```
+
+`git diff --check` and the explicit new-file EOF/trailing-whitespace check passed. The final independent Reviewer gate is PASS, BLOCKING 0. The full suite result was run on the immediately preceding checkpoint; the final compatibility patch was verified separately rather than included in that full run.
+
+## Phase 06 final independent live E2E
+
+The independent Tester report is at ignored `output/piccoma_experiment/phase06_tester/runs/20261009T053043Z-08fcc951/evidence/phase06_tester_report.json`. Full Discovery exhausted 432/432 rows for product 28600 and 218/218 for 28606. Incremental Discovery observed five known rows per product, added none, and stopped at `known_streak`. The read-only plan had 444 eligible/direct candidates, 206 skipped non-free candidates, and zero quota candidates. These counts describe that run, not constants.
+
+| Product/episode | Body pages | Result |
+| --- | ---: | --- |
+| 28600/1910027 | 24 at 844x1200 PNG | ordered unique pages, all `native_tile_replay_png`, explicit END, succeeded Run, completed Item, ZIP Artifact present |
+| 28606/2001009 | 15 at 842x1200 PNG | ordered unique pages, all `native_tile_replay_png`, explicit END, succeeded Run, completed Item, ZIP Artifact present |
+
+All 39 pages used `source_native=true`, JPEG source MIME, verified solid-white backdrop, and no fallback. The exact ZIP members matched the Manifest and passed CRC/member-hash checks; all image hashes were distinct within each episode, and Catalog Artifact checks passed. Six current first/middle/last same-page RGB comparisons and six visual checks passed. Sources remained available/free; quota/grant fields did not change and quota resource rows stayed at zero. Both viewers remained at their requested URLs through END. No paid or entitlement action was used. The Reviewer independently rechecked the actual ZIPs against the Manifest and read-only Catalog data and verified the six current image comparisons: PASS, BLOCKING 0.

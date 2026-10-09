@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from typing import Any
+from urllib.parse import urlparse
 
-from playwright.async_api import Locator, Page
+from playwright.async_api import Locator, Page, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.core.access_guard import AccessProfile
@@ -28,6 +30,15 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
     parse_piccoma_listing_url,
     parse_piccoma_viewer_url,
 )
+from screenshot_crawler.site_adapters.piccoma.native_capture import (
+    NativeCaptureUnavailable,
+    capture_native_tile_replay,
+    install_native_trace,
+    retire_native_trace,
+    snapshot_native_trace,
+    target_generation_signature,
+    validate_native_capture_still_current,
+)
 
 LISTING_SELECTOR = "#js_episodeList"
 ROW_SELECTOR = "#js_episodeList a[data-product_id][data-episode_id]"
@@ -39,6 +50,8 @@ RESUME_DIALOG_SELECTOR = ".jconfirm-open.PCM-pcmConfirm"
 VIEWPORT_WIDTH = 1904
 VIEWPORT_HEIGHT = 1200
 MAX_BODY_PAGES = 2_000
+MAX_NATIVE_RESPONSE_RECORDS = 512
+MAX_NATIVE_EPISODE_BYTES = 64_000_000
 PAGE_CHANGE_TIMEOUT_MS = 10_000
 INITIALIZE_TIMEOUT_MS = 30_000
 RESUME_DIALOG_GRACE_MS = 1_500
@@ -236,6 +249,18 @@ class PiccomaAdapter(SiteAdapter):
         self._terminal = False
         self._advance_from: int | None = None
         self._capture_method = "not_captured"
+        self._capture_source_native = False
+        self._capture_source_mime: str | None = None
+        self._capture_backdrop: str | None = None
+        self._capture_fallback_reason: str | None = None
+        self._capture_page: Page | None = None
+        self._response_listener: Any = None
+        self._native_responses: dict[str, list[Response]] = {}
+        self._native_response_counts: dict[str, int] = {}
+        self._native_response_count = 0
+        self._native_response_overflow = False
+        self._native_response_event = asyncio.Event()
+        self._native_bytes_read = 0
 
     def get_access_profile(self) -> AccessProfile:
         return piccoma_access_profile()
@@ -247,6 +272,76 @@ class PiccomaAdapter(SiteAdapter):
         # The observed desktop horizontal reader renders native 1200px canvas
         # height only when its owned Page starts at this viewport.
         await page.set_viewport_size({"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT})
+        await install_native_trace(page)
+        self._capture_page = page
+        self._native_responses = {}
+        self._native_response_counts = {}
+        self._native_response_count = 0
+        self._native_response_overflow = False
+        self._native_bytes_read = 0
+        self._native_response_event = asyncio.Event()
+        self._response_listener = self._on_native_response
+        page.on("response", self._response_listener)
+        page.on("close", self._clear_native_response_state)
+
+    def _on_native_response(self, response: Response) -> None:
+        """Retain only bounded first-party CDN image responses, without reading bodies."""
+
+        try:
+            parsed = urlparse(response.url)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != "pcm.kakaocdn.net"
+                or response.request.resource_type != "image"
+            ):
+                return
+            if self._native_response_count >= MAX_NATIVE_RESPONSE_RECORDS:
+                self._native_response_overflow = True
+                return
+            self._native_response_count += 1
+            if response.url not in self._native_response_counts:
+                if len(self._native_response_counts) >= MAX_NATIVE_RESPONSE_RECORDS:
+                    self._native_response_overflow = True
+                    return
+                self._native_response_counts[response.url] = 1
+            else:
+                self._native_response_counts[response.url] = min(
+                    2, self._native_response_counts[response.url] + 1
+                )
+            rows = self._native_responses.setdefault(response.url, [])
+            if len(rows) < 2:
+                rows.append(response)
+            self._native_response_event.set()
+        except Exception:  # noqa: BLE001 - response observation never blocks the reader
+            return
+
+    def _clear_native_response_state(self, *_args: object) -> None:
+        self._native_responses.clear()
+        self._native_response_counts.clear()
+        self._native_response_event.set()
+
+    def _native_response_count_for_url(self, source_url: str) -> int:
+        return self._native_response_counts.get(source_url, 0)
+
+    async def _responses_for_native_url(self, source_url: str) -> list[Response]:
+        deadline = time.monotonic() + 1.5
+        while True:
+            rows = self._native_responses.pop(source_url, None)
+            if rows:
+                return rows
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return []
+            self._native_response_event.clear()
+            # Recheck after clearing so a response cannot be lost between the
+            # map lookup and event reset.
+            rows = self._native_responses.pop(source_url, None)
+            if rows:
+                return rows
+            try:
+                await asyncio.wait_for(self._native_response_event.wait(), timeout=remaining)
+            except TimeoutError:
+                return []
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
         del page
@@ -262,6 +357,10 @@ class PiccomaAdapter(SiteAdapter):
         self._terminal = False
         self._advance_from = None
         self._capture_method = "not_captured"
+        self._capture_source_native = False
+        self._capture_source_mime = None
+        self._capture_backdrop = None
+        self._capture_fallback_reason = None
 
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
         match = re.fullmatch(r"([0-9]+):([0-9]+)", external_id)
@@ -707,6 +806,11 @@ class PiccomaAdapter(SiteAdapter):
         )
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        self._capture_method = "not_captured"
+        self._capture_source_native = False
+        self._capture_source_mime = None
+        self._capture_backdrop = None
+        self._capture_fallback_reason = None
         before = await self._reader_snapshot(page)
         self._validate_reader_mode(before)
         active = before.get("activeIds")
@@ -731,42 +835,137 @@ class PiccomaAdapter(SiteAdapter):
         target = await self.get_capture_target(page)
         if await target.count() != 1:
             raise UnknownPageStateError("Piccoma active canvas is missing or duplicated")
+        target_baseline = await snapshot_native_trace(page, target)
+        target_baseline_signature = target_generation_signature(target_baseline)
+        if target_baseline_signature is None:
+            raise UnknownPageStateError("Piccoma active canvas generation cannot be monitored")
         guide_style = await self._hide_reading_guide(page, before)
         try:
-            result = await capture_locator(target)
-            after = await self._reader_snapshot(page)
-            self._validate_reader_mode(after)
-            after_row = self._page_row(after, current)
-            if (
-                parse_piccoma_viewer_url(page.url) != self._require_identity()
-                or after.get("activeIds") != [current]
-                or after_row.get("canvasCount") != 1
-                or after_row.get("loadedCount") != 1
-                or after_row.get("canvas", {}).get("loaded") is not True
-                or after_row.get("canvas", {}).get("width") != expected_size[0]
-                or after_row.get("canvas", {}).get("height") != expected_size[1]
-                or after_row.get("canvas", {}).get("rect") != row.get("canvas", {}).get("rect")
-                or after_row.get("canvas", {}).get("renderability")
-                != row.get("canvas", {}).get("renderability")
-                or after.get("frameRect") != before.get("frameRect")
-            ):
-                raise UnknownPageStateError("Piccoma page changed during capture")
-            self._validate_canvas_geometry(after, after_row)
-            if not self._canvas_renderability_is_valid(after_row):
-                raise UnknownPageStateError(
-                    "Piccoma active canvas stopped being visibly rendered during capture"
+            native_result = None
+            try:
+                native_result = await capture_native_tile_replay(
+                    page,
+                    canvas=target,
+                    expected_width=expected_size[0],
+                    expected_height=expected_size[1],
+                    responses_for_url=self._responses_for_native_url,
+                    response_count_for_url=self._native_response_count_for_url,
+                    response_registry_overflowed=self._native_response_overflow,
+                    bytes_already_read=self._native_bytes_read,
+                    max_episode_bytes=MAX_NATIVE_EPISODE_BYTES,
                 )
-            if (
-                result.mime_type != "image/png"
-                or result.file_extension != ".png"
-                or _png_dimensions(result.data) != expected_size
-                or (result.width, result.height) != expected_size
-            ):
-                raise UnknownPageStateError("Piccoma rendered PNG dimensions are unsupported")
-            self._capture_method = "core_canvas_or_locator_png"
+            except NativeCaptureUnavailable as exc:
+                self._native_bytes_read += exc.bytes_read
+                if exc.unsafe_live_change:
+                    raise UnknownPageStateError(
+                        "Piccoma active canvas changed during source-native capture"
+                    ) from exc
+                self._capture_fallback_reason = exc.reason
+            if native_result is not None:
+                result = native_result.result
+                self._native_bytes_read += native_result.source_bytes
+                self._capture_method = "native_tile_replay_png"
+                self._capture_source_native = True
+                self._capture_source_mime = native_result.source_mime
+                self._capture_backdrop = native_result.backdrop
+            else:
+                result = await capture_locator(target)
+                self._capture_method = "core_canvas_or_locator_png"
+                self._capture_source_native = False
+                self._capture_source_mime = None
+                self._capture_backdrop = None
+            after = await self._reader_snapshot(page)
+            self._validate_capture_post_state(
+                page, before, after, current, row, expected_size, result
+            )
+            await self._validate_target_generation_unchanged(
+                page, target, target_baseline_signature
+            )
+            if native_result is not None:
+                try:
+                    fallback_reason = await validate_native_capture_still_current(
+                        page, target, native_result
+                    )
+                except NativeCaptureUnavailable as exc:
+                    self._native_bytes_read += exc.bytes_read
+                    if exc.unsafe_live_change:
+                        raise UnknownPageStateError(
+                            "Piccoma active canvas changed during source-native capture"
+                        ) from exc
+                    fallback_reason = exc.reason
+                if self._native_response_count_for_url(native_result.source_url) != 1:
+                    fallback_reason = "source_response_became_ambiguous"
+                if fallback_reason is not None:
+                    self._capture_fallback_reason = fallback_reason
+                    self._capture_method = "core_canvas_or_locator_png"
+                    self._capture_source_native = False
+                    self._capture_source_mime = None
+                    self._capture_backdrop = None
+                    result = await capture_locator(target)
+                    after = await self._reader_snapshot(page)
+                    self._validate_capture_post_state(
+                        page, before, after, current, row, expected_size, result
+                    )
+                    await self._validate_target_generation_unchanged(
+                        page, target, target_baseline_signature
+                    )
+                else:
+                    self._capture_fallback_reason = None
             return (result,)
         finally:
-            await self._restore_reading_guide(page, guide_style)
+            try:
+                await self._restore_reading_guide(page, guide_style)
+            finally:
+                await retire_native_trace(page, target)
+
+    async def _validate_target_generation_unchanged(
+        self, page: Page, target: Locator, baseline: tuple[Any, ...]
+    ) -> None:
+        current = await snapshot_native_trace(page, target)
+        if target_generation_signature(current) != baseline:
+            raise UnknownPageStateError(
+                "Piccoma active canvas changed during capture"
+            )
+
+    def _validate_capture_post_state(
+        self,
+        page: Page,
+        before: dict[str, Any],
+        after: dict[str, Any],
+        current: str,
+        before_row: dict[str, Any],
+        expected_size: tuple[int, int],
+        result: CaptureResult,
+    ) -> None:
+        self._validate_reader_mode(after)
+        after_row = self._page_row(after, current)
+        if (
+            parse_piccoma_viewer_url(page.url) != self._require_identity()
+            or after.get("activeIds") != [current]
+            or after_row.get("canvasCount") != 1
+            or after_row.get("loadedCount") != 1
+            or after_row.get("canvas", {}).get("loaded") is not True
+            or after_row.get("canvas", {}).get("width") != expected_size[0]
+            or after_row.get("canvas", {}).get("height") != expected_size[1]
+            or after_row.get("canvas", {}).get("rect")
+            != before_row.get("canvas", {}).get("rect")
+            or after_row.get("canvas", {}).get("renderability")
+            != before_row.get("canvas", {}).get("renderability")
+            or after.get("frameRect") != before.get("frameRect")
+        ):
+            raise UnknownPageStateError("Piccoma page changed during capture")
+        self._validate_canvas_geometry(after, after_row)
+        if not self._canvas_renderability_is_valid(after_row):
+            raise UnknownPageStateError(
+                "Piccoma active canvas stopped being visibly rendered during capture"
+            )
+        if (
+            result.mime_type != "image/png"
+            or result.file_extension != ".png"
+            or _png_dimensions(result.data) != expected_size
+            or (result.width, result.height) != expected_size
+        ):
+            raise UnknownPageStateError("Piccoma rendered PNG dimensions are unsupported")
 
     async def _hide_reading_guide(
         self, page: Page, snapshot: dict[str, Any]
@@ -906,9 +1105,12 @@ class PiccomaAdapter(SiteAdapter):
         return {
             "piccoma_capture": {
                 "method": self._capture_method,
-                "source_native": False,
+                "source_native": self._capture_source_native,
+                "source_mime": self._capture_source_mime,
+                "source_backdrop": self._capture_backdrop,
+                "fallback_reason": self._capture_fallback_reason,
                 "page_count": self._page_count,
-            "access_strategy": self._access_strategy,
+                "access_strategy": self._access_strategy,
                 "viewport": [VIEWPORT_WIDTH, VIEWPORT_HEIGHT],
             }
         }

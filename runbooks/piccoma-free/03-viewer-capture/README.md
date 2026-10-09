@@ -1,6 +1,6 @@
 # 03 — Free Viewer / Capture
 
-Status: PASS, BLOCKING 0 (174 passed, 0 skipped). Live viewer/capture evidence: [PROGRESS](../PROGRESS.md).
+Status: Phase 03 PASS, BLOCKING 0 (174 passed, 0 skipped). Phase 06-B source-derived PNG implementation, final independent review (PASS, BLOCKING 0), and independent Tester E2E are complete. The full suite passed on the checkpoint immediately before the final NamedNodeMap compatibility fix; that fix has its own passing focused browser test and Reviewer pass. Live evidence and current capture scope: [PROGRESS](../PROGRESS.md).
 Explorer researches unknown variants; Implementer writes; Reviewer gates;
 Tester independently checks tricky captures when needed.
 
@@ -43,3 +43,26 @@ page against visible content, image count, reading order and terminal state.
 Gate: no silent missing/duplicate page, false END, non-free access or
 unsound original-byte attribution. Reviewer zero BLOCKING. If no verified
 free episode is available, mark live verification blocked, not passed.
+
+## Phase 06-B implementation evidence (2026-10-09)
+
+The observed horizontal reader's complete one-image/408-tile JPEG draw graph is
+now replayed in a detached canvas with exact fractional coordinates and
+recorded supported context state. The output is a source-derived PNG after a
+separately proven solid-white alpha composite; the tiled JPEG bytes themselves
+are not saved as a page. Live canvas readback remains tainted. Native replay
+requires exact unique response attribution, stable image-load and target
+generations, bounded complete traces, supported operations, verified backdrop
+(`background-clip:border-box`, `clip:auto`, no borders/radius), and successful
+materialization. Per-target dimension observers also catch same-value attribute
+resets while the canvas is detached; they are limited to current/candidate
+canvases and disconnected on retirement. If pre-capture proof is unavailable, Core
+`capture_locator` is used only while the active canvas generation stays
+unchanged. A target mutation during either path fails closed. Unsupported
+layouts, draw graphs, backdrop structures, and resources remain unsupported.
+
+For products 28600/1910027 and 28606/2001009, production capture was checked at
+p1/middle/last (p1/p12/p24 and p1/p8/p15 respectively). Each of the six native
+replay PNGs was RGB pixel-identical to the unchanged clean Locator screenshot;
+both traversals reached explicit END without leaving the requested viewer URL.
+Final independent Reviewer gate: PASS, BLOCKING 0. Independent Tester final live E2E: PASS. Across the two exact-free seeds, the standard route verified all 39 pages, ZIP/Manifest membership, CRC and image hashes, Catalog completion/artifacts, explicit END, and no quota/resource mutation. The pre-final-compatibility full suite reported 1881 passed, 3558 warnings, and 0 skipped; the final NamedNodeMap compatibility regression passed separately (1 passed, 48 deselected, 0 skipped).

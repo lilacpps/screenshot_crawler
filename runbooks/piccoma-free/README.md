@@ -1,6 +1,6 @@
 # Piccoma Free-Only Site Adapter — Autonomous Runbook
 
-Status: COMPLETE. All five phases accepted; see [PROGRESS](PROGRESS.md) for evidence and limits.
+Status: COMPLETE. All five required phases and the Phase 06-B source-derived capture extension passed their independent review/Tester gates; see [PROGRESS](PROGRESS.md) for evidence and limits.
 Execution branch: feat/piccoma-adapter.
 The execution contract is defined below; verified observations, artifact checks and remaining limits are recorded in [PROGRESS](PROGRESS.md).
 
@@ -81,10 +81,13 @@ episode IDs or numbering relative to a bounded range. Honor the existing
 global position and archive naming contracts. Never hard-code live episode
 counts, which change.
 
-Live listing, viewer navigation, terminal state, and the selected two-product
-Discovery-to-ZIP path were verified through shared Crawler Chrome/CDP. Exact
-source-image response-to-canvas provenance remains UNVERIFIED; capture is a
-rendered PNG. See PROGRESS.md for observed counts, outputs, and scope limits.
+Live listing, viewer navigation, terminal state, and the two-product
+Discovery-to-ZIP path were verified through shared Crawler Chrome/CDP. For the
+observed horizontal reader, a strict exact-response-to-image-to-canvas draw
+graph was proven and replayed into a source-derived PNG using the browser's
+normal JPEG decoder, followed by a verified solid-white composite. Raw tiled
+JPEG bytes are not saved as page output. Other viewer/draw/backdrop variants
+remain unsupported. See PROGRESS.md for observed counts, outputs, and limits.
 
 ## Required stages
 
