@@ -43,3 +43,8 @@ Move them later in a dedicated documentation-only change after:
 3. the move does not get mixed with production implementation.
 
 This avoids noisy rename diffs and broken instructions during an in-progress investigation.
+
+## Active workstreams
+
+- [Piccoma free-only Site Adapter](piccoma-free/README.md) — five-role autonomous
+  discovery/capture/direct-batch/E2E implementation contract (planned).
