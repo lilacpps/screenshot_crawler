@@ -384,37 +384,56 @@ clear-bounded completed renderer mapping containing the visible renderer draw,
 its intermediate `HTMLCanvasElement`, a unique `ImageBitmap` tile permutation,
 and a matching purchased raw JPEG. Production does not use a global operation
 list as mapping authority: it retains a monotonic operation index, bounded
-active segments, and bounded completed mappings. The supported shadow contract
-is baseline sequential SOF0, three-component 4:4:4 JPEG, equal source/canvas
-dimensions, uniform strict-MCU tiles, and a complete bijection. The helper
-moves quantized DCT blocks with `jpeglib.read_dct()` / `write_dct()`, reads the
-coefficients back, and verifies zero mismatches plus unchanged quantization
-tables. Production reconstruction also validates the source and output DCT
-layout: three components, 4:4:4 sampling, one scan, and non-progressive
-baseline structure. The completed mapping records are selected by the exact
-renderer `mappingId`; retained-trace counts are returned as a small numeric
-summary rather than transferring the full trace.
+active segments, and bounded completed mappings. The legacy equal-size path
+requires baseline sequential SOF0, three-component 4:4:4 JPEG, equal
+source/canvas dimensions, a complete MCU bijection, and exact renderer/source
+identity. Equal-size uniform strict-MCU tiles remain that legacy path. The
+direct partial-MCU path uses explicit coded source frame `S` and visible frame
+`V`; `S` may exceed `V` by at most seven
+ pixels on the final right or bottom MCU only. It requires integer 8-pixel
+ aligned rectangles, complete non-overlapping 8x8 source/destination coverage,
+ and no hidden edge gaps or duplicates. `S` is retained for JPEG/coefficients;
+ `V` is retained for the native snapshot and output header. The helper moves
+ quantized DCT blocks with `jpeglib.read_dct()` / `write_dct()`, reads the
+ coefficients back, and verifies zero mismatches plus unchanged quantization
+ tables and component table-selector IDs. Production reconstruction also
+ validates the source and output DCT layout: three components, 4:4:4 sampling,
+ one scan, and non-progressive baseline structure. The completed mapping records
+ are selected by the exact renderer `mappingId`; retained-trace counts are
+ returned as a small numeric summary rather than transferring the full trace.
 The selected records use a versioned compact BookWalker-local transport
 representation and are decoded back to the unchanged rich mapping contract
 before the Python proof validator runs.
 
-For purchased pages, a strictly proven full-frame one-hop canvas scale may
-expose a higher-resolution source-native canvas. The supported shape is only:
+For purchased pages, a strictly proven bounded one-hop canvas scale may
+expose a higher-resolution source-native canvas. The supported shapes are:
 
 ```text
-proven tile canvas A
+proven tile canvas A (coded S / visible V)
     -> exactly one full-frame HTMLCanvasElement draw
 canvas B
     -> selected renderer
 ```
 
-The Python resolver connects that hop only by exact mapping ID, operation
-index, canvas identity, dimensions, geometry, safe draw state, and strict
-operation ordering. It does not support recursive canvas graphs, two or more
-hops, nearest mappings, dimension guessing, operation-proximity guessing, or
-fuzzy provenance. Reconstruction returns the source-native JPEG (for example
-960x1280), not a JPEG representation of the scaled 480x640 rendered pixels;
-the DCT mapping dimensions remain the proven source dimensions.
+The cropped one-hop extension requires an observed native `width`/`height` setter
+reset boundary with a monotonic segment generation. Same-value setters are
+resets; failed setters, unknown canvas attribute mutations, target changes,
+or an unobserved dimension change invalidate the segment. The clear-time
+canvas dimensions, tile draw target dimensions, B physical dimensions, and
+selected fractional source rectangle are retained as separate records. Only
+origin-zero full-frame A-to-B draws and the recorded right/bottom subpixel
+renderer crop are supported. Arbitrary graphs, third hops, rotations, left/top
+crops, dimension guessing, operation-proximity guessing, and fuzzy provenance
+remain unsupported.
+
+The resolver connects the hop only by exact mapping ID, operation index, canvas
+identity, dimensions, geometry, safe draw state, reset generation, and strict
+operation ordering. Reconstruction returns the source-native JPEG, not a JPEG
+representation of the scaled rendered pixels. The cropped one-hop production path requires intrinsic
+browser equality for the reconstructed A snapshot, reproduced B snapshot, and
+selected renderer destination ROI even when `BOOKWALKER_FINAL_PIXEL_VERIFY` is
+off; any unavailable, mismatched, or exceptional comparison falls back for the
+whole spread.
 Original JPEG matching remains first priority; its retry wait is now bounded
 and event-driven, and is used only while eligible response work is pending.
 
@@ -426,17 +445,22 @@ exact coefficients and quantization tables, output structural parity, and
 the reconstructed result matching the proven mapping source dimensions. Direct
 mapping additionally keeps the historical native-dimension contract; the
 one-hop source-native path intentionally permits reconstructed dimensions to
-differ from the displayed native PNG. The production authority is the verified
-source JPEG, complete MCU-aligned mapping, coefficient-exact reconstruction,
-equal quantization tables, and supported source/output JPEG structure. Browser-decoded
-full-pixel equality is not a default production gate after P4-5. It remains an
-optional BookWalker-local diagnostic through `BOOKWALKER_FINAL_PIXEL_VERIFY`;
-when enabled, it is an additional gate and mismatch falls back to native PNG.
-Direct mappings use intrinsic comparison. One-hop scaled mappings use the
-proven source rectangle and destination size, including observed image
-smoothing state, to compare the source-native JPEG after scaling to the native
-PNG; this remains diagnostic evidence rather than production provenance
-authority.
+ differ from the displayed native PNG. The direct partial-MCU path instead
+ requires coded/visible dimension proof and always performs intrinsic browser
+ comparison against the selected native snapshot, even when
+ `BOOKWALKER_FINAL_PIXEL_VERIFY` is off. Comparison unavailability, dimension
+ mismatch, exception, or any differing pixel falls back to native PNG. The
+ production authority is the verified source JPEG, complete MCU-aligned mapping,
+ coefficient-exact reconstruction, equal quantization tables and selector IDs,
+ and supported source/output JPEG structure. Browser full-pixel equality remains
+ optional for the older equal-size and one-hop paths through
+ `BOOKWALKER_FINAL_PIXEL_VERIFY`.
+Direct mappings use intrinsic comparison. The bounded cropped one-hop path
+replays the proven A-to-B source rectangle and destination, then the selected
+B-to-renderer source rectangle and destination using the observed image
+smoothing state. Those eager draw-time snapshots are production provenance
+gates; PNG encoding is deferred until after selection and never runs inside a
+draw wrapper.
 The output switch is BookWalker-local:
 `BOOKWALKER_LOSSLESS_JPEG_OUTPUT` is BookWalker-local and is enabled by
 default in Phase P3. Explicit `1`, `true`, `yes`, and `on` values also enable
@@ -452,16 +476,18 @@ signature matches reach full-resolution comparison. Zero signature matches
 leave the shadow unavailable, one exact full-resolution match is accepted, and
 two or more exact matches remain ambiguous.
 
-The final-pixel diagnostic defaults off. With it off, the reconstructed JPEG
-bytes from `reconstruct_lossless_jpeg()` are returned unchanged as `.jpg` after
-the structural and coefficient proof gates pass; `native_pixel_exact` remains
-unchecked (`null`) and the final comparison timing is zero. With
-`BOOKWALKER_FINAL_PIXEL_VERIFY=1` (also `true`, `yes`, or `on`), the browser
-full-resolution comparison is performed and exactness is required. An invalid
-explicit value fails fast. Spread output is all-or-none: one failed part makes
-every part native PNG. Unsupported JPEG layouts, ambiguous mappings or
-candidates, segment overflow, coefficient mismatch, dimension mismatch, and an
-enabled browser comparison failure are all non-fatal native PNG fallbacks.
+The final-pixel diagnostic defaults off for the older equal-size and one-hop
+paths. With it off, the reconstructed JPEG bytes from
+`reconstruct_lossless_jpeg()` are returned unchanged as `.jpg` after the
+structural and coefficient proof gates pass. The partial-MCU direct path always
+performs its intrinsic comparison and requires available, dimension-equal,
+all-pixel exact output. With `BOOKWALKER_FINAL_PIXEL_VERIFY=1` (also `true`,
+`yes`, or `on`), the older paths also perform the browser full-resolution
+comparison and require exactness. An invalid explicit value fails fast. Spread
+output is all-or-none: one failed part makes every part native PNG. Unsupported
+JPEG layouts, ambiguous mappings or candidates, segment overflow, coefficient
+mismatch, dimension mismatch, and any required browser comparison failure are
+all non-fatal native PNG fallbacks.
 Active segments, completed mappings, and retained browser source references are
 bounded and cleared after the capture window.
 `BOOKWALKER_CAPTURE_MODE=canvas` bypasses original/native/lossless capture and

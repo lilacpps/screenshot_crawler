@@ -37,8 +37,25 @@ all-parts-or-PNG fallback rules. The purchased viewer's intermediate
 composition checks, and its mutable source canvas uses eager per-draw crop capture.
 An `HTMLCanvasElement` without an eager crop is rejected before deferred materialization.
 When a raw tile cannot be uniquely matched, the verified source-native PNG is returned as-is;
-the adapter does not re-encode it as JPEG. Unavailable spread-native capture still falls back
-to the complete Core PNG path.
+the adapter does not re-encode it as JPEG. A direct completed tile mapping may instead
+produce a lossless reconstructed JPEG when the coded source frame `S` and visible
+intermediate frame `V` are proven separately. The supported cropped shape is limited
+to a right or bottom final-MCU crop of fewer than eight pixels, integer 8-pixel-aligned
+geometry, complete source/destination MCU bijection, SOF0 4:4:4 structure, exact
+coefficient/qtable/component-selector readback, and one unique full-pixel JPEG match.
+The cropped one-hop extension observes native canvas dimension setters as reset boundaries and
+retains the clear target, tile draw target, reset generation, and selected
+renderer geometry separately. It supports only one origin-zero full-frame
+A-to-B canvas draw followed by the recorded right/bottom renderer crop. It
+replays the reconstructed A through B and independently compares the eager A
+snapshot, eager B snapshot, and selected renderer destination ROI in-browser.
+The final replay keeps the renderer's actual backing-canvas dimensions and
+destination offset. Every comparison must be available, dimension-equal, and
+zero-difference, even when
+`BOOKWALKER_FINAL_PIXEL_VERIFY` is disabled; any unavailable, mismatched, or
+exceptional comparison returns native PNG for the whole spread. The current source-native priority is verified original JPEG, verified
+lossless reconstructed JPEG, source/native PNG, then rendered-canvas PNG fallback.
+Unavailable spread-native capture still falls back to the complete Core PNG path.
 
 ## Spread and order
 

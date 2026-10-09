@@ -47,6 +47,35 @@ def _mapping_object(mapping: list[dict[str, int]]) -> dict[str, object]:
     }
 
 
+def _cropped_mapping_object(
+    mapping: list[dict[str, int]],
+    *,
+    coded: tuple[int, int] = (32, 40),
+    visible: tuple[int, int] = (32, 37),
+) -> dict[str, object]:
+    return {
+        "source_dimensions": {"width": coded[0], "height": coded[1]},
+        "target_dimensions": {"width": visible[0], "height": visible[1]},
+        "mapping_sha256": mapping_sha256(mapping),
+        "mapping": mapping,
+    }
+
+
+def _cropped_mapping() -> list[dict[str, int]]:
+    return [
+        {
+            "source_x": x,
+            "source_y": y,
+            "destination_x": x,
+            "destination_y": y,
+            "width": 16,
+            "height": 16 if y < 32 else 8,
+        }
+        for y in (0, 16, 32)
+        for x in (0, 16)
+    ]
+
+
 def test_identity_reconstruction_is_coefficient_exact() -> None:
     data = _jpeg()
     result = reconstruct_lossless_jpeg(data, _mapping_object(_mapping()))
@@ -90,6 +119,66 @@ def test_two_tile_swap_reconstructs_without_rgb_requantization() -> None:
     assert result.data != _jpeg()
 
 
+def test_variable_mcu_tiles_and_bottom_crop_reconstruct_without_rgb_reencode() -> None:
+    mapping = _cropped_mapping()
+    result = reconstruct_lossless_jpeg(
+        _jpeg(width=32, height=40),
+        _cropped_mapping_object(mapping),
+    )
+
+    assert result.success
+    assert (result.width, result.height) == (32, 37)
+    assert result.coefficient_validation["mismatched_coefficients"] == 0
+    assert result.coefficient_validation["quantization_tables_equal"] is True
+    assert result.coefficient_validation[
+        "component_quantization_selectors_equal"
+    ] is True
+
+    decoded = Image.open(io.BytesIO(result.data)).convert("RGB")
+    source = Image.open(io.BytesIO(_jpeg(width=32, height=40))).convert("RGB")
+    assert decoded.size == (32, 37)
+    assert decoded.tobytes() == source.crop((0, 0, 32, 37)).tobytes()
+
+
+@pytest.mark.parametrize(
+    "visible",
+    [(32, 32), (24, 37), (32, 31)],
+    ids=["crop-too-large", "right-crop", "offset-not-final-mcu"],
+)
+def test_crop_contract_rejects_unsupported_or_misaligned_visible_frame(
+    visible: tuple[int, int],
+) -> None:
+    mapping = _cropped_mapping()
+    if visible == (24, 37):
+        mapping[-1]["destination_x"] = 8
+    result = reconstruct_lossless_jpeg(
+        _jpeg(width=32, height=40),
+        _cropped_mapping_object(mapping, visible=visible),
+    )
+
+    assert not result.available
+    assert result.data is None
+
+
+def test_fractional_mapping_geometry_fails_closed() -> None:
+    mapping = _mapping()
+    mapping[0]["width"] = 16.5  # type: ignore[assignment]
+    result = reconstruct_lossless_jpeg(_jpeg(), _mapping_object(mapping))
+
+    assert not result.available
+    assert result.reason in {"mapping is malformed", "mapping is unavailable"}
+
+
+def test_fractional_mapping_dimensions_fail_closed_without_rounding() -> None:
+    mapping = _mapping_object(_mapping())
+    mapping["source_dimensions"] = (32.5, 32)
+
+    result = reconstruct_lossless_jpeg(_jpeg(), mapping)
+
+    assert not result.available
+    assert result.reason == "mapping is unavailable"
+
+
 @pytest.mark.parametrize(
     "data,mapping",
     [
@@ -113,6 +202,19 @@ def test_duplicate_or_gap_mapping_returns_no_artifact() -> None:
 
     assert not result.available
     assert result.data is None
+
+
+def test_oversized_tile_is_rejected_before_mcu_expansion() -> None:
+    mapping = _cropped_mapping()
+    mapping[0]["width"] = 4096
+
+    result = reconstruct_lossless_jpeg(
+        _jpeg(width=32, height=40),
+        _cropped_mapping_object(mapping),
+    )
+
+    assert not result.available
+    assert result.reason == "mapping geometry is out of bounds"
 
 
 class _FakeDctLayout:

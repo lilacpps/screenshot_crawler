@@ -10,6 +10,7 @@ from playwright.async_api import Browser, Page
 import screenshot_crawler.site_adapters.bookwalker.adapter as bookwalker_adapter_module
 import screenshot_crawler.site_adapters.bookwalker.login as bookwalker_login_module
 from screenshot_crawler.site_adapters.bookwalker.adapter import (
+    _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
     _PIXEL_EXACT_COMPARISON_SCRIPT,
     BookWalkerAdapter,
     BookWalkerStrictEntryError,
@@ -170,6 +171,265 @@ async def test_reconstructed_jpeg_matches_expected_native_pixels_in_browser(
         "differing_pixel_count": 0,
         "max_channel_difference": 0,
     }
+
+
+async def test_nonuniform_right_bottom_crop_matches_draw_time_native_snapshot(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise coded S=40x40 to visible V=37x36 in a real browser canvas."""
+
+    monkeypatch.setenv("BOOKWALKER_FINAL_PIXEL_VERIFY", "0")
+    source = Image.new("RGB", (40, 40))
+    for y in range(40):
+        for x in range(40):
+            source.putpixel(
+                (x, y),
+                ((x * 13 + y * 5) % 256, (x * 7 + y * 17) % 256, (x * 19 + y * 3) % 256),
+            )
+    jpeg_buffer = io.BytesIO()
+    source.save(jpeg_buffer, format="JPEG", quality=90, subsampling=0, progressive=False)
+    jpeg_bytes = jpeg_buffer.getvalue()
+    jpeg_data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode("ascii")
+
+    columns = ((0, 16), (16, 16), (32, 8))
+    rows = ((0, 16), (16, 16), (32, 8))
+    source_cells = [
+        (source_x, source_y, width, height)
+        for source_y, height in rows
+        for source_x, width in columns
+    ]
+    destination_cells = [
+        (16, 0, 16, 16), (0, 0, 16, 16), (32, 0, 8, 16),
+        (0, 16, 16, 16), (16, 16, 16, 16), (32, 16, 8, 16),
+        (0, 32, 16, 8), (16, 32, 16, 8), (32, 32, 8, 8),
+    ]
+    mapping = [
+        {
+            "source_x": source_x,
+            "source_y": source_y,
+            "destination_x": destination_x,
+            "destination_y": destination_y,
+            "width": width,
+            "height": height,
+        }
+        for (source_x, source_y, width, height),
+        (destination_x, destination_y, _destination_width, _destination_height)
+        in zip(source_cells, destination_cells, strict=True)
+    ]
+    assert any(
+        item["source_x"] != item["destination_x"]
+        or item["source_y"] != item["destination_y"]
+        for item in mapping
+    )
+    result = reconstruct_lossless_jpeg(
+        jpeg_bytes,
+        {
+            "source_dimensions": {"width": 40, "height": 40},
+            "target_dimensions": {"width": 37, "height": 36},
+            "tile_dimensions": {"width": 16, "height": 16},
+            "mapping_sha256": mapping_sha256(mapping),
+            "mapping": mapping,
+        },
+    )
+    assert result.success
+    assert (result.width, result.height) == (37, 36)
+    assert result.coefficient_validation["mismatched_coefficients"] == 0
+    assert result.coefficient_validation["quantization_tables_equal"] is True
+    assert result.coefficient_validation[
+        "component_quantization_selectors_equal"
+    ] is True
+
+    await browser_page.goto("data:text/html,<html></html>")
+    native_data_url = await browser_page.evaluate(
+        """
+        async ({jpeg, mapping}) => {
+          const image = new Image();
+          image.src = jpeg;
+          await image.decode();
+          const source = document.createElement('canvas');
+          source.width = 40;
+          source.height = 40;
+          const sourceContext = source.getContext('2d');
+          sourceContext.drawImage(image, 0, 0);
+          const target = document.createElement('canvas');
+          target.width = 37;
+          target.height = 36;
+          const targetContext = target.getContext('2d');
+          for (const item of mapping) {
+            targetContext.drawImage(
+              source,
+              item.source_x, item.source_y, item.width, item.height,
+              item.destination_x, item.destination_y, item.width, item.height,
+            );
+          }
+          return target.toDataURL('image/png');
+        }
+        """,
+        {"jpeg": jpeg_data_url, "mapping": mapping},
+    )
+    native_bytes = base64.b64decode(native_data_url.split(",", 1)[1])
+    comparison = await BookWalkerAdapter()._browser_pixel_exact(
+        browser_page, result.data, native_bytes
+    )
+    assert comparison == {
+        "available": True,
+        "dimensions_equal": True,
+        "exact": True,
+        "differing_pixel_count": 0,
+        "max_channel_difference": 0,
+    }
+
+
+async def test_cropped_one_hop_replay_matches_intermediate_and_final_roi(
+    browser_page: Page,
+) -> None:
+    source = Image.new("RGB", (40, 40))
+    for y in range(40):
+        for x in range(40):
+            source.putpixel((x, y), ((x * 9 + y * 3) % 256, (x * 5 + y * 11) % 256, (x * 17 + y) % 256))
+    jpeg_buffer = io.BytesIO()
+    source.save(jpeg_buffer, format="JPEG", quality=90, subsampling=0, progressive=False)
+    jpeg_bytes = jpeg_buffer.getvalue()
+    mapping = [
+        {"source_x": sx, "source_y": sy, "destination_x": sx, "destination_y": sy,
+         "width": sw, "height": sh}
+        for sy, sh in ((0, 16), (16, 16), (32, 8))
+        for sx, sw in ((0, 16), (16, 16), (32, 8))
+    ]
+    # Use the production DCT path to obtain the visible A frame (37x36).
+    result = reconstruct_lossless_jpeg(jpeg_bytes, {
+        "source_dimensions": {"width": 40, "height": 40},
+        "target_dimensions": {"width": 37, "height": 36},
+        "tile_dimensions": {"width": 16, "height": 16},
+        "mapping_sha256": mapping_sha256(mapping), "mapping": mapping,
+    })
+    assert result.success and result.data is not None
+    reconstructed = "data:image/jpeg;base64," + base64.b64encode(result.data).decode("ascii")
+    await browser_page.goto("data:text/html,<html></html>")
+    artifacts = await browser_page.evaluate(
+        """
+        async jpeg => {
+          const image = new Image(); image.src = jpeg; await image.decode();
+          const a = document.createElement('canvas'); a.width = 37; a.height = 36;
+          const ac = a.getContext('2d'); ac.drawImage(image, 0, 0);
+          const b = document.createElement('canvas'); b.width = 18; b.height = 18;
+          const bc = b.getContext('2d'); bc.imageSmoothingEnabled = true; bc.imageSmoothingQuality = 'high';
+          bc.drawImage(a, 0, 0, 37, 36, 0, 0, 18, 18);
+          const final = document.createElement('canvas'); final.width = 14; final.height = 12;
+          const fc = final.getContext('2d'); fc.imageSmoothingEnabled = true; fc.imageSmoothingQuality = 'high';
+          fc.drawImage(b, 0, 0, 17.5, 18, 2, 1, 10, 10);
+          const roi = document.createElement('canvas'); roi.width = 10; roi.height = 10;
+          roi.getContext('2d').drawImage(final, 2, 1, 10, 10, 0, 0, 10, 10);
+          return {intermediate: b.toDataURL('image/png'), finalTarget: roi.toDataURL('image/png')};
+        }
+        """,
+        reconstructed,
+    )
+    comparison = await browser_page.evaluate(
+        _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+        {
+            "reconstructed": reconstructed,
+            "sourceSnapshot": reconstructed,
+            "intermediate": artifacts["intermediate"],
+            "finalTarget": artifacts["finalTarget"],
+            "copySourceRect": {"x": 0, "y": 0, "width": 37, "height": 36},
+            "copyDestination": {"x": 0, "y": 0, "width": 18, "height": 18},
+            "finalSourceRect": {"x": 0, "y": 0, "width": 17.5, "height": 18},
+            "finalDestination": {"x": 2, "y": 1, "width": 10, "height": 10},
+            "finalCanvasDimensions": {"width": 14, "height": 12},
+            "intermediateDimensions": {"width": 18, "height": 18},
+            "copySmoothingEnabled": True,
+            "copySmoothingQuality": "high",
+            "finalSmoothingEnabled": True,
+            "finalSmoothingQuality": "high",
+        },
+    )
+    assert comparison["available"] is True
+    assert comparison["exact"] is True
+    assert comparison["intermediate"]["differing_pixel_count"] == 0
+    assert comparison["final"]["differing_pixel_count"] == 0
+
+
+async def test_cropped_one_hop_pixel_gate_rejects_each_bad_stage(
+    browser_page: Page,
+) -> None:
+    def data_url(rgb: tuple[int, int, int]) -> str:
+        image = Image.new("RGB", (1, 1), rgb)
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    await browser_page.goto("data:text/html,<html></html>")
+    common = {
+        "reconstructed": data_url((20, 40, 60)),
+        "sourceSnapshot": data_url((20, 40, 60)),
+        "copySourceRect": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "copyDestination": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "finalSourceRect": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "finalDestination": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "finalCanvasDimensions": {"width": 1, "height": 1},
+        "intermediateDimensions": {"width": 1, "height": 1},
+        "copySmoothingEnabled": False,
+        "copySmoothingQuality": "low",
+        "finalSmoothingEnabled": False,
+        "finalSmoothingQuality": "low",
+    }
+
+    async def compare(intermediate: str, final_target: str) -> dict[str, object]:
+        return await browser_page.evaluate(
+            _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+            {**common, "intermediate": intermediate, "finalTarget": final_target},
+        )
+
+    exact = await compare(data_url((20, 40, 60)), data_url((20, 40, 60)))
+    assert exact["available"] is True
+    assert exact["dimensions_equal"] is True
+    assert exact["exact"] is True
+
+    intermediate_mismatch = await compare(data_url((21, 40, 60)), data_url((20, 40, 60)))
+    assert intermediate_mismatch["available"] is True
+    assert intermediate_mismatch["dimensions_equal"] is True
+    assert intermediate_mismatch["exact"] is False
+    assert intermediate_mismatch["final"]["available"] is False
+
+    final_mismatch = await compare(data_url((20, 40, 60)), data_url((20, 41, 60)))
+    assert final_mismatch["available"] is True
+    assert final_mismatch["dimensions_equal"] is True
+    assert final_mismatch["exact"] is False
+    assert final_mismatch["final"]["exact"] is False
+
+    source_mismatch = await browser_page.evaluate(
+        _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+        {
+            **common,
+            "reconstructed": data_url((21, 40, 60)),
+            "sourceSnapshot": data_url((20, 40, 60)),
+            "intermediate": data_url((21, 40, 60)),
+            "finalTarget": data_url((21, 40, 60)),
+        },
+    )
+    assert source_mismatch["available"] is True
+    assert source_mismatch["exact"] is False
+    assert source_mismatch["source"]["exact"] is False
+    assert source_mismatch["intermediate"]["available"] is False
+
+    unavailable = await compare(data_url((20, 40, 60)), "")
+    assert unavailable["available"] is False
+    assert unavailable["exact"] is False
+
+    missing_canvas_dimensions = dict(common)
+    missing_canvas_dimensions.pop("finalCanvasDimensions")
+    missing_canvas_dimensions.update({
+        "intermediate": data_url((20, 40, 60)),
+        "finalTarget": data_url((20, 40, 60)),
+    })
+    missing_dimensions_result = await browser_page.evaluate(
+        _CROPPED_ONE_HOP_PIXEL_EXACT_COMPARISON_SCRIPT,
+        missing_canvas_dimensions,
+    )
+    assert missing_dimensions_result["available"] is False
+    assert missing_dimensions_result["exact"] is False
 
 
 async def test_bookwalker_strict_quota_clicks_only_maruyomi(browser_page: Page) -> None:
