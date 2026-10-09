@@ -411,6 +411,7 @@ def _registry() -> AdapterRegistry:
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
+    from screenshot_crawler.site_adapters.piccoma import PiccomaAdapter
     from screenshot_crawler.site_adapters.zeblack import ZeblackAdapter
 
     registry.register("bookwalker", BookWalkerAdapter)
@@ -419,6 +420,7 @@ def _registry() -> AdapterRegistry:
     registry.register("mangaone", MangaOneAdapter)
     registry.register("zeblack", ZeblackAdapter)
     registry.register("comicdays", ComicDaysAdapter)
+    registry.register("piccoma", PiccomaAdapter)
     return registry
 
 
@@ -431,6 +433,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
+    from screenshot_crawler.site_adapters.piccoma import PiccomaAdapter
     from screenshot_crawler.site_adapters.zeblack import ZeblackAdapter
 
     registry.register(
@@ -445,6 +448,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     registry.register("mangaone", MangaOneAdapter)
     registry.register("zeblack", ZeblackAdapter)
     registry.register("comicdays", ComicDaysAdapter)
+    registry.register("piccoma", PiccomaAdapter)
     return registry
 
 

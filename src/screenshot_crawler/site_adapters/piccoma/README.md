@@ -1,66 +1,41 @@
-# Piccoma
+# Piccoma adapter
 
-## Current support
+## Implemented scope
 
-Piccoma Discovery is implemented for public product episode lists. The
-Watchlist target must be a canonical HTTPS viewer URL:
+Piccoma Discovery and the free-only horizontal viewer/Capture adapter are implemented. The Discovery adapter validates complete product episode lists and classifies access conservatively. The viewer adapter rechecks the target's current listing state before entering the viewer and captures rendered body pages through the existing Core capture helper.
+
+Phase 03 Viewer/Capture passed independent review with BLOCKING 0. The Piccoma Site Policy, full Batch orchestration, and production Manifest/ZIP end-to-end flow are not implemented or verified yet; Phase 04 and Phase 05 remain open.
+
+## Discovery and identity
+
+Watchlist targets use a canonical HTTPS viewer URL:
 
 ```text
 https://piccoma.com/web/viewer/{product_id}/{episode_id}
 ```
 
-Discovery validates that identity, opens the corresponding
-`/web/product/{product_id}/episodes` page, validates its complete episode list,
-and only then yields records to the existing Discovery service. The viewer
-adapter, fresh viewer access check, Site Policy, Batch execution, capture, and
-ZIP flow are not implemented yet.
-
-## Listing and identity
-
-The observed listing uses `#js_episodeList.PCM-list_asc`. Each row is an anchor
-with `data-product_id` and `data-episode_id`, containing one
-`.PCM-epList_ep`, `.PCM-epList_title`, and `.PCM-epList_status`. The product
-heading is `#js_contentBody .PCM-headTitle_name`, and the page text declares
-the complete count as `全N話`.
-
-The adapter requires the DOM row count to equal that declared count, every row
-to have the requested product ID, a unique numeric episode ID, a non-empty
-title and one status wrapper, and the Watchlist episode to be present. It
-buffers and validates the complete list before yielding. The native DOM is
-oldest-first; records are yielded latest-first. Global display position is
-`original_dom_index + 1`, so it remains unchanged when an inclusive bounded
-range is selected. The Catalog source identity is
-`{product_id}:{episode_id}`, and its canonical target URL is
-`https://piccoma.com/web/viewer/{product_id}/{episode_id}`.
+Discovery opens the matching `/web/product/{product_id}/episodes` listing. It buffers and validates the complete list before yielding: declared and observed counts must match, the product heading and every row must match the requested product, IDs must be unique numeric values, titles and status wrappers must exist, and the target episode must be present. Native DOM order is oldest-to-newest. Discovery yields latest-to-oldest and assigns whole-work display position as original DOM index + 1 before inclusive bounds are applied. Source identity is `{product_id}:{episode_id}`; caller-owned `work_key` does not encode product identity.
 
 ## Access classification
 
-The adapter collects `PCM-epList_status_*` markers from the status wrapper and
-its descendants. Unconditional free requires the exact marker set
-`PCM-epList_status_free` and exact visible `¥0`. A conflicting wait-free or
-other marker on the wrapper or a descendant maps to `unknown`. A recognized
-`PCM-epList_status_waitfree` signal maps to `quota`; an exact
-`PCM-epList_status_point` marker with a positive integer price maps to `paid`.
-Other states map to `unknown`. The generic `.PCM-epList_status` class by itself
-and `data-user_access` are not access-mode signals. A readable or previously
-opened viewer is not proof that an episode is unconditionally free.
+Unconditional free requires exactly one `PCM-epList_status_free` marker across the status wrapper and descendants plus exact visible `¥0`. Conflicting markers map to unknown. A recognized wait-free status maps to quota, a positive point price maps to paid, and ambiguous/missing signals remain unknown. Personal readability and generic status labels do not prove unconditional free access.
 
-The 2026-10-09 listing snapshot observed 432/432 rows marked free for product
-28600. Product 28606 had 12 exact free rows, 167 wait/binge-free rows, and 39
-point-priced rows. These counts are evidence snapshots, not constants.
+At viewer initialization, the adapter opens the product listing again and confirms that the exact target still has the free marker and exact zero price. It then requires HTTP 200 at the requested product/episode viewer path. `auto` and `direct` use this same fresh-free route; quota and other unsupported access strategies stop without fallback. The caller's work key is retained as opaque metadata.
 
-## Verification and limits
+## Viewer and capture
 
-The bounded metadata-only CDP probe lives under ignored
-`output/piccoma_experiment/`. It stores IDs, status labels/classes, counts, and
-paths only; it does not save image payloads, cookies, or signed URLs. Unit tests
-cover strict viewer and final listing URL parsing, complete-list validation,
-access states, latest-first order, bounds, and global position preservation.
-Browser-fixture tests cover wrapper marker conflicts, access refresh from free
-to paid/quota/unknown, and retention of a completed Item status.
+The supported observed reader is horizontal and has body classes `PCM-stt_horizontal` and `PCM-prop_scroll_l`. Body wrappers must form a complete contiguous `p1..pN` list, with one additional `last` wrapper. The observed page sequence was p1 through pN using the in-episode next control; native DOM wrapper order is reversed. A page is ready only when its expected ID is uniquely active and its single canvas is loaded, stable, and fully visible through every ancestor. The adapter advances only through the in-episode next control and waits for each expected ID. It accepts terminal END only after advancing from pN to the active `last` wrapper containing `#js_viewerEnd`.
 
-Live listing verification used the shared Crawler Chrome through the existing
-BrowserSession/CDP integration on 2026-10-09. Viewer entry, page layout,
-navigation, capture provenance, terminal END, and free-state revalidation at
-the viewer remain NOT VERIFIED and are Phase 3 gates. No ticket, point,
-purchase, rental, or unlock operation is part of this implementation.
+An exact known resume prompt may be canceled after validating its structure, text, and two expected enabled buttons. The observed prompt variants are the numeric-page wording and the exact last-page wording (`前回最後のページを 読んでいました。 最後のページに移動しますか？`); mixed wording or extra text is rejected. Attachment is bounded; unknown/ambiguous dialogs fail closed. The one known non-interactive #js_scrollTypeSing reading-direction guide is hidden only for capture after validating one of the two observed root class sets (base class alone, or base plus `_sh` and `_show`), the same exact two child groups and three expected image labels/classes, lack of meaningful text/interactive nodes, and empty pseudo-elements; its prior inline style is restored afterward.
+
+The owned Page starts at 1904x1200 before navigation. Captures use the Core `capture_locator` hierarchy and are labeled rendered PNGs. Live canvas raw readback raised `SecurityError`, so current captures use the rendered canvas Locator screenshot fallback. Before and after capture, the adapter checks computed display, visibility, opacity, and content-visibility on the canvas and all ancestors, as well as the expected page cursor and unchanged geometry. Hidden, translucent, or changed output fails closed. The image response-to-visible-canvas mapping is not proven; the adapter does not substitute observed JPEG responses or attempt image reconstruction. Actual canvas and PNG dimensions must agree.
+
+## Live evidence and limits
+
+On 2026-10-09, after the Reviewer fixes, the current listings for 28600/1910027 and 28606/2001009 each showed one exact-free target row (`PCM-epList_status_free`, `¥0`). The viewer path stayed on the requested composite identity. Product 28600 had 24 body pages; p1, p12, and p24 were captured as 844x1200 PNGs before explicit active END. Product 28606 had 15 body pages; p1, p8, and p15 were captured as 842x1200 PNGs before explicit active END. The reading guide was present and restored after each capture. All six latest ignored diagnostic PNGs were visually inspected. Sanitized evidence is under ignored `output/piccoma_experiment/phase03_b_live_capture_evidence.json`.
+
+These two live seeds verify the observed viewer and capture contract only. They do not verify full Batch, Catalog refresh through Batch, Manifest/ZIP output, other viewer layouts, or source-native image provenance. Phase 01 diagnostics are metadata-only; Phase 03 rendered QA PNGs remain ignored local artifacts and are not committed. No ticket, waiting, point, purchase, rental, unlock, CAPTCHA bypass, or DRM bypass flow is implemented.
+
+## Tests
+
+Focused browser-fixture and affected Discovery/Catalog/CLI tests passed: 174 passed, 288 pytest-asyncio event-loop-policy deprecation warnings, 0 skipped. Independent Phase 03 review passed with BLOCKING 0 (174 passed, 0 skipped). `ruff check src tests` passed. The live probe used shared Crawler Chrome via the existing CDP/BrowserSession integration; it did not launch a browser or commit copyrighted payloads.

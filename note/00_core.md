@@ -1,5 +1,9 @@
 # 00. Core 現行実装ノート
 
+## Piccoma current adapter registration (2026-10-09)
+
+The Discovery registry includes `PiccomaDiscoveryAdapter`; the manual crawl and Batch adapter registries include `PiccomaAdapter`. The adapter is site-local and uses the existing BrowserSession/CDP Page contract. Its manual access strategies are limited to `auto` and `direct`, both requiring a fresh exact-free product-listing check. No Piccoma Site Policy has been added, so registry presence does not complete Batch execution. Viewer/Capture implementation and bounded live verification are summarized in `note/09_piccoma.md`; the full Discovery-to-ZIP route remains pending.
+
 ## Read-only episode-list helper CLI (2026-10-01)
 
 `python -m screenshot_crawler.cli episode-list --url <URL>` is an operator

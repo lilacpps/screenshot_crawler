@@ -1,5 +1,6 @@
-"""Piccoma site-local Discovery support."""
+"""Piccoma site-local free-only crawler and Discovery adapters."""
 
+from screenshot_crawler.site_adapters.piccoma.adapter import PiccomaAdapter
 from screenshot_crawler.site_adapters.piccoma.discovery import (
     PiccomaDiscoveryAdapter,
     PiccomaEpisodeIdentity,
@@ -10,6 +11,7 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
 )
 
 __all__ = [
+    "PiccomaAdapter",
     "PiccomaDiscoveryAdapter",
     "PiccomaEpisodeIdentity",
     "canonical_piccoma_viewer_url",
