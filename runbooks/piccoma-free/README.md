@@ -1,6 +1,6 @@
 # Piccoma Free-Only Site Adapter — Autonomous Runbook
 
-Status: COMPLETE. All five required phases and the Phase 06-B source-derived capture extension passed their independent review/Tester gates; see [PROGRESS](PROGRESS.md) for evidence and limits.
+Status: COMPLETE. All five required phases and the Phase 06-B source-derived capture extension passed their independent review/Tester gates. The bounded Phase 06-C JPEG coefficient-feasibility probe and independent evidence/design review also passed with BLOCKING 0; see [PROGRESS](PROGRESS.md) for evidence and limits.
 Execution branch: feat/piccoma-adapter.
 The execution contract is defined below; verified observations, artifact checks and remaining limits are recorded in [PROGRESS](PROGRESS.md).
 

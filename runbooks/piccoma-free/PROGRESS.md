@@ -2,8 +2,8 @@
 
 Date: 2026-10-09
 Branch: `feat/piccoma-adapter`
-Last committed implementation checkpoint: `1e29fc8` (Phase 04)
-Current status: Phases 01-05 accepted. Phase 06-B passed final independent Reviewer review (PASS, BLOCKING 0) and independent Tester E2E (PASS). All 39 pages in the two-product live Batch-to-ZIP run used the strict source-derived PNG replay contract below. The full suite passed on the checkpoint immediately before the final NamedNodeMap argument-forwarding compatibility fix; that fix passed its separate focused browser test and final Reviewer gate.
+Last committed implementation checkpoint: `8be62be` (Phase 06-B)
+Current status: Phases 01-05 accepted. Phase 06-B passed final independent Reviewer review (PASS, BLOCKING 0) and independent Tester E2E (PASS). All 39 pages in the two-product live Batch-to-ZIP run used the strict source-derived PNG replay contract below. Phase 06-C's bounded p1-only JPEG coefficient-feasibility probe and independent evidence/design review passed with BLOCKING 0. The full suite passed on the checkpoint immediately before the final NamedNodeMap argument-forwarding compatibility fix; that fix passed its separate focused browser test and final Reviewer gate.
 
 | Phase | Status | Evidence |
 | --- | --- | --- |
@@ -13,6 +13,7 @@ Current status: Phases 01-05 accepted. Phase 06-B passed final independent Revie
 | 04 Site Policy/Batch | PASS, BLOCKING 0 | Independent review reported 130 passed and 0 skipped; local policy/Planner and standard Batch/Manifest/ZIP/Catalog tests pass. |
 | 05 E2E | PASS, BLOCKING 0 | Independent Tester and final audit verified Discovery, Catalog, Batch, Crawl, Manifest and ZIP for one currently free episode from each product. |
 | 06-B source-derived PNG | PASS, BLOCKING 0; independent Tester PASS | Exact single-JPEG/408-tile replay handled all 39 pages in the final two-product live E2E with no fallback; six selected same-page RGB comparisons and visual checks passed. Unsupported or mutated states fail closed or use the unchanged Core capture fallback only when target generation is stable. |
+| 06-C JPEG coefficient feasibility | PASS, independent evidence/design review PASS, BLOCKING 0 | `jpeglib.read_dct` succeeded on both p1 JPEG bodies, but the unchanged Jump+ feasibility helper rejected each exact fractional tile map as `tile_geometry_not_mcu_aligned`; no implementation change. |
 
 ## Phase 01 listing and access evidence
 
@@ -130,3 +131,9 @@ Exact test selections:
 .venv/Scripts/pytest.exe -q tests/unit/test_piccoma_native_capture.py tests/unit/test_piccoma_discovery.py tests/unit/test_piccoma_policy.py tests/integration/test_piccoma_discovery_browser.py tests/integration/test_piccoma_adapter_browser.py tests/unit/test_comicdays_native_capture.py tests/unit/test_bookwalker_native_capture.py
 249 passed, 306 warnings, 0 skipped
 ```
+
+## Phase 06-C actual JPEG coefficient feasibility (2026-10-09)
+
+The bounded p1-only probe refreshed exact-free listing status and composite target identity before entering 28600/1910027 and 28606/2001009. Both production traces were complete at 408 draws with one unique exact observed `image/jpeg` response, of 1,951,370 and 789,375 bytes respectively. The response bodies passed the existing 8 MB limit. `jpeglib.read_dct` parsed both baseline 8-bit, three-component 4:4:4 JPEGs with 8x8 MCUs; temporary files were removed. The probe used zero forward transitions and zero rights/entitlement actions, then closed both owned Pages and disconnected its CDP session. Sanitized evidence only is at ignored `output/piccoma_experiment/source_capture_research/phase06c_jpeglib_p1_evidence.json`; no source URL, bytes, or image payload was saved.
+
+The actual 408 draw mappings contain 50-pixel body tiles with 44-pixel (28600) and 42-pixel (28606) edge widths. Source crop heights are exactly `50.01`, destination heights are `50`, and recorded image smoothing is enabled with quality `low`. The exact observed fractional rectangles were passed unchanged to the unmodified Jump+ `dct_lossless_feasibility`; both returned `tile_geometry_not_mcu_aligned`. Existing Jump+/Magapoke coefficient permutation requires integer, equal-size, MCU-aligned rectangles, so that existing method cannot operate on this graph. This is limited to the existing coefficient method, not a claim that every custom JPEG transform is impossible. The first destination 8x8 block begins at source phase (6,6) for 28600 and (6,2) for 28606 and spans multiple source DCT blocks. None of 24 central 4x4 tile groups was a contiguous translated source group in either trace. The equal-50-height seam/phase and group calculation is diagnostic only; no production geometry is rounded or normalized. The accepted production output remains the verified reconstructed/composited PNG. The independent evidence/design review passed with BLOCKING 0. The isolated probe passed `py_compile` and Ruff; this docs/research-only checkpoint did not rerun unit, integration, or full-suite tests.
