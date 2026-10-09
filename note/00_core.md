@@ -1241,7 +1241,7 @@ remains `auto`/`direct`; quota entry remains rejected.
 
 `DiscoveryService`（`src/screenshot_crawler/discovery/`）は、呼び出し元が用意したPlaywright Page、enabledな`WatchlistTarget`、`full`または`incremental` modeを受け取る。Chrome launch、CDP endpoint、profile、Browser Session lifecycleはServiceやDiscovery Adapterに持たせない。targetの`work_key`でWorkをfind/createし、Work titleは新規作成時だけ`label`から初期化する。author/genreは観測値が非NULLでWork側がNULLの場合だけ補完し、既存値を上書きしない。
 
-`DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。現行のreal-site用AdapterはManga ONE、BookWalker、Magapokeである。BookWalkerはWatchlistのseries list targetだけを対象にする。
+`DiscoveryAdapter.iter_records()`はsite-neutralな`DiscoveredRecord`を順次yieldする。AdapterはCatalogを知らず、`site`と`discovery_key`はServiceがtargetからCatalogへ注入する。現行のreal-site用AdapterはManga ONE、BookWalker、Magapoke、Piccomaである。Piccomaは作品のepisode listingからDiscoveryするが、viewer / Batch / captureは未実装。BookWalkerはWatchlistのseries list targetだけを対象にする。
 
 Discovery Serviceは各recordについて、canonical titleをItemへ保存せず、kind/orderをItemへ、title/author/genreをWorkへ反映する。新規recordではItem/Source/web-default targetを一つのtransactionで作成し、既存sourceでは既存Itemを再利用して外部状態と非NULL Item metadataだけを更新する。観測した`DiscoveredSource.url`は`SourceTargetInput(backend="web", target_key="default", locator=...)`として同じsourceへupsertする。URL変更は同じ`(source_id, web, default)` targetのlocator更新になり、既存androidやweb/direct等の別targetは変更しない。sourceのfull-sync missing reconciliationは`available=false`だけを更新し、targetの削除や自動disableは行わない。既存sourceの`discovery_key` scope不一致、または既存Itemが別Workに属する場合はincompleteとして扱い、reparentや部分的な新規graph作成を行わない。
 
@@ -1454,7 +1454,7 @@ and per-artifact capture fingerprint.
 - Watchlistの`DiscoveryScope(from_url / through_url)` model、YAML parse、mapping / boundary存在 / non-empty string validation: **IMPLEMENTED**
 - scope付きtargetのenable / disable等のWatchlist rewrite preservation: **IMPLEMENTED**
 - scopeなしtargetの既存load / rewrite互換: **IMPLEMENTED**。scopeなしtargetは従来どおりunboundedとして扱い、scope専用CLI optionは追加していない
-- common Discovery capability gate: **IMPLEMENTED**。`DiscoveryAdapter.supports_bounded_discovery` のdefaultは`False`で、明示的にopt-inしたAdapterだけboundedを受け付ける。Magapoke / BookWalker / Manga ONE / Jump+ / Zeblackはopt-in済みで、その他の未対応Adapterはdefault `False`のまま
+- common Discovery capability gate: **IMPLEMENTED**。`DiscoveryAdapter.supports_bounded_discovery` のdefaultは`False`で、明示的にopt-inしたAdapterだけboundedを受け付ける。Magapoke / BookWalker / Manga ONE / Jump+ / Zeblack / Piccomaはopt-in済みで、その他の未対応Adapterはdefault `False`のまま
 - scope付きtargetを未対応Adapterへ渡した場合: **IMPLEMENTED**。Work作成前にincompleteとして停止し、`iter_records()`、unbounded fallback、Item / Source / SourceTarget同期を行わない
 - bounded full: **IMPLEMENTED**。対応Adapterがyieldしたrecordは通常どおり同期し、正常終了時は`complete=True` / `stopped_reason="exhausted"`とする。global missing-source reconciliationは実行しない。完全一覧を把握できるAdapterはscope slice前にglobal display-position hintを付与し、scope-local `1..N`へ再採番しない。hintなしbounded runはincompleteでfail closedとする
 - bounded incremental common semantics: **IMPLEMENTED**。generic known-streak（5件の連続distinct known identity）と`incremental_stop_decision()`のstop hookをscopeなしと同じ順序・契約で適用する。global hintがあればそれをauthorityとして使い、boundedでhintがなければincompleteとする
@@ -1468,6 +1468,7 @@ and per-artifact capture fingerprint.
 - Jump+ bounded buffering: **IMPLEMENTED**。scope付きfull / incrementalとも全rangeをbufferしてからboundary sliceをyieldし、後続range失敗時にpartial recordをyieldしない。scopeなしincrementalの既存streamingとscopeなしfullの既存全件bufferは維持する
 - Jump+ / bounded cross-site no-merge regression: **IMPLEMENTED**。bounded対応Fakeを使った共通回帰で、同じ`work_key`でもsiteをまたぐItem自動mergeを行わないことを確認している
 - Zeblack production Adapter bounded support: **IMPLEMENTED**。strict chapter-list / viewer parser、DOM/protobuf exact-set validation、latest-first canonical order、raw DOM oldest-first index由来のglobal position、chapter_id boundary slice、およびyield前bufferingを`ZeblackDiscoveryAdapter`で実装済み。Z4-1時点ではDiscovery registryのみ登録し、Z5でBatch Policy registryにも登録した
+- Piccoma bounded Discovery: **IMPLEMENTED**。canonical viewer URLからproduct / episode identityを厳密にparseし、完全なproduct listingをbuffer・検証してからlatest-first順のinclusive rangeを選択する。global display positionはoldest-first native DOM index + 1でslice前に付与し、status wrapperとdescendantsにある`PCM-epList_status_*` marker集合が`PCM-epList_status_free`のみ、かつexact `¥0`の場合に限りfreeとする。Viewer accessの再確認、Viewer / Batch / captureは未実装
 - 他siteのbounded range boundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
 
 The following historical summary predates Z4-1; the current production

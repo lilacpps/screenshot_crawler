@@ -30,6 +30,7 @@ noteと上位authorityまたはcode/testsが食い違う場合、noteを現行�
 - `01_bookwalker.md`: BookWalker固有の観測・Adapter・login・capture・終端
 - `02_mangaone.md`: Manga ONE固有の観測・Adapter・login・capture・終端
 - `03_magapoke.md`: Magapoke固有のviewer・scrambled JPEG tile再構成・PNG fallback・遷移・現行Batch/resource挙動
+- `09_piccoma.md`: Piccoma固有のDiscovery、episode listing access判定、実サイト確認状況と未対応範囲
 - `03_magapoke_access_plan.md`: Magapoke固有の採用済み未実装resource計画（PLANNED only）
 - `04_access_control_plan.md`: shared access-control / pacing / metrics / resource selectionの採用済み未実装計画（PLANNED only）
 - `05_catalog_status_plan.md`: 旧Catalog status計画。現在は`07_catalog_position_archive_plan.md`へ統合済み
