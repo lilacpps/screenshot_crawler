@@ -33,6 +33,7 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
     NativeCaptureUnavailable,
     capture_native_tile_replay,
+    capture_result_format_is_valid,
     install_native_trace,
     retire_native_trace,
     snapshot_native_trace,
@@ -253,6 +254,9 @@ class PiccomaAdapter(SiteAdapter):
         self._capture_source_mime: str | None = None
         self._capture_backdrop: str | None = None
         self._capture_fallback_reason: str | None = None
+        self._capture_encoding_fallback_reason: str | None = None
+        self._capture_output_format: str | None = None
+        self._capture_output_lossless: bool | None = None
         self._capture_page: Page | None = None
         self._response_listener: Any = None
         self._native_responses: dict[str, list[Response]] = {}
@@ -361,6 +365,9 @@ class PiccomaAdapter(SiteAdapter):
         self._capture_source_mime = None
         self._capture_backdrop = None
         self._capture_fallback_reason = None
+        self._capture_encoding_fallback_reason = None
+        self._capture_output_format = None
+        self._capture_output_lossless = None
 
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
         match = re.fullmatch(r"([0-9]+):([0-9]+)", external_id)
@@ -811,6 +818,9 @@ class PiccomaAdapter(SiteAdapter):
         self._capture_source_mime = None
         self._capture_backdrop = None
         self._capture_fallback_reason = None
+        self._capture_encoding_fallback_reason = None
+        self._capture_output_format = None
+        self._capture_output_lossless = None
         before = await self._reader_snapshot(page)
         self._validate_reader_mode(before)
         active = before.get("activeIds")
@@ -864,16 +874,27 @@ class PiccomaAdapter(SiteAdapter):
             if native_result is not None:
                 result = native_result.result
                 self._native_bytes_read += native_result.source_bytes
-                self._capture_method = "native_tile_replay_png"
+                if result.mime_type == "image/webp" and result.file_extension == ".webp":
+                    self._capture_method = "native_tile_replay_lossless_webp"
+                elif result.mime_type == "image/png" and result.file_extension == ".png":
+                    self._capture_method = "native_tile_replay_png"
+                else:
+                    raise UnknownPageStateError(
+                        "Piccoma native capture format is unsupported"
+                    )
                 self._capture_source_native = True
                 self._capture_source_mime = native_result.source_mime
                 self._capture_backdrop = native_result.backdrop
+                self._capture_encoding_fallback_reason = (
+                    native_result.encoding_fallback_reason
+                )
             else:
                 result = await capture_locator(target)
                 self._capture_method = "core_canvas_or_locator_png"
                 self._capture_source_native = False
                 self._capture_source_mime = None
                 self._capture_backdrop = None
+                self._capture_encoding_fallback_reason = None
             after = await self._reader_snapshot(page)
             self._validate_capture_post_state(
                 page, before, after, current, row, expected_size, result
@@ -897,6 +918,7 @@ class PiccomaAdapter(SiteAdapter):
                     fallback_reason = "source_response_became_ambiguous"
                 if fallback_reason is not None:
                     self._capture_fallback_reason = fallback_reason
+                    self._capture_encoding_fallback_reason = None
                     self._capture_method = "core_canvas_or_locator_png"
                     self._capture_source_native = False
                     self._capture_source_mime = None
@@ -911,6 +933,11 @@ class PiccomaAdapter(SiteAdapter):
                     )
                 else:
                     self._capture_fallback_reason = None
+            self._capture_output_format = result.mime_type
+            self._capture_output_lossless = result.mime_type in {
+                "image/png",
+                "image/webp",
+            }
             return (result,)
         finally:
             try:
@@ -959,13 +986,22 @@ class PiccomaAdapter(SiteAdapter):
             raise UnknownPageStateError(
                 "Piccoma active canvas stopped being visibly rendered during capture"
             )
+        expected_format = {
+            "native_tile_replay_lossless_webp": ("image/webp", ".webp"),
+            "native_tile_replay_png": ("image/png", ".png"),
+            "core_canvas_or_locator_png": ("image/png", ".png"),
+        }.get(self._capture_method)
         if (
-            result.mime_type != "image/png"
-            or result.file_extension != ".png"
-            or _png_dimensions(result.data) != expected_size
+            expected_format is None
+            or (result.mime_type, result.file_extension) != expected_format
             or (result.width, result.height) != expected_size
+            or not capture_result_format_is_valid(
+                result, width=expected_size[0], height=expected_size[1]
+            )
         ):
-            raise UnknownPageStateError("Piccoma rendered PNG dimensions are unsupported")
+            raise UnknownPageStateError(
+                "Piccoma rendered image format or dimensions are unsupported"
+            )
 
     async def _hide_reading_guide(
         self, page: Page, snapshot: dict[str, Any]
@@ -1109,6 +1145,9 @@ class PiccomaAdapter(SiteAdapter):
                 "source_mime": self._capture_source_mime,
                 "source_backdrop": self._capture_backdrop,
                 "fallback_reason": self._capture_fallback_reason,
+                "encoding_fallback_reason": self._capture_encoding_fallback_reason,
+                "output_format": self._capture_output_format,
+                "output_lossless": self._capture_output_lossless,
                 "page_count": self._page_count,
                 "access_strategy": self._access_strategy,
                 "viewport": [VIEWPORT_WIDTH, VIEWPORT_HEIGHT],

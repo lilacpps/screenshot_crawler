@@ -14,6 +14,7 @@ from PIL import Image, ImageChops, ImageDraw
 from playwright.async_api import Browser, Page
 
 import screenshot_crawler.site_adapters.piccoma.adapter as piccoma_adapter_module
+import screenshot_crawler.site_adapters.piccoma.native_capture as piccoma_native_capture_module
 from screenshot_crawler.batch import (
     BatchExecutionError,
     BatchExecutor,
@@ -245,7 +246,7 @@ def _synthetic_png() -> bytes:
     return output.getvalue()
 
 
-def _synthetic_tile_jpeg() -> bytes:
+def _synthetic_tile_jpeg(*, page_salt: int = 0) -> bytes:
     image = Image.new("RGB", (NATIVE_WIDTH, NATIVE_HEIGHT), "white")
     draw = ImageDraw.Draw(image)
     for row in range(24):
@@ -253,7 +254,11 @@ def _synthetic_tile_jpeg() -> bytes:
             left, top = column * 50, row * 50
             width = min(50, NATIVE_WIDTH - left)
             index = row * 17 + column
-            color = ((index * 37) % 256, (index * 71) % 256, (index * 113) % 256)
+            color = (
+                (index * 37 + page_salt * 23) % 256,
+                (index * 71 + page_salt * 41) % 256,
+                (index * 113 + page_salt * 67) % 256,
+            )
             draw.rectangle((left, top, left + width - 1, top + 49), fill=color)
     output = BytesIO()
     image.save(output, format="JPEG", quality=95, subsampling=0)
@@ -294,8 +299,8 @@ def _native_viewer_html(
         <div class="PCM-viewer2_scrollTypeSign_v"><img alt="タテ読み"></div>
         <div class="PCM-viewer2_scrollTypeSign_h"><img class="PCM-viewer2_scrollTypeSign_l" alt="ヨコ読み"><img class="PCM-viewer2_scrollTypeSign_r" alt="ヨコ読み"></div>
       </div></div>
-      <button class="PCM-viewer2_pagingBtn_prev">Previous</button>
-      <button class="PCM-viewer2_pagingBtn_next">Next</button>
+      <button class="PCM-viewer2_pagingBtn_prev" onclick="step(-1)">Previous</button>
+      <button class="PCM-viewer2_pagingBtn_next" onclick="step(1)">Next</button>
       <script>
         window.forbiddenClicks=0;
         document.querySelectorAll('button').forEach(button=>
@@ -320,6 +325,92 @@ def _native_viewer_html(
           canvas.dataset.drawn='true';
         }};
         image.src={json.dumps(NATIVE_SOURCE_URL)};
+      </script>
+    </body></html>"""
+
+
+def _native_batch_viewer_html(*, page_count: int = 3) -> str:
+    wrappers = []
+    for number in range(page_count, 0, -1):
+        current = " current" if number == 1 else ""
+        loaded = " loaded" if number == 1 else ""
+        wrappers.append(
+            f'<section id="p{number}" class="PCM-viewer2_pageWrapper{current}">'
+            f'<div class="PCM-viewer2_canvasWrapper{loaded}">'
+            f'<div class="PCM-viewer2_zoomPageWrap"><canvas '
+            "</canvas>"
+            "</div></div></section>"
+        )
+    wrappers.insert(
+        0,
+        '<section id="last" class="PCM-viewer2_pageWrapper">'
+        '<div id="js_viewerEnd" class="PCM-viewer2_endPage"></div></section>',
+    )
+    return f"""<!doctype html><html><head><style>
+      html,body {{ margin:0; }}
+      #js_frame {{ position:relative; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; margin:0 auto; }}
+      #react_PageListApp {{ position:absolute; inset:0; }}
+      .PCM-viewer2_pageWrapper {{ position:absolute; inset:0; display:none; }}
+      .PCM-viewer2_pageWrapper.current {{ display:block; }}
+      .PCM-viewer2_canvasWrapper,.PCM-viewer2_zoomPageWrap {{ position:absolute; inset:0;
+        width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; }}
+      .PCM-viewer2_zoomPageWrap {{ background:rgb(255,255,255); }}
+      .PCM-viewer2_canvasWrapper canvas {{ display:block; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; }}
+      #js_scrollTypeSing {{ position:fixed; left:0; top:0; width:10px; height:10px; }}
+      #js_scrollTypeSing > div {{ display:none; }}
+      .PCM-viewer2_pagingBtn_next {{ position:fixed; left:10px; top:20px; }}
+      .PCM-viewer2_pagingBtn_prev {{ position:fixed; left:10px; top:50px; }}
+    </style></head><body class="PCM-viewer2 PCM-stt_horizontal PCM-prop_scroll_l">
+      <div id="react_ViewerApp"><div id="js_frame" class="PCM-viewer2_frame">
+       <section id="react_PageListApp">{''.join(wrappers)}</section>
+      </div>
+      <div id="js_scrollTypeSing" class="PCM-viewer2_scrollTypeSign PCM-viewer2_scrollTypeSign_sh PCM-viewer2_scrollTypeSign_show">
+        <div class="PCM-viewer2_scrollTypeSign_v"><img alt="\u30bf\u30c6\u8aad\u307f"></div>
+        <div class="PCM-viewer2_scrollTypeSign_h"><img class="PCM-viewer2_scrollTypeSign_l" alt="\u30e8\u30b3\u8aad\u307f"><img class="PCM-viewer2_scrollTypeSign_r" alt="\u30e8\u30b3\u8aad\u307f"></div>
+      </div></div>
+      <button class="PCM-viewer2_pagingBtn_prev" onclick="step(-1)">Previous</button>
+      <button class="PCM-viewer2_pagingBtn_next" onclick="step(1)">Next</button>
+      <script>
+        window.forbiddenClicks=0;
+        function drawPage(number) {{
+          const canvas=document.querySelector(`#p${{number}} canvas`);
+          const wrapper=document.querySelector(`#p${{number}} .PCM-viewer2_canvasWrapper`);
+          const context=canvas.getContext('2d');
+          canvas.width={NATIVE_WIDTH}; canvas.height={NATIVE_HEIGHT};
+          const image=new Image();
+          image.onload=()=>{{
+            for(let destination=0;destination<408;destination++){{
+              const source=(destination*37)%408;
+              const dc=destination%17, dr=Math.floor(destination/17);
+              const sc=source%17, sr=Math.floor(source/17);
+              const dx=dc*50, dy=dr*50, sx=sc*50, sy=sr*50;
+              const dw=Math.min(50,{NATIVE_WIDTH}-dx), sw=Math.min(50,{NATIVE_WIDTH}-sx);
+              context.drawImage(image,sx,sy,sw,50.01,dx,dy,dw,50);
+            }}
+            wrapper.classList.add('loaded');
+            canvas.dataset.drawn='true';
+          }};
+          image.src=`https://pcm.kakaocdn.net/dna/a/b/c/i${{number}}.jpg?fixture=${{number}}`;
+        }}
+        function step(direction) {{
+          const active=document.querySelector('#react_PageListApp .PCM-viewer2_pageWrapper.current');
+          const match=active?.id.match(/^p([0-9]+)$/);
+          let nextId;
+          if(!match && direction<0) nextId='p{page_count}';
+          else if(!match) return;
+          else {{
+            const number=Number(match[1]);
+            if(direction>0 && number==={page_count}) nextId='last';
+            else nextId='p'+(number+direction);
+          }}
+          const next=document.getElementById(nextId);
+          if(!next) return;
+          active.classList.remove('current'); next.classList.add('current');
+          document.body.classList.toggle('PCM-viewer2_last',nextId==='last');
+          if(direction>0 && nextId!=='last') drawPage(Number(nextId.slice(1)));
+        }}
+        window.piccomaStep=step;
+        drawPage(1);
       </script>
     </body></html>"""
 
@@ -372,14 +463,18 @@ async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
     assert captures is not None and len(captures) == 1
     captured = captures[0]
     assert (captured.width, captured.height) == (NATIVE_WIDTH, NATIVE_HEIGHT)
-    assert captured.mime_type == "image/png"
+    assert captured.mime_type == "image/webp"
+    assert captured.file_extension == ".webp"
     metadata = await adapter.collect_debug_metadata(browser_page)
     assert metadata["piccoma_capture"] == {
-        "method": "native_tile_replay_png",
+        "method": "native_tile_replay_lossless_webp",
         "source_native": True,
         "source_mime": "image/jpeg",
         "source_backdrop": "verified_solid_white",
         "fallback_reason": None,
+        "encoding_fallback_reason": None,
+        "output_format": "image/webp",
+        "output_lossless": True,
         "page_count": 1,
         "access_strategy": "auto",
         "viewport": [1904, 1200],
@@ -410,6 +505,174 @@ async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
     assert await browser_page.locator("#js_scrollTypeSing").evaluate(
         "node => getComputedStyle(node).display"
     ) != "none"
+
+
+async def test_piccoma_native_capture_keeps_png_when_lossless_webp_encode_fails(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+
+    def fail_encoder(*_args, **_kwargs):
+        raise piccoma_native_capture_module.NativeCaptureUnavailable(
+            "webp_codec_unavailable"
+        )
+
+    monkeypatch.setattr(
+        piccoma_native_capture_module, "encode_lossless_webp", fail_encoder
+    )
+    captures = await adapter.capture_page(browser_page)
+
+    assert captures is not None and len(captures) == 1
+    captured = captures[0]
+    assert captured.mime_type == "image/png"
+    assert captured.file_extension == ".png"
+    metadata = await adapter.collect_debug_metadata(browser_page)
+    assert metadata["piccoma_capture"]["method"] == "native_tile_replay_png"
+    assert metadata["piccoma_capture"]["source_native"] is True
+    assert metadata["piccoma_capture"]["encoding_fallback_reason"] == "webp_codec_unavailable"
+    assert metadata["piccoma_capture"]["output_format"] == "image/png"
+    assert metadata["piccoma_capture"]["output_lossless"] is True
+
+
+async def test_piccoma_capture_metadata_resets_across_pages_and_failed_capture(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = PiccomaAdapter()
+    await _route_fixture(browser_page, native=True)
+    listing_url = await _configure(adapter, browser_page)
+    await browser_page.goto(listing_url, wait_until="commit")
+    await adapter.initialize(browser_page)
+
+    real_encoder = piccoma_native_capture_module.encode_lossless_webp
+
+    def fail_encoder(*_args, **_kwargs):
+        raise piccoma_native_capture_module.NativeCaptureUnavailable(
+            "webp_codec_unavailable"
+        )
+
+    monkeypatch.setattr(
+        piccoma_native_capture_module, "encode_lossless_webp", fail_encoder
+    )
+    first = await adapter.capture_page(browser_page)
+    assert first is not None and first[0].mime_type == "image/png"
+    first_metadata = (await adapter.collect_debug_metadata(browser_page))["piccoma_capture"]
+    assert first_metadata["encoding_fallback_reason"] == "webp_codec_unavailable"
+    assert first_metadata["output_format"] == "image/png"
+
+    monkeypatch.setattr(
+        piccoma_native_capture_module, "encode_lossless_webp", real_encoder
+    )
+    previous = await adapter.get_content_identity(browser_page)
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    await browser_page.locator("#p2 canvas").evaluate(
+        "canvas => canvas.getContext('2d').clearRect(0, 0, 1, 1)"
+    )
+    second = await adapter.capture_page(browser_page)
+    assert second is not None and second[0].mime_type == "image/png"
+    second_metadata = (await adapter.collect_debug_metadata(browser_page))["piccoma_capture"]
+    assert second_metadata["method"] == "core_canvas_or_locator_png"
+    assert second_metadata["fallback_reason"] == "unsupported_target_operation_count"
+    assert second_metadata["encoding_fallback_reason"] is None
+    assert second_metadata["output_format"] == "image/png"
+    assert second_metadata["output_lossless"] is True
+
+    previous = await adapter.get_content_identity(browser_page)
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, previous)
+    third = await adapter.capture_page(browser_page)
+    assert third is not None and third[0].mime_type == "image/webp"
+    third_metadata = (await adapter.collect_debug_metadata(browser_page))["piccoma_capture"]
+    assert third_metadata["method"] == "native_tile_replay_lossless_webp"
+    assert third_metadata["encoding_fallback_reason"] is None
+    assert third_metadata["output_format"] == "image/webp"
+    assert third_metadata["output_lossless"] is True
+
+    await browser_page.evaluate(
+        """() => {
+          document.querySelector('#p3').classList.remove('current');
+          document.querySelector('#p2').classList.add('current');
+        }"""
+    )
+    with pytest.raises(UnknownPageStateError):
+        await adapter.capture_page(browser_page)
+    failed_metadata = (await adapter.collect_debug_metadata(browser_page))["piccoma_capture"]
+    assert failed_metadata["method"] == "not_captured"
+    assert failed_metadata["encoding_fallback_reason"] is None
+    assert failed_metadata["output_format"] is None
+    assert failed_metadata["output_lossless"] is None
+
+
+async def test_piccoma_native_revalidation_fallback_clears_encoding_metadata(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+
+    async def reject_native_result(*_args, **_kwargs):
+        return "test_native_revalidation_failed"
+
+    monkeypatch.setattr(
+        piccoma_adapter_module,
+        "validate_native_capture_still_current",
+        reject_native_result,
+    )
+    captures = await adapter.capture_page(browser_page)
+
+    assert captures is not None and len(captures) == 1
+    assert captures[0].mime_type == "image/png"
+    assert captures[0].file_extension == ".png"
+    metadata = await adapter.collect_debug_metadata(browser_page)
+    piccoma_capture = metadata["piccoma_capture"]
+    assert piccoma_capture["method"] == "core_canvas_or_locator_png"
+    assert piccoma_capture["source_native"] is False
+    assert piccoma_capture["fallback_reason"] == "test_native_revalidation_failed"
+    assert piccoma_capture["encoding_fallback_reason"] is None
+    assert piccoma_capture["output_format"] == "image/png"
+
+
+async def test_piccoma_core_png_fallback_rejects_webp_result(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page, extra_paint=True)
+    source = Image.new("RGB", (NATIVE_WIDTH, NATIVE_HEIGHT), (17, 33, 65))
+    png = BytesIO()
+    source.save(png, format="PNG")
+    webp = piccoma_native_capture_module.encode_lossless_webp(
+        png.getvalue(), width=NATIVE_WIDTH, height=NATIVE_HEIGHT
+    )
+
+    async def return_webp_for_core_fallback(_locator):
+        return webp
+
+    monkeypatch.setattr(
+        piccoma_adapter_module, "capture_locator", return_webp_for_core_fallback
+    )
+    with pytest.raises(UnknownPageStateError, match="format or dimensions"):
+        await adapter.capture_page(browser_page)
+
+
+async def test_piccoma_native_capture_stops_if_target_changes_after_webp_materialization(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    capture_native = piccoma_adapter_module.capture_native_tile_replay
+
+    async def materialize_then_reset(*args, **kwargs):
+        result = await capture_native(*args, **kwargs)
+        await browser_page.locator("#p1 canvas").evaluate(
+            "canvas => canvas.width = canvas.width"
+        )
+        return result
+
+    monkeypatch.setattr(
+        piccoma_adapter_module, "capture_native_tile_replay", materialize_then_reset
+    )
+    with pytest.raises(UnknownPageStateError, match="canvas changed during capture"):
+        await adapter.capture_page(browser_page)
 
 
 async def test_piccoma_native_tile_replay_uses_screenshot_when_target_has_extra_paint(
@@ -780,14 +1043,24 @@ async def _route_fixture(
     status: str = "free",
     viewer_options: dict[str, object] | None = None,
     viewer_redirect: str | None = None,
+    native: bool = False,
 ) -> dict[str, int]:
-    counts = {"viewer": 0, "next_episode": 0}
+    counts = {"viewer": 0, "next_episode": 0, "jpeg": 0}
     body = _synthetic_png()
 
     async def route_handler(route: object) -> None:
         request = route.request  # type: ignore[attr-defined]
         path = request.url.split("?", 1)[0]
-        if path.startswith("https://pcm.kakaocdn.net/"):
+        if native and path.startswith("https://pcm.kakaocdn.net/dna/a/b/c/i") and path.endswith(".jpg"):
+            image_name = path.rsplit("/", 1)[-1]
+            page_salt = int(image_name[1:-4])
+            counts["jpeg"] += 1
+            await route.fulfill(
+                status=200,
+                body=_synthetic_tile_jpeg(page_salt=page_salt),
+                content_type="image/jpeg",
+            )  # type: ignore[attr-defined]
+        elif path.startswith("https://pcm.kakaocdn.net/"):
             await route.fulfill(status=200, body=body, content_type="image/png")  # type: ignore[attr-defined]
         elif path.endswith(f"/web/product/{PRODUCT_ID}/episodes"):
             await route.fulfill(status=200, body=_listing_html(status=status), content_type="text/html; charset=utf-8")  # type: ignore[attr-defined]
@@ -801,7 +1074,11 @@ async def _route_fixture(
             else:
                 await route.fulfill(
                     status=200,
-                    body=_viewer_html(**(viewer_options or {})),
+                    body=(
+                        _native_batch_viewer_html()
+                        if native
+                        else _viewer_html(**(viewer_options or {}))
+                    ),
                     content_type="text/html; charset=utf-8",
                 )  # type: ignore[attr-defined]
         elif path.startswith("https://piccoma.com/web/viewer/"):
@@ -1251,7 +1528,7 @@ async def test_piccoma_batch_executor_captures_manifest_packages_zip_and_complet
     catalog, work, item, source, target, policies, adapters, candidate = (
         _piccoma_batch_setup(tmp_path)
     )
-    route_counts = await _route_fixture(browser_page)
+    route_counts = await _route_fixture(browser_page, native=True)
     manifest_snapshots: list[dict[str, object]] = []
 
     def package_with_manifest_copy(output_dir, metadata, **kwargs):
@@ -1277,6 +1554,7 @@ async def test_piccoma_batch_executor_captures_manifest_packages_zip_and_complet
     )
 
     assert route_counts["viewer"] == 1
+    assert route_counts["jpeg"] == 3
     assert result.stop_reason == "end"
     assert result.page_count == 3
     assert result.archive_path.is_file()
@@ -1290,11 +1568,26 @@ async def test_piccoma_batch_executor_captures_manifest_packages_zip_and_complet
     assert [page["identity"]["page_id"] for page in pages] == ["p1", "p2", "p3"]
     assert [page["identity"]["page_number"] for page in pages] == [1, 2, 3]
     assert all(page["identity"]["source_id"] == f"{PRODUCT_ID}:{EPISODE_ID}" for page in pages)
+    assert [Path(page["file"]).suffix for page in pages] == [".webp"] * 3, [
+        {"file": page["file"], "metadata": page.get("metadata")}
+        for page in pages
+    ]
+    assert [page["mime_type"] for page in pages] == ["image/webp"] * 3
+    assert [page["file_extension"] for page in pages] == [".webp"] * 3
+    assert all(
+        page["metadata"]["piccoma_capture"]["method"]
+        == "native_tile_replay_lossless_webp"
+        and page["metadata"]["piccoma_capture"]["output_lossless"] is True
+        and page["metadata"]["piccoma_capture"]["source_native"] is True
+        for page in pages
+    )
     with ZipFile(result.archive_path) as archive:
         assert archive.namelist() == [page["file"] for page in pages]
+        assert all(name.endswith(".webp") for name in archive.namelist())
         for page_path in archive.namelist():
             with Image.open(BytesIO(archive.read(page_path))) as image:
-                assert image.size == (PAGE_WIDTH, PAGE_HEIGHT)
+                assert image.format == "WEBP"
+                assert image.size == (NATIVE_WIDTH, NATIVE_HEIGHT)
 
     updated_item = catalog.get_item(item.id)
     assert updated_item.status == "completed"

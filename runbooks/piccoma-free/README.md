@@ -1,6 +1,6 @@
 # Piccoma Free-Only Site Adapter — Autonomous Runbook
 
-Status: COMPLETE. All five required phases and the Phase 06-B source-derived capture extension passed their independent review/Tester gates. The bounded Phase 06-C JPEG coefficient-feasibility probe and independent evidence/design review also passed with BLOCKING 0; see [PROGRESS](PROGRESS.md) for evidence and limits.
+Status: Required Phases 01-05 and extensions 06-B/06-C are accepted historical checkpoints. Phase 06-D code review and independent live Tester both passed with BLOCKING 0. The standard two-product Batch-to-ZIP run verified 39 lossless WebP pages, current RGB comparisons, explicit END, and Catalog completion. See [PROGRESS](PROGRESS.md) for evidence and limits.
 Execution branch: feat/piccoma-adapter.
 The execution contract is defined below; verified observations, artifact checks and remaining limits are recorded in [PROGRESS](PROGRESS.md).
 
@@ -82,12 +82,16 @@ global position and archive naming contracts. Never hard-code live episode
 counts, which change.
 
 Live listing, viewer navigation, terminal state, and the two-product
-Discovery-to-ZIP path were verified through shared Crawler Chrome/CDP. For the
-observed horizontal reader, a strict exact-response-to-image-to-canvas draw
-graph was proven and replayed into a source-derived PNG using the browser's
-normal JPEG decoder, followed by a verified solid-white composite. Raw tiled
-JPEG bytes are not saved as page output. Other viewer/draw/backdrop variants
-remain unsupported. See PROGRESS.md for observed counts, outputs, and limits.
+Discovery-to-ZIP path were verified through shared Crawler Chrome/CDP under
+the historical PNG output contract. For the observed horizontal reader, a
+strict exact-response-to-image-to-canvas draw graph was proven and replayed
+with the browser's normal JPEG decoder, followed by a verified solid-white
+composite. Phase 06-D now encodes those verified RGB pixels as lossless WebP;
+native encoding fallback and Core fallback remain PNG. Raw tiled JPEG bytes
+are not saved as page output. Independent live verification of the WebP
+change passed for all 39 pages in two selected episodes, with no fallback.
+Other viewer/draw/backdrop variants remain unsupported. See PROGRESS.md for
+observed counts, outputs, and limits.
 
 ## Required stages
 

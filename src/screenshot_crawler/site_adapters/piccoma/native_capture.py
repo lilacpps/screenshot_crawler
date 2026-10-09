@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-from PIL import Image
+from PIL import Image, features
 from playwright.async_api import Page, Response
 
 from screenshot_crawler.core.capture import CaptureResult
@@ -47,6 +47,7 @@ class NativeCapture:
     result: CaptureResult
     source_mime: str = "image/jpeg"
     backdrop: str = "verified_solid_white"
+    encoding_fallback_reason: str | None = None
     source_bytes: int = 0
     source_url: str = ""
     target_signature: tuple[Any, ...] = ()
@@ -993,6 +994,142 @@ def composite_replay_png_on_white(data: bytes, *, width: int, height: int) -> by
         raise NativeCaptureUnavailable("replay_png_invalid") from exc
 
 
+def encode_lossless_webp(data: bytes, *, width: int, height: int) -> CaptureResult:
+    """Encode already-composited RGB pixels as lossless WebP and verify every RGB byte."""
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format != "PNG" or image.size != (width, height):
+                raise NativeCaptureUnavailable("webp_input_png_invalid")
+            rgb = image.convert("RGB")
+        if not features.check("webp"):
+            raise NativeCaptureUnavailable("webp_codec_unavailable")
+        encoded = io.BytesIO()
+        rgb.save(encoded, format="WEBP", lossless=True, method=6)
+        webp_bytes = encoded.getvalue()
+        if not _has_single_lossless_vp8l_chunk(
+            webp_bytes, width=width, height=height
+        ):
+            raise NativeCaptureUnavailable("webp_output_not_single_vp8l")
+        with Image.open(io.BytesIO(webp_bytes)) as decoded:
+            if decoded.format != "WEBP" or decoded.size != (width, height):
+                raise NativeCaptureUnavailable("webp_output_format_or_dimensions_invalid")
+            if decoded.convert("RGB").tobytes() != rgb.tobytes():
+                raise NativeCaptureUnavailable("webp_rgb_round_trip_mismatch")
+        return CaptureResult(
+            data=webp_bytes,
+            width=width,
+            height=height,
+            mime_type="image/webp",
+            file_extension=".webp",
+        )
+    except NativeCaptureUnavailable:
+        raise
+    except Exception as exc:
+        raise NativeCaptureUnavailable("webp_encode_failed") from exc
+
+
+def encode_lossless_webp_or_png(
+    data: bytes, *, width: int, height: int
+) -> tuple[CaptureResult, str | None]:
+    """Prefer verified lossless WebP; retain verified PNG pixels if encoding fails."""
+
+    png_result = CaptureResult(data, width, height, "image/png", ".png")
+    if not capture_result_format_is_valid(png_result, width=width, height=height):
+        raise NativeCaptureUnavailable("webp_fallback_png_invalid")
+    with Image.open(io.BytesIO(data)) as image:
+        image.convert("RGB").load()
+    try:
+        return encode_lossless_webp(data, width=width, height=height), None
+    except NativeCaptureUnavailable as exc:
+        return (
+            CaptureResult(
+                data=data,
+                width=width,
+                height=height,
+                mime_type="image/png",
+                file_extension=".png",
+            ),
+            exc.reason,
+        )
+
+
+def capture_result_format_is_valid(result: CaptureResult, *, width: int, height: int) -> bool:
+    """Validate result format, extension, and decoded dimensions for supported outputs."""
+
+    if (result.width, result.height) != (width, height):
+        return False
+    expected = {
+        ("image/png", ".png"): "PNG",
+        ("image/webp", ".webp"): "WEBP",
+    }.get((result.mime_type, result.file_extension))
+    if expected is None:
+        return False
+    if expected == "PNG" and not result.data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    if expected == "WEBP" and not _has_single_lossless_vp8l_chunk(
+        result.data, width=width, height=height
+    ):
+        return False
+    try:
+        with Image.open(io.BytesIO(result.data)) as verification:
+            if (
+                verification.format != expected
+                or verification.size != (width, height)
+                or getattr(verification, "n_frames", 1) != 1
+                or getattr(verification, "is_animated", False)
+            ):
+                return False
+            verification.verify()
+        with Image.open(io.BytesIO(result.data)) as image:
+            if (
+                image.format != expected
+                or image.size != (width, height)
+                or getattr(image, "n_frames", 1) != 1
+                or getattr(image, "is_animated", False)
+            ):
+                return False
+            image.load()
+            return True
+    except Exception:  # noqa: BLE001 - malformed image bytes are a validation failure
+        return False
+
+
+def _has_single_lossless_vp8l_chunk(
+    data: bytes, *, width: int, height: int
+) -> bool:
+    """Require the exact simple lossless WebP container emitted for RGB output."""
+
+    if (
+        len(data) < 25
+        or data[:4] != b"RIFF"
+        or int.from_bytes(data[4:8], "little") != len(data) - 8
+        or data[8:12] != b"WEBP"
+        or data[12:16] != b"VP8L"
+    ):
+        return False
+    chunk_size = int.from_bytes(data[16:20], "little")
+    payload_start = 20
+    payload_end = payload_start + chunk_size
+    padded_end = payload_end + (chunk_size & 1)
+    if chunk_size < 5 or padded_end != len(data) or data[payload_start] != 0x2F:
+        return False
+    width_minus_one = data[21] | ((data[22] & 0x3F) << 8)
+    height_minus_one = (
+        (data[22] >> 6)
+        | (data[23] << 2)
+        | ((data[24] & 0x0F) << 10)
+    )
+    has_alpha = (data[24] >> 4) & 1
+    version = (data[24] >> 5) & 0x07
+    return (
+        width_minus_one + 1 == width
+        and height_minus_one + 1 == height
+        and has_alpha == 0
+        and version == 0
+    )
+
+
 def validate_source_jpeg(data: bytes, *, width: int, height: int) -> None:
     """Require the observed one-frame baseline 4:4:4 JPEG layout."""
 
@@ -1274,6 +1411,9 @@ async def capture_native_tile_replay(
         composited = composite_replay_png_on_white(
             replay_png, width=expected_width, height=expected_height
         )
+        output_result, encoding_fallback_reason = encode_lossless_webp_or_png(
+            composited, width=expected_width, height=expected_height
+        )
         final_snapshot = await _bounded_evaluate(
             canvas,
             "(node) => window.__piccomaNativeCapture?.snapshot(node) ?? null",
@@ -1303,14 +1443,9 @@ async def capture_native_tile_replay(
         if response_count_for_url(trace.source_url) != 1:
             raise NativeCaptureUnavailable("source_response_became_ambiguous", bytes_read=len(body))
         return NativeCapture(
-            result=CaptureResult(
-                data=composited,
-                width=expected_width,
-                height=expected_height,
-                mime_type="image/png",
-                file_extension=".png",
-            ),
+            result=output_result,
             source_bytes=len(body),
+            encoding_fallback_reason=encoding_fallback_reason,
             source_url=trace.source_url,
             target_signature=_target_signature(before),
             source_signature=_source_signature(before),
@@ -1393,7 +1528,10 @@ __all__ = [
     "NativeCapture",
     "NativeCaptureUnavailable",
     "capture_native_tile_replay",
+    "capture_result_format_is_valid",
     "composite_replay_png_on_white",
+    "encode_lossless_webp",
+    "encode_lossless_webp_or_png",
     "install_native_trace",
     "retire_native_trace",
     "snapshot_native_trace",

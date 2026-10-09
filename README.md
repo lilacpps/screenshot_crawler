@@ -64,7 +64,7 @@ Python + Playwrightで、Webビューアを1ページずつ進めながら本文
 - Manga ONE Adapter
 - Magapoke Adapter（scrambled JPEGのtile再構成PNG、canvas screenshot fallback）
 - Comic DAYS Adapter (free/active-grant discovery, Work Ticket policy, horizontal RTL canvas, lossless JPEG-first native capture with reconstructed-PNG and locator fallbacks)
-- Piccoma Adapter (complete-list Discovery and direct-only Batch policy for currently available unconditional-free episodes; independent two-product live Batch-to-ZIP E2E passed for all 39 body pages with source-derived PNG replay; see [site README](src/screenshot_crawler/site_adapters/piccoma/README.md) for tested limits)
+- Piccoma Adapter (complete-list Discovery and direct-only Batch policy for currently available unconditional-free episodes; independent live Batch-to-ZIP verification passed for 39 pages across two products using validated lossless WebP. Native encoding and guarded Core fallbacks remain PNG. See [site README](src/screenshot_crawler/site_adapters/piccoma/README.md) for tested limits)
 - 既存ChromeへCDP接続するcrawl/loginフロー
 - 共通Crawler Chrome launcher (`scripts/start_crawler_chrome.ps1`)
 - BookWalker canvas / spread capture

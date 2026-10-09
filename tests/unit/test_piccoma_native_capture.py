@@ -5,9 +5,14 @@ from io import BytesIO
 import pytest
 from PIL import Image, ImageChops
 
+import screenshot_crawler.site_adapters.piccoma.native_capture as piccoma_native_capture_module
+from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
     NativeCaptureUnavailable,
+    capture_result_format_is_valid,
     composite_replay_png_on_white,
+    encode_lossless_webp,
+    encode_lossless_webp_or_png,
     target_generation_signature,
     validate_source_jpeg,
     validate_tile_trace,
@@ -335,3 +340,111 @@ def test_replay_output_is_composited_on_white_without_lossy_reencoding() -> None
         changed_rgb_pixel = actual.copy()
         changed_rgb_pixel.putpixel((0, 0), (177, 138, 142))
         assert ImageChops.difference(actual, changed_rgb_pixel).getbbox() is not None
+
+
+def test_lossless_webp_round_trip_preserves_full_rgb_without_resizing() -> None:
+    source = Image.new("RGB", (53, 31))
+    source.putdata(
+        [
+            (x * 13 % 256, y * 17 % 256, (x * 7 + y * 19) % 256)
+            for y in range(source.height)
+            for x in range(source.width)
+        ]
+    )
+    png = BytesIO()
+    source.save(png, format="PNG")
+
+    result = encode_lossless_webp(png.getvalue(), width=53, height=31)
+
+    assert result.mime_type == "image/webp"
+    assert result.file_extension == ".webp"
+    assert (result.width, result.height) == (53, 31)
+    assert result.data[:4] == b"RIFF" and result.data[8:12] == b"WEBP"
+    with Image.open(BytesIO(result.data)) as decoded:
+        assert decoded.format == "WEBP"
+        assert decoded.size == source.size
+        assert decoded.convert("RGB").tobytes() == source.tobytes()
+
+
+def test_lossless_webp_round_trip_preserves_white_composited_partial_alpha_rgb() -> None:
+    source = Image.new("RGBA", (3, 2), (0, 0, 0, 0))
+    source.putpixel((0, 0), (17, 189, 231, 64))
+    source.putpixel((1, 0), (211, 23, 88, 128))
+    source.putpixel((2, 1), (35, 167, 29, 255))
+    png = BytesIO()
+    source.save(png, format="PNG")
+    composite = composite_replay_png_on_white(png.getvalue(), width=3, height=2)
+    with Image.open(BytesIO(composite)) as expected:
+        expected_rgb = expected.convert("RGB").tobytes()
+
+    result = encode_lossless_webp(composite, width=3, height=2)
+
+    with Image.open(BytesIO(result.data)) as decoded:
+        assert decoded.convert("RGB").tobytes() == expected_rgb
+
+
+def test_lossless_webp_encode_failure_retains_validated_native_png(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = Image.new("RGB", (4, 3), (29, 141, 237))
+    png = BytesIO()
+    source.save(png, format="PNG")
+
+    def fail_encoder(*_args, **_kwargs):
+        raise NativeCaptureUnavailable("webp_codec_unavailable")
+
+    monkeypatch.setattr(
+        piccoma_native_capture_module, "encode_lossless_webp", fail_encoder
+    )
+    result, reason = encode_lossless_webp_or_png(
+        png.getvalue(), width=4, height=3
+    )
+
+    assert reason == "webp_codec_unavailable"
+    assert result.data == png.getvalue()
+    assert result.mime_type == "image/png"
+    assert result.file_extension == ".png"
+    assert capture_result_format_is_valid(result, width=4, height=3)
+
+
+def test_capture_result_metadata_rejects_mime_extension_payload_and_dimension_mismatch() -> None:
+    source = Image.new("RGB", (4, 3), (29, 141, 237))
+    png = BytesIO()
+    source.save(png, format="PNG")
+    webp = encode_lossless_webp(png.getvalue(), width=4, height=3)
+    truncated_png = CaptureResult(png.getvalue()[:-10], 4, 3, "image/png", ".png")
+    animated_png_bytes = BytesIO()
+    source.save(
+        animated_png_bytes,
+        format="PNG",
+        save_all=True,
+        append_images=[Image.new("RGB", (4, 3), (1, 2, 3))],
+    )
+    animated_png = CaptureResult(
+        animated_png_bytes.getvalue(), 4, 3, "image/png", ".png"
+    )
+
+    assert capture_result_format_is_valid(webp, width=4, height=3)
+    invalid_results = (
+        CaptureResult(webp.data, 4, 3, "image/png", ".png"),
+        CaptureResult(webp.data, 4, 3, "image/webp", ".png"),
+        CaptureResult(b"RIFF\x00\x00\x00\x00WEBPbad", 4, 3, "image/webp", ".webp"),
+        CaptureResult(webp.data, 5, 3, "image/webp", ".webp"),
+        CaptureResult(webp.data, 4, 3, "image/webp", ".jpg"),
+        truncated_png,
+        animated_png,
+    )
+    for result in invalid_results:
+        assert not capture_result_format_is_valid(result, width=4, height=3), result
+
+
+def test_capture_result_metadata_rejects_lossy_webp_even_when_rgb_is_exact() -> None:
+    source = Image.new("RGB", (1, 1), (255, 255, 255))
+    encoded = BytesIO()
+    source.save(encoded, format="WEBP", lossless=False, quality=100)
+    lossy = CaptureResult(
+        encoded.getvalue(), 1, 1, "image/webp", ".webp"
+    )
+    with Image.open(BytesIO(lossy.data)) as decoded:
+        assert decoded.convert("RGB").tobytes() == source.tobytes()
+    assert not capture_result_format_is_valid(lossy, width=1, height=1)

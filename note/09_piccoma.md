@@ -1,6 +1,6 @@
 # Piccoma current implementation snapshot
 
-Updated: 2026-10-09. Phases 01-05 remain accepted, including Phase 05 live Discovery-to-ZIP and independent artifact audit. Phase 06-B's strict JPEG tile replay to source-derived PNG passed the final independent Reviewer and Tester gates with BLOCKING 0. Phase 06-C's bounded p1-only JPEG coefficient-feasibility audit and independent evidence/design review passed with BLOCKING 0; the actual Piccoma tile geometry is infeasible for the unchanged Jump+ MCU-alignment method. The full suite passed on the immediately preceding reviewed checkpoint; the final NamedNodeMap argument-forwarding fix has its own passing focused browser test and final Reviewer pass.
+Updated: 2026-10-09. Phases 01-05 remain accepted. Phase 06-B's source-derived PNG replay and Phase 06-C's bounded p1-only JPEG coefficient feasibility work are historical accepted checkpoints. Phase 06-D defaults verified replay pixels to lossless WebP, retaining native PNG if encoding/round-trip proof fails and Core PNG if native provenance is unavailable. Phase 06-D code review and independent live Tester both passed with BLOCKING 0. Local Piccoma tests passed 99, packaging tests 26, and Ruff/diff checks passed; the full suite was not rerun after final site-local adjustments. The current two-product live route verified all 39 WebP pages through ZIP and Catalog completion. Detailed evidence and limits follow.
 
 ## Current adapter and CLI registration
 
@@ -44,13 +44,13 @@ One late resume prompt was observed. After a bounded 1.5-second attachment grace
 
 ## Capture path and provenance
 
-Before navigation, the owned Page viewport is set to 1904x1200, the observed supported layout. Before and after each capture the adapter verifies the same viewer identity, expected page cursor, active page ID, loaded canvas, computed display/visibility/opacity/content-visibility on the canvas and every ancestor, frame/canvas geometry, viewport, and PNG dimensions. A hidden or translucent canvas, cursor change, geometry change, or identity change fails closed without entering an unverified Core fallback.
+Before navigation, the owned Page viewport is set to 1904x1200, the observed supported layout. Before and after each capture the adapter verifies the same viewer identity, expected page cursor, active page ID, loaded canvas, computed display/visibility/opacity/content-visibility on the canvas and every ancestor, frame/canvas geometry, viewport, and output dimensions. A hidden or translucent canvas, cursor change, geometry change, or identity change fails closed without entering an unverified Core fallback.
 
-Live canvas `getImageData` raised `SecurityError`, so direct canvas readback remains unavailable. Phase 06-B supports one strictly observed horizontal rendering path: a single loaded HTML image bound to a unique exact first-party JPEG response and stable load generation supplies exactly 408 accounted tile draws to the selected canvas. The adapter records the complete draw arguments and supported 2D context state without changing the page renderer. It replays those exact fractional source/destination rectangles and state into a detached canvas using the browser's normal image decoder, encodes the source-derived pixels as PNG, and composites transparency over a separately validated solid-white paint ancestor. It does not save the tiled raw JPEG as a page or change canvas security/backing settings. Unique exact JPEG-response to loaded-image attribution is a mandatory replay gate; the output is the reconstructed/composited PNG, not the raw tiled JPEG.
+Live canvas `getImageData` raised `SecurityError`, so direct canvas readback remains unavailable. The supported horizontal rendering path requires one loaded HTML image bound to one unique exact first-party JPEG response and stable load generation, accounting for exactly 408 canvas tile draws. The adapter records complete draw arguments and supported 2D context state without changing the page renderer. It replays the exact fractional source/destination rectangles and state into a detached canvas using the browser's normal image decoder, then composites the transparent replay over a separately validated solid-white paint ancestor. The current output encodes these verified RGB pixels as lossless WebP. Acceptance requires one simple VP8L chunk, the expected decoded dimensions, and exact equality of every RGB byte. It does not save tiled JPEG bytes as a page or change canvas security/backing settings. If WebP encoding or proof fails, the already verified native result remains PNG with a sanitized encoding-fallback reason. If native attribution/replay proof is unavailable before materialization, Core canvas/Locator capture remains PNG and requires an unchanged target generation.
 
-The Phase 06-C coefficient feasibility probe confirmed that the exact observed JPEG response can be read by `jpeglib.read_dct`, but the unchanged Jump+ `dct_lossless_feasibility` helper rejects the actual Piccoma rectangles as `tile_geometry_not_mcu_aligned`. The 408-draw trace contains 50-pixel destination tiles, 44/42-pixel edge tiles, source-height `50.01`, destination-height `50`, and recorded image smoothing enabled at quality `low`; the fractional geometry was passed through unchanged. The observed source is baseline 8-bit, three-component 4:4:4 with 8x8 MCUs. The existing Jump+/Magapoke coefficient transform requires integer, equal-size, MCU-aligned rectangles, which this mapping does not provide. This rules out applying that existing coefficient-permutation method to the observed path; it does not claim every possible custom JPEG transform is impossible. The equal-50-height seam/phase analysis in the sanitized report is diagnostic only and is never used to round production geometry. Current production output therefore remains the verified reconstructed/composited PNG.
+The Phase 06-C coefficient feasibility probe confirmed that the exact observed JPEG response can be read by `jpeglib.read_dct`, but the unchanged Jump+ `dct_lossless_feasibility` helper rejects the actual Piccoma rectangles as `tile_geometry_not_mcu_aligned`. The 408-draw trace contains 50-pixel destination tiles, 44/42-pixel edge tiles, source-height `50.01`, destination-height `50`, and recorded image smoothing enabled at quality `low`; the fractional geometry was passed through unchanged. The observed source is baseline 8-bit, three-component 4:4:4 with 8x8 MCUs. The existing Jump+/Magapoke coefficient transform requires integer, equal-size, MCU-aligned rectangles, which this mapping does not provide. This rules out applying that existing coefficient-permutation method to the observed path; it does not claim every possible custom JPEG transform is impossible. The equal-50-height seam/phase analysis in the sanitized report is diagnostic only and is never used to round production geometry. Phase 06-D keeps faithful browser replay and emits lossless WebP from its verified RGB pixels.
 
-The trace and response registry are bounded. Per-canvas dimension MutationObservers are attached only to retained source candidates or the current capture target and are disconnected on eviction/capture cleanup; this also detects same-value NamedNodeMap changes while a canvas is detached. Missing/ambiguous responses, source reloads, canvas reset or unsupported paint/clip/state operations, overflow, unproven backdrop, or replay mismatch make the optimization unavailable. White compositing requires computed `background-clip:border-box`, `clip:auto`, no border widths/radius, and the other validated covering-white paint conditions. Core `capture_locator` is then allowed only when the active target canvas generation stayed unchanged for the entire capture; target mutation during any path fails closed. Successful native output reports `native_tile_replay_png`, `source_native=true`, `source_mime=image/jpeg`, and `source_backdrop=verified_solid_white`; screenshot fallback reports `source_native=false` and a sanitized reason. No signed URL, source bytes, or response body enters metadata.
+The trace and response registry are bounded. Per-canvas dimension MutationObservers are attached only to retained source candidates or the current capture target and are disconnected on eviction/capture cleanup; this also detects same-value NamedNodeMap changes while a canvas is detached. Missing/ambiguous responses, source reloads, canvas reset or unsupported paint/clip/state operations, overflow, unproven backdrop, or replay mismatch make the optimization unavailable. White compositing requires computed `background-clip:border-box`, `clip:auto`, no border widths/radius, and the other validated covering-white paint conditions. Core `capture_locator` is then allowed only when the active target canvas generation stayed unchanged for the entire capture; target mutation during any path fails closed. Successful default native output reports `native_tile_replay_lossless_webp`, `source_native=true`, `source_mime=image/jpeg`, `output_format=image/webp`, `output_lossless=true`, and `source_backdrop=verified_solid_white`. Native PNG fallback reports `native_tile_replay_png` plus an encoding-fallback reason. Core screenshot fallback reports `source_native=false`, PNG output, and a sanitized proof-fallback reason; a WebP result cannot be accepted under Core PNG metadata. Output validation fully decodes files, rejects animation/multiple frames, and checks MIME, extension, and bytes. No signed URL, source bytes, or response body enters metadata.
 
 ## Live verification and artifacts
 
@@ -62,7 +62,7 @@ Phase 01 evidence files are sanitized metadata only and contain no image payload
 
 ## Tests and remaining scope
 
-Phase 02 independent review: 60 passed, 0 skipped, BLOCKING 0. Phase 03 independent review: PASS, BLOCKING 0, 174 passed, 0 skipped. The focused implementation run also passed 174 tests with 288 pytest-asyncio event-loop-policy deprecation warnings. `ruff check src tests` passed. Browser-fixture tests cover entry and identity guards, delayed/exact/unknown dialog handling, complete/partial/duplicate readiness, transitions, unapproved jump/rewind rejection, END, guide restoration, canvas/ancestor visibility before and after capture, geometry, and PNG format/dimensions; guide checks reject appended text and unknown elements.
+Phase 02 independent review: 60 passed, 0 skipped, BLOCKING 0. Phase 03 independent review: PASS, BLOCKING 0, 174 passed, 0 skipped. The focused implementation run also passed 174 tests with 288 pytest-asyncio event-loop-policy deprecation warnings. `ruff check src tests` passed. Browser-fixture tests cover entry and identity guards, delayed/exact/unknown dialog handling, complete/partial/duplicate readiness, transitions, unapproved jump/rewind rejection, END, guide restoration, canvas/ancestor visibility before and after capture, geometry, and capture format/dimensions/payload; guide checks reject appended text and unknown elements.
 
 A local synthetic-browser Batch integration test exercises Planner -> BatchExecutor -> Runner -> Piccoma adapter -> Manifest -> ZIP -> Catalog completion for a three-page episode. Stale-free listing, wrong composite candidate identity, and redirected viewer failures create no ZIP, completed Item, or Artifact and do not mutate quota/resource state. Phase 04 local policy/CLI tests passed (96 passed, 0 skipped), its browser Batch integration passed (34 passed, 0 skipped), and the combined affected suite passed (310 passed, 743 pytest-asyncio event-loop-policy deprecation warnings, 0 skipped); `ruff check src tests` passed. Independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped).
 
@@ -76,7 +76,7 @@ The accepted viewer limit remains the observed horizontal mode at 1904x1200 and 
 
 The final API compatibility check passed 1 browser test (48 deselected, 0 skipped, five existing pytest-asyncio warnings). It compares the native and hooked `removeNamedItemNS(namespace, localName)` result and confirms the attribute is removed from a non-canvas element. Final independent Reviewer review passed with BLOCKING 0.
 
-Phase 06-B verification commands:
+Phase 06-B historical PNG verification commands:
 
 ```text
 .venv/Scripts/pytest.exe -q tests/unit/test_piccoma_native_capture.py tests/integration/test_piccoma_adapter_browser.py -k "detached_named_map or background_clip_text or white_backdrop_gate"
@@ -88,7 +88,7 @@ Phase 06-B verification commands:
 
 `git diff --check` and the explicit new-file EOF/trailing-whitespace check passed. The final independent Reviewer gate is PASS, BLOCKING 0. The full suite result was run on the immediately preceding checkpoint; the final compatibility patch was verified separately rather than included in that full run.
 
-## Phase 06 final independent live E2E
+## Phase 06 historical independent live E2E under PNG output contract
 
 The independent Tester report is at ignored `output/piccoma_experiment/phase06_tester/runs/20261009T053043Z-08fcc951/evidence/phase06_tester_report.json`. Full Discovery exhausted 432/432 rows for product 28600 and 218/218 for 28606. Incremental Discovery observed five known rows per product, added none, and stopped at `known_streak`. The read-only plan had 444 eligible/direct candidates, 206 skipped non-free candidates, and zero quota candidates. These counts describe that run, not constants.
 
@@ -105,4 +105,52 @@ The bounded probe checked only p1 for 28600/1910027 and 28606/2001009, after a f
 
 Both sources were baseline 8-bit, three-component 4:4:4 JPEGs with 8x8 MCUs. The observed 408-draw geometry had 50-pixel body tiles plus 44-pixel (28600) or 42-pixel (28606) edge widths; source crop height was exactly `50.01`, destination height `50`, and observed image smoothing was enabled with quality `low`. The unmodified Jump+ `dct_lossless_feasibility` helper received the original fractional rectangles and rejected both as `tile_geometry_not_mcu_aligned`. This is evidence that the existing integer/equal-size/8x8-aligned Jump+/Magapoke coefficient-permutation method does not support this observed path. It is not a claim that every possible custom JPEG transform is impossible.
 
-The report's equal-50-height seam/phase and 4x4 grouping analysis is explicitly diagnostic only. It does not normalize, round, or alter any production rectangle. The observed first destination 8x8 block begins at source phase (6,6) for 28600 and (6,2) for 28606 and touches multiple source DCT blocks; none of 24 central 4x4 groups was a contiguous translated source group in either trace. The supported capture remains the verified reconstructed/composited PNG. Probe script `py_compile` and Ruff passed; no tests or full suite were rerun for this research/docs-only update. Independent evidence/design review: PASS, BLOCKING 0.
+The report's equal-50-height seam/phase and 4x4 grouping analysis is explicitly diagnostic only. It does not normalize, round, or alter any production rectangle. The observed first destination 8x8 block begins at source phase (6,6) for 28600 and (6,2) for 28606 and touches multiple source DCT blocks; none of 24 central 4x4 groups was a contiguous translated source group in either trace. At the Phase 06-C checkpoint, output was the verified reconstructed/composited PNG; Phase 06-D later adds lossless WebP encoding without changing replay geometry. Probe script `py_compile` and Ruff passed; no tests or full suite were rerun for this research/docs-only update. Independent evidence/design review: PASS, BLOCKING 0.
+
+## Phase 06-D lossless WebP implementation
+
+The native replay contract through exact JPEG response attribution, the 408
+fractional canvas draws, and proven-white RGB composition is unchanged. The
+default result encodes those RGB pixels as lossless WebP (`lossless=True`,
+`method=6`). Validation requires a single `VP8L` chunk with exact RIFF/chunk
+lengths and expected encoded dimensions, full file verification/decode, one
+frame, MIME/extension agreement, and byte-for-byte equality of every decoded
+RGB channel with the verified composited pixels. A pixel-identical 1x1 lossy
+WebP still fails because its payload is `VP8 ` rather than `VP8L`. If the
+WebP encoder or RGB verification fails, the same verified native pixels remain
+PNG with `encoding_fallback_reason`; if source proof is unavailable, the Core
+path remains PNG. A Core PNG capture cannot be accepted as WebP under PNG
+method metadata. The target generation is checked after encoding, so a reset
+during encoding fails closed.
+
+The standard local three-page Batch integration verifies WebP page suffixes,
+Manifest MIME/extensions, decoded dimensions, ZIP member names and image
+payloads through the normal packager and Catalog completion path. A three-page
+regression tests native PNG on p1 after encoder failure, Core PNG on p2 after a
+synthetic unsupported canvas operation, native WebP on p3, and metadata clearing
+after a failed cursor-state capture. The Phase 06-D code Reviewer and independent
+live Tester passed with BLOCKING 0.
+
+The isolated live Tester report is ignored at
+`output/piccoma_experiment/phase06d_tester/runs/20261009T073152Z-3e91e9e0/evidence/phase06_tester_report.json`.
+Full Discovery exhausted 432 rows for 28600 and 218 for 28606; incremental mode
+saw five known rows per product and stopped at `known_streak`. The read-only plan
+had 444 direct eligible candidates, 206 skipped non-free candidates, and zero
+quota candidates. In the standard Batch-to-ZIP path, 28600/1910027 produced 24
+pages at 844x1200 and 28606/2001009 produced 15 at 842x1200. All 39 pages used
+the validated lossless-WebP native method without fallback. Ordered IDs, unique
+per-episode hashes, exact ZIP/Manifest membership, CRC/member hashes, Artifact
+hash/size, completed Items, succeeded END Runs, and present Artifacts passed.
+Six current same-page comparisons with unchanged Core capture (p1/p13/p24 and
+p1/p8/p15) had zero RGB differences and passed visual inspection. The prior
+39-page PNG RGB comparison is secondary historical evidence. No access-right
+fields changed, quota resource rows stayed 0 before/after, and no entitlement
+action occurred.
+
+For these 39 pages only, observed JPEG response bytes totaled 37,346,355 and
+WebP output totaled 25,356,052 (-32.11%). By product, 28600 measured 26,159,334
+to 18,055,076 bytes (-30.98%), and 28606 measured 11,187,021 to 7,300,976
+(-34.74%). All WebP pages were smaller than their observed source body in this
+run; this is not a general size guarantee. Downstream WebP reader compatibility
+outside the tested browser/Pillow/ZIP path was not separately verified. No image
+bytes, signed URLs, or credentials are recorded in Git.
