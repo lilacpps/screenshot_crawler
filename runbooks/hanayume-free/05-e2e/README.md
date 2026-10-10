@@ -1,13 +1,13 @@
 # Phase 05 — Independent live E2E / Final gate
 
-Status: NOT STARTED。前提: Phase 02〜04の実装Review BLOCKING 0、siteの現在の無料候補があること。
+Status: PASS / BLOCKING 0 for the logged-out exact-`無料` scope. Independent Tester completed three standard Batch runs with END, generated three verified ZIPs, pixel-checked all 122 pages and visually passed 9 first/middle/last samples. Final independent Reviewer passed with 42 fresh tests, 0 skipped, Ruff/diff, and independent SQLite/ZIP/PNG audits passing. The earlier HTTP 429 and one-page timeout attempts are historical and superseded. Authenticated non-consuming `今なら無料` remains outside scope and unverified.
 
 ## 目的
 **2〜3話**を実際の標準CLIで Watchlist → Discovery → Catalog → Batch Plan →
 Batch Run → Crawl → Manifest/ZIP → completed と通し、画像と状態の整合性を独立検証する。
-「無料」「今なら無料」が両方現存するときは**各ラベルから1話以上**を含める。
-シード: https://hanayume.com/episodes/8c6f15923caa0 （この話の無料権利は未確認）。
-不足すれば同一作品の現存無料話または別の花とゆめ＋作品に切り替え、対象と根拠を記録する。
+このrunではログアウト状態で直接閲覧を確認した「無料」話から2〜3話を含める。
+「今なら無料」は登録/ログインを要する表示を観測し、認証済みの非消費閲覧を確認していないためE2E対象外。
+シード: https://hanayume.com/episodes/8c6f15923caa0。
 
 ## Live手順（実装後のCLI、隔離パス）
 共通Crawler Chromeを既存手順で起動し、1 operatorで実施。
@@ -45,8 +45,16 @@ New-Item -ItemType Directory -Force output\hanayume_experiment | Out-Null
 ## Final gate
 - Tester結果はPASS/FAIL/NOT VERIFIEDを各観点で報告。通常のUnit成功だけではlive PASSとしない。
 - 最終Reviewerが実装差分・Checker evidence・失敗修正を再確認し、BLOCKING 0。
-- 「無料」「今なら無料」各分類を独立にUnit/Integrationで検証。
-  Live候補が存在しなかったラベルはNOT VERIFIEDと残し、仮定で実サイト成功を主張しない。
+- 「無料」と「今なら無料」の分類を独立にUnit/Integrationで検証し、後者は `unknown` のままにする。
+  今なら無料の認証済み非消費Viewer確認はユーザーのno-login指示で未実施であり、Live accessはNOT VERIFIEDと報告する。
 - PROGRESS.md、site README、対応noteを**実際の実装結果**に同期。
   ブランチはレビュー可能な状態で残す。mainへ自動mergeしない。
+
+## Final Tester result (2026-10-11)
+
+- The independent Tester reused the previously audited 296-source Discovery Catalog through a coherent SQLite backup; it did not rerun Discovery during the final Batch E2E. The harness invoked the standard `batch run --site hanayume --limit 3` CLI with transparent in-process evidence wrappers under isolated paths.
+- Exactly the three logged-out exact-`無料` entries completed with `stop_reason=end`: `8c6f15923caa0` (32 pages), `9202b052ad237` (40), and `2ec9c6b024ee0` (50). Before each advance, an independent visible-canvas read in the same run was decoded as RGBA and exactly matched the adapter PNG. Three ZIPs matched Manifest member count/order/CRC/hash; the corresponding three Catalog Items completed, while the 293 `unknown` Items remained pending. The earlier failed run record was retained.
+- Tester independently viewed first, middle, and last page samples for every episode (9 total); each showed only the comic body with no UI/ad, blank frame, or half-page crop. Quota resources remained unused and grant/entitlement state unchanged. Metrics: 1,189 requests; zero 403/429/5xx, challenge, CAPTCHA, or retries.
+- Command: `.venv/Scripts/python.exe output/hanayume_experiment/tester/hanayume_e2e.py --live --reuse-catalog output/hanayume_experiment/tester/runs/20261010T152230Z-2794388b/catalog.sqlite`. Reports: `output/hanayume_experiment/tester/runs/20261010T153649Z-ac385393/final_report.json` and `tester_assessment.json`; ZIPs and sampled images are isolated under the same ignored run directory.
+- Capture method is rendered body-canvas PNG at observed 828×1329 dimensions. It retains the rendered canvas pixels but not the original 960×1540 source resolution. The bounded 240×385 tiles reject only the tested MCU-8 DCT permutation approach. Authenticated non-consuming access for `今なら無料` remains NOT VERIFIED per the user's no-login instruction.
 

@@ -409,6 +409,7 @@ def _registry() -> AdapterRegistry:
     registry = AdapterRegistry()
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysAdapter
+    from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
@@ -422,15 +423,17 @@ def _registry() -> AdapterRegistry:
     registry.register("zeblack", ZeblackAdapter)
     registry.register("comicdays", ComicDaysAdapter)
     registry.register("piccoma", PiccomaAdapter)
+    registry.register("hanayume", HanayumeAdapter)
     return registry
 
 
 def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
-    """Build the Batch registry with BookWalker-only site-local credentials."""
+    """Build the Batch registry with only supported site adapters."""
 
     registry = AdapterRegistry()
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysAdapter
+    from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
@@ -450,6 +453,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     registry.register("zeblack", ZeblackAdapter)
     registry.register("comicdays", ComicDaysAdapter)
     registry.register("piccoma", PiccomaAdapter)
+    registry.register("hanayume", HanayumeAdapter)
     return registry
 
 
@@ -458,6 +462,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
 
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerDiscoveryAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysDiscoveryAdapter
+    from screenshot_crawler.site_adapters.hanayume import HanayumeDiscoveryAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusDiscoveryAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeDiscoveryAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneDiscoveryAdapter
@@ -472,6 +477,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     registry.register("piccoma", PiccomaDiscoveryAdapter)
     registry.register("zeblack", ZeblackDiscoveryAdapter)
     registry.register("comicdays", ComicDaysDiscoveryAdapter)
+    registry.register("hanayume", HanayumeDiscoveryAdapter)
     return registry
 
 
@@ -483,8 +489,10 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("mangaone", MangaOneSitePolicy)
     registry.register("zeblack", ZeblackSitePolicy)
     from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
+    from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
     registry.register("comicdays", ComicDaysSitePolicy)
     registry.register("piccoma", PiccomaSitePolicy)
+    registry.register("hanayume", HanayumeSitePolicy)
     return registry
 
 

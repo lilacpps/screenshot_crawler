@@ -1,24 +1,28 @@
 # 花とゆめ＋ Site Adapter — 「無料」「今なら無料」対応 Runbook
 
-Status: PLANNED / 実サイト未調査・実装未着手（2026-10-10）。
+Status: Phases 01-05 PASS / BLOCKING 0 within the user-authorized logged-out `無料` scope. Final independent Reviewer passed (42 fresh tests, 0 skipped; Ruff, diff, and SQLite/ZIP/PNG artifact audits passed). The Tester completed three episodes, 122 body pages, and three ZIP Artifacts with 9/9 visual samples passing. `今なら無料` remains `unknown` and authenticated non-consuming access is unverified under the no-login instruction. The full pytest run predates the latest site-only geometry correction; the independent post-fix affected selection passed.
 Branch: feat/hanayume-adapter。
-進捗と観測のauthority: [PROGRESS.md](PROGRESS.md)。この文書は実行契約であり、実装完了を意味しない。
+進捗と観測のauthority: [PROGRESS.md](PROGRESS.md)。この文書は実行契約。Phase 03-Bのlocal review gateとlive evidence gateは分けて記録し、overall Phase 03のPASSを先取りしない。
 
 ## 1. 目的と第一段階のスコープ
 
 花とゆめ＋（hanayume.com）の作品内エピソードをWatchlistの1話URLから発見し、
-**表示が「無料」または「今なら無料」の話**を既存の通常のdirect-only Batch Runで取り込み、
-本文を正しい読書順でManifest/ZIPに保存する。
+一覧に出る「無料」「今なら無料」を別々の表示状態としてDiscoveryへ取り込む。
+この実行ではユーザー指示「ログインせず、検証可能な範囲で進める」に従い、
+現在ログアウトで直接閲覧を確認できた「無料」だけをdirect-only Batch候補にする。
+「今なら無料」は登録/ログインが必要というViewer表示を観測したためDiscoveryには残すが、
+認証された状態の非消費閲覧は未確認としてBatch対象外にする。
 
 Watchlist → full/incremental/可能ならsite-native bounded Discovery
 → Catalog → Batch Plan（direct-only）→ Batch Run → Crawl → Manifest/ZIP → Catalog completed。
 
-- 「無料」も「今なら無料」も初期版の**同等な採用対象**。両者を生の表示状態として区別して観測・テストし、現行Catalogには検証済みの両方をfreeとして表現する方針（既存schema優先）。
+- Discoveryは行の正確な表示を別々に判定する。「無料」は `access_mode=free`、「今なら無料」は `access_mode=unknown` とし、raw labelはCatalogへ保存しない。free eligibilityは表示だけで決めず、Viewerの非消費入場を確認した状態だけをBatch候補にする。現在のrun scopeではログアウトで確認した「無料」のみ対象。
 - **配信期限を開発優先度・終了条件・固定の除外条件にしない**。ただし、実行時に無料でなくなった話は自動取得せずfail closed。もしサイトが終了日時を明示するなら既存モデルで保持可能か調査し、あくまで補助情報とする。
 - 作品横断の全サイト検索やquota/課金の自動取得は対象外。別作品にも再利用できるsite adapterとする。
 - 初期版はサイトで正規に利用できる無料閲覧を対象とし、アクセス制御・DRMの回避はしない。
 
-**重要な未検証事項**: 一覧のexpand構造、安定した作品/話identity、「今なら無料」の実際の閲覧条件、Viewer実体と原画像構成、END挙動。画面観測前にselectorやAPI形式を確定しない。
+**Phase 01で確認済み**: 10個の話数範囲ページで296/296件の一意IDを観測。「もっと見る」は55行で増分が止まっても表示されたため完了判定に使わない。「今なら無料」はログイン/登録要求の画面を表示し、ログアウト状態での閲覧は確認できなかった。
+**Phase 03/05 evidence:** for the three logged-out `無料` samples, counters were 37/45/55 and the viewer had 38/46/56 `#xCVPages` slots. In these samples, slot 0 was promotion; slots 1 through N−5 were structural body candidate wrappers, many unloaded placeholders without a canvas; slot N−4 was book information, then two promotion slots, followed by good/last terminal UI. At N−4 the final body canvas was visible; at terminal N/N there was no body canvas. All were in `mode-spread`; no single-page control was established. This is sample evidence, not a universal rule. One first-page source replay from 16 complete tiles into a 960×1540 scratch canvas and the exact 828×1329 visible scale matched pixels exactly. A third-sample scratch-to-visible canvas relationship remains unresolved, so no all-page source-native claim is justified. The final three-sample live Batch E2E captured 32/40/50 body pages (122 total) as clean rendered body-canvas PNGs at 828×1329; all same-run RGBA comparisons matched, all three ZIPs passed Manifest order/count/CRC/hash checks, and first/middle/last visual checks passed for each episode. DCT is rejected only for the measured 240×385 tile geometry, whose 385px height is unaligned to MCU-8. The earlier HTTP 429 and one-page timeout are historical failures superseded by the later PASS; see [PROGRESS.md](PROGRESS.md). Phase 02 live Discovery verified same-work identity, all ten ranges, and all 296 rows for the seed work; the final Batch test reused that Catalog and did not rerun Discovery.
 
 ## 2. 実装の基準
 
@@ -39,9 +43,9 @@ Comic DAYS（無料アクセス、canvas/native）、Piccoma（完全リスト�
 
 ## 3. free-only契約
 
-- Discoveryのpositive signalは、対象行に対応するサイト固有の正確な **「無料」/「今なら無料」** 表示と、その表示のscope・矛盾のなさ。単にViewerが読めた／ログイン済／以前開いたことがあるだけではfreeとしない。
-- 対象となる両表示について、Viewer入場時に購入・ポイント・コイン・チケット・待機消費・新たな権利開放を必要としないことをPhase 01で検証する。正規セッションでの単純閲覧は可能だが、ログイン自動化や利用権付与操作は初期版対象外。
-- 「今なら無料」が条件付き・権利消費型であると判明した場合、証拠に基づいてそのサブタイプをunknown/unsupportedへ保留し、Leadが範囲を明示的に再設計する。ラベルだけで危険な遷移を自動化しない。
+- 現在のログアウト実行では、同じ行の唯一の正確な「無料」badgeだけをfreeにする。複数badge、欠落、矛盾、未対応ラベルはunknownにする。「今なら無料」はDiscoveryで検出・区別するが、Catalog上はunknownであり、Batch候補にしない。
+- 「無料」3話はログアウト状態の正規Viewerで表示された。「今なら無料」の認証済み非消費閲覧可否は未検証。ユーザーのno-login指示により、ログイン、登録、権利付与、購入操作は行わず、この範囲を広げない。
+- 将来「今なら無料」をBatch対象へ含めるには、ログイン済み利用者についても同一話の現在の権利・Viewer入口・無消費性を示す追加の非消費証拠が必要。raw labelをCatalog schemaへ黙って追加しない。
 - 有料、quota、レンタル、待てば無料、会員特典/購入済み、表示矛盾、unknownは**Batch非対象**。これらを無条件freeへ昇格させない。
 - Catalogがfreeでも、**各Batch入場直前にliveサイトで同じ作品/話identityと現在の対象無料ラベルを再確認**。不一致、無料終了、未知のダイアログ、課金CTAは停止/skip。別エピソードへ暗黙移動しない。
 - Site Policyはdirect-only、quota resource/消費記録/後続grant passなし。auto/directも同じ安全な無料入場に限定し、quotaは明示拒否。
@@ -84,8 +88,8 @@ E2Eまで到達を優先してよい。ただしnative可能性のProbe結果・
 
 ## 5. 実行フェーズ・ゲート
 
-1. [01 — Site/Repo Probe](01-site-probe/README.md): 全件一覧、2種のfree表示、viewer、原画像候補、終端を証拠付き確認。
-2. [02 — Discovery](02-discovery/README.md): 両無料ラベル分類、全話同期、global order、full/incremental/bounded、独立Review。
+1. [01 — Site/Repo Probe](01-site-probe/README.md): 全件一覧、2種の表示状態、ログアウト可能な閲覧、viewer、原画像候補、終端を証拠付き確認。
+2. [02 — Discovery](02-discovery/README.md): 「無料」/「今なら無料」の診断分類（後者はunknown）、全話同期、global order、full/incremental/bounded、独立Review。
 3. [03 — Viewer/Capture](03-viewer-capture/README.md): live free preflight、安定したpage/END、原画像優先capture、比較テスト、独立Review。
 4. [04 — Policy/Batch](04-batch/README.md): direct-only Policy、Planner/Executor/ZIP/Catalog統合、独立Review。
 5. [05 — Independent E2E](05-e2e/README.md): 2〜3話の実パイプライン、画像・状態の独立監査、最終Review。
@@ -128,10 +132,10 @@ cookie、署名付きURL、token、購入画面、原画像、著作物fixture�
 ## 8. 最終受け入れ条件
 
 - 1話URLから対象作品全体を漏れなく正しく列挙し、全体順序をCatalogへ保持。
-- 「無料」と「今なら無料」それぞれを、**独立のpositive signalとしてテスト**し、検証済みであればどちらもdirect候補。
-  非対象状態や矛盾は誤って取得しない。
+- 「無料」と「今なら無料」それぞれの正確な表示状態を**独立にDiscoveryテスト**する。Catalogには現在の `access_mode` のみを保存し、raw labelは診断値とする。Batch候補にするのは同一identityの現在状態を無消費で直接閲覧できると確認したものだけ。
+  このrunではログアウトで確認した「無料」のみBatch対象。「今なら無料」は登録要求を確認したためunknown/ineligibleとして残し、誤って取得しない。
 - Batch直前に毎回identityと無料ラベルを再確認し、条件変化を安全に扱う。
-- 2〜3話（両ラベルのlive例が存在するなら双方を含む）を標準Discovery→Batch→ZIPで検証。
+- 2〜3話のログアウト状態「無料」例を標準Discovery→Batch→ZIPで検証する。「今なら無料」の認証済み非消費確認は、ユーザーの「ログインせず」指示によりこのrunの受け入れ条件から除外し、未検証として残す。
 - 本文の欠落・重複・ページ順序逆転・画像品質の不当な劣化・広告/次話混入なし。
   Native復元には厳密なprovenance/pixel照合、fallbackには正しいMethod記録。
 - 最終本文後のENDが観測され、Manifest/ZIP CRC/各member hash、Artifact、

@@ -1,6 +1,10 @@
 # Phase 01 — Repository / 花とゆめ＋ 実サイトProbe
 
-Status: NOT STARTED。次段階: [Discovery](../02-discovery/README.md)。
+Status: Independent Phase 01 review PASS / BLOCKING 0. Phase 02 is authorized; its independent review now gates Phase 03.
+
+## Current run scope (2026-10-10)
+
+ユーザー指示は「ログインせず、検証可能な範囲で進める」。Discoveryは「無料」「今なら無料」を別表示として保持するが、ログアウトでアカウント登録要求を確認した「今なら無料」は、認証済みの非消費閲覧を確認するまでunknown/ineligibleとし、このrunのBatch対象にしない。現在確認済みのBatch候補は同一作品の「無料」3話のみ。
 
 ## 目的・根拠
 シード https://hanayume.com/episodes/8c6f15923caa0 から、

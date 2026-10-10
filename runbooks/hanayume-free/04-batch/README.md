@@ -1,11 +1,12 @@
 # Phase 04 — Free-only Site Policy / Batch integration
 
-Status: NOT STARTED。前提: Phase 02 Discovery、Phase 03 Viewer/Captureの独立Review通過。
+Status: Phase 04 local implementation and independent review PASS / BLOCKING 0 (42 tests, 0 skipped; Ruff PASS). The separately gated Phase 05 live standard Batch E2E later completed three logged-out exact-`無料` episodes and ZIPs; all 122 body pages were pixel-verified, with 9/9 visual samples clean. `今なら無料` remains `unknown`/ineligible.
 次段階: [E2E](../05-e2e/README.md)。
 
 ## 目的
-既存Catalog/Planner/Executor/Runner/Packagerの標準経路で「無料」「今なら無料」両ラベル由来の
-freeなsourceだけを**direct-only**実行対象にし、正常終了でのみZIPとcompleted Itemを作る。
+既存Catalog/Planner/Executor/Runner/Packagerの標準経路で、現在 `access_mode=free` として
+確認されたsourceだけを**direct-only**実行対象にし、正常終了でのみZIPとcompleted Itemを作る。
+このno-login runでは「今なら無料」は `unknown` のため対象外。
 
 ## 実装契約
 - 花とゆめ＋ Site Policy を最小限のregistryに追加。Catalog available=trueかつ
@@ -23,7 +24,7 @@ freeなsourceだけを**direct-only**実行対象にし、正常終了でのみZ
 - existing Core/Batchにサイト名分岐を導入しない。必要な登録だけ差分追加。
 
 ## Test matrix
-- Unit: 両freeラベル起源sourceのdirect採択（Phase 02 classification前提）、
+- Unit: Phase 02でfreeに分類されたsourceのdirect採択（「今なら無料」はunknown）、
   nonfree/unknown/expired/live mismatch skip、no quota mutations、stale Catalog、completed skip。
 - Integration: local fixtureの完全なDiscovery→Catalog→Planner→Executor→Runner
   →Manifest→ZIP→completed経路、失敗時pending/no ZIP/no Artifact、
@@ -32,6 +33,10 @@ freeなsourceだけを**direct-only**実行対象にし、正常終了でのみZ
   site keyと隔離パスで使用できる。
 - Reviewerは権利消費・不適切な無料昇格・source衝突・誤完了・
   manifest範囲外ファイル混入・他サイト共通部への回帰を優先監査。
+
+## Phase 04 local result (2026-10-11)
+
+The registered Hanayume policy admits only available `access_mode=free` with `direct`; `今なら無料` remains `unknown` and ineligible. The site adapter accepts Batch `direct` as the same no-entry free path used by manual `auto`; quota strategies and resources remain unsupported. A synthetic browser pipeline completed Discovery -> Catalog -> Planner -> Executor -> Runner -> Manifest/ZIP -> Catalog completed using the explicit test Catalog and temporary output paths. It also verified stale free-to-`今なら無料`, wrong work, UNKNOWN state, premature END, max-pages, and package failure remain pending with no Artifact. The run observed global-position archive prefix and skipped the completed Item on replanning. Independent Phase 04 review passed BLOCKING 0 (42 tests, 0 skipped; Ruff PASS). No live Batch was part of the Phase 04 local gate; the Phase 05 section below documents the later independent live run.
 
 ## Exit
 normal Batch/isolated Catalogで既存統合テストを通過し、Reviewer BLOCKING 0。

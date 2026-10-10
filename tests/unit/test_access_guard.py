@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -102,6 +103,65 @@ def test_explicit_challenge_marker_has_distinct_reason() -> None:
         guard.raise_if_stopped()
     assert exc_info.value.reason == "challenge_detected"
     assert any(event.event_type == "challenge" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_close_propagates_cancellation_from_pending_captcha_provider_check() -> None:
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    released = asyncio.Event()
+
+    class Locator:
+        async def count(self) -> int:
+            if not released.is_set():
+                entered.set()
+                try:
+                    await released.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+            return 0
+
+    class Page:
+        url = "https://first-party.test/viewer"
+
+        def on(self, _event: str, _listener: object) -> None:
+            pass
+
+        def remove_listener(self, _event: str, _listener: object) -> None:
+            pass
+
+        def locator(self, _selector: str) -> Locator:
+            return Locator()
+
+    guard = AccessGuard(
+        site="test",
+        relevant_host=lambda _url: True,
+        monitor_interval_ms=1,
+    )
+    guard.start(Page())  # type: ignore[arg-type]
+    close_task: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=0.5)
+        close_task = asyncio.create_task(guard.close())
+        await asyncio.wait_for(cancelled.wait(), timeout=0.5)
+        # Give the monitor and close waiter a scheduling turn after cancellation.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert close_task.done(), "AccessGuard.close() left its monitor running"
+        await close_task
+    finally:
+        # On the pre-fix implementation, the provider probe swallowed its first
+        # cancellation. Release any subsequent selector checks and stop the task
+        # so this regression fails without leaking a background coroutine.
+        released.set()
+        monitor_task = guard._monitor_task
+        if monitor_task is not None and not monitor_task.done():
+            await asyncio.sleep(0.01)
+        if monitor_task is not None and not monitor_task.done():
+            monitor_task.cancel()
+        if close_task is not None and not close_task.done():
+            await asyncio.wait_for(asyncio.shield(close_task), timeout=0.5)
 
 
 @pytest.mark.asyncio

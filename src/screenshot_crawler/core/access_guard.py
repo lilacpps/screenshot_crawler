@@ -263,6 +263,8 @@ class AccessGuard:
                     for index in range(count):
                         if await locator.nth(index).is_visible():
                             return provider
+                except asyncio.CancelledError:
+                    raise
                 except BaseException:  # noqa: BLE001, S112
                     continue
         return None

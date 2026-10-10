@@ -1,49 +1,29 @@
 # Phase 02 — Discovery / Catalog
 
-Status: NOT STARTED。前提: [Phase 01](../01-site-probe/README.md)の一覧・ラベル・identity証拠。
-次段階: [Viewer/Capture](../03-viewer-capture/README.md)。
+Status: Implementation, focused local tests, isolated live full/incremental/bounded Discovery, and independent review complete (PASS / BLOCKING 0).
 
-## 目的
-Watchlistに与えた花とゆめ＋の任意の正規1話URLから対象作品の**全話**を発見し、
-complete snapshotを検証してCatalogへ反映する。
-「無料」「今なら無料」をpositiveに区別して判定し、両方とも安全なfreeへ正規化する。
-それ以外のアクセス種別はsite観測に基づいてquota/paid/unknown等へ保守的に分類。
+## Scope and observed authority
 
-## 実装範囲
-- src/screenshot_crawler/site_adapters/hanayume/ のDiscovery、URL/ID parser、
-  最小限のsite registration、対応Unit/Playwright browser Integration test。
-- Watchlistはsite=hanayume（仮site key、既存site registry namingと整合を取って確定）。
-  work_keyはuser指定のopaque value。source external_idはサイトの確実なstable identity。
-- 作品タイトル/著者/ジャンル/話タイトル/公開日/全体話順はサイトから観測できるものだけ採用。
-  第N話の表示番号が欠けたり重複したりしても、完全集合の**native順序**で整序する。
-- full / incremental / site-native boundedが既存framework契約を満たす。
-  範囲内で1から振り直さず、作品全体の表示番号を保持する。
+Discovery starts from the strict episode URL `https://hanayume.com/episodes/<13-hex-id>`. The target work is identified by the unique `#xHeader a.ep-h-main-h-series` link; that header link is a sibling of the episode-list subtree, so the adapter separately requires the unique `.series-eplist-wrap` inside the unique `div.series.mode-ep`. Global series links are not a work authority because the page also contains recommendations. The observed range navigation contains ten contiguous oldest-first ranges (`1-30` through `271-296`), with requested page routes `/episodes/<seed-id>/<ordinal>`. On all ten observed routes the active link pointed to the seed path `/episodes/<seed-id>`; the adapter accepts that alias only for the unique selected anchor after the actual browser URL equals the requested numbered route and the selected label matches. Every nonselected numeric link remains strict.
 
-## 契約
-- Phase 01で選んだ一つのexpand方式を、boundedクリック/タイムアウト/termination checksで実装。
-- 宣言話数があれば一致を検証し、行IDの欠損/重複、別作品混入、折り畳み残り、
-  未完了paginate、DOM変更はDiscoveryIncompleteError相当で失敗。
-- **全件のrowを一旦収集し検証した後**にrecordsをyield。途中失敗でfull既存sourceを
-  unavailableにしない。incrementalでも対象外の過去rowを誤って消さない。
-- 対象rowで厳密な「無料」もしくは「今なら無料」の単独positive signalが確認でき、
-  相反する paid/consume/unknown マーカーがなければ access_mode=free。
-  他のラベル、readable-only、既存unlock、矛盾表示をfree推定しない。
-- 生ラベルと正規化結果が診断可能な形でテスト/サイトドキュメントに残る。
-  既存Catalog schemaで未対応の追加フィールドが必要な場合は、schema変更前にLeadへ相談。
-- completed itemや既存ArtifactをDiscoveryだけで変更しない。再Discoverでfree→nonfreeとなる
-  正当な変化を反映し、Batchの対象選定に伝える。
+Each declared range is fetched once with finite navigation/DOM/observation timeouts and bounded pacing. Discovery checks the current range label and exact actual page URL, the unchanged complete range set, the same work identity, exact row counts, unique episode IDs, and presence of the seed. A missing row, duplicate ID, foreign work link, redirect, incomplete range, or AccessGuard stop fails closed. The loader is not used as a completion signal.
 
-## テストとレビュー
-- Unit: canonical host/URL/ID、作品scope、label分類（両exact free / 相反 / nonfree / unknown）、
-  duplicate/missing/reordered row、分割話、全体順序、bounded scope境界。
-- Browser Integration: 「もっと見る」または範囲展開の増分DOM、実際の完全終了signal、
-  transient loader、途中失敗は全体失敗、full/incremental、既知item状態を保全。
-- Live: seedの対象作品全件数/最古/最新、両無料ラベルが存在すれば各1件の正しいCatalog分類、
-  full→incremental、boundedの全体順序、サイト変更時の扱いを検証。
-- Reviewerはラベルの誤判定・不完全Discovery・範囲内番号誤り・item欠落を最優先で確認。
-  BLOCKING 0になるまで先へ進めない。
+All ranges are buffered and validated before the adapter yields its first record, for both full and incremental modes. Native row titles stay separate from list position, so split episodes remain distinct. Global positions are assigned in the observed oldest-first order; records are then yielded latest-first. Inclusive bounded scope is applied only after complete validation and retains the original global positions.
 
-## Exit
-実装diff、actual test selection/results/skips、live観測/未確認、Review、現在のCatalog出力を
-PROGRESS.mdへ記録。site README / noteは**実装済み契約のみ**を同期。
+## Access classification under the no-login run scope
 
+Classification reads exact access badges inside each episode row. One exact `無料` badge maps to `access_mode=free`. One exact `今なら無料` badge is retained as `access_mode=unknown`; login/registration was required in the logged-out viewer probe, and authenticated non-consuming access is not verified. Missing, duplicate, conflicting, or any other badge state maps to `unknown`.
+
+The current Catalog schema stores only `access_mode`; the raw Japanese badge is used by the site-local classifier and tests and is not persisted in Catalog, title, order, or work key. Discovery includes all observed rows, but only the three logged-out-confirmed `無料` rows are eligible for later Batch work in this run. Do not add login, registration, entitlement, ticket, purchase, or quota actions. Supporting `今なら無料` later requires separate authenticated, non-consuming evidence for the same live identity.
+
+## Implementation and verification
+
+- Site-local adapter: `src/screenshot_crawler/site_adapters/hanayume/`.
+- CLI registration: Discovery registry only. No site-specific Core, Catalog schema, Batch registry, viewer, or other-adapter changes were made. One narrowly scoped shared AccessGuard cancellation fix is recorded in the Core note.
+- Tests: `tests/unit/test_hanayume_discovery.py`, `tests/integration/test_hanayume_discovery_browser.py`, `tests/unit/test_access_guard.py`, `tests/integration/test_access_guard_browser.py`, and the CLI registry test cover strict URL/work identity, exact labels and conflicts, range completeness/drift, selected-alias and actual-URL checks, global positions, bounded scope, Catalog preservation, access stops, and guard cancellation.
+- Targeted verification passed: 46 unit/browser tests across Hanayume Discovery, AccessGuard, CLI registration, and the local Discovery integration; 0 skipped. Full `ruff check src tests` passed.
+- Isolated live CLI full Discovery passed: 296 observed/new, complete `True`, stopped `exhausted`. Catalog audit found 296 unique work-scoped sources, positions 1-296, with 3 `free` and 293 `unknown`.
+- Isolated live CLI incremental Discovery passed: 5 observed/known, complete `None`, stopped `known_streak`; the adapter validates and buffers all ten ranges before yielding those records.
+- Isolated live CLI bounded Discovery passed: 3 observed/new, complete `True`, stopped `exhausted`; Catalog audit returned latest-first global positions `[3, 2, 1]`.
+- All live runs used only `output/hanayume_experiment/` Watchlists/Catalogs. No normal Catalog or output fallback was used.
+- Independent Phase 02 reviewer: PASS / BLOCKING 0. Lead authorized Phase 03-A bounded probe; production viewer/capture implementation remains gated on evidence and a Lead contract.

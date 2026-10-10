@@ -1,5 +1,22 @@
 # 00. Core 現行実装ノート
 
+## Hanayume Discovery, Viewer, and direct-only Batch registration (2026-10-11)
+
+`HanayumeDiscoveryAdapter` is registered in the Discovery registry. `HanayumeAdapter` is registered in the manual crawl and Batch adapter registries, and `HanayumeSitePolicy` is registered in the Batch policy registry. They use the existing shared CDP BrowserSession/Page, DiscoveryService, and Planner/Executor/Runner/Packager paths. No site-specific Core branch or Catalog schema field was added.
+
+The row-local exact `無料` badge maps to `access_mode=free`; exact `今なら無料` and ambiguous/missing labels map to `unknown`. The policy allows only available free sources with the ordinary direct strategy; it rejects unknown, quota, paid, owned, grant, and rental and exposes no quota resources or grant-only passes. Catalog persists only `access_mode`, not the raw Japanese badge.
+
+The manual Viewer path performs a bounded fresh target-row check: it validates the bare same-work range set, searches that listing or only the numbered pages needed to locate the target, and rechecks the exact row after episode entry. Discovery still validates full-work coverage and global uniqueness. Viewer stores clean rendered body-canvas PNGs at their observed dimensions; broad source-native fidelity remains unproven. Independent Phase 03 correction review passed, and the final isolated live Batch E2E completed three `無料` episodes (122 pages) into three ZIP Artifacts with exact same-run canvas pixel matches and 9/9 visual samples passing. It reused the existing 296-source Discovery Catalog, completed exactly three Items, and left 293 unknown Items pending. Earlier HTTP 429 and one-page timeout runs are historical failed iterations. `今なら無料` remains unknown and authenticated non-consuming access remains unverified under the no-login scope. Final Reviewer passed BLOCKING 0 (42 fresh tests, 0 skipped; Ruff, diff, and SQLite/ZIP/PNG artifact audits passed). Details and limitations are in `note/10_hanayume.md` and the Hanayume runbook.
+
+## AccessGuard selector cancellation (2026-10-10)
+
+The shared visible-CAPTCHA provider selector check now re-raises
+`asyncio.CancelledError` before its best-effort Playwright-error handling. This
+allows the monitor task to terminate when `AccessGuard.close()` cancels it
+during a pending selector operation. A unit regression uses a blocked locator
+count to reproduce and verify prompt cleanup. Access-stop classification,
+relevant-host rules, and response handling are unchanged.
+
 ## Piccoma current adapter registration (2026-10-09)
 
 The Discovery registry includes `PiccomaDiscoveryAdapter`; the manual crawl and Batch adapter registries include `PiccomaAdapter`; and the Batch Site Policy registry includes `PiccomaSitePolicy`. The adapters use the existing BrowserSession/CDP Page contract. Manual access strategies are limited to `auto` and `direct`, both requiring a fresh exact-free product-listing check. Batch policy admits only available sources classified as free and uses the normal direct path; all other access modes are rejected with no resource or grant-only passes. Viewer/Capture and local Batch integration behavior are summarized in `note/09_piccoma.md`; independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped), and Phase 05 live Discovery-to-ZIP E2E passed for one free episode from each product. The earlier Phase 06-B live Batch-to-ZIP and PNG comparisons are historical. Phase 06-D's default native result is lossless WebP only after strict Piccoma-local JPEG tile replay, proven white compositing, single-VP8L validation, and exact full-RGB round-trip. Verified native pixels remain PNG if encoding fails; guarded Core fallback remains PNG. Phase 06-D code review and independent live Tester passed with BLOCKING 0: all 39 pages in the two-product Batch-to-ZIP run used the validated WebP path. Focused Piccoma, packaging, Ruff, and diff checks passed; the full suite was not rerun after the final site-local adjustments. Other layouts/resources and unobserved draw/backdrop variants remain unsupported. Details and limits are in `note/09_piccoma.md` and the Piccoma runbook progress.
@@ -229,7 +246,6 @@ read-only Batch planning and Manga ONE Policy. Phase
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
 最終同期: 2026-10-02
-
 
 ### Test execution policy（2026-09-27）
 
@@ -1331,7 +1347,6 @@ CrawlRun(failed)へ記録し、Itemはpending、Artifactは作成しない。
 `batch plan`は引き続きCatalog read-onlyであり、`batch run`だけがquota local stateと
 CrawlRun / Artifact / Item statusを書き換える。Manga ONEとBookWalkerのquota policyは既存挙動を
 維持し、Android targetはCatalogへ保持できるがPhase 3 Executorでは実行しない。
-
 
 ### Catalog v6 / Magapoke M3c1 current update
 

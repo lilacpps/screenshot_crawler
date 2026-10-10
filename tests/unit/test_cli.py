@@ -813,29 +813,36 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     assert cli._batch_policy_registry().sites() == (
         "bookwalker",
         "comicdays",
+        "hanayume",
         "jumpplus",
         "magapoke",
         "mangaone",
         "piccoma",
         "zeblack",
     )
+    policy = cli._batch_policy_registry().create("hanayume")
+    assert policy.supported_access_resources() == ()
+    assert policy.grant_only_supported_access_resources() == ()
 
 
 def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     expected_crawl_sites = (
         "bookwalker",
         "comicdays",
+        "hanayume",
         "jumpplus",
         "magapoke",
         "mangaone",
         "piccoma",
         "zeblack",
     )
+    expected_batch_sites = expected_crawl_sites
     assert cli._registry().sites() == expected_crawl_sites
-    assert cli._batch_adapter_registry({}).sites() == expected_crawl_sites
+    assert cli._batch_adapter_registry({}).sites() == expected_batch_sites
     assert cli._discovery_registry().sites() == (
         "bookwalker",
         "comicdays",
+        "hanayume",
         "jumpplus",
         "magapoke",
         "mangaone",
@@ -845,6 +852,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     assert "zeblack" in cli._batch_policy_registry().sites()
     assert "comicdays" in cli._batch_policy_registry().sites()
     assert "piccoma" in cli._batch_policy_registry().sites()
+    assert "hanayume" in cli._batch_policy_registry().sites()
 
 
 def test_batch_run_parser_accepts_execution_options() -> None:
