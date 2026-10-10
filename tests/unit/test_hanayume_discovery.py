@@ -96,6 +96,20 @@ def test_hanayume_access_classifier_requires_one_exact_observed_badge(
     assert result.access_mode == expected
 
 
+def test_hanayume_now_free_requires_verified_series_auth_and_one_exact_badge() -> None:
+    now_free = "\u4eca\u306a\u3089\u7121\u6599"
+    free = "\u7121\u6599"
+
+    assert classify_hanayume_access((now_free,)).access_mode == "unknown"
+    assert classify_hanayume_access(
+        (now_free,), listing_authenticated=True
+    ).access_mode == "free"
+    for labels in ((now_free, free), (now_free, now_free), (free, now_free)):
+        assert classify_hanayume_access(
+            labels, listing_authenticated=True
+        ).access_mode == "unknown"
+
+
 def test_hanayume_range_links_validate_full_contiguous_coverage() -> None:
     ranges = _parse_range_links(_range_entries(), seed_id=SEED_ID)
 

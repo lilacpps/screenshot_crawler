@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -31,11 +32,122 @@ RANGE_PATH = re.compile(
     r"^/episodes/(?P<seed_id>[0-9a-f]{13})(?:/(?P<page_number>[1-9][0-9]*))?/?$"
 )
 RANGE_LABEL = re.compile(r"^(?P<start>[1-9][0-9]*)-(?P<end>[1-9][0-9]*)$")
+SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS = 5.0
+SERIES_AUTH_POLL_INTERVAL_MS = 150
 
 WORK_LINK_SELECTOR = "#xHeader a.ep-h-main-h-series"
 LISTING_SELECTOR = ".series-eplist-wrap"
 RANGE_LINK_SELECTOR = f"{LISTING_SELECTOR} a.series-sort-link"
-ROW_SELECTOR = f'{LISTING_SELECTOR} .series-eplist-item[data-e2e="eli"]'
+SERIES_AUTH_SNAPSHOT_SCRIPT = r"""(workId) => {
+  const headerIds = [...document.querySelectorAll('#xHeader')];
+  const headers = [...document.querySelectorAll('#xHeader.h')];
+  const header = headers.length === 1 ? headers[0] : null;
+  const all = selector => [...document.querySelectorAll(selector)];
+  const inside = selector => header ? [...header.querySelectorAll(selector)] : [];
+  const menu = inside('[data-e2e="hUserMenu"]');
+  const icons = inside('[data-e2e="hUserIcon"]');
+  const signouts = inside('[data-e2e="signoutBtn"]');
+  const userMenus = inside('.h-usermenu');
+  const loginAnchors = all('a').filter(anchor => {
+    const href = anchor.getAttribute('href') || '';
+    const label = (anchor.innerText || '').replace(/\s+/g, ' ').trim();
+    return /login|signin|sign-in/i.test(href) ||
+      /\u30ed\u30b0\u30a4\u30f3|\u30b5\u30a4\u30f3\u30a4\u30f3|login/i.test(label);
+  });
+  const wrappers = all('.series-eplist-wrap');
+  const wrapper = wrappers.length === 1 ? wrappers[0] : null;
+  const outer = wrapper?.parentElement ?? null;
+  const mains = wrapper ? [...wrapper.children].filter(node =>
+    node.classList.contains('series-eplist-main')) : [];
+  const main = mains.length === 1 ? mains[0] : null;
+  const roots = wrapper ? [...wrapper.querySelectorAll('.series-eplist')] : [];
+  const allRoots = all('.series-eplist');
+  const publicRoots = roots.filter(root => root.dataset.e2e === 'epList');
+  const userRoots = roots.filter(root => root.dataset.e2e === 'epListUser');
+  const outerIsObservedSeries = outer?.tagName === 'DIV' &&
+    outer.classList.contains('series') && outer.classList.contains('mode-series-top') &&
+    outer.classList.contains('series-safe-filter-target') && outer.dataset.e2e === 'pageSeries';
+  const knownRoots = publicRoots.length === 1 && userRoots.length <= 1 &&
+    roots.length === publicRoots.length + userRoots.length &&
+    publicRoots[0].parentElement === main && userRoots.every(root =>
+      root.parentElement === main && root.classList.contains('mode-user'));
+  const listingReady = wrappers.length === 1 && outerIsObservedSeries &&
+    mains.length === 1 && main?.parentElement === wrapper && knownRoots &&
+    allRoots.length === roots.length &&
+    [...document.querySelectorAll('.series-eplist-item[data-e2e="eli"]')]
+      .every(row => publicRoots[0].contains(row) || userRoots.some(root => root.contains(row)));
+  const positive = headerIds.length === 1 && headers.length === 1 &&
+    menu.length === 1 && all('[data-e2e="hUserMenu"]').length === 1 &&
+    icons.length === 1 && all('[data-e2e="hUserIcon"]').length === 1 &&
+    menu[0].tagName === 'A' && menu[0].classList.contains('h-main-nav-link') &&
+    menu[0].classList.contains('mode-user') && menu[0].contains(icons[0]) &&
+    signouts.length === 1 && all('[data-e2e="signoutBtn"]').length === 1 &&
+    signouts[0].tagName === 'BUTTON' && userMenus.length === 1 &&
+    userMenus[0].contains(signouts[0]) && loginAnchors.length === 0;
+  return {
+    routeExact: location.origin === 'https://hanayume.com' &&
+      location.pathname === `/series/${workId}` && !location.search && !location.hash,
+    listingReady,
+    authenticated: positive,
+  };
+}""";
+
+RANGE_ROWS_SNAPSHOT_SCRIPT = r"""() => {
+  const wrappers = [...document.querySelectorAll('.series-eplist-wrap')];
+  const wrapper = wrappers.length === 1 ? wrappers[0] : null;
+  const mode = wrapper?.parentElement ?? null;
+  const episodeMarkers = [...document.querySelectorAll('[data-e2e="pageEpisode"]')];
+  const episodePages = episodeMarkers.filter(node => node.tagName === 'DIV' &&
+    node.classList.contains('ep-main') &&
+    node.classList.contains('series-safe-filter-target'));
+  const episodePage = episodePages.length === 1 ? episodePages[0] : null;
+  const episodeModes = episodePage ? [...episodePage.children].filter(node =>
+    node.tagName === 'DIV' && node.classList.contains('series') &&
+    node.classList.contains('mode-ep') && !node.hasAttribute('data-e2e')) : [];
+  const episodeMode = episodeModes.length === 1 ? episodeModes[0] : null;
+  const mains = wrapper ? [...wrapper.children].filter(node =>
+    node.classList.contains('series-eplist-main')) : [];
+  const main = mains.length === 1 ? mains[0] : null;
+  const roots = wrapper ? [...wrapper.querySelectorAll('.series-eplist')] : [];
+  const allRoots = [...document.querySelectorAll('.series-eplist')];
+  const publicRoots = roots.filter(root => root.dataset.e2e === 'epList');
+  const userRoots = roots.filter(root => root.dataset.e2e === 'epListUser');
+  const knownOuter = episodeMarkers.length === 1 && episodePages.length === 1 &&
+    episodePage?.tagName === 'DIV' &&
+    episodeModes.length === 1 && episodeMode?.parentElement === episodePage &&
+    mode === episodeMode;
+  const knownRoots = publicRoots.length === 1 && userRoots.length <= 1 &&
+    roots.length === publicRoots.length + userRoots.length &&
+    publicRoots[0].parentElement === main && userRoots.every(root =>
+      root.parentElement === main && root.classList.contains('mode-user'));
+  const readRows = root => [...root.querySelectorAll(
+    '.series-eplist-item[data-e2e="eli"]')].map(row => {
+      const links = [...row.querySelectorAll('a.series-eplist-item-link')];
+      const titles = [...row.querySelectorAll('.series-eplist-item-h-text')];
+      const badges = [...row.querySelectorAll('.series-eplist-item-access-text')];
+      return {
+        linkCount: links.length,
+        href: links.length === 1 ? links[0].href : null,
+        titleCount: titles.length,
+        title: titles.length === 1 ? (titles[0].innerText || '').trim() : null,
+        labels: badges.map(node => (node.innerText || '').replace(/\s+/g, ' ').trim())
+      };
+    });
+  const rows = publicRoots.length === 1 ? readRows(publicRoots[0]) : [];
+  const historyRows = userRoots.length === 1 ? readRows(userRoots[0]) : [];
+  const allRows = [...document.querySelectorAll('.series-eplist-item[data-e2e="eli"]')];
+  const scopedRows = wrapper ? [...wrapper.querySelectorAll(
+    '.series-eplist-item[data-e2e="eli"]')] : [];
+  const rowsKnown = allRows.length === scopedRows.length && allRows.every(row =>
+    publicRoots[0]?.contains(row) || userRoots.some(root => root.contains(row)));
+  return {
+    structureReady: wrappers.length === 1 && allRoots.length === roots.length &&
+      knownOuter && mains.length === 1 &&
+      main?.parentElement === wrapper && knownRoots && rowsKnown,
+    rows,
+    historyRows
+  };
+}""";
 
 NAVIGATION_TIMEOUT_MS = 30_000
 DOM_TIMEOUT_MS = 12_000
@@ -44,6 +156,8 @@ RANGE_PAGE_SIZE = 30
 MAX_RANGE_PAGES = 100
 MAX_LISTING_ROWS = RANGE_PAGE_SIZE * MAX_RANGE_PAGES
 OBSERVATION_TIMEOUT_SECONDS = 8
+FREE_LABEL = "\u7121\u6599"
+NOW_FREE_LABEL = "\u4eca\u306a\u3089\u7121\u6599"
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +252,9 @@ def parse_hanayume_work_url(url: str) -> str | None:
     return match.group("work_id") if match is not None else None
 
 
-def classify_hanayume_access(raw_labels: Sequence[str]) -> HanayumeAccessObservation:
+def classify_hanayume_access(
+    raw_labels: Sequence[str], *, listing_authenticated: bool = False
+) -> HanayumeAccessObservation:
     """Classify only exact, unambiguous labels proven by the live listing.
 
     The raw label remains a helper/diagnostic value. The current Catalog schema
@@ -146,14 +262,11 @@ def classify_hanayume_access(raw_labels: Sequence[str]) -> HanayumeAccessObserva
     """
 
     labels = tuple(raw_labels)
-    if labels == ("無料",):
+    if labels == (FREE_LABEL,):
         return HanayumeAccessObservation(labels, "free")
-    # This label is deliberately retained as UNKNOWN until a user-authorized,
-    # authenticated, non-consuming viewer check proves its access semantics.
-    if labels == ("今なら無料",):
-        return HanayumeAccessObservation(labels, "unknown")
+    if labels == (NOW_FREE_LABEL,) and listing_authenticated is True:
+        return HanayumeAccessObservation(labels, "free")
     return HanayumeAccessObservation(labels, "unknown")
-
 
 def _parse_range_route(
     url: str, *, expected_seed_id: str
@@ -355,8 +468,40 @@ async def _wait_for_listing(page: Page, guard: AccessGuard) -> None:
         )
         await page.wait_for_function(
             """() => document.querySelectorAll(
-              '.series-eplist-wrap .series-eplist-item[data-e2e="eli"]'
-            ).length > 0""",
+              '[data-e2e="pageEpisode"]'
+            ).length === 1 && (() => {
+              const episodeMarkers = [...document.querySelectorAll('[data-e2e="pageEpisode"]')];
+              const pageRoots = episodeMarkers.filter(node => node.tagName === 'DIV' &&
+                node.classList.contains('ep-main') &&
+                node.classList.contains('series-safe-filter-target'));
+              const pageRoot = pageRoots.length === 1 ? pageRoots[0] : null;
+              if (!pageRoot) return false;
+              const modes = [...pageRoot.children].filter(node =>
+                node.tagName === 'DIV' && node.classList.contains('series') &&
+                node.classList.contains('mode-ep') && !node.hasAttribute('data-e2e'));
+              const wrappers = [...document.querySelectorAll('.series-eplist-wrap')];
+              const wrap = wrappers.length === 1 ? wrappers[0] : null;
+              const mains = wrap ? [...wrap.children].filter(node =>
+                node.classList.contains('series-eplist-main')) : [];
+              const roots = wrap ? [...wrap.querySelectorAll('.series-eplist')] : [];
+              const publicRoots = roots.filter(root => root.dataset.e2e === 'epList');
+              const userRoots = roots.filter(root => root.dataset.e2e === 'epListUser');
+              const allRoots = [...document.querySelectorAll('.series-eplist')];
+              const publicRoot = publicRoots.length === 1 ? publicRoots[0] : null;
+              const main = mains.length === 1 ? mains[0] : null;
+              const rowsKnown = [...document.querySelectorAll(
+                '.series-eplist-item[data-e2e="eli"]')].every(row =>
+                  publicRoot?.contains(row) || userRoots.some(root => root.contains(row)));
+              return episodeMarkers.length === 1 && pageRoots.length === 1 &&
+                modes.length === 1 && wrap?.parentElement === modes[0] &&
+                wrappers.length === 1 && mains.length === 1 && main?.parentElement === wrap &&
+                publicRoots.length === 1 && publicRoot.parentElement === main &&
+                userRoots.length <= 1 && roots.length === publicRoots.length + userRoots.length &&
+                allRoots.length === roots.length && userRoots.every(root =>
+                  root.parentElement === main && root.classList.contains('mode-user')) &&
+                rowsKnown && publicRoot.querySelectorAll(
+                  '.series-eplist-item[data-e2e="eli"]').length > 0;
+            })()""",
             timeout=DOM_TIMEOUT_MS,
         )
     except (PlaywrightError, TimeoutError) as exc:
@@ -365,7 +510,42 @@ async def _wait_for_listing(page: Page, guard: AccessGuard) -> None:
     await _guard_checkpoint(guard, page)
 
 
-async def _read_work_identity(page: Page) -> tuple[str, str]:
+async def _wait_for_series_listing(page: Page, guard: AccessGuard) -> None:
+    try:
+        await page.locator(LISTING_SELECTOR).wait_for(
+            state="visible", timeout=DOM_TIMEOUT_MS
+        )
+        await page.wait_for_function(
+            """() => {
+              const wrappers = [...document.querySelectorAll('.series-eplist-wrap')];
+              if (wrappers.length !== 1) return false;
+              const wrap = wrappers[0];
+              const outer = wrap.parentElement;
+              const mains = [...wrap.children].filter(node =>
+                node.classList.contains('series-eplist-main'));
+              const roots = [...wrap.querySelectorAll('.series-eplist')];
+              const publicRoots = roots.filter(root => root.dataset.e2e === 'epList');
+              const userRoots = roots.filter(root => root.dataset.e2e === 'epListUser');
+              return outer?.dataset.e2e === 'pageSeries' &&
+                outer.classList.contains('mode-series-top') && mains.length === 1 &&
+                mains[0].parentElement === wrap && publicRoots.length === 1 &&
+                publicRoots[0].parentElement === mains[0] && userRoots.length <= 1 &&
+                roots.length === publicRoots.length + userRoots.length &&
+                userRoots.every(root => root.parentElement === mains[0] &&
+                  root.classList.contains('mode-user')) &&
+                publicRoots[0].querySelectorAll('.series-eplist-item[data-e2e="eli"]').length > 0;
+            }""",
+            timeout=DOM_TIMEOUT_MS,
+        )
+    except (PlaywrightError, TimeoutError) as exc:
+        await _guard_checkpoint(guard, page)
+        raise DiscoveryIncompleteError(
+            "Hanayume canonical work listing did not become ready"
+        ) from exc
+    await _guard_checkpoint(guard, page)
+
+
+async def _read_work_identity(page: Page) -> tuple[str, str, str]:
     data = await asyncio.wait_for(
         page.evaluate(
             """() => {
@@ -374,7 +554,20 @@ async def _read_work_identity(page: Page) -> tuple[str, str]:
             ? [...header.querySelectorAll("a.ep-h-main-h-series")]
             : [];
           const list = document.querySelector(".series-eplist-wrap");
-          const scope = document.querySelector("div.series.mode-ep");
+          const episodeMarkers = [...document.querySelectorAll('[data-e2e="pageEpisode"]')];
+          const episodePages = episodeMarkers.filter(node => node.tagName === 'DIV' &&
+            node.classList.contains('ep-main') &&
+            node.classList.contains('series-safe-filter-target'));
+          const episodePage = episodePages.length === 1 ? episodePages[0] : null;
+          const scopes = episodePage ? [...episodePage.children].filter(node =>
+            node.tagName === 'DIV' && node.classList.contains('series') &&
+            node.classList.contains('mode-ep') && !node.hasAttribute('data-e2e')) : [];
+          const scope = scopes.length === 1 ? scopes[0] : null;
+          const main = list ? [...list.children].filter(node =>
+            node.classList.contains('series-eplist-main')) : [];
+          const roots = list ? [...list.querySelectorAll('.series-eplist')] : [];
+          const publicRoots = roots.filter(node => node.dataset.e2e === 'epList');
+          const userRoots = roots.filter(node => node.dataset.e2e === 'epListUser');
           const link = links.length === 1 ? links[0] : null;
           return {
             link_count: links.length,
@@ -383,7 +576,21 @@ async def _read_work_identity(page: Page) -> tuple[str, str]:
             header_count: document.querySelectorAll("#xHeader").length,
             list_count: document.querySelectorAll(".series-eplist-wrap").length,
             scope_count: document.querySelectorAll("div.series.mode-ep").length,
-            list_in_scope: Boolean(scope && list && scope.contains(list)),
+            episode_page_count: episodeMarkers.length,
+            episode_scope: episodePages.length === 1 &&
+              episodePage?.classList.contains('ep-main') &&
+              episodePage.classList.contains('series-safe-filter-target'),
+            mode_scope: scopes.length === 1 && scope?.hasAttribute('data-e2e') === false,
+            list_in_scope: Boolean(scope && list && scope.contains(list) &&
+              list.parentElement === scope),
+            main_count: main.length,
+            main_direct: main.length === 1 && main[0].parentElement === list,
+            known_roots: publicRoots.length === 1 && userRoots.length <= 1 &&
+              roots.length === publicRoots.length + userRoots.length &&
+              publicRoots[0].parentElement === main[0] && userRoots.every(node =>
+                node.parentElement === main[0] && node.classList.contains('mode-user')),
+            rows_known: [...document.querySelectorAll('.series-eplist-item[data-e2e="eli"]')]
+              .every(row => publicRoots[0]?.contains(row) || userRoots.some(root => root.contains(row))),
           };
             }"""
         ),
@@ -395,7 +602,14 @@ async def _read_work_identity(page: Page) -> tuple[str, str]:
         or data.get("header_count") != 1
         or data.get("list_count") != 1
         or data.get("scope_count") != 1
+        or data.get("episode_page_count") != 1
+        or data.get("episode_scope") is not True
+        or data.get("mode_scope") is not True
         or data.get("list_in_scope") is not True
+        or data.get("main_count") != 1
+        or data.get("main_direct") is not True
+        or data.get("known_roots") is not True
+        or data.get("rows_known") is not True
         or not isinstance(data.get("href"), str)
         or not isinstance(data.get("title"), str)
         or not data["title"].strip()
@@ -406,7 +620,48 @@ async def _read_work_identity(page: Page) -> tuple[str, str]:
     work_id = parse_hanayume_work_url(data["href"])
     if work_id is None:
         raise DiscoveryIncompleteError("Hanayume target work link has an invalid identity")
-    return work_id, data["title"].strip()
+    canonical_work_url = f"https://hanayume.com/series/{work_id}"
+    if data["href"] != canonical_work_url:
+        raise DiscoveryIncompleteError("Hanayume target work link is not its exact canonical URL")
+    return work_id, data["title"].strip(), canonical_work_url
+
+
+async def _read_series_authentication(page: Page, *, work_id: str) -> bool:
+    expected_url = f"https://hanayume.com/series/{work_id}"
+    deadline = time.monotonic() + SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS
+    while True:
+        if page.url != expected_url:
+            raise ValueError("Hanayume auth marker is outside its exact work route")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            value = await asyncio.wait_for(
+                page.evaluate(SERIES_AUTH_SNAPSHOT_SCRIPT, work_id),
+                timeout=min(OBSERVATION_TIMEOUT_SECONDS, remaining),
+            )
+        except (PlaywrightError, TimeoutError) as exc:
+            raise ValueError(
+                "Hanayume work-listing authentication markers could not be read"
+            ) from exc
+        if page.url != expected_url:
+            raise ValueError("Hanayume authentication route identity changed")
+        if not isinstance(value, dict) or value.get("routeExact") is not True:
+            raise ValueError("Hanayume authentication route identity changed")
+        if value.get("listingReady") is not True:
+            raise ValueError("Hanayume authenticated work listing is missing or ambiguous")
+        authenticated = value.get("authenticated")
+        if not isinstance(authenticated, bool):
+            raise TypeError("Hanayume authentication marker state is malformed")
+        if authenticated:
+            return True
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        await page.wait_for_timeout(
+            min(SERIES_AUTH_POLL_INTERVAL_MS, max(1, int(remaining * 1000)))
+        )
 
 
 async def _read_range_links(page: Page) -> list[dict[str, object]]:
@@ -453,36 +708,35 @@ async def _read_range_rows(
     *,
     work_id: str,
     first_position: int,
+    listing_authenticated: bool,
 ) -> list[HanayumeListingRow]:
-    rows = await asyncio.wait_for(
-        page.locator(ROW_SELECTOR).evaluate_all(
-            """rows => rows.map((row, index) => {
-          const links = [...row.querySelectorAll("a.series-eplist-item-link")];
-          const titles = [...row.querySelectorAll(".series-eplist-item-h-text")];
-          const badges = [...row.querySelectorAll(".series-eplist-item-access-text")];
-          return {
-            index,
-            link_count: links.length,
-            href: links.length === 1 ? links[0].href : null,
-            title_count: titles.length,
-            title: titles.length === 1 ? titles[0].innerText?.trim() || null : null,
-            labels: badges.map(node => node.innerText?.trim() || "")
-          };
-            })"""
-        ),
-        timeout=OBSERVATION_TIMEOUT_SECONDS,
-    )
+    try:
+        snapshot = await asyncio.wait_for(
+            page.evaluate(RANGE_ROWS_SNAPSHOT_SCRIPT),
+            timeout=OBSERVATION_TIMEOUT_SECONDS,
+        )
+    except (PlaywrightError, TimeoutError) as exc:
+        raise DiscoveryIncompleteError(
+            "Hanayume public episode rows could not be observed"
+        ) from exc
+    if not isinstance(snapshot, dict) or snapshot.get("structureReady") is not True:
+        raise DiscoveryIncompleteError(
+            "Hanayume episode list does not match its observed public/history structure"
+        )
+    rows = snapshot.get("rows")
+    history_rows = snapshot.get("historyRows")
     if not isinstance(rows, list) or not rows:
         raise DiscoveryIncompleteError("Hanayume range contains no episode rows")
+    if not isinstance(history_rows, list):
+        raise DiscoveryIncompleteError("Hanayume history-copy observation is malformed")
 
     parsed_rows: list[HanayumeListingRow] = []
     seen_ids: set[str] = set()
     for index, raw in enumerate(rows):
         if (
             not isinstance(raw, dict)
-            or raw.get("index") != index
-            or raw.get("link_count") != 1
-            or raw.get("title_count") != 1
+            or raw.get("linkCount") != 1
+            or raw.get("titleCount") != 1
             or not isinstance(raw.get("href"), str)
             or not isinstance(raw.get("title"), str)
             or not raw["title"].strip()
@@ -503,10 +757,34 @@ async def _read_range_rows(
             HanayumeListingRow(
                 identity=HanayumeEpisodeIdentity(work_id, parsed_url.episode_id),
                 title=raw["title"].strip(),
-                access=classify_hanayume_access(labels),
+                access=classify_hanayume_access(
+                    labels, listing_authenticated=listing_authenticated
+                ),
                 global_position=first_position + index,
             )
         )
+    public_labels = {
+        row.identity.episode_id: row.access.raw_labels for row in parsed_rows
+    }
+    history_ids: set[str] = set()
+    for raw in history_rows:
+        if (
+            not isinstance(raw, dict)
+            or raw.get("linkCount") != 1
+            or not isinstance(raw.get("href"), str)
+            or not isinstance(raw.get("labels"), list)
+            or not all(isinstance(label, str) for label in raw["labels"])
+        ):
+            raise DiscoveryIncompleteError("Hanayume history copy is incomplete or ambiguous")
+        identity = parse_hanayume_episode_url(raw["href"])
+        if identity is None or identity.episode_id in history_ids:
+            raise DiscoveryIncompleteError("Hanayume history copy has an invalid or duplicate ID")
+        history_ids.add(identity.episode_id)
+        public_labels_for_copy = public_labels.get(identity.episode_id)
+        if public_labels_for_copy is not None and tuple(raw["labels"]) != public_labels_for_copy:
+            raise DiscoveryIncompleteError(
+                "Hanayume public and history episode copies disagree on access labels"
+            )
     return parsed_rows
 
 
@@ -620,10 +898,43 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
                     "Hanayume seed episode navigation changed its canonical identity"
                 )
             await _wait_for_listing(page, guard)
-            work_id, work_title = await _read_work_identity(page)
+            work_id, work_title, work_url = await _read_work_identity(page)
             initial_entries = await _read_range_links(page)
             _validate_initial_latest_marker(initial_entries, seed_id=target_identity.episode_id)
             ranges = _parse_range_links(initial_entries, seed_id=target_identity.episode_id)
+
+            await _navigation_response(page, work_url, guard)
+            if page.url != work_url:
+                raise DiscoveryIncompleteError(
+                    "Hanayume work-link navigation changed its exact canonical URL"
+                )
+            await _wait_for_series_listing(page, guard)
+            listing_authenticated = await _read_series_authentication(page, work_id=work_id)
+            await _guard_checkpoint(guard, page)
+
+            await _navigation_response(page, canonical_url, guard)
+            if page.url != canonical_url:
+                raise DiscoveryIncompleteError(
+                    "Hanayume return navigation changed its exact seed episode URL"
+                )
+            await _wait_for_listing(page, guard)
+            returned_work_id, returned_work_title, returned_work_url = await _read_work_identity(page)
+            returned_entries = await _read_range_links(page)
+            _validate_initial_latest_marker(
+                returned_entries, seed_id=target_identity.episode_id
+            )
+            returned_ranges = _parse_range_links(
+                returned_entries, seed_id=target_identity.episode_id
+            )
+            if (
+                returned_work_id != work_id
+                or returned_work_title != work_title
+                or returned_work_url != work_url
+                or returned_ranges != ranges
+            ):
+                raise DiscoveryIncompleteError(
+                    "Hanayume seed identity or range set changed after auth verification"
+                )
 
             rows_oldest_first: list[HanayumeListingRow] = []
             all_ids: set[str] = set()
@@ -637,8 +948,12 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
                         "Hanayume range navigation redirected from its declared URL"
                     )
                 await _wait_for_listing(page, guard)
-                current_work_id, current_work_title = await _read_work_identity(page)
-                if current_work_id != work_id or current_work_title != work_title:
+                current_work_id, current_work_title, current_work_url = await _read_work_identity(page)
+                if (
+                    current_work_id != work_id
+                    or current_work_title != work_title
+                    or current_work_url != work_url
+                ):
                     raise DiscoveryIncompleteError(
                         "Hanayume range page belongs to a different work context"
                     )
@@ -654,6 +969,7 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
                     page,
                     work_id=work_id,
                     first_position=episode_range.start_position,
+                    listing_authenticated=listing_authenticated,
                 )
                 expected_count = episode_range.end_position - episode_range.start_position + 1
                 if len(page_rows) != expected_count:
@@ -681,6 +997,10 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
             )
         except DiscoveryIncompleteError:
             raise
+        except ValueError as exc:
+            raise DiscoveryIncompleteError(
+                "Hanayume work authentication or identity validation failed"
+            ) from exc
         except AccessStopError as exc:
             raise DiscoveryIncompleteError(
                 f"Hanayume Discovery stopped by the access guard: {exc.reason}"

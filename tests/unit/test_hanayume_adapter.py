@@ -1,16 +1,30 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import UnknownPageStateError
+from screenshot_crawler.site_adapters.hanayume import adapter as hanayume_adapter
 from screenshot_crawler.site_adapters.hanayume.adapter import (
     HanayumeAdapter,
+    _capture_output_format,
     _expected_active_slots,
     _parse_series_ranges,
     _parse_viewer_observation,
 )
 
 WORK_ID = "1f9f5b0d4cd52"
+
+
+def test_capture_output_format_reports_mixed_native_and_rendered_captures() -> None:
+    captures = [
+        CaptureResult(b"webp", 2, 3, "image/webp", ".webp"),
+        CaptureResult(b"png", 2, 3),
+    ]
+
+    assert _capture_output_format(captures) == "mixed"
 
 
 @pytest.mark.asyncio
@@ -21,6 +35,26 @@ async def test_batch_direct_strategy_uses_the_observed_free_viewer_path() -> Non
 
     with pytest.raises(UnknownPageStateError):
         await adapter.configure_run(None, "quota")
+
+
+@pytest.mark.asyncio
+async def test_capture_budget_timeout_fails_closed_without_generic_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = HanayumeAdapter()
+    monkeypatch.setattr(hanayume_adapter, "CAPTURE_BUDGET_SECONDS", 0.001)
+
+    async def slow_capture(_page) -> None:
+        await asyncio.sleep(0.05)
+
+    adapter._capture_page_within_budget = slow_capture  # type: ignore[method-assign]
+    with pytest.raises(UnknownPageStateError, match="atomic capture exceeded"):
+        await adapter.capture_page(None)  # type: ignore[arg-type]
+
+    assert adapter._capture_diagnostics == {
+        "mode": "capture_failed",
+        "reason": "capture_budget_exceeded",
+    }
 
 
 def _range_entries(*, selected_page: int | None = None) -> list[dict[str, object]]:
@@ -197,6 +231,21 @@ def test_hanayume_viewer_keeps_observed_loading_placeholder_out_of_ready_pages()
     slots[2]["classes"] = ["-cv-page", "mode-req-render"]
     with pytest.raises(UnknownPageStateError, match="unknown state class"):
         _parse_viewer_observation(snapshot)
+
+
+def test_hanayume_viewer_accepts_observed_loaded_request_render_preload_as_not_ready() -> None:
+    snapshot = _viewer_snapshot()
+    slots = snapshot["slots"]
+    assert isinstance(slots, list)
+    slots[2]["classes"] = ["-cv-page", "mode-loaded", "mode-req-render"]
+    slots[2]["wrapperCenterInViewport"] = False
+    slots[2]["canvasCount"] = 0
+    slots[2]["canvas"] = None
+
+    observation = _parse_viewer_observation(snapshot)
+
+    assert observation.active_slots == (1,)
+    assert observation.ready_slots == (1,)
 
 
 def test_hanayume_viewer_rejects_unknown_slot_or_seek_drift() -> None:

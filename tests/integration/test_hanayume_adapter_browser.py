@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import io
+import json
+import threading
 from urllib.parse import urlsplit
 
 import pytest
@@ -11,6 +14,8 @@ from screenshot_crawler.core.errors import PageChangeTimeoutError, UnknownPageSt
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.site_adapters.hanayume import adapter as hanayume_adapter_module
+from screenshot_crawler.site_adapters.hanayume import discovery as hanayume_discovery_module
 from screenshot_crawler.site_adapters.hanayume.adapter import HanayumeAdapter
 
 WORK_ID = "1f9f5b0d4cd52"
@@ -22,6 +27,12 @@ FREE_LABEL = "\u7121\u6599"
 NOW_FREE_LABEL = "\u4eca\u306a\u3089\u7121\u6599"
 
 
+@pytest.fixture(autouse=True)
+def _short_hanayume_initialization_waits(monkeypatch) -> None:
+    monkeypatch.setattr(hanayume_discovery_module, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(hanayume_adapter_module, "VIEWER_COUNTER_READY_TIMEOUT_MS", 400)
+
+
 def _row(episode_id: str, label: str) -> str:
     return f"""<div class="series-eplist-item" data-e2e="eli">
       <a class="series-eplist-item-link" href="/episodes/{episode_id}">episode</a>
@@ -29,21 +40,59 @@ def _row(episode_id: str, label: str) -> str:
     </div>"""
 
 
-def _listing(*, selected: bool, target_label: str = "無料") -> str:
+def _series_auth_header(*, authenticated: bool = False) -> str:
+    if authenticated:
+        return """<header id="xHeader" class="h"><nav>
+          <a class="h-main-nav-link mode-user" data-e2e="hUserMenu" href="#account">
+            <svg data-e2e="hUserIcon"></svg></a>
+          <div class="h-usermenu"><button data-e2e="signoutBtn">Sign out</button></div>
+        </nav></header>"""
+    return '<header id="xHeader" class="h"></header>'
+
+
+def _listing(*, selected: bool, target_label: str = "\u7121\u6599") -> str:
     class_name = "series-sort-link mode-current" if selected else "series-sort-link"
-    return f"""<div class="series-eplist-wrap">
+    rows = (
+        _row(EPISODE_ID, target_label)
+        + _row(NOW_ID, "\u4eca\u306a\u3089\u7121\u6599")
+    )
+    return f"""<div class="series mode-series-top series-safe-filter-target" data-e2e="pageSeries">
+      <div class="series-eplist-wrap">
       <a class="{class_name}" href="{WORK_URL if selected else WORK_URL + '/1'}">1-2</a>
-      {_row(EPISODE_ID, target_label)}
-      {_row(NOW_ID, "今なら無料")}
-    </div>"""
+      <div class="series-eplist-main">
+        <div class="series-eplist" data-e2e="epList">
+          <div class="series-eplist-default has-store-item mode-last">{rows}</div>
+        </div>
+        <div class="series-eplist mode-user" data-e2e="epListUser">
+          <div class="series-eplist-default has-store-item mode-last">{rows}</div>
+        </div>
+      </div></div></div>"""
 
 
-def _episode_html(*, current: int = 3, label: str = "無料") -> str:
+def _episode_html(
+    *, current: int = 3, label: str = "無料", user_target_label: str | None = None,
+    counter_delay_ms: int = 0, counter_never: bool = False,
+    counter_duplicate: bool = False, counter_malformed: bool = False,
+) -> str:
     return f"""<!doctype html><html><body>
       <header id="xHeader"><a class="ep-h-main-h-series" href="{WORK_URL}">work</a></header>
-      {_listing(selected=False, target_label=label)}
+      <div class="ep-main series-safe-filter-target" data-e2e="pageEpisode">
+      <div class="series mode-ep"><div class="series-eplist-wrap">
+        <div class="series-eplist-main"><div class="series-eplist" data-e2e="epList">
+          <div class="series-eplist-default has-store-item mode-last">
+          {_row(EPISODE_ID, label)}
+          {_row(NOW_ID, "今なら無料")}
+          </div></div>
+        <div class="series-eplist mode-user" data-e2e="epListUser">
+          <div class="series-eplist-default has-store-item mode-last">
+          {_row(EPISODE_ID, user_target_label) if user_target_label is not None else ""}
+          </div></div>
+        </div>
+      </div></div></div>
       <div id="comici-viewer" class="-cv mode-spread">
-        <div class="-cv-f-page-current"></div><div class="-cv-f-page-total">9</div>
+        <div class="-cv-f-page-current"></div>
+        {'<div class="-cv-f-page-current"></div>' if counter_duplicate else ''}
+        <div class="-cv-f-page-total">{'' if counter_delay_ms or counter_never else '9'}</div>
         <input id="xCVSeekBar" type="range" min="1" max="9" step="2" value="9">
         <div id="xCVPages"></div>
       </div>
@@ -71,6 +120,15 @@ def _episode_html(*, current: int = 3, label: str = "無料") -> str:
           }};
           const reusedCanvas = baseCanvas();
           const secondCanvas = baseCanvas();
+          const preloaded = new WeakSet();
+          const sourceFor = index => {{
+            const canvas = document.createElement('canvas');
+            canvas.width = 960; canvas.height = 1540;
+            const context = canvas.getContext('2d');
+            context.fillStyle = `rgb(${{index * 20}},40,60)`;
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            return canvas;
+          }};
           const classFor = index => {{
             if (index === 0) return '-cv-page mode-empty mode-pr mode-top-pr';
             if (index === total - 4) return '-cv-page mode-ci';
@@ -80,7 +138,7 @@ def _episode_html(*, current: int = 3, label: str = "無料") -> str:
             return '-cv-page';
           }};
           function render(current, terminal = false) {{
-            currentText.textContent = String(current);
+            currentText.textContent = {json.dumps('not-a-number' if counter_malformed else None)} ?? String(current);
             document.querySelector('.-cv-f-page-total').textContent = String(total);
             seek.value = String(total - (current - 1));
             root.classList.toggle('mode-last-page', terminal);
@@ -95,16 +153,31 @@ def _episode_html(*, current: int = 3, label: str = "無料") -> str:
             visible.forEach((index, side) => {{
               wrappers[index].style.left = `${{side * 100}}px`;
               if (index < 1 || index > bodyTotal) return;
-              const canvas = side === 0 ? reusedCanvas : secondCanvas;
+              const canvas = index % 2 === 1 ? reusedCanvas : secondCanvas;
               const context = canvas.getContext('2d');
-              context.fillStyle = `rgb(${{index * 20}},40,60)`;
-              context.fillRect(0, 0, canvas.width, canvas.height);
               const holder = document.createElement('div');
               holder.className = '-cv-page-canvas';
               holder.append(canvas);
               wrappers[index].append(holder);
+              if (!(index === 2 && current === 3 && preloaded.has(canvas))) {{
+                const source = sourceFor(index);
+                context.drawImage(source, 0, 0, 960, 1540, 0, 0, canvas.width, canvas.height);
+                source.getContext('2d').clearRect(0, 0, source.width, source.height);
+              }}
               wrappers[index].classList.add('mode-loaded', 'mode-rendered');
             }});
+            if (current === 1) {{
+              const wrapper = wrappers[2];
+              const holder = document.createElement('div');
+              holder.className = '-cv-page-canvas';
+              holder.append(secondCanvas);
+              wrapper.append(holder);
+              const source = sourceFor(2);
+              secondCanvas.getContext('2d').drawImage(source, 0, 0, 960, 1540, 0, 0, secondCanvas.width, secondCanvas.height);
+              source.getContext('2d').clearRect(0, 0, source.width, source.height);
+              preloaded.add(secondCanvas);
+              wrapper.classList.add('mode-loaded', 'mode-req-render');
+            }}
             if (current === 3) {{
               const previous = wrappers[1];
               previous.style.left = `${{innerWidth - 15.3333}}px`;
@@ -124,7 +197,10 @@ def _episode_html(*, current: int = 3, label: str = "無料") -> str:
             if (event.key === 'End') {{ event.preventDefault(); render(1); }}
             if (event.key === 'Home') {{ event.preventDefault(); render(total, true); }}
           }});
-          render({current});
+          if (!{json.dumps(counter_never)}) {{
+            if ({counter_delay_ms} > 0) setTimeout(() => render({current}), {counter_delay_ms});
+            else render({current});
+          }}
         }})();
       </script>
     </body></html>"""
@@ -134,7 +210,12 @@ async def _install_mock_site(
     page: Page,
     *,
     return_episode_label: str = "無料",
+    user_target_label: str | None = None,
     resume_current: int = 3,
+    counter_delay_ms: int = 0,
+    counter_never: bool = False,
+    counter_duplicate: bool = False,
+    counter_malformed: bool = False,
 ) -> dict[str, object]:
     state: dict[str, object] = {"episode_visits": 0, "paths": []}
 
@@ -145,11 +226,24 @@ async def _install_mock_site(
             visits = int(state["episode_visits"]) + 1
             state["episode_visits"] = visits
             label = "無料" if visits == 1 else return_episode_label
-            body = _episode_html(current=resume_current, label=label)
+            body = _episode_html(
+                current=resume_current, label=label, user_target_label=user_target_label,
+                counter_delay_ms=counter_delay_ms, counter_never=counter_never,
+                counter_duplicate=counter_duplicate, counter_malformed=counter_malformed,
+            )
         elif path == f"/series/{WORK_ID}":
-            body = f"""<div class="series-eplist-wrap">
-              <a class="series-sort-link" href="{WORK_URL}/1">1-2</a>
-            </div>"""
+            body = (
+                "<!doctype html><html><body>"
+                + _series_auth_header()
+                + '<div class="series mode-series-top series-safe-filter-target" data-e2e="pageSeries">'
+                + '<div class="series-eplist-wrap">'
+                + f'<a class="series-sort-link" href="{WORK_URL}/1">1-2</a>'
+                + '<div class="series-eplist-main">'
+                + '<div class="series-eplist" data-e2e="epList"></div>'
+                + '<div class="series-eplist mode-loading mode-user" data-e2e="epListUser"></div>'
+                + '</div></div></div>'
+                + "</body></html>"
+            )
         elif path == f"/series/{WORK_ID}/1":
             body = _listing(selected=True)
         else:
@@ -166,6 +260,7 @@ def _search_listing(
     selected_page: int | None,
     rows: list[tuple[str, str]],
     drift: bool = False,
+    history_conflict: bool = False,
 ) -> str:
     ranges = ((1, 1, 30), (2, 31, 32 if not drift else 33))
     links = []
@@ -176,11 +271,22 @@ def _search_listing(
         links.append(
             f'<a class="series-sort-link{current}" href="{href}">{start}-{end}</a>'
         )
+    public_rows = "".join(_row(episode_id, label) for episode_id, label in rows)
+    history_values = [
+        (episode_id, NOW_FREE_LABEL if history_conflict and episode_id == EPISODE_ID else label)
+        for episode_id, label in rows
+    ]
+    history_rows = "".join(_row(episode_id, label) for episode_id, label in history_values)
     return (
-        '<div class="series-eplist-wrap">'
+        _series_auth_header()
+        + '<div class="series mode-series-top series-safe-filter-target" data-e2e="pageSeries">'
+        + '<div class="series-eplist-wrap">'
         + "".join(links)
-        + "".join(_row(episode_id, label) for episode_id, label in rows)
-        + "</div>"
+        + '<div class="series-eplist-main"><div class="series-eplist" data-e2e="epList">'
+        + public_rows
+        + '</div><div class="series-eplist mode-user" data-e2e="epListUser">'
+        + history_rows
+        + "</div></div></div></div>"
     )
 
 
@@ -190,6 +296,7 @@ async def _install_preflight_site(
     bare_rows: list[tuple[str, str]],
     range_rows: dict[int, list[tuple[str, str]]],
     drift_first_range: bool = False,
+    history_conflict: bool = False,
     entered_episode_id: str = EPISODE_ID,
     entered_episode_href: str | None = None,
 ) -> dict[str, object]:
@@ -222,15 +329,20 @@ async def _install_preflight_site(
                     1,
                 )
         elif path == f"/series/{WORK_ID}":
-            body = _search_listing(selected_page=None, rows=bare_rows)
+            body = _search_listing(
+                selected_page=None, rows=bare_rows, history_conflict=history_conflict
+            )
         elif path == f"/series/{WORK_ID}/1":
             body = _search_listing(
                 selected_page=1,
                 rows=defaults[1],
                 drift=drift_first_range,
+                history_conflict=history_conflict,
             )
         elif path == f"/series/{WORK_ID}/2":
-            body = _search_listing(selected_page=2, rows=defaults[2])
+            body = _search_listing(
+                selected_page=2, rows=defaults[2], history_conflict=history_conflict
+            )
         else:
             await route.fulfill(status=404, body="")
             return
@@ -243,6 +355,7 @@ async def _install_preflight_site(
 async def _initialized(page: Page, *, adapter: HanayumeAdapter | None = None) -> HanayumeAdapter:
     instance = adapter or HanayumeAdapter()
     url = instance.resolve_initial_navigation_url(EPISODE_URL)
+    await instance.prepare_page(page)
     response = await page.goto(url, wait_until="domcontentloaded")
     assert response is not None and response.status == 200
     await instance.initialize(page)
@@ -265,7 +378,8 @@ async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_sprea
     captures = await adapter.capture_page(browser_page)
     assert captures is not None and len(captures) == 1
     first = Image.open(io.BytesIO(captures[0].data)).convert("RGB")
-    assert first.size == (5, 7)
+    assert first.size == (960, 1540)
+    assert captures[0].mime_type == "image/webp"
     assert first.getpixel((0, 0)) == (20, 40, 60)
     assert first_identity.page_id == "1"
 
@@ -275,6 +389,7 @@ async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_sprea
     spread_identity = await adapter.get_content_identity(browser_page)
     spread = await adapter.capture_page(browser_page)
     assert spread is not None and len(spread) == 2
+    assert all(item.mime_type == "image/webp" and (item.width, item.height) == (960, 1540) for item in spread), adapter._capture_diagnostics
     assert [Image.open(io.BytesIO(item.data)).convert("RGB").getpixel((0, 0)) for item in spread] == [
         (40, 40, 60),
         (60, 40, 60),
@@ -287,11 +402,357 @@ async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_sprea
     final_identity = await adapter.get_content_identity(browser_page)
     final = await adapter.capture_page(browser_page)
     assert final is not None and len(final) == 1
+    assert (final[0].width, final[0].height) == (960, 1540)
     assert Image.open(io.BytesIO(final[0].data)).convert("RGB").getpixel((0, 0)) == (80, 40, 60)
 
     await adapter.go_next(browser_page)
     await adapter.wait_for_change(browser_page, final_identity)
     assert await adapter.detect_state(browser_page) is PageState.END
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_initialize_waits_for_delayed_known_viewer_counter(
+    browser_page: Page,
+) -> None:
+    state = await _install_mock_site(browser_page, counter_delay_ms=180)
+
+    adapter = await _initialized(browser_page)
+
+    observation = await adapter._observe(browser_page)
+    assert observation.current == 1 and observation.total == 9
+    assert observation.ready_slots == (1,)
+    assert state["paths"] == [
+        f"/episodes/{EPISODE_ID}",
+        f"/series/{WORK_ID}",
+        f"/series/{WORK_ID}/1",
+        f"/episodes/{EPISODE_ID}",
+    ]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_initialize_fails_closed_when_viewer_counter_never_appears(
+    browser_page: Page,
+) -> None:
+    state = await _install_mock_site(browser_page, counter_never=True)
+
+    adapter = HanayumeAdapter()
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    started = asyncio.get_running_loop().time()
+
+    with pytest.raises(UnknownPageStateError, match="counter did not become ready"):
+        await adapter.initialize(browser_page)
+
+    elapsed = asyncio.get_running_loop().time() - started
+    assert 0.25 <= elapsed < 1.5
+    assert state["paths"] == [
+        f"/episodes/{EPISODE_ID}",
+        f"/series/{WORK_ID}",
+        f"/series/{WORK_ID}/1",
+        f"/episodes/{EPISODE_ID}",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [("counter_duplicate", "counter is missing"), ("counter_malformed", "counter is malformed")],
+)
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_initialize_does_not_wait_past_duplicate_or_malformed_counter(
+    browser_page: Page, mutation: str, message: str,
+) -> None:
+    state = await _install_mock_site(browser_page, **{mutation: True})
+    adapter = HanayumeAdapter()
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    started = asyncio.get_running_loop().time()
+
+    with pytest.raises(UnknownPageStateError, match=message):
+        await adapter.initialize(browser_page)
+
+    assert asyncio.get_running_loop().time() - started < 0.4
+    assert state["paths"] == [
+        f"/episodes/{EPISODE_ID}",
+        f"/series/{WORK_ID}",
+        f"/series/{WORK_ID}/1",
+        f"/episodes/{EPISODE_ID}",
+    ]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "write", "same-width-attribute", "same-height-attribute", "clip",
+        "hook-tamper", "instance-write-tamper", "observer-error", "replace",
+        "get-transform-tamper", "set-transform-tamper", "context-attrs-tamper",
+        "paint-descriptor-tamper",
+    ],
+)
+async def test_hanayume_unsafe_or_reset_target_uses_only_clean_rendered_png_fallback(
+    browser_page: Page, mutation: str
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    await _body_state(browser_page, adapter)
+    await browser_page.locator("#xCVPages > .-cv-page:nth-child(2) canvas").evaluate(
+        """(canvas, mutation) => {
+          if (mutation === 'write') {
+            canvas.getContext('2d').fillRect(0, 0, canvas.width, canvas.height);
+          } else if (mutation === 'same-width-attribute') {
+            canvas.setAttribute('width', String(canvas.width));
+          } else if (mutation === 'same-height-attribute') {
+            canvas.setAttribute('height', String(canvas.height));
+          } else if (mutation === 'clip') {
+            const context = canvas.getContext('2d');
+            context.save(); context.beginPath(); context.rect(0, 0, 3, 3); context.clip(); context.restore();
+          } else if (mutation === 'replace') {
+            canvas.replaceWith(canvas.cloneNode());
+          } else if (mutation === 'instance-write-tamper') {
+            const context = canvas.getContext('2d');
+            const clearRect = CanvasRenderingContext2D.prototype.clearRect;
+            context.clearRect = function(...args) { return clearRect.apply(this, args); };
+          } else if (mutation === 'observer-error') {
+            Object.defineProperty(canvas, 'closest', {configurable:true, value() { throw new Error('observer'); }});
+            const source = document.createElement('canvas');
+            source.width = 960; source.height = 1540;
+            const sourceContext = source.getContext('2d');
+            sourceContext.fillStyle = 'rgb(111,122,133)';
+            sourceContext.fillRect(0, 0, source.width, source.height);
+            canvas.getContext('2d').drawImage(source, 0, 0, 960, 1540, 0, 0, canvas.width, canvas.height);
+          } else if (mutation === 'get-transform-tamper') {
+            const prototype = CanvasRenderingContext2D.prototype;
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, 'getTransform');
+            const setTransform = Object.getOwnPropertyDescriptor(prototype, 'setTransform').value;
+            setTransform.call(canvas.getContext('2d'), 2, 0, 0, 1, 0, 0);
+            Object.defineProperty(prototype, 'getTransform', {
+              ...descriptor, value() { return new DOMMatrix([1, 0, 0, 1, 0, 0]); }
+            });
+          } else if (mutation === 'set-transform-tamper') {
+            const prototype = CanvasRenderingContext2D.prototype;
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, 'setTransform');
+            const original = descriptor.value;
+            Object.defineProperty(prototype, 'setTransform', {
+              ...descriptor, value(...args) { return original.apply(this, args); }
+            });
+          } else if (mutation === 'context-attrs-tamper') {
+            const prototype = CanvasRenderingContext2D.prototype;
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, 'getContextAttributes');
+            const original = descriptor.value;
+            Object.defineProperty(prototype, 'getContextAttributes', {
+              ...descriptor, value(...args) { return original.apply(this, args); }
+            });
+          } else if (mutation === 'paint-descriptor-tamper') {
+            const prototype = CanvasRenderingContext2D.prototype;
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, 'shadowColor');
+            Object.defineProperty(prototype, 'shadowColor', {
+              ...descriptor, get() { return descriptor.get.call(this); }
+            });
+          } else {
+            const prototype = CanvasRenderingContext2D.prototype;
+            const drawImage = prototype.drawImage;
+            prototype.drawImage = function(...args) { return drawImage.apply(this, args); };
+          }
+        }""",
+        mutation,
+    )
+
+    captures = await adapter.capture_page(browser_page)
+
+    assert captures is not None and len(captures) == 1
+    assert captures[0].mime_type == "image/png"
+    assert (captures[0].width, captures[0].height) == (5, 7)
+    assert adapter._capture_diagnostics["mode"] == "rendered_body_canvas_png"
+    assert adapter._capture_diagnostics["reason"] in {
+        "native_candidate_missing_or_stale",
+        "observer_integrity_lost",
+    }
+    if mutation == "observer-error":
+        assert Image.open(io.BytesIO(captures[0].data)).convert("RGB").getpixel((0, 0)) == (111, 122, 133)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_spread_uses_rendered_png_for_both_sides_when_one_native_candidate_is_unavailable(
+    browser_page: Page,
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    first = await adapter.get_content_identity(browser_page)
+    assert await adapter.capture_page(browser_page)
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, first)
+    assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    await browser_page.locator("#xCVPages > .-cv-page:nth-child(3) canvas").evaluate(
+        "canvas => canvas.getContext('2d').fillRect(0, 0, canvas.width, canvas.height)"
+    )
+
+    spread = await adapter.capture_page(browser_page)
+
+    assert spread is not None and len(spread) == 2
+    assert all(item.mime_type == "image/png" for item in spread)
+    assert [(item.width, item.height) for item in spread] == [(5, 7), (5, 7)]
+    assert adapter._capture_diagnostics["mode"] == "rendered_body_canvas_png"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_native_replay_exception_falls_back_to_rendered_spread(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    await _body_state(browser_page, adapter)
+    monkeypatch.setattr(
+        hanayume_adapter_module,
+        "COLLECT_CAPTURE_SCRIPT",
+        r"""args => {
+          const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, 'createElement');
+          const original = descriptor.value;
+          Object.defineProperty(Document.prototype, 'createElement', {
+            ...descriptor,
+            value(tag, ...rest) {
+              if (String(tag).toLowerCase() === 'canvas') throw new Error('synthetic replay failure');
+              return Reflect.apply(original, this, [tag, ...rest]);
+            }
+          });
+          try { return window.__hanayumeNativeCapture.collect(args); }
+          finally { Object.defineProperty(Document.prototype, 'createElement', descriptor); }
+        }""",
+    )
+
+    captures = await adapter.capture_page(browser_page)
+
+    assert captures is not None and len(captures) == 1
+    assert captures[0].mime_type == "image/png"
+    assert (captures[0].width, captures[0].height) == (5, 7)
+    assert adapter._capture_diagnostics["mode"] == "rendered_body_canvas_png"
+    assert adapter._capture_diagnostics["reason"] == "native_validation_exception"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_native_proof_is_single_outstanding_and_release_keeps_preloads(
+    browser_page: Page,
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    await _body_state(browser_page, adapter)
+    args = {
+        "expectedSlots": [1], "expectedCurrent": 1, "expectedBodyTotal": 4,
+        "episodePath": f"/episodes/{EPISODE_ID}",
+    }
+    first = await browser_page.evaluate(
+        "args => window.__hanayumeNativeCapture.collect(args)", args
+    )
+    assert first["ok"] is True and first["mode"] == "native"
+    assert first["token"]
+    assert (await browser_page.evaluate("() => window.__hanayumeNativeCapture.status()"))["proofCount"] == 1
+
+    second = await browser_page.evaluate(
+        "args => window.__hanayumeNativeCapture.collect(args)", args
+    )
+    assert second["ok"] is True and second["mode"] == "rendered"
+    assert await browser_page.evaluate(
+        "token => window.__hanayumeNativeCapture.verify(token)", first["token"]
+    ) is False
+    released = await browser_page.evaluate(
+        "args => window.__hanayumeNativeCapture.release(args)",
+        {**args, "token": first["token"]},
+    )
+    assert released["proofCount"] == 0
+    assert released["candidateCount"] == 1
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_native_candidate_is_bound_to_draw_time_episode_route(
+    browser_page: Page,
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    await _body_state(browser_page, adapter)
+    await browser_page.evaluate(
+        "episode => history.replaceState({}, '', `/episodes/${episode}`)", NOW_ID
+    )
+
+    result = await browser_page.evaluate(
+        "args => window.__hanayumeNativeCapture.collect(args)",
+        {
+            "expectedSlots": [1], "expectedCurrent": 1, "expectedBodyTotal": 4,
+            "episodePath": f"/episodes/{NOW_ID}",
+        },
+    )
+
+    assert result["ok"] is True and result["mode"] == "rendered"
+    assert result["reason"] == "native_candidate_missing_or_stale"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("abort", ["cancel", "timeout"])
+async def test_hanayume_aborted_native_capture_releases_its_proof_and_keeps_preloads(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, abort: str
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    await _body_state(browser_page, adapter)
+    reached_verify = asyncio.Event()
+
+    async def block_verification(_page: Page, _token: str) -> bool:
+        reached_verify.set()
+        await asyncio.Future()
+        return False
+
+    monkeypatch.setattr(adapter, "_verify_native_capture", block_verification)
+    if abort == "timeout":
+        monkeypatch.setattr(hanayume_adapter_module, "CAPTURE_BUDGET_SECONDS", 0.8)
+    task = asyncio.create_task(adapter.capture_page(browser_page))
+    await asyncio.wait_for(reached_verify.wait(), timeout=3)
+
+    if abort == "cancel":
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        with pytest.raises(UnknownPageStateError, match="exceeded its adapter budget"):
+            await task
+
+    status = await browser_page.evaluate("() => window.__hanayumeNativeCapture.status()")
+    assert status["proofCount"] == 0
+    assert status["candidateCount"] == 1
+    assert adapter._captured_slots == []
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_target_change_after_native_encoding_discards_encoded_snapshot(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    await _body_state(browser_page, adapter)
+    entered = threading.Event()
+    continue_encoding = threading.Event()
+    original_encoder = hanayume_adapter_module.encode_native_webp
+
+    def delayed_encoder(images):
+        entered.set()
+        if not continue_encoding.wait(timeout=3):
+            raise TimeoutError("synthetic encoder wait timed out")
+        return original_encoder(images)
+
+    monkeypatch.setattr(hanayume_adapter_module, "encode_native_webp", delayed_encoder)
+    task = asyncio.create_task(adapter.capture_page(browser_page))
+    assert await asyncio.to_thread(entered.wait, 3)
+    await browser_page.locator("#xCVPages > .-cv-page:nth-child(2) canvas").evaluate(
+        "canvas => canvas.getContext('2d').fillRect(0, 0, 1, 1)"
+    )
+    continue_encoding.set()
+
+    with pytest.raises(UnknownPageStateError, match="changed after native image encoding"):
+        await task
+
+    status = await browser_page.evaluate("() => window.__hanayumeNativeCapture.status()")
+    assert status["proofCount"] == 0
+    assert status["candidateCount"] == 1
+    assert adapter._captured_slots == []
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -346,6 +807,77 @@ async def test_hanayume_local_viewer_fails_closed_when_spread_half_is_missing(br
     assert await adapter.detect_state(browser_page) is PageState.LOADING
     with pytest.raises(UnknownPageStateError):
         await adapter.capture_page(browser_page)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    ("user_label", "accepted"),
+    [(FREE_LABEL, True), (NOW_FREE_LABEL, False)],
+    ids=("same-free-copy", "conflicting-user-copy"),
+)
+async def test_hanayume_entry_uses_unique_public_ep_list_and_checks_all_target_copies(
+    browser_page: Page, user_label: str, accepted: bool
+) -> None:
+    await _install_mock_site(browser_page, user_target_label=user_label)
+    adapter = HanayumeAdapter()
+    url = adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    response = await browser_page.goto(url, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+
+    if accepted:
+        await adapter.initialize(browser_page)
+        assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    else:
+        with pytest.raises(UnknownPageStateError, match="copies disagree"):
+            await adapter.initialize(browser_page)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    "mutation",
+    ["unknown-copy", "unknown-root", "duplicate-public-root", "nested-user-root", "wrong-outer"],
+)
+async def test_hanayume_entry_rejects_unknown_target_copy_or_public_list_shape(
+    browser_page: Page, mutation: str
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    await browser_page.evaluate(
+        """mutation => {
+          const publicRoot = document.querySelector('.series-eplist[data-e2e="epList"]');
+          const main = publicRoot.parentElement;
+          const wrap = publicRoot.closest('.series-eplist-wrap');
+          const target = publicRoot.querySelector('.series-eplist-item[data-e2e="eli"]');
+          if (mutation === 'unknown-copy') {
+            const extra = document.createElement('div');
+            extra.className = 'series-eplist-extra';
+            extra.append(target.cloneNode(true));
+            wrap.append(extra);
+          } else if (mutation === 'duplicate-public-root') {
+            main.append(publicRoot.cloneNode(true));
+          } else if (mutation === 'unknown-root') {
+            const extra = document.createElement('div');
+            extra.className = 'series-eplist';
+            extra.dataset.e2e = 'unexpectedList';
+            main.append(extra);
+          } else if (mutation === 'wrong-outer') {
+            wrap.parentElement.dataset.e2e = 'pageSeries';
+          } else {
+            const extra = document.createElement('div');
+            extra.className = 'series-eplist-extra';
+            const user = document.createElement('div');
+            user.className = 'series-eplist mode-user';
+            user.dataset.e2e = 'epListUser';
+            user.append(target.cloneNode(true));
+            extra.append(user);
+            wrap.append(extra);
+          }
+        }""",
+        mutation,
+    )
+    with pytest.raises(UnknownPageStateError):
+        await adapter._read_episode_row_labels(browser_page)
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -412,9 +944,10 @@ async def test_hanayume_local_viewer_rejects_free_label_change_after_preflight(b
 async def _initialized_before_return(page: Page) -> None:
     adapter = HanayumeAdapter()
     url = adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(page)
     response = await page.goto(url, wait_until="domcontentloaded")
     assert response is not None and response.status == 200
-    with pytest.raises(UnknownPageStateError, match="no longer has one exact"):
+    with pytest.raises(UnknownPageStateError, match="free access"):
         await adapter.initialize(page)
 
 
@@ -515,6 +1048,27 @@ async def test_hanayume_bare_preflight_rejects_ambiguous_or_nonfree_target_witho
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_preflight_rejects_conflicting_public_and_history_badges(
+    browser_page: Page,
+) -> None:
+    state = await _install_preflight_site(
+        browser_page,
+        bare_rows=[(EPISODE_ID, FREE_LABEL)],
+        range_rows={},
+        history_conflict=True,
+    )
+    adapter = HanayumeAdapter()
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+
+    with pytest.raises(UnknownPageStateError, match="copies disagree"):
+        await adapter.initialize(browser_page)
+
+    assert state["paths"] == [f"/episodes/{EPISODE_ID}", f"/series/{WORK_ID}"]
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_hanayume_preflight_rejects_range_drift_before_searching_next_range(
     browser_page: Page,
 ) -> None:
@@ -557,7 +1111,7 @@ async def test_hanayume_preflight_rechecks_exact_episode_row_on_entry(browser_pa
     response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
     assert response is not None and response.status == 200
 
-    with pytest.raises(UnknownPageStateError, match="current episode row is missing"):
+    with pytest.raises(UnknownPageStateError, match="current episode .*missing"):
         await adapter.initialize(browser_page)
 
     assert state["paths"][-1] == f"/episodes/{EPISODE_ID}"

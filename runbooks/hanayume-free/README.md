@@ -1,29 +1,18 @@
 # 花とゆめ＋ Site Adapter — 「無料」「今なら無料」対応 Runbook
 
-Status: Phases 01-05 PASS / BLOCKING 0 within the user-authorized logged-out `無料` scope. Final independent Reviewer passed (42 fresh tests, 0 skipped; Ruff, diff, and SQLite/ZIP/PNG artifact audits passed). The Tester completed three episodes, 122 body pages, and three ZIP Artifacts with 9/9 visual samples passing. `今なら無料` remains `unknown` and authenticated non-consuming access is unverified under the no-login instruction. The full pytest run predates the latest site-only geometry correction; the independent post-fix affected selection passed.
+Status: Phases 01-05 implementation and live acceptance PASS within the verified scope; final independent review PASS / BLOCKING 0. The final logged-in standard Batch E2E completed four exact-free candidates, 134/134 original 960x1540 source-canvas pages as lossless WebP, and four verified ZIPs. The full Discovery snapshot contained 296 unique rows (3 `無料`, 293 `今なら無料`); the authenticated attempt classified all as free, then the standard inclusive Watchlist scope selected four. No quota/resource or entitlement state changed.
 Branch: feat/hanayume-adapter。
 進捗と観測のauthority: [PROGRESS.md](PROGRESS.md)。この文書は実行契約。Phase 03-Bのlocal review gateとlive evidence gateは分けて記録し、overall Phase 03のPASSを先取りしない。
 
-## 1. 目的と第一段階のスコープ
+## 1. Purpose and current scope
 
-花とゆめ＋（hanayume.com）の作品内エピソードをWatchlistの1話URLから発見し、
-一覧に出る「無料」「今なら無料」を別々の表示状態としてDiscoveryへ取り込む。
-この実行ではユーザー指示「ログインせず、検証可能な範囲で進める」に従い、
-現在ログアウトで直接閲覧を確認できた「無料」だけをdirect-only Batch候補にする。
-「今なら無料」は登録/ログインが必要というViewer表示を観測したためDiscoveryには残すが、
-認証された状態の非消費閲覧は未確認としてBatch対象外にする。
+The Hanayume adapter discovers episodes from a Watchlist seed, captures the clean viewer body, and supports direct-only Batch runs using the existing Catalog and Runner. The original Phases 01-05 established the logged-out `無料` rendered-PNG baseline. A later user instruction authorized a logged-in pilot and eligibility for exact `今なら無料` rows when a fresh same-work series listing proves the observed authenticated account markers.
 
-Watchlist → full/incremental/可能ならsite-native bounded Discovery
-→ Catalog → Batch Plan（direct-only）→ Batch Run → Crawl → Manifest/ZIP → Catalog completed。
+The final listing snapshot contained 296 unique episodes: 3 exact `無料` rows and 293 exact `今なら無料` rows. With the current attempt's verified same-work series auth, all 296 were classified `access_mode=free`; the standard inclusive Watchlist scope selected four records. The logged-out baseline had kept the latter rows `unknown`. The final live Batch completed the selected `今なら無料` and `無料` records without entitlement actions. The fresh auth result remains attempt-local; missing or ambiguous auth still leaves `今なら無料` unknown and ineligible.
 
-- Discoveryは行の正確な表示を別々に判定する。「無料」は `access_mode=free`、「今なら無料」は `access_mode=unknown` とし、raw labelはCatalogへ保存しない。free eligibilityは表示だけで決めず、Viewerの非消費入場を確認した状態だけをBatch候補にする。現在のrun scopeではログアウトで確認した「無料」のみ対象。
-- **配信期限を開発優先度・終了条件・固定の除外条件にしない**。ただし、実行時に無料でなくなった話は自動取得せずfail closed。もしサイトが終了日時を明示するなら既存モデルで保持可能か調査し、あくまで補助情報とする。
-- 作品横断の全サイト検索やquota/課金の自動取得は対象外。別作品にも再利用できるsite adapterとする。
-- 初期版はサイトで正規に利用できる無料閲覧を対象とし、アクセス制御・DRMの回避はしない。
+The earlier logged-out live Batch run completed three `無料` episodes (122 rendered-canvas PNG pages); it is historical fallback evidence. The final logged-in E2E supersedes it for current acceptance: four candidates, 134 original-canvas lossless-WebP pages, four END runs, and four verified ZIPs.
 
-**Phase 01で確認済み**: 10個の話数範囲ページで296/296件の一意IDを観測。「もっと見る」は55行で増分が止まっても表示されたため完了判定に使わない。「今なら無料」はログイン/登録要求の画面を表示し、ログアウト状態での閲覧は確認できなかった。
-**Phase 03/05 evidence:** for the three logged-out `無料` samples, counters were 37/45/55 and the viewer had 38/46/56 `#xCVPages` slots. In these samples, slot 0 was promotion; slots 1 through N−5 were structural body candidate wrappers, many unloaded placeholders without a canvas; slot N−4 was book information, then two promotion slots, followed by good/last terminal UI. At N−4 the final body canvas was visible; at terminal N/N there was no body canvas. All were in `mode-spread`; no single-page control was established. This is sample evidence, not a universal rule. One first-page source replay from 16 complete tiles into a 960×1540 scratch canvas and the exact 828×1329 visible scale matched pixels exactly. A third-sample scratch-to-visible canvas relationship remains unresolved, so no all-page source-native claim is justified. The final three-sample live Batch E2E captured 32/40/50 body pages (122 total) as clean rendered body-canvas PNGs at 828×1329; all same-run RGBA comparisons matched, all three ZIPs passed Manifest order/count/CRC/hash checks, and first/middle/last visual checks passed for each episode. DCT is rejected only for the measured 240×385 tile geometry, whose 385px height is unaligned to MCU-8. The earlier HTTP 429 and one-page timeout are historical failures superseded by the later PASS; see [PROGRESS.md](PROGRESS.md). Phase 02 live Discovery verified same-work identity, all ten ranges, and all 296 rows for the seed work; the final Batch test reused that Catalog and did not rerun Discovery.
-
+Current gate: Phases 01-05 implementation and live acceptance are complete; final independent review PASS / BLOCKING 0. Remaining limitations are documented below: original JPEG bytes/DCT recovery, unobserved native dimensions/layouts, and universal entry-overlay detection are not claimed.
 ## 2. 実装の基準
 
 上位authority: AGENTS.md、docs/SPEC.md、docs/ARCHITECTURE.md、
@@ -37,20 +26,17 @@ Comic DAYS（無料アクセス、canvas/native）、Piccoma（完全リスト�
 **UI類似だけで流用可と決めない**。既存の拡張ポイントを優先し、Coreのサイト固有分岐、Catalog schema変更、DSL/過剰抽象化を避ける。
 
 観測シード: https://hanayume.com/episodes/8c6f15923caa0
-このURLは調査入口であり、対応する作品ID・話順・無料状態・画像種別をまだ確認したものではない。
+At the start of Phase 01 this URL was only a probe entry; its work ID, order, access labels, and image format were not yet verified. Phases 01-05 later verified this seed and the supported scope: 296 unique ordered rows, 3 exact `無料` and 293 exact `今なら無料`; the final authenticated attempt classified all rows as free and the standard inclusive scope selected four E2E candidates.
 同一作品のサイトから現在読める2〜3話を選び、異なる話順/ラベル/終端を含むように実サイト確認する。
 適切な例がなければ不足を明示し、別の現在無料作品で補完する。
 
-## 3. free-only契約
+## 3. Free-only and authenticated listing rules
 
-- 現在のログアウト実行では、同じ行の唯一の正確な「無料」badgeだけをfreeにする。複数badge、欠落、矛盾、未対応ラベルはunknownにする。「今なら無料」はDiscoveryで検出・区別するが、Catalog上はunknownであり、Batch候補にしない。
-- 「無料」3話はログアウト状態の正規Viewerで表示された。「今なら無料」の認証済み非消費閲覧可否は未検証。ユーザーのno-login指示により、ログイン、登録、権利付与、購入操作は行わず、この範囲を広げない。
-- 将来「今なら無料」をBatch対象へ含めるには、ログイン済み利用者についても同一話の現在の権利・Viewer入口・無消費性を示す追加の非消費証拠が必要。raw labelをCatalog schemaへ黙って追加しない。
-- 有料、quota、レンタル、待てば無料、会員特典/購入済み、表示矛盾、unknownは**Batch非対象**。これらを無条件freeへ昇格させない。
-- Catalogがfreeでも、**各Batch入場直前にliveサイトで同じ作品/話identityと現在の対象無料ラベルを再確認**。不一致、無料終了、未知のダイアログ、課金CTAは停止/skip。別エピソードへ暗黙移動しない。
-- Site Policyはdirect-only、quota resource/消費記録/後続grant passなし。auto/directも同じ安全な無料入場に限定し、quotaは明示拒否。
-- full Discoveryでラベル変更を観測したら次のBatchは新しい状態に従う。既存completed ItemやArtifactをDiscoveryで巻き戻さない。
-
+- One exact row-scoped `無料` badge maps to `access_mode=free`, regardless of account markers. One exact `今なら無料` badge maps to `free` only when the current Discovery or Batch attempt proves authentication on the exact canonical same-work series route. Logged-out, absent, duplicate, or ambiguous auth markers leave `今なら無料` as `unknown`. Authentication is not stored in Catalog or reused across attempts.
+- The positive authentication proof is the observed unique `#xHeader.h`, one `data-e2e=hUserMenu` link with a nested `hUserIcon`, one `signoutBtn` within `.h-usermenu`, and no login anchor. Episode/range pages normally use `#xHeader.ep-h` and need not contain these account markers.
+- Discovery preserves both exact row labels as site-local classifications while Catalog stores only `access_mode`; no schema extension is used. Duplicate, conflicting, missing, or unsupported row labels remain unknown/fail closed. Every range remains subject to the full same-work identity, route, count, uniqueness, and buffering checks.
+- Batch requires fresh exact work/episode identity and current exact row label; only `今なら無料` also requires fresh authenticated series proof. A login or paid-entry gate and unknown state stop without clicking. Page-wide upsell/resource copy alone is not an access decision. No ticket, coin, quota, purchase, rental, or entitlement is consumed or treated as free.
+- The site policy remains direct-only and declares no resource or grant-only passes. A Catalog `free` value is not sufficient by itself to override a changed current listing or failed fresh preflight.
 ## 4. Discovery / Capture設計の共通判断
 
 ### 全話列挙
@@ -88,8 +74,10 @@ E2Eまで到達を優先してよい。ただしnative可能性のProbe結果・
 
 ## 5. 実行フェーズ・ゲート
 
+R2 document-start source-canvas capture and strict lossless WebP validation passed the final live run: 134/134 native pages, 0 rendered fallbacks. R3 authenticated `今なら無料` classification, R4 public-root validation, and R5 bounded readiness are included in the same verified four-candidate Batch E2E. The earlier 122-page rendered-PNG run remains historical baseline evidence.
+
 1. [01 — Site/Repo Probe](01-site-probe/README.md): 全件一覧、2種の表示状態、ログアウト可能な閲覧、viewer、原画像候補、終端を証拠付き確認。
-2. [02 — Discovery](02-discovery/README.md): 「無料」/「今なら無料」の診断分類（後者はunknown）、全話同期、global order、full/incremental/bounded、独立Review。
+2. [02 — Discovery](02-discovery/README.md): exact `無料` / `今なら無料` row classification; the latter is free only with fresh verified account markers on the canonical same-work series route, otherwise unknown; complete ordering and independent Review.
 3. [03 — Viewer/Capture](03-viewer-capture/README.md): live free preflight、安定したpage/END、原画像優先capture、比較テスト、独立Review。
 4. [04 — Policy/Batch](04-batch/README.md): direct-only Policy、Planner/Executor/ZIP/Catalog統合、独立Review。
 5. [05 — Independent E2E](05-e2e/README.md): 2〜3話の実パイプライン、画像・状態の独立監査、最終Review。
@@ -129,24 +117,16 @@ Review後のBLOCKINGは修正・再Reviewするまで次へ進めない。
 cookie、署名付きURL、token、購入画面、原画像、著作物fixtureや生の機密ログをcommitしない。
 すべてのtimeout/retry/クリック回数/pacingは有限でAccessGuard/max_pages/same-content guardを維持する。
 
-## 8. 最終受け入れ条件
+## 8. Current exit gates
 
-- 1話URLから対象作品全体を漏れなく正しく列挙し、全体順序をCatalogへ保持。
-- 「無料」と「今なら無料」それぞれの正確な表示状態を**独立にDiscoveryテスト**する。Catalogには現在の `access_mode` のみを保存し、raw labelは診断値とする。Batch候補にするのは同一identityの現在状態を無消費で直接閲覧できると確認したものだけ。
-  このrunではログアウトで確認した「無料」のみBatch対象。「今なら無料」は登録要求を確認したためunknown/ineligibleとして残し、誤って取得しない。
-- Batch直前に毎回identityと無料ラベルを再確認し、条件変化を安全に扱う。
-- 2〜3話のログアウト状態「無料」例を標準Discovery→Batch→ZIPで検証する。「今なら無料」の認証済み非消費確認は、ユーザーの「ログインせず」指示によりこのrunの受け入れ条件から除外し、未検証として残す。
-- 本文の欠落・重複・ページ順序逆転・画像品質の不当な劣化・広告/次話混入なし。
-  Native復元には厳密なprovenance/pixel照合、fallbackには正しいMethod記録。
-- 最終本文後のENDが観測され、Manifest/ZIP CRC/各member hash、Artifact、
-  Catalog completed/Succeeded Runを整合検証。失敗話はpendingのまま。
-- Relevant Unit/Integration/Live試験、独立Reviewer BLOCKING 0、独立Tester結果、未検証点をPROGRESS.mdに明示。
-  実サイトで条件を満たす例が見つからなければその項目はNOT VERIFIEDとし、部分成功を完成扱いしない。
+The original Discovery, Viewer, direct-only Batch, and three-episode rendered-PNG E2E gates passed independent review. The following follow-up gates remain:
 
+- R2: all-page native capture verification passed in the final E2E (134/134 exact RGBA source-canvas pages). Keep original JPEG/DCT and unsupported-layout claims bounded to the documented evidence.
+- R3/R5: authenticated eligibility, bounded readiness, END, artifact integrity, target identity, and no-entitlement-mutation checks passed in the final logged-in standard Batch E2E; final independent review PASS / BLOCKING 0.
+- Keep the prior logged-out PNG baseline distinct from these follow-up results. Update `PROGRESS.md`, the site README, and `note/10_hanayume.md` with actual reviewer/test/live outcomes before marking the follow-up gates complete.
 ## 9. Codex起動時
 
 最初に本READMEとPROGRESS.md・Phase 01を読み、上位authorityと現行main差分を確認する。
 Phaseごとに目的/観測/未確定/変更範囲/受け入れ条件/テストをLeadが提示し、
 Probe→Implementer→Reviewer→必要ならTester→PROGRESS更新の順に実行する。
 最終報告は「実装したもの」「テストしたもの」「未確認のもの」を厳密に分ける。
-

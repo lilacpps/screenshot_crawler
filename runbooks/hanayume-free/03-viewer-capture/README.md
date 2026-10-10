@@ -1,25 +1,18 @@
 # Phase 03 — Free Viewer / Rendered PNG Capture
 
-Status: Phase 03 PASS / BLOCKING 0. The final Phase 05 live Batch E2E completed all 32/40/50 body slots across the three confirmed `無料` samples with END, same-run RGBA proof for all 122 pages, and clean first/middle/last visual samples. Independent review of the center-in-viewport correction passed (163 affected tests, 0 skipped; Ruff and diff checks passed). The HTTP 429 and one-page timeout below are historical failed attempts superseded by the final E2E.
-Next: no additional live Viewer run is needed for this logged-out scope. Other layouts/works and authenticated `今なら無料` access remain unverified. Stop if future access encounters 403/429/challenge; do not log in, pay, exclude the content host, weaken AccessGuard, or add retry behavior.
+Status: Phase 03 capture passed independent review and final live E2E: 134/134 body pages came from the observed original 960x1540 source canvas and were encoded as lossless WebP; rendered fallback was 0. Four episodes reached END. The older 122-page PNG run is the rendered-canvas baseline only; final independent review PASS / BLOCKING 0.
+Next: implementation and live capture gates are complete for the verified layouts. Keep original JPEG/DCT restoration, other works/native dimensions, and universal entry-overlay detection as documented limitations. No AccessGuard relaxation or retries are permitted.
 
 ## 目的
-現在ログアウト状態で閲覧確認済みの「無料」対象話を正規Viewerで開き、
+新鮮な同作品認証を確認した「今なら無料」または認証状態を問わない「無料」対象話を正規Viewerで開き、
 **元画像を可能な限り無変換で保存**して本文すべてを正しい順序で終了まで取得する。
-サイト側の表示方式をまだ観測していないため、Capture MethodはProbe後に決定する。
+Use verified original-canvas pixels when the site-local provenance and exact RGBA replay checks pass; otherwise capture clean rendered body-canvas PNG at the canvas's actual dimensions.
 
-## Viewer/アクセス契約
-- 実行時のcanonical URL/target external_idと対象作品・話IDを厳密に比較。
-- 直接入場前に同一一覧等で対象行の現在の正確な「無料」badgeをfresh check。
-  `今なら無料` はCatalog上unknownであり、このrunでは入場しない。古いCatalogのfreeやログイン状態だけでは許可しない。
-- 課金/チケット/待機/解放/login操作、別話への遷移はしない。
-  必要な未対応CTAが出たらfail closed。auto/direct限定、quotaを拒否。
-- サイトで観測された単画面/見開き、上部Viewer、再開/巻き戻しを正しく扱う。
-  body index、page-change readiness、loading、広告、END/NEXT_CONTENTを
-  明示的なbounded state/signalsで判定。固定sleepだけでcaptureしない。
-- 最終本文を落とさず、最終本文後は次話の有料Viewerに入る前にEND。
-  spreadは片側欠損不可、読書順を守る。same-content/max_pages/timeoutを残す。
+## Viewer/access contract
 
+- Before entry, compare the canonical episode URL and external episode ID with the scoped work identity. Read the current exact row on the canonical same-work series route. `無料` is eligible regardless of account markers; exact `今なら無料` is eligible only when the same attempt proves the observed authenticated account-marker structure on that route.
+- The authentication proof is one observed `#xHeader.h`, one `data-e2e=hUserMenu` link containing `hUserIcon`, one `signoutBtn` under `.h-usermenu`, and no login anchor. Missing/ambiguous markers keep `今なら無料` unknown. The episode route normally uses `#xHeader.ep-h` without those markers; recheck exact work and row label there instead of treating their absence as logged out.
+- Do not click login, registration, purchase, ticket, quota, or next-episode controls. A login/paid entry gate, changed row, identity drift, or unknown viewer structure fails closed. Page-wide upsell/resource copy alone is not an access signal; no entitlement is consumed.
 ## 画像取得の決定ゲート
 優先順位は docs/CAPTURE_STRATEGY.md のauthorityどおり。
 
@@ -47,6 +40,22 @@ D. **Rendered fallback**:
 品質制約（実測解像度、同一ページ照合）を文書化し、見込みのないJPEG復元を作り込まない。
 ただしA/B/Cを観測・検証せず最初からDを恒久の標準にしない。
 
+## Historical R2 source-native capture checkpoint - superseded by the final 134-page native/logged-in E2E PASS (231618Z run)
+
+The document-start observer makes one bounded immutable copy of the exact observed 960x1540 full-frame source canvas during its draw into the exact body target. It retains up to eight candidates, consumes only the selected spread, and preserves future preloads. Selected pages require exact target canvas, wrapper/slot, generation/write/dimensions, safe geometry/context, and current one-canvas `-cv-page-canvas` structure. Reparenting the same target canvas into a new holder within the exact wrapper remains eligible; wrapper/slot drift or target replacement does not.
+
+Readback, replay, encoding, and hashing happen only after page selection. Replay uses no background and every RGBA byte must match the current selected canvas. Verified native PNG pixels become strict single-chunk VP8L lossless WebP method 4 only after full RGBA round-trip validation; encoder failure keeps the same verified source PNG. If any native candidate in a spread is unavailable, the entire spread uses clean rendered-canvas PNGs at actual dimensions. Observer integrity loss, unsafe state, selected-target drift, native proof/replay/source-snapshot readback error, or candidate miss uses whole-spread rendered-canvas PNG. Failure to read selected rendered canvases or expiry of the 10-second adapter capture budget fails closed. No original JPEG bytes or tile reconstruction are claimed.
+
+Historical checkpoint, superseded by the final 134-page native/logged-in E2E PASS (231618Z run): R2 pre-review selection had 44 passed, 0 skipped, and 23 pytest-asyncio deprecation warnings. That selection did not provide live verification; the later R2 local review and final all-page native E2E passed.
+
+## Historical R2 reviewer correction checkpoint - superseded by the final 134-page native/logged-in E2E PASS (231618Z run)
+
+- Episode pages use `div.ep-main.series-safe-filter-target[data-e2e="pageEpisode"] > div.series.mode-ep` (the inner mode has no `data-e2e`) > `.series-eplist-wrap` > `.series-eplist-main`; canonical series routes use `div.series.mode-series-top.series-safe-filter-target[data-e2e="pageSeries"]` as the wrapper parent. Both require one unique direct public `epList`. Rows are descendants under `.series-eplist-default.has-store-item.mode-last`, not direct children of the public root. A direct `epListUser` history sibling is not enumerated; overlapping labels must agree. Unknown/nested/duplicate roots and conflicts fail closed.
+- Native proof validates saved Canvas `getContextAttributes`, `getTransform`, and `setTransform` functions plus the relevant paint descriptors. Candidate provenance includes the episode pathname observed at draw. Native replay or source-snapshot readback exceptions select clean rendered PNG for the entire spread; failure to read the selected rendered canvas remains fail-closed.
+- There is one outstanding proof token at most. Each collect invalidates the previous token, and capture `finally` releases the selected slots/token without discarding unrelated future preloads. Regression coverage includes context/paint API tampering, replay exception, route change, one-proof cap, cancel/timeout cleanup, post-encode target drift, and preloaded-candidate retention.
+- Historical checkpoint, superseded by the final 134-page native/logged-in E2E PASS (231618Z run): focused affected Hanayume selection had 109 passed, 0 skipped, and 27 pytest-asyncio deprecation warnings. Independent R2 review passed BLOCKING 0; the later final live verification is recorded above.
+- R1's focused copy/replay probe performed replay/readback synchronously inside the draw wrapper. It did not prove deferred replay. R2 leaves only the immutable canvas copy on the draw hook and performs readback/replay after selection.
+
 ## Phase 03-B implementation checkpoint (2026-10-10; historical pre-live checkpoint, local review PASS)
 
 - Manual Viewer registration is site-local and uses the shared CDP/Page lifecycle. Before entry it verifies the exact episode URL and unique scoped work header, then checks the exact bare same-work URL and a finite valid range set. It proceeds only if that listing contains one exact target row with `無料`; otherwise it follows observed numbered routes with exact current-range, unchanged-range-set, declared row-count, and page-local ID checks, stopping at the first target. Duplicate, conflicting, or nonfree target rows fail immediately, and the adapter exhausts ranges only when the target is absent. After opening the exact episode it checks the work and label again. Discovery remains responsible for full-work coverage/global uniqueness. `今なら無料`, a missing/duplicate/conflicting label, target/work drift, or unsupported viewer state fails closed.
@@ -71,7 +80,7 @@ D. **Rendered fallback**:
 - The Tester reused the previously verified isolated Discovery Catalog (296 sources: 3 `free`, 293 `unknown`) by SQLite backup, then invoked the normal Batch CLI for the three exact-free candidates. Discovery was not rerun during this Batch iteration.
 - All three episode runs reached `END` with complete body coverage: 32, 40, and 50 slots (122 total). The same-run selected visible canvas RGBA payload exactly matched every adapter PNG. Three ZIPs matched Manifest member count/order/CRC/hash; exactly three Catalog Items completed and the 293 `unknown` Items remained pending.
 - Independent visual review sampled each episode's first, middle, and last body page (9 images); all showed clean comic body canvases without UI, ads, blank frames, or half-page crops. Metrics were 1,189 requests and zero 403/429/5xx, challenge, CAPTCHA, or retry events; quota remained unused and entitlement/grant state unchanged.
-- The harness command and final reports are in `output/hanayume_experiment/tester/runs/20261010T153649Z-ac385393/`; details are summarized in `runbooks/hanayume-free/PROGRESS.md` and `note/10_hanayume.md`. The run used rendered body-canvas PNG at 828×1329; original 960×1540 source mapping is not proven generally. The authenticated, non-consuming `今なら無料` case remains unverified under the user's no-login instruction.
+- At this historical Phase 03-B checkpoint, the logged-out `今なら無料` case remained unverified under the then-current no-login instruction. The later user-authorized R3 pilot and current implementation are summarized at the top and in PROGRESS.md.
 
 ## Phase 03-A probe result (2026-10-10; production contract still gated)
 
@@ -98,4 +107,3 @@ D. **Rendered fallback**:
 本番で採用するCaptureレベル、証明手段、観測した解像度/ページ数、fallback頻度、
 テストPASS/FAIL/NOT VERIFIED、差分とReview BLOCKING 0をPROGRESS.mdへ記録。
 未対応layoutやDCT不適合を「完全復元済」と表現しない。
-

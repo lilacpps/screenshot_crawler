@@ -1,12 +1,12 @@
 # Phase 05 — Independent live E2E / Final gate
 
-Status: PASS / BLOCKING 0 for the logged-out exact-`無料` scope. Independent Tester completed three standard Batch runs with END, generated three verified ZIPs, pixel-checked all 122 pages and visually passed 9 first/middle/last samples. Final independent Reviewer passed with 42 fresh tests, 0 skipped, Ruff/diff, and independent SQLite/ZIP/PNG audits passing. The earlier HTTP 429 and one-page timeout attempts are historical and superseded. Authenticated non-consuming `今なら無料` remains outside scope and unverified.
+Status: PASS / BLOCKING 0 for the final logged-in standard Batch E2E within the verified scope. Four inclusive-scope candidates completed at END, producing 134/134 independently RGBA-verified original-canvas lossless-WebP pages and four verified ZIPs. Final independent review PASS / BLOCKING 0.
 
 ## 目的
 **2〜3話**を実際の標準CLIで Watchlist → Discovery → Catalog → Batch Plan →
 Batch Run → Crawl → Manifest/ZIP → completed と通し、画像と状態の整合性を独立検証する。
-このrunではログアウト状態で直接閲覧を確認した「無料」話から2〜3話を含める。
-「今なら無料」は登録/ログインを要する表示を観測し、認証済みの非消費閲覧を確認していないためE2E対象外。
+このrunでは「無料」対象に加え、現在の共有プロファイルで同作品の認証markerを確認できる場合は「今なら無料」対象を少なくとも1話含める。Viewer/Batchのfresh preflightで認証と正確な対象rowを再確認し、未確認ならunknownのまま停止する。
+Do not perform login, registration, purchase, ticket, quota, or entitlement actions. If fresh authentication or the exact target row cannot be verified, keep the candidate unknown and stop before entry.
 シード: https://hanayume.com/episodes/8c6f15923caa0。
 
 ## Live手順（実装後のCLI、隔離パス）
@@ -43,18 +43,18 @@ New-Item -ItemType Directory -Force output\hanayume_experiment | Out-Null
 7. 既存の他サイトAdapter/Catalog/共通部の対象回帰試験、skips/未実行理由を報告。
 
 ## Final gate
-- Tester結果はPASS/FAIL/NOT VERIFIEDを各観点で報告。通常のUnit成功だけではlive PASSとしない。
-- 最終Reviewerが実装差分・Checker evidence・失敗修正を再確認し、BLOCKING 0。
-- 「無料」と「今なら無料」の分類を独立にUnit/Integrationで検証し、後者は `unknown` のままにする。
-  今なら無料の認証済み非消費Viewer確認はユーザーのno-login指示で未実施であり、Live accessはNOT VERIFIEDと報告する。
-- PROGRESS.md、site README、対応noteを**実際の実装結果**に同期。
-  ブランチはレビュー可能な状態で残す。mainへ自動mergeしない。
 
-## Final Tester result (2026-10-11)
+- Final report: `output/hanayume_experiment/tester/runs/20261010T231618Z-a02345e9/final_report.json`; audit files in the same directory include `batch_access_metrics.json`, `independent_capture_fingerprints.json`, and `independent_draw_trace.json`. Final run 20261010T231618Z-a02345e9 performed fresh standard Discovery, validated all 296 rows, applied the standard inclusive Watchlist scope, synchronized four records into a new isolated Catalog, and ran standard Batch for these four candidates. No Catalog backup was reused.
+- Full-list observation contained 296 unique IDs/positions 1-296: 3 exact `無料` and 293 exact `今なら無料`. The attempt verified account markers on the canonical same-work series route; all rows were classified free for this attempt, while the standard inclusive scope selected four candidates.
+- Selected episodes in execution order: `90868f4de278f` (12 body pages), `2ec9c6b024ee0` (50), `9202b052ad237` (40), and `8c6f15923caa0` (32). All four runs reached END, all four Catalog items completed, and all four ZIP artifacts are present.
+- All 134 output pages are 960x1540 `source_canvas_lossless_webp` artifacts. Independent draw-time copies of the selected original canvas and deferred decoded RGBA readback matched each output exactly (134/134); every WebP is single-chunk VP8L. Rendered fallback was zero. The observed resized display canvas was 828x1329 (CSS 552x886 at DPR 1.5); the native path avoids that display resize.
+- All four ZIPs passed CRC, manifest order, member count, and SHA-256 checks. Tester visual review passed 12 first/middle/final samples. Access metrics recorded 2,426 requests and zero 403/429/challenge/CAPTCHA events; CLI-reported retry count was 0. No quota resource or grant/entitlement state changed.
+- Earlier 122-page rendered-PNG E2E, R5 auth/counter probes, and initial failed attempts remain historical checkpoints. The bounded auth poll follows a live probe where positive markers appeared at 150 ms; the counter transition itself was not directly measured. An ignored audit-harness slot-attribution failure was corrected and the final independent audit passed.
+- Limits: this verifies decoded source-canvas pixels, not original JPEG bytes. The measured 385px tile height did not support the tested MCU-8 DCT coefficient permutation. Other native dimensions/layouts may use whole-spread rendered PNG; universal detection of a ready Viewer overlapping an entry gate remains unverified.
+## Historical logged-out rendered-PNG baseline (superseded by the final logged-in E2E above)
 
 - The independent Tester reused the previously audited 296-source Discovery Catalog through a coherent SQLite backup; it did not rerun Discovery during the final Batch E2E. The harness invoked the standard `batch run --site hanayume --limit 3` CLI with transparent in-process evidence wrappers under isolated paths.
 - Exactly the three logged-out exact-`無料` entries completed with `stop_reason=end`: `8c6f15923caa0` (32 pages), `9202b052ad237` (40), and `2ec9c6b024ee0` (50). Before each advance, an independent visible-canvas read in the same run was decoded as RGBA and exactly matched the adapter PNG. Three ZIPs matched Manifest member count/order/CRC/hash; the corresponding three Catalog Items completed, while the 293 `unknown` Items remained pending. The earlier failed run record was retained.
 - Tester independently viewed first, middle, and last page samples for every episode (9 total); each showed only the comic body with no UI/ad, blank frame, or half-page crop. Quota resources remained unused and grant/entitlement state unchanged. Metrics: 1,189 requests; zero 403/429/5xx, challenge, CAPTCHA, or retries.
 - Command: `.venv/Scripts/python.exe output/hanayume_experiment/tester/hanayume_e2e.py --live --reuse-catalog output/hanayume_experiment/tester/runs/20261010T152230Z-2794388b/catalog.sqlite`. Reports: `output/hanayume_experiment/tester/runs/20261010T153649Z-ac385393/final_report.json` and `tester_assessment.json`; ZIPs and sampled images are isolated under the same ignored run directory.
-- Capture method is rendered body-canvas PNG at observed 828×1329 dimensions. It retains the rendered canvas pixels but not the original 960×1540 source resolution. The bounded 240×385 tiles reject only the tested MCU-8 DCT permutation approach. Authenticated non-consuming access for `今なら無料` remains NOT VERIFIED per the user's no-login instruction.
-
+- This historical baseline used rendered body-canvas PNG at observed 828x1329 dimensions and verified only the logged-out `無料` path. It does not establish original-canvas or authenticated `今なら無料` behavior; those were verified separately in the final E2E above.

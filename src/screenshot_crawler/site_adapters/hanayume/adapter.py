@@ -28,9 +28,18 @@ from screenshot_crawler.site_adapters.hanayume.access import hanayume_access_pro
 from screenshot_crawler.site_adapters.hanayume.discovery import (
     RANGE_LABEL,
     RANGE_PAGE_SIZE,
+    _read_series_authentication,
     classify_hanayume_access,
     parse_hanayume_episode_url,
     parse_hanayume_work_url,
+)
+from screenshot_crawler.site_adapters.hanayume.native_capture import (
+    COLLECT_CAPTURE_SCRIPT,
+    OBSERVER_INIT_SCRIPT,
+    RELEASE_CAPTURE_SCRIPT,
+    VERIFY_CAPTURE_SCRIPT,
+    decode_capture_images,
+    encode_native_webp,
 )
 
 BASE_URL = "https://hanayume.com"
@@ -50,13 +59,15 @@ SEEK_SELECTOR = "#xCVSeekBar"
 NAVIGATION_TIMEOUT_MS = 15_000
 DOM_TIMEOUT_MS = 6_000
 OBSERVATION_TIMEOUT_SECONDS = 4.0
+CAPTURE_BUDGET_SECONDS = 10.0
 RANGE_PACING_MS = 350
+VIEWER_COUNTER_READY_TIMEOUT_MS = 5_000
+VIEWER_COUNTER_POLL_INTERVAL_MS = 100
 MAX_RANGE_PAGES = 100
 MAX_LISTING_ROWS = RANGE_PAGE_SIZE * MAX_RANGE_PAGES
 INITIALIZE_TIMEOUT_MS = 240_000
 MAX_PNG_BYTES = 8_000_000
 POLL_INTERVAL_SECONDS = 0.15
-FREE_LABEL = "\u7121\u6599"
 
 SNAPSHOT_SCRIPT = r"""({includePng = false} = {}) => {
   const one = selector => {
@@ -113,17 +124,44 @@ SNAPSHOT_SCRIPT = r"""({includePng = false} = {}) => {
   };
 }"""
 
-RANGE_SNAPSHOT_SCRIPT = r"""() => ({
-  path: location.pathname,
-  ranges: [...document.querySelectorAll('.series-eplist-wrap a.series-sort-link')]
-    .map(anchor => ({
-      label: (anchor.innerText || '').replace(/\s+/g, ' ').trim(),
-      href: anchor.href,
-      current: anchor.classList.contains('mode-current')
-    })),
-  rows: [...document.querySelectorAll(
-    '.series-eplist-wrap .series-eplist-item[data-e2e="eli"]')]
-    .map((row, index) => {
+VIEWER_COUNTER_READINESS_SCRIPT = r"""() => {
+  const count = selector => document.querySelectorAll(selector).length;
+  const current = [...document.querySelectorAll('.-cv-f-page-current')];
+  const total = [...document.querySelectorAll('.-cv-f-page-total')];
+  if (count('#comici-viewer') !== 1 || count('#xCVPages') !== 1 ||
+      count('#xCVSeekBar') !== 1) return true;
+  if (current.length > 1 || total.length > 1) return true;
+  if (current.length !== 1 || total.length !== 1) return false;
+  return (current[0].textContent || '').trim().length > 0 &&
+    (total[0].textContent || '').trim().length > 0;
+}"""
+
+RANGE_SNAPSHOT_SCRIPT = r"""() => {
+  const wrappers = [...document.querySelectorAll('.series-eplist-wrap')];
+  const wrapper = wrappers.length === 1 ? wrappers[0] : null;
+  const outer = wrapper?.parentElement ?? null;
+  const routeOuterValid = outer?.tagName === 'DIV' &&
+    outer.classList.contains('series') && outer.classList.contains('mode-series-top') &&
+    outer.classList.contains('series-safe-filter-target') &&
+    outer.dataset.e2e === 'pageSeries';
+  const mains = wrapper ? [...wrapper.children].filter(node =>
+    node.classList.contains('series-eplist-main')) : [];
+  const main = mains.length === 1 ? mains[0] : null;
+  const roots = wrapper ? [...wrapper.querySelectorAll('.series-eplist')] : [];
+  const allRoots = [...document.querySelectorAll('.series-eplist')];
+  const publicRoots = roots.filter(root => root.dataset.e2e === 'epList');
+  const userRoots = roots.filter(root => root.dataset.e2e === 'epListUser');
+  const rowsKnown = [...document.querySelectorAll('.series-eplist-item[data-e2e="eli"]')]
+    .every(row => publicRoots[0]?.contains(row) || userRoots.some(root => root.contains(row)));
+  const structureReady = wrappers.length === 1 && routeOuterValid &&
+    allRoots.length === roots.length && mains.length === 1 &&
+    main?.parentElement === wrapper && publicRoots.length === 1 &&
+    publicRoots[0].parentElement === main && userRoots.length <= 1 &&
+    roots.length === publicRoots.length + userRoots.length &&
+    userRoots.every(root => root.parentElement === main && root.classList.contains('mode-user')) &&
+    rowsKnown;
+  const readRows = root => [...root.querySelectorAll(
+    '.series-eplist-item[data-e2e="eli"]')].map((row, index) => {
       const links = [...row.querySelectorAll('a.series-eplist-item-link')];
       const badges = [...row.querySelectorAll('.series-eplist-item-access-text')];
       return {
@@ -132,8 +170,19 @@ RANGE_SNAPSHOT_SCRIPT = r"""() => ({
         href: links.length === 1 ? links[0].href : null,
         labels: badges.map(node => (node.innerText || '').replace(/\s+/g, ' ').trim())
       };
-    })
-})"""
+    });
+  return {
+    path: location.pathname,
+    structureReady,
+    ranges: wrapper ? [...wrapper.querySelectorAll('a.series-sort-link')].map(anchor => ({
+      label: (anchor.innerText || '').replace(/\s+/g, ' ').trim(),
+      href: anchor.href,
+      current: anchor.classList.contains('mode-current')
+    })) : [],
+    rows: publicRoots.length === 1 ? readRows(publicRoots[0]) : [],
+    historyRows: userRoots.length === 1 ? readRows(userRoots[0]) : []
+  };
+}"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +358,52 @@ def _find_target_labels(rows: object, target_episode_id: str | None) -> tuple[st
     return target_labels[0] if target_labels else None
 
 
+def _validate_history_row_copies(public_rows: object, history_rows: object) -> None:
+    """Check only overlapping history copies; the public root remains authoritative."""
+
+    if not isinstance(public_rows, list) or not isinstance(history_rows, list):
+        raise UnknownPageStateError("Hanayume public/history episode rows are malformed")
+    public_labels: dict[str, tuple[str, ...]] = {}
+    for rows, seen, branch in (
+        (public_rows, set(), "public"),
+        (history_rows, set(), "history"),
+    ):
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or row.get("linkCount") != 1
+                or not isinstance(row.get("href"), str)
+                or not isinstance(row.get("labels"), list)
+                or not all(isinstance(label, str) for label in row["labels"])
+            ):
+                raise UnknownPageStateError(f"Hanayume {branch} episode row is malformed")
+            identity = parse_hanayume_episode_url(row["href"])
+            if identity is None or identity.episode_id in seen:
+                raise UnknownPageStateError(
+                    f"Hanayume {branch} range has a foreign or duplicate episode ID"
+                )
+            seen.add(identity.episode_id)
+            labels = tuple(row["labels"])
+            if branch == "public":
+                public_labels[identity.episode_id] = labels
+            elif (
+                identity.episode_id in public_labels
+                and public_labels[identity.episode_id] != labels
+            ):
+                raise UnknownPageStateError(
+                    "Hanayume public and history episode copies disagree on access labels"
+                )
+
+
+def _capture_output_format(captures: list[CaptureResult]) -> str:
+    formats = {capture.mime_type for capture in captures}
+    if formats == {"image/webp"}:
+        return "webp"
+    if formats == {"image/png"}:
+        return "png"
+    return "mixed"
+
+
 
 def _expected_active_slots(current: int, body_total: int) -> tuple[int, ...]:
     if current == 1:
@@ -344,6 +439,7 @@ def _slot_role(index: int, total: int, classes: object) -> str:
         or state_classes in (
             {"mode-loading"},
             {"mode-loading", "mode-req-render"},
+            {"mode-loaded", "mode-req-render"},
         )
     ):
         raise UnknownPageStateError("Hanayume body slot has an unknown state class")
@@ -461,7 +557,7 @@ def _decode_canvas_png(value: object, *, width: int, height: int) -> bytes:
 
 
 class HanayumeAdapter(SiteAdapter):
-    """Capture only the current, exact free Hanayume body canvases as PNG."""
+    """Capture exact-free Hanayume body canvases with verified native pixels."""
 
     page_change_timeout_ms = 12_000
 
@@ -476,6 +572,15 @@ class HanayumeAdapter(SiteAdapter):
         self._pending: tuple[str, int, tuple[int, ...]] | None = None
         self._ended = False
         self._last_capture_slots: tuple[int, ...] = ()
+        self._capture_diagnostics: dict[str, object] = {}
+        self._webp_encode_job: asyncio.Task[tuple[CaptureResult, ...]] | None = None
+        self._capture_attempt: dict[str, object] | None = None
+
+    async def prepare_page(self, page: Page) -> None:
+        try:
+            await page.add_init_script(OBSERVER_INIT_SCRIPT)
+        except PlaywrightError as exc:
+            self._capture_diagnostics = {"mode": "observer_unavailable", "reason": type(exc).__name__}
 
     def get_access_profile(self) -> AccessProfile:
         return hanayume_access_profile()
@@ -519,6 +624,7 @@ class HanayumeAdapter(SiteAdapter):
             await self._navigate_exact(page, self._target_url)
         await self._wait_for_episode(page, expected_work=initial_work)
         await self._wait_for_locator(page, SEEK_SELECTOR, state="attached")
+        await self._wait_for_viewer_counter_readiness(page)
         first = await self._observe(page)
         if first.terminal or first.current != 1 or first.seek_value != first.seek_max:
             seek = page.locator(SEEK_SELECTOR)
@@ -551,6 +657,12 @@ class HanayumeAdapter(SiteAdapter):
         ranges = _parse_series_ranges(initial.get("ranges"), work_id=work_id)
         if not ranges:
             raise UnknownPageStateError("Hanayume work has no supported episode ranges")
+        try:
+            listing_authenticated = await _read_series_authentication(page, work_id=work_id)
+        except (ValueError, TypeError) as exc:
+            raise UnknownPageStateError(
+                "Hanayume work-listing authentication state is unknown"
+            ) from exc
 
         target_labels = _find_target_labels(initial.get("rows"), self._episode_id)
         if target_labels is None:
@@ -582,15 +694,22 @@ class HanayumeAdapter(SiteAdapter):
 
         if target_labels is None:
             raise UnknownPageStateError("Hanayume target episode is missing from its work")
-        access = classify_hanayume_access(target_labels)
-        if access.raw_labels != (FREE_LABEL,) or access.access_mode != "free":
+        expected_labels = tuple(target_labels)
+        access = classify_hanayume_access(
+            expected_labels, listing_authenticated=listing_authenticated
+        )
+        if access.access_mode != "free":
             raise UnknownPageStateError(
-                "Hanayume target is not one exact logged-out free row"
+                "Hanayume target is not one exact currently eligible free row"
             )
 
         await self._navigate_exact(page, self._target_url or "")
         await self._wait_for_episode(page, expected_work=work_id)
-        await self._validate_episode_free_row(page)
+        await self._validate_episode_free_row(
+            page,
+            expected_labels=expected_labels,
+            listing_authenticated=listing_authenticated,
+        )
 
     async def _navigate_exact(self, page: Page, url: str) -> None:
         if not _strict_first_party_url(url):
@@ -614,13 +733,48 @@ class HanayumeAdapter(SiteAdapter):
         except (PlaywrightError, TimeoutError) as exc:
             raise UnknownPageStateError("Hanayume expected page structure did not become ready") from exc
 
+    async def _wait_for_viewer_counter_readiness(self, page: Page) -> None:
+        if self._target_url is None:
+            raise UnknownPageStateError("Hanayume viewer target identity is missing")
+        deadline = time.monotonic() + VIEWER_COUNTER_READY_TIMEOUT_MS / 1000
+        while True:
+            if page.url != self._target_url:
+                raise UnknownPageStateError("Hanayume viewer moved away before its counter became ready")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise UnknownPageStateError("Hanayume viewer page counter did not become ready")
+            try:
+                ready = await asyncio.wait_for(
+                    page.evaluate(VIEWER_COUNTER_READINESS_SCRIPT),
+                    timeout=min(OBSERVATION_TIMEOUT_SECONDS, remaining),
+                )
+            except (PlaywrightError, TimeoutError) as exc:
+                raise UnknownPageStateError(
+                    "Hanayume viewer page counter readiness exceeded its bound"
+                ) from exc
+            if not isinstance(ready, bool):
+                raise UnknownPageStateError("Hanayume viewer counter readiness is malformed")
+            if ready:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise UnknownPageStateError("Hanayume viewer page counter did not become ready")
+            await asyncio.sleep(
+                min(VIEWER_COUNTER_POLL_INTERVAL_MS / 1000, remaining)
+            )
+
     async def _read_range_page(self, page: Page) -> dict[str, object]:
         try:
             value = await asyncio.wait_for(page.evaluate(RANGE_SNAPSHOT_SCRIPT), timeout=OBSERVATION_TIMEOUT_SECONDS)
         except (PlaywrightError, TimeoutError) as exc:
             raise UnknownPageStateError("Hanayume range observation exceeded its timeout") from exc
-        if not isinstance(value, dict) or value.get("path") != urlsplit(page.url).path:
+        if (
+            not isinstance(value, dict)
+            or value.get("path") != urlsplit(page.url).path
+            or value.get("structureReady") is not True
+        ):
             raise UnknownPageStateError("Hanayume range observation URL is inconsistent")
+        _validate_history_row_copies(value.get("rows"), value.get("historyRows"))
         return value
 
     async def _read_episode_work(self, page: Page) -> str:
@@ -643,22 +797,80 @@ class HanayumeAdapter(SiteAdapter):
 
     async def _read_episode_row_labels(self, page: Page) -> list[tuple[str, ...]]:
         try:
-            rows = await asyncio.wait_for(
+            value = await asyncio.wait_for(
                 page.evaluate(
-                    r"""() => [...document.querySelectorAll(
-                      '.series-eplist-wrap .series-eplist-item[data-e2e="eli"]')].map(row => ({
-                        hrefs: [...row.querySelectorAll('a.series-eplist-item-link')].map(link => link.href),
-                        labels: [...row.querySelectorAll('.series-eplist-item-access-text')]
-                          .map(node => (node.innerText || '').replace(/\s+/g, ' ').trim())
-                      }))"""
+                    r"""() => {
+                      const wrappers = [...document.querySelectorAll('.series-eplist-wrap')];
+                      const mains = wrappers.flatMap(wrap => [...wrap.children]
+                        .filter(node => node.classList.contains('series-eplist-main')));
+                      const episodeMarkers = [...document.querySelectorAll('[data-e2e="pageEpisode"]')];
+                      const episodePages = episodeMarkers.filter(node => node.tagName === 'DIV' &&
+                        node.classList.contains('ep-main') &&
+                        node.classList.contains('series-safe-filter-target'));
+                      const episodePage = episodePages.length === 1 ? episodePages[0] : null;
+                      const episodeModes = episodePage ? [...episodePage.children].filter(node =>
+                        node.tagName === 'DIV' && node.classList.contains('series') &&
+                        node.classList.contains('mode-ep') && !node.hasAttribute('data-e2e')) : [];
+                      const episodeMode = episodeModes.length === 1 ? episodeModes[0] : null;
+                      const allRoots = [...document.querySelectorAll('.series-eplist')];
+                      const roots = [...document.querySelectorAll(
+                        '.series-eplist[data-e2e="epList"]')];
+                      const userRoots = [...document.querySelectorAll(
+                        '.series-eplist[data-e2e="epListUser"]')];
+                      const knownMode = episodeMarkers.length === 1 && episodePages.length === 1 &&
+                        wrappers.length === 1 && mains.length === 1 && episodeModes.length === 1 &&
+                        episodeMode?.parentElement === episodePage &&
+                        wrappers[0].parentElement === episodeMode &&
+                        mains[0].parentElement === wrappers[0];
+                      const publicRoot = roots.length === 1 && knownMode &&
+                        roots[0].parentElement === mains[0];
+                      const validUserRoots = userRoots.length <= 1 && knownMode &&
+                        userRoots.every(root => root.parentElement === mains[0] &&
+                          root.classList.contains('series-eplist') && root.classList.contains('mode-user'));
+                      const knownRoots = publicRoot && validUserRoots &&
+                        allRoots.length === roots.length + userRoots.length;
+                      const readRows = root => [...root.querySelectorAll(
+                        '.series-eplist-item[data-e2e="eli"]')].map(row => ({
+                          hrefs: [...row.querySelectorAll('a.series-eplist-item-link')].map(link => link.href),
+                          labels: [...row.querySelectorAll('.series-eplist-item-access-text')]
+                            .map(node => (node.innerText || '').replace(/\s+/g, ' ').trim())
+                        }));
+                      const allRows = [...document.querySelectorAll(
+                        '.series-eplist-item[data-e2e="eli"]')].map(row => {
+                          const branch = row.closest('.series-eplist[data-e2e]');
+                          return {
+                            branch: branch === roots[0] ? 'public' :
+                              (branch === userRoots[0] ? 'user' : 'unknown'),
+                            hrefs: [...row.querySelectorAll('a.series-eplist-item-link')].map(link => link.href),
+                            labels: [...row.querySelectorAll('.series-eplist-item-access-text')]
+                              .map(node => (node.innerText || '').replace(/\s+/g, ' ').trim())
+                          };
+                        });
+                      return {
+                        rootCount: roots.length, knownMode, publicRoot,
+                        userRootCount: userRoots.length, validUserRoots, knownRoots,
+                        publicRows: publicRoot ? readRows(roots[0]) : [], allRows
+                      };
+                    }"""
                 ),
                 timeout=OBSERVATION_TIMEOUT_SECONDS,
             )
         except (PlaywrightError, TimeoutError) as exc:
             raise UnknownPageStateError("Hanayume current episode access row could not be read") from exc
-        if not isinstance(rows, list):
+        if (
+            not isinstance(value, dict)
+            or value.get("rootCount") != 1
+            or value.get("knownMode") is not True
+            or value.get("publicRoot") is not True
+            or value.get("validUserRoots") is not True
+            or value.get("knownRoots") is not True
+        ):
+            raise UnknownPageStateError("Hanayume public episode list is missing or ambiguous")
+        rows = value.get("allRows")
+        public_rows = value.get("publicRows")
+        if not isinstance(rows, list) or not isinstance(public_rows, list):
             raise UnknownPageStateError("Hanayume current episode access row is malformed")
-        result: list[tuple[str, ...]] = []
+        target_copies: list[tuple[str, ...]] = []
         expected_path = f"/episodes/{self._episode_id}"
         for row in rows:
             if (
@@ -680,6 +892,10 @@ class HanayumeAdapter(SiteAdapter):
                     ) from exc
             if not target_like:
                 continue
+            if row.get("branch") not in {"public", "user"}:
+                raise UnknownPageStateError(
+                    "Hanayume target-like episode copy is outside the known list branches"
+                )
             if len(hrefs) != 1:
                 raise UnknownPageStateError(
                     "Hanayume current episode row is ambiguous"
@@ -689,16 +905,56 @@ class HanayumeAdapter(SiteAdapter):
                 raise UnknownPageStateError(
                     "Hanayume current episode row URL is not the exact first-party target"
                 )
-            result.append(tuple(row["labels"]))
-        if len(result) != 1:
-            raise UnknownPageStateError("Hanayume current episode row is missing or duplicated")
-        return result
+            target_copies.append(tuple(row["labels"]))
+        public_targets: list[tuple[str, ...]] = []
+        for row in public_rows:
+            if (
+                not isinstance(row, dict)
+                or not isinstance(row.get("hrefs"), list)
+                or not all(isinstance(href, str) for href in row["hrefs"])
+                or not isinstance(row.get("labels"), list)
+                or not all(isinstance(label, str) for label in row["labels"])
+            ):
+                raise UnknownPageStateError("Hanayume public episode row is malformed")
+            hrefs = row["hrefs"]
+            target_like = False
+            for href in hrefs:
+                try:
+                    target_like = target_like or urlsplit(href).path == expected_path
+                except ValueError as exc:
+                    raise UnknownPageStateError("Hanayume public episode row URL is invalid") from exc
+            if not target_like:
+                continue
+            if len(hrefs) != 1:
+                raise UnknownPageStateError("Hanayume public episode target row is ambiguous")
+            identity = parse_hanayume_episode_url(hrefs[0])
+            if identity is None or identity.episode_id != self._episode_id:
+                raise UnknownPageStateError("Hanayume public episode URL is not the exact target")
+            public_targets.append(tuple(row["labels"]))
+        if len(public_targets) != 1 or not target_copies:
+            raise UnknownPageStateError("Hanayume current episode public row is missing or duplicated")
+        if any(labels != public_targets[0] for labels in target_copies):
+            raise UnknownPageStateError("Hanayume target-like episode copies disagree on access")
+        return public_targets
 
-    async def _validate_episode_free_row(self, page: Page) -> None:
+    async def _validate_episode_free_row(
+        self,
+        page: Page,
+        *,
+        expected_labels: tuple[str, ...],
+        listing_authenticated: bool,
+    ) -> None:
         await self._wait_for_locator(page, LISTING_SELECTOR, state="visible")
         labels = await self._read_episode_row_labels(page)
-        if labels != [(FREE_LABEL,)]:
-            raise UnknownPageStateError("Hanayume current episode no longer has one exact 無料 badge")
+        if labels != [expected_labels]:
+            raise UnknownPageStateError(
+                "Hanayume episode badge changed after the fresh work-listing check; free access is not confirmed"
+            )
+        access = classify_hanayume_access(
+            expected_labels, listing_authenticated=listing_authenticated
+        )
+        if access.access_mode != "free":
+            raise UnknownPageStateError("Hanayume current episode is not currently free")
 
     async def _wait_for_episode(self, page: Page, *, expected_work: str) -> None:
         if self._target_url is None or page.url != self._target_url:
@@ -765,6 +1021,7 @@ class HanayumeAdapter(SiteAdapter):
                 and observation.ready_slots == ()
             ):
                 self._ended = True
+                await self._clear_native_cache(page)
                 return PageState.END
             raise UnknownPageStateError("Hanayume reached END before all body slots were captured")
         expected = _expected_active_slots(observation.current, observation.body_total)
@@ -790,30 +1047,210 @@ class HanayumeAdapter(SiteAdapter):
         )
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
-        observation = await self._observe(page, include_png=True)
+        self._capture_attempt = None
+        try:
+            return await asyncio.wait_for(
+                self._capture_page_within_budget(page), timeout=CAPTURE_BUDGET_SECONDS
+            )
+        except TimeoutError as exc:
+            self._capture_diagnostics = {
+                "mode": "capture_failed",
+                "reason": "capture_budget_exceeded",
+            }
+            raise UnknownPageStateError("Hanayume atomic capture exceeded its adapter budget") from exc
+        finally:
+            await self._release_capture_attempt(page)
+
+    async def _capture_page_within_budget(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        observation = await self._observe(page)
         expected = _expected_active_slots(observation.current, observation.body_total)
         next_slots = tuple(range(len(self._captured_slots) + 1, len(self._captured_slots) + 1 + len(expected)))
         if observation.terminal or not expected or expected != next_slots:
             raise UnknownPageStateError("Hanayume capture is not the next complete body page/spread")
         if observation.active_slots != expected or observation.ready_slots != expected:
             raise UnknownPageStateError("Hanayume current spread is missing a ready body canvas")
-        slots = observation.raw.get("slots")
-        if not isinstance(slots, list):
-            raise UnknownPageStateError("Hanayume canvas wrapper list disappeared during capture")
-        captures: list[CaptureResult] = []
-        for index in expected:
-            slot = slots[index]
-            canvas = slot.get("canvas") if isinstance(slot, dict) else None
-            if not isinstance(canvas, dict) or canvas.get("ready") is not True or canvas.get("visible") is not True:
-                raise UnknownPageStateError("Hanayume selected canvas changed before readback")
-            width, height = canvas.get("width"), canvas.get("height")
-            if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
-                raise UnknownPageStateError("Hanayume selected canvas dimensions are invalid")
-            data = _decode_canvas_png(canvas.get("png"), width=width, height=height)
-            captures.append(CaptureResult(data=data, width=width, height=height))
+        if self._webp_encode_job is not None and not self._webp_encode_job.done():
+            raise UnknownPageStateError("Hanayume previous bounded WebP encode is still running")
+        episode_path = urlsplit(self._target_url or "").path
+        self._capture_attempt = {
+            "expectedSlots": list(expected), "episodePath": episode_path, "token": None,
+        }
+        try:
+            raw = await asyncio.wait_for(
+                page.evaluate(
+                    COLLECT_CAPTURE_SCRIPT,
+                    {
+                        "expectedSlots": list(expected),
+                        "expectedCurrent": observation.current,
+                        "expectedBodyTotal": observation.body_total,
+                        "episodePath": episode_path,
+                    },
+                ),
+                timeout=OBSERVATION_TIMEOUT_SECONDS * 2,
+            )
+        except (PlaywrightError, TimeoutError) as exc:
+            raise UnknownPageStateError("Hanayume atomic canvas capture exceeded its bound") from exc
+        if not isinstance(raw, dict) or raw.get("ok") is not True:
+            reason = raw.get("reason") if isinstance(raw, dict) else "malformed_capture_result"
+            if reason not in {"capture_observer_missing", "observer_integrity_lost"}:
+                self._capture_diagnostics = {"mode": "capture_failed", "reason": str(reason)}
+                raise UnknownPageStateError("Hanayume selected canvas changed or could not be read")
+            rendered = await self._observe(page, include_png=True)
+            if (
+                rendered.current != observation.current
+                or rendered.body_total != observation.body_total
+                or rendered.active_slots != expected
+                or rendered.ready_slots != expected
+            ):
+                raise UnknownPageStateError("Hanayume clean rendered-canvas fallback changed state")
+            slots = rendered.raw.get("slots")
+            if not isinstance(slots, list):
+                raise UnknownPageStateError("Hanayume rendered-canvas fallback slots are missing")
+            captures: list[CaptureResult] = []
+            for index in expected:
+                slot = slots[index]
+                canvas = slot.get("canvas") if isinstance(slot, dict) else None
+                if not isinstance(canvas, dict) or canvas.get("ready") is not True or canvas.get("visible") is not True:
+                    raise UnknownPageStateError("Hanayume rendered-canvas fallback is not ready")
+                width, height = canvas.get("width"), canvas.get("height")
+                if not isinstance(width, int) or not isinstance(height, int):
+                    raise UnknownPageStateError("Hanayume rendered-canvas fallback dimensions are invalid")
+                data = _decode_canvas_png(canvas.get("png"), width=width, height=height)
+                captures.append(CaptureResult(data, width, height, "image/png", ".png"))
+            self._capture_diagnostics = {
+                "mode": "rendered_body_canvas_png",
+                "reason": str(reason),
+                "slots": list(expected),
+                "output_dimensions": [[item.width, item.height] for item in captures],
+                "output_formats": [item.mime_type for item in captures],
+            }
+            self._captured_slots.extend(expected)
+            self._last_capture_slots = expected
+            return tuple(captures)
+        raw_token = raw.get("token")
+        if isinstance(raw_token, str) and self._capture_attempt is not None:
+            self._capture_attempt["token"] = raw_token
+        current_observation = _parse_viewer_observation(raw.get("observation"))
+        if (
+            current_observation.current != observation.current
+            or current_observation.body_total != observation.body_total
+            or current_observation.active_slots != expected
+            or current_observation.ready_slots != expected
+        ):
+            raise UnknownPageStateError("Hanayume selected spread changed during atomic readback")
+        mode = raw.get("mode")
+        if mode not in {"native", "rendered"}:
+            raise UnknownPageStateError("Hanayume capture mode is unknown")
+        images = decode_capture_images(
+            raw.get("images"), expected_slots=expected, require_opaque=mode == "native"
+        )
+        if mode == "native":
+            if any((image.width, image.height) != (960, 1540) for image in images):
+                raise UnknownPageStateError("Hanayume native capture dimensions are not source-native")
+            token = raw_token
+            if not isinstance(token, str) or not token:
+                raise UnknownPageStateError("Hanayume native capture proof token is missing")
+            encode_task = asyncio.create_task(asyncio.to_thread(encode_native_webp, images))
+            self._webp_encode_job = encode_task
+            encode_task.add_done_callback(self._clear_webp_encode_job)
+            try:
+                captures = await asyncio.wait_for(asyncio.shield(encode_task), timeout=6.0)
+            except TimeoutError as exc:
+                self._capture_diagnostics = {
+                    "mode": "capture_failed",
+                    "reason": "native_encode_timeout",
+                    "source_slots": list(expected),
+                }
+                raise UnknownPageStateError("Hanayume bounded native image encoding timed out") from exc
+            except Exception:  # noqa: BLE001 - retain the same already-verified native PNGs
+                captures = tuple(
+                    CaptureResult(item.png, item.width, item.height, "image/png", ".png")
+                    for item in images
+                )
+            verified = await self._verify_native_capture(page, token)
+            if not verified:
+                self._capture_diagnostics = {
+                    "mode": "capture_failed",
+                    "reason": "native_target_changed_after_encoding",
+                    "source_slots": list(expected),
+                }
+                raise UnknownPageStateError("Hanayume selected canvas changed after native image encoding")
+            output_format = _capture_output_format(captures)
+            self._capture_diagnostics = {
+                "mode": f"source_canvas_lossless_{output_format}",
+                "reason": raw.get("reason"),
+                "slots": list(expected),
+                "source_dimensions": [960, 1540],
+                "output_dimensions": [[item.width, item.height] for item in captures],
+                "output_formats": [item.mime_type for item in captures],
+            }
+        else:
+            slots = observation.raw.get("slots")
+            if not isinstance(slots, list):
+                raise UnknownPageStateError("Hanayume canvas wrapper list disappeared during capture")
+            for index, image in zip(expected, images, strict=True):
+                slot = slots[index]
+                canvas = slot.get("canvas") if isinstance(slot, dict) else None
+                if (
+                    not isinstance(canvas, dict)
+                    or canvas.get("ready") is not True
+                    or canvas.get("visible") is not True
+                    or (canvas.get("width"), canvas.get("height")) != (image.width, image.height)
+                ):
+                    raise UnknownPageStateError("Hanayume rendered fallback dimensions changed")
+            captures = tuple(
+                CaptureResult(image.png, image.width, image.height, "image/png", ".png")
+                for image in images
+            )
+            self._capture_diagnostics = {
+                "mode": "rendered_body_canvas_png",
+                "reason": raw.get("reason"),
+                "slots": list(expected),
+                "output_dimensions": [[item.width, item.height] for item in captures],
+                "output_formats": [item.mime_type for item in captures],
+            }
         self._captured_slots.extend(expected)
         self._last_capture_slots = expected
         return tuple(captures)
+
+    def _clear_webp_encode_job(self, task: asyncio.Task[tuple[CaptureResult, ...]]) -> None:
+        if self._webp_encode_job is task:
+            self._webp_encode_job = None
+        if not task.cancelled():
+            try:
+                task.exception()
+            except asyncio.CancelledError:
+                pass
+
+    async def _verify_native_capture(self, page: Page, token: str) -> bool:
+        try:
+            value = await asyncio.wait_for(
+                page.evaluate(VERIFY_CAPTURE_SCRIPT, token),
+                timeout=OBSERVATION_TIMEOUT_SECONDS,
+            )
+        except (PlaywrightError, TimeoutError):
+            return False
+        return value is True
+
+    async def _release_capture_attempt(self, page: Page) -> None:
+        attempt = self._capture_attempt
+        self._capture_attempt = None
+        if attempt is None:
+            return
+        try:
+            await asyncio.wait_for(
+                page.evaluate(
+                    RELEASE_CAPTURE_SCRIPT,
+                    {
+                        "token": attempt.get("token"),
+                        "expectedSlots": attempt.get("expectedSlots"),
+                        "episodePath": attempt.get("episodePath"),
+                    },
+                ),
+                timeout=0.5,
+            )
+        except (PlaywrightError, TimeoutError):
+            return
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:
         observation = await self._observe(page)
@@ -903,6 +1340,7 @@ class HanayumeAdapter(SiteAdapter):
                 raise UnknownPageStateError("Hanayume terminal UI arrived before complete body coverage")
             self._ended = True
             self._pending = None
+            await self._clear_native_cache(page)
             return
         observation = await self._wait_for_observation(
             page,
@@ -920,13 +1358,23 @@ class HanayumeAdapter(SiteAdapter):
     async def collect_debug_metadata(self, page: Page) -> dict[str, object]:
         del page
         return {
-            "capture_mode": "rendered_body_canvas_png",
+            "capture_mode": self._capture_diagnostics.get("mode", "not_started"),
+            "capture": dict(self._capture_diagnostics),
             "episode_id": self._episode_id,
             "captured_body_slots": len(self._captured_slots),
             "body_total": self._body_total,
             "last_slots": list(self._last_capture_slots),
-            "source_native": False,
+            "source_native": str(self._capture_diagnostics.get("mode", "")).startswith("source_canvas_"),
         }
+
+    async def _clear_native_cache(self, page: Page) -> None:
+        try:
+            await asyncio.wait_for(
+                page.evaluate("() => window.__hanayumeNativeCapture?.clear?.()"),
+                timeout=1.0,
+            )
+        except (PlaywrightError, TimeoutError):
+            return
 
 
 __all__ = ["HanayumeAdapter"]

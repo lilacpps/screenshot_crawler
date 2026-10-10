@@ -38,12 +38,16 @@ def _short_hanayume_test_timeouts(monkeypatch) -> None:
     monkeypatch.setattr(hanayume_adapter, "NAVIGATION_TIMEOUT_MS", 3_000)
     monkeypatch.setattr(hanayume_adapter, "DOM_TIMEOUT_MS", 3_000)
     monkeypatch.setattr(hanayume_adapter, "RANGE_PACING_MS", 0)
+    monkeypatch.setattr(hanayume_discovery, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 0.45)
+    monkeypatch.setattr(hanayume_adapter, "VIEWER_COUNTER_READY_TIMEOUT_MS", 400)
     monkeypatch.setattr(HanayumeAdapter, "page_change_timeout_ms", 1_000)
 
 BASE = "https://hanayume.com"
 SEED_ID = f"{1:013x}"
 WORK_ID = f"{900:013x}"
 TOTAL = 32
+TARGET_POSITION = 2
+NOW_FREE_LABEL = "\u4eca\u306a\u3089\u7121\u6599"
 
 
 def _episode_id(position: int) -> str:
@@ -68,14 +72,53 @@ def _row(position: int, label: str) -> str:
     </div>"""
 
 
+def _series_auth_header(state: str) -> str:
+    if state == "authenticated":
+        login_anchor = ""
+        extra_icon = ""
+        menu = '''<a class="h-main-nav-link mode-user" data-e2e="hUserMenu" href="#account">
+          <svg data-e2e="hUserIcon"></svg></a>
+          <div class="h-usermenu"><ul><li><button data-e2e="signoutBtn">Sign out</button></li></ul></div>'''
+    elif state == "delayed":
+        return '''<header id="xHeader" class="h"><nav></nav></header>
+          <script>
+            setTimeout(() => {
+              const header = document.querySelector('#xHeader.h');
+              if (header) header.innerHTML = '<nav><a class="h-main-nav-link mode-user" data-e2e="hUserMenu" href="#account"><svg data-e2e="hUserIcon"></svg></a><div class="h-usermenu"><ul><li><button data-e2e="signoutBtn">Sign out</button></li></ul></div></nav>';
+            }, 220);
+          </script>'''
+    elif state == "ambiguous":
+        login_anchor = '<a href="/login">Login</a>'
+        extra_icon = '<svg data-e2e="hUserIcon"></svg>'
+        menu = '''<a class="h-main-nav-link mode-user" data-e2e="hUserMenu" href="#account">
+          <svg data-e2e="hUserIcon"></svg></a>
+          <div class="h-usermenu"><ul><li><button data-e2e="signoutBtn">Sign out</button></li></ul></div>'''
+    else:
+        login_anchor = '<a href="/login">Login</a>'
+        extra_icon = ""
+        menu = ""
+    return f'''<header id="xHeader" class="h"><nav class="h-main-nav">
+      {menu}{extra_icon}{login_anchor}
+    </nav></header>'''
+
+
 def _page_html(
     *,
     page_number: int | None,
+    series_route: bool = False,
     drift_last_range: bool = False,
     first_badge: str = "無料",
     foreign_work: bool = False,
     duplicate_boundary_row: bool = False,
     omit_last_row: bool = False,
+    target_badge: str | None = None,
+    series_auth_state: str | None = None,
+    work_id_override: str | None = None,
+    history_conflict: bool = False,
+    unknown_root: bool = False,
+    nested_user_root: bool = False,
+    duplicate_public_root: bool = False,
+    wrong_outer: bool = False,
 ) -> str:
     final_end = 33 if drift_last_range else TOTAL
     ranges = [(1, 30), (31, final_end)]
@@ -111,25 +154,76 @@ def _page_html(
         row_position = 30 if page_number == 2 and duplicate_boundary_row and position == 31 else position
         if position == 1:
             label = first_badge
+        elif position == TARGET_POSITION and target_badge is not None:
+            label = target_badge
         elif position <= 3:
             label = "無料"
         else:
             label = "今なら無料"
         rows.append(_row(row_position, label))
-    work_id = f"{901:013x}" if foreign_work and page_number == 2 else WORK_ID
+    work_id = work_id_override or (
+        f"{901:013x}" if foreign_work and page_number == 2 else WORK_ID
+    )
+    header = (
+        _series_auth_header(series_auth_state)
+        if series_auth_state is not None
+        else f'<header id="xHeader"><a class="ep-h-main-h-series" href="/series/{work_id}">Fixture Work</a></header>'
+    )
+    history_rows = list(rows)
+    if history_conflict and page_number == 1 and history_rows:
+        history_rows[0] = _row(1, NOW_FREE_LABEL)
+    user_markup = (
+        '<div class="series-eplist mode-loading mode-user" data-e2e="epListUser"></div>'
+        if series_route
+        else '<div class="series-eplist mode-user" data-e2e="epListUser">'
+        '<div class="series-eplist-default has-store-item mode-last">'
+        + "".join(history_rows)
+        + "</div></div>"
+    )
+    if nested_user_root:
+        user_markup = (
+            '<div class="series-eplist-extra">'
+            '<div class="series-eplist mode-user" data-e2e="epListUser">'
+            + "".join(history_rows)
+            + "</div></div>"
+        )
+    public_markup = (
+        '<div class="series-eplist" data-e2e="epList">'
+        '<div class="series-eplist-default has-store-item mode-last">'
+        + "".join(rows)
+        + "</div></div>"
+    )
+    if duplicate_public_root:
+        public_markup += public_markup
+    if unknown_root:
+        user_markup += '<div class="series-eplist" data-e2e="unknownList"></div>'
+    if series_route and not wrong_outer:
+        route_open = (
+            '<div class="series mode-series-top series-safe-filter-target" data-e2e="pageSeries">'
+        )
+        route_close = "</div>"
+    elif series_route or not wrong_outer:
+        route_open = (
+            '<div class="ep-main series-safe-filter-target" data-e2e="pageEpisode">'
+            '<div class="series mode-ep">'
+        )
+        route_close = "</div></div>"
+    else:
+        route_open = (
+            '<div class="series mode-series-top series-safe-filter-target" data-e2e="pageSeries">'
+        )
+        route_close = "</div>"
     return f"""<!doctype html><html><head><title>Fixture Work</title></head>
       <body><div class="base">
-        <header id="xHeader">
-          <a class="ep-h-main-h-series" href="/series/{work_id}">Fixture Work</a>
-        </header>
-        <div class="ep-main series-safe-filter-target">
-          <div class="series mode-ep">
+        {header}
+          {route_open}
             <div class="series-eplist-wrap">
               <nav>{''.join(range_links)}</nav>
-              <div class="series-eplist">{''.join(rows)}</div>
+              <div class="series-eplist-main">
+                {public_markup}{user_markup}
+              </div>
             </div>
-          </div>
-        </div>
+          {route_close}
       </div></body></html>"""
 
 
@@ -164,16 +258,49 @@ async def _install_pages(
     foreign_work: bool = False,
     duplicate_boundary_row: bool = False,
     omit_last_row: bool = False,
+    target_badge: str | None = None,
+    series_auth_state: str = "logged-out",
+    history_conflict: bool = False,
+    unknown_root: bool = False,
+    nested_user_root: bool = False,
+    duplicate_public_root: bool = False,
+    wrong_series_outer: bool = False,
+    wrong_episode_outer: bool = False,
+    return_route_drift: bool = False,
+    return_work_drift: bool = False,
+    return_range_drift: bool = False,
 ) -> list[str]:
     requested_paths: list[str] = []
+    seed_requests = 0
 
     async def fulfill(route) -> None:
+        nonlocal seed_requests
         parsed = urlsplit(route.request.url)
         requested_paths.append(parsed.path)
+        if parsed.path == f"/series/{WORK_ID}":
+            await route.fulfill(
+                status=200,
+                body=_page_html(
+                    page_number=None,
+                    series_route=True,
+                    target_badge=target_badge,
+                    series_auth_state=series_auth_state,
+                    wrong_outer=wrong_series_outer,
+                ),
+                content_type="text/html; charset=utf-8",
+            )
+            return
         if parsed.path == f"/episodes/{SEED_ID}" and base_status != 200:
             await route.fulfill(status=base_status, body="", headers=base_headers or {})
             return
         if parsed.path == f"/episodes/{SEED_ID}":
+            seed_requests += 1
+            if return_route_drift and seed_requests > 1:
+                await route.fulfill(
+                    status=302,
+                    headers={"location": f"/episodes/{_episode_id(5)}"},
+                )
+                return
             page_number = None
         elif parsed.path == f"/episodes/{SEED_ID}/1":
             page_number = 1
@@ -186,11 +313,30 @@ async def _install_pages(
             status=200,
             body=_page_html(
                 page_number=page_number,
-                drift_last_range=drift_last_range,
+                drift_last_range=(
+                    drift_last_range
+                    or (
+                        return_range_drift
+                        and seed_requests > 1
+                        and parsed.path == f"/episodes/{SEED_ID}"
+                    )
+                ),
                 first_badge=first_badge,
                 foreign_work=foreign_work,
                 duplicate_boundary_row=duplicate_boundary_row,
                 omit_last_row=omit_last_row,
+                target_badge=target_badge,
+                history_conflict=history_conflict,
+                unknown_root=unknown_root,
+                nested_user_root=nested_user_root,
+                duplicate_public_root=duplicate_public_root,
+                wrong_outer=wrong_episode_outer,
+                work_id_override=(
+                    f"{901:013x}"
+                    if return_work_drift and parsed.path == f"/episodes/{SEED_ID}"
+                    and seed_requests > 1
+                    else None
+                ),
             ),
             content_type="text/html; charset=utf-8",
         )
@@ -251,12 +397,71 @@ async def test_hanayume_full_incremental_and_bounded_discovery(
 
 
 @pytest.mark.parametrize(
+    ("auth_state", "expected_free_count"),
+    [("logged-out", 2), ("ambiguous", 2), ("authenticated", TOTAL), ("delayed", TOTAL)],
+)
+async def test_hanayume_now_free_discovery_uses_only_fresh_series_auth_markers(
+    browser_page, tmp_path: Path, auth_state: str, expected_free_count: int
+) -> None:
+    requested = await _install_pages(
+        browser_page, target_badge=NOW_FREE_LABEL, series_auth_state=auth_state
+    )
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+
+    result = await DiscoveryService(catalog, _registry()).discover(
+        browser_page, _target(), "full"
+    )
+
+    target = catalog.find_source("hanayume", f"{WORK_ID}:{_episode_id(TARGET_POSITION)}")
+    assert result.complete is True and result.observed_count == TOTAL
+    assert target is not None
+    assert target.access_mode == ("free" if auth_state in {"authenticated", "delayed"} else "unknown")
+    assert sum(source.access_mode == "free" for source in catalog.list_sources(site="hanayume")) == expected_free_count
+    assert requested[:3] == [f"/episodes/{SEED_ID}", f"/series/{WORK_ID}", f"/episodes/{SEED_ID}"]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_discovery_and_batch_wait_for_delayed_now_free_auth_markers(
+    browser_page, tmp_path: Path
+) -> None:
+    catalog, _source, candidate, plan, executor, _requested = await _batch_fixture(
+        browser_page,
+        tmp_path,
+        target_badge=NOW_FREE_LABEL,
+        discovery_target_badge=NOW_FREE_LABEL,
+        discovery_auth_state="delayed",
+    )
+
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch-output",
+        library_dir=tmp_path / "library",
+        max_pages=10,
+        now=BATCH_NOW,
+    )
+
+    assert result.stop_reason == "end" and result.page_count == 4
+    assert catalog.get_item(candidate.item_id).status == "completed"
+    assert len(plan.candidates) == TOTAL
+
+
+@pytest.mark.parametrize(
     "page_options",
     [
         pytest.param({"drift_last_range": True}, id="range-set-drift"),
         pytest.param({"foreign_work": True}, id="foreign-work-context"),
         pytest.param({"duplicate_boundary_row": True}, id="duplicate-episode-id"),
         pytest.param({"omit_last_row": True}, id="incomplete-declared-range"),
+        pytest.param({"return_route_drift": True}, id="seed-return-route-drift"),
+        pytest.param({"return_work_drift": True}, id="seed-return-work-drift"),
+        pytest.param({"return_range_drift": True}, id="seed-return-range-drift"),
+        pytest.param({"history_conflict": True}, id="conflicting-history-copy"),
+        pytest.param({"unknown_root": True}, id="unknown-list-root"),
+        pytest.param({"nested_user_root": True}, id="nested-history-root"),
+        pytest.param({"duplicate_public_root": True}, id="duplicate-public-root"),
+        pytest.param({"wrong_series_outer": True}, id="wrong-series-route-ancestry"),
+        pytest.param({"wrong_episode_outer": True}, id="wrong-episode-route-ancestry"),
     ],
 )
 async def test_hanayume_incomplete_or_foreign_ranges_fail_before_catalog_sources_are_written(
@@ -360,7 +565,10 @@ BATCH_NOW = datetime(2026, 10, 10, 12, 0, tzinfo=JST)
 
 
 def _series_batch_html(
-    *, page_number: int | None, target_badge: str = "無料"
+    *,
+    page_number: int | None,
+    target_badge: str = "\u7121\u6599",
+    series_auth_state: str = "logged-out",
 ) -> str:
     ranges = ((1, 1, 30), (2, 31, TOTAL))
     links = []
@@ -384,7 +592,17 @@ def _series_batch_html(
         for position in positions
     ]
     return f"""<!doctype html><html><body>
-      <div class="series-eplist-wrap"><nav>{''.join(links)}</nav>{''.join(rows)}</div>
+      {_series_auth_header(series_auth_state)}
+      <div class="series mode-series-top series-safe-filter-target" data-e2e="pageSeries"><div class="series-eplist-wrap"><nav>{''.join(links)}</nav>
+        <div class="series-eplist-main">
+          <div class="series-eplist" data-e2e="epList">
+            <div class="series-eplist-default has-store-item mode-last">{''.join(rows)}</div>
+          </div>
+          <div class="series-eplist mode-user" data-e2e="epListUser">
+            <div class="series-eplist-default has-store-item mode-last">{''.join(rows)}</div>
+          </div>
+        </div>
+      </div></div>
     </body></html>"""
 
 
@@ -392,16 +610,38 @@ def _batch_viewer_html(
     *,
     episode_id: str,
     work_id: str = WORK_ID,
-    target_badge: str = "無料",
+    target_badge: str = "\u7121\u6599",
     mutation: str = "none",
+    entry_gate: bool = False,
 ) -> str:
     target_row = _row(TARGET_POSITION, target_badge)
+    if entry_gate:
+        return f"""<!doctype html><html><body>
+          <header id="xHeader"><a class="ep-h-main-h-series" href="{BASE}/series/{work_id}">work</a></header>
+          <div class="ep-main series-safe-filter-target" data-e2e="pageEpisode">
+            <div class="series mode-ep"><div class="series-eplist-wrap">
+              <div class="series-eplist-main"><div class="series-eplist" data-e2e="epList">
+                <div class="series-eplist-default has-store-item mode-last">{target_row}</div>
+              </div></div>
+            </div></div>
+          </div>
+          <div role="dialog" aria-label="login required"><button id="entry-gate">Continue</button></div>
+          <script>window.entryGateClicks=0;document.querySelector('#entry-gate').addEventListener('click',()=>window.entryGateClicks++);</script>
+        </body></html>"""
     return f"""<!doctype html><html><head><style>
       body {{ margin:0 }} #comici-viewer {{ position:relative;width:200px;height:100px }}
       #xCVPages {{ position:absolute;inset:0 }} .-cv-page {{ position:absolute;top:0;width:100px;height:100px }}
     </style></head><body>
       <header id="xHeader"><a class="ep-h-main-h-series" href="{BASE}/series/{work_id}">work</a></header>
-      <div class="series-eplist-wrap">{target_row}</div>
+      <div class="ep-main series-safe-filter-target" data-e2e="pageEpisode">
+      <div class="series mode-ep"><div class="series-eplist-wrap">
+        <div class="series-eplist-main">
+          <div class="series-eplist" data-e2e="epList">
+            <div class="series-eplist-default has-store-item mode-last">{target_row}</div>
+          </div>
+        </div>
+      </div></div></div>
+      </div>
       <div id="comici-viewer" class="-cv mode-spread">
         <div class="-cv-f-page-current"></div><div class="-cv-f-page-total">9</div>
         <input id="xCVSeekBar" type="range" min="1" max="9" step="2" value="9">
@@ -467,9 +707,11 @@ def _batch_viewer_html(
 async def _install_batch_routes(
     browser_page,
     *,
-    target_badge: str = "無料",
+    target_badge: str = "\u7121\u6599",
     work_id: str = WORK_ID,
     mutation: str = "none",
+    series_auth_state: str = "logged-out",
+    entry_gate: bool = False,
 ) -> list[str]:
     requested: list[str] = []
     target_path = f"/episodes/{TARGET_EPISODE_ID}"
@@ -483,13 +725,26 @@ async def _install_batch_routes(
                 work_id=work_id,
                 target_badge=target_badge,
                 mutation=mutation,
+                entry_gate=entry_gate,
             )
         elif path == f"/series/{WORK_ID}":
-            body = _series_batch_html(page_number=None, target_badge=target_badge)
+            body = _series_batch_html(
+                page_number=None,
+                target_badge=target_badge,
+                series_auth_state=series_auth_state,
+            )
         elif path == f"/series/{WORK_ID}/1":
-            body = _series_batch_html(page_number=1, target_badge=target_badge)
+            body = _series_batch_html(
+                page_number=1,
+                target_badge=target_badge,
+                series_auth_state=series_auth_state,
+            )
         elif path == f"/series/{WORK_ID}/2":
-            body = _series_batch_html(page_number=2, target_badge=target_badge)
+            body = _series_batch_html(
+                page_number=2,
+                target_badge=target_badge,
+                series_auth_state=series_auth_state,
+            )
         else:
             await route.fulfill(status=404, body="")
             return
@@ -507,11 +762,19 @@ async def _batch_fixture(
     browser_page,
     tmp_path: Path,
     *,
-    target_badge: str = "無料",
+    target_badge: str = "\u7121\u6599",
+    discovery_target_badge: str | None = None,
+    discovery_auth_state: str = "logged-out",
+    runtime_auth_state: str | None = None,
     viewer_work_id: str = WORK_ID,
     mutation: str = "none",
+    entry_gate: bool = False,
 ):
-    await _install_pages(browser_page)
+    await _install_pages(
+        browser_page,
+        target_badge=discovery_target_badge,
+        series_auth_state=discovery_auth_state,
+    )
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     discovery = await DiscoveryService(catalog, _registry()).discover(
         browser_page, _target(), "full"
@@ -535,6 +798,8 @@ async def _batch_fixture(
         target_badge=target_badge,
         work_id=viewer_work_id,
         mutation=mutation,
+        series_auth_state=runtime_auth_state or discovery_auth_state,
+        entry_gate=entry_gate,
     )
     executor = BatchExecutor(
         catalog,
@@ -545,12 +810,25 @@ async def _batch_fixture(
     return catalog, source, candidate, plan, executor, requested
 
 
+@pytest.mark.parametrize(
+    ("target_badge", "auth_state", "expected_candidates"),
+    [("\u7121\u6599", "logged-out", 3), (NOW_FREE_LABEL, "authenticated", TOTAL)],
+    ids=("free-logged-out", "now-free-logged-in"),
+)
 @pytest.mark.asyncio(loop_scope="module")
-async def test_hanayume_discovery_to_batch_zip_completes_only_free_candidate(
-    browser_page, tmp_path: Path
+async def test_hanayume_discovery_to_batch_zip_completes_only_eligible_candidate(
+    browser_page,
+    tmp_path: Path,
+    target_badge: str,
+    auth_state: str,
+    expected_candidates: int,
 ) -> None:
     catalog, source, candidate, plan, executor, requested = await _batch_fixture(
-        browser_page, tmp_path
+        browser_page,
+        tmp_path,
+        target_badge=target_badge,
+        discovery_target_badge=target_badge,
+        discovery_auth_state=auth_state,
     )
     manifest_snapshots: list[dict[str, object]] = []
 
@@ -585,7 +863,7 @@ async def test_hanayume_discovery_to_batch_zip_completes_only_free_candidate(
     assert catalog.get_quota_resource_state(
         catalog.get_work(item.work_id).id, site="hanayume", resource="work_ticket"
     ) is None
-    assert len(plan.candidates) == 3
+    assert len(plan.candidates) == expected_candidates
     assert {entry.access_mode for entry in plan.candidates} == {"free"}
     assert len(manifest_snapshots) == 1
     manifest = manifest_snapshots[0]
@@ -655,6 +933,63 @@ async def test_hanayume_batch_failures_never_complete_or_create_artifacts(
         assert len(runs) == 1 and runs[0].status == "failed"
         assert runs[0].page_count is None
         assert requested.count(f"/episodes/{TARGET_EPISODE_ID}") == 1
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_now_free_batch_stops_when_fresh_auth_marker_expires(
+    browser_page, tmp_path: Path, monkeypatch
+) -> None:
+    # Keep the negative-auth deadline short while leaving room for the browser
+    # evaluation itself to complete under the full affected test selection.
+    monkeypatch.setattr(
+        hanayume_discovery, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 1.5
+    )
+    catalog, _source, candidate, _plan, executor, requested = await _batch_fixture(
+        browser_page,
+        tmp_path,
+        target_badge=NOW_FREE_LABEL,
+        discovery_target_badge=NOW_FREE_LABEL,
+        discovery_auth_state="authenticated",
+        runtime_auth_state="logged-out",
+    )
+
+    with pytest.raises(BatchExecutionError):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            max_pages=10,
+            now=BATCH_NOW,
+        )
+
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+    assert requested.count(f"/episodes/{TARGET_EPISODE_ID}") == 1
+    assert f"/series/{WORK_ID}/1" in requested
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_login_entry_gate_is_not_clicked_or_treated_as_free(
+    browser_page, tmp_path: Path
+) -> None:
+    catalog, _source, candidate, _plan, executor, _requested = await _batch_fixture(
+        browser_page, tmp_path, entry_gate=True
+    )
+
+    with pytest.raises(BatchExecutionError):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            max_pages=10,
+            now=BATCH_NOW,
+        )
+
+    assert await browser_page.evaluate("window.entryGateClicks") == 0
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
 
 
 @pytest.mark.asyncio(loop_scope="module")

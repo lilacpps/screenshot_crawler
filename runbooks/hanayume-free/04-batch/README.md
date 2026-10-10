@@ -1,12 +1,12 @@
 # Phase 04 — Free-only Site Policy / Batch integration
 
-Status: Phase 04 local implementation and independent review PASS / BLOCKING 0 (42 tests, 0 skipped; Ruff PASS). The separately gated Phase 05 live standard Batch E2E later completed three logged-out exact-`無料` episodes and ZIPs; all 122 body pages were pixel-verified, with 9/9 visual samples clean. `今なら無料` remains `unknown`/ineligible.
+Status: Direct-only Phase 04 integration and R3/R4/R5 corrections passed independent review. The final logged-in standard Batch E2E completed four authenticated/ordinary-free candidates with END and four verified ZIP artifacts; no quota or entitlement state changed. Final independent review PASS / BLOCKING 0.
 次段階: [E2E](../05-e2e/README.md)。
 
 ## 目的
 既存Catalog/Planner/Executor/Runner/Packagerの標準経路で、現在 `access_mode=free` として
 確認されたsourceだけを**direct-only**実行対象にし、正常終了でのみZIPとcompleted Itemを作る。
-このno-login runでは「今なら無料」は `unknown` のため対象外。
+The original logged-out baseline kept `今なら無料` as `unknown`; current runs may include it only when the fresh same-work listing proves the positive authentication markers.
 
 ## 実装契約
 - 花とゆめ＋ Site Policy を最小限のregistryに追加。Catalog available=trueかつ
@@ -34,12 +34,11 @@ Status: Phase 04 local implementation and independent review PASS / BLOCKING 0 (
 - Reviewerは権利消費・不適切な無料昇格・source衝突・誤完了・
   manifest範囲外ファイル混入・他サイト共通部への回帰を優先監査。
 
-## Phase 04 local result (2026-10-11)
+## Historical Phase 04 local result (before the R3 authenticated-label extension)
 
-The registered Hanayume policy admits only available `access_mode=free` with `direct`; `今なら無料` remains `unknown` and ineligible. The site adapter accepts Batch `direct` as the same no-entry free path used by manual `auto`; quota strategies and resources remain unsupported. A synthetic browser pipeline completed Discovery -> Catalog -> Planner -> Executor -> Runner -> Manifest/ZIP -> Catalog completed using the explicit test Catalog and temporary output paths. It also verified stale free-to-`今なら無料`, wrong work, UNKNOWN state, premature END, max-pages, and package failure remain pending with no Artifact. The run observed global-position archive prefix and skipped the completed Item on replanning. Independent Phase 04 review passed BLOCKING 0 (42 tests, 0 skipped; Ruff PASS). No live Batch was part of the Phase 04 local gate; the Phase 05 section below documents the later independent live run.
+The registered Hanayume policy admits only available `access_mode=free` with `direct`; the original logged-out Catalog kept `今なら無料` unknown. Current Discovery may classify that exact label as free only after the fresh same-work auth proof described above, and runtime repeats that preflight. The site adapter accepts Batch `direct` as the same no-entry free path used by manual `auto`; quota strategies and resources remain unsupported. A synthetic browser pipeline completed Discovery -> Catalog -> Planner -> Executor -> Runner -> Manifest/ZIP -> Catalog completed using the explicit test Catalog and temporary output paths. It also verified stale free-to-`今なら無料`, wrong work, UNKNOWN state, premature END, max-pages, and package failure remain pending with no Artifact. The run observed global-position archive prefix and skipped the completed Item on replanning. Independent Phase 04 review passed BLOCKING 0 (42 tests, 0 skipped; Ruff PASS). No live Batch was part of the Phase 04 local gate; the Phase 05 section below documents the later independent live run.
 
 ## Exit
 normal Batch/isolated Catalogで既存統合テストを通過し、Reviewer BLOCKING 0。
 実サイトをまだ使っていない場合は「live Batch NOT VERIFIED」とPROGRESSへ記録し、
 Phase 05で独立検証する。全pytestは変更面積とdocs/TEST_STRATEGY.mdに従って判断する。
-
