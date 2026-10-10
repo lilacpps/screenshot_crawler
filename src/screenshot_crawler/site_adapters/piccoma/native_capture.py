@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import math
 import re
 from collections.abc import Awaitable, Callable
@@ -21,6 +22,11 @@ MAX_TARGET_EVENTS = 512
 MAX_RETAINED_CANVASES = 16
 MAX_TRACE_EVENTS = 20_000
 MAX_SOURCE_BYTES = 8_000_000
+# A new fail-closed transport ceiling admits 512 bounded target events at
+# 16 KiB/event, with a separate 256-node/event traversal guard. Neither bound
+# truncates; unusually large full traces are rejected instead.
+MAX_NATIVE_SNAPSHOT_BYTES = MAX_TARGET_EVENTS * 16_384
+MAX_NATIVE_SNAPSHOT_NODES = MAX_TARGET_EVENTS * 256
 MAX_REPLAY_MS = 10_000
 RESPONSE_WAIT_SECONDS = 1.5
 _SOURCE_HOST = "pcm.kakaocdn.net"
@@ -70,6 +76,7 @@ TRACE_INIT_SCRIPT = r"""(() => {
   const CANDIDATE_HOST = 'pcm.kakaocdn.net';
   const MAX_TARGET_EVENTS = 512, MAX_RETAINED = 16,
     MAX_ACTIVE_TRACES = 128, MAX_TOTAL_EVENTS = 20000;
+  const nativeJsonStringify = JSON.stringify;
   const canvasIds = new WeakMap(), imageIds = new WeakMap(), imageStates = new WeakMap();
   const traces = new WeakMap(), retained = new Map(), heavyTraces = new Map();
   const expectedAttributeMutations = new WeakMap();
@@ -631,6 +638,94 @@ TRACE_INIT_SCRIPT = r"""(() => {
         Object.entries(hooks.paint).every(([name, hook]) => CanvasRenderingContext2D.prototype[name] === hook) &&
         trace.attributeObserver !== null };
   };
+  const snapshotJson = canvas => {
+    const MAX_BYTES = __MAX_BYTES__, MAX_NODES = __MAX_NODES__;
+    const fail = () => { throw new TypeError('native_snapshot_not_json_safe'); };
+    if (JSON.stringify !== nativeJsonStringify ||
+        Array.prototype.toJSON !== undefined || Object.prototype.toJSON !== undefined)
+      fail();
+    const value = window.__piccomaNativeCapture.snapshot(canvas);
+    if (value === null) return 'null';
+    const required = ['id', 'initialDimensions', 'dimensions', 'connected',
+      'generation', 'retired', 'overflow', 'totalOverflow', 'events',
+      'sourceStates', 'sourceOverflow', 'unobservedAttributeMutation',
+      'attributeObserverReady', 'paint', 'retained', 'hooksIntact'];
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        Object.getPrototypeOf(value) !== Object.prototype ||
+        required.some(key => !Object.prototype.hasOwnProperty.call(value, key))) fail();
+
+    let nodes = 0, estimatedBytes = 0;
+    const active = new WeakSet();
+    const account = bytes => {
+      estimatedBytes += bytes;
+      if (estimatedBytes > MAX_BYTES) fail();
+    };
+    const stringBytes = text => {
+      let bytes = 2;
+      for (let index = 0; index < text.length; index++) {
+        const code = text.charCodeAt(index);
+        if (code === 34 || code === 92 || code === 8 || code === 9 ||
+            code === 10 || code === 12 || code === 13) bytes += 2;
+        else if (code < 32) bytes += 6;
+        else if (code >= 0xd800 && code <= 0xdbff) {
+          const next = text.charCodeAt(index + 1);
+          if (next >= 0xdc00 && next <= 0xdfff) { bytes += 4; index++; }
+          else bytes += 6;
+        } else if (code >= 0xdc00 && code <= 0xdfff) bytes += 6;
+        else if (code < 0x80) bytes++;
+        else if (code < 0x800) bytes += 2;
+        else bytes += 3;
+        if (bytes > MAX_BYTES) fail();
+      }
+      return bytes;
+    };
+    const validate = item => {
+      if (++nodes > MAX_NODES) fail();
+      if (item === null) { account(4); return; }
+      if (typeof item === 'string') { account(stringBytes(item)); return; }
+      if (typeof item === 'boolean') { account(item ? 4 : 5); return; }
+      if (typeof item === 'number') {
+        if (!Number.isFinite(item) || Object.is(item, -0)) fail();
+        const numberText = nativeJsonStringify(item);
+        account(numberText.length);
+        return;
+      }
+      if (typeof item !== 'object' || active.has(item)) fail();
+      active.add(item);
+      if (Array.isArray(item)) {
+        if (Object.getPrototypeOf(item) !== Array.prototype ||
+            Reflect.ownKeys(item).length !== item.length + 1) fail();
+        account(2);
+        for (let index = 0; index < item.length; index++) {
+          if (index > 0) account(1);
+          const descriptor = Object.getOwnPropertyDescriptor(item, String(index));
+          if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) fail();
+          validate(descriptor.value);
+        }
+        active.delete(item);
+        return;
+      }
+      if (Object.getPrototypeOf(item) !== Object.prototype) fail();
+      const keys = Reflect.ownKeys(item);
+      if (keys.length > MAX_NODES) fail();
+      account(2);
+      for (let index = 0; index < keys.length; index++) {
+        if (index > 0) account(1);
+        const key = keys[index];
+        if (typeof key !== 'string') fail();
+        const descriptor = Object.getOwnPropertyDescriptor(item, key);
+        if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) fail();
+        account(stringBytes(key) + 1);
+        validate(descriptor.value);
+      }
+      active.delete(item);
+    };
+    validate(value);
+    const serialized = nativeJsonStringify(value);
+    if (typeof serialized !== 'string' ||
+        new TextEncoder().encode(serialized).byteLength !== estimatedBytes) fail();
+    return serialized;
+  };
   const retire = canvas => {
     const trace = traces.get(canvas);
     if (trace) retireTrace(canvas, trace);
@@ -681,9 +776,136 @@ TRACE_INIT_SCRIPT = r"""(() => {
     }
   };
   window.__piccomaNativeCapture = { snapshot, paintSnapshot, retire, replay,
+    snapshotJson,
     limits: { perTarget: MAX_TARGET_EVENTS, retained: MAX_RETAINED,
       activeTraces: MAX_ACTIVE_TRACES, total: MAX_TOTAL_EVENTS } };
 })();"""
+TRACE_INIT_SCRIPT = TRACE_INIT_SCRIPT.replace(
+    "__MAX_BYTES__", str(MAX_NATIVE_SNAPSHOT_BYTES)
+).replace("__MAX_NODES__", str(MAX_NATIVE_SNAPSHOT_NODES))
+
+
+SNAPSHOT_JSON_EXPRESSION = r"""(node) => {
+  const api = window.__piccomaNativeCapture;
+  if (api === undefined || api === null) return 'null';
+  if (typeof api.snapshotJson !== 'function')
+    throw new TypeError('native_snapshot_json_unavailable');
+  return api.snapshotJson(node);
+}"""
+
+_NATIVE_SNAPSHOT_FIELDS = frozenset({
+    "id", "initialDimensions", "dimensions", "connected", "generation",
+    "retired", "overflow", "totalOverflow", "events", "sourceStates",
+    "sourceOverflow", "unobservedAttributeMutation", "attributeObserverReady",
+    "paint", "retained", "hooksIntact",
+})
+_NATIVE_SNAPSHOT_BOOLEAN_FIELDS = (
+    "connected", "retired", "overflow", "totalOverflow", "sourceOverflow",
+    "unobservedAttributeMutation", "attributeObserverReady", "retained", "hooksIntact",
+)
+
+
+def _duplicate_free_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def _parse_json_constant(value: str) -> None:
+    raise ValueError(f"unsupported JSON constant: {value}")
+
+
+def _parse_json_integer(value: str) -> int:
+    if value == "-0":
+        raise ValueError("negative zero is unsupported in native snapshots")
+    return int(value)
+
+
+def _parse_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or (parsed == 0 and math.copysign(1.0, parsed) < 0):
+        raise ValueError("non-finite or negative-zero JSON number")
+    return parsed
+
+
+def _native_snapshot_shape_is_valid(value: object) -> bool:
+    if not isinstance(value, dict) or not _NATIVE_SNAPSHOT_FIELDS.issubset(value):
+        return False
+    if not isinstance(value.get("id"), str) or not value["id"]:
+        return False
+    for key in ("initialDimensions", "dimensions"):
+        dimensions = value.get(key)
+        if (
+            not isinstance(dimensions, list)
+            or len(dimensions) != 2
+            or any(type(dimension) is not int or dimension < 0 for dimension in dimensions)
+        ):
+            return False
+    if type(value.get("generation")) is not int or value["generation"] < 0:
+        return False
+    if any(type(value.get(key)) is not bool for key in _NATIVE_SNAPSHOT_BOOLEAN_FIELDS):
+        return False
+    events = value.get("events")
+    if (
+        not isinstance(events, list)
+        or len(events) > MAX_TARGET_EVENTS
+        or any(not isinstance(event, dict) or not isinstance(event.get("type"), str) for event in events)
+    ):
+        return False
+    source_states = value.get("sourceStates")
+    if not isinstance(source_states, list) or len(source_states) > MAX_TARGET_EVENTS:
+        return False
+    if any(not isinstance(state, dict) for state in source_states):
+        return False
+    paint = value.get("paint")
+    return isinstance(paint, dict)
+
+
+def _decode_native_snapshot_json(value: object) -> dict[str, Any] | None:
+    """Restore a bounded full trace, rejecting lossy or ambiguous JSON input."""
+
+    if not isinstance(value, str) or len(value) > MAX_NATIVE_SNAPSHOT_BYTES:
+        raise NativeCaptureUnavailable(
+            "native_snapshot_json_invalid", unsafe_live_change=True
+        )
+    try:
+        if len(value.encode("utf-8")) > MAX_NATIVE_SNAPSHOT_BYTES:
+            raise ValueError("native snapshot JSON exceeds the transport bound")
+        decoded = json.loads(
+            value,
+            object_pairs_hook=_duplicate_free_object,
+            parse_constant=_parse_json_constant,
+            parse_int=_parse_json_integer,
+            parse_float=_parse_json_float,
+        )
+    except (UnicodeEncodeError, ValueError, TypeError, RecursionError) as exc:
+        raise NativeCaptureUnavailable(
+            "native_snapshot_json_invalid", unsafe_live_change=True
+        ) from exc
+    if decoded is None:
+        return None
+    if not _native_snapshot_shape_is_valid(decoded):
+        raise NativeCaptureUnavailable(
+            "native_snapshot_schema_invalid", unsafe_live_change=True
+        )
+    return decoded
+
+
+async def _read_native_snapshot(page: Page, canvas: Any) -> dict[str, Any] | None:
+    """Fetch one full trace as JSON and restore it for the existing validators."""
+
+    try:
+        raw = await _bounded_evaluate(
+            canvas, SNAPSHOT_JSON_EXPRESSION, timeout_seconds=3.0
+        )
+    except Exception as exc:
+        raise NativeCaptureUnavailable(
+            "native_snapshot_transport_failed", unsafe_live_change=True
+        ) from exc
+    return _decode_native_snapshot_json(raw)
 
 
 def validate_tile_trace(
@@ -1294,11 +1516,7 @@ async def capture_native_tile_replay(
     if response_registry_overflowed:
         raise NativeCaptureUnavailable("response_registry_overflow")
     try:
-        before = await _bounded_evaluate(
-            canvas,
-            "(node) => window.__piccomaNativeCapture?.snapshot(node) ?? null",
-            timeout_seconds=3.0,
-        )
+        before = await _read_native_snapshot(page, canvas)
         trace = validate_tile_trace(
             before, expected_width=expected_width, expected_height=expected_height
         )
@@ -1381,11 +1599,7 @@ async def capture_native_tile_replay(
             or replayed.get("drawCount") != 408
         ):
             raise NativeCaptureUnavailable("replay_output_unverified")
-        after = await _bounded_evaluate(
-            canvas,
-            "(node) => window.__piccomaNativeCapture?.snapshot(node) ?? null",
-            timeout_seconds=3.0,
-        )
+        after = await _read_native_snapshot(page, canvas)
         if (
             not isinstance(after, dict)
             or _target_signature(before) != _target_signature(after)
@@ -1414,11 +1628,7 @@ async def capture_native_tile_replay(
         output_result, encoding_fallback_reason = encode_lossless_webp_or_png(
             composited, width=expected_width, height=expected_height
         )
-        final_snapshot = await _bounded_evaluate(
-            canvas,
-            "(node) => window.__piccomaNativeCapture?.snapshot(node) ?? null",
-            timeout_seconds=3.0,
-        )
+        final_snapshot = await _read_native_snapshot(page, canvas)
         if (
             not isinstance(final_snapshot, dict)
             or _target_signature(before) != _target_signature(final_snapshot)
@@ -1466,11 +1676,7 @@ async def validate_native_capture_still_current(
     """Check target/source generations after adapter-level capture guards."""
 
     try:
-        current = await _bounded_evaluate(
-            canvas,
-            "(node) => window.__piccomaNativeCapture?.snapshot(node) ?? null",
-            timeout_seconds=3.0,
-        )
+        current = await _read_native_snapshot(page, canvas)
     except Exception as exc:
         raise NativeCaptureUnavailable(
             "live_target_recheck_failed", unsafe_live_change=True
@@ -1499,12 +1705,7 @@ async def install_native_trace(page: Page) -> None:
 async def snapshot_native_trace(page: Page, canvas: Any) -> dict[str, Any] | None:
     """Read the current canvas trace without exposing it in logs or manifests."""
 
-    value = await _bounded_evaluate(
-        canvas,
-        "(node) => window.__piccomaNativeCapture?.snapshot(node) ?? null",
-        timeout_seconds=3.0,
-    )
-    return value if isinstance(value, dict) else None
+    return await _read_native_snapshot(page, canvas)
 
 
 async def retire_native_trace(page: Page, canvas: Any) -> None:
@@ -1521,9 +1722,12 @@ async def retire_native_trace(page: Page, canvas: Any) -> None:
 
 
 __all__ = [
+    "MAX_NATIVE_SNAPSHOT_BYTES",
+    "MAX_NATIVE_SNAPSHOT_NODES",
     "MAX_RETAINED_CANVASES",
     "MAX_SOURCE_BYTES",
     "MAX_TARGET_EVENTS",
+    "SNAPSHOT_JSON_EXPRESSION",
     "TRACE_INIT_SCRIPT",
     "NativeCapture",
     "NativeCaptureUnavailable",

@@ -1,7 +1,7 @@
 # Piccoma Free-Only Site Adapter — Autonomous Runbook
 
 Status: Required Phases 01-05 and extensions 06-B/06-C are accepted historical checkpoints. Phase 06-D code review and independent live Tester both passed with BLOCKING 0. The standard two-product Batch-to-ZIP run verified 39 lossless WebP pages, current RGB comparisons, explicit END, and Catalog completion. See [PROGRESS](PROGRESS.md) for evidence and limits.
-Execution branch: feat/piccoma-adapter.
+Execution branch for the historical implementation: feat/piccoma-adapter. The current performance research/planning branch is research/piccoma-performance-20261010; preserve its existing changes.
 The execution contract is defined below; verified observations, artifact checks and remaining limits are recorded in [PROGRESS](PROGRESS.md).
 
 ## Goal and authority
@@ -100,6 +100,8 @@ observed counts, outputs, and limits.
 3. [03: Viewer and Capture](03-viewer-capture/README.md)
 4. [04: direct-only Site Policy and Batch](04-batch/README.md)
 5. [05: independent E2E and final gate](05-e2e/README.md)
+
+Additional adopted plan (2026-10-10): [07: full JSON trace transfer and crawler.yaml pacing 200ms](07-performance/README.md). Stages A and B are implemented and passed independent review; Stage C interleaved manual comparison, 24-page Batch END/ZIP/Catalog checks, and fresh per-page manifest audit passed. Final Stage C Reviewer review passed with BLOCKING 0. Existing DPR tolerance/raw viewport equality is retained. Phase 07 changes neither the source-native image pipeline nor rendering-stability checks; WebP method/PNG/refactoring remain outside its implementation scope. The separate [genre correction plan](../../research/piccoma-performance/GENRE_FIX_PLAN.md) remains planned.
 
 Lead may split, repeat, or reorder stages based on evidence, but may not
 advance across an unresolved BLOCKING review finding. Unavailable Chrome,

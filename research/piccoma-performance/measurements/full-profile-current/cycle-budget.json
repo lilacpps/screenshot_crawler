@@ -1,0 +1,1826 @@
+{
+  "scope": "2 runs, complete p1..p11 cycles; p12 partial excluded",
+  "method": "Atomize measured Python intervals; specific children override parents. Browser JS synthetic spans excluded. Capture children partition capture only and are not added to top capture again.",
+  "summary": {
+    "first": {
+      "cycle": {
+        "n": 2,
+        "mean_s": 5.4846145999617875,
+        "median_s": 5.4846145999617875,
+        "p90_s": 5.5714569999836385,
+        "max_s": 5.5714569999836385
+      },
+      "capture_cpu": {
+        "n": 2,
+        "mean_s": 2.234375,
+        "median_s": 2.234375,
+        "p90_s": 2.234375,
+        "max_s": 2.234375
+      },
+      "top": {
+        "access_check": {
+          "n": 2,
+          "mean_s": 0.0796072999946773,
+          "median_s": 0.0796072999946773,
+          "p90_s": 0.08364370022900403,
+          "max_s": 0.08364370022900403
+        },
+        "capture": {
+          "n": 2,
+          "mean_s": 3.610050799907185,
+          "median_s": 3.610050799907185,
+          "p90_s": 3.7056677998043597,
+          "max_s": 3.7056677998043597
+        },
+        "go_next": {
+          "n": 2,
+          "mean_s": 0.10383030003868043,
+          "median_s": 0.10383030003868043,
+          "p90_s": 0.10510170017369092,
+          "max_s": 0.10510170017369092
+        },
+        "manifest": {
+          "n": 2,
+          "mean_s": 0.005030800006352365,
+          "median_s": 0.005030800006352365,
+          "p90_s": 0.005404900060966611,
+          "max_s": 0.005404900060966611
+        },
+        "other_gap": {
+          "n": 2,
+          "mean_s": 0.0021518998546525836,
+          "median_s": 0.0021518998546525836,
+          "p90_s": 0.0023896002676337957,
+          "max_s": 0.0023896002676337957
+        },
+        "pacing": {
+          "n": 2,
+          "mean_s": 1.0096635000081733,
+          "median_s": 1.0096635000081733,
+          "p90_s": 1.0163630000315607,
+          "max_s": 1.0163630000315607
+        },
+        "runner_state_metadata": {
+          "n": 2,
+          "mean_s": 0.04983225010801107,
+          "median_s": 0.04983225010801107,
+          "p90_s": 0.05118190008215606,
+          "max_s": 0.05118190008215606
+        },
+        "save": {
+          "n": 2,
+          "mean_s": 0.001478400081396103,
+          "median_s": 0.001478400081396103,
+          "p90_s": 0.0018723001703619957,
+          "max_s": 0.0018723001703619957
+        },
+        "wait_for_change": {
+          "n": 2,
+          "mean_s": 0.6229693499626592,
+          "median_s": 0.6229693499626592,
+          "p90_s": 0.6265459998976439,
+          "max_s": 0.6265459998976439
+        }
+      },
+      "capture": {
+        "fallback_png_input_preparation": {
+          "n": 2,
+          "mean_s": 0.02166085015051067,
+          "median_s": 0.02166085015051067,
+          "p90_s": 0.022545700194314122,
+          "max_s": 0.022545700194314122
+        },
+        "fallback_png_validation": {
+          "n": 2,
+          "mean_s": 0.021526299882680178,
+          "median_s": 0.021526299882680178,
+          "p90_s": 0.02203869982622564,
+          "max_s": 0.02203869982622564
+        },
+        "final_format_validation": {
+          "n": 2,
+          "mean_s": 0.03412610001396388,
+          "median_s": 0.03412610001396388,
+          "p90_s": 0.040862000081688166,
+          "max_s": 0.040862000081688166
+        },
+        "final_native_compare_python": {
+          "n": 2,
+          "mean_s": 0.0019349500071257353,
+          "median_s": 0.0019349500071257353,
+          "p90_s": 0.0021771001629531384,
+          "max_s": 0.0021771001629531384
+        },
+        "native_trace_rpc": {
+          "n": 2,
+          "mean_s": 1.0017379999626428,
+          "median_s": 1.0017379999626428,
+          "p90_s": 1.0244105998426676,
+          "max_s": 1.0244105998426676
+        },
+        "other_browser_controls": {
+          "n": 2,
+          "mean_s": 0.05031610024161637,
+          "median_s": 0.05031610024161637,
+          "p90_s": 0.05350710032507777,
+          "max_s": 0.05350710032507777
+        },
+        "other_capture": {
+          "n": 2,
+          "mean_s": 0.017095649731345475,
+          "median_s": 0.017095649731345475,
+          "p90_s": 0.022815399570390582,
+          "max_s": 0.022815399570390582
+        },
+        "reader_rpc": {
+          "n": 2,
+          "mean_s": 0.06023885007016361,
+          "median_s": 0.06023885007016361,
+          "p90_s": 0.06565010035410523,
+          "max_s": 0.06565010035410523
+        },
+        "replay_rpc_including_browser_png": {
+          "n": 2,
+          "mean_s": 0.6714646999025717,
+          "median_s": 0.6714646999025717,
+          "p90_s": 0.7200019999872893,
+          "max_s": 0.7200019999872893
+        },
+        "source_body": {
+          "n": 2,
+          "mean_s": 0.1909937000600621,
+          "median_s": 0.1909937000600621,
+          "p90_s": 0.19993559992872179,
+          "max_s": 0.19993559992872179
+        },
+        "source_jpeg_validation": {
+          "n": 2,
+          "mean_s": 0.2228229499887675,
+          "median_s": 0.2228229499887675,
+          "p90_s": 0.23866720008663833,
+          "max_s": 0.23866720008663833
+        },
+        "webp_encode": {
+          "n": 2,
+          "mean_s": 1.1400180499767885,
+          "median_s": 1.1400180499767885,
+          "p90_s": 1.1588695999234915,
+          "max_s": 1.1588695999234915
+        },
+        "webp_input_and_container_preparation": {
+          "n": 2,
+          "mean_s": 0.023400499834679067,
+          "median_s": 0.023400499834679067,
+          "p90_s": 0.024264299776405096,
+          "max_s": 0.024264299776405096
+        },
+        "webp_roundtrip_convert": {
+          "n": 2,
+          "mean_s": 0.030057250056415796,
+          "median_s": 0.030057250056415796,
+          "p90_s": 0.030264100059866905,
+          "max_s": 0.030264100059866905
+        },
+        "webp_roundtrip_tobytes": {
+          "n": 2,
+          "mean_s": 0.005413350067101419,
+          "median_s": 0.005413350067101419,
+          "p90_s": 0.0055825000163167715,
+          "max_s": 0.0055825000163167715
+        },
+        "white_composite_rgb_png": {
+          "n": 2,
+          "mean_s": 0.11724349996075034,
+          "median_s": 0.11724349996075034,
+          "p90_s": 0.11898349993862212,
+          "max_s": 0.11898349993862212
+        }
+      },
+      "capture_groups": {
+        "final_format_and_native_compare": {
+          "n": 2,
+          "mean_s": 0.03606105002108961,
+          "median_s": 0.03606105002108961,
+          "p90_s": 0.0425547999329865,
+          "max_s": 0.0425547999329865
+        },
+        "native_trace_rpc": {
+          "n": 2,
+          "mean_s": 1.0017379999626428,
+          "median_s": 1.0017379999626428,
+          "p90_s": 1.0244105998426676,
+          "max_s": 1.0244105998426676
+        },
+        "other_capture": {
+          "n": 2,
+          "mean_s": 0.017095649731345475,
+          "median_s": 0.017095649731345475,
+          "p90_s": 0.022815399570390582,
+          "max_s": 0.022815399570390582
+        },
+        "png_and_codec_preparation": {
+          "n": 2,
+          "mean_s": 0.06658764986786991,
+          "median_s": 0.06658764986786991,
+          "p90_s": 0.06884869979694486,
+          "max_s": 0.06884869979694486
+        },
+        "reader_and_controls": {
+          "n": 2,
+          "mean_s": 0.11055495031177998,
+          "median_s": 0.11055495031177998,
+          "p90_s": 0.1127752005122602,
+          "max_s": 0.1127752005122602
+        },
+        "replay_rpc_including_browser_png": {
+          "n": 2,
+          "mean_s": 0.6714646999025717,
+          "median_s": 0.6714646999025717,
+          "p90_s": 0.7200019999872893,
+          "max_s": 0.7200019999872893
+        },
+        "source_body": {
+          "n": 2,
+          "mean_s": 0.1909937000600621,
+          "median_s": 0.1909937000600621,
+          "p90_s": 0.19993559992872179,
+          "max_s": 0.19993559992872179
+        },
+        "source_jpeg_validation": {
+          "n": 2,
+          "mean_s": 0.2228229499887675,
+          "median_s": 0.2228229499887675,
+          "p90_s": 0.23866720008663833,
+          "max_s": 0.23866720008663833
+        },
+        "webp_encode": {
+          "n": 2,
+          "mean_s": 1.1400180499767885,
+          "median_s": 1.1400180499767885,
+          "p90_s": 1.1588695999234915,
+          "max_s": 1.1588695999234915
+        },
+        "webp_roundtrip": {
+          "n": 2,
+          "mean_s": 0.035470600123517215,
+          "median_s": 0.035470600123517215,
+          "p90_s": 0.03550830017775297,
+          "max_s": 0.03550830017775297
+        },
+        "white_composite_rgb_png": {
+          "n": 2,
+          "mean_s": 0.11724349996075034,
+          "median_s": 0.11724349996075034,
+          "p90_s": 0.11898349993862212,
+          "max_s": 0.11898349993862212
+        }
+      },
+      "replay_js": {
+        "draw_408": {
+          "n": 2,
+          "mean_s": 0.0013500000238418578,
+          "median_s": 0.0013500000238418578,
+          "p90_s": 0.0015999999046325685,
+          "max_s": 0.0015999999046325685
+        },
+        "jpeg_decode": {
+          "n": 2,
+          "mean_s": 0.025049999952316285,
+          "median_s": 0.025049999952316285,
+          "p90_s": 0.02609999990463257,
+          "max_s": 0.02609999990463257
+        },
+        "png_encode": {
+          "n": 2,
+          "mean_s": 0.07144999992847442,
+          "median_s": 0.07144999992847442,
+          "p90_s": 0.0795,
+          "max_s": 0.0795
+        },
+        "replay_rpc_residual": {
+          "n": 2,
+          "mean_s": 0.5736146999979392,
+          "median_s": 0.5736146999979392,
+          "p90_s": 0.6149020000826567,
+          "max_s": 0.6149020000826567
+        }
+      }
+    },
+    "normal": {
+      "cycle": {
+        "n": 20,
+        "mean_s": 4.53802309500752,
+        "median_s": 4.151133100036532,
+        "p90_s": 5.627211899962276,
+        "max_s": 5.772127100033686
+      },
+      "capture_cpu": {
+        "n": 20,
+        "mean_s": 1.540625,
+        "median_s": 1.234375,
+        "p90_s": 2.375,
+        "max_s": 2.625
+      },
+      "top": {
+        "access_check": {
+          "n": 20,
+          "mean_s": 0.08355810500215739,
+          "median_s": 0.08311069989576936,
+          "p90_s": 0.09335430013015866,
+          "max_s": 0.10330619988963008
+        },
+        "capture": {
+          "n": 20,
+          "mean_s": 2.6321234000264666,
+          "median_s": 2.2335934001021087,
+          "p90_s": 3.6697445998433977,
+          "max_s": 3.9263164000585675
+        },
+        "go_next": {
+          "n": 20,
+          "mean_s": 0.09395624498138204,
+          "median_s": 0.08930229989346117,
+          "p90_s": 0.11574489995837212,
+          "max_s": 0.14323389995843172
+        },
+        "manifest": {
+          "n": 20,
+          "mean_s": 0.0031765499734319746,
+          "median_s": 0.003073799889534712,
+          "p90_s": 0.0037989001721143723,
+          "max_s": 0.004277299856767058
+        },
+        "other_gap": {
+          "n": 20,
+          "mean_s": 0.0015245850896462797,
+          "median_s": 0.0013617001241073012,
+          "p90_s": 0.002102900529280305,
+          "max_s": 0.002202600007876754
+        },
+        "pacing": {
+          "n": 20,
+          "mean_s": 1.0078840749920346,
+          "median_s": 1.007508600014262,
+          "p90_s": 1.0132158999331295,
+          "max_s": 1.0151577999349684
+        },
+        "runner_state_metadata": {
+          "n": 20,
+          "mean_s": 0.0702568099484779,
+          "median_s": 0.06822684966027737,
+          "p90_s": 0.08127389987930655,
+          "max_s": 0.09612750029191375
+        },
+        "save": {
+          "n": 20,
+          "mean_s": 0.001327059988398105,
+          "median_s": 0.001364949974231422,
+          "p90_s": 0.0017561998683959246,
+          "max_s": 0.0018372000195086002
+        },
+        "wait_for_change": {
+          "n": 20,
+          "mean_s": 0.6442162650055252,
+          "median_s": 0.6313298500608653,
+          "p90_s": 0.7206141999922693,
+          "max_s": 0.7414411997888237
+        }
+      },
+      "capture": {
+        "fallback_png_input_preparation": {
+          "n": 20,
+          "mean_s": 0.015669774974230676,
+          "median_s": 0.014202249934896827,
+          "p90_s": 0.022344500059261918,
+          "max_s": 0.024496600264683366
+        },
+        "fallback_png_validation": {
+          "n": 20,
+          "mean_s": 0.014514539984520524,
+          "median_s": 0.0127426499966532,
+          "p90_s": 0.020684099989011884,
+          "max_s": 0.022134199971333146
+        },
+        "final_format_validation": {
+          "n": 20,
+          "mean_s": 0.018571275018621235,
+          "median_s": 0.016041699913330376,
+          "p90_s": 0.028756599873304367,
+          "max_s": 0.03324900008738041
+        },
+        "final_native_compare_python": {
+          "n": 20,
+          "mean_s": 0.0021153850248083472,
+          "median_s": 0.0019432000117376447,
+          "p90_s": 0.0028346998151391745,
+          "max_s": 0.0037634000182151794
+        },
+        "native_trace_rpc": {
+          "n": 20,
+          "mean_s": 1.0343611950054765,
+          "median_s": 1.0372880502836779,
+          "p90_s": 1.0822552000172436,
+          "max_s": 1.2016773999202996
+        },
+        "other_browser_controls": {
+          "n": 20,
+          "mean_s": 0.04211913994513452,
+          "median_s": 0.04216695006471127,
+          "p90_s": 0.048941800370812416,
+          "max_s": 0.05527650052681565
+        },
+        "other_capture": {
+          "n": 20,
+          "mean_s": 0.016479790059383957,
+          "median_s": 0.01670190063305199,
+          "p90_s": 0.020943700103089213,
+          "max_s": 0.02767669945023954
+        },
+        "reader_rpc": {
+          "n": 20,
+          "mean_s": 0.08336969498777762,
+          "median_s": 0.07329339999705553,
+          "p90_s": 0.08514570002444088,
+          "max_s": 0.18420269968919456
+        },
+        "replay_rpc_including_browser_png": {
+          "n": 20,
+          "mean_s": 0.4860184649936855,
+          "median_s": 0.39611520001199096,
+          "p90_s": 0.7400391998235136,
+          "max_s": 0.8186590999830514
+        },
+        "source_body": {
+          "n": 20,
+          "mean_s": 0.09252551498357206,
+          "median_s": 0.07652769994456321,
+          "p90_s": 0.14603790012188256,
+          "max_s": 0.15355629986152053
+        },
+        "source_jpeg_validation": {
+          "n": 20,
+          "mean_s": 0.119247554987669,
+          "median_s": 0.09428734995890409,
+          "p90_s": 0.1827191999182105,
+          "max_s": 0.19142479985021055
+        },
+        "webp_encode": {
+          "n": 20,
+          "mean_s": 0.5717443250585348,
+          "median_s": 0.31835875008255243,
+          "p90_s": 1.1983461000490934,
+          "max_s": 1.4423432999756187
+        },
+        "webp_input_and_container_preparation": {
+          "n": 20,
+          "mean_s": 0.01771957501769066,
+          "median_s": 0.0158148001646623,
+          "p90_s": 0.023839199915528297,
+          "max_s": 0.030112799955531955
+        },
+        "webp_roundtrip_convert": {
+          "n": 20,
+          "mean_s": 0.019473679980728777,
+          "median_s": 0.015826850081793964,
+          "p90_s": 0.029342700028792024,
+          "max_s": 0.04026489984244108
+        },
+        "webp_roundtrip_tobytes": {
+          "n": 20,
+          "mean_s": 0.005047739995643496,
+          "median_s": 0.004854200058616698,
+          "p90_s": 0.006384299835190177,
+          "max_s": 0.009675499983131886
+        },
+        "white_composite_rgb_png": {
+          "n": 20,
+          "mean_s": 0.09314575000898913,
+          "median_s": 0.08517100010067225,
+          "p90_s": 0.11813529999926686,
+          "max_s": 0.12326189992018044
+        }
+      },
+      "capture_groups": {
+        "final_format_and_native_compare": {
+          "n": 20,
+          "mean_s": 0.020686660043429582,
+          "median_s": 0.017914250027388334,
+          "p90_s": 0.03221650002524257,
+          "max_s": 0.034812199883162975
+        },
+        "native_trace_rpc": {
+          "n": 20,
+          "mean_s": 1.0343611950054765,
+          "median_s": 1.0372880502836779,
+          "p90_s": 1.0822552000172436,
+          "max_s": 1.2016773999202996
+        },
+        "other_capture": {
+          "n": 20,
+          "mean_s": 0.016479790059383957,
+          "median_s": 0.01670190063305199,
+          "p90_s": 0.020943700103089213,
+          "max_s": 0.02767669945023954
+        },
+        "png_and_codec_preparation": {
+          "n": 20,
+          "mean_s": 0.04790388997644186,
+          "median_s": 0.043097150046378374,
+          "p90_s": 0.06629340001381934,
+          "max_s": 0.07534970017150044
+        },
+        "reader_and_controls": {
+          "n": 20,
+          "mean_s": 0.12548883493291213,
+          "median_s": 0.11598210001830012,
+          "p90_s": 0.1340875003952533,
+          "max_s": 0.22692079981788993
+        },
+        "replay_rpc_including_browser_png": {
+          "n": 20,
+          "mean_s": 0.4860184649936855,
+          "median_s": 0.39611520001199096,
+          "p90_s": 0.7400391998235136,
+          "max_s": 0.8186590999830514
+        },
+        "source_body": {
+          "n": 20,
+          "mean_s": 0.09252551498357206,
+          "median_s": 0.07652769994456321,
+          "p90_s": 0.14603790012188256,
+          "max_s": 0.15355629986152053
+        },
+        "source_jpeg_validation": {
+          "n": 20,
+          "mean_s": 0.119247554987669,
+          "median_s": 0.09428734995890409,
+          "p90_s": 0.1827191999182105,
+          "max_s": 0.19142479985021055
+        },
+        "webp_encode": {
+          "n": 20,
+          "mean_s": 0.5717443250585348,
+          "median_s": 0.31835875008255243,
+          "p90_s": 1.1983461000490934,
+          "max_s": 1.4423432999756187
+        },
+        "webp_roundtrip": {
+          "n": 20,
+          "mean_s": 0.02452141997637227,
+          "median_s": 0.021104600047692657,
+          "p90_s": 0.035366900032386184,
+          "max_s": 0.04994039982557297
+        },
+        "white_composite_rgb_png": {
+          "n": 20,
+          "mean_s": 0.09314575000898913,
+          "median_s": 0.08517100010067225,
+          "p90_s": 0.11813529999926686,
+          "max_s": 0.12326189992018044
+        }
+      },
+      "replay_js": {
+        "draw_408": {
+          "n": 20,
+          "mean_s": 0.0010199999690055847,
+          "median_s": 0.0010499999523162842,
+          "p90_s": 0.0013000001907348632,
+          "max_s": 0.0015
+        },
+        "jpeg_decode": {
+          "n": 20,
+          "mean_s": 0.020204999959468842,
+          "median_s": 0.015899999976158142,
+          "p90_s": 0.034799999952316286,
+          "max_s": 0.03610000014305115
+        },
+        "png_encode": {
+          "n": 20,
+          "mean_s": 0.05219500004053116,
+          "median_s": 0.04260000002384186,
+          "p90_s": 0.07530000019073486,
+          "max_s": 0.09640000009536744
+        },
+        "replay_rpc_residual": {
+          "n": 20,
+          "mean_s": 0.4125984650246799,
+          "median_s": 0.34005295039527117,
+          "p90_s": 0.6424356999956071,
+          "max_s": 0.7183591000307351
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "run": "20261010_full_profile_01",
+      "page": 1,
+      "cycle_wall_s": 5.5714569999836385,
+      "capture_cpu_s": 2.234375,
+      "top": {
+        "other_gap": 0.0023896002676337957,
+        "capture": 3.7056677998043597,
+        "access_check": 0.07557089976035058,
+        "runner_state_metadata": 0.04848260013386607,
+        "save": 0.0018723001703619957,
+        "manifest": 0.005404900060966611,
+        "pacing": 1.002963999984786,
+        "go_next": 0.10255889990366995,
+        "wait_for_change": 0.6265459998976439
+      },
+      "capture": {
+        "other_capture": 0.022815399570390582,
+        "reader_rpc": 0.06565010035410523,
+        "other_browser_controls": 0.047125100158154964,
+        "native_trace_rpc": 1.0244105998426676,
+        "source_body": 0.19993559992872179,
+        "source_jpeg_validation": 0.23866720008663833,
+        "replay_rpc_including_browser_png": 0.7200019999872893,
+        "white_composite_rgb_png": 0.11898349993862212,
+        "fallback_png_validation": 0.02203869982622564,
+        "webp_encode": 1.1211665000300854,
+        "webp_roundtrip_convert": 0.030264100059866905,
+        "webp_roundtrip_tobytes": 0.0052442001178860664,
+        "webp_input_and_container_preparation": 0.024264299776405096,
+        "fallback_png_input_preparation": 0.022545700194314122,
+        "final_format_validation": 0.040862000081688166,
+        "final_native_compare_python": 0.0016927998512983322
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0244105998426676,
+        "reader_and_controls": 0.1127752005122602,
+        "source_body": 0.19993559992872179,
+        "source_jpeg_validation": 0.23866720008663833,
+        "replay_rpc_including_browser_png": 0.7200019999872893,
+        "white_composite_rgb_png": 0.11898349993862212,
+        "png_and_codec_preparation": 0.06884869979694486,
+        "webp_encode": 1.1211665000300854,
+        "webp_roundtrip": 0.03550830017775297,
+        "final_format_and_native_compare": 0.0425547999329865,
+        "other_capture": 0.022815399570390582
+      },
+      "replay_js": {
+        "jpeg_decode": 0.024,
+        "draw_408": 0.0015999999046325685,
+        "png_encode": 0.0795,
+        "replay_rpc_residual": 0.6149020000826567
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 2,
+      "cycle_wall_s": 5.461292900145054,
+      "capture_cpu_s": 2.375,
+      "top": {
+        "other_gap": 0.0012766006402671337,
+        "capture": 3.6239245999604464,
+        "access_check": 0.08556139981374145,
+        "runner_state_metadata": 0.055546899791806936,
+        "save": 0.001775600016117096,
+        "manifest": 0.002926700050011277,
+        "pacing": 1.004069000016898,
+        "go_next": 0.06993479980155826,
+        "wait_for_change": 0.6162773000542074
+      },
+      "capture": {
+        "other_capture": 0.016679200809448957,
+        "reader_rpc": 0.07158919959329069,
+        "other_browser_controls": 0.052921299589797854,
+        "native_trace_rpc": 0.9944373997859657,
+        "source_body": 0.13616560003720224,
+        "source_jpeg_validation": 0.15691110002808273,
+        "replay_rpc_including_browser_png": 0.7385356999002397,
+        "white_composite_rgb_png": 0.11146729998290539,
+        "fallback_png_validation": 0.020684099989011884,
+        "webp_encode": 1.2136872000992298,
+        "webp_roundtrip_convert": 0.029342700028792024,
+        "webp_roundtrip_tobytes": 0.004621400032192469,
+        "webp_input_and_container_preparation": 0.0235812000464648,
+        "fallback_png_input_preparation": 0.02108470001257956,
+        "final_format_validation": 0.028756599873304367,
+        "final_native_compare_python": 0.0034599001519382
+      },
+      "capture_groups": {
+        "native_trace_rpc": 0.9944373997859657,
+        "reader_and_controls": 0.12451049918308854,
+        "source_body": 0.13616560003720224,
+        "source_jpeg_validation": 0.15691110002808273,
+        "replay_rpc_including_browser_png": 0.7385356999002397,
+        "white_composite_rgb_png": 0.11146729998290539,
+        "png_and_codec_preparation": 0.06535000004805624,
+        "webp_encode": 1.2136872000992298,
+        "webp_roundtrip": 0.03396410006098449,
+        "final_format_and_native_compare": 0.03221650002524257,
+        "other_capture": 0.016679200809448957
+      },
+      "replay_js": {
+        "jpeg_decode": 0.023700000047683717,
+        "draw_408": 0.0012000000476837158,
+        "png_encode": 0.07119999980926514,
+        "replay_rpc_residual": 0.6424356999956071
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 3,
+      "cycle_wall_s": 5.627211899962276,
+      "capture_cpu_s": 2.25,
+      "top": {
+        "other_gap": 0.001254500588402152,
+        "capture": 3.6697445998433977,
+        "access_check": 0.0743191996589303,
+        "runner_state_metadata": 0.0673188001383096,
+        "save": 0.0016798998694866896,
+        "manifest": 0.0036961999721825123,
+        "pacing": 1.003064899938181,
+        "go_next": 0.08551959996111691,
+        "wait_for_change": 0.7206141999922693
+      },
+      "capture": {
+        "other_capture": 0.017606700072064996,
+        "reader_rpc": 0.06253990042023361,
+        "other_browser_controls": 0.04271379951387644,
+        "native_trace_rpc": 1.0639236003626138,
+        "source_body": 0.15125319990329444,
+        "source_jpeg_validation": 0.1827191999182105,
+        "replay_rpc_including_browser_png": 0.7400391998235136,
+        "white_composite_rgb_png": 0.12326189992018044,
+        "fallback_png_validation": 0.02010970003902912,
+        "webp_encode": 1.1479371001478285,
+        "webp_roundtrip_convert": 0.03084239992313087,
+        "webp_roundtrip_tobytes": 0.005801999941468239,
+        "webp_input_and_container_preparation": 0.023839199915528297,
+        "fallback_png_input_preparation": 0.022344500059261918,
+        "final_format_validation": 0.03324900008738041,
+        "final_native_compare_python": 0.001563199795782566
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0639236003626138,
+        "reader_and_controls": 0.10525369993411005,
+        "source_body": 0.15125319990329444,
+        "source_jpeg_validation": 0.1827191999182105,
+        "replay_rpc_including_browser_png": 0.7400391998235136,
+        "white_composite_rgb_png": 0.12326189992018044,
+        "png_and_codec_preparation": 0.06629340001381934,
+        "webp_encode": 1.1479371001478285,
+        "webp_roundtrip": 0.03664439986459911,
+        "final_format_and_native_compare": 0.034812199883162975,
+        "other_capture": 0.017606700072064996
+      },
+      "replay_js": {
+        "jpeg_decode": 0.0305,
+        "draw_408": 0.0013999998569488525,
+        "png_encode": 0.07529999995231629,
+        "replay_rpc_residual": 0.6328392000142484
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 4,
+      "cycle_wall_s": 5.450953099876642,
+      "capture_cpu_s": 2.234375,
+      "top": {
+        "other_gap": 0.0020739000756293535,
+        "capture": 3.6019268000964075,
+        "access_check": 0.08028990030288696,
+        "runner_state_metadata": 0.06166409980505705,
+        "save": 0.0014426999259740114,
+        "manifest": 0.0026608998887240887,
+        "pacing": 1.0039993999525905,
+        "go_next": 0.07994329999201,
+        "wait_for_change": 0.6169520998373628
+      },
+      "capture": {
+        "other_capture": 0.02767669945023954,
+        "reader_rpc": 0.0661765004042536,
+        "other_browser_controls": 0.044937900034710765,
+        "native_trace_rpc": 0.9958027999382466,
+        "source_body": 0.14468719996511936,
+        "source_jpeg_validation": 0.18268220010213554,
+        "replay_rpc_including_browser_png": 0.7216843001078814,
+        "white_composite_rgb_png": 0.11813529999926686,
+        "fallback_png_validation": 0.018433399964123964,
+        "webp_encode": 1.1836135999765247,
+        "webp_roundtrip_convert": 0.025650099851191044,
+        "webp_roundtrip_tobytes": 0.0034493000712245703,
+        "webp_input_and_container_preparation": 0.02036500023677945,
+        "fallback_png_input_preparation": 0.018951899837702513,
+        "final_format_validation": 0.02779500000178814,
+        "final_native_compare_python": 0.0018856001552194357
+      },
+      "capture_groups": {
+        "native_trace_rpc": 0.9958027999382466,
+        "reader_and_controls": 0.11111440043896437,
+        "source_body": 0.14468719996511936,
+        "source_jpeg_validation": 0.18268220010213554,
+        "replay_rpc_including_browser_png": 0.7216843001078814,
+        "white_composite_rgb_png": 0.11813529999926686,
+        "png_and_codec_preparation": 0.05775030003860593,
+        "webp_encode": 1.1836135999765247,
+        "webp_roundtrip": 0.029099399922415614,
+        "final_format_and_native_compare": 0.029680600157007575,
+        "other_capture": 0.02767669945023954
+      },
+      "replay_js": {
+        "jpeg_decode": 0.03609999990463257,
+        "draw_408": 0.0015,
+        "png_encode": 0.09640000009536744,
+        "replay_rpc_residual": 0.5876843001078814
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 5,
+      "cycle_wall_s": 4.300959900021553,
+      "capture_cpu_s": 1.3125,
+      "top": {
+        "other_gap": 0.0018238003831356764,
+        "capture": 2.389167800080031,
+        "access_check": 0.08271439978852868,
+        "runner_state_metadata": 0.0734508999157697,
+        "save": 0.0013949000276625156,
+        "manifest": 0.002430099993944168,
+        "pacing": 1.0089008999057114,
+        "go_next": 0.09178119990974665,
+        "wait_for_change": 0.6492959000170231
+      },
+      "capture": {
+        "other_capture": 0.014872200321406126,
+        "reader_rpc": 0.08106419979594648,
+        "other_browser_controls": 0.04595079994760454,
+        "native_trace_rpc": 1.0822552000172436,
+        "source_body": 0.07623209990561008,
+        "source_jpeg_validation": 0.128690600162372,
+        "replay_rpc_including_browser_png": 0.4493962998967618,
+        "white_composite_rgb_png": 0.0854774999897927,
+        "fallback_png_validation": 0.01577739999629557,
+        "webp_encode": 0.3378312001004815,
+        "webp_roundtrip_convert": 0.013348500011488795,
+        "webp_roundtrip_tobytes": 0.0037455002311617136,
+        "webp_input_and_container_preparation": 0.02095939964056015,
+        "fallback_png_input_preparation": 0.018621800001710653,
+        "final_format_validation": 0.013244699919596314,
+        "final_native_compare_python": 0.0017004001419991255
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0822552000172436,
+        "reader_and_controls": 0.12701499974355102,
+        "source_body": 0.07623209990561008,
+        "source_jpeg_validation": 0.128690600162372,
+        "replay_rpc_including_browser_png": 0.4493962998967618,
+        "white_composite_rgb_png": 0.0854774999897927,
+        "png_and_codec_preparation": 0.055358599638566375,
+        "webp_encode": 0.3378312001004815,
+        "webp_roundtrip": 0.01709400024265051,
+        "final_format_and_native_compare": 0.01494510006159544,
+        "other_capture": 0.014872200321406126
+      },
+      "replay_js": {
+        "jpeg_decode": 0.0175,
+        "draw_408": 0.0012000000476837158,
+        "png_encode": 0.05609999990463257,
+        "replay_rpc_residual": 0.3745962999444455
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 6,
+      "cycle_wall_s": 4.396887100068852,
+      "capture_cpu_s": 1.375,
+      "top": {
+        "other_gap": 0.0011149998754262924,
+        "capture": 2.4084695000201464,
+        "access_check": 0.10330619988963008,
+        "runner_state_metadata": 0.09612750029191375,
+        "save": 0.001074699917808175,
+        "manifest": 0.0028245002031326294,
+        "pacing": 1.0066756999585778,
+        "go_next": 0.11574489995837212,
+        "wait_for_change": 0.6615490999538451
+      },
+      "capture": {
+        "other_capture": 0.011530099902302027,
+        "reader_rpc": 0.08514570002444088,
+        "other_browser_controls": 0.048941800370812416,
+        "native_trace_rpc": 1.1606842998880893,
+        "source_body": 0.07292159995995462,
+        "source_jpeg_validation": 0.10365920001640916,
+        "replay_rpc_including_browser_png": 0.39043589984066784,
+        "white_composite_rgb_png": 0.09311819984577596,
+        "fallback_png_validation": 0.012317099841311574,
+        "webp_encode": 0.3495047001633793,
+        "webp_roundtrip_convert": 0.02181349997408688,
+        "webp_roundtrip_tobytes": 0.006677599856629968,
+        "webp_input_and_container_preparation": 0.01749640004709363,
+        "fallback_png_input_preparation": 0.015612700022757053,
+        "final_format_validation": 0.016935900086537004,
+        "final_native_compare_python": 0.0016748001798987389
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.1606842998880893,
+        "reader_and_controls": 0.1340875003952533,
+        "source_body": 0.07292159995995462,
+        "source_jpeg_validation": 0.10365920001640916,
+        "replay_rpc_including_browser_png": 0.39043589984066784,
+        "white_composite_rgb_png": 0.09311819984577596,
+        "png_and_codec_preparation": 0.04542619991116226,
+        "webp_encode": 0.3495047001633793,
+        "webp_roundtrip": 0.02849109983071685,
+        "final_format_and_native_compare": 0.018610700266435742,
+        "other_capture": 0.011530099902302027
+      },
+      "replay_js": {
+        "jpeg_decode": 0.0165,
+        "draw_408": 0.0009000000953674316,
+        "png_encode": 0.049,
+        "replay_rpc_residual": 0.3240358997453004
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 7,
+      "cycle_wall_s": 3.997624699957669,
+      "capture_cpu_s": 1.21875,
+      "top": {
+        "other_gap": 0.0011766999959945679,
+        "capture": 2.112460699863732,
+        "access_check": 0.08350700000301003,
+        "runner_state_metadata": 0.06722039985470474,
+        "save": 0.0010228999890387058,
+        "manifest": 0.0026213000528514385,
+        "pacing": 1.010626900009811,
+        "go_next": 0.091909300070256,
+        "wait_for_change": 0.6270795001182705
+      },
+      "capture": {
+        "other_capture": 0.01783450017683208,
+        "reader_rpc": 0.18420269968919456,
+        "other_browser_controls": 0.03257519984617829,
+        "native_trace_rpc": 0.9915986000560224,
+        "source_body": 0.07504629995673895,
+        "source_jpeg_validation": 0.08792219986207783,
+        "replay_rpc_including_browser_png": 0.31522170011885464,
+        "white_composite_rgb_png": 0.07928449986502528,
+        "fallback_png_validation": 0.011461399961262941,
+        "webp_encode": 0.2600422000978142,
+        "webp_roundtrip_convert": 0.0142748998478055,
+        "webp_roundtrip_tobytes": 0.0044479998759925365,
+        "webp_input_and_container_preparation": 0.013532000128179789,
+        "fallback_png_input_preparation": 0.012252500047907233,
+        "final_format_validation": 0.011246200185269117,
+        "final_native_compare_python": 0.001517800148576498
+      },
+      "capture_groups": {
+        "native_trace_rpc": 0.9915986000560224,
+        "reader_and_controls": 0.21677789953537285,
+        "source_body": 0.07504629995673895,
+        "source_jpeg_validation": 0.08792219986207783,
+        "replay_rpc_including_browser_png": 0.31522170011885464,
+        "white_composite_rgb_png": 0.07928449986502528,
+        "png_and_codec_preparation": 0.03724590013734996,
+        "webp_encode": 0.2600422000978142,
+        "webp_roundtrip": 0.018722899723798037,
+        "final_format_and_native_compare": 0.012764000333845615,
+        "other_capture": 0.01783450017683208
+      },
+      "replay_js": {
+        "jpeg_decode": 0.013299999952316285,
+        "draw_408": 0.0006999998092651368,
+        "png_encode": 0.03610000014305115,
+        "replay_rpc_residual": 0.2651217002142221
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 8,
+      "cycle_wall_s": 3.9529838000889868,
+      "capture_cpu_s": 1.109375,
+      "top": {
+        "other_gap": 0.002185299526900053,
+        "capture": 2.066160300048068,
+        "access_check": 0.07678010012023151,
+        "runner_state_metadata": 0.06673020031303167,
+        "save": 0.00136009999550879,
+        "manifest": 0.003510399954393506,
+        "pacing": 1.012192500056699,
+        "go_next": 0.09678700007498264,
+        "wait_for_change": 0.6272778999991715
+      },
+      "capture": {
+        "other_capture": 0.016724600456655025,
+        "reader_rpc": 0.07477639964781702,
+        "other_browser_controls": 0.03675879933871329,
+        "native_trace_rpc": 1.0518859003204852,
+        "source_body": 0.05743709998205304,
+        "source_jpeg_validation": 0.09203569986857474,
+        "replay_rpc_including_browser_png": 0.32880320004187524,
+        "white_composite_rgb_png": 0.08159650000743568,
+        "fallback_png_validation": 0.009079699870198965,
+        "webp_encode": 0.2653135999571532,
+        "webp_roundtrip_convert": 0.011192100122570992,
+        "webp_roundtrip_tobytes": 0.00501250009983778,
+        "webp_input_and_container_preparation": 0.011719799833372235,
+        "fallback_png_input_preparation": 0.009944400284439325,
+        "final_format_validation": 0.012282900046557188,
+        "final_native_compare_python": 0.0015971001703292131
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0518859003204852,
+        "reader_and_controls": 0.1115351989865303,
+        "source_body": 0.05743709998205304,
+        "source_jpeg_validation": 0.09203569986857474,
+        "replay_rpc_including_browser_png": 0.32880320004187524,
+        "white_composite_rgb_png": 0.08159650000743568,
+        "png_and_codec_preparation": 0.030743899988010526,
+        "webp_encode": 0.2653135999571532,
+        "webp_roundtrip": 0.01620460022240877,
+        "final_format_and_native_compare": 0.013880000216886401,
+        "other_capture": 0.016724600456655025
+      },
+      "replay_js": {
+        "jpeg_decode": 0.021,
+        "draw_408": 0.0007999999523162842,
+        "png_encode": 0.03609999990463257,
+        "replay_rpc_residual": 0.27090320018492636
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 9,
+      "cycle_wall_s": 3.9621689999476075,
+      "capture_cpu_s": 1.140625,
+      "top": {
+        "other_gap": 0.001215300289914012,
+        "capture": 2.0464135000947863,
+        "access_check": 0.07994109997525811,
+        "runner_state_metadata": 0.06931749964132905,
+        "save": 0.0013697999529540539,
+        "manifest": 0.002939400030300021,
+        "pacing": 1.0033380999229848,
+        "go_next": 0.12537249992601573,
+        "wait_for_change": 0.6322618001140654
+      },
+      "capture": {
+        "other_capture": 0.016611199593171477,
+        "reader_rpc": 0.07259120023809373,
+        "other_browser_controls": 0.03638680023141205,
+        "native_trace_rpc": 0.9248681999742985,
+        "source_body": 0.05727979983203113,
+        "source_jpeg_validation": 0.08682850003242493,
+        "replay_rpc_including_browser_png": 0.4017945001833141,
+        "white_composite_rgb_png": 0.07610969990491867,
+        "fallback_png_validation": 0.011667599901556969,
+        "webp_encode": 0.3088670000433922,
+        "webp_roundtrip_convert": 0.012099699815735221,
+        "webp_roundtrip_tobytes": 0.00401410018093884,
+        "webp_input_and_container_preparation": 0.012179200071841478,
+        "fallback_png_input_preparation": 0.01147820008918643,
+        "final_format_validation": 0.011704799951985478,
+        "final_native_compare_python": 0.0019330000504851341
+      },
+      "capture_groups": {
+        "native_trace_rpc": 0.9248681999742985,
+        "reader_and_controls": 0.10897800046950579,
+        "source_body": 0.05727979983203113,
+        "source_jpeg_validation": 0.08682850003242493,
+        "replay_rpc_including_browser_png": 0.4017945001833141,
+        "white_composite_rgb_png": 0.07610969990491867,
+        "png_and_codec_preparation": 0.03532500006258488,
+        "webp_encode": 0.3088670000433922,
+        "webp_roundtrip": 0.01611379999667406,
+        "final_format_and_native_compare": 0.013637800002470613,
+        "other_capture": 0.016611199593171477
+      },
+      "replay_js": {
+        "jpeg_decode": 0.014399999856948852,
+        "draw_408": 0.0005999999046325683,
+        "png_encode": 0.034100000143051146,
+        "replay_rpc_residual": 0.35269450027868154
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 10,
+      "cycle_wall_s": 4.016225399915129,
+      "capture_cpu_s": 1.109375,
+      "top": {
+        "other_gap": 0.002102900529280305,
+        "capture": 2.0263398999813944,
+        "access_check": 0.085306900087744,
+        "runner_state_metadata": 0.06769279949367046,
+        "save": 0.0009379000402987003,
+        "manifest": 0.0033829999156296253,
+        "pacing": 1.0045849999878556,
+        "go_next": 0.08443580009043217,
+        "wait_for_change": 0.7414411997888237
+      },
+      "capture": {
+        "other_capture": 0.009758999571204185,
+        "reader_rpc": 0.07754290010780096,
+        "other_browser_controls": 0.040017399936914444,
+        "native_trace_rpc": 1.036891400348395,
+        "source_body": 0.07443200005218387,
+        "source_jpeg_validation": 0.07995110005140305,
+        "replay_rpc_including_browser_png": 0.3226771999616176,
+        "white_composite_rgb_png": 0.0710587000939995,
+        "fallback_png_validation": 0.011475099949166179,
+        "webp_encode": 0.2438785000704229,
+        "webp_roundtrip_convert": 0.015493200160562992,
+        "webp_roundtrip_tobytes": 0.003783400170505047,
+        "webp_input_and_container_preparation": 0.013322099577635527,
+        "fallback_png_input_preparation": 0.011512500001117587,
+        "final_format_validation": 0.012217200128361583,
+        "final_native_compare_python": 0.002328199800103903
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.036891400348395,
+        "reader_and_controls": 0.1175603000447154,
+        "source_body": 0.07443200005218387,
+        "source_jpeg_validation": 0.07995110005140305,
+        "replay_rpc_including_browser_png": 0.3226771999616176,
+        "white_composite_rgb_png": 0.0710587000939995,
+        "png_and_codec_preparation": 0.03630969952791929,
+        "webp_encode": 0.2438785000704229,
+        "webp_roundtrip": 0.01927660033106804,
+        "final_format_and_native_compare": 0.014545399928465486,
+        "other_capture": 0.009758999571204185
+      },
+      "replay_js": {
+        "jpeg_decode": 0.014899999856948853,
+        "draw_408": 0.001,
+        "png_encode": 0.03890000009536743,
+        "replay_rpc_residual": 0.2678772000093013
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_01",
+      "page": 11,
+      "cycle_wall_s": 4.15892540011555,
+      "capture_cpu_s": 1.15625,
+      "top": {
+        "other_gap": 0.0014467996079474688,
+        "capture": 2.216218300163746,
+        "access_check": 0.09335430013015866,
+        "runner_state_metadata": 0.07836040016263723,
+        "save": 0.001017899950966239,
+        "manifest": 0.0036104999016970396,
+        "pacing": 1.0088134000543505,
+        "go_next": 0.11183549999259412,
+        "wait_for_change": 0.6442683001514524
+      },
+      "capture": {
+        "other_capture": 0.0168955996632576,
+        "reader_rpc": 0.08510550018399954,
+        "other_browser_controls": 0.03985990025103092,
+        "native_trace_rpc": 1.0437547999899834,
+        "source_body": 0.06477319984696805,
+        "source_jpeg_validation": 0.09530559997074306,
+        "replay_rpc_including_browser_png": 0.38551140017807484,
+        "white_composite_rgb_png": 0.08337040012702346,
+        "fallback_png_validation": 0.012616900028660893,
+        "webp_encode": 0.3278505001217127,
+        "webp_roundtrip_convert": 0.014064299874007702,
+        "webp_roundtrip_tobytes": 0.0036825998686254025,
+        "webp_input_and_container_preparation": 0.015251800185069442,
+        "fallback_png_input_preparation": 0.014488799963146448,
+        "final_format_validation": 0.01206029998138547,
+        "final_native_compare_python": 0.0016266999300569296
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0437547999899834,
+        "reader_and_controls": 0.12496540043503046,
+        "source_body": 0.06477319984696805,
+        "source_jpeg_validation": 0.09530559997074306,
+        "replay_rpc_including_browser_png": 0.38551140017807484,
+        "white_composite_rgb_png": 0.08337040012702346,
+        "png_and_codec_preparation": 0.04235750017687678,
+        "webp_encode": 0.3278505001217127,
+        "webp_roundtrip": 0.017746899742633104,
+        "final_format_and_native_compare": 0.013686999911442399,
+        "other_capture": 0.0168955996632576
+      },
+      "replay_js": {
+        "jpeg_decode": 0.015199999809265136,
+        "draw_408": 0.0005999999046325683,
+        "png_encode": 0.042299999952316286,
+        "replay_rpc_residual": 0.32741140051186085
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 1,
+      "cycle_wall_s": 5.397772199939936,
+      "capture_cpu_s": 2.234375,
+      "top": {
+        "other_gap": 0.0019141994416713715,
+        "capture": 3.5144338000100106,
+        "access_check": 0.08364370022900403,
+        "runner_state_metadata": 0.05118190008215606,
+        "save": 0.0010844999924302101,
+        "manifest": 0.004656699951738119,
+        "pacing": 1.0163630000315607,
+        "go_next": 0.10510170017369092,
+        "wait_for_change": 0.6193927000276744
+      },
+      "capture": {
+        "other_capture": 0.011375899892300367,
+        "reader_rpc": 0.05482759978622198,
+        "other_browser_controls": 0.05350710032507777,
+        "native_trace_rpc": 0.979065400082618,
+        "source_body": 0.18205180019140244,
+        "source_jpeg_validation": 0.20697869989089668,
+        "replay_rpc_including_browser_png": 0.6229273998178542,
+        "white_composite_rgb_png": 0.11550349998287857,
+        "fallback_png_validation": 0.021013899939134717,
+        "webp_encode": 1.1588695999234915,
+        "webp_roundtrip_convert": 0.029850400052964687,
+        "webp_roundtrip_tobytes": 0.0055825000163167715,
+        "webp_input_and_container_preparation": 0.022536699892953038,
+        "fallback_png_input_preparation": 0.020776000106707215,
+        "final_format_validation": 0.02739019994623959,
+        "final_native_compare_python": 0.0021771001629531384
+      },
+      "capture_groups": {
+        "native_trace_rpc": 0.979065400082618,
+        "reader_and_controls": 0.10833470011129975,
+        "source_body": 0.18205180019140244,
+        "source_jpeg_validation": 0.20697869989089668,
+        "replay_rpc_including_browser_png": 0.6229273998178542,
+        "white_composite_rgb_png": 0.11550349998287857,
+        "png_and_codec_preparation": 0.06432659993879497,
+        "webp_encode": 1.1588695999234915,
+        "webp_roundtrip": 0.03543290006928146,
+        "final_format_and_native_compare": 0.02956730010919273,
+        "other_capture": 0.011375899892300367
+      },
+      "replay_js": {
+        "jpeg_decode": 0.02609999990463257,
+        "draw_408": 0.0011000001430511474,
+        "png_encode": 0.06339999985694886,
+        "replay_rpc_residual": 0.5323273999132216
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 2,
+      "cycle_wall_s": 5.772127100033686,
+      "capture_cpu_s": 2.625,
+      "top": {
+        "other_gap": 0.0017161003779619932,
+        "capture": 3.8985621000174433,
+        "access_check": 0.0849129999987781,
+        "runner_state_metadata": 0.06876089982688427,
+        "save": 0.0017561998683959246,
+        "manifest": 0.0025164999533444643,
+        "pacing": 1.0151577999349684,
+        "go_next": 0.07602300005964935,
+        "wait_for_change": 0.6227214999962598
+      },
+      "capture": {
+        "other_capture": 0.01361260050907731,
+        "reader_rpc": 0.05876889987848699,
+        "other_browser_controls": 0.04589579929597676,
+        "native_trace_rpc": 0.9326467998325825,
+        "source_body": 0.14603790012188256,
+        "source_jpeg_validation": 0.18978300015442073,
+        "replay_rpc_including_browser_png": 0.8186590999830514,
+        "white_composite_rgb_png": 0.1106818001717329,
+        "fallback_png_validation": 0.020740299951285124,
+        "webp_encode": 1.4423432999756187,
+        "webp_roundtrip_convert": 0.028982600197196007,
+        "webp_roundtrip_tobytes": 0.006384299835190177,
+        "webp_input_and_container_preparation": 0.030112799955531955,
+        "fallback_png_input_preparation": 0.024496600264683366,
+        "final_format_validation": 0.026613999856635928,
+        "final_native_compare_python": 0.0028023000340908766
+      },
+      "capture_groups": {
+        "native_trace_rpc": 0.9326467998325825,
+        "reader_and_controls": 0.10466469917446375,
+        "source_body": 0.14603790012188256,
+        "source_jpeg_validation": 0.18978300015442073,
+        "replay_rpc_including_browser_png": 0.8186590999830514,
+        "white_composite_rgb_png": 0.1106818001717329,
+        "png_and_codec_preparation": 0.07534970017150044,
+        "webp_encode": 1.4423432999756187,
+        "webp_roundtrip": 0.035366900032386184,
+        "final_format_and_native_compare": 0.029416299890726805,
+        "other_capture": 0.01361260050907731
+      },
+      "replay_js": {
+        "jpeg_decode": 0.024099999904632567,
+        "draw_408": 0.0008999998569488526,
+        "png_encode": 0.07530000019073486,
+        "replay_rpc_residual": 0.7183591000307351
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 3,
+      "cycle_wall_s": 5.756419999990612,
+      "capture_cpu_s": 2.390625,
+      "top": {
+        "other_gap": 0.0018075001426041126,
+        "capture": 3.9263164000585675,
+        "access_check": 0.08564749988727272,
+        "runner_state_metadata": 0.06462469976395369,
+        "save": 0.0017058001831173897,
+        "manifest": 0.0032029999420046806,
+        "pacing": 1.0131405000574887,
+        "go_next": 0.07804229995235801,
+        "wait_for_change": 0.5819323000032455
+      },
+      "capture": {
+        "other_capture": 0.01909619988873601,
+        "reader_rpc": 0.06304330029524863,
+        "other_browser_controls": 0.05527650052681565,
+        "native_trace_rpc": 1.2016773999202996,
+        "source_body": 0.15355629986152053,
+        "source_jpeg_validation": 0.19142479985021055,
+        "replay_rpc_including_browser_png": 0.7669332998339087,
+        "white_composite_rgb_png": 0.12214650004170835,
+        "fallback_png_validation": 0.022134199971333146,
+        "webp_encode": 1.1983461000490934,
+        "webp_roundtrip_convert": 0.04026489984244108,
+        "webp_roundtrip_tobytes": 0.009675499983131886,
+        "webp_input_and_container_preparation": 0.026318400166928768,
+        "fallback_png_input_preparation": 0.024185699876397848,
+        "final_format_validation": 0.03025620011612773,
+        "final_native_compare_python": 0.001981099834665656
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.2016773999202996,
+        "reader_and_controls": 0.11831980082206428,
+        "source_body": 0.15355629986152053,
+        "source_jpeg_validation": 0.19142479985021055,
+        "replay_rpc_including_browser_png": 0.7669332998339087,
+        "white_composite_rgb_png": 0.12214650004170835,
+        "png_and_codec_preparation": 0.07263830001465976,
+        "webp_encode": 1.1983461000490934,
+        "webp_roundtrip": 0.04994039982557297,
+        "final_format_and_native_compare": 0.032237299950793386,
+        "other_capture": 0.01909619988873601
+      },
+      "replay_js": {
+        "jpeg_decode": 0.034799999952316286,
+        "draw_408": 0.0012999999523162842,
+        "png_encode": 0.08730000019073486,
+        "replay_rpc_residual": 0.6435332997385412
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 4,
+      "cycle_wall_s": 5.376955399988219,
+      "capture_cpu_s": 2.234375,
+      "top": {
+        "other_gap": 0.0016191997565329075,
+        "capture": 3.5298159001395106,
+        "access_check": 0.07846320001408458,
+        "runner_state_metadata": 0.05880330014042556,
+        "save": 0.0018372000195086002,
+        "manifest": 0.003674199804663658,
+        "pacing": 1.0080311000347137,
+        "go_next": 0.08027460006996989,
+        "wait_for_change": 0.6144367000088096
+      },
+      "capture": {
+        "other_capture": 0.016300300369039178,
+        "reader_rpc": 0.063718699850142,
+        "other_browser_controls": 0.044547699857503176,
+        "native_trace_rpc": 0.9925748996902257,
+        "source_body": 0.1321203000843525,
+        "source_jpeg_validation": 0.17961180000565946,
+        "replay_rpc_including_browser_png": 0.7164682000875473,
+        "white_composite_rgb_png": 0.10390560002997518,
+        "fallback_png_validation": 0.019137700088322163,
+        "webp_encode": 1.1541907000355422,
+        "webp_roundtrip_convert": 0.028441500151529908,
+        "webp_roundtrip_tobytes": 0.006027699913829565,
+        "webp_input_and_container_preparation": 0.022430599899962544,
+        "fallback_png_input_preparation": 0.01990209985524416,
+        "final_format_validation": 0.028136499924585223,
+        "final_native_compare_python": 0.00230160029605031
+      },
+      "capture_groups": {
+        "native_trace_rpc": 0.9925748996902257,
+        "reader_and_controls": 0.10826639970764518,
+        "source_body": 0.1321203000843525,
+        "source_jpeg_validation": 0.17961180000565946,
+        "replay_rpc_including_browser_png": 0.7164682000875473,
+        "white_composite_rgb_png": 0.10390560002997518,
+        "png_and_codec_preparation": 0.06147039984352887,
+        "webp_encode": 1.1541907000355422,
+        "webp_roundtrip": 0.03446920006535947,
+        "final_format_and_native_compare": 0.030438100220635533,
+        "other_capture": 0.016300300369039178
+      },
+      "replay_js": {
+        "jpeg_decode": 0.03610000014305115,
+        "draw_408": 0.0012999999523162842,
+        "png_encode": 0.07380000019073486,
+        "replay_rpc_residual": 0.605268199801445
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 5,
+      "cycle_wall_s": 3.9990701999049634,
+      "capture_cpu_s": 1.09375,
+      "top": {
+        "other_gap": 0.0012221999932080507,
+        "capture": 2.1041431000921875,
+        "access_check": 0.09375780005939305,
+        "runner_state_metadata": 0.06464260001666844,
+        "save": 0.0013875998556613922,
+        "manifest": 0.004277299856767058,
+        "pacing": 1.014509700005874,
+        "go_next": 0.0804990001488477,
+        "wait_for_change": 0.6346308998763561
+      },
+      "capture": {
+        "other_capture": 0.01913600042462349,
+        "reader_rpc": 0.0717958000022918,
+        "other_browser_controls": 0.04260809998959303,
+        "native_trace_rpc": 0.9863702000584453,
+        "source_body": 0.07682329998351634,
+        "source_jpeg_validation": 0.08978939987719059,
+        "replay_rpc_including_browser_png": 0.3691744999960065,
+        "white_composite_rgb_png": 0.08452060003764927,
+        "fallback_png_validation": 0.00912499986588955,
+        "webp_encode": 0.294499299954623,
+        "webp_roundtrip_convert": 0.013577000005170703,
+        "webp_roundtrip_tobytes": 0.0037569000851362944,
+        "webp_input_and_container_preparation": 0.013685200130566955,
+        "fallback_png_input_preparation": 0.010218299925327301,
+        "final_format_validation": 0.016228799941018224,
+        "final_native_compare_python": 0.0028346998151391745
+      },
+      "capture_groups": {
+        "native_trace_rpc": 0.9863702000584453,
+        "reader_and_controls": 0.11440389999188483,
+        "source_body": 0.07682329998351634,
+        "source_jpeg_validation": 0.08978939987719059,
+        "replay_rpc_including_browser_png": 0.3691744999960065,
+        "white_composite_rgb_png": 0.08452060003764927,
+        "png_and_codec_preparation": 0.033028499921783805,
+        "webp_encode": 0.294499299954623,
+        "webp_roundtrip": 0.017333900090306997,
+        "final_format_and_native_compare": 0.019063499756157398,
+        "other_capture": 0.01913600042462349
+      },
+      "replay_js": {
+        "jpeg_decode": 0.015700000047683717,
+        "draw_408": 0.0010999999046325684,
+        "png_encode": 0.04290000009536743,
+        "replay_rpc_residual": 0.30947449994832277
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 6,
+      "cycle_wall_s": 4.24655340006575,
+      "capture_cpu_s": 1.296875,
+      "top": {
+        "other_gap": 0.0012763002887368202,
+        "capture": 2.2876186999492347,
+        "access_check": 0.08682930003851652,
+        "runner_state_metadata": 0.05984209990128875,
+        "save": 0.0010389001108705997,
+        "manifest": 0.0034899997990578413,
+        "pacing": 1.0132158999331295,
+        "go_next": 0.14323389995843172,
+        "wait_for_change": 0.6500083000864834
+      },
+      "capture": {
+        "other_capture": 0.009538900339975953,
+        "reader_rpc": 0.07744270004332066,
+        "other_browser_controls": 0.041725800139829516,
+        "native_trace_rpc": 1.0538915996439755,
+        "source_body": 0.0777670000679791,
+        "source_jpeg_validation": 0.10481949988752604,
+        "replay_rpc_including_browser_png": 0.408403699984774,
+        "white_composite_rgb_png": 0.08212319994345307,
+        "fallback_png_validation": 0.013028400018811226,
+        "webp_encode": 0.35946590011008084,
+        "webp_roundtrip_convert": 0.013365699909627438,
+        "webp_roundtrip_tobytes": 0.004002199741080403,
+        "webp_input_and_container_preparation": 0.013546300353482366,
+        "fallback_png_input_preparation": 0.012844599783420563,
+        "final_format_validation": 0.013580000028014183,
+        "final_native_compare_python": 0.0020731999538838863
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0538915996439755,
+        "reader_and_controls": 0.11916850018315017,
+        "source_body": 0.0777670000679791,
+        "source_jpeg_validation": 0.10481949988752604,
+        "replay_rpc_including_browser_png": 0.408403699984774,
+        "white_composite_rgb_png": 0.08212319994345307,
+        "png_and_codec_preparation": 0.039419300155714154,
+        "webp_encode": 0.35946590011008084,
+        "webp_roundtrip": 0.01736789965070784,
+        "final_format_and_native_compare": 0.01565319998189807,
+        "other_capture": 0.009538900339975953
+      },
+      "replay_js": {
+        "jpeg_decode": 0.015699999809265137,
+        "draw_408": 0.0007000000476837158,
+        "png_encode": 0.03629999995231628,
+        "replay_rpc_residual": 0.35570370017550884
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 7,
+      "cycle_wall_s": 4.143340799957514,
+      "capture_cpu_s": 1.1875,
+      "top": {
+        "other_gap": 0.0011639997828751802,
+        "capture": 2.2509685000404716,
+        "access_check": 0.07992819999344647,
+        "runner_state_metadata": 0.07458049990236759,
+        "save": 0.0010126999113708735,
+        "manifest": 0.0037989001721143723,
+        "pacing": 1.0080431001260877,
+        "go_next": 0.09344700002111495,
+        "wait_for_change": 0.6303979000076652
+      },
+      "capture": {
+        "other_capture": 0.01171399955637753,
+        "reader_rpc": 0.18205920001491904,
+        "other_browser_controls": 0.044861599802970886,
+        "native_trace_rpc": 1.0564827001653612,
+        "source_body": 0.08566970005631447,
+        "source_jpeg_validation": 0.08772259997203946,
+        "replay_rpc_including_browser_png": 0.3289165000896901,
+        "white_composite_rgb_png": 0.1085604999680072,
+        "fallback_png_validation": 0.01553889992646873,
+        "webp_encode": 0.2674768001306802,
+        "webp_roundtrip_convert": 0.01139339990913868,
+        "webp_roundtrip_tobytes": 0.00492039998061955,
+        "webp_input_and_container_preparation": 0.014494300121441483,
+        "fallback_png_input_preparation": 0.014678100124001503,
+        "final_format_validation": 0.012716400204226375,
+        "final_native_compare_python": 0.0037634000182151794
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0564827001653612,
+        "reader_and_controls": 0.22692079981788993,
+        "source_body": 0.08566970005631447,
+        "source_jpeg_validation": 0.08772259997203946,
+        "replay_rpc_including_browser_png": 0.3289165000896901,
+        "white_composite_rgb_png": 0.1085604999680072,
+        "png_and_codec_preparation": 0.044711300171911716,
+        "webp_encode": 0.2674768001306802,
+        "webp_roundtrip": 0.01631379988975823,
+        "final_format_and_native_compare": 0.016479800222441554,
+        "other_capture": 0.01171399955637753
+      },
+      "replay_js": {
+        "jpeg_decode": 0.01459999990463257,
+        "draw_408": 0.0010999999046325684,
+        "png_encode": 0.03660000014305115,
+        "replay_rpc_residual": 0.2766165001373738
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 8,
+      "cycle_wall_s": 4.0103933999780566,
+      "capture_cpu_s": 1.1875,
+      "top": {
+        "other_gap": 0.0014858001377433538,
+        "capture": 2.0839587999507785,
+        "access_check": 0.08706800010986626,
+        "runner_state_metadata": 0.08454539976082742,
+        "save": 0.0010645000729709864,
+        "manifest": 0.0026777000166475773,
+        "pacing": 1.0021430000197142,
+        "go_next": 0.11097049992531538,
+        "wait_for_change": 0.6364796999841928
+      },
+      "capture": {
+        "other_capture": 0.020943700103089213,
+        "reader_rpc": 0.07970399991609156,
+        "other_browser_controls": 0.0382086003664881,
+        "native_trace_rpc": 1.0307907997630537,
+        "source_body": 0.07822280004620552,
+        "source_jpeg_validation": 0.08112580003216863,
+        "replay_rpc_including_browser_png": 0.3342318998184055,
+        "white_composite_rgb_png": 0.08486450021155179,
+        "fallback_png_validation": 0.01042200019583106,
+        "webp_encode": 0.2607080000452697,
+        "webp_roundtrip_convert": 0.016615399857982993,
+        "webp_roundtrip_tobytes": 0.005019099917262793,
+        "webp_input_and_container_preparation": 0.01351290033198893,
+        "fallback_png_input_preparation": 0.012166199507191777,
+        "final_format_validation": 0.01585459988564253,
+        "final_native_compare_python": 0.0015684999525547028
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0307907997630537,
+        "reader_and_controls": 0.11791260028257966,
+        "source_body": 0.07822280004620552,
+        "source_jpeg_validation": 0.08112580003216863,
+        "replay_rpc_including_browser_png": 0.3342318998184055,
+        "white_composite_rgb_png": 0.08486450021155179,
+        "png_and_codec_preparation": 0.03610110003501177,
+        "webp_encode": 0.2607080000452697,
+        "webp_roundtrip": 0.021634499775245786,
+        "final_format_and_native_compare": 0.01742309983819723,
+        "other_capture": 0.020943700103089213
+      },
+      "replay_js": {
+        "jpeg_decode": 0.016099999904632567,
+        "draw_408": 0.0010999999046325684,
+        "png_encode": 0.03659999990463257,
+        "replay_rpc_residual": 0.2804319001045078
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 9,
+      "cycle_wall_s": 4.020175900077447,
+      "capture_cpu_s": 1.25,
+      "top": {
+        "other_gap": 0.0011769996490329504,
+        "capture": 2.1361269000917673,
+        "access_check": 0.0816239002160728,
+        "runner_state_metadata": 0.08127389987930655,
+        "save": 0.0011994000524282455,
+        "manifest": 0.0025036002043634653,
+        "pacing": 1.00698609999381,
+        "go_next": 0.0916676998604089,
+        "wait_for_change": 0.617617400130257
+      },
+      "capture": {
+        "other_capture": 0.021926100132986903,
+        "reader_rpc": 0.06605689995922148,
+        "other_browser_controls": 0.03310010000132024,
+        "native_trace_rpc": 0.9770412999205291,
+        "source_body": 0.06307000014930964,
+        "source_jpeg_validation": 0.0909559999126941,
+        "replay_rpc_including_browser_png": 0.45269430009648204,
+        "white_composite_rgb_png": 0.07884899992495775,
+        "fallback_png_validation": 0.011056600138545036,
+        "webp_encode": 0.2751917000859976,
+        "webp_roundtrip_convert": 0.01569190016016364,
+        "webp_roundtrip_tobytes": 0.004882800159975886,
+        "webp_input_and_container_preparation": 0.014382699504494667,
+        "fallback_png_input_preparation": 0.011565099935978651,
+        "final_format_validation": 0.017947399988770485,
+        "final_native_compare_python": 0.001715000020340085
+      },
+      "capture_groups": {
+        "native_trace_rpc": 0.9770412999205291,
+        "reader_and_controls": 0.09915699996054173,
+        "source_body": 0.06307000014930964,
+        "source_jpeg_validation": 0.0909559999126941,
+        "replay_rpc_including_browser_png": 0.45269430009648204,
+        "white_composite_rgb_png": 0.07884899992495775,
+        "png_and_codec_preparation": 0.037004399579018354,
+        "webp_encode": 0.2751917000859976,
+        "webp_roundtrip": 0.020574700320139527,
+        "final_format_and_native_compare": 0.01966240000911057,
+        "other_capture": 0.021926100132986903
+      },
+      "replay_js": {
+        "jpeg_decode": 0.0135,
+        "draw_408": 0.001,
+        "png_encode": 0.03490000009536743,
+        "replay_rpc_residual": 0.4032943000011146
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 10,
+      "cycle_wall_s": 4.098543199943379,
+      "capture_cpu_s": 1.0625,
+      "top": {
+        "other_gap": 0.002202600007876754,
+        "capture": 2.122506400104612,
+        "access_check": 0.07362479995936155,
+        "runner_state_metadata": 0.07145899999886751,
+        "save": 0.0014587000478059053,
+        "manifest": 0.003842199919745326,
+        "pacing": 1.0035127999726683,
+        "go_next": 0.08693689992651343,
+        "wait_for_change": 0.7329998000059277
+      },
+      "capture": {
+        "other_capture": 0.019746800186112523,
+        "reader_rpc": 0.07399559975601733,
+        "other_browser_controls": 0.03468599962070584,
+        "native_trace_rpc": 1.0719613002147526,
+        "source_body": 0.05697549995966256,
+        "source_jpeg_validation": 0.07974370010197163,
+        "replay_rpc_including_browser_png": 0.3803014999721199,
+        "white_composite_rgb_png": 0.07801429997198284,
+        "fallback_png_validation": 0.012620100053027272,
+        "webp_encode": 0.24267040006816387,
+        "webp_roundtrip_convert": 0.015961800003424287,
+        "webp_roundtrip_tobytes": 0.006223900010809302,
+        "webp_input_and_container_preparation": 0.01728440006263554,
+        "fallback_png_input_preparation": 0.013915699906647205,
+        "final_format_validation": 0.016377600142732263,
+        "final_native_compare_python": 0.0020278000738471746
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0719613002147526,
+        "reader_and_controls": 0.10868159937672317,
+        "source_body": 0.05697549995966256,
+        "source_jpeg_validation": 0.07974370010197163,
+        "replay_rpc_including_browser_png": 0.3803014999721199,
+        "white_composite_rgb_png": 0.07801429997198284,
+        "png_and_codec_preparation": 0.04382020002231002,
+        "webp_encode": 0.24267040006816387,
+        "webp_roundtrip": 0.02218570001423359,
+        "final_format_and_native_compare": 0.018405400216579437,
+        "other_capture": 0.019746800186112523
+      },
+      "replay_js": {
+        "jpeg_decode": 0.0155,
+        "draw_408": 0.0007000000476837158,
+        "png_encode": 0.04490000009536743,
+        "replay_rpc_residual": 0.31920149982906876
+      },
+      "full_trace_count": 6
+    },
+    {
+      "run": "20261010_full_profile_02",
+      "page": 11,
+      "cycle_wall_s": 4.011649300111458,
+      "capture_cpu_s": 1.203125,
+      "top": {
+        "other_gap": 0.001150200143456459,
+        "capture": 2.141625199932605,
+        "access_check": 0.07422589999623597,
+        "runner_state_metadata": 0.07317430037073791,
+        "save": 0.0010037999600172043,
+        "manifest": 0.002944599837064743,
+        "pacing": 1.0066756999585778,
+        "go_next": 0.08476609992794693,
+        "wait_for_change": 0.6260834999848157
+      },
+      "capture": {
+        "other_capture": 0.011391399661079049,
+        "reader_rpc": 0.07007459993474185,
+        "other_browser_controls": 0.040408900240436196,
+        "native_trace_rpc": 1.0376847002189606,
+        "source_body": 0.07003939989954233,
+        "source_jpeg_validation": 0.09326909994706511,
+        "replay_rpc_including_browser_png": 0.35048689995892346,
+        "white_composite_rgb_png": 0.0863690001424402,
+        "fallback_png_validation": 0.012865199940279126,
+        "webp_encode": 0.3014686999376863,
+        "webp_roundtrip_convert": 0.017057999968528748,
+        "webp_roundtrip_tobytes": 0.004825599957257509,
+        "webp_input_and_container_preparation": 0.01637780014425516,
+        "fallback_png_input_preparation": 0.013131099985912442,
+        "final_format_validation": 0.014221400022506714,
+        "final_native_compare_python": 0.0019533999729901552
+      },
+      "capture_groups": {
+        "native_trace_rpc": 1.0376847002189606,
+        "reader_and_controls": 0.11048350017517805,
+        "source_body": 0.07003939989954233,
+        "source_jpeg_validation": 0.09326909994706511,
+        "replay_rpc_including_browser_png": 0.35048689995892346,
+        "white_composite_rgb_png": 0.0863690001424402,
+        "png_and_codec_preparation": 0.04237410007044673,
+        "webp_encode": 0.3014686999376863,
+        "webp_roundtrip": 0.021883599925786257,
+        "final_format_and_native_compare": 0.01617479999549687,
+        "other_capture": 0.011391399661079049
+      },
+      "replay_js": {
+        "jpeg_decode": 0.014900000095367431,
+        "draw_408": 0.0013000001907348632,
+        "png_encode": 0.039799999952316284,
+        "replay_rpc_residual": 0.2944868997205049
+      },
+      "full_trace_count": 6
+    }
+  ]
+}

@@ -3,7 +3,7 @@
 Date: 2026-10-09
 Branch: `feat/piccoma-adapter`
 Last committed implementation checkpoint: `8fcfb00` (Phase 06-C)
-Current status: Phases 01-05 and Phase 06-B/C are accepted checkpoints; Phase 06-B/C PNG/JPEG findings are historical. Phase 06-D implements lossless WebP from the verified source-derived RGB path, with validated native PNG on encoding failure and guarded Core PNG when provenance is unavailable. Phase 06-D code review and independent live Tester both passed with BLOCKING 0. The focused Piccoma and packaging selections, Ruff, and diff checks passed; the full suite was not rerun after the final site-local changes. The two-product current WebP Batch-to-ZIP evidence and limits are recorded below.
+Current status: Phases 01-05 and Phase 06-B/C are accepted checkpoints; Phase 06-B/C PNG/JPEG findings are historical. Phase 06-D implements lossless WebP from the verified source-derived RGB path, with validated native PNG on encoding failure and guarded Core PNG when provenance is unavailable. Phase 06-D code review and independent live Tester both passed with BLOCKING 0. The focused Piccoma and packaging selections, Ruff, and diff checks passed; the full suite was not rerun after the final site-local changes. A 2026-10-10 bounded two-run profile also verified 24/24 current native WebP page captures after the DPR tolerance adjustment; it stopped at `max_pages`, so END was not confirmed and it is not a full crawl. Phase 07 Stages A and B passed independent review. Stage C's interleaved manual comparison, dedicated 24-page Batch END/ZIP/Catalog checks, and fresh per-page Batch Manifest audit passed. The final Stage C Reviewer gate passed with BLOCKING 0. See the linked Phase 07 reports for exact metrics and scope.
 
 | Phase | Status | Evidence |
 | --- | --- | --- |
@@ -15,6 +15,8 @@ Current status: Phases 01-05 and Phase 06-B/C are accepted checkpoints; Phase 06
 | 06-B historical source-derived PNG | PASS, BLOCKING 0; independent Tester PASS | Exact single-JPEG/408-tile replay handled all 39 pages in the final two-product live E2E with no fallback under the prior PNG output contract; six selected same-page RGB comparisons and visual checks passed. Unsupported or mutated states fail closed or use the unchanged Core capture fallback only when target generation is stable. |
 | 06-C JPEG coefficient feasibility | PASS, independent evidence/design review PASS, BLOCKING 0 | `jpeglib.read_dct` succeeded on both p1 JPEG bodies, but the unchanged Jump+ feasibility helper rejected each exact fractional tile map as `tile_geometry_not_mcu_aligned`; no implementation change. |
 | 06-D lossless WebP output | PASS, code Reviewer PASS and independent live Tester PASS; BLOCKING 0 | All 39 selected pages used validated VP8L lossless WebP without fallback; six current Core RGB comparisons were exact. Standard ZIP/Manifest/Catalog/END checks passed. See the live evidence section below. |
+| Bounded performance recheck (2026-10-10) | Capture verified; END unverified by design | Two 12-page runs used current DPR acceptance and captured ordered p1..p12 as native WebP with 0 fallback. They stopped at `max_pages`; see the bounded timing section below and [PROFILE](../../research/piccoma-performance/PROFILE.md#full-current-pipeline-live-profile-handoff-two-runs). |
+| 07 JSON transfer / configured pacing (2026-10-10) | Stage A/B REVIEW PASS; Stage C evidence PASS / FINAL REVIEW PASS / BLOCKING 0 | [Phase 07 runbook](07-performance/README.md): Piccoma YAML200ms resolved through actual CLI and Batch paths; inter-candidate delay 3000ms, common fallback and other sites unchanged. All six native snapshots use full JSON transport and restore for existing validation. Four interleaved 12-page manual runs yielded 48/48 byte-identical native lossless-WebP files and 0 fallback; normal cycle mean was 3.601s object vs 2.743s JSON (-0.857s/23.8%). Dedicated 24-page Batch reached explicit END and passed ZIP/Catalog checks; fresh prepackage Manifest audit passed for all 24 pages (144 native evaluations/144 JSON decodes). Final Reviewer gate passed with BLOCKING 0. Method6 and rendering stability remain unchanged. See [profile](../../research/piccoma-performance/PHASE07_PROFILE.md), [Tester report](../../research/piccoma-performance/PHASE07_TESTER.md), and [numeric measurements](../../research/piccoma-performance/PHASE07_MEASUREMENTS.json). |
 
 ## Phase 01 listing and access evidence
 
@@ -71,7 +73,7 @@ The adapter and browser-fixture tests cover strict identity and fresh-free prefl
 
 ## Final result and limits
 
-Phases 01-05 and Phase 06-B/C are accepted checkpoints. Phase 06-D code review and independent live Tester passed with BLOCKING 0. The standard two-product run completed all 39 pages as lossless WebP with explicit END and verified ZIP/Manifest/Catalog artifacts; this is the current-format E2E, while Phase 06-B PNG evidence remains historical. Focused Piccoma/package selections and Ruff/diff checks pass; full pytest was not rerun after final site-local changes. Limits remain the observed horizontal layout at 1904x1200/DPR 1, unsupported draw/backdrop/resource variants, and excluded paid/quota flows. Preserve the pre-existing user edit to `watchlist.yaml` and untracked `debug.log`.
+Phases 01-05 and Phase 06-B/C are accepted checkpoints. Phase 06-D code review and independent live Tester passed with BLOCKING 0. The standard two-product run completed all 39 pages as lossless WebP with explicit END and verified ZIP/Manifest/Catalog artifacts; this is the current-format E2E, while Phase 06-B PNG evidence remains historical. A later shared-CDP diagnostic exposed a floating-point DPR slightly above 1; the adapter now has a 1e-7 tolerance and exact raw viewport stability check. The updated gate passed two bounded 12-page live runs (24/24 native WebP, zero fallback); END was not checked by these bounded runs. Focused Piccoma/package selections and Ruff/diff checks pass; full pytest was not rerun after final site-local changes. Other draw/backdrop/resource variants and paid/quota flows remain unsupported/excluded. Preserve the pre-existing user edit to `watchlist.yaml` and untracked `debug.log`.
 
 ## Phase 04 Site Policy and local Batch checkpoint
 
@@ -196,10 +198,49 @@ and 28606 measured 11,187,021 to 7,300,976 bytes (-34.74%). No page's WebP
 exceeded its corresponding observed JPEG body size. This is a measurement of
 these 39 pages, not a general size guarantee. Both targets remained
 available/free; quota and grant fields were unchanged, and Piccoma resource
-rows remained zero before and after. No entitlement action was performed. The
-observed supported mode remains horizontal at 1904x1200/DPR 1; other
-reader/draw/backdrop/resource variants are unsupported. Downstream WebP reader
-compatibility outside the tested browser/Pillow/ZIP path was not separately
-verified.
+rows remained zero before and after. No entitlement action was performed.
+Historical live captures verified the horizontal layout at 1904x1200 and exact
+DPR 1. A later shared-CDP diagnostic observed `devicePixelRatio` as
+`1.0000000298023224` at the same viewport. The adapter previously required an
+exact DPR value of 1 and stopped before the normal capture loop. The current
+code accepts finite numeric DPR values with `abs(DPR - 1) <= 1e-7`, while
+rejecting bool/non-finite values and normal scaled modes. It retains all
+existing viewport dimensions, canvas/backing/frame/renderability checks, and
+requires the full raw viewport array to be unchanged across capture. Pure
+validation cases, local Chromium capture tests, and the bounded live runs below
+cover acceptance; local regression also rejects an in-band DPR change during
+capture. This tolerance is not evidence for another reader layout. Other
+reader/draw/backdrop/resource variants remain unsupported. Downstream WebP
+reader compatibility outside the tested browser/Pillow/ZIP path was not
+separately verified.
+
+## 2026-10-10 bounded performance recheck
+
+Using the existing shared Crawler Chrome over CDP 9222, the Tester created a
+fresh uncredentialed owned context, freshly confirmed the exact-free listing
+for 28600/1910027, and ran two bounded passes. Each pass captured pages p1..p12
+in order as `native_tile_replay_lossless_webp`: **24/24 native WebP captures,
+zero fallbacks, no gap or duplicate**. The near-1 DPR was accepted. The normal
+1,000 ms pacing, method-6 lossless WebP encoder, full object trace returns, and
+source/provenance/generation/output guards were retained, so this is a baseline
+profile rather than an optimization A/B.
+
+The driver stopped at its configured `max_pages` bound after p12. It did not
+capture p13 or observe active END. This is bounded live capture evidence, not
+a full-episode completion or END verification. Historical Phase 06-D live
+E2E remains the separate evidence for full episodes reaching END, ZIP/Manifest
+consistency, and Catalog completion. Both current profile runs used isolated
+outputs; they did not modify normal outputs or Catalog and performed no paid,
+ticket, or quota action.
+
+Across 20 complete steady-page intervals measured from capture start of pN to
+capture start of pN+1, wall time was mean **4.538 s**, median **4.151 s**, p90
+**5.627 s**, maximum **5.772 s**. The two p1 intervals were **5.571 s** and
+**5.398 s**. For those same 20 cycles, stage medians include fixed pacing
+**1.008 s**, page turn through stable completion **0.724 s**, and
+`capture_page()` **2.234 s**. These top-level stages are disjoint, but their
+medians must not be added to obtain the cycle median. Detailed stage distributions,
+transition anchors, measurement limits, and unmeasured causes are in the
+[current performance profile](../../research/piccoma-performance/PROFILE.md#full-current-pipeline-live-profile-handoff-two-runs).
 
 The full suite result remains 1881 passed, 3558 warnings, and 0 skipped on the reviewed checkpoint immediately before the final NamedNodeMap compatibility fix. That fix was tested separately; the suite was not rerun after it or the final Phase 06-D site-local changes.

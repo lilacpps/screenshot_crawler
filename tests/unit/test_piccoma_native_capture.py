@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 
 import pytest
@@ -7,8 +8,11 @@ from PIL import Image, ImageChops
 
 import screenshot_crawler.site_adapters.piccoma.native_capture as piccoma_native_capture_module
 from screenshot_crawler.core.capture import CaptureResult
+from screenshot_crawler.core.errors import UnknownPageStateError
+from screenshot_crawler.site_adapters.piccoma.adapter import PiccomaAdapter
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
     NativeCaptureUnavailable,
+    _decode_native_snapshot_json,
     capture_result_format_is_valid,
     composite_replay_png_on_white,
     encode_lossless_webp,
@@ -133,6 +137,137 @@ def _trace(width: int = 844) -> dict[str, object]:
         ],
         "events": events,
     }
+
+
+def _snapshot_json_fixture() -> dict[str, object]:
+    snapshot = _trace()
+    snapshot["attributeObserverReady"] = True
+    snapshot["paint"] = {"firstOpaqueColor": None}
+    return snapshot
+
+
+def test_native_snapshot_json_round_trip_preserves_full_trace_and_nulls() -> None:
+    snapshot = _snapshot_json_fixture()
+
+    restored = _decode_native_snapshot_json(json.dumps(snapshot))
+
+    assert restored == snapshot
+    assert restored is not None
+    assert restored["events"][0]["options"] is None
+    assert restored["paint"]["firstOpaqueColor"] is None
+    assert target_generation_signature(restored) == target_generation_signature(snapshot)
+    assert validate_tile_trace(
+        restored, expected_width=844, expected_height=1200
+    ) == validate_tile_trace(snapshot, expected_width=844, expected_height=1200)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "{",
+        "[]",
+        "true",
+        "0",
+        '"trace"',
+        'NaN',
+        '{"id":"first","id":"second"}',
+        '{"dimensions":[-0,0]}',
+        '{"dimensions":[-0.0,0]}',
+    ],
+)
+def test_native_snapshot_json_rejects_malformed_or_ambiguous_values(value: str) -> None:
+    with pytest.raises(NativeCaptureUnavailable) as error:
+        _decode_native_snapshot_json(value)
+
+    assert error.value.unsafe_live_change is True
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda snapshot: snapshot.pop("paint"),
+        lambda snapshot: snapshot.update(generation="1"),
+        lambda snapshot: snapshot.update(events=[None]),
+        lambda snapshot: snapshot.update(sourceStates="missing"),
+        lambda snapshot: snapshot.update(paint=[]),
+    ],
+)
+def test_native_snapshot_json_rejects_incomplete_or_wrong_schema(mutate) -> None:
+    snapshot = _snapshot_json_fixture()
+    mutate(snapshot)
+
+    with pytest.raises(NativeCaptureUnavailable) as error:
+        _decode_native_snapshot_json(json.dumps(snapshot))
+
+    assert error.value.unsafe_live_change is True
+
+
+def test_native_snapshot_json_rejects_oversized_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        piccoma_native_capture_module, "MAX_NATIVE_SNAPSHOT_BYTES", 8
+    )
+
+    with pytest.raises(NativeCaptureUnavailable) as error:
+        _decode_native_snapshot_json('"123456789"')
+
+    assert error.value.unsafe_live_change is True
+
+
+@pytest.mark.parametrize(
+    ("device_pixel_ratio", "supported"),
+    [
+        (1, True),
+        (1.0, True),
+        (1 + 2**-25, True),
+        (1 - 2**-25, True),
+        (1 + 0.99e-7, True),
+        (float("nan"), False),
+        (float("inf"), False),
+        (float("-inf"), False),
+        (True, False),
+        (False, False),
+        (1 + 1.01e-7, False),
+        (1.25, False),
+        (2, False),
+        (None, False),
+        ("1", False),
+    ],
+)
+def test_piccoma_geometry_accepts_only_finite_near_one_device_pixel_ratio(
+    device_pixel_ratio: object, supported: bool
+) -> None:
+    adapter = PiccomaAdapter()
+    row = {
+        "canvas": {
+            "width": 844,
+            "height": 1200,
+            "rect": [530, 0, 844, 1200],
+            "inFrame": True,
+            "renderability": {
+                "visible": True,
+                "ancestors": [
+                    {
+                        "display": "block",
+                        "visibility": "visible",
+                        "opacity": 1,
+                        "contentVisibility": "visible",
+                    }
+                ],
+            },
+        }
+    }
+    snapshot = {
+        "viewport": [1904, 1200, device_pixel_ratio],
+        "frameRect": [530, 0, 844, 1200],
+    }
+
+    if supported:
+        assert adapter._validate_canvas_geometry(snapshot, row) == (844, 1200)
+    else:
+        with pytest.raises(UnknownPageStateError, match="supported viewport"):
+            adapter._validate_canvas_geometry(snapshot, row)
 
 
 def _white_paint_path(width: int = 844) -> dict[str, object]:

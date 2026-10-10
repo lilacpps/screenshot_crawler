@@ -1,0 +1,2812 @@
+{
+  "browser_version": "153.0.8010.54",
+  "runner_error_type": "UnknownPageStateError",
+  "fresh_free_preflight_completed": true,
+  "viewer_response_metadata": [
+    {
+      "status": 200,
+      "resource_type_document": true,
+      "content_type_html": true
+    }
+  ],
+  "raw_runner_diagnostics_disabled": true,
+  "page_saved_by_probe": false,
+  "runner_saved_page_count": 0,
+  "source_body_read": false,
+  "source_body_call_count": 0,
+  "tile_replay_called": false,
+  "tile_replay_call_count": 0,
+  "capture_method": "not_successful_or_not_requested",
+  "repeat_probe_allowed_by_observed_guard": true,
+  "ab_pairs_requested": 12,
+  "reader": {
+    "snapshot_count_per_variant": 12,
+    "before_after_page_summary_equal": true,
+    "before_active_page_number": 1,
+    "after_active_page_number": 1,
+    "full_compact_projection_matches": 12,
+    "full_compact_projection_match_count": 12,
+    "projection_mismatches_on_stable_pairs": 0,
+    "unstable_pairs_excluded": 0,
+    "per_pair_stable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "full_snapshots_stable": true,
+    "full_vs_compact": {
+      "full": {
+        "wall": {
+          "n": 12,
+          "mean_s": 0.010814374991847822,
+          "median_s": 0.01101945003028959,
+          "p90_s": 0.012295400025323033,
+          "max_s": 0.013022900093346834
+        },
+        "cpu": {
+          "n": 12,
+          "mean_s": 0.00390625,
+          "median_s": 0.0,
+          "p90_s": 0.015625,
+          "max_s": 0.015625
+        },
+        "browser_exec": {
+          "n": 12,
+          "mean_ms": 0.5666666428248087,
+          "median_ms": 0.5,
+          "p90_ms": 0.7000000476837158,
+          "max_ms": 0.7999999523162842
+        },
+        "summary_exec": {
+          "n": 12,
+          "mean_ms": 0.024999996026357014,
+          "median_ms": 0.0,
+          "p90_ms": 0.09999990463256836,
+          "max_ms": 0.10000014305114746
+        },
+        "payload_json_size": {
+          "n": 12,
+          "mean_bytes": 13106.0,
+          "median_bytes": 13080.0,
+          "p90_bytes": 13170.0,
+          "max_bytes": 13170.0
+        }
+      },
+      "compact": {
+        "wall": {
+          "n": 12,
+          "mean_s": 0.003925308294128627,
+          "median_s": 0.003771050018258393,
+          "p90_s": 0.005235099932178855,
+          "max_s": 0.006102300016209483
+        },
+        "cpu": {
+          "n": 12,
+          "mean_s": 0.0013020833333333333,
+          "median_s": 0.0,
+          "p90_s": 0.0,
+          "max_s": 0.015625
+        },
+        "browser_exec": {
+          "n": 12,
+          "mean_ms": 0.549999992052714,
+          "median_ms": 0.5499999523162842,
+          "p90_ms": 0.7000000476837158,
+          "max_ms": 0.7000000476837158
+        },
+        "summary_exec": {
+          "n": 12,
+          "mean_ms": 0.008333345254262289,
+          "median_ms": 0.0,
+          "p90_ms": 0.0,
+          "max_ms": 0.10000014305114746
+        },
+        "payload_json_size": {
+          "n": 12,
+          "mean_bytes": 466.0,
+          "median_bytes": 466.0,
+          "p90_bytes": 466.0,
+          "max_bytes": 466.0
+        }
+      }
+    },
+    "first_warmup_excluded": [
+      {
+        "variant": "full",
+        "wall_s": 0.012668599840253592,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 1.0,
+        "summary_exec_ms": 0.2999999523162842,
+        "projection_matches": true
+      },
+      {
+        "variant": "compact",
+        "wall_s": 0.0044905999675393105,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.7000000476837158,
+        "summary_exec_ms": 0.09999990463256836,
+        "projection_matches": true
+      }
+    ],
+    "rows": [
+      {
+        "pair": 1,
+        "variant": "full",
+        "wall_s": 0.012295400025323033,
+        "cpu_s": 0.015625,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.09999990463256836,
+        "full_json_bytes": 13170,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13170,
+        "rpc_residual_ms": 11.695400120690465,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 1,
+        "variant": "compact",
+        "wall_s": 0.0034606000408530235,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5999999046325684,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13170,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 2.860600136220455,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 2,
+        "variant": "full",
+        "wall_s": 0.010511100059375167,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13170,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13170,
+        "rpc_residual_ms": 10.011100059375167,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 2,
+        "variant": "compact",
+        "wall_s": 0.0039120998699218035,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.39999985694885254,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13146,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 3.512100012972951,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 3,
+        "variant": "full",
+        "wall_s": 0.011775099905207753,
+        "cpu_s": 0.015625,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13146,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13146,
+        "rpc_residual_ms": 11.275099905207753,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 3,
+        "variant": "compact",
+        "wall_s": 0.005235099932178855,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5999999046325684,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13146,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 4.635100027546287,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 4,
+        "variant": "full",
+        "wall_s": 0.009816600009799004,
+        "cpu_s": 0.015625,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13146,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13146,
+        "rpc_residual_ms": 9.316600009799004,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 4,
+        "variant": "compact",
+        "wall_s": 0.003785500070080161,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.10000014305114746,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 3.1854999270290136,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 5,
+        "variant": "full",
+        "wall_s": 0.008333900012075901,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13080,
+        "rpc_residual_ms": 7.833900012075901,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 5,
+        "variant": "compact",
+        "wall_s": 0.0033342998940497637,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.6000001430511475,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 2.734299750998616,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 6,
+        "variant": "full",
+        "wall_s": 0.011527800001204014,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13080,
+        "rpc_residual_ms": 11.027800001204014,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 6,
+        "variant": "compact",
+        "wall_s": 0.003903299802914262,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.7000000476837158,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 3.203299755230546,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 7,
+        "variant": "full",
+        "wall_s": 0.013022900093346834,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.6999998092651367,
+        "summary_exec_ms": 0.10000014305114746,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13080,
+        "rpc_residual_ms": 12.22290014103055,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 7,
+        "variant": "compact",
+        "wall_s": 0.006102300016209483,
+        "cpu_s": 0.015625,
+        "browser_exec_ms": 0.6000001430511475,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 5.502299873158336,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 8,
+        "variant": "full",
+        "wall_s": 0.011947899824008346,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.7999999523162842,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13080,
+        "rpc_residual_ms": 11.147899871692061,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 8,
+        "variant": "compact",
+        "wall_s": 0.0028196999337524176,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 2.3196999337524176,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 9,
+        "variant": "full",
+        "wall_s": 0.009734599851071835,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5999999046325684,
+        "summary_exec_ms": 0.09999990463256836,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13080,
+        "rpc_residual_ms": 9.034600041806698,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 9,
+        "variant": "compact",
+        "wall_s": 0.0038765999488532543,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.7000000476837158,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 3.1765999011695385,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 10,
+        "variant": "full",
+        "wall_s": 0.008777800016105175,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.7000000476837158,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13080,
+        "rpc_residual_ms": 8.07779996842146,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 10,
+        "variant": "compact",
+        "wall_s": 0.003723400179296732,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 3.223400179296732,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 11,
+        "variant": "full",
+        "wall_s": 0.011901500169187784,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5999999046325684,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13080,
+        "rpc_residual_ms": 11.301500264555216,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 11,
+        "variant": "compact",
+        "wall_s": 0.0037565999664366245,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.39999985694885254,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 3.356600109487772,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 12,
+        "variant": "full",
+        "wall_s": 0.010127899935469031,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.40000009536743164,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 13080,
+        "rpc_residual_ms": 9.7278998401016,
+        "pair_p1_stable": true
+      },
+      {
+        "pair": 12,
+        "variant": "compact",
+        "wall_s": 0.003194199874997139,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 0.0,
+        "full_json_bytes": 13080,
+        "compact_json_bytes": 466,
+        "browser_payload_json_bytes": 466,
+        "rpc_residual_ms": 2.694199874997139,
+        "pair_p1_stable": true
+      }
+    ]
+  },
+  "trace": {
+    "snapshot_count_per_variant": 12,
+    "full_compact_projection_matches": 12,
+    "full_compact_projection_match_count": 12,
+    "unstable_pairs_excluded": 0,
+    "per_pair_stable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "full_target_source_paint_signatures_stable": true,
+    "json_string_full_deep_equality_count": 12,
+    "json_string_full_deep_equality_n": 12,
+    "tile_trace_validation_reason": "valid",
+    "white_paint_valid": true,
+    "source_response_metadata": {
+      "trace_validated": true,
+      "response_count_for_bound_source": 1,
+      "unique_response_matches_source": true,
+      "response_status": 200,
+      "request_is_exact_unredirected_image": true,
+      "content_type_is_jpeg": true,
+      "declared_length_bytes": 1951370,
+      "response_body_read": false
+    },
+    "full_vs_compact": {
+      "full": {
+        "wall": {
+          "n": 12,
+          "mean_s": 0.19326979166362435,
+          "median_s": 0.20085014996584505,
+          "p90_s": 0.22120130015537143,
+          "max_s": 0.2817939000669867
+        },
+        "cpu": {
+          "n": 12,
+          "mean_s": 0.078125,
+          "median_s": 0.0703125,
+          "p90_s": 0.109375,
+          "max_s": 0.171875
+        },
+        "browser_exec": {
+          "n": 12,
+          "mean_ms": 0.38333332538604736,
+          "median_ms": 0.34999990463256836,
+          "p90_ms": 0.5,
+          "max_ms": 0.7000000476837158
+        },
+        "summary_exec": {
+          "n": 12,
+          "mean_ms": 1.4583333730697632,
+          "median_ms": 1.399999976158142,
+          "p90_ms": 1.7000000476837158,
+          "max_ms": 2.5
+        },
+        "paint": {
+          "n": 12,
+          "mean_ms": 0.23333332935969034,
+          "median_ms": 0.25,
+          "p90_ms": 0.3000001907348633,
+          "max_ms": 0.39999985694885254
+        },
+        "full_json_size": {
+          "n": 12,
+          "mean_bytes": 391028.0,
+          "median_bytes": 391028.0,
+          "p90_bytes": 391028.0,
+          "max_bytes": 391028.0
+        },
+        "compact_json_size": {
+          "n": 12,
+          "mean_bytes": 513.0,
+          "median_bytes": 513.0,
+          "p90_bytes": 513.0,
+          "max_bytes": 513.0
+        },
+        "draw_counts": [
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408
+        ]
+      },
+      "compact": {
+        "wall": {
+          "n": 12,
+          "mean_s": 0.01185414173717921,
+          "median_s": 0.011897650081664324,
+          "p90_s": 0.013018100056797266,
+          "max_s": 0.017195300199091434
+        },
+        "cpu": {
+          "n": 12,
+          "mean_s": 0.0013020833333333333,
+          "median_s": 0.0,
+          "p90_s": 0.0,
+          "max_s": 0.015625
+        },
+        "browser_exec": {
+          "n": 12,
+          "mean_ms": 0.44999998807907104,
+          "median_ms": 0.40000009536743164,
+          "p90_ms": 0.7000000476837158,
+          "max_ms": 0.7999999523162842
+        },
+        "summary_exec": {
+          "n": 12,
+          "mean_ms": 1.3749999801317851,
+          "median_ms": 1.350000023841858,
+          "p90_ms": 1.6000001430511475,
+          "max_ms": 2.1999998092651367
+        },
+        "paint": {
+          "n": 12,
+          "mean_ms": 0.2416666547457377,
+          "median_ms": 0.20000004768371582,
+          "p90_ms": 0.3000001907348633,
+          "max_ms": 0.39999985694885254
+        },
+        "full_json_size": {
+          "n": 12,
+          "mean_bytes": 391028.0,
+          "median_bytes": 391028.0,
+          "p90_bytes": 391028.0,
+          "max_bytes": 391028.0
+        },
+        "compact_json_size": {
+          "n": 12,
+          "mean_bytes": 513.0,
+          "median_bytes": 513.0,
+          "p90_bytes": 513.0,
+          "max_bytes": 513.0
+        },
+        "draw_counts": [
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408
+        ]
+      },
+      "json_string": {
+        "wall": {
+          "n": 12,
+          "mean_s": 0.024161308344143134,
+          "median_s": 0.02273809991311282,
+          "p90_s": 0.026515900157392025,
+          "max_s": 0.04299749992787838
+        },
+        "cpu": {
+          "n": 12,
+          "mean_s": 0.00390625,
+          "median_s": 0.0,
+          "p90_s": 0.015625,
+          "max_s": 0.015625
+        },
+        "browser_exec": {
+          "n": 12,
+          "mean_ms": 0.3333333134651184,
+          "median_ms": 0.34999990463256836,
+          "p90_ms": 0.40000009536743164,
+          "max_ms": 0.5
+        },
+        "summary_exec": {
+          "n": 12,
+          "mean_ms": 1.3083333770434062,
+          "median_ms": 1.2000000476837158,
+          "p90_ms": 1.7000000476837158,
+          "max_ms": 2.299999952316284
+        },
+        "paint": {
+          "n": 12,
+          "mean_ms": 0.19166664282480875,
+          "median_ms": 0.20000004768371582,
+          "p90_ms": 0.2999999523162842,
+          "max_ms": 0.2999999523162842
+        },
+        "full_json_size": {
+          "n": 12,
+          "mean_bytes": 391028.0,
+          "median_bytes": 391028.0,
+          "p90_bytes": 391028.0,
+          "max_bytes": 391028.0
+        },
+        "compact_json_size": {
+          "n": 12,
+          "mean_bytes": 513.0,
+          "median_bytes": 513.0,
+          "p90_bytes": 513.0,
+          "max_bytes": 513.0
+        },
+        "draw_counts": [
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408,
+          408
+        ],
+        "json_string_utf8_size": {
+          "n": 12,
+          "mean_bytes": 391028.0,
+          "median_bytes": 391028.0,
+          "p90_bytes": 391028.0,
+          "max_bytes": 391028.0
+        },
+        "python_json_loads_wall": {
+          "n": 12,
+          "mean_s": 0.0034943833209884665,
+          "median_s": 0.003342999960295856,
+          "p90_s": 0.004379200050607324,
+          "max_s": 0.006646999856457114
+        },
+        "python_json_loads_cpu": {
+          "n": 12,
+          "mean_s": 0.0013020833333333333,
+          "median_s": 0.0,
+          "p90_s": 0.0,
+          "max_s": 0.015625
+        },
+        "evaluate_plus_json_loads_wall": {
+          "n": 12,
+          "mean_s": 0.0276556916651316,
+          "median_s": 0.026288799941539764,
+          "p90_s": 0.03089510020799935,
+          "max_s": 0.049644499784335494
+        }
+      }
+    },
+    "first_warmup_excluded": [
+      {
+        "variant": "full",
+        "wall_s": 0.15880000009201467,
+        "cpu_s": 0.078125,
+        "browser_exec_ms": 1.5999999046325684,
+        "paint_ms": 0.7999999523162842,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "projection_matches_python": true,
+        "json_string_roundtrip_deep_equal": false
+      },
+      {
+        "variant": "compact",
+        "wall_s": 0.014076099963858724,
+        "cpu_s": 0.015625,
+        "browser_exec_ms": 0.7000000476837158,
+        "paint_ms": 0.39999985694885254,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "projection_matches_python": true,
+        "json_string_roundtrip_deep_equal": null
+      },
+      {
+        "variant": "json_string",
+        "wall_s": 0.023137300042435527,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.20000004768371582,
+        "paint_ms": 0.20000004768371582,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "projection_matches_python": true,
+        "json_string_roundtrip_deep_equal": null
+      }
+    ],
+    "full_rows": [
+      {
+        "pair": 1,
+        "variant": "full",
+        "wall_s": 0.1971767998766154,
+        "cpu_s": 0.109375,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 1.3000001907348633,
+        "paint_ms": 0.09999990463256836,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 195.57679973356426,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 2,
+        "variant": "full",
+        "wall_s": 0.2127123000100255,
+        "cpu_s": 0.09375,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 1.4000000953674316,
+        "paint_ms": 0.3000001907348633,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 210.81229991465807,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 3,
+        "variant": "full",
+        "wall_s": 0.15043030004017055,
+        "cpu_s": 0.0625,
+        "browser_exec_ms": 0.20000004768371582,
+        "summary_exec_ms": 1.0999999046325684,
+        "paint_ms": 0.09999990463256836,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 149.13030008785427,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 4,
+        "variant": "full",
+        "wall_s": 0.15996439987793565,
+        "cpu_s": 0.046875,
+        "browser_exec_ms": 0.7000000476837158,
+        "summary_exec_ms": 1.4000000953674316,
+        "paint_ms": 0.39999985694885254,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 157.8643997348845,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 5,
+        "variant": "full",
+        "wall_s": 0.2045235000550747,
+        "cpu_s": 0.046875,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 2.5,
+        "paint_ms": 0.2999999523162842,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 201.5235000550747,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 6,
+        "variant": "full",
+        "wall_s": 0.1604718999005854,
+        "cpu_s": 0.046875,
+        "browser_exec_ms": 0.40000009536743164,
+        "summary_exec_ms": 1.7000000476837158,
+        "paint_ms": 0.2999999523162842,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 158.37189975753427,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 7,
+        "variant": "full",
+        "wall_s": 0.2817939000669867,
+        "cpu_s": 0.171875,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 1.2000000476837158,
+        "paint_ms": 0.20000004768371582,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 280.2939000669867,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 8,
+        "variant": "full",
+        "wall_s": 0.22120130015537143,
+        "cpu_s": 0.09375,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 1.5,
+        "paint_ms": 0.2999999523162842,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 219.40130020305514,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 9,
+        "variant": "full",
+        "wall_s": 0.20635570003651083,
+        "cpu_s": 0.078125,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 1.5,
+        "paint_ms": 0.20000004768371582,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 204.55570008419454,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 10,
+        "variant": "full",
+        "wall_s": 0.2141411998309195,
+        "cpu_s": 0.0625,
+        "browser_exec_ms": 0.39999985694885254,
+        "summary_exec_ms": 1.3000001907348633,
+        "paint_ms": 0.2999999523162842,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 212.4411997832358,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 11,
+        "variant": "full",
+        "wall_s": 0.15457320003770292,
+        "cpu_s": 0.078125,
+        "browser_exec_ms": 0.40000009536743164,
+        "summary_exec_ms": 1.2000000476837158,
+        "paint_ms": 0.20000004768371582,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 152.97319989465177,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 12,
+        "variant": "full",
+        "wall_s": 0.1558930000755936,
+        "cpu_s": 0.046875,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 1.3999998569488525,
+        "paint_ms": 0.10000014305114746,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 154.19300026632845,
+        "pair_page_and_trace_stable": true
+      }
+    ],
+    "compact_rows": [
+      {
+        "pair": 1,
+        "variant": "compact",
+        "wall_s": 0.017195300199091434,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.7999999523162842,
+        "summary_exec_ms": 1.3000001907348633,
+        "paint_ms": 0.20000004768371582,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 15.095300056040287,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 2,
+        "variant": "compact",
+        "wall_s": 0.010614300146698952,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.39999985694885254,
+        "summary_exec_ms": 1.1000001430511475,
+        "paint_ms": 0.39999985694885254,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 9.114300146698952,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 3,
+        "variant": "compact",
+        "wall_s": 0.011839200044050813,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 1.2000000476837158,
+        "paint_ms": 0.09999990463256836,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 10.339200044050813,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 4,
+        "variant": "compact",
+        "wall_s": 0.01214370015077293,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.39999985694885254,
+        "summary_exec_ms": 1.6000001430511475,
+        "paint_ms": 0.20000004768371582,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 10.14370015077293,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 5,
+        "variant": "compact",
+        "wall_s": 0.011040700133889914,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 1.5999999046325684,
+        "paint_ms": 0.20000004768371582,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 8.940700229257345,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 6,
+        "variant": "compact",
+        "wall_s": 0.010611100122332573,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 1.5,
+        "paint_ms": 0.2999999523162842,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 8.611100122332573,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 7,
+        "variant": "compact",
+        "wall_s": 0.011956100119277835,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.40000009536743164,
+        "summary_exec_ms": 1.5,
+        "paint_ms": 0.3000001907348633,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 10.056100023910403,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 8,
+        "variant": "compact",
+        "wall_s": 0.012360800057649612,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.40000009536743164,
+        "summary_exec_ms": 1.3999998569488525,
+        "paint_ms": 0.2999999523162842,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 10.560800105333328,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 9,
+        "variant": "compact",
+        "wall_s": 0.013018100056797266,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.7000000476837158,
+        "summary_exec_ms": 2.1999998092651367,
+        "paint_ms": 0.2999999523162842,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 10.118100199848413,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 10,
+        "variant": "compact",
+        "wall_s": 0.010015199892222881,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 0.8999998569488525,
+        "paint_ms": 0.19999980926513672,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 8.815200082957745,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 11,
+        "variant": "compact",
+        "wall_s": 0.012816800037398934,
+        "cpu_s": 0.0,
+        "browser_exec_ms": 0.40000009536743164,
+        "summary_exec_ms": 1.1999998092651367,
+        "paint_ms": 0.20000004768371582,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 11.216800132766366,
+        "pair_page_and_trace_stable": true
+      },
+      {
+        "pair": 12,
+        "variant": "compact",
+        "wall_s": 0.008638399885967374,
+        "cpu_s": 0.015625,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 1.0,
+        "paint_ms": 0.20000004768371582,
+        "paint_count": 1,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 7.33839993365109,
+        "pair_page_and_trace_stable": true
+      }
+    ],
+    "json_string_rows": [
+      {
+        "pair": 1,
+        "variant": "json_string",
+        "wall_s": 0.026515900157392025,
+        "cpu_s": 0.015625,
+        "python_json_loads_wall_s": 0.004379200050607324,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 1.4000000953674316,
+        "paint_ms": 0.09999990463256836,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 24.81590010970831,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.03089510020799935
+      },
+      {
+        "pair": 2,
+        "variant": "json_string",
+        "wall_s": 0.020820199977606535,
+        "cpu_s": 0.0,
+        "python_json_loads_wall_s": 0.00246519991196692,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.39999985694885254,
+        "summary_exec_ms": 0.9000000953674316,
+        "paint_ms": 0.2999999523162842,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 19.52020002529025,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.023285399889573455
+      },
+      {
+        "pair": 3,
+        "variant": "json_string",
+        "wall_s": 0.022533699870109558,
+        "cpu_s": 0.0,
+        "python_json_loads_wall_s": 0.0032003000378608704,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.20000004768371582,
+        "summary_exec_ms": 1.0999999046325684,
+        "paint_ms": 0.20000004768371582,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 21.233699917793274,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.02573399990797043
+      },
+      {
+        "pair": 4,
+        "variant": "json_string",
+        "wall_s": 0.01987409987486899,
+        "cpu_s": 0.0,
+        "python_json_loads_wall_s": 0.0021610998082906008,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.20000004768371582,
+        "summary_exec_ms": 1.0999999046325684,
+        "paint_ms": 0.09999990463256836,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 18.574099922552705,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.02203519968315959
+      },
+      {
+        "pair": 5,
+        "variant": "json_string",
+        "wall_s": 0.02294249995611608,
+        "cpu_s": 0.0,
+        "python_json_loads_wall_s": 0.003985700197517872,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.40000009536743164,
+        "summary_exec_ms": 1.4000000953674316,
+        "paint_ms": 0.20000004768371582,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 21.142499765381217,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.026928200153633952
+      },
+      {
+        "pair": 6,
+        "variant": "json_string",
+        "wall_s": 0.019404200138524175,
+        "cpu_s": 0.015625,
+        "python_json_loads_wall_s": 0.003221499966457486,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 0.9000000953674316,
+        "paint_ms": 0.20000004768371582,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 18.20420009084046,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.02262570010498166
+      },
+      {
+        "pair": 7,
+        "variant": "json_string",
+        "wall_s": 0.025958700105547905,
+        "cpu_s": 0.0,
+        "python_json_loads_wall_s": 0.003464499954134226,
+        "python_json_loads_cpu_s": 0.015625,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.40000009536743164,
+        "summary_exec_ms": 1.2999999523162842,
+        "paint_ms": 0.20000004768371582,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 24.25870005786419,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.02942320005968213
+      },
+      {
+        "pair": 8,
+        "variant": "json_string",
+        "wall_s": 0.024424700066447258,
+        "cpu_s": 0.0,
+        "python_json_loads_wall_s": 0.0039007000159472227,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.2999999523162842,
+        "summary_exec_ms": 1.4000000953674316,
+        "paint_ms": 0.20000004768371582,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 22.724700018763542,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.02832540008239448
+      },
+      {
+        "pair": 9,
+        "variant": "json_string",
+        "wall_s": 0.04299749992787838,
+        "cpu_s": 0.0,
+        "python_json_loads_wall_s": 0.006646999856457114,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.5,
+        "summary_exec_ms": 2.299999952316284,
+        "paint_ms": 0.2999999523162842,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 40.197499975562096,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.049644499784335494
+      },
+      {
+        "pair": 10,
+        "variant": "json_string",
+        "wall_s": 0.023225999902933836,
+        "cpu_s": 0.0,
+        "python_json_loads_wall_s": 0.0036176000721752644,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.39999985694885254,
+        "summary_exec_ms": 1.1000001430511475,
+        "paint_ms": 0.19999980926513672,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 21.725999902933836,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.0268435999751091
+      },
+      {
+        "pair": 11,
+        "variant": "json_string",
+        "wall_s": 0.020339100155979395,
+        "cpu_s": 0.0,
+        "python_json_loads_wall_s": 0.0024478998966515064,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.39999985694885254,
+        "summary_exec_ms": 1.7000000476837158,
+        "paint_ms": 0.20000004768371582,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 18.239100251346827,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.0227870000526309
+      },
+      {
+        "pair": 12,
+        "variant": "json_string",
+        "wall_s": 0.020899099996313453,
+        "cpu_s": 0.015625,
+        "python_json_loads_wall_s": 0.00244190008379519,
+        "python_json_loads_cpu_s": 0.0,
+        "json_string_utf8_bytes": 391028,
+        "browser_exec_ms": 0.20000004768371582,
+        "summary_exec_ms": 1.1000001430511475,
+        "paint_ms": 0.09999990463256836,
+        "full_json_bytes": 391028,
+        "compact_json_bytes": 513,
+        "deep_equal_to_full_object": true,
+        "numeric_projection_matches_python": true,
+        "numeric_summary": {
+          "target_id_present": true,
+          "dimensions": [
+            844,
+            1200
+          ],
+          "initial_dimensions": [
+            300,
+            150
+          ],
+          "connected": true,
+          "generation": 411,
+          "retired": false,
+          "overflow": false,
+          "total_overflow": false,
+          "event_count": 411,
+          "draw_count": 408,
+          "source_count": 1,
+          "source_complete": true,
+          "source_dimensions": [
+            844,
+            1200
+          ],
+          "source_generation": [
+            1,
+            1,
+            1
+          ],
+          "paint_ancestor_count": 4,
+          "paint_overlap_count": 0,
+          "paint_first_opaque_index": 3,
+          "paint_covers_canvas": true,
+          "paint_canvas_rect": [
+            529.6666870117188,
+            0,
+            844,
+            1200
+          ],
+          "hooks_intact": true,
+          "attribute_observer_ready": true
+        },
+        "rpc_residual_ms": 19.59909980557859,
+        "pair_page_and_trace_stable": true,
+        "evaluate_plus_json_loads_wall_s": 0.023341000080108643
+      }
+    ]
+  },
+  "page_state_before_after": {
+    "same_expected_viewer": true,
+    "reader_projection_unchanged": true
+  }
+}

@@ -1,0 +1,531 @@
+{
+  "interpretation": {
+    "payload_sizes": "UTF-8 JSON lengths, not CDP wire byte counts.",
+    "wall_residual": "Wall minus browser execution and summary timers; includes stringify, transport, Playwright conversion and scheduling, not pure RPC.",
+    "json_string_variant": "Same full snapshot and summary calculations, but return the entire trace as JSON text; Python json.loads is measured separately, and parsed object equality is checked in memory.",
+    "capture_scope": "Read-only p1 metadata probe after fresh-free preflight; strict geometry guard blocked normal capture; no body read, replay, or save.",
+    "ordering": "Each pair used fixed full, compact, json-string order; timing is observed, not a randomized causal comparison."
+  },
+  "runs": [
+    {
+      "run": "A",
+      "runner_error_type": "UnknownPageStateError",
+      "fresh_free_preflight_completed": true,
+      "reader_pairs_checked": 12,
+      "reader_projection_matches_on_stable_pairs": 12,
+      "trace_pairs_checked": 12,
+      "trace_projection_matches_on_stable_pairs": 12,
+      "trace_string_deep_equal_n": 12,
+      "trace_string_deep_equal_total": 12,
+      "trace_unstable_pairs": 0,
+      "trace_evaluate_plus_json_loads_wall": {
+        "n": 12,
+        "mean_s": 0.0276556916651316,
+        "median_s": 0.026288799941539764,
+        "p90_s": 0.03089510020799935,
+        "max_s": 0.049644499784335494
+      },
+      "draw_count": 408,
+      "tile_trace_validation_reason": "valid",
+      "white_paint_valid": true,
+      "response_binding": {
+        "trace_validated": true,
+        "response_count_for_bound_source": 1,
+        "unique_response_matches_source": true,
+        "response_status": 200,
+        "request_is_exact_unredirected_image": true,
+        "content_type_is_jpeg": true,
+        "declared_length_bytes": 1951370,
+        "response_body_read": false
+      },
+      "source_body_call_count": 0,
+      "tile_replay_call_count": 0,
+      "saved_page_count": 0,
+      "trace_timing": {
+        "full": {
+          "wall": {
+            "n": 12,
+            "mean_s": 0.19326979166362435,
+            "median_s": 0.20085014996584505,
+            "p90_s": 0.22120130015537143,
+            "max_s": 0.2817939000669867
+          },
+          "cpu": {
+            "n": 12,
+            "mean_s": 0.078125,
+            "median_s": 0.0703125,
+            "p90_s": 0.109375,
+            "max_s": 0.171875
+          },
+          "browser_exec": {
+            "n": 12,
+            "mean_ms": 0.38333332538604736,
+            "median_ms": 0.34999990463256836,
+            "p90_ms": 0.5,
+            "max_ms": 0.7000000476837158
+          },
+          "summary_exec": {
+            "n": 12,
+            "mean_ms": 1.4583333730697632,
+            "median_ms": 1.399999976158142,
+            "p90_ms": 1.7000000476837158,
+            "max_ms": 2.5
+          },
+          "paint": {
+            "n": 12,
+            "mean_ms": 0.23333332935969034,
+            "median_ms": 0.25,
+            "p90_ms": 0.3000001907348633,
+            "max_ms": 0.39999985694885254
+          },
+          "full_json_size": {
+            "n": 12,
+            "mean_bytes": 391028.0,
+            "median_bytes": 391028.0,
+            "p90_bytes": 391028.0,
+            "max_bytes": 391028.0
+          },
+          "compact_json_size": {
+            "n": 12,
+            "mean_bytes": 513.0,
+            "median_bytes": 513.0,
+            "p90_bytes": 513.0,
+            "max_bytes": 513.0
+          },
+          "draw_counts": [
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408
+          ]
+        },
+        "compact": {
+          "wall": {
+            "n": 12,
+            "mean_s": 0.01185414173717921,
+            "median_s": 0.011897650081664324,
+            "p90_s": 0.013018100056797266,
+            "max_s": 0.017195300199091434
+          },
+          "cpu": {
+            "n": 12,
+            "mean_s": 0.0013020833333333333,
+            "median_s": 0.0,
+            "p90_s": 0.0,
+            "max_s": 0.015625
+          },
+          "browser_exec": {
+            "n": 12,
+            "mean_ms": 0.44999998807907104,
+            "median_ms": 0.40000009536743164,
+            "p90_ms": 0.7000000476837158,
+            "max_ms": 0.7999999523162842
+          },
+          "summary_exec": {
+            "n": 12,
+            "mean_ms": 1.3749999801317851,
+            "median_ms": 1.350000023841858,
+            "p90_ms": 1.6000001430511475,
+            "max_ms": 2.1999998092651367
+          },
+          "paint": {
+            "n": 12,
+            "mean_ms": 0.2416666547457377,
+            "median_ms": 0.20000004768371582,
+            "p90_ms": 0.3000001907348633,
+            "max_ms": 0.39999985694885254
+          },
+          "full_json_size": {
+            "n": 12,
+            "mean_bytes": 391028.0,
+            "median_bytes": 391028.0,
+            "p90_bytes": 391028.0,
+            "max_bytes": 391028.0
+          },
+          "compact_json_size": {
+            "n": 12,
+            "mean_bytes": 513.0,
+            "median_bytes": 513.0,
+            "p90_bytes": 513.0,
+            "max_bytes": 513.0
+          },
+          "draw_counts": [
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408
+          ]
+        },
+        "json_string": {
+          "wall": {
+            "n": 12,
+            "mean_s": 0.024161308344143134,
+            "median_s": 0.02273809991311282,
+            "p90_s": 0.026515900157392025,
+            "max_s": 0.04299749992787838
+          },
+          "cpu": {
+            "n": 12,
+            "mean_s": 0.00390625,
+            "median_s": 0.0,
+            "p90_s": 0.015625,
+            "max_s": 0.015625
+          },
+          "browser_exec": {
+            "n": 12,
+            "mean_ms": 0.3333333134651184,
+            "median_ms": 0.34999990463256836,
+            "p90_ms": 0.40000009536743164,
+            "max_ms": 0.5
+          },
+          "summary_exec": {
+            "n": 12,
+            "mean_ms": 1.3083333770434062,
+            "median_ms": 1.2000000476837158,
+            "p90_ms": 1.7000000476837158,
+            "max_ms": 2.299999952316284
+          },
+          "paint": {
+            "n": 12,
+            "mean_ms": 0.19166664282480875,
+            "median_ms": 0.20000004768371582,
+            "p90_ms": 0.2999999523162842,
+            "max_ms": 0.2999999523162842
+          },
+          "full_json_size": {
+            "n": 12,
+            "mean_bytes": 391028.0,
+            "median_bytes": 391028.0,
+            "p90_bytes": 391028.0,
+            "max_bytes": 391028.0
+          },
+          "compact_json_size": {
+            "n": 12,
+            "mean_bytes": 513.0,
+            "median_bytes": 513.0,
+            "p90_bytes": 513.0,
+            "max_bytes": 513.0
+          },
+          "draw_counts": [
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408
+          ],
+          "json_string_utf8_size": {
+            "n": 12,
+            "mean_bytes": 391028.0,
+            "median_bytes": 391028.0,
+            "p90_bytes": 391028.0,
+            "max_bytes": 391028.0
+          },
+          "python_json_loads_wall": {
+            "n": 12,
+            "mean_s": 0.0034943833209884665,
+            "median_s": 0.003342999960295856,
+            "p90_s": 0.004379200050607324,
+            "max_s": 0.006646999856457114
+          },
+          "python_json_loads_cpu": {
+            "n": 12,
+            "mean_s": 0.0013020833333333333,
+            "median_s": 0.0,
+            "p90_s": 0.0,
+            "max_s": 0.015625
+          },
+          "evaluate_plus_json_loads_wall": {
+            "n": 12,
+            "mean_s": 0.0276556916651316,
+            "median_s": 0.026288799941539764,
+            "p90_s": 0.03089510020799935,
+            "max_s": 0.049644499784335494
+          }
+        }
+      }
+    },
+    {
+      "run": "B",
+      "runner_error_type": "UnknownPageStateError",
+      "fresh_free_preflight_completed": true,
+      "reader_pairs_checked": 12,
+      "reader_projection_matches_on_stable_pairs": 12,
+      "trace_pairs_checked": 12,
+      "trace_projection_matches_on_stable_pairs": 12,
+      "trace_string_deep_equal_n": 12,
+      "trace_string_deep_equal_total": 12,
+      "trace_unstable_pairs": 0,
+      "trace_evaluate_plus_json_loads_wall": {
+        "n": 12,
+        "mean_s": 0.024240850005298853,
+        "median_s": 0.024144900031387806,
+        "p90_s": 0.025562400231137872,
+        "max_s": 0.027386900270357728
+      },
+      "draw_count": 408,
+      "tile_trace_validation_reason": "valid",
+      "white_paint_valid": true,
+      "response_binding": {
+        "trace_validated": true,
+        "response_count_for_bound_source": 1,
+        "unique_response_matches_source": true,
+        "response_status": 200,
+        "request_is_exact_unredirected_image": true,
+        "content_type_is_jpeg": true,
+        "declared_length_bytes": 1951370,
+        "response_body_read": false
+      },
+      "source_body_call_count": 0,
+      "tile_replay_call_count": 0,
+      "saved_page_count": 0,
+      "trace_timing": {
+        "full": {
+          "wall": {
+            "n": 12,
+            "mean_s": 0.16690202503620336,
+            "median_s": 0.15725220006424934,
+            "p90_s": 0.18931660009548068,
+            "max_s": 0.2486947001889348
+          },
+          "cpu": {
+            "n": 12,
+            "mean_s": 0.07291666666666667,
+            "median_s": 0.0625,
+            "p90_s": 0.09375,
+            "max_s": 0.15625
+          },
+          "browser_exec": {
+            "n": 12,
+            "mean_ms": 0.3916666905085246,
+            "median_ms": 0.35000014305114746,
+            "p90_ms": 0.5,
+            "max_ms": 0.6999998092651367
+          },
+          "summary_exec": {
+            "n": 12,
+            "mean_ms": 1.3333333532015483,
+            "median_ms": 1.100000023841858,
+            "p90_ms": 2.200000047683716,
+            "max_ms": 2.299999952316284
+          },
+          "paint": {
+            "n": 12,
+            "mean_ms": 0.2416666547457377,
+            "median_ms": 0.25,
+            "p90_ms": 0.2999999523162842,
+            "max_ms": 0.2999999523162842
+          },
+          "full_json_size": {
+            "n": 12,
+            "mean_bytes": 390619.0,
+            "median_bytes": 390619.0,
+            "p90_bytes": 390619.0,
+            "max_bytes": 390619.0
+          },
+          "compact_json_size": {
+            "n": 12,
+            "mean_bytes": 513.0,
+            "median_bytes": 513.0,
+            "p90_bytes": 513.0,
+            "max_bytes": 513.0
+          },
+          "draw_counts": [
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408
+          ]
+        },
+        "compact": {
+          "wall": {
+            "n": 12,
+            "mean_s": 0.012080674971609065,
+            "median_s": 0.011910649947822094,
+            "p90_s": 0.01492119999602437,
+            "max_s": 0.01666789990849793
+          },
+          "cpu": {
+            "n": 12,
+            "mean_s": 0.00390625,
+            "median_s": 0.0,
+            "p90_s": 0.015625,
+            "max_s": 0.015625
+          },
+          "browser_exec": {
+            "n": 12,
+            "mean_ms": 0.36666669448216754,
+            "median_ms": 0.39999985694885254,
+            "p90_ms": 0.40000009536743164,
+            "max_ms": 0.5999999046325684
+          },
+          "summary_exec": {
+            "n": 12,
+            "mean_ms": 1.2916666467984517,
+            "median_ms": 1.3000000715255737,
+            "p90_ms": 1.5999999046325684,
+            "max_ms": 1.7999999523162842
+          },
+          "paint": {
+            "n": 12,
+            "mean_ms": 0.24166667461395264,
+            "median_ms": 0.20000004768371582,
+            "p90_ms": 0.3000001907348633,
+            "max_ms": 0.3000001907348633
+          },
+          "full_json_size": {
+            "n": 12,
+            "mean_bytes": 390619.0,
+            "median_bytes": 390619.0,
+            "p90_bytes": 390619.0,
+            "max_bytes": 390619.0
+          },
+          "compact_json_size": {
+            "n": 12,
+            "mean_bytes": 513.0,
+            "median_bytes": 513.0,
+            "p90_bytes": 513.0,
+            "max_bytes": 513.0
+          },
+          "draw_counts": [
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408
+          ]
+        },
+        "json_string": {
+          "wall": {
+            "n": 12,
+            "mean_s": 0.02127310833505665,
+            "median_s": 0.021027349983341992,
+            "p90_s": 0.02295180014334619,
+            "max_s": 0.023538000183179975
+          },
+          "cpu": {
+            "n": 12,
+            "mean_s": 0.006510416666666667,
+            "median_s": 0.0,
+            "p90_s": 0.015625,
+            "max_s": 0.015625
+          },
+          "browser_exec": {
+            "n": 12,
+            "mean_ms": 0.3083333969116211,
+            "median_ms": 0.2999999523162842,
+            "p90_ms": 0.5,
+            "max_ms": 0.6000001430511475
+          },
+          "summary_exec": {
+            "n": 12,
+            "mean_ms": 1.1416666706403096,
+            "median_ms": 1.100000023841858,
+            "p90_ms": 1.5,
+            "max_ms": 1.5999999046325684
+          },
+          "paint": {
+            "n": 12,
+            "mean_ms": 0.22500004371007284,
+            "median_ms": 0.20000004768371582,
+            "p90_ms": 0.2999999523162842,
+            "max_ms": 0.3000001907348633
+          },
+          "full_json_size": {
+            "n": 12,
+            "mean_bytes": 390619.0,
+            "median_bytes": 390619.0,
+            "p90_bytes": 390619.0,
+            "max_bytes": 390619.0
+          },
+          "compact_json_size": {
+            "n": 12,
+            "mean_bytes": 513.0,
+            "median_bytes": 513.0,
+            "p90_bytes": 513.0,
+            "max_bytes": 513.0
+          },
+          "draw_counts": [
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408,
+            408
+          ],
+          "json_string_utf8_size": {
+            "n": 12,
+            "mean_bytes": 390619.0,
+            "median_bytes": 390619.0,
+            "p90_bytes": 390619.0,
+            "max_bytes": 390619.0
+          },
+          "python_json_loads_wall": {
+            "n": 12,
+            "mean_s": 0.0029677416702422,
+            "median_s": 0.002856300096027553,
+            "p90_s": 0.003816199954599142,
+            "max_s": 0.0038489000871777534
+          },
+          "python_json_loads_cpu": {
+            "n": 12,
+            "mean_s": 0.0013020833333333333,
+            "median_s": 0.0,
+            "p90_s": 0.0,
+            "max_s": 0.015625
+          },
+          "evaluate_plus_json_loads_wall": {
+            "n": 12,
+            "mean_s": 0.024240850005298853,
+            "median_s": 0.024144900031387806,
+            "p90_s": 0.025562400231137872,
+            "max_s": 0.027386900270357728
+          }
+        }
+      }
+    }
+  ]
+}

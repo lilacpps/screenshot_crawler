@@ -325,6 +325,7 @@ async def test_crawl_disconnects_browser_before_packaging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    run_configs: list[object] = []
 
     class FakeAdapter:
         def get_output_metadata(self) -> dict[str, str]:
@@ -349,8 +350,8 @@ async def test_crawl_disconnects_browser_before_packaging(
             events.append("close_session")
 
     class FakeRunner:
-        def __init__(self, _config: object) -> None:
-            pass
+        def __init__(self, config: object) -> None:
+            run_configs.append(config)
 
         async def run(self, _page: object, _adapter: FakeAdapter) -> object:
             events.append("crawl")
@@ -372,15 +373,22 @@ async def test_crawl_disconnects_browser_before_packaging(
     monkeypatch.setattr(cli, "CrawlerRunner", FakeRunner)
     monkeypatch.setattr(cli, "package_crawl_output", fake_package)
 
+    crawler_config = tmp_path / "crawler.yaml"
+    crawler_config.write_text(
+        "sites:\n  piccoma:\n    page_turn_delay_ms: 200\n",
+        encoding="utf-8",
+    )
     args = _parser().parse_args(
         [
             "crawl",
             "--site",
-            "magapoke",
+            "piccoma",
             "--url",
-            "https://example.test/title/1/episode/2",
+            "https://piccoma.com/web/viewer/28600/1910027",
             "--output-dir",
             str(tmp_path / "crawl"),
+            "--crawler-config",
+            str(crawler_config),
             "--cdp-endpoint",
             "http://127.0.0.1:9222",
         ]
@@ -388,6 +396,8 @@ async def test_crawl_disconnects_browser_before_packaging(
     await cli._run_crawl(args)
 
     assert events == ["crawl", "close_page", "close_session", "package"]
+    assert run_configs[0].site == "piccoma"
+    assert run_configs[0].page_turn_delay_ms == 200
 
 
 def test_discover_parser_accepts_watchlist_catalog_and_mode() -> None:

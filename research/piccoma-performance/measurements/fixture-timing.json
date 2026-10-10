@@ -1,0 +1,1338 @@
+{
+  "totals": {
+    "pillow.load.unknown": {
+      "wall_s": 0.0002088993787765503,
+      "cpu_s": 0.0
+    },
+    "pillow.save.jpeg": {
+      "wall_s": 0.03863169997930527,
+      "cpu_s": 0.03125
+    },
+    "browser.Page.set_viewport_size": {
+      "wall_s": 0.0018504001200199127,
+      "cpu_s": 0.0
+    },
+    "browser.Page.add_init_script": {
+      "wall_s": 0.0022848998196423054,
+      "cpu_s": 0.0
+    },
+    "browser.Page.goto": {
+      "wall_s": 0.061835299944505095,
+      "cpu_s": 0.015625
+    },
+    "browser.Locator.wait_for": {
+      "wall_s": 1.5596936999354511,
+      "cpu_s": 0.015625
+    },
+    "browser.Locator.count": {
+      "wall_s": 0.026847699657082558,
+      "cpu_s": 0.0
+    },
+    "browser.Locator.inner_text": {
+      "wall_s": 0.0035074998158961535,
+      "cpu_s": 0.0
+    },
+    "browser.Locator.evaluate_all": {
+      "wall_s": 0.004533200059086084,
+      "cpu_s": 0.0
+    },
+    "browser.Page.wait_for_function": {
+      "wall_s": 0.041926899924874306,
+      "cpu_s": 0.0
+    },
+    "browser.Page.evaluate": {
+      "wall_s": 0.45427890005521476,
+      "cpu_s": 0.109375
+    },
+    "adapter.reader_snapshot": {
+      "wall_s": 0.17289090086705983,
+      "cpu_s": 0.03125
+    },
+    "browser.Page.wait_for_timeout": {
+      "wall_s": 0.22112999972887337,
+      "cpu_s": 0.015625
+    },
+    "browser.Locator.evaluate": {
+      "wall_s": 1.5667481999844313,
+      "cpu_s": 0.53125
+    },
+    "browser.js.paint_snapshot_dom_walk": {
+      "wall_s": 0.021099999904632565,
+      "cpu_s": 0.0
+    },
+    "browser.snapshot_evaluate": {
+      "wall_s": 1.4764405998867005,
+      "cpu_s": 0.515625
+    },
+    "native.snapshot_native_trace": {
+      "wall_s": 0.6071597002446651,
+      "cpu_s": 0.203125
+    },
+    "browser.response_body": {
+      "wall_s": 0.02704810001887381,
+      "cpu_s": 0.0
+    },
+    "image.source_jpeg_validation": {
+      "wall_s": 0.0322460001334548,
+      "cpu_s": 0.03125
+    },
+    "browser.js.jpeg_decode_ms": {
+      "wall_s": 0.018900000095367433,
+      "cpu_s": 0.0
+    },
+    "browser.js.draw_408_ms": {
+      "wall_s": 0.014400000095367432,
+      "cpu_s": 0.0
+    },
+    "browser.js.png_encode_ms": {
+      "wall_s": 0.041799999952316286,
+      "cpu_s": 0.0
+    },
+    "browser.replay_evaluate": {
+      "wall_s": 0.27937180013395846,
+      "cpu_s": 0.078125
+    },
+    "pillow.load.png": {
+      "wall_s": 9.729969315230846e-05,
+      "cpu_s": 0.0
+    },
+    "pillow.save.png": {
+      "wall_s": 0.017414200119674206,
+      "cpu_s": 0.015625
+    },
+    "image.png_decode_white_composite": {
+      "wall_s": 0.032978300005197525,
+      "cpu_s": 0.03125
+    },
+    "image.final_format_validation": {
+      "wall_s": 0.020413200138136744,
+      "cpu_s": 0.015625
+    },
+    "pillow.save.webp": {
+      "wall_s": 0.7022637000773102,
+      "cpu_s": 0.671875
+    },
+    "pillow.load.webp": {
+      "wall_s": 5.769939161837101e-05,
+      "cpu_s": 0.0
+    },
+    "image.webp_encode": {
+      "wall_s": 0.731063999934122,
+      "cpu_s": 0.703125
+    },
+    "image.webp_encode_or_fallback": {
+      "wall_s": 0.7416976999957114,
+      "cpu_s": 0.71875
+    },
+    "native.capture_total": {
+      "wall_s": 1.7695899000391364,
+      "cpu_s": 1.125
+    },
+    "native.validate_current": {
+      "wall_s": 0.22960130008868873,
+      "cpu_s": 0.0625
+    },
+    "browser.other_evaluate": {
+      "wall_s": 0.007312299916520715,
+      "cpu_s": 0.0
+    },
+    "capture.native_webp_gate": {
+      "wall_s": 0.0,
+      "cpu_s": 0.0
+    },
+    "adapter.capture_page_total": {
+      "wall_s": 2.762336199870333,
+      "cpu_s": 1.453125
+    }
+  },
+  "counts": {
+    "pillow.load.unknown": 26,
+    "pillow.save.jpeg": 1,
+    "browser.Page.set_viewport_size": 1,
+    "browser.Page.add_init_script": 1,
+    "browser.Page.goto": 2,
+    "browser.Locator.wait_for": 3,
+    "browser.Locator.count": 5,
+    "browser.Locator.inner_text": 1,
+    "browser.Locator.evaluate_all": 1,
+    "browser.Page.wait_for_function": 2,
+    "browser.Page.evaluate": 16,
+    "adapter.reader_snapshot": 14,
+    "browser.Page.wait_for_timeout": 2,
+    "browser.Locator.evaluate": 13,
+    "browser.js.paint_snapshot_dom_walk": 6,
+    "browser.snapshot_evaluate": 6,
+    "native.snapshot_native_trace": 2,
+    "browser.response_body": 1,
+    "image.source_jpeg_validation": 1,
+    "browser.js.jpeg_decode_ms": 1,
+    "browser.js.draw_408_ms": 1,
+    "browser.js.png_encode_ms": 1,
+    "browser.replay_evaluate": 1,
+    "pillow.load.png": 14,
+    "pillow.save.png": 1,
+    "image.png_decode_white_composite": 1,
+    "image.final_format_validation": 2,
+    "pillow.save.webp": 1,
+    "pillow.load.webp": 8,
+    "image.webp_encode": 1,
+    "image.webp_encode_or_fallback": 1,
+    "native.capture_total": 1,
+    "native.validate_current": 1,
+    "browser.other_evaluate": 1,
+    "capture.native_webp_gate": 1,
+    "adapter.capture_page_total": 1
+  },
+  "events": [
+    {
+      "stage": "process_start",
+      "start_s": 0.0,
+      "end_s": 0.0,
+      "rss_start_mb": 37.8203125,
+      "rss_peak_start_mb": 37.8203125,
+      "python": "3.14.6"
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 1.9127489000093192,
+      "end_s": 1.9127666999120265,
+      "wall_s": 1.7799902707338333e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 1.9318683000747114,
+      "end_s": 1.931879899930209,
+      "wall_s": 1.1599855497479439e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 1.9319209000095725,
+      "end_s": 1.9319229999091476,
+      "wall_s": 2.09989957511425e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.save.jpeg",
+      "start_s": 1.9140158998779953,
+      "end_s": 1.9526475998573005,
+      "wall_s": 0.03863169997930527,
+      "cpu_s": 0.03125,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.set_viewport_size",
+      "start_s": 1.955332299694419,
+      "end_s": 1.9571826998144388,
+      "wall_s": 0.0018504001200199127,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.add_init_script",
+      "start_s": 1.957286600023508,
+      "end_s": 1.9595714998431504,
+      "wall_s": 0.0022848998196423054,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.goto",
+      "start_s": 1.9608383998274803,
+      "end_s": 2.0093311998061836,
+      "wall_s": 0.04849279997870326,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.wait_for",
+      "start_s": 2.009402299998328,
+      "end_s": 2.051487499848008,
+      "wall_s": 0.042085199849680066,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.wait_for",
+      "start_s": 2.051531999837607,
+      "end_s": 2.0637077998835593,
+      "wall_s": 0.012175800045952201,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.count",
+      "start_s": 2.0637482998427004,
+      "end_s": 2.066664799815044,
+      "wall_s": 0.002916499972343445,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.inner_text",
+      "start_s": 2.066677500028163,
+      "end_s": 2.0701849998440593,
+      "wall_s": 0.0035074998158961535,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate_all",
+      "start_s": 2.070218299748376,
+      "end_s": 2.074751499807462,
+      "wall_s": 0.004533200059086084,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.goto",
+      "start_s": 2.0748170998413116,
+      "end_s": 2.0881595998071134,
+      "wall_s": 0.013342499965801835,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.wait_for_function",
+      "start_s": 2.088238399941474,
+      "end_s": 2.125280699925497,
+      "wall_s": 0.037042299984022975,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.count",
+      "start_s": 2.125299399951473,
+      "end_s": 2.140033399919048,
+      "wall_s": 0.014733999967575073,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.wait_for",
+      "start_s": 2.1400649999268353,
+      "end_s": 3.645497699966654,
+      "wall_s": 1.5054327000398189,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.count",
+      "start_s": 3.6455574999563396,
+      "end_s": 3.648684599902481,
+      "wall_s": 0.003127099946141243,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.count",
+      "start_s": 3.6487152001354843,
+      "end_s": 3.650935099925846,
+      "wall_s": 0.0022198997903615236,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.6509547997266054,
+      "end_s": 3.6645101998001337,
+      "wall_s": 0.01355540007352829,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.65094679989852,
+      "end_s": 3.664517499972135,
+      "wall_s": 0.013570700073614717,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.664548499742523,
+      "end_s": 3.669537899782881,
+      "wall_s": 0.004989400040358305,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.6645426000468433,
+      "end_s": 3.6695443999487907,
+      "wall_s": 0.005001799901947379,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.6695651998743415,
+      "end_s": 3.6735455999150872,
+      "wall_s": 0.003980400040745735,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.6695598997175694,
+      "end_s": 3.6735510998405516,
+      "wall_s": 0.0039912001229822636,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.6735712997615337,
+      "end_s": 3.677625799784437,
+      "wall_s": 0.004054500022903085,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.673566199839115,
+      "end_s": 3.6776314999442548,
+      "wall_s": 0.004065300105139613,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.wait_for_timeout",
+      "start_s": 3.6776779000647366,
+      "end_s": 3.7841042999643832,
+      "wall_s": 0.10642639989964664,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.7841195999644697,
+      "end_s": 3.79064659983851,
+      "wall_s": 0.006526999874040484,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.78411309979856,
+      "end_s": 3.7906521998811513,
+      "wall_s": 0.006539100082591176,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.wait_for_timeout",
+      "start_s": 3.790699000004679,
+      "end_s": 3.9054025998339057,
+      "wall_s": 0.11470359982922673,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.9054176998324692,
+      "end_s": 3.9525066998321563,
+      "wall_s": 0.047088999999687076,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.9054103000089526,
+      "end_s": 3.9525160999037325,
+      "wall_s": 0.04710579989477992,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.wait_for_function",
+      "start_s": 3.9526130999438465,
+      "end_s": 3.957497699884698,
+      "wall_s": 0.004884599940851331,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.9575916999019682,
+      "end_s": 3.962332099908963,
+      "wall_s": 0.004740400006994605,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.9575834998395294,
+      "end_s": 3.962340099969879,
+      "wall_s": 0.004756600130349398,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.962358199991286,
+      "end_s": 3.9676162998657674,
+      "wall_s": 0.005258099874481559,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.9623516998253763,
+      "end_s": 3.967624899931252,
+      "wall_s": 0.0052732001058757305,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.9677412998862565,
+      "end_s": 3.9720100997947156,
+      "wall_s": 0.0042687999084591866,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.9677354998420924,
+      "end_s": 3.972016599960625,
+      "wall_s": 0.004281100118532777,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 3.97208399977535,
+      "end_s": 4.03289489983581,
+      "wall_s": 0.06081090006045997,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 3.972076599719003,
+      "end_s": 4.0329041997902095,
+      "wall_s": 0.06082760007120669,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 4.032922200160101,
+      "end_s": 4.037618899950758,
+      "wall_s": 0.004696699790656567,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 4.032913699746132,
+      "end_s": 4.037628699792549,
+      "wall_s": 0.004715000046417117,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 4.037758299848065,
+      "end_s": 4.043128499994054,
+      "wall_s": 0.0053702001459896564,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 4.037750999676064,
+      "end_s": 4.043136099819094,
+      "wall_s": 0.005385100143030286,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.count",
+      "start_s": 4.04317139997147,
+      "end_s": 4.0470215999521315,
+      "wall_s": 0.003850199980661273,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 4.047113100066781,
+      "end_s": 4.468408799963072,
+      "wall_s": 0.4212956998962909,
+      "cpu_s": 0.109375,
+      "page_index": null
+    },
+    {
+      "stage": "browser.js.paint_snapshot_dom_walk",
+      "start_s": 4.448872099719941,
+      "end_s": 4.468472099862993,
+      "wall_s": 0.019600000143051147,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.snapshot_evaluate",
+      "start_s": 4.047040699981153,
+      "end_s": 4.468480299925432,
+      "wall_s": 0.4214395999442786,
+      "cpu_s": 0.109375,
+      "page_index": null
+    },
+    {
+      "stage": "native.snapshot_native_trace",
+      "start_s": 4.047031299909577,
+      "end_s": 4.468487299978733,
+      "wall_s": 0.4214560000691563,
+      "cpu_s": 0.109375,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 4.470357700018212,
+      "end_s": 4.490684499964118,
+      "wall_s": 0.020326799945905805,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 4.490747899981216,
+      "end_s": 4.754107699962333,
+      "wall_s": 0.26335979998111725,
+      "cpu_s": 0.09375,
+      "page_index": null
+    },
+    {
+      "stage": "browser.js.paint_snapshot_dom_walk",
+      "start_s": 4.7537483998276295,
+      "end_s": 4.754148399922997,
+      "wall_s": 0.00040000009536743164,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.snapshot_evaluate",
+      "start_s": 4.49070949992165,
+      "end_s": 4.754155599977821,
+      "wall_s": 0.2634461000561714,
+      "cpu_s": 0.09375,
+      "page_index": null
+    },
+    {
+      "stage": "browser.response_body",
+      "start_s": 4.760984199820086,
+      "end_s": 4.78803229983896,
+      "wall_s": 0.02704810001887381,
+      "cpu_s": 0.0,
+      "page_index": null,
+      "bytes": 184691
+    },
+    {
+      "stage": "image.source_jpeg_validation",
+      "start_s": 4.788068899651989,
+      "end_s": 4.820314899785444,
+      "wall_s": 0.0322460001334548,
+      "cpu_s": 0.03125,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 4.821240699850023,
+      "end_s": 5.1005110999103636,
+      "wall_s": 0.27927040006034076,
+      "cpu_s": 0.078125,
+      "page_index": null
+    },
+    {
+      "stage": "browser.js.jpeg_decode_ms",
+      "start_s": 5.081645099841058,
+      "end_s": 5.100545099936426,
+      "wall_s": 0.018900000095367433,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.js.draw_408_ms",
+      "start_s": 5.086152299895883,
+      "end_s": 5.10055229999125,
+      "wall_s": 0.014400000095367432,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.js.png_encode_ms",
+      "start_s": 5.0587566998396065,
+      "end_s": 5.100556699791923,
+      "wall_s": 0.041799999952316286,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.replay_evaluate",
+      "start_s": 4.821190999820828,
+      "end_s": 5.100562799954787,
+      "wall_s": 0.27937180013395846,
+      "cpu_s": 0.078125,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 5.100618799682707,
+      "end_s": 5.3120268997736275,
+      "wall_s": 0.21140810009092093,
+      "cpu_s": 0.09375,
+      "page_index": null
+    },
+    {
+      "stage": "browser.js.paint_snapshot_dom_walk",
+      "start_s": 5.311854700176045,
+      "end_s": 5.31205469998531,
+      "wall_s": 0.00019999980926513672,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.snapshot_evaluate",
+      "start_s": 5.100579699734226,
+      "end_s": 5.312058699782938,
+      "wall_s": 0.2114790000487119,
+      "cpu_s": 0.09375,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.315812699962407,
+      "end_s": 5.3158162999898195,
+      "wall_s": 3.600027412176132e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.318106699967757,
+      "end_s": 5.318121999967843,
+      "wall_s": 1.5300000086426735e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.318137699738145,
+      "end_s": 5.318140399875119,
+      "wall_s": 2.700136974453926e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.320399299962446,
+      "end_s": 5.320414199959487,
+      "wall_s": 1.4899997040629387e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.320425800047815,
+      "end_s": 5.320428299950436,
+      "wall_s": 2.499902620911598e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.327212499920279,
+      "end_s": 5.3272251999005675,
+      "wall_s": 1.2699980288743973e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.327239599777386,
+      "end_s": 5.3272414999082685,
+      "wall_s": 1.90013088285923e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.328038599807769,
+      "end_s": 5.328048399882391,
+      "wall_s": 9.800074622035027e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.329517599893734,
+      "end_s": 5.329521999927238,
+      "wall_s": 4.400033503770828e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.329585599945858,
+      "end_s": 5.329587699845433,
+      "wall_s": 2.09989957511425e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.save.png",
+      "start_s": 5.329490499803796,
+      "end_s": 5.346904699923471,
+      "wall_s": 0.017414200119674206,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "image.png_decode_white_composite",
+      "start_s": 5.3156123999506235,
+      "end_s": 5.348590699955821,
+      "wall_s": 0.032978300005197525,
+      "cpu_s": 0.03125,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.348855199990794,
+      "end_s": 5.34886009991169,
+      "wall_s": 4.899920895695686e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.352991499938071,
+      "end_s": 5.353005899814889,
+      "wall_s": 1.4399876818060875e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "image.final_format_validation",
+      "start_s": 5.348620899952948,
+      "end_s": 5.353402999928221,
+      "wall_s": 0.004782099975273013,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.35350799979642,
+      "end_s": 5.353509899927303,
+      "wall_s": 1.90013088285923e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.357428099960089,
+      "end_s": 5.357441799947992,
+      "wall_s": 1.3699987903237343e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.357458000071347,
+      "end_s": 5.357460499973968,
+      "wall_s": 2.499902620911598e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.358562499983236,
+      "end_s": 5.3585701999254525,
+      "wall_s": 7.699942216277122e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.358964099781588,
+      "end_s": 5.358965599909425,
+      "wall_s": 1.500127837061882e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.362798499874771,
+      "end_s": 5.362811399856582,
+      "wall_s": 1.2899981811642647e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 5.362828399986029,
+      "end_s": 5.3628333997912705,
+      "wall_s": 4.999805241823196e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.365307099884376,
+      "end_s": 5.365313799818978,
+      "wall_s": 6.6999346017837524e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.401895999908447,
+      "end_s": 5.401904099853709,
+      "wall_s": 8.09994526207447e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.402248199796304,
+      "end_s": 5.402260799892247,
+      "wall_s": 1.2600095942616463e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 5.422146499855444,
+      "end_s": 5.422155199805275,
+      "wall_s": 8.699949830770493e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.save.webp",
+      "start_s": 5.365287599852309,
+      "end_s": 6.067551299929619,
+      "wall_s": 0.7022637000773102,
+      "cpu_s": 0.671875,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.webp",
+      "start_s": 6.079003700055182,
+      "end_s": 6.07901079999283,
+      "wall_s": 7.0999376475811005e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.webp",
+      "start_s": 6.080419300124049,
+      "end_s": 6.080428499961272,
+      "wall_s": 9.19983722269535e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.webp",
+      "start_s": 6.08072239998728,
+      "end_s": 6.080727399792522,
+      "wall_s": 4.999805241823196e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.081746599869803,
+      "end_s": 6.081751199904829,
+      "wall_s": 4.600035026669502e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.085404599783942,
+      "end_s": 6.085418799892068,
+      "wall_s": 1.4200108125805855e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "image.webp_encode",
+      "start_s": 5.358861899934709,
+      "end_s": 6.089925899868831,
+      "wall_s": 0.731063999934122,
+      "cpu_s": 0.703125,
+      "page_index": null
+    },
+    {
+      "stage": "image.webp_encode_or_fallback",
+      "start_s": 5.348605599952862,
+      "end_s": 6.090303299948573,
+      "wall_s": 0.7416976999957114,
+      "cpu_s": 0.71875,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 6.0903710999991745,
+      "end_s": 6.256552599836141,
+      "wall_s": 0.1661814998369664,
+      "cpu_s": 0.0625,
+      "page_index": null
+    },
+    {
+      "stage": "browser.js.paint_snapshot_dom_walk",
+      "start_s": 6.255888799831271,
+      "end_s": 6.256588799878955,
+      "wall_s": 0.0007000000476837158,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.snapshot_evaluate",
+      "start_s": 6.090321599971503,
+      "end_s": 6.256592199904844,
+      "wall_s": 0.16627059993334115,
+      "cpu_s": 0.0625,
+      "page_index": null
+    },
+    {
+      "stage": "native.capture_total",
+      "start_s": 4.490701699862257,
+      "end_s": 6.260291599901393,
+      "wall_s": 1.7695899000391364,
+      "cpu_s": 1.125,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 6.260313200065866,
+      "end_s": 6.263904199935496,
+      "wall_s": 0.0035909998696297407,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 6.260308399796486,
+      "end_s": 6.2639092998579144,
+      "wall_s": 0.003600900061428547,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.webp",
+      "start_s": 6.277221099939197,
+      "end_s": 6.277228199876845,
+      "wall_s": 7.0999376475811005e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.webp",
+      "start_s": 6.278835999779403,
+      "end_s": 6.2788433998357505,
+      "wall_s": 7.400056347250938e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "image.final_format_validation",
+      "start_s": 6.264021499780938,
+      "end_s": 6.279652599943802,
+      "wall_s": 0.01563110016286373,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 6.279697599820793,
+      "end_s": 6.465331599814817,
+      "wall_s": 0.18563399999402463,
+      "cpu_s": 0.09375,
+      "page_index": null
+    },
+    {
+      "stage": "browser.js.paint_snapshot_dom_walk",
+      "start_s": 6.4652558000944556,
+      "end_s": 6.465355799999088,
+      "wall_s": 9.999990463256836e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.snapshot_evaluate",
+      "start_s": 6.279667099937797,
+      "end_s": 6.465359999798238,
+      "wall_s": 0.18569289986044168,
+      "cpu_s": 0.09375,
+      "page_index": null
+    },
+    {
+      "stage": "native.snapshot_native_trace",
+      "start_s": 6.279661499662325,
+      "end_s": 6.465365199837834,
+      "wall_s": 0.18570370017550886,
+      "cpu_s": 0.09375,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 6.468730199849233,
+      "end_s": 6.69677669997327,
+      "wall_s": 0.22804650012403727,
+      "cpu_s": 0.0625,
+      "page_index": null
+    },
+    {
+      "stage": "browser.js.paint_snapshot_dom_walk",
+      "start_s": 6.696690800059587,
+      "end_s": 6.696790799964219,
+      "wall_s": 9.999990463256836e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.snapshot_evaluate",
+      "start_s": 6.468681699829176,
+      "end_s": 6.696794099872932,
+      "wall_s": 0.22811240004375577,
+      "cpu_s": 0.0625,
+      "page_index": null
+    },
+    {
+      "stage": "native.validate_current",
+      "start_s": 6.46866189991124,
+      "end_s": 6.6982631999999285,
+      "wall_s": 0.22960130008868873,
+      "cpu_s": 0.0625,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 6.698295399779454,
+      "end_s": 6.720936999889091,
+      "wall_s": 0.022641600109636784,
+      "cpu_s": 0.015625,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 6.720967799890786,
+      "end_s": 6.728247499791905,
+      "wall_s": 0.0072796999011188745,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.other_evaluate",
+      "start_s": 6.720947399968281,
+      "end_s": 6.728259699884802,
+      "wall_s": 0.007312299916520715,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "capture.native_webp_gate",
+      "start_s": 6.730061499867588,
+      "end_s": 6.730061499867588,
+      "wall_s": 0.0,
+      "cpu_s": 0.0,
+      "page_index": null,
+      "passed": true,
+      "method": "native_tile_replay_lossless_webp",
+      "result_count": 1
+    },
+    {
+      "stage": "adapter.capture_page_total",
+      "start_s": 3.967733700061217,
+      "end_s": 6.73006989993155,
+      "wall_s": 2.762336199870333,
+      "cpu_s": 1.453125,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 6.7300937997642905,
+      "end_s": 6.745569299906492,
+      "wall_s": 0.015475500142201781,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 6.745584699790925,
+      "end_s": 6.749345599906519,
+      "wall_s": 0.003760900115594268,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "adapter.reader_snapshot",
+      "start_s": 6.7455777998548,
+      "end_s": 6.749355299863964,
+      "wall_s": 0.003777500009164214,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 6.749410399701446,
+      "end_s": 6.7594060997944325,
+      "wall_s": 0.009995700092986226,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 6.889909599907696,
+      "end_s": 6.8972628999035805,
+      "wall_s": 0.007353299995884299,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.webp",
+      "start_s": 6.910830399952829,
+      "end_s": 6.910838699899614,
+      "wall_s": 8.299946784973145e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.webp",
+      "start_s": 6.912478999933228,
+      "end_s": 6.912488999776542,
+      "wall_s": 9.999843314290047e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.webp",
+      "start_s": 6.912776099750772,
+      "end_s": 6.912779699778184,
+      "wall_s": 3.600027412176132e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 6.9138739998452365,
+      "end_s": 6.913876799866557,
+      "wall_s": 2.800021320581436e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 6.91906309989281,
+      "end_s": 6.919076799880713,
+      "wall_s": 1.3699987903237343e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.png",
+      "start_s": 6.919091599993408,
+      "end_s": 6.919093999778852,
+      "wall_s": 2.3997854441404343e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.921506499871612,
+      "end_s": 6.921523399883881,
+      "wall_s": 1.6900012269616127e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.921535300090909,
+      "end_s": 6.921537999995053,
+      "wall_s": 2.6999041438102722e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.928062899969518,
+      "end_s": 6.928078799974173,
+      "wall_s": 1.5900004655122757e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.9290036000311375,
+      "end_s": 6.929008699953556,
+      "wall_s": 5.09992241859436e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.930378299672157,
+      "end_s": 6.93038439983502,
+      "wall_s": 6.100162863731384e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.930405599996448,
+      "end_s": 6.930407699896023,
+      "wall_s": 2.09989957511425e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.930419400101528,
+      "end_s": 6.93042129999958,
+      "wall_s": 1.8998980522155762e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.930424300022423,
+      "end_s": 6.9304261999204755,
+      "wall_s": 1.8998980522155762e-06,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "pillow.load.unknown",
+      "start_s": 6.937234899960458,
+      "end_s": 6.937248799949884,
+      "wall_s": 1.3899989426136017e-05,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Page.evaluate",
+      "start_s": 6.938439599703997,
+      "end_s": 6.940755399875343,
+      "wall_s": 0.0023158001713454723,
+      "cpu_s": 0.0,
+      "page_index": null
+    },
+    {
+      "stage": "browser.Locator.evaluate",
+      "start_s": 6.940782600082457,
+      "end_s": 6.948532599955797,
+      "wall_s": 0.00774999987334013,
+      "cpu_s": 0.0,
+      "page_index": null
+    }
+  ],
+  "rss_final_mb": 79.37890625,
+  "rss_peak_mb": 130.0703125
+}

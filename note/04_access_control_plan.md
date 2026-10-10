@@ -7,6 +7,8 @@ Phase 6 verification evidence is maintained in `docs/PHASE6_VERIFICATION.md`.
 
 Authority: `docs/ACCESS_CONTROL_AND_PACING.md`.
 
+Piccoma Phase 07 configuration (2026-10-10): **Stage A/B IMPLEMENTED / INDEPENDENT REVIEW PASS**. The distributed root `crawler.yaml` contains `sites.piccoma.page_turn_delay_ms: 200`, with `inter_candidate_delay_ms: 3000` and the existing stop flags enabled. Existing loader/manual/Batch resolution and save→manifest→delay→advance placement are reused. The common missing-file/site/field fallback (1,000ms), other site values, AccessGuard flags, and shared Phase 1 contract are unchanged. The Piccoma-local JSON transport does not change the shared pacing/access-control contract. Stage C interleaved manual comparison, YAML 200ms manual/Batch paths, 24-page Batch END/ZIP/Catalog checks, and a fresh prepackage audit of all 24 manifest entries passed. Final Stage C Reviewer review passed with BLOCKING 0. See the [Phase 07 runbook](../runbooks/piccoma-free/07-performance/README.md), [live profile](../research/piccoma-performance/PHASE07_PROFILE.md), and [Tester report](../research/piccoma-performance/PHASE07_TESTER.md).
+
 This note records the adopted shared plan and the current Phase 1–6 implementation/verification state. Current implementation snapshots remain in each site's note and are synchronized when shared behavior affects that site.
 
 Phase 1 current state: root `crawler.yaml` is parsed outside Core into typed per-site settings with safe
