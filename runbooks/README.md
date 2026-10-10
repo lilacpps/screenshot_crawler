@@ -48,3 +48,6 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 
 - [Piccoma free-only Site Adapter](piccoma-free/README.md) — five-role autonomous
   discovery/capture/direct-batch/E2E implementation contract (planned).
+- [花とゆめ＋「無料」「今なら無料」Site Adapter](hanayume-free/README.md) —
+  five-phase Discovery → source-faithful Capture → direct Batch → independent E2E contract (planned).
+
