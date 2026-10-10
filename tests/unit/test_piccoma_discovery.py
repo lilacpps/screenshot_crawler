@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from screenshot_crawler.discovery import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.piccoma.discovery import (
     BINGE_FREE_MARKER,
     FREE_MARKER,
+    GRANTED_MARKER,
     POINT_MARKER,
     WAIT_FREE_MARKER,
     PiccomaEpisodeIdentity,
@@ -81,6 +84,14 @@ def test_piccoma_final_listing_url_parser_accepts_target_canonical_url() -> None
         ([POINT_MARKER, FREE_MARKER], "69", "unknown"),
         (["PCM-epList_status_unknown"], "¥0", "unknown"),
         ([], "¥0", "unknown"),
+        ([GRANTED_MARKER], "閲覧期限\n残り71時間", "quota"),
+        ([GRANTED_MARKER], "閲覧期限 残り1時間", "quota"),
+        ([GRANTED_MARKER], "閲覧期限 残り0時間", "unknown"),
+        ([GRANTED_MARKER], "閲覧期限 残り30分", "unknown"),
+        ([GRANTED_MARKER], "残り71時間", "unknown"),
+        ([WAIT_FREE_MARKER], "閲覧期限 残り71時間", "quota"),
+        ([GRANTED_MARKER, FREE_MARKER], "閲覧期限 残り71時間", "unknown"),
+        ([GRANTED_MARKER, POINT_MARKER], "閲覧期限 残り71時間", "unknown"),
     ],
 )
 def test_piccoma_access_requires_exact_free_marker_and_price(
@@ -134,6 +145,39 @@ def test_piccoma_full_listing_reverses_traversal_but_keeps_global_positions() ->
         f"https://piccoma.com/web/viewer/900/{episode_id}"
         for episode_id in ("104", "103", "102", "101")
     ]
+
+
+@pytest.mark.parametrize(
+    ("markers", "label", "hours"),
+    [
+        ([GRANTED_MARKER], "閲覧期限\n残り71時間", 70),
+        ([GRANTED_MARKER], "閲覧期限 残り2時間", 1),
+        ([GRANTED_MARKER], "閲覧期限 残り1時間", 0),
+        ([GRANTED_MARKER], "閲覧期限 残り0時間", None),
+        ([GRANTED_MARKER], "閲覧期限 残り30分", None),
+        ([WAIT_FREE_MARKER], "閲覧期限 残り71時間", None),
+        ([GRANTED_MARKER, FREE_MARKER], "閲覧期限 残り71時間", None),
+        ([FREE_MARKER], "¥0", None),
+    ],
+)
+def test_piccoma_manual_grant_requires_exact_badge_and_records_conservative_expiry(
+    markers: list[str], label: str, hours: int | None
+) -> None:
+    observed_at = datetime(2026, 10, 10, 4, tzinfo=UTC)
+    record, = _parse_listing_rows(
+        rows=[_row("101", markers=markers, label=label)],
+        product_id="900",
+        canonical_title="Fixture Work",
+        declared_count=1,
+        scope=None,
+        observed_at=observed_at,
+    )
+    assert record.source.access_granted_until == (
+        observed_at + timedelta(hours=hours) if hours is not None else None
+    )
+    assert record.source.access_checked_at == observed_at
+    assert record.source.access_granted_until_observed is True
+    assert record.source.free_until is None
 
 
 @pytest.mark.parametrize(

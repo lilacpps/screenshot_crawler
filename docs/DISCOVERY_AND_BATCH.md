@@ -1,5 +1,31 @@
 # Discovery / Catalog / Batch Design
 
+## Piccoma observed manual unlocks (2026-10-10)
+
+Piccoma Discovery records already active manual unlocks as `access_mode=quota`
+with the existing `access_granted_until` field, never as unconditional free.
+Evidence requires the sole `PCM-epList_status_waitfreeRead` marker and normalized
+`閲覧期限 残りN時間` text (positive whole hours, at most three digits). Since exact
+expiry/rounding is not exposed, the eligibility bound is observation start plus
+`N-1` hours. One-hour countdowns are not eligible; zero/minute/unknown forms
+establish no grant. All validated rows explicitly observe the grant field to
+clear stale grants, and record `access_checked_at`.
+
+Both full and incremental Piccoma Discovery refresh the entire requested scope:
+manual grants can change on old episodes beyond a known-row boundary. The
+existing site-specific incremental stop hook is used; incremental still does
+not reconcile unseen rows as unavailable. Item completion/artifacts are retained.
+
+Normal Piccoma Batch admits available free sources and available quota sources
+with a future observed grant as non-consuming `direct`. The adapter rechecks
+the unique row's current free/manual-grant evidence before entry. Only freshly
+verified manual grants may use the observed `/web/viewer/s/{product}/{episode}`
+redirect; matching composite identity and HTTP 200 are required, and the exact
+accepted URL must remain unchanged. Catalog and manifest source URLs remain
+canonical. Missing/expired grants do not trigger access acquisition. Automatic
+ticket/resource use and grant-only remain unsupported. No shared schema, Core,
+or Batch orchestration change is required.
+
 ## Z6 Zeblack site-native Work Ticket orchestration (2026-09-30)
 
 Zeblack keeps the broad Catalog classification: `POINT`,

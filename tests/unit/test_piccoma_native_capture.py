@@ -48,6 +48,8 @@ DRAW_STATE = {
 
 
 def _trace(width: int = 844) -> dict[str, object]:
+    columns = (width + 49) // 50
+    draw_count = columns * 24
     events: list[dict[str, object]] = [
         {
             "type": "getContext",
@@ -73,12 +75,12 @@ def _trace(width: int = 844) -> dict[str, object]:
         },
     ]
     for row in range(24):
-        for column in range(17):
+        for column in range(columns):
             destination_x = column * 50
             destination_y = row * 50
-            source_index = (row * 17 + column) * 37 % 408
-            source_x = (source_index % 17) * 50
-            source_y = (source_index // 17) * 50
+            source_index = (row * columns + column) * 37 % draw_count
+            source_x = (source_index % columns) * 50
+            source_y = (source_index // columns) * 50
             tile_width = min(50, width - destination_x)
             events.append(
                 {
@@ -117,7 +119,7 @@ def _trace(width: int = 844) -> dict[str, object]:
         "totalOverflow": False,
         "sourceOverflow": False,
         "unobservedAttributeMutation": False,
-        "generation": 411,
+        "generation": len(events),
         "retired": False,
         "retained": True,
         "hooksIntact": True,
@@ -339,14 +341,14 @@ def _jpeg(*, subsampling: int = 0, progressive: bool = False) -> bytes:
     return output.getvalue()
 
 
-@pytest.mark.parametrize("width", [842, 844])
+@pytest.mark.parametrize("width", [764, 842, 844])
 def test_validates_full_fractional_source_and_destination_grid(width: int) -> None:
     result = validate_tile_trace(_trace(width), expected_width=width, expected_height=1200)
 
     assert result.width == width
     assert result.height == 1200
     assert result.source_url == SOURCE_URL
-    assert len(result.draws) == 408
+    assert len(result.draws) == ((width + 49) // 50) * 24
     assert all(draw["args"][3] == 50.01 for draw in result.draws)
     assert result.draws[-1]["args"][6:] == [width % 50 or 50, 50]
 
@@ -368,14 +370,35 @@ def test_validates_full_fractional_source_and_destination_grid(width: int) -> No
         (lambda trace: trace["events"][3].update(sourceUrl="https://pcm.kakaocdn.net/dna/a/b/i123.jpg?token=x"), "path"),
         (lambda trace: trace["events"][3].update(overload=5), "overload"),
         (lambda trace: trace["events"][3].update(sourceComplete=False), "complete"),
+        (
+            lambda trace: trace["events"][4]["args"].__setitem__(
+                slice(0, 4), trace["events"][3]["args"][:4]
+            ),
+            "duplicate_source",
+        ),
+        (
+            lambda trace: trace["events"][4]["args"].__setitem__(
+                slice(4, 8), trace["events"][3]["args"][4:]
+            ),
+            "duplicate_destination",
+        ),
     ],
 )
-def test_rejects_trace_gaps_or_unobserved_generation_changes(change, reason: str) -> None:
-    trace = _trace()
+@pytest.mark.parametrize("width", [764, 844])
+def test_rejects_trace_gaps_or_unobserved_generation_changes(
+    change, reason: str, width: int
+) -> None:
+    trace = _trace(width)
     change(trace)
 
     with pytest.raises(NativeCaptureUnavailable):
-        validate_tile_trace(trace, expected_width=844, expected_height=1200)
+        validate_tile_trace(trace, expected_width=width, expected_height=1200)
+
+
+@pytest.mark.parametrize("width", [763, 765, 800])
+def test_unobserved_native_dimensions_remain_unsupported(width: int) -> None:
+    with pytest.raises(NativeCaptureUnavailable, match="target_canvas_identity_or_dimensions"):
+        validate_tile_trace(_trace(width), expected_width=width, expected_height=1200)
 
 
 @pytest.mark.parametrize(

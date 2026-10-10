@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
@@ -81,6 +81,11 @@ def _listing_html(*, status: str = "free") -> str:
         marker, label = "PCM-epList_status_free", "&#165;0"
     elif status == "quota":
         marker, label = "PCM-epList_status_waitfree", "&#165;0"
+    elif status in {"granted", "expiring_grant", "malformed_grant"}:
+        marker = "PCM-epList_status_waitfreeRead"
+        label = {"granted": "閲覧期限 残り71時間",
+                 "expiring_grant": "閲覧期限 残り1時間",
+                 "malformed_grant": "閲覧期限 残り0時間"}[status]
     else:
         marker, label = "PCM-epList_status_point", "5"
     return f"""<!doctype html><html><body>
@@ -246,39 +251,46 @@ def _synthetic_png() -> bytes:
     return output.getvalue()
 
 
-def _synthetic_tile_jpeg(*, page_salt: int = 0) -> bytes:
-    image = Image.new("RGB", (NATIVE_WIDTH, NATIVE_HEIGHT), "white")
+def _synthetic_tile_jpeg(*, page_salt: int = 0, width: int = NATIVE_WIDTH) -> bytes:
+    columns = (width + 49) // 50
+    image = Image.new("RGB", (width, NATIVE_HEIGHT), "white")
     draw = ImageDraw.Draw(image)
     for row in range(24):
-        for column in range(17):
+        for column in range(columns):
             left, top = column * 50, row * 50
-            width = min(50, NATIVE_WIDTH - left)
-            index = row * 17 + column
+            tile_width = min(50, width - left)
+            index = row * columns + column
             color = (
                 (index * 37 + page_salt * 23) % 256,
                 (index * 71 + page_salt * 41) % 256,
                 (index * 113 + page_salt * 67) % 256,
             )
-            draw.rectangle((left, top, left + width - 1, top + 49), fill=color)
+            draw.rectangle((left, top, left + tile_width - 1, top + 49), fill=color)
     output = BytesIO()
     image.save(output, format="JPEG", quality=95, subsampling=0)
     return output.getvalue()
 
 
 def _native_viewer_html(
-    *, extra_paint: bool = False, overlay_sibling: bool = False
+    *,
+    extra_paint: bool = False,
+    overlay_sibling: bool = False,
+    width: int = NATIVE_WIDTH,
+    left_offset: float = 0,
 ) -> str:
+    columns = (width + 49) // 50
+    draw_count = columns * 24
     extra = "ctx.clearRect(0, 0, 1, 1);" if extra_paint else ""
     overlay = '<div class="fixtureOverlay"></div>' if overlay_sibling else ""
     return f"""<!doctype html><html><head><style>
       html,body {{ margin:0; }}
-      #js_frame {{ position:relative; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; margin:0 auto; }}
+      #js_frame {{ position:relative; left:{left_offset}px; width:{width}px; height:{NATIVE_HEIGHT}px; margin:0 auto; }}
       #react_PageListApp {{ position:absolute; inset:0; }}
       .PCM-viewer2_pageWrapper {{ position:absolute; inset:0; display:none; }}
       .PCM-viewer2_pageWrapper.current {{ display:block; }}
-      .PCM-viewer2_canvasWrapper {{ position:absolute; inset:0; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; }}
-      .PCM-viewer2_zoomPageWrap {{ position:absolute; inset:0; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; background:rgb(255,255,255); }}
-      .PCM-viewer2_canvasWrapper canvas {{ display:block; width:{NATIVE_WIDTH}px; height:{NATIVE_HEIGHT}px; }}
+      .PCM-viewer2_canvasWrapper {{ position:absolute; inset:0; width:{width}px; height:{NATIVE_HEIGHT}px; }}
+      .PCM-viewer2_zoomPageWrap {{ position:absolute; inset:0; width:{width}px; height:{NATIVE_HEIGHT}px; background:rgb(255,255,255); }}
+      .PCM-viewer2_canvasWrapper canvas {{ display:block; width:{width}px; height:{NATIVE_HEIGHT}px; }}
       .fixtureOverlay {{ position:absolute; inset:0; z-index:2; background:rgb(255,0,0); }}
       #js_scrollTypeSing {{ position:fixed; left:0; top:0; width:10px; height:10px; }}
       #js_scrollTypeSing > div {{ display:none; }}
@@ -308,17 +320,17 @@ def _native_viewer_html(
         const canvas=document.querySelector('#p1 canvas');
         const wrapper=document.querySelector('#p1 .PCM-viewer2_canvasWrapper');
         const ctx=canvas.getContext('2d');
-        canvas.width={NATIVE_WIDTH}; canvas.height={NATIVE_HEIGHT};
+        canvas.width={width}; canvas.height={NATIVE_HEIGHT};
         const image=new Image();
         window.__piccomaFixtureImage=image;
         image.onload=()=>{{
           {extra}
-          for(let destination=0;destination<408;destination++){{
-            const source=(destination*37)%408;
-            const dc=destination%17, dr=Math.floor(destination/17);
-            const sc=source%17, sr=Math.floor(source/17);
+          for(let destination=0;destination<{draw_count};destination++){{
+            const source=(destination*37)%{draw_count};
+            const dc=destination%{columns}, dr=Math.floor(destination/{columns});
+            const sc=source%{columns}, sr=Math.floor(source/{columns});
             const dx=dc*50, dy=dr*50, sx=sc*50, sy=sr*50;
-            const dw=Math.min(50,{NATIVE_WIDTH}-dx), sw=Math.min(50,{NATIVE_WIDTH}-sx);
+            const dw=Math.min(50,{width}-dx), sw=Math.min(50,{width}-sx);
             ctx.drawImage(image,sx,sy,sw,50.01,dx,dy,dw,50);
           }}
           wrapper.classList.add('loaded');
@@ -421,8 +433,10 @@ async def _start_native_fixture(
     *,
     extra_paint: bool = False,
     overlay_sibling: bool = False,
+    width: int = NATIVE_WIDTH,
+    left_offset: float = 0,
 ) -> None:
-    body = _synthetic_tile_jpeg()
+    body = _synthetic_tile_jpeg(width=width)
 
     async def route_handler(route: object) -> None:
         request = route.request  # type: ignore[attr-defined]
@@ -436,7 +450,10 @@ async def _start_native_fixture(
             await route.fulfill(
                 status=200,
                 body=_native_viewer_html(
-                    extra_paint=extra_paint, overlay_sibling=overlay_sibling
+                    extra_paint=extra_paint,
+                    overlay_sibling=overlay_sibling,
+                    width=width,
+                    left_offset=left_offset,
                 ),
                 content_type="text/html; charset=utf-8",
             )  # type: ignore[attr-defined]
@@ -458,11 +475,15 @@ async def _override_device_pixel_ratio(page: Page, value: float) -> None:
     )
 
 
+@pytest.mark.parametrize(("width", "left_offset"), [(764, -1 / 3), (842, 0), (844, 0)])
 async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
-    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    width: int,
+    left_offset: float,
 ) -> None:
     adapter = PiccomaAdapter()
-    await _start_native_fixture(adapter, browser_page)
+    await _start_native_fixture(adapter, browser_page, width=width, left_offset=left_offset)
     assert await adapter.detect_state(browser_page) is PageState.CONTENT
     canvas = browser_page.locator("#p1 canvas")
     real_bounded_evaluate = piccoma_native_capture_module._bounded_evaluate
@@ -493,7 +514,7 @@ async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
 
     assert captures is not None and len(captures) == 1
     captured = captures[0]
-    assert (captured.width, captured.height) == (NATIVE_WIDTH, NATIVE_HEIGHT)
+    assert (captured.width, captured.height) == (width, NATIVE_HEIGHT)
     assert captured.mime_type == "image/webp"
     assert captured.file_extension == ".webp"
     metadata = await adapter.collect_debug_metadata(browser_page)
@@ -518,6 +539,13 @@ async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
     snapshot = await adapter._reader_snapshot(browser_page)
     guide_style = await adapter._hide_reading_guide(browser_page, snapshot)
     try:
+        if left_offset:
+            # Reproduce the failing Locator bounds, then align only the QA
+            # reference after production capture to compare native RGB pixels.
+            fractional = await canvas.screenshot(animations="disabled")
+            with Image.open(BytesIO(fractional)) as image:
+                assert image.size == (width + 1, NATIVE_HEIGHT)
+            await browser_page.locator("#js_frame").evaluate("node => node.style.left = '0px'")
         expected = await canvas.screenshot(animations="disabled")
     finally:
         await adapter._restore_reading_guide(browser_page, guide_style)
@@ -1281,25 +1309,27 @@ async def _route_fixture(
             await route.fulfill(status=200, body=_listing_html(status=status), content_type="text/html; charset=utf-8")  # type: ignore[attr-defined]
         elif path.endswith(f"/web/viewer/{PRODUCT_ID}/{EPISODE_ID}"):
             counts["viewer"] += 1
-            if viewer_redirect:
-                await route.fulfill(
-                    status=302,
-                    headers={"Location": viewer_redirect},
-                )  # type: ignore[attr-defined]
-            else:
-                await route.fulfill(
-                    status=200,
-                    body=(
-                        _native_batch_viewer_html()
-                        if native
-                        else _viewer_html(**(viewer_options or {}))
-                    ),
-                    content_type="text/html; charset=utf-8",
-                )  # type: ignore[attr-defined]
+            final_url = viewer_redirect or (
+                f"https://piccoma.com/web/viewer/s/{PRODUCT_ID}/{EPISODE_ID}"
+                if status == "granted" else None
+            )
+            body_html = _native_batch_viewer_html() if native else _viewer_html(**(viewer_options or {}))
+            if final_url:
+                # Model the final reader URL locally. Playwright does not
+                # route the follow-up of a fulfilled HTTP redirect, so a 302
+                # fixture would accidentally depend on the external site.
+                body_html = body_html.replace(
+                    "<head>",
+                    f"<head><script>history.replaceState(null,'',{json.dumps(final_url)});</script>",
+                    1,
+                )
+            await route.fulfill(
+                status=200, body=body_html, content_type="text/html; charset=utf-8"
+            )  # type: ignore[attr-defined]
         elif path.startswith("https://piccoma.com/web/viewer/"):
             await route.fulfill(
                 status=200,
-                body=_viewer_html(**(viewer_options or {})),
+                body=_native_batch_viewer_html() if native else _viewer_html(**(viewer_options or {})),
                 content_type="text/html; charset=utf-8",
             )  # type: ignore[attr-defined]
         else:
@@ -1413,7 +1443,7 @@ async def test_piccoma_near_miss_last_page_resume_prompt_fails_closed(
     assert await browser_page.evaluate("window.forbiddenClicks") == 0
 
 
-@pytest.mark.parametrize("status", ["quota", "paid"])
+@pytest.mark.parametrize("status", ["quota", "paid", "expiring_grant"])
 async def test_piccoma_stale_nonfree_listing_never_enters_viewer(
     browser_page: Page, status: str
 ) -> None:
@@ -1426,6 +1456,36 @@ async def test_piccoma_stale_nonfree_listing_never_enters_viewer(
         await adapter.initialize(browser_page)
     assert counts["viewer"] == 0
     assert browser_page.url == listing_url
+
+
+async def test_piccoma_malformed_grant_never_enters_viewer(browser_page: Page) -> None:
+    adapter = PiccomaAdapter()
+    counts = await _route_fixture(browser_page, status="malformed_grant")
+    listing_url = await _configure(adapter, browser_page, mode="direct")
+    await browser_page.goto(listing_url, wait_until="commit")
+    with pytest.raises(UnknownPageStateError, match="ambiguous"):
+        await adapter.initialize(browser_page)
+    assert counts["viewer"] == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "redirect"),
+    [
+        ("free", "https://piccoma.com/web/viewer/s/900/101"),
+        ("granted", "https://piccoma.com/web/viewer/s/900/999"),
+        ("granted", "https://piccoma.com/web/viewer/s/901/101"),
+        ("granted", "https://piccoma.com/web/viewer/s/900/101?extra=1"),
+    ],
+)
+async def test_piccoma_manual_grant_redirect_requires_fresh_grant_and_exact_identity(
+    browser_page: Page, status: str, redirect: str
+) -> None:
+    adapter = PiccomaAdapter()
+    await _route_fixture(browser_page, status=status, viewer_redirect=redirect)
+    listing_url = await _configure(adapter, browser_page, mode="direct")
+    await browser_page.goto(listing_url, wait_until="commit")
+    with pytest.raises(UnknownPageStateError, match="redirected outside"):
+        await adapter.initialize(browser_page)
 
 
 @pytest.mark.parametrize(
@@ -1698,7 +1758,7 @@ async def test_piccoma_work_key_is_opaque_and_quota_strategy_is_rejected(
         await adapter.configure_run(browser_page, "quota")
 
 
-def _piccoma_batch_setup(tmp_path: Path):
+def _piccoma_batch_setup(tmp_path: Path, *, manual_grant: bool = False):
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(
         WorkInput(
@@ -1717,7 +1777,8 @@ def _piccoma_batch_setup(tmp_path: Path):
             site="piccoma",
             external_id=f"{PRODUCT_ID}:{EPISODE_ID}",
             discovery_key=PRODUCT_ID,
-            access_mode="free",
+            access_mode="quota" if manual_grant else "free",
+            access_granted_until=(BATCH_NOW + timedelta(hours=70)) if manual_grant else None,
             available=True,
             display_position=3,
         ),
@@ -1737,13 +1798,16 @@ def _piccoma_batch_setup(tmp_path: Path):
     return catalog, work, item, source, target, policies, adapters, candidate
 
 
+@pytest.mark.parametrize("manual_grant", [False, True])
 async def test_piccoma_batch_executor_captures_manifest_packages_zip_and_completes(
-    browser_page: Page, tmp_path: Path
+    browser_page: Page, tmp_path: Path, manual_grant: bool
 ) -> None:
     catalog, work, item, source, target, policies, adapters, candidate = (
-        _piccoma_batch_setup(tmp_path)
+        _piccoma_batch_setup(tmp_path, manual_grant=manual_grant)
     )
-    route_counts = await _route_fixture(browser_page, native=True)
+    route_counts = await _route_fixture(
+        browser_page, native=True, status="granted" if manual_grant else "free"
+    )
     manifest_snapshots: list[dict[str, object]] = []
 
     def package_with_manifest_copy(output_dir, metadata, **kwargs):
@@ -1771,6 +1835,9 @@ async def test_piccoma_batch_executor_captures_manifest_packages_zip_and_complet
     assert route_counts["viewer"] == 1
     assert route_counts["jpeg"] == 3
     assert result.stop_reason == "end"
+    assert browser_page.url == (
+        f"https://piccoma.com/web/viewer/s/{PRODUCT_ID}/{EPISODE_ID}" if manual_grant else SOURCE_URL
+    )
     assert result.page_count == 3
     assert result.archive_path.is_file()
     assert len(manifest_snapshots) == 1
@@ -1820,22 +1887,22 @@ async def test_piccoma_batch_executor_captures_manifest_packages_zip_and_complet
     assert status["status"] == "completed"
     assert status["page_count"] == 3
     persisted_source = catalog.get_source(source.id)
-    assert persisted_source.access_mode == "free"
+    assert persisted_source.access_mode == ("quota" if manual_grant else "free")
     assert persisted_source.quota_started_at is None
-    assert persisted_source.access_granted_until is None
+    assert persisted_source.access_granted_until == source.access_granted_until
     assert catalog.get_quota_resource_state(
         work.id, site="piccoma", resource="work_ticket"
     ) is None
 
 
-@pytest.mark.parametrize("failure", ["stale_free", "wrong_id", "redirect"])
+@pytest.mark.parametrize("failure", ["stale_free", "stale_grant", "wrong_id", "redirect"])
 async def test_piccoma_batch_failures_never_package_complete_or_mutate_resources(
     browser_page: Page, tmp_path: Path, failure: str
 ) -> None:
     catalog, work, item, source, _target, policies, adapters, candidate = (
-        _piccoma_batch_setup(tmp_path)
+        _piccoma_batch_setup(tmp_path, manual_grant=failure == "stale_grant")
     )
-    if failure == "stale_free":
+    if failure in {"stale_free", "stale_grant"}:
         route_counts = await _route_fixture(browser_page, status="quota")
     elif failure == "redirect":
         route_counts = await _route_fixture(
@@ -1852,8 +1919,8 @@ async def test_piccoma_batch_failures_never_package_complete_or_mutate_resources
         runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
     )
 
-    if failure == "stale_free":
-        with pytest.raises(AccessResourceUnavailableError, match="no longer unconditionally free"):
+    if failure in {"stale_free", "stale_grant"}:
+        with pytest.raises(AccessResourceUnavailableError, match="no verified free access"):
             await executor.execute_candidate(
                 browser_page,
                 candidate,
@@ -1887,9 +1954,9 @@ async def test_piccoma_batch_failures_never_package_complete_or_mutate_resources
     assert catalog.get_item(item.id).status == "pending"
     assert catalog.list_artifacts(item_id=item.id) == []
     source_after = catalog.get_source(source.id)
-    assert source_after.access_mode == "free"
+    assert source_after.access_mode == source.access_mode
     assert source_after.quota_started_at is None
-    assert source_after.access_granted_until is None
+    assert source_after.access_granted_until == source.access_granted_until
     assert catalog.get_quota_resource_state(
         work.id, site="piccoma", resource="work_ticket"
     ) is None

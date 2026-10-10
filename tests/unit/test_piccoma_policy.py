@@ -65,7 +65,8 @@ def test_piccoma_policy_allows_only_available_free_as_direct() -> None:
 @pytest.mark.parametrize(
     ("mode", "grant_until"),
     [
-        ("quota", (NOW + timedelta(hours=1)).isoformat()),
+        ("quota", None),
+        ("quota", NOW.isoformat()),
         ("quota", (NOW - timedelta(hours=1)).isoformat()),
         ("paid", (NOW + timedelta(hours=1)).isoformat()),
         ("owned", None),
@@ -75,7 +76,7 @@ def test_piccoma_policy_allows_only_available_free_as_direct() -> None:
         ("unrecognized", None),
     ],
 )
-def test_piccoma_policy_rejects_every_nonfree_mode_and_grant_variant(
+def test_piccoma_policy_rejects_unsupported_modes_and_inactive_grants(
     mode: str, grant_until: str | None
 ) -> None:
     decision = PiccomaSitePolicy().evaluate(
@@ -88,6 +89,27 @@ def test_piccoma_policy_rejects_every_nonfree_mode_and_grant_variant(
     assert decision.access_strategy is None
     assert decision.consumes_quota is False
     assert decision.quota_resource is None
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_piccoma_policy_allows_only_available_active_manual_grant(available: bool) -> None:
+    decision = PiccomaSitePolicy().evaluate(
+        _source("quota", available=available,
+                access_granted_until=(NOW + timedelta(hours=1)).isoformat()),
+        now=NOW, quota_available=0,
+    )
+    assert decision.eligible is available
+    assert decision.access_strategy == ("direct" if available else None)
+    assert decision.consumes_quota is False
+    assert decision.quota_resource is None
+
+
+@pytest.mark.parametrize("value", ["bad", "2026-10-10T12:00:00"])
+def test_piccoma_policy_rejects_invalid_grant_timestamp(value: str) -> None:
+    with pytest.raises(SitePolicyError):
+        PiccomaSitePolicy().evaluate(
+            _source("quota", access_granted_until=value), now=NOW, quota_available=0
+        )
 
 
 def test_piccoma_policy_rejects_unavailable_free_and_exposes_no_resource_paths() -> None:
@@ -106,7 +128,7 @@ def test_piccoma_policy_rejects_unavailable_free_and_exposes_no_resource_paths()
         policy.validate_grant_only_resource("work_ticket")
 
 
-def test_piccoma_planner_keeps_only_free_available_and_catalog_positions(
+def test_piccoma_planner_keeps_free_and_active_grants_with_catalog_positions(
     tmp_path: Path,
 ) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
@@ -126,6 +148,8 @@ def test_piccoma_planner_keeps_only_free_available_and_catalog_positions(
         ("900:105", "paid", True, 428, None),
         ("900:106", "owned", True, 427, None),
         ("900:107", "unknown", True, 426, None),
+        ("900:108", "quota", True, 425, NOW.isoformat()),
+        ("900:109", "quota", True, 424, None),
     ]
     for index, (external_id, mode, available, position, grant_until) in enumerate(rows):
         item = catalog.create_item(
@@ -156,13 +180,17 @@ def test_piccoma_planner_keeps_only_free_available_and_catalog_positions(
     assert [candidate.external_id for candidate in plan.candidates] == [
         "900:101",
         "900:102",
+        "900:104",
     ]
-    assert [candidate.artifact_prefix for candidate in plan.candidates] == ["432", "431"]
+    assert [candidate.artifact_prefix for candidate in plan.candidates] == ["432", "431", "429"]
     assert [candidate.access_strategy for candidate in plan.candidates] == [
         "direct",
         "direct",
+        "direct",
     ]
-    assert all(candidate.reason == "free" for candidate in plan.candidates)
+    assert [candidate.reason for candidate in plan.candidates] == [
+        "free", "free", "active_manual_grant"
+    ]
     assert all(candidate.consumes_quota is False for candidate in plan.candidates)
     assert all(candidate.quota_resource is None for candidate in plan.candidates)
     assert all(candidate.metadata == {
@@ -175,6 +203,7 @@ def test_piccoma_planner_keeps_only_free_available_and_catalog_positions(
         "unavailable",
         "unsupported_access_mode",
         "unknown",
+        "no_active_manual_grant",
     }
 
 

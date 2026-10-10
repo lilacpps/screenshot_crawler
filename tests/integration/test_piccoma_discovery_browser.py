@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
 from screenshot_crawler.site_adapters.piccoma import PiccomaDiscoveryAdapter
+from screenshot_crawler.site_policies import PiccomaSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -23,6 +26,7 @@ def _listing_html(
     free_wrapper_marker: str | None = None,
     first_marker: str = "PCM-epList_status_free",
     first_label: str = "¥0",
+    extra_known_rows: bool = False,
 ) -> str:
     rows = (
         ("101", "第1話 Alpha", first_marker, first_label),
@@ -35,6 +39,9 @@ def _listing_html(
             "公開終了",
         ),
     )
+    if extra_known_rows:
+        rows += tuple((str(n), f"Chapter {n}", "PCM-epList_status_other", "公開終了")
+                      for n in (105, 106))
     cards = "\n".join(
         f"""<a href="#" data-user_access="require" data-product_id="{foreign_last_product_id if index == 3 and foreign_last_product_id else product_id}" data-episode_id="{episode_id}">
           <div class="PCM-epList_ep">
@@ -189,24 +196,58 @@ async def test_piccoma_full_rediscovery_updates_access_state_and_preserves_compl
         assert catalog.get_item(item_id).status == "completed"
 
 
-async def test_piccoma_incremental_uses_latest_first_generic_discovery_order(
+async def test_piccoma_incremental_refreshes_old_manual_grants_and_clears_stale_grants(
     browser_page, tmp_path: Path
 ) -> None:
-    await _install_listing(browser_page, _listing_html())
+    current_html = {"body": _listing_html(declared_count=6, extra_known_rows=True)}
+    await _install_listing(browser_page, lambda: current_html["body"])
     catalog = CatalogService(tmp_path / "catalog.sqlite")
+    service = DiscoveryService(catalog, _registry())
 
-    result = await DiscoveryService(catalog, _registry()).discover(
-        browser_page, _target(), "incremental"
+    await service.discover(browser_page, _target(), "full")
+    policies = SitePolicyRegistry()
+    policies.register("piccoma", PiccomaSitePolicy)
+    # The old row lies beyond the generic five-known-record boundary.
+    current_html["body"] = _listing_html(
+        first_marker="PCM-epList_status_waitfreeRead",
+        first_label="閲覧期限\n残り71時間",
+        declared_count=6, extra_known_rows=True,
     )
+    result = await service.discover(browser_page, _target(), "incremental")
 
     assert result.complete is None
     assert result.stopped_reason == "exhausted"
+    assert result.observed_count == 6
     assert [source.external_id for source in catalog.list_sources(site="piccoma")] == [
+        "900:106",
+        "900:105",
         "900:104",
         "900:103",
         "900:102",
         "900:101",
     ]
+    source = catalog.list_sources(site="piccoma")[-1]
+    assert source.access_mode == "quota"
+    assert source.access_granted_until is not None
+    assert datetime.fromisoformat(source.access_granted_until) == (
+        datetime.fromisoformat(source.access_checked_at) + timedelta(hours=70)
+    )
+    plan = BatchPlanner(catalog, policies).plan(
+        site="piccoma", now=datetime.fromisoformat(source.access_checked_at)
+    )
+    assert [candidate.external_id for candidate in plan.candidates] == ["900:101"]
+    assert plan.candidates[0].access_strategy == "direct"
+    assert plan.candidates[0].consumes_quota is False
+    assert catalog.get_item(source.item_id).status == "pending"
+    catalog.mark_item_completed(source.item_id)
+    current_html["body"] = _listing_html(
+        first_marker="PCM-epList_status_waitfree", first_label="",
+        declared_count=6, extra_known_rows=True,
+    )
+    refreshed = await service.discover(browser_page, _target(), "incremental")
+    assert refreshed.observed_count == 6
+    assert catalog.get_source(source.id).access_granted_until is None
+    assert catalog.get_item(source.item_id).status == "completed"
 
 
 async def test_piccoma_bounded_full_preserves_complete_list_positions(
@@ -261,14 +302,14 @@ async def test_piccoma_cross_product_redirect_fails_before_catalog_writes(
     browser_page, tmp_path: Path
 ) -> None:
     async def redirect(route) -> None:
-        if route.request.url.endswith("/web/product/900/episodes"):
-            await route.fulfill(
-                status=302,
-                headers={"Location": "https://piccoma.com/web/product/901/episodes"},
-            )
-            return
+        # Expose the foreign final URL without following a 302 outside routing.
+        html = _listing_html(product_id="901").replace(
+            "<head>",
+            "<head><script>history.replaceState(null,'','/web/product/901/episodes');</script>",
+            1,
+        )
         await route.fulfill(
-            body=_listing_html(product_id="901"),
+            body=html,
             content_type="text/html; charset=utf-8",
         )
 

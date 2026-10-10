@@ -1,4 +1,4 @@
-"""Free-only Piccoma viewer adapter, bound to a freshly checked source."""
+"""Piccoma direct viewer entry, bound to freshly checked access evidence."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import math
 import re
 import time
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -30,6 +31,7 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
     classify_piccoma_access,
     parse_piccoma_listing_url,
     parse_piccoma_viewer_url,
+    piccoma_manual_grant_until,
 )
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
     NativeCaptureUnavailable,
@@ -131,7 +133,7 @@ def _png_dimensions(data: bytes) -> tuple[int, int] | None:
 
 
 class PiccomaAdapter(SiteAdapter):
-    """Capture only exact-free episodes through the observed horizontal reader."""
+    """Capture exact-free or manually unlocked episodes through the horizontal reader."""
 
     page_change_timeout_ms = PAGE_CHANGE_TIMEOUT_MS
     _reader_snapshot_js = r"""() => {
@@ -246,6 +248,7 @@ class PiccomaAdapter(SiteAdapter):
     def __init__(self) -> None:
         self._access_strategy: AccessStrategy = "direct"
         self._source_identity: PiccomaEpisodeIdentity | None = None
+        self._viewer_url: str | None = None
         self._configured_external_id: str | None = None
         self._work_key: str | None = None
         self._title: str | None = None
@@ -355,10 +358,11 @@ class PiccomaAdapter(SiteAdapter):
         del page
         if access_strategy not in {"auto", "direct"}:
             raise UnsupportedAccessStrategyError(
-                "Piccoma supports only auto/direct for freshly verified free episodes"
+                "Piccoma supports only auto/direct for freshly verified free or unlocked episodes"
             )
         self._access_strategy = access_strategy
         self._source_identity = None
+        self._viewer_url = None
         self._title = None
         self._page_count = None
         self._expected_page_id = None
@@ -400,12 +404,13 @@ class PiccomaAdapter(SiteAdapter):
             raise UnknownPageStateError("Piccoma listing redirected outside the target product")
         await page.locator("#js_contentBody").wait_for(state="visible", timeout=15_000)
         await page.locator(LISTING_SELECTOR).wait_for(state="visible", timeout=15_000)
-        access_mode, title = await self._current_listing_access(page, identity)
-        if access_mode in {"paid", "quota"}:
+        access_mode, title, grant_until = await self._current_listing_access(page, identity)
+        active_grant = grant_until is not None and grant_until > datetime.now(UTC)
+        if access_mode in {"paid", "quota"} and not active_grant:
             raise AccessResourceUnavailableError(
-                "Piccoma target is no longer unconditionally free"
+                "Piccoma target has no verified free access or active manual unlock"
             )
-        if access_mode != "free":
+        if access_mode != "free" and not (access_mode == "quota" and active_grant):
             raise UnknownPageStateError("Piccoma target access state is ambiguous")
         self._title = title
 
@@ -416,10 +421,21 @@ class PiccomaAdapter(SiteAdapter):
             wait_until="domcontentloaded",
             timeout=15_000,
         )
-        if parse_piccoma_viewer_url(page.url) != identity:
+        final_identity = parse_piccoma_viewer_url(page.url)
+        if final_identity is None and active_grant:
+            # The live manually unlocked reader redirects to /viewer/s/.
+            # Keep Catalog/source URLs canonical and allow this route only
+            # after fresh manual-grant evidence for the same composite ID.
+            parsed = urlparse(page.url)
+            if parsed.path.startswith("/web/viewer/s/"):
+                final_identity = parse_piccoma_viewer_url(
+                    parsed._replace(path=parsed.path.replace("/viewer/s/", "/viewer/", 1)).geturl()
+                )
+        if final_identity != identity:
             raise UnknownPageStateError("Piccoma viewer redirected outside the target episode")
         if response is None or response.status != 200:
             raise UnknownPageStateError("Piccoma viewer did not return HTTP 200")
+        self._viewer_url = page.url
         await page.wait_for_function(
             """() => !!document.querySelector('#react_ViewerApp') &&
               (!!document.querySelector('.jconfirm-open.PCM-pcmConfirm') ||
@@ -444,7 +460,8 @@ class PiccomaAdapter(SiteAdapter):
 
     async def _current_listing_access(
         self, page: Page, identity: PiccomaEpisodeIdentity
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, datetime | None]:
+        observed_at = datetime.now(UTC)
         title_locator = page.locator("#js_contentBody .PCM-headTitle_name")
         if await title_locator.count() != 1:
             raise UnknownPageStateError("Piccoma product title is missing or ambiguous")
@@ -472,9 +489,12 @@ class PiccomaAdapter(SiteAdapter):
             raise UnknownPageStateError("Piccoma target is absent or duplicated in its listing")
         row = matches[0]
         if row.get("statusCount") != 1:
-            return "unknown", title
+            return "unknown", title, None
         access_mode = classify_piccoma_access(row.get("markers", []), row.get("label", ""))
-        return access_mode, title
+        grant_until = piccoma_manual_grant_until(
+            row.get("markers", []), row.get("label", ""), observed_at
+        )
+        return access_mode, title, grant_until
 
     async def _dismiss_exact_resume_prompt(self, page: Page) -> None:
         dialogs = page.locator(RESUME_DIALOG_SELECTOR)
@@ -777,7 +797,7 @@ class PiccomaAdapter(SiteAdapter):
         await self.initialize(page)
 
     async def detect_state(self, page: Page) -> PageState:
-        if self._source_identity is None or parse_piccoma_viewer_url(page.url) != self._source_identity:
+        if not self._matches_viewer_url(page):
             return PageState.UNKNOWN
         snapshot = await self._reader_snapshot(page)
         try:
@@ -997,7 +1017,7 @@ class PiccomaAdapter(SiteAdapter):
         self._validate_reader_mode(after)
         after_row = self._page_row(after, current)
         if (
-            parse_piccoma_viewer_url(page.url) != self._require_identity()
+            not self._matches_viewer_url(page)
             or after.get("activeIds") != [current]
             or after_row.get("canvasCount") != 1
             or after_row.get("loadedCount") != 1
@@ -1094,7 +1114,7 @@ class PiccomaAdapter(SiteAdapter):
         )
 
     async def get_content_context(self, page: Page) -> ContentContext:
-        if parse_piccoma_viewer_url(page.url) != self._require_identity():
+        if not self._matches_viewer_url(page):
             raise UnknownPageStateError("Piccoma content context left the requested viewer")
         identity = self._require_identity()
         return ContentContext(
@@ -1149,7 +1169,7 @@ class PiccomaAdapter(SiteAdapter):
         expected = self._advance_from + 1
         if expected <= self._page_count:
             await self._wait_for_body(page, expected)
-            if parse_piccoma_viewer_url(page.url) != self._require_identity():
+            if not self._matches_viewer_url(page):
                 raise UnknownPageStateError("Piccoma page transition changed the viewer URL")
             self._expected_page_id = f"p{expected}"
             self._advance_from = None
@@ -1157,10 +1177,17 @@ class PiccomaAdapter(SiteAdapter):
         if self._advance_from != self._page_count:
             raise UnknownPageStateError("Piccoma END was requested before the final body page")
         await self._wait_for_end(page)
-        if parse_piccoma_viewer_url(page.url) != self._require_identity():
+        if not self._matches_viewer_url(page):
             raise UnknownPageStateError("Piccoma END transition changed the viewer URL")
         self._expected_page_id = "last"
         self._terminal = True
+
+    def _matches_viewer_url(self, page: Page) -> bool:
+        return (
+            self._source_identity is not None
+            and self._viewer_url is not None
+            and page.url == self._viewer_url
+        )
 
     def _require_identity(self) -> PiccomaEpisodeIdentity:
         if self._source_identity is None:

@@ -31,6 +31,8 @@ MAX_REPLAY_MS = 10_000
 RESPONSE_WAIT_SECONDS = 1.5
 _SOURCE_HOST = "pcm.kakaocdn.net"
 _SOURCE_PATH = re.compile(r"^/dna/[^/?#]+/[^/?#]+/[^/?#]+/i[^/?#]+\.jpg$")
+# Only live-observed 1200px-high tile grids; unknown dimensions stay on fallback.
+_OBSERVED_TILE_COLUMNS = {764: 16, 842: 17, 844: 17}
 _ALLOWED_CONTEXT_ATTRIBUTES = frozenset(
     {"alpha", "colorSpace", "colorType", "desynchronized", "toneMapping", "willReadFrequently"}
 )
@@ -911,7 +913,7 @@ async def _read_native_snapshot(page: Page, canvas: Any) -> dict[str, Any] | Non
 def validate_tile_trace(
     trace: dict[str, Any] | None, *, expected_width: int, expected_height: int
 ) -> ValidatedTrace:
-    """Accept only the complete observed 408-image draw graph for one page."""
+    """Accept only a complete live-observed 384/408-image draw graph."""
 
     if (
         not isinstance(trace, dict)
@@ -925,7 +927,7 @@ def validate_tile_trace(
     if (
         trace.get("connected") is not True
         or trace.get("dimensions") != [expected_width, expected_height]
-        or expected_width not in {842, 844}
+        or expected_width not in _OBSERVED_TILE_COLUMNS
         or expected_height != 1200
         or trace.get("retained") is not True
     ):
@@ -933,7 +935,9 @@ def validate_tile_trace(
     events = trace.get("events")
     if not isinstance(events, list) or not 1 <= len(events) <= MAX_TARGET_EVENTS:
         raise NativeCaptureUnavailable("target_trace_incomplete")
-    if len(events) != 411:
+    columns = _OBSERVED_TILE_COLUMNS[expected_width]
+    expected_draw_count = columns * 24
+    if len(events) != expected_draw_count + 3:
         raise NativeCaptureUnavailable("unsupported_target_operation_count")
     creation = events[0]
     if (
@@ -979,7 +983,7 @@ def validate_tile_trace(
     expected_destinations: set[tuple[int, int, int, int]] = set()
     for row in range(24):
         sy = row * 50
-        for column in range(17):
+        for column in range(columns):
             sx = column * 50
             expected_sources.add((sx, sy, min(50, expected_width - sx), 50.01))
             dx, dy = sx, sy
@@ -1065,10 +1069,10 @@ def validate_tile_trace(
         destination_grid.add(destination_rect)
         draws.append({"args": args, "state": event["state"]})
     if (
-        len(draws) != 408
-        or len(source_grid) != 408
+        len(draws) != expected_draw_count
+        or len(source_grid) != expected_draw_count
         or source_grid != expected_sources
-        or len(destination_grid) != 408
+        or len(destination_grid) != expected_draw_count
         or destination_grid != expected_destinations
         or source_url is None
         or source_id is None
@@ -1596,7 +1600,7 @@ async def capture_native_tile_replay(
             not isinstance(replayed, dict)
             or replayed.get("dimensions") != [expected_width, expected_height]
             or replayed.get("contextAttributes") != trace.context_attributes
-            or replayed.get("drawCount") != 408
+            or replayed.get("drawCount") != len(trace.draws)
         ):
             raise NativeCaptureUnavailable("replay_output_unverified")
         after = await _read_native_snapshot(page, canvas)

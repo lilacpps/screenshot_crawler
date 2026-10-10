@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 from playwright.async_api import Error as PlaywrightError
@@ -21,6 +22,8 @@ from screenshot_crawler.discovery.models import (
     DiscoveredRecord,
     DiscoveredSource,
     DiscoveryMode,
+    DiscoverySourceSnapshot,
+    IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
@@ -41,6 +44,8 @@ FREE_MARKER = "PCM-epList_status_free"
 WAIT_FREE_MARKER = "PCM-epList_status_waitfree"
 BINGE_FREE_MARKER = "PCM-epList_status_bingefree"
 POINT_MARKER = "PCM-epList_status_point"
+GRANTED_MARKER = "PCM-epList_status_waitfreeRead"
+_GRANTED_HOURS = re.compile(r"閲覧期限 残り([1-9][0-9]{0,2})時間")
 WAIT_MARKERS = frozenset({WAIT_FREE_MARKER, BINGE_FREE_MARKER})
 
 WAIT_TIMEOUT_MS = 15_000
@@ -65,6 +70,7 @@ class PiccomaListingRow:
     title: str
     access_mode: str
     dom_index: int
+    access_granted_until: datetime | None = None
 
 
 def parse_piccoma_viewer_url(url: str) -> PiccomaEpisodeIdentity | None:
@@ -132,6 +138,8 @@ def classify_piccoma_access(markers: Iterable[str], status_label: str) -> str:
     observed = {marker for marker in markers if marker.startswith("PCM-epList_status_")}
     label = " ".join(status_label.split())
 
+    if _manual_grant_hours(observed, label) is not None:
+        return "quota"
     if observed == {FREE_MARKER} and label == "¥0":
         return "free"
     if FREE_MARKER in observed:
@@ -143,6 +151,29 @@ def classify_piccoma_access(markers: Iterable[str], status_label: str) -> str:
     return "unknown"
 
 
+def _manual_grant_hours(markers: set[str], label: str) -> int | None:
+    """Require the observed personal rental badge, never just countdown text."""
+
+    if markers != {GRANTED_MARKER}:
+        return None
+    match = _GRANTED_HOURS.fullmatch(label)
+    return int(match[1]) if match is not None else None
+
+
+def piccoma_manual_grant_until(
+    markers: Iterable[str], status_label: str, observed_at: datetime
+) -> datetime | None:
+    """Bound the observed whole-hour rental countdown conservatively."""
+
+    hours = _manual_grant_hours(
+        {marker for marker in markers if marker.startswith("PCM-epList_status_")},
+        " ".join(status_label.split()),
+    )
+    # Rounding is not established. Reserve one hour rather than overstate
+    # the grant; a one-hour display does not establish a future lower bound.
+    return observed_at + timedelta(hours=hours - 1) if hours is not None else None
+
+
 def _parse_listing_rows(
     *,
     rows: Sequence[dict[str, object]],
@@ -150,6 +181,7 @@ def _parse_listing_rows(
     canonical_title: str,
     declared_count: int,
     scope: DiscoveryScope | None,
+    observed_at: datetime | None = None,
 ) -> list[DiscoveredRecord]:
     """Validate and buffer a complete DOM snapshot before any record is yielded."""
 
@@ -160,6 +192,7 @@ def _parse_listing_rows(
     if len(rows) != declared_count:
         raise DiscoveryIncompleteError("Piccoma episode listing count did not match its header")
 
+    observed_at = observed_at or datetime.now(UTC)
     parsed_rows: list[PiccomaListingRow] = []
     seen_ids: set[str] = set()
     for dom_index, raw in enumerate(rows):
@@ -194,6 +227,9 @@ def _parse_listing_rows(
                 title=" ".join(title.split()),
                 access_mode=classify_piccoma_access(status_markers, status_label),
                 dom_index=dom_index,
+                access_granted_until=piccoma_manual_grant_until(
+                    status_markers, status_label, observed_at
+                ),
             )
         )
 
@@ -217,6 +253,9 @@ def _parse_listing_rows(
                 access_mode=row.access_mode,
                 available=True,
                 global_display_position=row.dom_index + 1,
+                access_granted_until=row.access_granted_until,
+                access_granted_until_observed=True,
+                access_checked_at=observed_at,
             ),
         )
         for row in canonical_rows
@@ -262,6 +301,16 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
 
     supports_bounded_discovery = True
 
+    def incremental_stop_decision(
+        self,
+        record: DiscoveredRecord,
+        previous: DiscoverySourceSnapshot | None,
+        target: WatchlistTarget,
+    ) -> IncrementalStopDecision:
+        # Manual grants can change on any old episode. The entire validated
+        # listing is already buffered; a known newest streak is not a safe boundary.
+        return IncrementalStopDecision.CONTINUE
+
     async def iter_records(
         self,
         page: Page,
@@ -279,6 +328,7 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
             "https://piccoma.com/web/product/"
             f"{target_identity.product_id}/episodes"
         )
+        observed_at = datetime.now(UTC)
         try:
             response = await page.goto(
                 listing_url,
@@ -377,6 +427,7 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
             canonical_title=canonical_title,
             declared_count=declared_count,
             scope=target.discovery_scope,
+            observed_at=observed_at,
         )
         for record in records:
             yield record
