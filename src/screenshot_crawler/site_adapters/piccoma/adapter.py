@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
 from typing import Any
@@ -50,6 +51,9 @@ RESUME_DIALOG_SELECTOR = ".jconfirm-open.PCM-pcmConfirm"
 
 VIEWPORT_WIDTH = 1904
 VIEWPORT_HEIGHT = 1200
+# Chrome may expose a tiny floating-point DPR error around the observed 1x
+# viewport. Keep the supported mode narrowly centered on 1x.
+DEVICE_PIXEL_RATIO_TOLERANCE = 1e-7
 MAX_BODY_PAGES = 2_000
 MAX_NATIVE_RESPONSE_RECORDS = 512
 MAX_NATIVE_EPISODE_BYTES = 64_000_000
@@ -686,7 +690,7 @@ class PiccomaAdapter(SiteAdapter):
             or abs(float(rect[2]) - width) > 0.5
             or abs(float(rect[3]) - height) > 0.5
             or not canvas.get("inFrame")
-            or viewport != [VIEWPORT_WIDTH, VIEWPORT_HEIGHT, 1]
+            or not self._viewport_is_supported(viewport)
             or float(rect[0]) < 0
             or float(rect[1]) < 0
             or float(rect[0]) + float(rect[2]) > viewport[0] + 0.5
@@ -697,6 +701,22 @@ class PiccomaAdapter(SiteAdapter):
         ):
             raise UnknownPageStateError("Piccoma canvas does not match the supported viewport")
         return width, height
+
+    @staticmethod
+    def _viewport_is_supported(viewport: Any) -> bool:
+        if (
+            not isinstance(viewport, list)
+            or len(viewport) != 3
+            or viewport[0] != VIEWPORT_WIDTH
+            or viewport[1] != VIEWPORT_HEIGHT
+        ):
+            return False
+        device_pixel_ratio = viewport[2]
+        if type(device_pixel_ratio) not in {int, float}:
+            return False
+        if isinstance(device_pixel_ratio, float) and not math.isfinite(device_pixel_ratio):
+            return False
+        return abs(device_pixel_ratio - 1) <= DEVICE_PIXEL_RATIO_TOLERANCE
 
     @staticmethod
     def _canvas_renderability_is_valid(row: dict[str, Any]) -> bool:
@@ -845,7 +865,12 @@ class PiccomaAdapter(SiteAdapter):
         target = await self.get_capture_target(page)
         if await target.count() != 1:
             raise UnknownPageStateError("Piccoma active canvas is missing or duplicated")
-        target_baseline = await snapshot_native_trace(page, target)
+        try:
+            target_baseline = await snapshot_native_trace(page, target)
+        except NativeCaptureUnavailable as exc:
+            raise UnknownPageStateError(
+                "Piccoma active canvas generation cannot be monitored"
+            ) from exc
         target_baseline_signature = target_generation_signature(target_baseline)
         if target_baseline_signature is None:
             raise UnknownPageStateError("Piccoma active canvas generation cannot be monitored")
@@ -948,7 +973,12 @@ class PiccomaAdapter(SiteAdapter):
     async def _validate_target_generation_unchanged(
         self, page: Page, target: Locator, baseline: tuple[Any, ...]
     ) -> None:
-        current = await snapshot_native_trace(page, target)
+        try:
+            current = await snapshot_native_trace(page, target)
+        except NativeCaptureUnavailable as exc:
+            raise UnknownPageStateError(
+                "Piccoma active canvas changed during capture"
+            ) from exc
         if target_generation_signature(current) != baseline:
             raise UnknownPageStateError(
                 "Piccoma active canvas changed during capture"
@@ -979,6 +1009,7 @@ class PiccomaAdapter(SiteAdapter):
             or after_row.get("canvas", {}).get("renderability")
             != before_row.get("canvas", {}).get("renderability")
             or after.get("frameRect") != before.get("frameRect")
+            or after.get("viewport") != before.get("viewport")
         ):
             raise UnknownPageStateError("Piccoma page changed during capture")
         self._validate_canvas_geometry(after, after_row)

@@ -450,15 +450,46 @@ async def _start_native_fixture(
     await page.wait_for_function("document.querySelector('#p1 canvas')?.dataset.drawn === 'true'")
 
 
+async def _override_device_pixel_ratio(page: Page, value: float) -> None:
+    await page.evaluate(
+        "value => Object.defineProperty(window, 'devicePixelRatio', "
+        "{configurable: true, get: () => value})",
+        value,
+    )
+
+
 async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
-    browser_page: Page,
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     adapter = PiccomaAdapter()
     await _start_native_fixture(adapter, browser_page)
     assert await adapter.detect_state(browser_page) is PageState.CONTENT
     canvas = browser_page.locator("#p1 canvas")
+    real_bounded_evaluate = piccoma_native_capture_module._bounded_evaluate
+    snapshot_json_results: list[object] = []
+
+    async def record_snapshot_json(subject, expression, argument=None, *, timeout_seconds):
+        result = await real_bounded_evaluate(
+            subject, expression, argument, timeout_seconds=timeout_seconds
+        )
+        if expression == piccoma_native_capture_module.SNAPSHOT_JSON_EXPRESSION:
+            snapshot_json_results.append(result)
+        return result
+
+    monkeypatch.setattr(
+        piccoma_native_capture_module, "_bounded_evaluate", record_snapshot_json
+    )
 
     captures = await adapter.capture_page(browser_page)
+
+    assert len(snapshot_json_results) == 6
+    assert all(isinstance(result, str) for result in snapshot_json_results)
+    restored_snapshots = [
+        piccoma_native_capture_module._decode_native_snapshot_json(result)
+        for result in snapshot_json_results
+    ]
+    assert all(snapshot is not None for snapshot in restored_snapshots)
+    assert all(snapshot["events"][0]["options"] is None for snapshot in restored_snapshots)
 
     assert captures is not None and len(captures) == 1
     captured = captures[0]
@@ -505,6 +536,190 @@ async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
     assert await browser_page.locator("#js_scrollTypeSing").evaluate(
         "node => getComputedStyle(node).display"
     ) != "none"
+
+
+async def test_piccoma_snapshot_json_rejects_unsupported_javascript_values(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    canvas = browser_page.locator("#p1 canvas")
+
+    rejected = await canvas.evaluate(
+        """canvas => {
+          const api = window.__piccomaNativeCapture;
+          const original = api.snapshot;
+          const cases = ['undefined', 'nonfinite', 'negative_zero', 'function',
+            'symbol', 'bigint', 'sparse_array', 'custom_object', 'cycle', 'accessor',
+            'oversized'];
+          const results = [];
+          for (const kind of cases) {
+            api.snapshot = node => {
+              const value = original(node);
+              const event = value.events[0];
+              if (kind === 'undefined') event.options = undefined;
+              if (kind === 'nonfinite') event.options = NaN;
+              if (kind === 'negative_zero') event.options = -0;
+              if (kind === 'function') event.options = () => null;
+              if (kind === 'symbol') event.options = Symbol('unsupported');
+              if (kind === 'bigint') event.options = 1n;
+              if (kind === 'sparse_array') { const items = []; items.length = 1; event.options = items; }
+              if (kind === 'custom_object') event.options = new Date(0);
+              if (kind === 'cycle') { const item = {}; item.self = item; event.options = item; }
+              if (kind === 'oversized') event.transportProbe = 'x'.repeat(8388609);
+              if (kind === 'accessor') Object.defineProperty(event, 'options', {
+                enumerable: true, configurable: true, get: () => null
+              });
+              return value;
+            };
+            try { api.snapshotJson(canvas); results.push(false); }
+            catch (_) { results.push(true); }
+            finally { api.snapshot = original; }
+          }
+          return results;
+        }"""
+    )
+
+    assert rejected == [True] * 11
+
+
+async def test_piccoma_snapshot_json_preserves_escaped_and_unicode_strings(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    canvas = browser_page.locator("#p1 canvas")
+    raw = await canvas.evaluate(
+        r"""canvas => {
+          const api = window.__piccomaNativeCapture;
+          const original = api.snapshot;
+          api.snapshot = node => {
+            const value = original(node);
+            value.events[0].transportProbe = 'quote" slash\\ newline\n nul\u0000 emoji \u{1F600} lone \uD800';
+            return value;
+          };
+          try { return api.snapshotJson(canvas); }
+          finally { api.snapshot = original; }
+        }"""
+    )
+
+    restored = piccoma_native_capture_module._decode_native_snapshot_json(raw)
+
+    assert restored is not None
+    assert restored["events"][0]["transportProbe"] == 'quote" slash\\ newline\n nul\u0000 emoji 😀 lone \ud800'
+
+
+@pytest.mark.parametrize("corrupt_checkpoint", [3, 4, 5, 6])
+async def test_piccoma_snapshot_json_corruption_fails_closed_without_core_fallback(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    corrupt_checkpoint: int,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    real_bounded_evaluate = piccoma_native_capture_module._bounded_evaluate
+    snapshot_count = 0
+    fallback_called = False
+
+    async def corrupt_snapshot_checkpoint(subject, expression, argument=None, *, timeout_seconds):
+        nonlocal snapshot_count
+        result = await real_bounded_evaluate(
+            subject, expression, argument, timeout_seconds=timeout_seconds
+        )
+        if expression == piccoma_native_capture_module.SNAPSHOT_JSON_EXPRESSION:
+            snapshot_count += 1
+            if snapshot_count == corrupt_checkpoint:
+                return '{"id":"ambiguous-root"}'
+        return result
+
+    async def reject_core_fallback(_target):
+        nonlocal fallback_called
+        fallback_called = True
+        raise AssertionError("JSON transport failure must not reach Core fallback")
+
+    monkeypatch.setattr(
+        piccoma_native_capture_module, "_bounded_evaluate", corrupt_snapshot_checkpoint
+    )
+    monkeypatch.setattr(piccoma_adapter_module, "capture_locator", reject_core_fallback)
+
+    with pytest.raises(UnknownPageStateError):
+        await adapter.capture_page(browser_page)
+
+    assert snapshot_count == corrupt_checkpoint
+    assert fallback_called is False
+
+
+async def test_piccoma_snapshot_serializer_error_fails_closed_without_core_fallback(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    await browser_page.evaluate(
+        """() => {
+          const api = window.__piccomaNativeCapture;
+          const original = api.snapshot;
+          let snapshots = 0;
+          api.snapshot = node => {
+            const value = original(node);
+            snapshots++;
+            if (snapshots === 3) value.events[0].options = undefined;
+            return value;
+          };
+        }"""
+    )
+    fallback_called = False
+
+    async def reject_core_fallback(_target):
+        nonlocal fallback_called
+        fallback_called = True
+        raise AssertionError("Serializer failure must not reach Core fallback")
+
+    monkeypatch.setattr(piccoma_adapter_module, "capture_locator", reject_core_fallback)
+
+    with pytest.raises(UnknownPageStateError):
+        await adapter.capture_page(browser_page)
+
+    assert fallback_called is False
+
+
+async def test_piccoma_capture_accepts_unchanged_observed_near_one_dpr(
+    browser_page: Page,
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    observed_dpr = 1 + 2**-25
+    await _override_device_pixel_ratio(browser_page, observed_dpr)
+
+    assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    captures = await adapter.capture_page(browser_page)
+
+    assert captures is not None and len(captures) == 1
+    assert captures[0].mime_type == "image/webp"
+    metadata = await adapter.collect_debug_metadata(browser_page)
+    assert metadata["piccoma_capture"]["source_native"] is True
+
+
+async def test_piccoma_capture_rejects_dpr_change_within_supported_band(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page)
+    await _override_device_pixel_ratio(browser_page, 1 + 2**-25)
+    real_capture = piccoma_adapter_module.capture_native_tile_replay
+
+    async def change_dpr_after_materialization(*args, **kwargs):
+        result = await real_capture(*args, **kwargs)
+        await _override_device_pixel_ratio(browser_page, 1 - 2**-25)
+        return result
+
+    monkeypatch.setattr(
+        piccoma_adapter_module,
+        "capture_native_tile_replay",
+        change_dpr_after_materialization,
+    )
+    with pytest.raises(UnknownPageStateError, match="page changed during capture"):
+        await adapter.capture_page(browser_page)
 
 
 async def test_piccoma_native_capture_keeps_png_when_lossless_webp_encode_fails(

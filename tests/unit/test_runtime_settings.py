@@ -41,8 +41,37 @@ def test_runtime_settings_missing_file_uses_safe_defaults(tmp_path: Path) -> Non
     settings = load_runtime_settings(tmp_path / "missing.yaml")
 
     assert settings.for_site("unknown") == SiteRuntimeSettings()
-    assert settings.for_site("unknown").page_turn_delay_ms > 0
-    assert settings.for_site("unknown").inter_candidate_delay_ms > 0
+    assert settings.for_site("unknown").page_turn_delay_ms == DEFAULT_PAGE_TURN_DELAY_MS
+    assert settings.for_site("unknown").inter_candidate_delay_ms == (
+        DEFAULT_INTER_CANDIDATE_DELAY_MS
+    )
+
+
+def test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_other_sites() -> None:
+    settings = load_runtime_settings(Path(__file__).parents[2] / "crawler.yaml")
+
+    assert settings.for_site("piccoma") == SiteRuntimeSettings(
+        page_turn_delay_ms=200,
+        inter_candidate_delay_ms=3000,
+        stop_on_http_403=True,
+        stop_on_http_429=True,
+        stop_on_challenge=True,
+        stop_on_captcha=True,
+    )
+    assert settings.for_site("magapoke").page_turn_delay_ms == 1000
+    assert settings.for_site("magapoke").inter_candidate_delay_ms == 3000
+    assert settings.for_site("mangaone").page_turn_delay_ms == 1000
+    assert settings.for_site("bookwalker").page_turn_delay_ms == 200
+
+
+def test_piccoma_runtime_settings_allow_explicit_zero_override(tmp_path: Path) -> None:
+    path = tmp_path / "crawler.yaml"
+    path.write_text(
+        "sites:\n  piccoma:\n    page_turn_delay_ms: 0\n",
+        encoding="utf-8",
+    )
+
+    assert load_runtime_settings(path).for_site("piccoma").page_turn_delay_ms == 0
 
 
 @pytest.mark.parametrize(

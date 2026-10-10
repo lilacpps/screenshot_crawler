@@ -1,0 +1,37 @@
+{
+  "webp_supported": true,
+  "samples": 4,
+  "repeats_per_method_per_sample": 3,
+  "rows": [
+    {
+      "method": 0,
+      "n": 12,
+      "encode_median_s": 0.2077725500566885,
+      "encode_p90_s": 0.23835110012441874,
+      "verify_median_s": 0.023560550063848495,
+      "mean_bytes": 936699,
+      "all_single_vp8l": true,
+      "all_rgb_exact": true
+    },
+    {
+      "method": 3,
+      "n": 12,
+      "encode_median_s": 0.45665390009526163,
+      "encode_p90_s": 0.5700697000138462,
+      "verify_median_s": 0.018115849932655692,
+      "mean_bytes": 824211,
+      "all_single_vp8l": true,
+      "all_rgb_exact": true
+    },
+    {
+      "method": 6,
+      "n": 12,
+      "encode_median_s": 0.9712745500728488,
+      "encode_p90_s": 1.187061000149697,
+      "verify_median_s": 0.018518099910579622,
+      "mean_bytes": 819326.5,
+      "all_single_vp8l": true,
+      "all_rgb_exact": true
+    }
+  ]
+}

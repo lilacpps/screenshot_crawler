@@ -1,0 +1,17 @@
+{
+  "comparison": "baseline_20261010_full_profile_01_p1_to_p12_vs_zero_delay_runs",
+  "baseline_pages": 12,
+  "zero_delay_run_1_pages": 12,
+  "zero_delay_run_1_sha256_equal_count": 12,
+  "zero_delay_run_1_exact_RGB_comparison_required": false,
+  "zero_delay_run_2_pages": 12,
+  "zero_delay_run_2_sha256_equal_count": 12,
+  "zero_delay_run_2_exact_RGB_comparison_required": false,
+  "webp_method": 6,
+  "native_lossless_pages_only": true,
+  "fallback_pages_each_run": 0,
+  "terminal": "max_pages_exceeded_bounded_probe_not_end",
+  "end_verified": false,
+  "hashes_saved": false,
+  "image_bytes_saved_in_research": false
+}

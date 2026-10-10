@@ -34,6 +34,7 @@ from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import PackageResult
 from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.runtime_settings import SiteRuntimeSettings, load_runtime_settings
 from screenshot_crawler.site_adapters.base import AccessConsumption
 from screenshot_crawler.site_adapters.comicdays.adapter import ComicDaysAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
@@ -41,6 +42,7 @@ from screenshot_crawler.site_policies import (
     ComicDaysSitePolicy,
     MagapokeSitePolicy,
     MangaOneSitePolicy,
+    PiccomaSitePolicy,
     SitePolicyRegistry,
 )
 
@@ -109,11 +111,14 @@ def make_executor(
         tuple[dict[str, str], dict[str, str], str | None, str | None]
     ] | None = None,
     before_run: Callable[[RunConfig], None] | None = None,
+    runtime_settings: SiteRuntimeSettings | None = None,
 ) -> BatchExecutor:
     policies = SitePolicyRegistry()
     policies.register("mangaone", MangaOneSitePolicy)
+    policies.register("piccoma", PiccomaSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("mangaone", FakeAdapter)
+    adapters.register("piccoma", FakeAdapter)
 
     def runner_factory(config: RunConfig) -> FakeRunner:
         if configs is not None:
@@ -158,6 +163,7 @@ def make_executor(
         adapters,
         runner_factory=runner_factory,
         package_function=package_function,
+        runtime_settings=runtime_settings,
     )
 
 
@@ -167,6 +173,7 @@ def add_candidate(
     access_mode: str,
     consumes_quota: bool = False,
     access_granted_until: str | None = None,
+    site: str = "mangaone",
 ) -> BatchCandidate:
     work = service.create_work(WorkInput(work_key=f"work-{access_mode}", title="作品A"))
     item = service.create_item(
@@ -174,7 +181,7 @@ def add_candidate(
     )
     source = service.create_source(
         SourceInput(
-            site="mangaone",
+            site=site,
             external_id=f"chapter-{item.id}",
             access_mode=access_mode,
             available=True,
@@ -201,6 +208,34 @@ def add_candidate(
         access_mode=access_mode,
         consumes_quota=consumes_quota,
     )
+
+
+async def test_piccoma_batch_yaml_delay_reaches_runner_config(tmp_path: Path) -> None:
+    crawler_config = tmp_path / "crawler.yaml"
+    crawler_config.write_text(
+        "sites:\n  piccoma:\n    page_turn_delay_ms: 200\n",
+        encoding="utf-8",
+    )
+    runtime_settings = load_runtime_settings(crawler_config).for_site("piccoma")
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free", site="piccoma")
+    configs: list[RunConfig] = []
+    executor = make_executor(
+        service,
+        configs=configs,
+        runtime_settings=runtime_settings,
+    )
+
+    await executor.execute_candidate(
+        object(),
+        candidate,
+        output_root=tmp_path / "batch",
+        library_dir=tmp_path / "Books",
+        now=NOW,
+    )
+
+    assert configs[0].site == "piccoma"
+    assert configs[0].page_turn_delay_ms == 200
 
 
 @pytest.mark.parametrize("access_mode", ["free", "owned"])

@@ -1,0 +1,41 @@
+{
+  "browser_context": "isolated_uncredentialed",
+  "viewport": [
+    1904,
+    1200
+  ],
+  "device_scale_factor": 1,
+  "page_limit": 1,
+  "saved_pages": 0,
+  "terminal": "not_verified",
+  "error_type": "UnknownPageStateError",
+  "observed_geometry": {
+    "inner": [
+      1904,
+      1200
+    ],
+    "dpr": 1.0000000298023224,
+    "screen": [
+      1904,
+      1200
+    ],
+    "activePage": "p1",
+    "canvasPixels": [
+      844,
+      1200
+    ],
+    "canvasRect": [
+      529.6666870117188,
+      0,
+      844,
+      1200
+    ],
+    "frameRect": [
+      530,
+      0,
+      844,
+      1200
+    ]
+  },
+  "source_evidence": "output/piccoma_performance/20261010_geometry/run-1/run_result.json"
+}
