@@ -10,12 +10,72 @@ from screenshot_crawler.site_adapters.hanayume import adapter as hanayume_adapte
 from screenshot_crawler.site_adapters.hanayume.adapter import (
     HanayumeAdapter,
     _capture_output_format,
+    _episode_row_signature,
     _expected_active_slots,
+    _matches_episode_preview,
     _parse_series_ranges,
     _parse_viewer_observation,
+    _preview_is_unselected,
 )
 
 WORK_ID = "1f9f5b0d4cd52"
+
+
+def _episode_rows(ids: tuple[str, ...], label: str = "無料") -> list[dict[str, object]]:
+    return [
+        {
+            "linkCount": 1,
+            "href": f"https://hanayume.com/episodes/{episode_id}",
+            "labels": [label],
+        }
+        for episode_id in ids
+    ]
+
+
+def test_hanayume_preview_signature_is_exact_or_observed_reverse_only() -> None:
+    preview = _episode_row_signature(_episode_rows(("0000000000001", "0000000000002")))
+
+    assert _matches_episode_preview(preview, preview)
+    assert _matches_episode_preview(tuple(reversed(preview)), preview)
+    assert not _matches_episode_preview((), preview)
+    assert not _matches_episode_preview(preview[:1], preview)
+    assert not _matches_episode_preview(
+        _episode_row_signature(_episode_rows(("0000000000001", "0000000000002"), "今なら無料")),
+        preview,
+    )
+    three_row_preview = _episode_row_signature(
+        _episode_rows(("0000000000001", "0000000000002", "0000000000003"))
+    )
+    arbitrary_order = _episode_row_signature(
+        _episode_rows(("0000000000002", "0000000000001", "0000000000003"))
+    )
+    assert not _matches_episode_preview(arbitrary_order, three_row_preview)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [
+            {"linkCount": 1, "href": "https://hanayume.com/episodes/0000000000001?x=1", "labels": ["無料"]}
+        ],
+        _episode_rows(("0000000000001", "0000000000001")),
+        [{"linkCount": 2, "href": "https://hanayume.com/episodes/0000000000001", "labels": ["無料"]}],
+    ],
+    ids=("empty", "query-url", "duplicate-id", "duplicate-link"),
+)
+def test_hanayume_preview_signature_rejects_incomplete_or_ambiguous_rows(
+    rows: list[dict[str, object]],
+) -> None:
+    with pytest.raises(UnknownPageStateError):
+        _episode_row_signature(rows)
+
+
+def test_hanayume_preview_absence_requires_unselected_range_navigation() -> None:
+    assert _preview_is_unselected([{"current": False}, {"current": False}])
+    assert not _preview_is_unselected([{"current": False}, {"current": True}])
+    assert not _preview_is_unselected([])
+    assert not _preview_is_unselected([{"current": "false"}])
 
 
 def test_capture_output_format_reports_mixed_native_and_rendered_captures() -> None:

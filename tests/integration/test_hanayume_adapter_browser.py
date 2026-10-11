@@ -28,7 +28,7 @@ NOW_FREE_LABEL = "\u4eca\u306a\u3089\u7121\u6599"
 
 
 @pytest.fixture(autouse=True)
-def _short_hanayume_initialization_waits(monkeypatch) -> None:
+def _short_hanayume_initialization_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hanayume_discovery_module, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr(hanayume_adapter_module, "VIEWER_COUNTER_READY_TIMEOUT_MS", 400)
 
@@ -38,6 +38,10 @@ def _row(episode_id: str, label: str) -> str:
       <a class="series-eplist-item-link" href="/episodes/{episode_id}">episode</a>
       <span class="series-eplist-item-access-text">{label}</span>
     </div>"""
+
+
+def _preview_rows(count: int = 4) -> list[tuple[str, str]]:
+    return [(f"{index:013x}", FREE_LABEL) for index in range(700, 700 + count)]
 
 
 def _series_auth_header(*, authenticated: bool = False) -> str:
@@ -71,26 +75,41 @@ def _listing(*, selected: bool, target_label: str = "\u7121\u6599") -> str:
 
 def _episode_html(
     *, current: int = 3, label: str = "無料", user_target_label: str | None = None,
+    episode_rows: list[tuple[str, str]] | None = None,
+    episode_history_rows: list[tuple[str, str]] | None = None,
+    episode_unknown_rows: list[tuple[str, str]] | None = None,
     counter_delay_ms: int = 0, counter_never: bool = False,
     counter_duplicate: bool = False, counter_malformed: bool = False,
     top_empty: bool = False, top_empty_seek_locked: bool = False,
     top_empty_first_marker_missing: bool = False, top_empty_interior_empty: bool = False,
 ) -> str:
+    public_values = episode_rows if episode_rows is not None else [
+        (EPISODE_ID, label),
+        (NOW_ID, NOW_FREE_LABEL),
+    ]
+    history_values = episode_history_rows if episode_history_rows is not None else (
+        [(EPISODE_ID, user_target_label)] if user_target_label is not None else []
+    )
+    public_rows_html = "".join(_row(episode_id, row_label) for episode_id, row_label in public_values)
+    history_rows_html = "".join(_row(episode_id, row_label) for episode_id, row_label in history_values)
+    unknown_rows_html = "".join(
+        _row(episode_id, row_label) for episode_id, row_label in episode_unknown_rows or []
+    )
     return f"""<!doctype html><html><body>
       <header id="xHeader"><a class="ep-h-main-h-series" href="{WORK_URL}">work</a></header>
       <div class="ep-main series-safe-filter-target" data-e2e="pageEpisode">
       <div class="series mode-ep"><div class="series-eplist-wrap">
         <div class="series-eplist-main"><div class="series-eplist" data-e2e="epList">
           <div class="series-eplist-default has-store-item mode-last">
-          {_row(EPISODE_ID, label)}
-          {_row(NOW_ID, "今なら無料")}
+          {public_rows_html}
           </div></div>
         <div class="series-eplist mode-user" data-e2e="epListUser">
           <div class="series-eplist-default has-store-item mode-last">
-          {_row(EPISODE_ID, user_target_label) if user_target_label is not None else ""}
+          {history_rows_html}
           </div></div>
         </div>
       </div></div></div>
+      <div class="series-eplist-extra">{unknown_rows_html}</div>
       <div id="comici-viewer" class="-cv mode-spread">
         <div class="-cv-f-page-current"></div>
         {'<div class="-cv-f-page-current"></div>' if counter_duplicate else ''}
@@ -229,8 +248,10 @@ def _episode_html(
 async def _install_mock_site(
     page: Page,
     *,
+    authenticated: bool = False,
     return_episode_label: str = "無料",
     user_target_label: str | None = None,
+    episode_rows: list[tuple[str, str]] | None = None,
     resume_current: int = 3,
     counter_delay_ms: int = 0,
     counter_never: bool = False,
@@ -252,6 +273,7 @@ async def _install_mock_site(
             label = "無料" if visits == 1 else return_episode_label
             body = _episode_html(
                 current=resume_current, label=label, user_target_label=user_target_label,
+                episode_rows=episode_rows,
                 counter_delay_ms=counter_delay_ms, counter_never=counter_never,
                 counter_duplicate=counter_duplicate, counter_malformed=counter_malformed,
                 top_empty=top_empty, top_empty_seek_locked=top_empty_seek_locked,
@@ -261,7 +283,7 @@ async def _install_mock_site(
         elif path == f"/series/{WORK_ID}":
             body = (
                 "<!doctype html><html><body>"
-                + _series_auth_header()
+                + _series_auth_header(authenticated=authenticated)
                 + '<div class="series mode-series-top series-safe-filter-target" data-e2e="pageSeries">'
                 + '<div class="series-eplist-wrap">'
                 + f'<a class="series-sort-link" href="{WORK_URL}/1">1-2</a>'
@@ -326,6 +348,9 @@ async def _install_preflight_site(
     history_conflict: bool = False,
     entered_episode_id: str = EPISODE_ID,
     entered_episode_href: str | None = None,
+    episode_rows: list[tuple[str, str]] | None = None,
+    episode_history_rows: list[tuple[str, str]] | None = None,
+    episode_unknown_rows: list[tuple[str, str]] | None = None,
 ) -> dict[str, object]:
     state: dict[str, object] = {"episode_visits": 0, "paths": []}
     defaults = {
@@ -342,7 +367,11 @@ async def _install_preflight_site(
         if path == f"/episodes/{EPISODE_ID}":
             visits = int(state["episode_visits"]) + 1
             state["episode_visits"] = visits
-            body = _episode_html()
+            body = _episode_html(
+                episode_rows=episode_rows,
+                episode_history_rows=episode_history_rows,
+                episode_unknown_rows=episode_unknown_rows,
+            )
             if visits > 1 and entered_episode_href is not None:
                 body = body.replace(
                     f'href="/episodes/{EPISODE_ID}"',
@@ -789,7 +818,7 @@ async def test_hanayume_native_replay_exception_falls_back_to_rendered_spread(
 async def test_hanayume_native_proof_is_single_outstanding_and_release_keeps_preloads(
     browser_page: Page,
 ) -> None:
-    await _install_mock_site(browser_page)
+    await _install_mock_site(browser_page, authenticated=True)
     adapter = await _initialized(browser_page)
     await _body_state(browser_page, adapter)
     args = {
@@ -1091,6 +1120,96 @@ async def test_hanayume_local_viewer_rejects_work_mismatch_before_preflight(brow
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_configured_batch_target_skips_listing_preflight_and_captures_to_end(
+    browser_page: Page,
+) -> None:
+    state = await _install_mock_site(browser_page, episode_rows=_preview_rows())
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", "opaque-catalog-key")
+    url = adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    response = await browser_page.goto(url, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+
+    await adapter.initialize(browser_page)
+    assert state["paths"] == [f"/episodes/{EPISODE_ID}"]
+
+    captured: list[int] = []
+    for _ in range((adapter._body_total or 0) + 1):
+        state_now = await adapter.detect_state(browser_page)
+        if state_now is PageState.END:
+            break
+        assert state_now is PageState.CONTENT
+        identity = await adapter.get_content_identity(browser_page)
+        assert await adapter.capture_page(browser_page)
+        captured.extend(adapter._last_capture_slots)
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, identity)
+
+    assert await adapter.detect_state(browser_page) is PageState.END
+    assert captured == [1, 2, 3, 4]
+    assert state["paths"] == [f"/episodes/{EPISODE_ID}"]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_configured_batch_target_rejects_wrong_episode_identity(
+    browser_page: Page,
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{NOW_ID}", "opaque-catalog-key")
+
+    with pytest.raises(UnknownPageStateError, match="differs from the Catalog target"):
+        adapter.resolve_initial_navigation_url(EPISODE_URL)
+
+
+@pytest.mark.parametrize("cta", ["待つと無料で読む", "この話をレンタルする"])
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_configured_batch_stops_on_unreadable_cta_viewer_without_action(
+    browser_page: Page,
+    cta: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = await _install_mock_site(browser_page, resume_current=1)
+    adapter = HanayumeAdapter()
+    adapter.page_change_timeout_ms = 250
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", "opaque-catalog-key")
+    url = adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    response = await browser_page.goto(url, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    await browser_page.evaluate(
+        """label => {
+          window.__hanayumeCtaClicks = 0;
+          const cta = document.createElement('button');
+          cta.textContent = label;
+          cta.addEventListener('click', () => window.__hanayumeCtaClicks++);
+          document.body.append(cta);
+          const first = document.querySelector('#xCVPages > .-cv-page:nth-child(2)');
+          first.className = '-cv-page mode-loading';
+          first.replaceChildren();
+        }""",
+        cta,
+    )
+    capture_calls = 0
+    original_capture_page = adapter.capture_page
+
+    async def count_capture_calls(page: Page):
+        nonlocal capture_calls
+        capture_calls += 1
+        return await original_capture_page(page)
+
+    monkeypatch.setattr(adapter, "capture_page", count_capture_calls)
+
+    with pytest.raises(PageChangeTimeoutError, match="first body page"):
+        await adapter.initialize(browser_page)
+
+    assert state["paths"] == [f"/episodes/{EPISODE_ID}"]
+    assert capture_calls == 0
+    assert await browser_page.evaluate("window.__hanayumeCtaClicks") == 0
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_hanayume_local_viewer_rejects_free_label_change_after_preflight(browser_page: Page) -> None:
     state = await _install_mock_site(browser_page, return_episode_label="今なら無料")
     await _initialized_before_return(browser_page)
@@ -1173,6 +1292,131 @@ async def test_hanayume_fresh_preflight_exhausts_declared_ranges_only_when_targe
     ]
 
 
+@pytest.mark.parametrize("reverse", [False, True], ids=("same-order", "observed-reverse"))
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_absent_episode_row_accepts_exact_fresh_preview_and_reaches_end(
+    browser_page: Page,
+    reverse: bool,
+) -> None:
+    preview = _preview_rows()
+    episode_rows = list(reversed(preview)) if reverse else preview
+    range_one = [(EPISODE_ID, FREE_LABEL)] + [
+        (f"{index:013x}", FREE_LABEL) for index in range(200, 229)
+    ]
+    state = await _install_preflight_site(
+        browser_page,
+        bare_rows=preview,
+        range_rows={1: range_one},
+        episode_rows=episode_rows,
+        episode_history_rows=[],
+    )
+
+    adapter = await _initialized(browser_page)
+    assert state["paths"][-2:] == [f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    captured: list[int] = []
+    for _ in range((adapter._body_total or 0) + 1):
+        state_now = await adapter.detect_state(browser_page)
+        if state_now is PageState.END:
+            break
+        assert state_now is PageState.CONTENT
+        identity = await adapter.get_content_identity(browser_page)
+        result = await adapter.capture_page(browser_page)
+        assert result
+        captured.extend(adapter._last_capture_slots)
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, identity)
+    assert await adapter.detect_state(browser_page) is PageState.END
+    assert captured == [1, 2, 3, 4]
+
+
+@pytest.mark.parametrize(
+    ("episode_rows", "episode_history_rows", "message"),
+    [
+        (_preview_rows()[:-1] + [(f"{800:013x}", FREE_LABEL)], [], "exact fresh public preview"),
+        (_preview_rows()[:-1] + [(_preview_rows()[-1][0], NOW_FREE_LABEL)], [], "exact fresh public preview"),
+        ([_preview_rows()[0], _preview_rows()[2], _preview_rows()[1], _preview_rows()[3]], [], "exact fresh public preview"),
+        ([_preview_rows()[0], _preview_rows()[0]], [], "duplicate ID"),
+        (_preview_rows(), [(EPISODE_ID, FREE_LABEL)], "history listing"),
+        (_preview_rows(), [(_preview_rows()[0][0], NOW_FREE_LABEL)], "copies disagree"),
+    ],
+    ids=("id-drift", "label-drift", "arbitrary-order", "duplicate-row", "history-target-only", "history-conflict"),
+)
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_absent_episode_row_rejects_preview_drift_or_history_target(
+    browser_page: Page,
+    episode_rows: list[tuple[str, str]],
+    episode_history_rows: list[tuple[str, str]],
+    message: str,
+) -> None:
+    preview = _preview_rows()
+    range_one = [(EPISODE_ID, FREE_LABEL)] + [
+        (f"{index:013x}", FREE_LABEL) for index in range(200, 229)
+    ]
+    state = await _install_preflight_site(
+        browser_page,
+        bare_rows=preview,
+        range_rows={1: range_one},
+        episode_rows=episode_rows,
+        episode_history_rows=episode_history_rows,
+    )
+    adapter = HanayumeAdapter()
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+
+    with pytest.raises(UnknownPageStateError, match=message):
+        await adapter.initialize(browser_page)
+
+    assert state["paths"][-1] == f"/episodes/{EPISODE_ID}"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_absent_episode_row_rejects_non_target_copy_outside_known_roots(
+    browser_page: Page,
+) -> None:
+    range_one = [(EPISODE_ID, FREE_LABEL)] + [
+        (f"{index:013x}", FREE_LABEL) for index in range(200, 229)
+    ]
+    state = await _install_preflight_site(
+        browser_page,
+        bare_rows=_preview_rows(),
+        range_rows={1: range_one},
+        episode_rows=_preview_rows(),
+        episode_history_rows=[],
+        episode_unknown_rows=[(f"{900:013x}", FREE_LABEL)],
+    )
+    adapter = HanayumeAdapter()
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+
+    with pytest.raises(UnknownPageStateError, match="outside the known public/history roots"):
+        await adapter.initialize(browser_page)
+
+    assert state["paths"][-1] == f"/episodes/{EPISODE_ID}"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_empty_bare_listing_keeps_exact_numbered_target_path_available(
+    browser_page: Page,
+) -> None:
+    state = await _install_preflight_site(
+        browser_page,
+        bare_rows=[],
+        range_rows={1: [(EPISODE_ID, FREE_LABEL)] + [
+            (f"{index:013x}", FREE_LABEL) for index in range(200, 229)
+        ]},
+    )
+    await _initialized(browser_page)
+
+    assert state["paths"] == [
+        f"/episodes/{EPISODE_ID}",
+        f"/series/{WORK_ID}",
+        f"/series/{WORK_ID}/1",
+        f"/episodes/{EPISODE_ID}",
+    ]
+
+
 @pytest.mark.parametrize(
     ("bare_rows", "error"),
     [
@@ -1231,7 +1475,7 @@ async def test_hanayume_preflight_rejects_range_drift_before_searching_next_rang
 ) -> None:
     state = await _install_preflight_site(
         browser_page,
-        bare_rows=[],
+        bare_rows=_preview_rows(),
         range_rows={
             1: [(EPISODE_ID, FREE_LABEL)]
             + [(f"{index:013x}", FREE_LABEL) for index in range(200, 229)]
@@ -1259,16 +1503,16 @@ async def test_hanayume_preflight_rechecks_exact_episode_row_on_entry(browser_pa
     ]
     state = await _install_preflight_site(
         browser_page,
-        bare_rows=[],
+        bare_rows=_preview_rows(),
         range_rows={1: range_one},
-        entered_episode_id=NOW_ID,
+        episode_rows=[(NOW_ID, FREE_LABEL)],
     )
     adapter = HanayumeAdapter()
     adapter.resolve_initial_navigation_url(EPISODE_URL)
     response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
     assert response is not None and response.status == 200
 
-    with pytest.raises(UnknownPageStateError, match="current episode .*missing"):
+    with pytest.raises(UnknownPageStateError, match="absent outside the exact fresh public preview"):
         await adapter.initialize(browser_page)
 
     assert state["paths"][-1] == f"/episodes/{EPISODE_ID}"
@@ -1292,7 +1536,7 @@ async def test_hanayume_entry_recheck_rejects_noncanonical_target_like_episode_u
     ]
     state = await _install_preflight_site(
         browser_page,
-        bare_rows=[],
+        bare_rows=_preview_rows(),
         range_rows={1: range_one},
         entered_episode_href=entered_episode_href,
     )

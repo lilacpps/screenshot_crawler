@@ -1,21 +1,24 @@
 # Phase 04 — Free-only Site Policy / Batch integration
 
-Status: Direct-only Phase 04 integration and R3/R4/R5 corrections passed independent review. The final logged-in standard Batch E2E completed four authenticated/ordinary-free candidates with END and four verified ZIP artifacts; no quota or entitlement state changed. Final independent review PASS / BLOCKING 0.
+Status: Historical Phase 04 integration passed review. R9 source/tests review and both configured direct-Batch live artifact audits passed; final documentation review: PASS / BLOCKING 0. See the [progress log](../PROGRESS.md) for scope and evidence.
+
+**Historical contract notice:** This phase's original execution steps require a fresh current badge/auth preflight before every Batch attempt. That requirement is superseded for configured Batch by the user-approved direct-entry rule: current eligibility is the selected Catalog source's `available` and `access_mode=free`, while canonical episode/work identity, Viewer readiness, capture, and END remain required. Discovery and manual Viewer entry still require fresh listing/auth checks. See the [current runbook](../README.md) and [evidence/status log](../PROGRESS.md); the four-candidate E2E below is prior baseline evidence, not R9 live verification.
 次段階: [E2E](../05-e2e/README.md)。
 
 ## 目的
 既存Catalog/Planner/Executor/Runner/Packagerの標準経路で、現在 `access_mode=free` として
 確認されたsourceだけを**direct-only**実行対象にし、正常終了でのみZIPとcompleted Itemを作る。
-The original logged-out baseline kept `今なら無料` as `unknown`; current runs may include it only when the fresh same-work listing proves the positive authentication markers.
+Discovery and manual Viewer entry classify `今なら無料` as `free` only after fresh same-work authentication proof. Configured Batch uses the selected Catalog source's persisted `available` and `access_mode=free`; it does not recheck current badge/auth state.
 
-## 実装契約
+## Historical Phase 04 implementation contract (configured Batch superseded by R9)
+The requirements below describe the pre-R9 integration checkpoint. Current configured Batch follows the Catalog eligibility rule above and the R9 evidence in the [current runbook](../README.md); Discovery and manual entry retain fresh listing/auth checks.
+
 - 花とゆめ＋ Site Policy を最小限のregistryに追加。Catalog available=trueかつ
   access_mode=freeのcandidateだけをdirectへ。quota・paid・unknown・owned・
   grant・rental等は非対象。quota resource/消費/purchase/後続grant passを実装しない。
 - Plannerはnative順序とwork-global positionを尊重。既存的な重複取込/skip/completed処理を維持。
-- Execution前に対象site/作品/話のcanonical identityとfresh freeラベルを確認。
-  失効・矛盾・redirectはcapture/ZIP/完了更新なしでfail closed。何らかのgrant状態が
-  既にあることを理由に非freeを昇格させない。
+- The pre-R9 execution gate rechecked the current label/auth before entry; configured R9 Batch supersedes that gate with persisted Catalog eligibility. All Batch runs still require canonical site/work/episode identity, strict readable Viewer state, capture proof, and END; mismatches fail closed without Artifact or completion. Grant state never promotes a nonfree Catalog source.
+- The controls `待つと無料で読む` and `この話をレンタルする` are out of scope; no wait/rental, login, purchase, ticket, quota, or entry-button action is performed.
 - 標準BatchはCrawl Requestを作り、元のsource URL/metadata/読書順を壊さない。
   source-native jpeg/webp/pngとfallback PNG・lossless WebPをManifestが正しく識別し、
   完了したmemberだけPackagerがまとめる。
@@ -36,7 +39,7 @@ The original logged-out baseline kept `今なら無料` as `unknown`; current ru
 
 ## Historical Phase 04 local result (before the R3 authenticated-label extension)
 
-The registered Hanayume policy admits only available `access_mode=free` with `direct`; the original logged-out Catalog kept `今なら無料` unknown. Current Discovery may classify that exact label as free only after the fresh same-work auth proof described above, and runtime repeats that preflight. The site adapter accepts Batch `direct` as the same no-entry free path used by manual `auto`; quota strategies and resources remain unsupported. A synthetic browser pipeline completed Discovery -> Catalog -> Planner -> Executor -> Runner -> Manifest/ZIP -> Catalog completed using the explicit test Catalog and temporary output paths. It also verified stale free-to-`今なら無料`, wrong work, UNKNOWN state, premature END, max-pages, and package failure remain pending with no Artifact. The run observed global-position archive prefix and skipped the completed Item on replanning. Independent Phase 04 review passed BLOCKING 0 (42 tests, 0 skipped; Ruff PASS). No live Batch was part of the Phase 04 local gate; the Phase 05 section below documents the later independent live run.
+The registered Hanayume policy admits only available `access_mode=free` with `direct`; the original logged-out Catalog kept `今なら無料` unknown. Discovery may classify that exact label as free only after fresh same-work auth proof. Configured Batch accepts persisted Catalog eligibility and does not repeat that preflight; manual Viewer entry retains fresh checks. Quota strategies and resources remain unsupported. A synthetic browser pipeline completed Discovery -> Catalog -> Planner -> Executor -> Runner -> Manifest/ZIP -> Catalog completed using the explicit test Catalog and temporary output paths. It also verified stale free-to-`今なら無料`, wrong work, UNKNOWN state, premature END, max-pages, and package failure remain pending with no Artifact. The run observed global-position archive prefix and skipped the completed Item on replanning. Independent Phase 04 review passed BLOCKING 0 (42 tests, 0 skipped; Ruff PASS). No live Batch was part of the Phase 04 local gate; R9 live evidence is recorded in Phase 05 and PROGRESS.
 
 ## Exit
 normal Batch/isolated Catalogで既存統合テストを通過し、Reviewer BLOCKING 0。

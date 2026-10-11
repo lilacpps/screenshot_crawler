@@ -397,6 +397,82 @@ def _validate_history_row_copies(public_rows: object, history_rows: object) -> N
                 )
 
 
+def _episode_row_signature(
+    rows: object, *, allow_empty: bool = False
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Validate a bounded observed episode list and retain its ordered raw signature."""
+
+    if not isinstance(rows, list) or len(rows) > RANGE_PAGE_SIZE or (not rows and not allow_empty):
+        raise UnknownPageStateError("Hanayume episode preview is empty or exceeds its row guard")
+    signature: list[tuple[str, tuple[str, ...]]] = []
+    seen_ids: set[str] = set()
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or row.get("linkCount") != 1
+            or not isinstance(row.get("href"), str)
+            or not isinstance(row.get("labels"), list)
+            or not all(isinstance(label, str) for label in row["labels"])
+        ):
+            raise UnknownPageStateError("Hanayume episode preview row is malformed")
+        identity = parse_hanayume_episode_url(row["href"])
+        if identity is None or identity.episode_id in seen_ids:
+            raise UnknownPageStateError("Hanayume episode preview has a foreign or duplicate ID")
+        seen_ids.add(identity.episode_id)
+        signature.append((identity.episode_id, tuple(row["labels"])))
+    return tuple(signature)
+
+
+def _episode_dom_row_signature(
+    rows: object, *, allow_empty: bool = False
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    if not isinstance(rows, list):
+        raise UnknownPageStateError("Hanayume episode preview rows are malformed")
+    normalized: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("hrefs"), list):
+            raise UnknownPageStateError("Hanayume episode preview row is malformed")
+        hrefs = row["hrefs"]
+        normalized.append(
+            {
+                "linkCount": len(hrefs),
+                "href": hrefs[0] if len(hrefs) == 1 else None,
+                "labels": row.get("labels"),
+            }
+        )
+    return _episode_row_signature(normalized, allow_empty=allow_empty)
+
+
+def _signature_rows(
+    signature: tuple[tuple[str, tuple[str, ...]], ...]
+) -> list[dict[str, object]]:
+    return [
+        {
+            "linkCount": 1,
+            "href": f"{BASE_URL}/episodes/{episode_id}",
+            "labels": list(labels),
+        }
+        for episode_id, labels in signature
+    ]
+
+
+def _preview_is_unselected(entries: object) -> bool:
+    """Only the observed bare listing with no selected numeric range is a preview."""
+
+    return (
+        isinstance(entries, list)
+        and bool(entries)
+        and all(isinstance(entry, dict) and entry.get("current") is False for entry in entries)
+    )
+
+
+def _matches_episode_preview(
+    observed: tuple[tuple[str, tuple[str, ...]], ...],
+    preview: tuple[tuple[str, tuple[str, ...]], ...] | None,
+) -> bool:
+    return bool(preview) and (observed == preview or observed == tuple(reversed(preview)))
+
+
 def _capture_output_format(captures: list[CaptureResult]) -> str:
     formats = {capture.mime_type for capture in captures}
     if formats == {"image/webp"}:
@@ -658,7 +734,8 @@ class HanayumeAdapter(SiteAdapter):
         initial_work = await self._read_episode_work(page)
         if self._expected_work_id is not None and initial_work != self._expected_work_id:
             raise UnknownPageStateError("Hanayume episode belongs to a different Catalog work")
-        await self._fresh_free_preflight(page, initial_work)
+        if self._expected_work_id is None:
+            await self._fresh_free_preflight(page, initial_work)
         if page.url != self._target_url:
             await self._navigate_exact(page, self._target_url)
         await self._wait_for_episode(page, expected_work=initial_work)
@@ -783,7 +860,21 @@ class HanayumeAdapter(SiteAdapter):
             ) from exc
 
         target_labels = _find_target_labels(initial.get("rows"), self._episode_id)
+        preview_signature: tuple[tuple[str, tuple[str, ...]], ...] | None = None
+        preview_unselected = False
         if target_labels is None:
+            target_history_labels = _find_target_labels(
+                initial.get("historyRows"), self._episode_id
+            )
+            preview_unselected = _preview_is_unselected(initial.get("ranges"))
+            initial_rows = initial.get("rows")
+            if (
+                preview_unselected
+                and target_history_labels is None
+                and isinstance(initial_rows, list)
+                and 0 < len(initial_rows) <= RANGE_PAGE_SIZE
+            ):
+                preview_signature = _episode_row_signature(initial_rows)
             # The bare route can be a latest-page preview. Follow its observed
             # numbered links only until the target is found; Discovery owns
             # full-work coverage and cross-range uniqueness.
@@ -827,6 +918,9 @@ class HanayumeAdapter(SiteAdapter):
             page,
             expected_labels=expected_labels,
             listing_authenticated=listing_authenticated,
+            expected_work=work_id,
+            preview_signature=preview_signature,
+            preview_unselected=preview_unselected,
         )
 
     async def _navigate_exact(self, page: Page, url: str) -> None:
@@ -913,7 +1007,17 @@ class HanayumeAdapter(SiteAdapter):
             raise UnknownPageStateError("Hanayume scoped work link is invalid")
         return work_id
 
-    async def _read_episode_row_labels(self, page: Page) -> list[tuple[str, ...]]:
+    async def _read_episode_row_state(
+        self, page: Page
+    ) -> tuple[
+        tuple[str, ...] | None,
+        tuple[tuple[str, tuple[str, ...]], ...] | None,
+        tuple[tuple[str, tuple[str, ...]], ...] | None,
+    ]:
+        if self._target_url is None or page.url != self._target_url:
+            raise UnknownPageStateError("Hanayume current URL does not match the target episode")
+        if self._episode_id is None:
+            raise UnknownPageStateError("Hanayume target episode identity is missing")
         try:
             value = await asyncio.wait_for(
                 page.evaluate(
@@ -967,7 +1071,8 @@ class HanayumeAdapter(SiteAdapter):
                       return {
                         rootCount: roots.length, knownMode, publicRoot,
                         userRootCount: userRoots.length, validUserRoots, knownRoots,
-                        publicRows: publicRoot ? readRows(roots[0]) : [], allRows
+                        publicRows: publicRoot ? readRows(roots[0]) : [],
+                        historyRows: userRoots.length === 1 ? readRows(userRoots[0]) : [], allRows
                       };
                     }"""
                 ),
@@ -975,6 +1080,8 @@ class HanayumeAdapter(SiteAdapter):
             )
         except (PlaywrightError, TimeoutError) as exc:
             raise UnknownPageStateError("Hanayume current episode access row could not be read") from exc
+        if page.url != self._target_url:
+            raise UnknownPageStateError("Hanayume episode route changed during its row recheck")
         if (
             not isinstance(value, dict)
             or value.get("rootCount") != 1
@@ -1049,11 +1156,39 @@ class HanayumeAdapter(SiteAdapter):
             if identity is None or identity.episode_id != self._episode_id:
                 raise UnknownPageStateError("Hanayume public episode URL is not the exact target")
             public_targets.append(tuple(row["labels"]))
-        if len(public_targets) != 1 or not target_copies:
-            raise UnknownPageStateError("Hanayume current episode public row is missing or duplicated")
-        if any(labels != public_targets[0] for labels in target_copies):
-            raise UnknownPageStateError("Hanayume target-like episode copies disagree on access")
-        return public_targets
+        if len(public_targets) > 1:
+            raise UnknownPageStateError("Hanayume current episode public row is duplicated")
+        if public_targets:
+            if not target_copies:
+                raise UnknownPageStateError("Hanayume current episode public row is missing")
+            if any(labels != public_targets[0] for labels in target_copies):
+                raise UnknownPageStateError("Hanayume target-like episode copies disagree on access")
+            return public_targets[0], None, None
+        if target_copies:
+            raise UnknownPageStateError("Hanayume target episode appears only in the history listing")
+
+        history_rows = value.get("historyRows")
+        if (
+            not isinstance(history_rows, list)
+            or len(rows) != len(public_rows) + len(history_rows)
+            or any(
+                not isinstance(row, dict) or row.get("branch") not in {"public", "user"}
+                for row in rows
+            )
+        ):
+            raise UnknownPageStateError("Hanayume preview row is outside the known public/history roots")
+        public_signature = _episode_dom_row_signature(public_rows)
+        history_signature = _episode_dom_row_signature(history_rows, allow_empty=True)
+        _validate_history_row_copies(
+            _signature_rows(public_signature), _signature_rows(history_signature)
+        )
+        return None, public_signature, history_signature
+
+    async def _read_episode_row_labels(self, page: Page) -> list[tuple[str, ...]]:
+        labels, _, _ = await self._read_episode_row_state(page)
+        if labels is None:
+            raise UnknownPageStateError("Hanayume current episode public row is missing")
+        return [labels]
 
     async def _validate_episode_free_row(
         self,
@@ -1061,12 +1196,26 @@ class HanayumeAdapter(SiteAdapter):
         *,
         expected_labels: tuple[str, ...],
         listing_authenticated: bool,
+        expected_work: str,
+        preview_signature: tuple[tuple[str, tuple[str, ...]], ...] | None,
+        preview_unselected: bool,
     ) -> None:
         await self._wait_for_locator(page, LISTING_SELECTOR, state="visible")
-        labels = await self._read_episode_row_labels(page)
-        if labels != [expected_labels]:
+        if await self._read_episode_work(page) != expected_work:
+            raise UnknownPageStateError("Hanayume episode work changed during its entry recheck")
+        target_labels, public_signature, _ = await self._read_episode_row_state(page)
+        if target_labels is not None:
+            if target_labels != expected_labels:
+                raise UnknownPageStateError(
+                    "Hanayume episode badge changed after the fresh work-listing check; free access is not confirmed"
+                )
+        elif (
+            public_signature is None
+            or not preview_unselected
+            or not _matches_episode_preview(public_signature, preview_signature)
+        ):
             raise UnknownPageStateError(
-                "Hanayume episode badge changed after the fresh work-listing check; free access is not confirmed"
+                "Hanayume current episode is absent outside the exact fresh public preview"
             )
         access = classify_hanayume_access(
             expected_labels, listing_authenticated=listing_authenticated

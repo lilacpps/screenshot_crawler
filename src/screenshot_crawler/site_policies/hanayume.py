@@ -1,4 +1,4 @@
-"""Direct-only Batch eligibility for exact, currently free Hanayume sources."""
+"""Direct-only Batch eligibility for available Hanayume Catalog sources marked free."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
 
 
 class HanayumeSitePolicy(SitePolicy):
-    """Allow only available sources freshly classified as exactly free."""
+    """Allow available Catalog sources whose access mode is exactly free."""
 
     site = "hanayume"
 

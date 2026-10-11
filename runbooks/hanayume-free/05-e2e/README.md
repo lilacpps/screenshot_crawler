@@ -1,12 +1,13 @@
 # Phase 05 — Independent live E2E / Final gate
 
-Status: PASS / BLOCKING 0 for the final logged-in standard Batch E2E within the verified scope. Four inclusive-scope candidates completed at END, producing 134/134 independently RGBA-verified original-canvas lossless-WebP pages and four verified ZIPs. Final independent review PASS / BLOCKING 0.
+Status: The prior four-candidate E2E remains PASS / BLOCKING 0 within its verified scope (134/134 independent RGBA-verified source-canvas WebP pages). R9 source/tests review and both configured direct-Batch live artifact audits passed; final documentation review: PASS / BLOCKING 0.
+
+**Historical contract notice:** The E2E steps and PASS below predate R9 and require fresh badge/auth/target-row checks before Batch entry. That contract is superseded for configured Batch by the user-approved direct-entry rule documented in the [current runbook](../README.md) and [evidence/status log](../PROGRESS.md): persisted Catalog `available` plus `access_mode=free` establishes eligibility, followed by canonical episode/work identity, strict Viewer/capture checks, and END. Discovery and manual Viewer entry retain fresh listing/auth checks. R9 live cases are recorded below and in PROGRESS; this historical four-candidate run does not verify the R9 optimization.
 
 ## 目的
 **2〜3話**を実際の標準CLIで Watchlist → Discovery → Catalog → Batch Plan →
 Batch Run → Crawl → Manifest/ZIP → completed と通し、画像と状態の整合性を独立検証する。
-このrunでは「無料」対象に加え、現在の共有プロファイルで同作品の認証markerを確認できる場合は「今なら無料」対象を少なくとも1話含める。Viewer/Batchのfresh preflightで認証と正確な対象rowを再確認し、未確認ならunknownのまま停止する。
-Do not perform login, registration, purchase, ticket, quota, or entitlement actions. If fresh authentication or the exact target row cannot be verified, keep the candidate unknown and stop before entry.
+R9 supersedes this pre-R9 E2E entry rule for configured Batch: use persisted Catalog `available` + `access_mode=free`. Discovery/manual Viewer still require fresh same-work listing/auth proof. Do not perform login, registration, purchase, ticket, quota, or entitlement actions. Configured Batch does not click `待つと無料で読む` or `この話をレンタルする`; an unreadable/incomplete Viewer stops without capture.
 シード: https://hanayume.com/episodes/8c6f15923caa0。
 
 ## Live手順（実装後のCLI、隔離パス）
@@ -32,7 +33,7 @@ New-Item -ItemType Directory -Force output\hanayume_experiment | Out-Null
 ## Tester独立監査
 1. Discoveryの全件数、作品/話ID重複なし、最古/最新、全体position、
    ラベル別件数・特定例、full/incremental/bounded、非freeの除外を確認。
-2. Batchの直前に正しい作品/話と現在freeの表示を再確認。課金/チケット/購入/自動ログイン操作ゼロ。
+2. Historical pre-R9 step: confirm current listing state before entry. For configured Batch now use persisted Catalog eligibility; do not perform login, purchase, ticket, quota, wait, or rental actions.
 3. 各話の最初・中間・最後の画像を実Viewerと視認照合。全画像の順序、dimensions、
    page fingerprint、異常重複、欠落、黒/白化、見開き半分欠損、広告/UI/次話混入を検査。
 4. Nativeならresponse/source identity、jpeg DCT復元証拠またはsource-derived RGB proof、
@@ -51,6 +52,12 @@ New-Item -ItemType Directory -Force output\hanayume_experiment | Out-Null
 - All four ZIPs passed CRC, manifest order, member count, and SHA-256 checks. Tester visual review passed 12 first/middle/final samples. Access metrics recorded 2,426 requests and zero 403/429/challenge/CAPTCHA events; CLI-reported retry count was 0. No quota resource or grant/entitlement state changed.
 - Earlier 122-page rendered-PNG E2E, R5 auth/counter probes, and initial failed attempts remain historical checkpoints. The bounded auth poll follows a live probe where positive markers appeared at 150 ms; the counter transition itself was not directly measured. An ignored audit-harness slot-attribution failure was corrected and the final independent audit passed.
 - Limits: this verifies decoded source-canvas pixels, not original JPEG bytes. The measured 385px tile height did not support the tested MCU-8 DCT coefficient permutation. Other native dimensions/layouts may use whole-spread rendered PNG; universal detection of a ready Viewer overlapping an entry gate remains unverified.
+## R9 configured direct Batch live cases (2026-10-11; source/tests and artifact audits PASS; documentation review PASS / BLOCKING 0)
+
+- Target case: `aca2240729bd0` completed 10 pages at END. Its isolated Catalog item/run/artifact audit passed; the ZIP has 10 960x1540 single-chunk VP8L WebP members, CRC/order/dimensions passed, size 7,161,994 bytes and SHA-256 `69e1ff1fcd1bc460e3ab76d28289454cd2432e74c9b23d25f74b35baa37232c9`. Metrics record 260 requests (257 HTTP 200, 3 HTTP 204), one canonical episode document request, zero series/range document requests, zero 403/429/5xx, challenge/CAPTCHA aggregate events, and retries. Independent source-canvas RGBA equality was not measured. Audit: `output/hanayume_experiment/tester/runs/r9-standard-prepared-20261011-fc46cdda/aca2240729bd0/artifact_audit.json`.
+- Normal control: `output/hanayume_experiment/tester/runs/r9-control-diagnostic-20261011T015208Z/` used a one-entry isolated Watchlist, fresh standard full-mode Discovery into a new Catalog, then standard Batch. The Catalog source was available/free; the Batch completed 12 pages at END with zero quota-resource rows. Its ZIP passed independent CRC/order/member hash/size and archive hash/size audits and contains 12 960x1540 VP8L WebP members (7,256,143 bytes). Batch document metrics show one canonical episode document request and zero series document requests. Metrics include one HTTP 502 on a relevant non-document Hanayume episode request; the run completed with zero retries, 403/429, or aggregate challenge/CAPTCHA events. Independent visual review of first/middle/last samples passed. Report: `auditor_report.json`; samples: `audit_samples/page-0001.webp`, `page-0006.webp`, and `page-0012.webp` under that run directory.
+- The standard CLI emitted a new control metrics file under the default `output/metrics/` directory despite the isolated Catalog/output paths; it was left untouched. The initial control attempt had only a generic Discovery failure report and no per-target logs; the cause remains unknown, no Batch ran, and the later successful attempt does not establish why that first attempt failed. Full evidence and paths are in [PROGRESS.md](../PROGRESS.md).
+
 ## Historical logged-out rendered-PNG baseline (superseded by the final logged-in E2E above)
 
 - The independent Tester reused the previously audited 296-source Discovery Catalog through a coherent SQLite backup; it did not rerun Discovery during the final Batch E2E. The harness invoked the standard `batch run --site hanayume --limit 3` CLI with transparent in-process evidence wrappers under isolated paths.

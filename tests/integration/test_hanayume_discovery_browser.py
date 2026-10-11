@@ -887,7 +887,6 @@ async def test_hanayume_discovery_to_batch_zip_completes_only_eligible_candidate
 @pytest.mark.parametrize(
     ("variant", "target_badge", "viewer_work_id", "max_pages"),
     [
-        ("now-free", "今なら無料", WORK_ID, 10),
         ("wrong-work", "無料", f"{901:013x}", 10),
         ("unknown-slot", "無料", WORK_ID, 10),
         ("premature-end", "無料", WORK_ID, 10),
@@ -907,7 +906,7 @@ async def test_hanayume_batch_failures_never_complete_or_create_artifacts(
         "unknown-slot": "unknown-after-advance",
         "premature-end": "early-terminal",
     }.get(variant, "none")
-    catalog, _source, candidate, _plan, executor, requested = await _batch_fixture(
+    catalog, _source, candidate, _plan, executor, _requested = await _batch_fixture(
         browser_page,
         tmp_path,
         target_badge=target_badge,
@@ -928,23 +927,13 @@ async def test_hanayume_batch_failures_never_complete_or_create_artifacts(
     assert catalog.get_item(candidate.item_id).status == "pending"
     assert catalog.list_artifacts(item_id=candidate.item_id) == []
     assert list((tmp_path / "library").rglob("*.zip")) == []
-    if variant == "now-free":
-        runs = catalog.list_crawl_runs(item_id=candidate.item_id)
-        assert len(runs) == 1 and runs[0].status == "failed"
-        assert runs[0].page_count is None
-        assert requested.count(f"/episodes/{TARGET_EPISODE_ID}") == 1
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_hanayume_now_free_batch_stops_when_fresh_auth_marker_expires(
-    browser_page, tmp_path: Path, monkeypatch
+async def test_hanayume_catalog_eligible_source_does_not_recheck_series_auth(
+    browser_page, tmp_path: Path
 ) -> None:
-    # Keep the negative-auth deadline short while leaving room for the browser
-    # evaluation itself to complete under the full affected test selection.
-    monkeypatch.setattr(
-        hanayume_discovery, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 1.5
-    )
-    catalog, _source, candidate, _plan, executor, requested = await _batch_fixture(
+    catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
         browser_page,
         tmp_path,
         target_badge=NOW_FREE_LABEL,
@@ -953,20 +942,21 @@ async def test_hanayume_now_free_batch_stops_when_fresh_auth_marker_expires(
         runtime_auth_state="logged-out",
     )
 
-    with pytest.raises(BatchExecutionError):
-        await executor.execute_candidate(
-            browser_page,
-            candidate,
-            output_root=tmp_path / "batch-output",
-            library_dir=tmp_path / "library",
-            max_pages=10,
-            now=BATCH_NOW,
-        )
+    assert source.access_mode == "free"
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch-output",
+        library_dir=tmp_path / "library",
+        max_pages=10,
+        now=BATCH_NOW,
+    )
 
-    assert catalog.get_item(candidate.item_id).status == "pending"
-    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+    assert result.stop_reason == "end" and result.page_count == 4
+    assert catalog.get_item(candidate.item_id).status == "completed"
+    assert len(catalog.list_artifacts(item_id=candidate.item_id)) == 1
     assert requested.count(f"/episodes/{TARGET_EPISODE_ID}") == 1
-    assert f"/series/{WORK_ID}/1" in requested
+    assert not any(path.startswith(f"/series/{WORK_ID}") for path in requested)
 
 
 @pytest.mark.asyncio(loop_scope="module")
