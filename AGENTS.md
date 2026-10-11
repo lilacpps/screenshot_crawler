@@ -80,7 +80,9 @@ shared profileでBookWalker/MANGA ONEのlogin・crawl・session共存と既存vi
 新規Site Adapterを自律/マルチエージェントで実装する場合は
 `docs/MULTI_AGENT_SITE_ADAPTER_WORKFLOW.md` を使用する。
 ピッコマの無料公開分については `runbooks/piccoma-free/README.md` と
-各Stageを実行契約とする。Runbookは上位authorityを上書きしない。
+各Stageを実行契約とする。
+カドコミの無料公開話については `runbooks/kadocomi/README.md` と
+P0〜P4（P1.5を含む）を実行契約とする。Runbookは上位authorityを上書きしない。
 
 標準役割（モデル表記はCodexのID、Very Highは `xhigh`）:
 
