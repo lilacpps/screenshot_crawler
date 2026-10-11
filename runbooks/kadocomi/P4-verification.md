@@ -1,0 +1,64 @@
+# P4 — 独立E2E、レビュー、最終判定
+
+Status: NOT STARTED。Lead/Reviewer/Testerが最終品質を判定。
+**目的**: Discovery→Catalog→Batch→全本文の完全性→ZIP/Completedを確認し、
+再公開/期限変更/非公開履歴で実害のある不具合を残さない。
+
+## 必須確認マトリクス
+
+| 分類 | 独立に確かめること |
+| --- | --- |
+| URL/identity | 作品、episode URL、redirect、別作品/volume混入、query/canonicalの整合 |
+| 全件展開 | 「全XX話」展開、総数と非公開区間の意味、重複・途中切れ検出 |
+| Full | clean complete時のみmissingをunavailable化し、Source/Item/Artifact/Completedを保存 |
+| Incremental | 新規話/観測話更新とfree_until更新、早期停止、未観測履歴不変 |
+| 配信期限 | 期限あり更新、期限なしNULLクリア、期限切れ時のBatch拒否 |
+| 復活 | 同一episode ID再公開で既存Source再利用、現在観測freeへ状態更新 |
+| 位置 | 全件順序・非公開gap・部分話、履歴Sourceとの衝突なし。不明な位置は捏造しない |
+| キャプチャ | original byte保持またはnative/canvas pixel証明、全本文・spread・順序・解像度 |
+| END | 最終本文直後の正常END、別話/広告/課金誘導非取得、途中失敗は未完了 |
+| Batch | 期限/権利fresh check、Catalog候補、--limit、manifest、ZIP、Completed |
+| 安全性 | 403/429/CAPTCHA、ログイン/チケット/ポイント・購入UI、上書き、無限retryなし |
+| 回帰 | DiscoveryService、Catalog、Policy、Core capture/packaging、既存関連site |
+
+## 実行手順
+
+1. Reviewerがbranchのmaterial diffを実際の上位authority、P0証拠、
+   受け入れ条件と突合。BLOCKING/NON-BLOCKING/VERIFIED分類。好みと実害を分離。
+2. ImplementerがBLOCKINGを修正 → Reviewer再検証。自分のテストだけを合格根拠にしない。
+3. Tester (独立) が専用Watchlist+Catalogを新規に用意し、
+   少なくとも1話、可能なら期限/構造の異なる2話について実サイト `discover full`
+   → `batch plan` → `batch run --limit 1` を実施。
+   ZIPの実ページ数、先頭/中間/最後、左右、形式、寸法、源との一致を調べる。
+4. 再Discovery（incremental/full）の差分ケースを合成fixtureで検証。
+   時間経過による配信終了・再公開の実サイト検証は可能な時点で行い、
+   fixture結果と未実施liveを混同しない。
+5. Catalogバックアップ・Archive renumberのdry-runを試験用DB/outputで確認。
+   `--apply`は安全なisolated fixtureに限る。本番運用DB/ZIPには勝手に実行しない。
+6. target unit/local Playwright integration/関連Batch/Catalog tests、必要に応じ
+   `pytest -q`と`ruff check src tests` を実施。skipをPASS扱いしない。
+7. `site_adapters/kadocomi/README.md`、対応`note/`、`PROGRESS.md`に
+   現行実装、実サイト日時、証拠、サポート対象外、将来課題を記す。
+8. Leadが独立TesterとReviewerの結果を確認し、各Phase状態・最終判定を記録。
+
+## 最終PASSの受け入れ条件
+
+- 現在無条件無料と証明できた話で、少なくとも1つの完全なBatch→ZIP→Completed。
+- 先頭から最後まで本文の欠落/重複/入替なし、ENDは明示/証明済み。
+- 可読権限の誤判定や課金消費、重要なCatalog履歴破壊なし。
+- 未観測Sourceの扱いがfull/incremental契約に一致。
+- 再採番の安全策（誤った番号の強制更新をしない）が機能。
+- 既存機能の回帰なし、Reviewer BLOCKING=0、必要な独立E2E確認済み。
+- 原画像調査で、採用方式と不採用候補に根拠がある。
+- 不可能なlive経時検証や高度な終了区間復元は、残制限として可視化してよい。
+  **未確認のことをPASSと記載しない。**
+
+## Leadの最終報告フォーマット
+
+- 実装branch/commitと変更ファイル。
+- supported URL/viewer/free判定とunsupportedな状態。
+- Full/Incremental/復活/位置再採番の実装済み範囲。
+- original/native/renderedの採用方式、根拠、画素検証。
+- テストコマンド: PASS/FAIL/SKIPと理由、live E2E/画像監査の結果。
+- BLOCKING 0の確認、未確認事項、修復・再実施が必要な場合の手順。
+- ユーザーが判断する事項は最大3点に絞り、他の重要事項は省略せず説明する。
