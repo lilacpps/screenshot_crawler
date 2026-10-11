@@ -1,4 +1,4 @@
-"""Manual, exact-free Younganimal crawl entry and rendered viewer adapter."""
+"""Direct Younganimal episode entry with reader access and capture verification."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from urllib.parse import urlsplit
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult
@@ -22,7 +21,6 @@ from screenshot_crawler.core.errors import (
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.younganimal.access import (
     YOUNGANIMAL_RELEVANT_HOSTS,
@@ -38,15 +36,7 @@ from screenshot_crawler.site_adapters.younganimal.capture import (
     decode_capture_results,
 )
 from screenshot_crawler.site_adapters.younganimal.discovery import (
-    MAX_RANGE_PAGES,
-    YounganimalRange,
-    _parse_range_links,
-    _read_range_entries,
-    _read_range_rows,
-    _read_series_title,
-    _validate_page_ranges,
     canonical_younganimal_episode_url,
-    classify_younganimal_access,
     parse_younganimal_episode_url,
     parse_younganimal_work_url,
 )
@@ -71,12 +61,8 @@ from screenshot_crawler.site_adapters.younganimal.native_capture import (
 )
 
 BASE_URL = "https://younganimal.com"
-WORK_LINK_SELECTOR = "#xHeader a.ep-h-main-h-series"
-LISTING_SELECTOR = ".series-eplist-main"
 SEEK_SELECTOR = "#xCVSeekBar"
 
-NAVIGATION_TIMEOUT_MS = 15_000
-LISTING_TIMEOUT_MS = 12_000
 OBSERVATION_TIMEOUT_SECONDS = 4.0
 INITIALIZE_TIMEOUT_MS = 240_000
 VIEWER_READY_TIMEOUT_MS = 20_000
@@ -86,7 +72,6 @@ INITIAL_QUIET_DEADLINE_MS = 5_000
 INITIAL_QUIET_POLL_MS = 100
 PAGE_CHANGE_TIMEOUT_MS = 12_000
 PAGE_CHANGE_POLL_MS = 100
-MANUAL_RANGE_PACING_MS = 3_000
 MAX_CAPTURE_TOTAL_BYTES = 16_000_000
 EXTERNAL_ID_PATTERN = re.compile(
     r"^(?P<work>[0-9a-f]{13}):(?P<episode>[0-9a-f]{13})$"
@@ -305,50 +290,30 @@ def _native_failure_details(value: object) -> dict[str, object]:
         "mutations": mutations,
     }
 
-EPISODE_SCOPE_SCRIPT = r"""({episodeUrl, workUrl}) => {
-  const mains = [...document.querySelectorAll('.series-eplist-main')];
+EPISODE_SCOPE_SCRIPT = r"""() => {
   const headers = [...document.querySelectorAll('#xHeader a.ep-h-main-h-series')];
-  const publicRoots = mains.length === 1
-    ? [...mains[0].querySelectorAll('.series-eplist[data-e2e="epList"]')] : [];
-  const userRoots = mains.length === 1
-    ? [...mains[0].querySelectorAll('.series-eplist[data-e2e="epListUser"]')] : [];
-  const allRoots = [...document.querySelectorAll('.series-eplist')];
-  const publicRows = publicRoots.length === 1
-    ? [...publicRoots[0].querySelectorAll('.series-eplist-item')] : [];
-  const userRows = userRoots.flatMap(root => [...root.querySelectorAll('.series-eplist-item')]);
-  const allRows = [...document.querySelectorAll('.series-eplist-item')];
-  const candidates = publicRows.filter(row =>
-    [...row.querySelectorAll('a[href*="/episodes/"]')].some(link => link.href === episodeUrl));
-  const row = candidates.length === 1 ? candidates[0] : null;
-  const links = row ? [...row.querySelectorAll('a[href*="/episodes/"]')] : [];
-  const titles = row ? [...row.querySelectorAll('.series-eplist-item-h-text')] : [];
-  const labels = row ? [...row.querySelectorAll('.series-eplist-item-access-text')] : [];
-  const structureReady = mains.length === 1 && headers.length === 1 &&
-    headers[0].href === workUrl && publicRoots.length === 1 &&
-    publicRoots[0].parentElement === mains[0] && userRoots.length <= 1 &&
-    allRoots.length === publicRoots.length + userRoots.length &&
-    userRoots.every(root => root.parentElement === mains[0] && root.classList.contains('mode-user')) &&
-    allRows.length === publicRows.length + userRows.length &&
-    allRows.every(candidate => publicRows.includes(candidate) || userRows.includes(candidate));
+  const headings = [...document.querySelectorAll('#xHeader h1')];
   return {
     route: location.href,
-    path: location.pathname,
-    title: document.title,
-    headingCount: [...document.querySelectorAll('h1')].filter(node => (node.innerText || '').trim()).length,
     workLinkCount: headers.length,
     workHref: headers.length === 1 ? headers[0].href : null,
     workTitle: headers.length === 1
       ? (headers[0].innerText || '').replace(/\s+/g, ' ').trim() : null,
-    structureReady,
-    publicRowCount: publicRows.length,
-    userRowCount: userRows.length,
-    targetRowCount: candidates.length,
-    targetRouteCount: links.length,
-    rawTargetHref: links.length === 1 ? links[0].getAttribute('href') : null,
-    targetTitleCount: titles.length,
-    targetTitle: titles.length === 1 ? (titles[0].innerText || '').replace(/\s+/g, ' ').trim() : null,
-    labels: labels.map(node => (node.innerText || '').replace(/\s+/g, ' ').trim()),
+    episodeTitle: headings.length === 1
+      ? (headings[0].innerText || '').replace(/\s+/g, ' ').trim() : null,
   };
+}"""
+
+ENTRY_BLOCK_SCRIPT = r"""() => {
+  const visible = node => {
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 &&
+      node.checkVisibility({checkVisibilityCSS: true, checkOpacity: true});
+  };
+  const charge = [...document.querySelectorAll('.ep-main-content.mode-charge, .ep-main-content .ep-charge')];
+  const controls = [...document.querySelectorAll('.ep-main-content button, .ep-main-content a, #comici-viewer button, #comici-viewer a')];
+  return charge.some(visible) || controls.some(node => visible(node) &&
+    /すぐ.*無料.*読む|待つと.*無料.*読む|この話.*レンタル/.test((node.innerText || '').replace(/\s+/g, ' ').trim()));
 }"""
 
 
@@ -360,7 +325,7 @@ def _safe_path(url: str) -> str:
 
 
 class YounganimalAdapter(SiteAdapter):
-    """Capture only exact-free episodes proven through a configured work listing."""
+    """Capture verified readable episodes without traversing episode listings."""
 
     page_change_timeout_ms = PAGE_CHANGE_TIMEOUT_MS
 
@@ -430,7 +395,7 @@ class YounganimalAdapter(SiteAdapter):
             return
         if access_strategy != "auto":
             raise UnsupportedAccessStrategyError(
-                "Younganimal manual free crawl currently supports access_strategy='auto' only"
+                "Younganimal manual crawl currently supports access_strategy='auto' only"
             )
 
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
@@ -466,13 +431,12 @@ class YounganimalAdapter(SiteAdapter):
         self._episode_id = episode.episode_id
         self._target_url = source_url
         self._work_id = work_id
-        return self._preflight_work_url
+        return self._target_url
 
     async def initialize(self, page: Page) -> None:
         if self._work_id is None or self._target_url is None or self._episode_id is None:
             raise UnknownPageStateError("Younganimal crawl target was not validated before navigation")
-        direct_batch = self._batch_expected_work_id is not None
-        expected_initial_url = self._target_url if direct_batch else f"{BASE_URL}/series/{self._work_id}"
+        expected_initial_url = self._target_url
         if page.url != expected_initial_url:
             raise UnknownPageStateError("Younganimal initial navigation left its configured entry route")
         self._work_title = None
@@ -490,9 +454,6 @@ class YounganimalAdapter(SiteAdapter):
         self._native_cleanup_token = None
         self._capture_diagnostics = {"mode": "not_started"}
         self._initial_canvas_quiet = None
-        if not direct_batch:
-            await self._find_exact_free_target(page)
-            await self._navigate_episode(page)
         await self._verify_episode_entry(page)
         observation = await self._wait_for_viewer_ready(page)
         self._frozen_viewer_mapping = self._viewer_mapping(observation)
@@ -533,128 +494,6 @@ class YounganimalAdapter(SiteAdapter):
             raise UnknownPageStateError("Younganimal first body canvas disappeared after quiet wait")
         self._rendered_dimensions = (first_canvas["width"], first_canvas["height"])
 
-    async def _find_exact_free_target(self, page: Page) -> None:
-        work_id = self._work_id
-        episode_id = self._episode_id
-        if work_id is None or episode_id is None:
-            raise UnknownPageStateError("Younganimal work or episode identity is missing")
-        work_url = f"{BASE_URL}/series/{work_id}"
-        deadline = time.monotonic() + 220
-        try:
-            await page.locator(LISTING_SELECTOR).wait_for(
-                state="visible", timeout=LISTING_TIMEOUT_MS
-            )
-            title = await _read_series_title(page)
-            entries = await _read_range_entries(page)
-            ranges = _parse_range_links(entries, work_id=work_id)
-        except (DiscoveryIncompleteError, PlaywrightError, PlaywrightTimeoutError) as exc:
-            raise UnknownPageStateError("Younganimal canonical work listing is incomplete") from exc
-        if page.url != work_url:
-            raise UnknownPageStateError("Younganimal canonical work listing route changed")
-        if not title or len(ranges) > MAX_RANGE_PAGES:
-            raise UnknownPageStateError("Younganimal work title or range map is invalid")
-
-        for episode_range in ranges:
-            self._raise_if_access_stopped()
-            await page.wait_for_timeout(MANUAL_RANGE_PACING_MS)
-            self._raise_if_access_stopped()
-            if time.monotonic() >= deadline:
-                raise PageChangeTimeoutError("Younganimal target lookup exceeded its bounded work budget")
-            response = await self._navigate_listing_range(page, episode_range, work_url)
-            self._require_http_200(response, "range listing")
-            try:
-                await page.locator(LISTING_SELECTOR).wait_for(
-                    state="visible", timeout=LISTING_TIMEOUT_MS
-                )
-                current_title = await _read_series_title(page)
-                entries = await _read_range_entries(page)
-                _validate_page_ranges(
-                    entries,
-                    work_id=work_id,
-                    ranges=ranges,
-                    selected=episode_range,
-                )
-                rows = await _read_range_rows(
-                    page,
-                    work_id=work_id,
-                    first_position=episode_range.start_position,
-                )
-            except (DiscoveryIncompleteError, PlaywrightError, PlaywrightTimeoutError) as exc:
-                raise UnknownPageStateError("Younganimal target range failed strict validation") from exc
-            self._raise_if_access_stopped()
-            if current_title != title:
-                raise UnknownPageStateError("Younganimal target range belongs to a different work title")
-            expected_count = episode_range.end_position - episode_range.start_position + 1
-            if len(rows) != expected_count:
-                raise UnknownPageStateError("Younganimal target range row count is incomplete")
-            matches = [row for row in rows if row.identity.episode_id == episode_id]
-            if not matches:
-                continue
-            if len(matches) != 1 or matches[0].identity.work_id != work_id:
-                raise UnknownPageStateError("Younganimal target episode identity is duplicated or foreign")
-            row = matches[0]
-            if (
-                row.access.access_mode != "free"
-                or classify_younganimal_access(row.access.raw_labels).access_mode != "free"
-            ):
-                raise UnknownPageStateError("Younganimal target row lacks one exact free label")
-            self._work_title = title
-            self._target_position = row.global_position
-            return
-        raise UnknownPageStateError("Younganimal target episode is absent from the validated public ranges")
-
-    async def _navigate_listing_range(
-        self, page: Page, episode_range: YounganimalRange, work_url: str
-    ):
-        try:
-            response = await page.goto(
-                episode_range.url,
-                wait_until="commit",
-                timeout=NAVIGATION_TIMEOUT_MS,
-            )
-        except (PlaywrightError, PlaywrightTimeoutError) as exc:
-            self._raise_if_access_stopped()
-            raise PageChangeTimeoutError(
-                f"Younganimal range navigation failed at {episode_range.path}"
-            ) from exc
-        self._raise_if_access_stopped()
-        if page.url != episode_range.url and not (
-            episode_range.page_number == 1 and page.url == work_url
-        ):
-            raise UnknownPageStateError("Younganimal numeric range redirected outside its exact route")
-        return response
-
-    async def _navigate_episode(self, page: Page) -> None:
-        target_url = self._target_url
-        if target_url is None:
-            raise UnknownPageStateError("Younganimal episode target URL is missing")
-        self._raise_if_access_stopped()
-        await page.wait_for_timeout(MANUAL_RANGE_PACING_MS)
-        self._raise_if_access_stopped()
-        try:
-            response = await page.goto(
-                target_url,
-                wait_until="commit",
-                timeout=NAVIGATION_TIMEOUT_MS,
-            )
-        except (PlaywrightError, PlaywrightTimeoutError) as exc:
-            self._raise_if_access_stopped()
-            raise PageChangeTimeoutError("Younganimal exact free episode navigation failed") from exc
-        self._raise_if_access_stopped()
-        self._require_http_200(response, "episode document")
-        if page.url != target_url:
-            raise UnknownPageStateError("Younganimal episode document changed its exact route")
-
-    @staticmethod
-    def _require_http_200(response, label: str) -> None:
-        if response is None:
-            raise UnknownPageStateError(f"Younganimal {label} has no document response")
-        status = getattr(response, "status", None)
-        if status in {403, 429}:
-            raise UnknownPageStateError(f"Younganimal {label} stopped at HTTP {status}")
-        if status != 200:
-            raise UnknownPageStateError(f"Younganimal {label} did not return HTTP 200")
-
     def _raise_if_access_stopped(self) -> None:
         if self._access_stop is not None:
             stop = self._access_stop
@@ -663,50 +502,44 @@ class YounganimalAdapter(SiteAdapter):
                 f"(status={stop.get('status')}, host={stop.get('host')}, path={stop.get('path')})"
             )
 
+    async def _raise_if_entry_blocked(self, page: Page) -> None:
+        try:
+            blocked = await asyncio.wait_for(page.evaluate(ENTRY_BLOCK_SCRIPT), timeout=OBSERVATION_TIMEOUT_SECONDS)
+        except (PlaywrightError, TimeoutError) as exc:
+            raise UnknownPageStateError("Younganimal reader access state could not be checked") from exc
+        if blocked is not False:
+            raise UnknownPageStateError("Younganimal episode requires a read/rental action; direct access is blocked")
+
     async def _verify_episode_entry(self, page: Page) -> None:
+        self._raise_if_access_stopped()
         target_url = self._target_url
         work_id = self._work_id
         if target_url is None or work_id is None or page.url != target_url:
             raise UnknownPageStateError("Younganimal entry route differs from the exact target episode")
-        work_url = f"{BASE_URL}/series/{work_id}"
         try:
-            await page.locator(LISTING_SELECTOR).wait_for(
-                state="visible", timeout=LISTING_TIMEOUT_MS
+            await page.wait_for_function(
+                """() => document.querySelector('#xHeader a.ep-h-main-h-series') &&
+                  (document.querySelector('#comici-viewer') ||
+                   document.querySelector('.ep-main-content.mode-charge'))""",
+                timeout=VIEWER_READY_TIMEOUT_MS,
             )
-            raw = await asyncio.wait_for(
-                page.evaluate(EPISODE_SCOPE_SCRIPT, {"episodeUrl": target_url, "workUrl": work_url}),
-                timeout=OBSERVATION_TIMEOUT_SECONDS,
-            )
+            raw = await asyncio.wait_for(page.evaluate(EPISODE_SCOPE_SCRIPT), timeout=OBSERVATION_TIMEOUT_SECONDS)
         except (PlaywrightError, TimeoutError) as exc:
             self._raise_if_access_stopped()
-            raise UnknownPageStateError("Younganimal episode access row could not be verified") from exc
+            raise UnknownPageStateError("Younganimal episode header/reader did not become ready") from exc
         self._raise_if_access_stopped()
-        episode = parse_younganimal_episode_url(target_url)
         if (
             not isinstance(raw, dict)
-            or episode is None
             or raw.get("route") != target_url
-            or raw.get("path") != f"/episodes/{episode.episode_id}"
-            or raw.get("structureReady") is not True
             or raw.get("workLinkCount") != 1
-            or raw.get("workHref") != work_url
+            or raw.get("workHref") != f"{BASE_URL}/series/{work_id}"
             or not isinstance(raw.get("workTitle"), str)
             or not raw["workTitle"].strip()
-            or raw.get("userRowCount") != 0
-            or raw.get("targetRowCount") != 1
-            or raw.get("targetRouteCount") != 1
-            or raw.get("rawTargetHref") != f"/episodes/{episode.episode_id}"
-            or raw.get("targetTitleCount") != 1
-            or not isinstance(raw.get("targetTitle"), str)
-            or not raw["targetTitle"].strip()
-            or raw.get("labels") != ["無料"]
-            or classify_younganimal_access(raw["labels"]).access_mode != "free"
         ):
-            raise UnknownPageStateError("Younganimal fresh episode listing does not prove exact free access")
-        if self._work_title is not None and raw["workTitle"] != self._work_title:
-            raise UnknownPageStateError("Younganimal episode work title differs from its verified listing")
+            raise UnknownPageStateError("Younganimal episode header does not prove the configured work")
+        await self._raise_if_entry_blocked(page)
         self._work_title = raw["workTitle"]
-        self._episode_title = raw["targetTitle"]
+        self._episode_title = raw.get("episodeTitle") or None
 
     async def _wait_for_viewer_ready(self, page: Page) -> ViewerObservation:
         deadline = time.monotonic() + VIEWER_READY_TIMEOUT_MS / 1000
@@ -870,6 +703,7 @@ class YounganimalAdapter(SiteAdapter):
         target_url = self._target_url
         if target_url is None or page.url != target_url:
             raise UnknownPageStateError("Younganimal viewer route no longer matches its episode")
+        await self._raise_if_entry_blocked(page)
         try:
             result = await asyncio.wait_for(
                 page.evaluate(SNAPSHOT_SCRIPT, {"pixelSlots": list(pixel_slots)}),

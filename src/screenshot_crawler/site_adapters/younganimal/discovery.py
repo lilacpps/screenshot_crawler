@@ -6,12 +6,14 @@ import asyncio
 import re
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Request, Response
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.errors import AccessStopError
 from screenshot_crawler.discovery.base import DiscoveryAdapter
@@ -20,6 +22,8 @@ from screenshot_crawler.discovery.models import (
     DiscoveredRecord,
     DiscoveredSource,
     DiscoveryMode,
+    DiscoverySourceSnapshot,
+    IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.younganimal.access import younganimal_access_profile
@@ -48,6 +52,7 @@ OBSERVATION_TIMEOUT_SECONDS = 15
 RANGE_PACING_MS = 3_000
 GUARD_CLEANUP_TIMEOUT_SECONDS = 5
 FREE_LABEL = "無料"
+RENTAL_LABEL = re.compile(r"^レンタル中 閲覧期限 (?P<days>[0-9]{1,2})日\+(?P<hours>[0-9]{1,2})時間$")
 LATEST_LABEL = "最新話から"
 ELLIPSIS_LABEL = "..."
 
@@ -73,6 +78,7 @@ class YounganimalEpisodeUrl:
 class YounganimalAccessObservation:
     raw_labels: tuple[str, ...]
     access_mode: str
+    access_granted_until: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,14 +149,24 @@ def parse_younganimal_work_url(url: str) -> str | None:
 
 def classify_younganimal_access(
     raw_labels: Sequence[str],
+    *,
+    observed_at: datetime | None = None,
 ) -> YounganimalAccessObservation:
-    """Only one exact row-scoped `無料` label is a positive free signal."""
+    """Recognize exact free labels and the observed rental countdown only."""
 
     labels = tuple(raw_labels)
-    return YounganimalAccessObservation(
-        raw_labels=labels,
-        access_mode="free" if labels == (FREE_LABEL,) else "unknown",
-    )
+    if labels == (FREE_LABEL,):
+        return YounganimalAccessObservation(labels, "free")
+    match = RENTAL_LABEL.fullmatch(labels[0]) if len(labels) == 1 else None
+    if match is not None:
+        days, hours = int(match["days"]), int(match["hours"])
+        remaining = timedelta(days=days, hours=hours) - timedelta(hours=1)
+        if days <= 14 and hours <= 23 and remaining > timedelta():
+            current = observed_at if observed_at is not None else datetime.now(JST)
+            if current.tzinfo is None or current.utcoffset() is None:
+                raise ValueError("Younganimal rental observation requires an aware timestamp")
+            return YounganimalAccessObservation(labels, "paid", current + remaining)
+    return YounganimalAccessObservation(labels, "unknown")
 
 
 def _parse_range_route(url: str, *, expected_work_id: str) -> tuple[int, str] | None:
@@ -545,6 +561,16 @@ async def _read_range_entries(page: Page) -> list[dict[str, object]]:
 async def _read_range_rows(
     page: Page, *, work_id: str, first_position: int
 ) -> list[YounganimalListingRow]:
+    # Account rows mount asynchronously, after the public list is ready.
+    try:
+        await page.wait_for_function(
+            """() => [...document.querySelectorAll('.series-eplist[data-e2e="epListUser"]')]
+              .every(root => !root.classList.contains('mode-loading'))""",
+            timeout=DOM_TIMEOUT_MS,
+        )
+    except (PlaywrightError, TimeoutError) as exc:
+        raise DiscoveryIncompleteError("Younganimal user listing did not settle") from exc
+    observed_at = datetime.now(JST)
     script = r"""() => {
       const mains = [...document.querySelectorAll('.series-eplist-main')];
       const main = mains.length === 1 ? mains[0] : null;
@@ -561,8 +587,8 @@ async def _read_range_rows(
       const structureReady = mains.length === 1 && roots.length > 0 && pub.length === 1 &&
         publicRoot.parentElement === main && user.length <= 1 && roots.length === pub.length + user.length &&
         allRoots.length === roots.length && user.every(node => node.parentElement === main && node.classList.contains('mode-user')) &&
-        knownRows;
-      const rows = publicRows.map(row => {
+        knownRows && user.every(root => !root.classList.contains('mode-loading'));
+      const readRow = row => {
         const links = [...row.querySelectorAll('a[href*="/episodes/"]')];
         const titles = [...row.querySelectorAll('.series-eplist-item-h-text')];
         const labels = [...row.querySelectorAll('.series-eplist-item-access-text')];
@@ -573,8 +599,9 @@ async def _read_range_rows(
           title: titles.length === 1 ? (titles[0].innerText || '').replace(/\s+/g, ' ').trim() : null,
           labels: labels.map(node => (node.innerText || '').replace(/\s+/g, ' ').trim())
         };
-      });
-      return {structureReady, historyRowCount: userRows.length, rows};
+      };
+      return {structureReady, historyRowCount: userRows.length,
+        rows: publicRows.map(readRow), userRows: userRows.map(readRow)};
     }"""
     try:
         snapshot = await asyncio.wait_for(page.evaluate(script), timeout=OBSERVATION_TIMEOUT_SECONDS)
@@ -585,19 +612,22 @@ async def _read_range_rows(
     history_row_count = snapshot.get("historyRowCount")
     if not isinstance(history_row_count, int) or history_row_count < 0:
         raise DiscoveryIncompleteError("Younganimal history row count is unknown")
-    if history_row_count:
-        raise DiscoveryIncompleteError(
-            "Younganimal nonempty user/history rows are unsupported because duplicate identity labels are unverified"
-        )
     if snapshot.get("structureReady") is not True:
         raise DiscoveryIncompleteError("Younganimal public/history listing scope is unknown")
     raw_rows = snapshot.get("rows")
     if not isinstance(raw_rows, list) or not raw_rows:
         raise DiscoveryIncompleteError("Younganimal declared range has no public episode rows")
+    user_rows = snapshot.get("userRows")
+    if not isinstance(user_rows, list) or len(user_rows) != history_row_count:
+        raise DiscoveryIncompleteError("Younganimal user rows are incomplete")
+    if len(user_rows) > MAX_LISTING_ROWS:
+        raise DiscoveryIncompleteError("Younganimal user listing exceeds its row guard")
 
     rows: list[YounganimalListingRow] = []
     seen: set[str] = set()
-    for index, raw in enumerate(raw_rows):
+    user_by_id: dict[str, dict[str, object]] = {}
+    # Validate account identities before joining; user rows never add positions.
+    for index, raw in enumerate(user_rows + raw_rows):
         if (
             not isinstance(raw, dict)
             or raw.get("linkCount") != 1
@@ -612,15 +642,28 @@ async def _read_range_rows(
         identity = parse_younganimal_episode_url(raw["href"])
         if identity is None or raw["href"] != canonical_younganimal_episode_url(raw["href"]):
             raise DiscoveryIncompleteError("Younganimal public row has an invalid or noncanonical URL")
+        if index < len(user_rows):
+            if identity.episode_id in user_by_id:
+                raise DiscoveryIncompleteError("Younganimal user listing repeats an episode ID")
+            user_by_id[identity.episode_id] = raw
+            continue
         if identity.episode_id in seen:
             raise DiscoveryIncompleteError("Younganimal range repeats an episode ID")
         seen.add(identity.episode_id)
+        access = classify_younganimal_access(raw["labels"], observed_at=observed_at)
+        account_row = user_by_id.get(identity.episode_id)
+        if account_row is not None:
+            if account_row["title"] != raw["title"]:
+                raise DiscoveryIncompleteError("Younganimal user/history title conflicts with public identity")
+            account_access = classify_younganimal_access(account_row["labels"], observed_at=observed_at)
+            if access.access_mode != "free" and account_access.access_granted_until is not None:
+                access = account_access
         rows.append(
             YounganimalListingRow(
                 identity=YounganimalEpisodeIdentity(work_id, identity.episode_id),
                 title=raw["title"].strip(),
-                access=classify_younganimal_access(raw["labels"]),
-                global_position=first_position + index,
+                access=access,
+                global_position=first_position + index - len(user_rows),
             )
         )
     return rows
@@ -649,6 +692,8 @@ def _records_from_rows(
                 external_id=row.identity.external_id,
                 url=f"https://younganimal.com/episodes/{row.identity.episode_id}",
                 access_mode=row.access.access_mode,
+                access_granted_until=row.access.access_granted_until,
+                access_granted_until_observed=True,
                 available=True,
                 global_display_position=row.global_position,
             ),
@@ -693,10 +738,20 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
 
     supports_bounded_discovery = True
 
+    def incremental_stop_decision(
+        self,
+        record: DiscoveredRecord,
+        previous: DiscoverySourceSnapshot | None,
+        target: WatchlistTarget,
+    ) -> IncrementalStopDecision:
+        # Rental grants can change on old episodes. All ranges are already
+        # validated and buffered, so continuing adds no browser navigation.
+        return IncrementalStopDecision.CONTINUE
+
     async def iter_records(
         self, page: Page, target: WatchlistTarget, mode: DiscoveryMode
     ) -> AsyncIterator[DiscoveredRecord]:
-        del mode  # Both modes use the same complete-work proof; Service orders incremental stops.
+        del mode  # Both modes refresh the same fully validated requested scope.
         work_id = parse_younganimal_work_url(target.url)
         work_url = f"https://younganimal.com/series/{work_id}" if work_id else None
         if target.site != "younganimal" or work_url is None or target.url != work_url:

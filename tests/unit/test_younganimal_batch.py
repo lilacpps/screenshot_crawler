@@ -59,6 +59,7 @@ async def test_younganimal_batch_rejects_url_or_strategy_that_disagrees_with_ide
 @pytest.mark.asyncio
 async def test_younganimal_manual_path_cannot_request_batch_direct_strategy() -> None:
     adapter = YounganimalAdapter(preflight_work_url=f"https://younganimal.com/series/{WORK_ID}")
+    assert adapter.resolve_initial_navigation_url(EPISODE_URL) == EPISODE_URL
 
     with pytest.raises(UnsupportedAccessStrategyError, match="auto.*only"):
         await adapter.configure_run(object(), "direct")

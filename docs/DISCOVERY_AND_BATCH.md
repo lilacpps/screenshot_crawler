@@ -1,5 +1,29 @@
 # Discovery / Catalog / Batch Design
 
+## Younganimal active rentals and direct reader entry (2026-10-12)
+
+Younganimal Discovery joins settled `epListUser` account rows to canonical
+public episode identities using exact normalized titles. Account rows never add
+Items or display positions; duplicate IDs and title conflicts fail closed.
+Exact normalized `レンタル中 閲覧期限 D日+H時間` observations map to `paid`
+with `access_granted_until = observation start + D days + H hours - 1 hour`.
+This conservative lower bound requires days 0..14, hours 0..23 and a positive
+duration. Other countdown forms remain unknown. Each observed source explicitly
+refreshes or clears the grant. Exact free remains free and takes precedence.
+The site Policy selects only available free or unexpired rental sources, using
+non-consuming `direct`; expired/unknown access never initiates rental acquisition.
+Incremental refreshes every row in the validated requested scope so old rental
+changes are not hidden by a newest-known streak. This uses the existing stop
+hook and adds no browser requests to the already-buffered listing traversal;
+incremental never reconciles unseen sources as unavailable.
+
+Both manual and Batch Crawl navigate directly to the exact episode URL and
+validate the same-work header and live readable viewer. They do not traverse or
+read episode listings. Visible central charge/read/rental UI stops without
+clicking; the existing strict body, identity, capture and END proof remains
+required. Discovery retains its canonical series scope and bounded range pacing.
+No shared Catalog schema, Core access strategy, or resource rules change.
+
 ## Piccoma observed manual unlocks (2026-10-10)
 
 Piccoma Discovery records already active manual unlocks as `access_mode=quota`

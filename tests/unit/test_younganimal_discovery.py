@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -83,6 +84,12 @@ def test_younganimal_urls_are_strict_and_work_scoped() -> None:
         (("無料", "無料"), "unknown"),
         (("無料", "今なら無料"), "unknown"),
         (("購入",), "unknown"),
+        (("レンタル中",), "unknown"),
+        (("レンタル中 閲覧期限 14日+23時間", "無料"), "unknown"),
+        (("レンタル中 閲覧期限 14日+24時間",), "unknown"),
+        (("レンタル中 閲覧期限 15日+0時間",), "unknown"),
+        (("レンタル中 閲覧期限 0日+1時間",), "unknown"),
+        (("レンタル中 閲覧期限 0日+0時間",), "unknown"),
         ((), "unknown"),
     ],
 )
@@ -90,6 +97,15 @@ def test_younganimal_access_needs_one_exact_free_label(labels, expected) -> None
     observed = classify_younganimal_access(labels)
     assert observed.raw_labels == labels
     assert observed.access_mode == expected
+
+
+def test_younganimal_rental_countdown_is_a_conservative_timed_grant() -> None:
+    now = datetime(2026, 10, 12, 12, tzinfo=UTC)
+    observed = classify_younganimal_access(("レンタル中 閲覧期限 14日+23時間",), observed_at=now)
+    assert observed.access_mode == "paid"
+    assert observed.access_granted_until == now + timedelta(days=14, hours=22)
+    with pytest.raises(ValueError, match="aware timestamp"):
+        classify_younganimal_access(("レンタル中 閲覧期限 2日+23時間",), observed_at=now.replace(tzinfo=None))
 
 
 def test_younganimal_access_profile_uses_observed_content_hosts_only() -> None:

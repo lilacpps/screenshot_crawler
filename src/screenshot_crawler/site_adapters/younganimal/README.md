@@ -1,13 +1,27 @@
 # Younganimal adapter
 
-The Younganimal adapter provides Discovery, a manual free-episode crawl, and a
-direct-only free-source Batch path. It uses the shared CDP BrowserSession / Playwright Page,
+The Younganimal adapter provides Discovery, direct manual episode Crawl, and a
+direct-only Batch path for free sources and active rentals. It uses the shared CDP BrowserSession / Playwright Page,
 the shared AccessGuard, and the normal Runner, manifest, and packager.
 It does not launch Chrome or select a profile. Batch selects only currently
-available Catalog sources with `access_mode=free`; wait-free and resource flows
+available free sources or paid sources with an unexpired observed rental grant; new wait-free and resource flows
 are not implemented.
 
-## Current live verification (2026-10-11)
+## Current live verification (2026-10-12)
+
+The supplied rental episode `37d94ac0d8242` passed full work Discovery (six
+positions, three active rentals) and a production Batch run through END with
+28 pages and 28 CRC-valid ZIP members. Crawl made exactly one main-frame
+document navigation, to the canonical episode URL, and visited no listing route.
+Its additional `top_empty_no_pr` layout requires the positive top-empty root
+flag, exact empty/no-canvas slot 0, contiguous body and CI/PR/PR/Good/Last tail,
+and `seek.max=wrapper_count-1`. At maximum seek the empty wrapper and first body
+are in view with only the first-page flag; no blank-only advance is needed.
+The observed sample has 34 wrappers and 28 body pages; these counts are derived,
+not fixed. Native/rendered capture proof and frozen mapping remain required.
+Report: `output/younganimal_rental/crawl_20261012_065928/report.json`.
+
+Previous exact-free verification (2026-10-11):
 
 Full live Discovery passed all 31 ranges and 925 positions with a 3000 ms
 harness override; the production default was changed to 3000 ms after that run.
@@ -40,25 +54,22 @@ suite and both live profiles described above.
 Pass a canonical episode URL to the crawl command for site younganimal and set
 YOUNGANIMAL_WORK_URL=https://younganimal.com/series/&lt;work-id&gt; in the selected
 environment file. The work URL must be canonical and same-work; the episode
-source URL remains the manifest source URL. The adapter rejects a missing,
-malformed, or mismatched entry before episode navigation.
+source URL remains the manifest source URL. Missing/malformed configuration is
+rejected before navigation; a mismatched work header is rejected before capture.
 
-The adapter starts at the configured work listing, validates its observed range
-map and each visited range, and stops once the exact target row is found. It
-does not need to enumerate all 925 rows for this manual path. It waits 3 seconds
-before every selected numeric range route and before entering the episode. The
-selected row must have exactly one row-scoped 無料 label; 今なら無料,
-待つと無料, blank, repeated, conflicting, and unknown labels are ineligible.
-After entry, the embedded public row must independently prove the exact target
-route, same work, unique row, and exact 無料 label before viewer observation
-begins. No login, wait, ticket, coin, point, purchase, grant, or next-episode
-action is performed.
+The adapter starts directly at the canonical episode URL and verifies its exact
+route and same-work header. The configured work URL is an identity check only.
+Crawl does not navigate to, traverse, or read episode listing rows. Visible
+central charge UI or read/rental controls stop without clicking. The strict
+viewer/body parser must positively establish readable content before capture.
+No login, ticket, coin, point, purchase, rental activation or next-episode action
+is performed.
 
-The manual crawl supports only `access_strategy=auto` and retains its fresh
-series-listing preflight. Configured Batch requires `access_strategy=direct`, a
+The manual crawl supports only `access_strategy=auto`.
+Configured Batch requires `access_strategy=direct`, a
 strict `{13-hex-work-id}:{13-hex-episode-id}` external identity, and a nonempty
 opaque `work_key`. It navigates once to the canonical Catalog episode URL, then
-validates the freshly embedded exact-free row and work header before viewer
+validates the work header and live reader access before viewer
 initialization. It does not visit the series listing or consume/update quota or
 grant state. A mismatch stops before capture and leaves the Batch item pending.
 
@@ -146,19 +157,26 @@ attribution remains UNKNOWN; this does not generalize to every page.
 - Episode identity is work-scoped as &lt;work_id&gt;:&lt;episode_id&gt;.
 - Discovery accepts only a canonical series listing URL of the form
   https://younganimal.com/series/&lt;13-lowercase-hex-work-id&gt;. Episode seeds
-  are rejected before guard startup/navigation because the row's exact free
-  status has not been proven.
+  are rejected before guard startup/navigation; the supported Discovery scope
+  is the canonical series listing.
 - Full Discovery buffers every declared range before yielding. It validates
   contiguous ranges, row counts, unique IDs, work title, and exact row URLs.
   Incomplete traversal yields no partial records. Inclusive bounded scopes
   preserve whole-work global positions.
-- Nonempty epListUser history is rejected because same-ID title/access
-  consistency has not been established. The range selector accepts the exact
+- epListUser account rows settle within a bounded 12-second wait. Canonical
+  unique IDs and matching normalized public/user titles are required. Account
+  rows supplement access only and never create extra positions or Items.
+  Duplicate/malformed identities or conflicting titles fail closed.
+  The range selector accepts the exact
   observed 最新話から control at the same-work /new route and an optional
   no-href ... placeholder. Unknown controls and redirects fail closed.
-- Only exact row-local 無料 maps to free. Authentication, 今なら無料, waiting,
-  tickets, coins, purchases, grants, and resource state remain unknown or
-  unimplemented.
+- Exact row-local 無料 maps to free. Exact normalized rental countdown
+  `レンタル中 閲覧期限 D日+H時間` maps to paid with the conservative grant
+  `observation start + D days + H hours - 1 hour` (days 0..14, hours 0..23,
+  positive remaining bound). Free takes precedence; malformed/near-expiry or
+  unobserved formats stay unknown. Every observation refreshes or clears the
+  old grant. Policy admits only available, unexpired rentals as non-consuming
+  `direct`. New waiting/ticket/coin/purchase access remains unsupported.
 
 The Discovery adapter uses a 3-second delay before every numeric range route,
 a finite retry budget that requires matching current-attempt HTTP 200 document
@@ -166,20 +184,26 @@ evidence, and bounded AccessGuard cleanup. Its exact retry contract and the
 completed 925-row live pass are documented in note/11_younganimal.md and the
 runbook progress.
 
+Incremental refreshes every validated row in the requested scope because rental
+rights can change on old episodes beyond a newest-known boundary. The listing
+is already buffered, so this adds no browser requests. Incremental does not
+reconcile unseen sources as unavailable.
+
 ## Verification status
 
-The final affected Younganimal capture unit and browser suite passed 84 tests,
-0 skipped, with 5 existing pytest-asyncio deprecation warnings in 133.19s.
-`ruff check src tests` passed. A read-only CLI review inspected a SHA-snapshotted
-code view but did not run tests. The full `pytest -q` suite was not run for this
-site-local change.
+The rental/direct-entry iteration passed all six Younganimal unit/browser files:
+171 passed, 0 skipped, with existing pytest-asyncio deprecation warnings.
+The final incremental refresh change also passed a targeted Discovery rerun:
+51 passed, 0 skipped.
+`ruff check src tests` and `git diff --check` passed. The global full suite and
+Research tests were not run for this site-local change.
 
 Discovery's 925-row live run is complete. The direct-only Policy/Batch path has
 passed independent review and synthetic BatchExecutor-to-Runner-to-ZIP tests.
 Attempt 9 verifies the final capture code on both live profiles. The 44-page
 synthetic Runner also verifies all native outputs against independent
-fixture-source RGBA through END/ZIP. Phase 05 remains UNKNOWN-only and
-unimplemented: both SVG icons on blank rows were measured
+fixture-source RGBA through END/ZIP. Phase 05 remains
+unimplemented for new access acquisition: both SVG icons on blank rows were measured
 visible at 24x24 with visible parents, but active icon, wait/access/resource
 semantics, and positive authentication state remain UNKNOWN. No wait, CTA,
 episode, or resource action occurred.

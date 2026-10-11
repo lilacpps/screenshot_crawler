@@ -63,7 +63,7 @@ def _row(
     </div>'''
 
 
-def _listing(*, selected_range: bool, target_label: str = "無料") -> str:
+def _listing(*, selected_range: bool, target_label: str = "無料", rental: bool = False) -> str:
     href = WORK_URL if selected_range else f"{WORK_URL}/1"
     rows = "".join(
         _row(
@@ -73,9 +73,10 @@ def _listing(*, selected_range: bool, target_label: str = "無料") -> str:
         )
         for position in range(1, 17)
     )
+    user_rows = _row(1, label="レンタル中 閲覧期限 14日+23時間") if rental else ""
     return f'''<div class="series-eplist-main">
       <div class="series-eplist" data-e2e="epList">{rows}</div>
-      <div class="series-eplist mode-user" data-e2e="epListUser"></div>
+      <div class="series-eplist mode-user" data-e2e="epListUser">{user_rows}</div>
       <nav class="series-sort">
         <a class="series-sort-link" href="{WORK_URL}/new">最新話から</a>
         <a class="series-sort-link" href="{href}">1-16</a>
@@ -87,11 +88,12 @@ def _viewer_html(
     initial_seek: int = 11,
     native_source_slots: tuple[int, ...] = (),
     clip_slots: tuple[int, ...] = (),
+    no_top_pr: bool = False,
 ) -> str:
     wrappers: list[str] = []
     for index in range(22):
         if index == 0:
-            classes = "mode-empty mode-pr mode-top-pr -cv-page"
+            classes = "mode-empty -cv-page" if no_top_pr else "mode-empty mode-pr mode-top-pr -cv-page"
             body = ""
         elif index <= 16:
             classes = "-cv-page mode-loaded mode-rendered"
@@ -147,7 +149,8 @@ def _viewer_html(
             f'<div class="{classes}"{marker_id} data-slot="{index}">{body}</div>'
         )
     wrappers_html = "".join(wrappers)
-    return f'''<section id="comici-viewer" class="-cv mode-lang-ja mode-h mode-dir-rtl mode-nav-dir-rtl mode-spread">
+    root_flag = "mode-has-top-emptypage" if no_top_pr else ""
+    return f'''<section id="comici-viewer" class="-cv mode-lang-ja mode-h mode-dir-rtl mode-nav-dir-rtl mode-spread {root_flag}">
       <input id="xCVSeekBar" type="range" min="1" max="21" step="2" value="{initial_seek}">
       <div id="xCVPages" class="-cv-pages">{wrappers_html}</div>
     </section>
@@ -176,7 +179,10 @@ def _viewer_html(
             wrapper.style.left = `${{945 + (focus - index - 1) * 946}}px`;
           }});
           viewer.classList.remove('mode-first-page','mode-top-pr-page','mode-pr-page','mode-ci-page','mode-last-page');
-          if (value === 21) viewer.classList.add('mode-first-page','mode-top-pr-page');
+          if (value === 21) {{
+            viewer.classList.add('mode-first-page');
+            if (!{str(no_top_pr).lower()}) viewer.classList.add('mode-top-pr-page');
+          }}
           if (value === 5) viewer.classList.add('mode-pr-page','mode-ci-page');
           if (value === 3) viewer.classList.add('mode-pr-page');
           if (value === 1) viewer.classList.add('mode-pr-page','mode-last-page');
@@ -196,11 +202,18 @@ def _viewer_html(
 def _episode_html(
     *, native_source_slots: tuple[int, ...] = (), clip_slots: tuple[int, ...] = (),
     target_label: str = "無料",
+    rental: bool = False,
+    no_top_pr: bool = False,
 ) -> str:
+    gate = (
+        f'<div class="ep-main-content mode-charge"><div class="ep-charge"><button>{target_label}</button></div></div>'
+        if target_label != "無料" and not rental else ""
+    )
     return f'''<!doctype html><html><head><meta charset="utf-8"><title>Fixture viewer</title></head>
       <body><div id="xHeader"><a class="ep-h-main-h-series" href="{WORK_URL}">Fixture Work</a></div>
-      {_listing(selected_range=True, target_label=target_label)}
-      {_viewer_html(native_source_slots=native_source_slots, clip_slots=clip_slots)}</body></html>'''
+      {gate}
+      {'' if no_top_pr else _listing(selected_range=True, target_label=target_label, rental=rental)}
+      {_viewer_html(native_source_slots=native_source_slots, clip_slots=clip_slots, no_top_pr=no_top_pr)}</body></html>'''
 
 
 def _top_empty_viewer_html(
@@ -324,6 +337,8 @@ async def _install_fixture(
     clip_slots: tuple[int, ...] = (), top_empty: bool = False,
     top_empty_initial_nav_open: bool = False, top_empty_initial_splash_count: int = 0,
     episode_target_label: str = "無料",
+    rental: bool = False,
+    no_top_pr: bool = False,
 ) -> list[str]:
     requested: list[str] = []
 
@@ -350,6 +365,8 @@ async def _install_fixture(
                     native_source_slots=native_source_slots,
                     clip_slots=clip_slots,
                     target_label=episode_target_label,
+                    rental=rental,
+                    no_top_pr=no_top_pr,
                 ).replace('value="11"', f'value="{initial_seek}"')
             await route.fulfill(status=200, body=body, content_type="text/html")
         else:
@@ -398,6 +415,7 @@ def _make_younganimal_batch(
     *,
     manifest_observations: list[dict[str, object]] | None = None,
     external_work_id: str = WORK_ID,
+    rental: bool = False,
 ) -> tuple[CatalogService, BatchExecutor, object]:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(
@@ -412,7 +430,8 @@ def _make_younganimal_batch(
             site="younganimal",
             external_id=f"{external_work_id}:{EPISODE_ID}",
             discovery_key="fixture-discovery",
-            access_mode="free",
+            access_mode="paid" if rental else "free",
+            access_granted_until="2099-10-11T12:00:00+09:00" if rental else None,
             available=True,
             display_position=1,
         ),
@@ -452,7 +471,6 @@ async def test_younganimal_runner_captures_only_contiguous_rendered_pngs_and_pac
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     requested = await _install_fixture(browser_page)
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 50)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 20)
@@ -514,7 +532,7 @@ async def test_younganimal_runner_captures_only_contiguous_rendered_pngs_and_pac
 
     assert result.stop_state is PageState.END
     assert len(result.pages) == 16
-    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    assert requested == [f"/episodes/{EPISODE_ID}"]
     assert [page.identity.page_id for page in result.pages] == [
         "1", "2,3", "2,3", "4,5", "4,5", "6,7", "6,7", "8,9", "8,9",
         "10,11", "10,11", "12,13", "12,13", "14,15", "14,15", "16",
@@ -538,11 +556,15 @@ async def test_younganimal_runner_captures_only_contiguous_rendered_pngs_and_pac
         assert all(name.endswith(".png") for name in names)
 
 
+@pytest.mark.parametrize(("rental", "no_top_pr"), [(False, False), (True, False), (True, True)])
 async def test_younganimal_direct_batch_completes_from_one_canonical_episode_navigation(
-    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rental: bool, no_top_pr: bool
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
-    requested = await _install_fixture(browser_page)
+    requested = await _install_fixture(
+        browser_page, rental=rental, episode_target_label="" if rental else "無料",
+        no_top_pr=no_top_pr, native_source_slots=tuple(range(1, 17)) if no_top_pr else (),
+    )
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 50)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 20)
@@ -550,7 +572,7 @@ async def test_younganimal_direct_batch_completes_from_one_canonical_episode_nav
     monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
     manifest_observations: list[dict[str, object]] = []
     catalog, executor, candidate = _make_younganimal_batch(
-        tmp_path, manifest_observations=manifest_observations
+        tmp_path, manifest_observations=manifest_observations, rental=rental
     )
 
     result = await executor.execute_candidate(
@@ -573,7 +595,7 @@ async def test_younganimal_direct_batch_completes_from_one_canonical_episode_nav
     target = catalog.get_source_target(candidate.target_id)
     assert target.locator == EPISODE_URL
     assert source.quota_started_at is None
-    assert source.access_granted_until is None
+    assert source.access_granted_until == ("2099-10-11T12:00:00+09:00" if rental else None)
     assert len(manifest_observations) == 1
     manifest = manifest_observations[0]
     assert manifest["source_url"] == EPISODE_URL
@@ -591,7 +613,7 @@ async def test_younganimal_direct_batch_rejects_stale_free_row_before_capture_or
     requested = await _install_fixture(browser_page, episode_target_label=chr(0x5f85) + chr(0x3064) + chr(0x3068) + chr(0x7121) + chr(0x6599))
     catalog, executor, candidate = _make_younganimal_batch(tmp_path)
 
-    with pytest.raises(CandidateExecutionError, match="fresh episode listing does not prove exact free"):
+    with pytest.raises(CandidateExecutionError, match="direct access is blocked"):
         await executor.execute_candidate(
             browser_page,
             candidate,
@@ -618,7 +640,7 @@ async def test_younganimal_direct_batch_rejects_stale_free_row_before_capture_or
             "0000000000001",
             None,
             [f"/episodes/{EPISODE_ID}"],
-            "fresh episode listing does not prove exact free",
+            "episode header does not prove the configured work",
         ),
         (
             WORK_ID,
@@ -683,7 +705,6 @@ async def test_younganimal_top_empty_profile_skips_only_observed_blank_and_captu
         top_empty_initial_nav_open=True,
         top_empty_initial_splash_count=1,
     )
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 1_000)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 5_000)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 20)
@@ -839,7 +860,7 @@ async def test_younganimal_top_empty_profile_skips_only_observed_blank_and_captu
         for first_slot in range(2, 46, 2)
         for page_id in (f"{first_slot},{first_slot + 1}",) * 2
     ]
-    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    assert requested == [f"/episodes/{EPISODE_ID}"]
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["source_url"] == EPISODE_URL
     assert [page["sequence"] for page in manifest["pages"]] == list(range(1, 45))
@@ -962,7 +983,6 @@ async def test_younganimal_initial_ui_unknown_or_unsettled_fails_before_capture(
         top_empty_initial_nav_open=case == "unsettled_ui",
         top_empty_initial_splash_count=1 if case == "unsettled_ui" else 0,
     )
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 30)
     monkeypatch.setattr(
         younganimal_adapter_module,
@@ -1021,7 +1041,7 @@ async def test_younganimal_initial_ui_unknown_or_unsettled_fails_before_capture(
             )
         ).run(browser_page, adapter)
 
-    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    assert requested == [f"/episodes/{EPISODE_ID}"]
     assert collection_calls == []
     assert encoding_calls == []
     assert list(output_dir.rglob("page-*.*")) == []
@@ -1035,7 +1055,6 @@ async def test_younganimal_native_selection_cancellation_releases_unreturned_pro
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     await _install_fixture(browser_page, native_source_slots=(1, 2))
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
@@ -1105,7 +1124,6 @@ async def test_younganimal_capture_rejects_frozen_mapping_drift_before_native_or
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     await _install_fixture(browser_page, native_source_slots=(1, 2))
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
@@ -1152,7 +1170,6 @@ async def test_younganimal_capture_rejects_valid_profile_mapping_drift_after_det
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     await _install_fixture(browser_page, initial_seek=11, native_source_slots=(1, 2, 3, 4))
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
@@ -1308,7 +1325,6 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     requested = await _install_fixture(browser_page, native_source_slots=tuple(range(1, 17)))
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 30)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
@@ -1387,7 +1403,7 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
 
     assert result.stop_state is PageState.END
     assert len(result.pages) == 16
-    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    assert requested == [f"/episodes/{EPISODE_ID}"]
     assert adapter.capture_modes[0] == "native_source_canvas", adapter.capture_records[0]
     assert adapter.capture_modes == ["native_source_canvas"] * 9, adapter.capture_modes
     assert adapter.source_authority is not None
@@ -1538,7 +1554,6 @@ async def test_younganimal_unsafe_or_missing_native_half_falls_back_for_whole_sp
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     await _install_fixture(browser_page, native_source_slots=(1, 2), clip_slots=(1,))
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
@@ -1651,7 +1666,6 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
             "OBSERVER_INIT_SCRIPT",
             test_namespaced_observer + original_observer_script,
         )
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
@@ -2138,34 +2152,21 @@ async def test_younganimal_mutation_journal_is_bounded_and_marks_lost_coverage(
     assert all(record["targetArea"] == "viewer" for record in result["records"])
 
 
-async def test_younganimal_manual_entry_rejects_nonfree_row_before_episode_navigation(
-    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("gate", ["すぐ無料で読む", "待つと無料で読む", "この話をレンタルする"])
+async def test_younganimal_manual_entry_checks_reader_gate_without_listing_navigation(
+    browser_page, gate: str
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
-    requested = await _install_fixture(browser_page)
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    requested = await _install_fixture(browser_page, episode_target_label=gate)
     adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
     await adapter.prepare_page(browser_page)
-    await browser_page.goto(WORK_URL, wait_until="commit")
-    adapter.resolve_initial_navigation_url(EPISODE_URL)
-    # The fixture's target is free by default. Mutate only its exact public-row
-    # badge to prove that the adapter will not enter the episode after an unknown label.
-    await browser_page.route(
-        "https://younganimal.com/series/aee4fa742b0fe/1",
-        lambda route: route.fulfill(
-            status=200,
-            body=(
-                '<!doctype html><html><head><meta charset="utf-8"></head><body><h1>Fixture Work</h1>'
-                + _listing(selected_range=True).replace("無料", "待つと無料")
-                + "</body></html>"
-            ),
-            content_type="text/html",
-        ),
-    )
-    await browser_page.locator(".series-eplist-main").wait_for(state="visible")
-    with pytest.raises(UnknownPageStateError, match="exact free label"):
+    entry = adapter.resolve_initial_navigation_url(EPISODE_URL)
+    assert entry == EPISODE_URL
+    await browser_page.goto(entry, wait_until="commit")
+    with pytest.raises(UnknownPageStateError, match="direct access is blocked"):
         await adapter.initialize(browser_page)
-    assert f"/episodes/{EPISODE_ID}" not in requested
+    assert _content_document_paths(requested) == [f"/episodes/{EPISODE_ID}"]
+
 
 
 async def test_younganimal_canvas_mutation_fails_without_runner_fallback_or_saved_page(
@@ -2173,7 +2174,6 @@ async def test_younganimal_canvas_mutation_fails_without_runner_fallback_or_save
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     requested = await _install_fixture(browser_page)
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
@@ -2218,17 +2218,16 @@ async def test_younganimal_canvas_mutation_fails_without_runner_fallback_or_save
             )
         ).run(browser_page, adapter)
 
-    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    assert requested == [f"/episodes/{EPISODE_ID}"]
     assert fallback_calls == []
     assert list(output_dir.glob("page-*.png")) == []
 
 
-async def test_younganimal_range_429_stops_before_episode_navigation(
+async def test_younganimal_episode_429_stops_without_listing_navigation(
     browser_page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     requested = await _install_fixture(browser_page)
-    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
     attempts: list[str] = []
 
     async def rate_limit(route) -> None:
@@ -2240,15 +2239,14 @@ async def test_younganimal_range_429_stops_before_episode_navigation(
             content_type="text/plain",
         )
 
-    await browser_page.route(f"{WORK_URL}/1", rate_limit)
+    await browser_page.route(EPISODE_URL, rate_limit)
     adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
     await adapter.prepare_page(browser_page)
-    await browser_page.goto(WORK_URL, wait_until="commit")
-    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    entry = adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await browser_page.goto(entry, wait_until="commit")
 
     with pytest.raises(UnknownPageStateError, match="429"):
         await adapter.initialize(browser_page)
 
-    assert attempts == [f"{WORK_URL}/1"]
-    assert requested == [f"/series/{WORK_ID}"]
-    assert f"/episodes/{EPISODE_ID}" not in requested
+    assert attempts == [EPISODE_URL]
+    assert requested == []

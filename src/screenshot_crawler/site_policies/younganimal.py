@@ -1,4 +1,4 @@
-"""Direct-only Batch eligibility for available Younganimal sources marked free."""
+"""Direct-only Batch eligibility for Younganimal free episodes and active rentals."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
 
 
 class YounganimalSitePolicy(SitePolicy):
-    """Allow only currently available Catalog sources classified exactly free."""
+    """Allow available free sources and unexpired observed rental grants."""
 
     site = "younganimal"
 
@@ -20,7 +20,7 @@ class YounganimalSitePolicy(SitePolicy):
         now: datetime,
         quota_available: int | None,
     ) -> PolicyDecision:
-        del now, quota_available
+        del quota_available
         if not source.available:
             return PolicyDecision(False, None, "unavailable")
         if source.access_mode == "free":
@@ -30,6 +30,18 @@ class YounganimalSitePolicy(SitePolicy):
         if source.access_mode == "quota":
             return PolicyDecision(False, None, "quota_not_supported")
         if source.access_mode == "paid":
+            if source.access_granted_until is not None:
+                try:
+                    grant = datetime.fromisoformat(source.access_granted_until)
+                except ValueError:
+                    return PolicyDecision(False, None, "invalid_rental")
+                if grant.tzinfo is None or grant.utcoffset() is None:
+                    return PolicyDecision(False, None, "invalid_rental")
+                if now.tzinfo is None or now.utcoffset() is None:
+                    return PolicyDecision(False, None, "invalid_rental")
+                if grant > now:
+                    return PolicyDecision(True, "direct", "active_rental")
+                return PolicyDecision(False, None, "expired_rental")
             return PolicyDecision(False, None, "paid")
         if source.access_mode == "owned":
             return PolicyDecision(False, None, "owned_not_verified")

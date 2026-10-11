@@ -95,10 +95,12 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         pages.children.length < 9 || seek.type !== 'range' || seek.disabled) return null;
     const children = [...pages.children];
     const ci = children.length - 5;
-    const hasTopEmptyPage = viewer.classList.contains('mode-has-top-emptypage');
+    const noTopPr = viewer.classList.contains('mode-has-top-emptypage') &&
+      exactClasses(children[0], ['-cv-page', 'mode-empty']);
+    const hasTopEmptyPage = viewer.classList.contains('mode-has-top-emptypage') && !noTopPr;
     const bodyStart = hasTopEmptyPage ? 2 : 1;
     if (children.length < 9 || ci <= bodyStart ||
-        !exactClasses(children[0], ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']) ||
+        !exactClasses(children[0], noTopPr ? ['-cv-page', 'mode-empty'] : ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']) ||
         (hasTopEmptyPage && !exactClasses(children[1], ['-cv-page', 'mode-empty'])) ||
         !exactClasses(children[ci], ['-cv-page', 'mode-ci']) ||
         !exactClasses(children[ci + 1], ['-cv-page', 'mode-empty', 'mode-pr']) ||
@@ -125,7 +127,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     if (!mutationState || !Number.isSafeInteger(mutationState.domGeneration) || mutationState.domGeneration < 0 ||
         !Number.isSafeInteger(mutationState.captureDomGeneration) || mutationState.captureDomGeneration < 0) return null;
     return {viewer, pages, seek, children, ci, bodyStart,
-      variant: hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
+      variant: noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
       path: location.pathname, dom: mutationState.domGeneration,
       captureDom: mutationState.captureDomGeneration,
       viewport: {width: innerWidth, height: innerHeight, dpr: devicePixelRatio}};

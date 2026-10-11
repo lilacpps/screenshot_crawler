@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -75,12 +76,20 @@ def _listing_html(
 ) -> str:
     heading = '<h1>Fixture Work</h1>' if title else ""
     rows = "".join(_row(position) for position in positions)
+    account_script = ""
+    if user_rows:
+        account_script = f'''<script>
+          const root = document.querySelector('[data-e2e="epListUser"]');
+          root.classList.add('mode-loading');
+          setTimeout(() => {{root.innerHTML = {json.dumps(user_rows)};
+            root.classList.remove('mode-loading');}}, 50);
+        </script>'''
     return f'''<!doctype html><html><head><meta charset="utf-8"></head><body>{heading}
       <div class="series-eplist-main">
         <div class="series-eplist" data-e2e="epList">{rows}</div>
-        <div class="series-eplist mode-user" data-e2e="epListUser">{user_rows}</div>
+        <div class="series-eplist mode-user" data-e2e="epListUser"></div>
         <div class="series-sort">{_range_links(selected_page=selected_page)}</div>
-      </div></body></html>'''
+      </div>{account_script}</body></html>'''
 
 
 def _target(
@@ -108,7 +117,8 @@ async def _install_pages(
     browser_page,
     *,
     omit_last: bool = False,
-    history_conflict: bool = False,
+    history_conflict: str | None = None,
+    rental_label: str | None = None,
 ) -> list[str]:
     requested: list[str] = []
     root_requests = 0
@@ -117,6 +127,10 @@ async def _install_pages(
         if history_conflict
         else ""
     )
+    if rental_label is not None:
+        history_rows = _row(2, label=rental_label)
+    if history_conflict == "duplicate":
+        history_rows = _row(1, label="レンタル中 閲覧期限 2日+23時間") * 2
 
     async def fulfill(route) -> None:
         nonlocal root_requests
@@ -202,12 +216,13 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
     assert requested.count(f"/series/{WORK_ID}/1") == 1
     assert requested.count(f"/series/{WORK_ID}/2") == 1
     assert pacing_navigation_counts == [1, 2]
+
     requested.clear()
     pacing_navigation_counts.clear()
     incremental = await service.discover(browser_page, _target(), "incremental")
     assert incremental.complete is None
-    assert incremental.stopped_reason == "known_streak"
-    assert incremental.observed_count == 5
+    assert incremental.stopped_reason == "exhausted"
+    assert incremental.observed_count == TOTAL
     assert requested.count(f"/series/{WORK_ID}/1") == 1
     assert requested.count(f"/series/{WORK_ID}/2") == 1
     assert pacing_navigation_counts == [1, 2]
@@ -233,6 +248,42 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
         28,
     ]
     assert pacing_navigation_counts == [1, 2]
+
+
+async def test_younganimal_rental_history_joins_public_identity_and_clears_stale_grant(
+    browser_page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from screenshot_crawler.batch.planner import BatchPlanner
+    from screenshot_crawler.site_policies import SitePolicyRegistry, YounganimalSitePolicy
+
+    monkeypatch.setattr(younganimal_discovery, "RANGE_PACING_MS", 0)
+    catalog = CatalogService(tmp_path / "rental.sqlite")
+    service = DiscoveryService(catalog, _registry())
+    await _install_pages(browser_page, rental_label="レンタル中 閲覧期限 14日+23時間")
+    result = await service.discover(browser_page, _target(), "full")
+    assert result.complete is True
+    assert len(catalog.list_sources(site="younganimal")) == TOTAL
+    source = catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(2)}")
+    assert source.access_mode == "paid"
+    assert source.display_position == 2
+    assert source.access_granted_until is not None
+    policies = SitePolicyRegistry()
+    policies.register("younganimal", YounganimalSitePolicy)
+    plan = BatchPlanner(catalog, policies).plan(site="younganimal")
+    candidate = next(row for row in plan.candidates if row.source_id == source.id)
+    assert candidate.access_strategy == "direct"
+    assert candidate.reason == "active_rental"
+    assert not candidate.consumes_quota
+
+    await browser_page.unroute("https://younganimal.com/**")
+    await _install_pages(browser_page, rental_label="レンタル中")
+    refreshed = await service.discover(browser_page, _target(), "incremental")
+    assert refreshed.observed_count == TOTAL
+    assert refreshed.complete is None
+    assert refreshed.stopped_reason == "exhausted"
+    source = catalog.get_source(source.id)
+    assert source.access_mode == "unknown"
+    assert source.access_granted_until is None
 
 
 async def test_younganimal_navigation_retry_budget_is_shared_across_work(
@@ -327,10 +378,11 @@ async def test_younganimal_episode_seed_is_rejected_before_any_navigation(
     assert requested == []
 
 
+@pytest.mark.parametrize("history_conflict", ["title", "duplicate"])
 async def test_younganimal_conflicting_history_duplicate_fails_closed_and_preserves_catalog(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, history_conflict: str
 ) -> None:
-    await _install_pages(browser_page, history_conflict=True)
+    await _install_pages(browser_page, history_conflict=history_conflict)
     target = _target()
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(WorkInput(work_key=target.work_key, title="Fixture Work"))

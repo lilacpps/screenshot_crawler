@@ -172,10 +172,16 @@ def _top_empty_snapshot(seek_value: int) -> dict[str, object]:
         (1, "end", (19, 20, 21)),
     ],
 )
+@pytest.mark.parametrize("no_top_pr", [False, True])
 def test_younganimal_observed_seek_roles_map_to_contiguous_physical_body_slots(
-    seek_value: int, state: str, active: tuple[int, ...]
+    seek_value: int, state: str, active: tuple[int, ...], no_top_pr: bool
 ) -> None:
-    observation = _parse_viewer_observation(_snapshot(seek_value), expected_url=EPISODE_URL)
+    raw = _snapshot(seek_value)
+    if no_top_pr:
+        raw["viewerClasses"] = [name for name in raw["viewerClasses"] if name != "mode-top-pr-page"] + ["mode-has-top-emptypage"]
+        raw["slots"][0]["classes"] = ["-cv-page", "mode-empty"]
+    observation = _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+    assert observation.layout_variant == ("top_empty_no_pr" if no_top_pr else "standard")
 
     assert observation.body_slots == BODY_SLOTS
     assert observation.ci_slot == 17
@@ -183,6 +189,26 @@ def test_younganimal_observed_seek_roles_map_to_contiguous_physical_body_slots(
     assert observation.active_slots == active
     if state == "content":
         assert observation.ready_slots == active
+
+
+@pytest.mark.parametrize("mutation", ["flag", "canvas", "range", "pr_marker", "offscreen"])
+def test_younganimal_no_pr_profile_requires_its_positive_structural_proof(mutation: str) -> None:
+    raw = _snapshot(21)
+    raw["viewerClasses"] = [name for name in raw["viewerClasses"] if name != "mode-top-pr-page"] + ["mode-has-top-emptypage"]
+    raw["slots"][0]["classes"] = ["-cv-page", "mode-empty"]
+    if mutation == "flag":
+        raw["viewerClasses"].remove("mode-has-top-emptypage")
+    elif mutation == "canvas":
+        raw["slots"][0]["canvasCount"] = 1
+        raw["slots"][0]["canvas"] = raw["slots"][1]["canvas"]
+    elif mutation == "range":
+        raw["seek"]["max"] = "23"
+    elif mutation == "pr_marker":
+        raw["viewerClasses"].append("mode-top-pr-page")
+    else:
+        raw["slots"][0]["wrapperCenterInViewport"] = False
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
 
 @pytest.mark.parametrize("value", [None, True, -1, 1.5, "0"])

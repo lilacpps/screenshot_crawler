@@ -61,7 +61,6 @@ def test_younganimal_policy_allows_only_available_free_directly() -> None:
     ("mode", "reason"),
     [
         ("unknown", "unknown"),
-        ("paid", "paid"),
         ("owned", "owned_not_verified"),
         ("grant", "grant_not_supported"),
         ("rental", "rental_not_supported"),
@@ -104,3 +103,27 @@ def test_younganimal_policy_rejects_unavailable_free_and_has_no_resource_paths()
         policy.validate_access_resource("work_ticket")
     with pytest.raises(SitePolicyError, match="Grant-only access resource is not implemented"):
         policy.validate_grant_only_resource("work_ticket")
+
+
+@pytest.mark.parametrize(
+    ("grant", "available", "eligible", "reason"),
+    [
+        ("2026-10-11T12:00:01+09:00", True, True, "active_rental"),
+        ("2026-10-11T12:00:00+09:00", True, False, "expired_rental"),
+        ("2026-10-10T12:00:00+09:00", True, False, "expired_rental"),
+        (None, True, False, "paid"),
+        ("invalid", True, False, "invalid_rental"),
+        ("2099-10-11T12:00:00", True, False, "invalid_rental"),
+        ("2099-10-11T12:00:00+09:00", False, False, "unavailable"),
+    ],
+)
+def test_younganimal_policy_selects_only_available_unexpired_rentals(
+    grant, available, eligible, reason
+) -> None:
+    source = _source("paid", available=available, access_granted_until=grant)
+    decision = YounganimalSitePolicy().evaluate(source, now=NOW, quota_available=0)
+    assert (decision.eligible, decision.reason) == (eligible, reason)
+    assert decision.access_strategy == ("direct" if eligible else None)
+    assert not decision.consumes_quota
+    assert decision.quota_resource is None
+    assert source.quota_started_at is None
