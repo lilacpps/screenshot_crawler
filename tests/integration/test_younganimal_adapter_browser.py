@@ -1,0 +1,2254 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import io
+import json
+import zipfile
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+from PIL import Image
+
+from screenshot_crawler.batch import BatchExecutor, BatchPlanner, CandidateExecutionError
+from screenshot_crawler.catalog import (
+    CatalogService,
+    ItemInput,
+    SourceInput,
+    SourceTargetInput,
+    WorkInput,
+)
+from screenshot_crawler.catalog.service import JST
+from screenshot_crawler.core.errors import UnknownPageStateError
+from screenshot_crawler.core.models import RunConfig
+from screenshot_crawler.core.packaging import package_crawl_output
+from screenshot_crawler.core.runner import CrawlerRunner
+from screenshot_crawler.core.state import PageState
+from screenshot_crawler.runtime_settings import SiteRuntimeSettings
+from screenshot_crawler.site_adapters.registry import AdapterRegistry
+from screenshot_crawler.site_adapters.younganimal import adapter as younganimal_adapter_module
+from screenshot_crawler.site_adapters.younganimal.adapter import YounganimalAdapter
+from screenshot_crawler.site_policies import SitePolicyRegistry, YounganimalSitePolicy
+
+pytestmark = pytest.mark.asyncio(loop_scope="module")
+
+BASE = "https://younganimal.com"
+WORK_ID = "aee4fa742b0fe"
+EPISODE_ID = "55889b8a851cb"
+WORK_URL = f"{BASE}/series/{WORK_ID}"
+EPISODE_URL = f"{BASE}/episodes/{EPISODE_ID}"
+PAGE_WIDTH = 984
+PAGE_HEIGHT = 1329
+NOW = datetime(2026, 10, 11, 12, 0, tzinfo=JST)
+
+
+def _episode_id(position: int) -> str:
+    if position == 1:
+        return EPISODE_ID
+    return f"{position:013x}"
+
+
+def _row(
+    position: int, *, selected: bool = False, label: str | None = None
+) -> str:
+    episode_id = _episode_id(position)
+    label = label if label is not None else ("無料" if selected else "今なら無料")
+    return f'''<div class="series-eplist-item">
+      <a class="series-eplist-item-link" href="/episodes/{episode_id}">
+        <span class="series-eplist-item-h-text">Fixture part {position}</span>
+        <span class="series-eplist-item-access-text">{label}</span>
+      </a>
+    </div>'''
+
+
+def _listing(*, selected_range: bool, target_label: str = "無料") -> str:
+    href = WORK_URL if selected_range else f"{WORK_URL}/1"
+    rows = "".join(
+        _row(
+            position,
+            selected=position == 1,
+            label=target_label if position == 1 else None,
+        )
+        for position in range(1, 17)
+    )
+    return f'''<div class="series-eplist-main">
+      <div class="series-eplist" data-e2e="epList">{rows}</div>
+      <div class="series-eplist mode-user" data-e2e="epListUser"></div>
+      <nav class="series-sort">
+        <a class="series-sort-link" href="{WORK_URL}/new">最新話から</a>
+        <a class="series-sort-link" href="{href}">1-16</a>
+      </nav>
+    </div>'''
+
+
+def _viewer_html(
+    initial_seek: int = 11,
+    native_source_slots: tuple[int, ...] = (),
+    clip_slots: tuple[int, ...] = (),
+) -> str:
+    wrappers: list[str] = []
+    for index in range(22):
+        if index == 0:
+            classes = "mode-empty mode-pr mode-top-pr -cv-page"
+            body = ""
+        elif index <= 16:
+            classes = "-cv-page mode-loaded mode-rendered"
+            shade = (index * 13) % 255
+            if index in native_source_slots:
+                clip_prefix = (
+                    'x.save();x.rect(0,0,c.width,c.height);x.clip();'
+                    if index in clip_slots else ""
+                )
+                clip_suffix = "x.restore();" if index in clip_slots else ""
+                draw_script = (
+                    f'window.__yaRenderers=window.__yaRenderers||{{}};'
+                    f'window.__yaSources=window.__yaSources||{{}};'
+                    f'const s=document.createElement("canvas");s.width=47;s.height=61;'
+                    f'const sx=s.getContext("2d");sx.fillStyle="rgb({shade},40,90)";'
+                    f'sx.fillRect(0,0,s.width,s.height);window.__yaSources[{index}]=s;'
+                    f'window.__yaRenderers[{index}]=()=>{{{clip_prefix}'
+                    + 'x.clearRect(0,0,c.width,c.height);'
+                    + f'x.drawImage(s,0,0,s.width,s.height,0,0,c.width,c.height);{clip_suffix}}};'
+                )
+            else:
+                draw_script = (
+                    f'window.__yaRenderers=window.__yaRenderers||{{}};'
+                    f'window.__yaRenderers[{index}]=()=>{{x.fillStyle="rgb({shade},40,90)";'
+                    'x.fillRect(0,0,c.width,c.height);};'
+                )
+            body = (
+                f'<div class="-cv-page-canvas"><canvas width="{PAGE_WIDTH}" '
+                f'height="{PAGE_HEIGHT}" data-slot="{index}" '
+                f'style="position:absolute;left:145px;top:0;width:656px;height:886px"></canvas></div>'
+                f'<script>(function(){{const c=document.currentScript.previousElementSibling.querySelector("canvas");'
+                f'const x=c.getContext("2d");{draw_script}window.__yaRenderers[{index}]();}})()</script>'
+            )
+        elif index == 17:
+            classes = "mode-ci -cv-page"
+            body = (
+                '<div class="-cv-ci -cv-page-content">'
+                '<div class="-cv-ci-content" data-ya-scroll-widget="fixture">'
+                '<span class="-cv-ci-item"></span><span class="-cv-ci-item"></span>'
+                '</div></div>'
+            )
+        elif index in {18, 19}:
+            classes = "mode-empty mode-pr -cv-page"
+            body = ""
+        elif index == 20:
+            classes = "mode-good -cv-page"
+            body = ""
+        else:
+            classes = "mode-last -cv-page"
+            body = ""
+        marker_id = ' id="xCVLastPage"' if index == 21 else ""
+        wrappers.append(
+            f'<div class="{classes}"{marker_id} data-slot="{index}">{body}</div>'
+        )
+    wrappers_html = "".join(wrappers)
+    return f'''<section id="comici-viewer" class="-cv mode-lang-ja mode-h mode-dir-rtl mode-nav-dir-rtl mode-spread">
+      <input id="xCVSeekBar" type="range" min="1" max="21" step="2" value="{initial_seek}">
+      <div id="xCVPages" class="-cv-pages">{wrappers_html}</div>
+    </section>
+    <style>
+      html,body {{ margin:0; width:1906px; height:986px; overflow:hidden; }}
+      #comici-viewer {{ position:relative; width:1906px; height:986px; overflow:hidden; }}
+      #xCVSeekBar {{ position:absolute; top:900px; }}
+      #xCVPages {{ position:absolute; left:0; top:0; width:1906px; height:886px; }}
+      .-cv-page {{ position:absolute; top:0; width:946px; height:886px; }}
+      .-cv-page-canvas {{ position:absolute; inset:0; }}
+      .-cv-ci.-cv-page-content {{ position:absolute; left:0; top:0; width:628px; height:886px; }}
+      .-cv-ci-content {{ position:absolute; left:392px; top:160px; width:450px; height:565px; }}
+      canvas {{ display:block; }}
+    </style>
+    <script>
+      (() => {{
+        const viewer = document.querySelector('#comici-viewer');
+        const seek = document.querySelector('#xCVSeekBar');
+        const pages = document.querySelector('#xCVPages');
+        const wrappers = [...pages.children];
+        const body = wrappers.slice(1, 17);
+        const update = () => {{
+          const value = Number(seek.value);
+          const focus = Number(seek.max) - value + 1;
+          wrappers.forEach((wrapper, index) => {{
+            wrapper.style.left = `${{945 + (focus - index - 1) * 946}}px`;
+          }});
+          viewer.classList.remove('mode-first-page','mode-top-pr-page','mode-pr-page','mode-ci-page','mode-last-page');
+          if (value === 21) viewer.classList.add('mode-first-page','mode-top-pr-page');
+          if (value === 5) viewer.classList.add('mode-pr-page','mode-ci-page');
+          if (value === 3) viewer.classList.add('mode-pr-page');
+          if (value === 1) viewer.classList.add('mode-pr-page','mode-last-page');
+          body.forEach(wrapper => {{
+            wrapper.classList.add('mode-loaded','mode-rendered');
+          }});
+          const active = [focus - 1, focus].filter(slot => slot >= 1 && slot <= body.length);
+          active.forEach(slot => window.__yaRenderers?.[slot]?.());
+        }};
+        seek.addEventListener('input', update);
+        seek.addEventListener('change', update);
+        update();
+      }})();
+    </script>'''
+
+
+def _episode_html(
+    *, native_source_slots: tuple[int, ...] = (), clip_slots: tuple[int, ...] = (),
+    target_label: str = "無料",
+) -> str:
+    return f'''<!doctype html><html><head><meta charset="utf-8"><title>Fixture viewer</title></head>
+      <body><div id="xHeader"><a class="ep-h-main-h-series" href="{WORK_URL}">Fixture Work</a></div>
+      {_listing(selected_range=True, target_label=target_label)}
+      {_viewer_html(native_source_slots=native_source_slots, clip_slots=clip_slots)}</body></html>'''
+
+
+def _top_empty_viewer_html(
+    *,
+    native_source_slots: tuple[int, ...] = (),
+    initial_nav_open: bool = False,
+    initial_splash_count: int = 0,
+) -> str:
+    wrappers: list[str] = []
+    for index in range(51):
+        if index == 0:
+            classes, body = "mode-empty mode-pr mode-top-pr -cv-page", ""
+        elif index == 1:
+            classes, body = "mode-empty -cv-page", ""
+        elif index <= 45:
+            classes = "-cv-page mode-loaded mode-rendered"
+            shade = (index * 13) % 255
+            if index in native_source_slots:
+                draw = (
+                    f'window.__yaRenderers[{index}]=()=>{{'
+                    f'x.drawImage(s,0,0,s.width,s.height,0,0,c.width,c.height);}};'
+                )
+                source = (
+                    f'const s=document.createElement("canvas");s.width=47;s.height=61;'
+                    f'const sx=s.getContext("2d");sx.fillStyle="rgb({shade},40,90)";'
+                    f'sx.fillRect(0,0,s.width,s.height);window.__yaSources=window.__yaSources||{{}};'
+                    f'window.__yaSources[{index}]=s;'
+                )
+            else:
+                source = ""
+                draw = (
+                    f'window.__yaRenderers[{index}]=()=>{{x.fillStyle="rgb({shade},40,90)";'
+                    'x.fillRect(0,0,c.width,c.height);};'
+                )
+            body = (
+                '<div class="-cv-page-content"><div class="-cv-page-canvas"><canvas width="942" height="1329" '
+                f'data-slot="{index}" style="position:absolute;left:159px;top:0;'
+                'width:628px;height:886px"></canvas></div></div>'
+                '<script>(function(){const c=document.currentScript.previousElementSibling.querySelector("canvas");'
+                'const x=c.getContext("2d");window.__yaRenderers=window.__yaRenderers||{};'
+                f'{source}{draw}window.__yaRenderers[{index}]();}})()</script>'
+            )
+        elif index == 46:
+            classes = "mode-ci -cv-page"
+            body = (
+                '<div class="-cv-ci -cv-page-content">'
+                '<div class="-cv-ci-content" data-ya-scroll-widget="fixture">'
+                '<span class="-cv-ci-item"></span><span class="-cv-ci-item"></span>'
+                '<span class="-cv-ci-item"></span><span class="-cv-ci-item"></span>'
+                '</div></div>'
+            )
+        elif index in {47, 48}:
+            classes, body = "mode-empty mode-pr -cv-page", ""
+        elif index == 49:
+            classes, body = "mode-good -cv-page", ""
+        else:
+            classes, body = "mode-last -cv-page", ""
+        marker = ' id="xCVLastPage"' if index == 50 else ""
+        wrappers.append(f'<div class="{classes}"{marker} data-slot="{index}">{body}</div>')
+
+    nav_class = " mode-nav-open" if initial_nav_open else ""
+    splash_nodes = ''.join('<div class="-cv-splash"></div>' for _ in range(initial_splash_count))
+    return f'''<section id="comici-viewer" class="-cv mode-lang-ja mode-h mode-dir-rtl mode-nav-dir-rtl mode-spread mode-has-top-emptypage{nav_class}">
+      {splash_nodes}
+      <input id="xCVSeekBar" type="range" min="1" max="51" step="2" value="51">
+      <div id="xCVPages" class="-cv-pages">{"".join(wrappers)}</div>
+    </section>
+    <style>
+      html,body {{ margin:0; width:1906px; height:986px; overflow:hidden; }}
+      #comici-viewer {{ position:absolute; left:0; top:0; width:1906px; height:986px; overflow:hidden; }}
+      #xCVSeekBar {{ position:absolute; top:900px; }}
+      #xCVPages {{ position:absolute; left:0; top:0; width:1906px; height:886px; }}
+      .-cv-page {{ position:absolute; top:0; width:946px; height:886px; }}
+      .-cv-page-content {{ position:absolute; inset:0; }}
+      .-cv-page-canvas {{ position:absolute; inset:0; }}
+      .-cv-ci.-cv-page-content {{ position:absolute; left:0; top:0; width:628px; height:886px; }}
+      .-cv-ci-content {{ position:absolute; left:90px; top:207px; width:450px; height:470px; }}
+      canvas {{ display:block; }}
+    </style>
+    <script>
+      (() => {{
+        const viewer = document.querySelector('#comici-viewer');
+        const seek = document.querySelector('#xCVSeekBar');
+        const wrappers = [...document.querySelector('#xCVPages').children];
+        const body = wrappers.slice(2, 46);
+        const update = () => {{
+          const value = Number(seek.value);
+          const focus = Number(seek.max) - value + 1;
+          wrappers.forEach((wrapper, index) => {{
+            wrapper.style.left = `${{945 + (focus - index - 1) * 946}}px`;
+          }});
+          viewer.classList.remove('mode-first-page','mode-top-pr-page','mode-last-page');
+          if (value === 51) viewer.classList.add('mode-first-page','mode-top-pr-page');
+          if (value === 1) viewer.classList.add('mode-last-page');
+          body.forEach(wrapper => wrapper.classList.add('mode-loaded','mode-rendered'));
+          const active = [focus - 1, focus].filter(slot => slot >= 2 && slot <= 45);
+          active.forEach(slot => window.__yaRenderers?.[slot]?.());
+        }};
+        seek.addEventListener('input', update);
+        seek.addEventListener('change', update);
+        update();
+      }})();
+    </script>'''
+
+
+def _top_empty_episode_html(
+    *,
+    native_source_slots: tuple[int, ...] = (),
+    initial_nav_open: bool = False,
+    initial_splash_count: int = 0,
+) -> str:
+    return f'''<!doctype html><html><head><meta charset="utf-8"><title>Fixture viewer</title></head>
+      <body><div id="xHeader"><a class="ep-h-main-h-series" href="{WORK_URL}">Fixture Work</a></div>
+      {_listing(selected_range=True)}
+      {_top_empty_viewer_html(native_source_slots=native_source_slots, initial_nav_open=initial_nav_open,
+                              initial_splash_count=initial_splash_count)}</body></html>'''
+
+
+async def _install_fixture(
+    page, *, initial_seek: int = 11, native_source_slots: tuple[int, ...] = (),
+    clip_slots: tuple[int, ...] = (), top_empty: bool = False,
+    top_empty_initial_nav_open: bool = False, top_empty_initial_splash_count: int = 0,
+    episode_target_label: str = "無料",
+) -> list[str]:
+    requested: list[str] = []
+
+    async def fulfill(route) -> None:
+        path = route.request.url.split("?", 1)[0].removeprefix(BASE)
+        requested.append(path)
+        if path == f"/series/{WORK_ID}":
+            body = f'''<!doctype html><html><head><meta charset="utf-8"></head><body>
+              <h1>Fixture Work</h1>{_listing(selected_range=False)}</body></html>'''
+            await route.fulfill(status=200, body=body, content_type="text/html")
+        elif path == f"/series/{WORK_ID}/1":
+            body = f'''<!doctype html><html><head><meta charset="utf-8"></head><body>
+              <h1>Fixture Work</h1>{_listing(selected_range=True)}</body></html>'''
+            await route.fulfill(status=200, body=body, content_type="text/html")
+        elif path == f"/episodes/{EPISODE_ID}":
+            if top_empty:
+                body = _top_empty_episode_html(
+                    native_source_slots=native_source_slots,
+                    initial_nav_open=top_empty_initial_nav_open,
+                    initial_splash_count=top_empty_initial_splash_count,
+                )
+            else:
+                body = _episode_html(
+                    native_source_slots=native_source_slots,
+                    clip_slots=clip_slots,
+                    target_label=episode_target_label,
+                ).replace('value="11"', f'value="{initial_seek}"')
+            await route.fulfill(status=200, body=body, content_type="text/html")
+        else:
+            await route.fulfill(status=404, body="")
+
+    await page.route("https://younganimal.com/**", fulfill)
+    return requested
+
+
+def _content_document_paths(requested: list[str]) -> list[str]:
+    return [path for path in requested if path.startswith(("/episodes/", "/series/"))]
+
+
+def _rgba_from_png_data_url(value: str) -> tuple[tuple[int, int], bytes]:
+    prefix = "data:image/png;base64,"
+    assert value.startswith(prefix)
+    raw = base64.b64decode(value.removeprefix(prefix), validate=True)
+    with Image.open(io.BytesIO(raw)) as image:
+        image.load()
+        return image.size, image.convert("RGBA").tobytes()
+
+
+def _rgba_from_output(data: bytes) -> tuple[tuple[int, int], bytes]:
+    with Image.open(io.BytesIO(data)) as image:
+        image.load()
+        return image.size, image.convert("RGBA").tobytes()
+
+
+async def _read_fixture_pixel_authority(page) -> dict[str, object]:
+    return await page.evaluate("""() => {
+      const png = canvas => canvas.toDataURL('image/png');
+      const sources = Object.fromEntries(Object.entries(window.__yaSources || {})
+        .map(([slot, canvas]) => [slot, png(canvas)]));
+      const rendered = Object.fromEntries([2, 3].map(slot => {
+        const wrapper = document.querySelector('#xCVPages').children[slot];
+        const canvases = [...wrapper.querySelectorAll('canvas')];
+        if (canvases.length !== 1) throw new Error(`fixture_target_canvas_${slot}_missing`);
+        return [slot, png(canvases[0])];
+      }));
+      return {sources, rendered};
+    }""")
+
+
+def _make_younganimal_batch(
+    tmp_path: Path,
+    *,
+    manifest_observations: list[dict[str, object]] | None = None,
+    external_work_id: str = WORK_ID,
+) -> tuple[CatalogService, BatchExecutor, object]:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(
+        WorkInput(work_key="opaque-work-key-for-fixture", title="Catalog Work")
+    )
+    item = catalog.create_item(
+        ItemInput(item_title="Episode 1", kind="episode", order_label="第1話"),
+        work_id=work.id,
+    )
+    source = catalog.create_source(
+        SourceInput(
+            site="younganimal",
+            external_id=f"{external_work_id}:{EPISODE_ID}",
+            discovery_key="fixture-discovery",
+            access_mode="free",
+            available=True,
+            display_position=1,
+        ),
+        item_id=item.id,
+    )
+    catalog.create_source_target(
+        SourceTargetInput(backend="web", locator=EPISODE_URL), source_id=source.id
+    )
+    policies = SitePolicyRegistry()
+    policies.register("younganimal", YounganimalSitePolicy)
+    adapters = AdapterRegistry()
+    adapters.register("younganimal", YounganimalAdapter)
+    plan = BatchPlanner(catalog, policies).plan(site="younganimal", now=NOW)
+    assert len(plan.candidates) == 1
+
+    package_function = package_crawl_output
+    if manifest_observations is not None:
+        def observe_manifest(output_dir, metadata, **kwargs):
+            manifest_observations.append(
+                json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+            )
+            return package_crawl_output(output_dir, metadata, **kwargs)
+
+        package_function = observe_manifest
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        package_function=package_function,
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+    )
+    return catalog, executor, plan.candidates[0]
+
+
+async def test_younganimal_runner_captures_only_contiguous_rendered_pngs_and_packages_zip(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page)
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 50)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+    original_collect = younganimal_adapter_module.COLLECT_CAPTURE_SCRIPT
+    instrumented_collect = original_collect.replace("({expectedSlots", "async ({expectedSlots", 1).replace(
+        "const after = api.inspect(expectedSlots);",
+        "await new Promise(resolve => requestAnimationFrame(resolve));\n  const after = api.inspect(expectedSlots);",
+        1,
+    )
+    monkeypatch.setattr(younganimal_adapter_module, "COLLECT_CAPTURE_SCRIPT", instrumented_collect)
+    adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
+    original_evaluate = browser_page.evaluate
+    rendered_epoch_audits: list[tuple[int, int]] = []
+    instrumentation_installed = False
+
+    async def instrument_rendered_capture(expression, *args, **kwargs):
+        nonlocal instrumentation_installed
+        if expression == instrumented_collect and not instrumentation_installed:
+            instrumentation_installed = True
+            await original_evaluate("""() => {
+              const ci = [...document.querySelector('#xCVPages').children].slice(-5)[0];
+              for (const canvas of document.querySelectorAll('#xCVPages .-cv-page canvas')) {
+                const native = canvas.toDataURL;
+                canvas.toDataURL = function(...args) {
+                  if (!window.__yaCiMutationQueued) {
+                    window.__yaCiMutationQueued = true;
+                    requestAnimationFrame(() => ci.setAttribute('class', 'mode-ci -cv-page'));
+                  }
+                  return Reflect.apply(native, this, args);
+                };
+              }
+            }""")
+        result = await original_evaluate(expression, *args, **kwargs)
+        if expression == instrumented_collect and isinstance(result, dict) and result.get("ok") is True:
+            before = result["before"]
+            after = result["after"]
+            rendered_epoch_audits.append((
+                after["domGeneration"] - before["domGeneration"],
+                after["captureDomGeneration"] - before["captureDomGeneration"],
+            ))
+        return result
+
+    monkeypatch.setattr(browser_page, "evaluate", instrument_rendered_capture)
+    output_dir = tmp_path / "younganimal-crawl"
+    result = await CrawlerRunner(
+        RunConfig(
+            site="younganimal",
+            source_url=EPISODE_URL,
+            output_dir=output_dir,
+            diagnostics_dir=tmp_path / "diagnostics",
+            page_turn_delay_ms=0,
+            max_pages=20,
+            max_same_content=3,
+            page_change_timeout_ms=2_000,
+        )
+    ).run(browser_page, adapter)
+
+    assert result.stop_state is PageState.END
+    assert len(result.pages) == 16
+    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    assert [page.identity.page_id for page in result.pages] == [
+        "1", "2,3", "2,3", "4,5", "4,5", "6,7", "6,7", "8,9", "8,9",
+        "10,11", "10,11", "12,13", "12,13", "14,15", "14,15", "16",
+    ]
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_url"] == EPISODE_URL
+    assert [page["sequence"] for page in manifest["pages"]] == list(range(1, 17))
+    assert {(page["width"], page["height"], page["mime_type"]) for page in manifest["pages"]} == {
+        (PAGE_WIDTH, PAGE_HEIGHT, "image/png")
+    }
+    assert rendered_epoch_audits
+    assert rendered_epoch_audits[0] == (1, 0)
+    package = package_crawl_output(
+        output_dir,
+        adapter.get_output_metadata(),
+        library_dir=tmp_path / "library",
+    )
+    with zipfile.ZipFile(package.archive_path) as archive:
+        names = archive.namelist()
+        assert len(names) == 16
+        assert all(name.endswith(".png") for name in names)
+
+
+async def test_younganimal_direct_batch_completes_from_one_canonical_episode_navigation(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 50)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+    manifest_observations: list[dict[str, object]] = []
+    catalog, executor, candidate = _make_younganimal_batch(
+        tmp_path, manifest_observations=manifest_observations
+    )
+
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch",
+        library_dir=tmp_path / "library",
+        max_pages=20,
+        now=NOW,
+    )
+
+    assert _content_document_paths(requested) == [f"/episodes/{EPISODE_ID}"]
+    assert await browser_page.locator("button").count() == 0
+    assert result.page_count == 16
+    assert result.stop_reason == "end"
+    assert catalog.get_item(candidate.item_id).status == "completed"
+    assert len(catalog.list_artifacts(item_id=candidate.item_id, state="present")) == 1
+    assert len(catalog.list_crawl_runs(item_id=candidate.item_id, status="succeeded")) == 1
+    source = catalog.get_source(candidate.source_id)
+    target = catalog.get_source_target(candidate.target_id)
+    assert target.locator == EPISODE_URL
+    assert source.quota_started_at is None
+    assert source.access_granted_until is None
+    assert len(manifest_observations) == 1
+    manifest = manifest_observations[0]
+    assert manifest["source_url"] == EPISODE_URL
+    assert len(manifest["pages"]) == 16
+    assert result.archive_path.exists()
+    assert "Catalog Work" in result.archive_path.name
+    with zipfile.ZipFile(result.archive_path) as archive:
+        assert len(archive.namelist()) == 16
+
+
+async def test_younganimal_direct_batch_rejects_stale_free_row_before_capture_or_artifact(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, episode_target_label=chr(0x5f85) + chr(0x3064) + chr(0x3068) + chr(0x7121) + chr(0x6599))
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path)
+
+    with pytest.raises(CandidateExecutionError, match="fresh episode listing does not prove exact free"):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert _content_document_paths(requested) == [f"/episodes/{EPISODE_ID}"]
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+    assert list((tmp_path / "library").rglob("*.zip")) == []
+    assert list((tmp_path / "batch").rglob("page-*.*")) == []
+    source = catalog.get_source(candidate.source_id)
+    assert source.quota_started_at is None
+    assert source.access_granted_until is None
+
+
+@pytest.mark.parametrize(
+    ("external_work_id", "initial_url_override", "expected_requests", "error_message"),
+    [
+        (
+            "0000000000001",
+            None,
+            [f"/episodes/{EPISODE_ID}"],
+            "fresh episode listing does not prove exact free",
+        ),
+        (
+            WORK_ID,
+            "https://younganimal.com/episodes/0000000000001",
+            ["/episodes/0000000000001"],
+            "initial navigation left its configured entry route",
+        ),
+    ],
+)
+async def test_younganimal_direct_batch_rejects_wrong_work_header_or_redirect_before_capture(
+    browser_page,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    external_work_id: str,
+    initial_url_override: str | None,
+    expected_requests: list[str],
+    error_message: str,
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page)
+    if initial_url_override is not None:
+        resolve_initial_navigation_url = YounganimalAdapter.resolve_initial_navigation_url
+
+        def override_initial_navigation(adapter, source_url: str) -> str:
+            resolve_initial_navigation_url(adapter, source_url)
+            return initial_url_override
+
+        monkeypatch.setattr(
+            YounganimalAdapter,
+            "resolve_initial_navigation_url",
+            override_initial_navigation,
+        )
+    catalog, executor, candidate = _make_younganimal_batch(
+        tmp_path, external_work_id=external_work_id
+    )
+
+    with pytest.raises(CandidateExecutionError, match=error_message):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert _content_document_paths(requested) == expected_requests
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+    assert list((tmp_path / "library").rglob("*.zip")) == []
+    assert list((tmp_path / "batch").rglob("page-*.*")) == []
+
+
+async def test_younganimal_top_empty_profile_skips_only_observed_blank_and_captures_all_body_pages(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page,
+        top_empty=True,
+        native_source_slots=tuple(range(2, 46)),
+        top_empty_initial_nav_open=True,
+        top_empty_initial_splash_count=1,
+    )
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 1_000)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 5_000)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 3_000)
+
+    class PixelAuditAdapter(YounganimalAdapter):
+        def __init__(self) -> None:
+            super().__init__(preflight_work_url=WORK_URL)
+            self.fixture_pixel_authority: dict[str, object] | None = None
+            self.initial_ui_metrics: list[dict[str, object]] = []
+            self.capture_modes: list[str] = []
+
+        async def _wait_for_initial_quiet(self, page, initial):
+            await page.evaluate("""() => {
+              const viewer = document.querySelector('#comici-viewer');
+              const splash = viewer.querySelector('.-cv-splash');
+              window.__yaInitialUiTimeline = {started: performance.now()};
+              window.__yaInitialUiTimers = [
+                setTimeout(() => {
+                  viewer.classList.remove('mode-nav-open');
+                  splash.classList.add('mode-hide');
+                  window.__yaInitialUiTimeline.navClosed = performance.now();
+                }, 1200),
+                setTimeout(() => {
+                  splash.remove();
+                  window.__yaInitialUiTimeline.firstSettled = performance.now();
+                }, 1400),
+                setTimeout(() => {
+                  viewer.classList.add('mode-nav-open');
+                  viewer.append(splash);
+                  window.__yaInitialUiTimeline.reopened = performance.now();
+                }, 1900),
+                setTimeout(() => {
+                  viewer.classList.remove('mode-nav-open');
+                  splash.remove();
+                  window.__yaInitialUiTimeline.finalSettled = performance.now();
+                }, 2200),
+              ];
+            }""")
+            await super()._wait_for_initial_quiet(page, initial)
+
+        async def capture_page(self, page):
+            if self.fixture_pixel_authority is None:
+                # Read the fixture's private source canvases and visible target
+                # canvases directly, before the production capture path runs.
+                self.fixture_pixel_authority = await _read_fixture_pixel_authority(page)
+            result = await super().capture_page(page)
+            self.capture_modes.append(str(self._capture_diagnostics["mode"]))
+            return result
+
+    adapter = PixelAuditAdapter()
+    original_verify = younganimal_adapter_module.VERIFY_NATIVE_CAPTURE_SCRIPT
+    monkeypatch.setattr(
+        younganimal_adapter_module,
+        "VERIFY_NATIVE_CAPTURE_SCRIPT",
+        f"""async token => {{
+          const capture = window.__younganimalViewerCapture;
+          const before = capture.inspect([]);
+          const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          if (!widget) throw new Error('fixture_ci_scroll_widget_missing');
+          const variants = ['mode-ci\\t-cv-page -cv-page', '-cv-page  mode-ci'];
+          const audits = window.__yaCiNoopAudits || (window.__yaCiNoopAudits = []);
+          const serialization = variants[audits.length % variants.length];
+          ci.setAttribute('class', serialization);
+          if (widget.classList.contains('mode-scroll-bottom')) {{
+            widget.setAttribute('class', widget.getAttribute('class'));
+          }} else {{
+            widget.setAttribute('class', '-cv-ci-content mode-scroll-bottom');
+          }}
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          const after = capture.inspect([]);
+          const mutations = capture.mutationsSince(before.domGeneration);
+          const records = mutations.records.filter(item => item.generation > before.domGeneration);
+          const record = records.find(item => item.canonicalCiClassNoop === true);
+          const widgetRecord = records.find(item => item.ciScrollWidgetClassNoop === true);
+          const verified = await ({original_verify})(token);
+          audits.push({{
+            globalDelta: after.domGeneration - before.domGeneration,
+            captureDelta: after.captureDomGeneration - before.captureDomGeneration,
+            record: record ? {{
+              canonicalCiWrapper: record.canonicalCiWrapper,
+              classTokenSetsSame: record.classTokenSetsSame,
+              canonicalCiClassNoop: record.canonicalCiClassNoop,
+              generation: record.generation,
+              captureGeneration: record.captureGeneration,
+            }} : null,
+            widgetRecord: widgetRecord ? {{
+              targetArea: widgetRecord.targetArea,
+              ciScrollWidgetTarget: widgetRecord.ciScrollWidgetTarget,
+              ciScrollWidgetClassNoop: widgetRecord.ciScrollWidgetClassNoop,
+              classTokenSetsSame: widgetRecord.classTokenSetsSame,
+              classAdded: widgetRecord.classAdded,
+              classRemoved: widgetRecord.classRemoved,
+              captureGeneration: widgetRecord.captureGeneration,
+            }} : null,
+            mutationCount: records.length,
+            verified: verified.ok === true,
+          }});
+          return verified;
+        }}""",
+    )
+    original_evaluate = browser_page.evaluate
+    encode_events: list[dict[str, object]] = []
+    original_encode = younganimal_adapter_module.encode_native_webp
+
+    async def record_native_selection(expression, *args, **kwargs):
+        if expression == younganimal_adapter_module.COLLECT_NATIVE_CAPTURE_SCRIPT:
+            metrics = await original_evaluate("""() => {
+              const viewer = document.querySelector('#comici-viewer');
+              const timeline = window.__yaInitialUiTimeline;
+              return {
+                navOpen: viewer.classList.contains('mode-nav-open'),
+                splashCount: viewer.querySelectorAll('.-cv-splash').length,
+                afterFinalSettleMs: timeline?.finalSettled === undefined
+                  ? null : performance.now() - timeline.finalSettled,
+              };
+            }""")
+            adapter.initial_ui_metrics.append(metrics)
+        return await original_evaluate(expression, *args, **kwargs)
+
+    monkeypatch.setattr(browser_page, "evaluate", record_native_selection)
+
+    def record_native_encoding(images):
+        assert adapter.initial_ui_metrics
+        encode_events.append(adapter.initial_ui_metrics[-1])
+        return original_encode(images)
+
+    monkeypatch.setattr(younganimal_adapter_module, "encode_native_webp", record_native_encoding)
+    output_dir = tmp_path / "younganimal-top-empty-crawl"
+    result = await CrawlerRunner(
+        RunConfig(
+            site="younganimal",
+            source_url=EPISODE_URL,
+            output_dir=output_dir,
+            diagnostics_dir=tmp_path / "diagnostics",
+            page_turn_delay_ms=0,
+            max_pages=50,
+            max_same_content=3,
+            page_change_timeout_ms=3_000,
+        )
+    ).run(browser_page, adapter)
+
+    assert result.stop_state is PageState.END
+    assert len(result.pages) == 44
+    assert len(adapter.capture_modes) == 22
+    assert adapter.capture_modes == ["native_source_canvas"] * 22
+    assert result.pages[0].identity.page_id == "2,3"
+    assert [page.identity.page_id for page in result.pages] == [
+        page_id
+        for first_slot in range(2, 46, 2)
+        for page_id in (f"{first_slot},{first_slot + 1}",) * 2
+    ]
+    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_url"] == EPISODE_URL
+    assert [page["sequence"] for page in manifest["pages"]] == list(range(1, 45))
+    assert all(
+        (page["width"], page["height"]) == (47, 61)
+        for page in manifest["pages"]
+    )
+    assert all(page["mime_type"] == "image/webp" for page in manifest["pages"])
+    ci_audits = await browser_page.evaluate("() => window.__yaCiNoopAudits")
+    assert len(ci_audits) == 22
+    nested_body_holders = await browser_page.evaluate("""() => {
+      const pages = document.querySelector('#xCVPages');
+      return [...pages.children].slice(2, 46).map(wrapper => {
+        const canvases = [...wrapper.querySelectorAll('canvas')];
+        const canvas = canvases.length === 1 ? canvases[0] : null;
+        const holder = canvas?.parentElement || null;
+        return {
+          canvasCount: canvases.length,
+          wrapperContainsHolder: !!holder && wrapper.contains(holder),
+          nearestPageIsWrapper: !!holder && holder.closest('.-cv-page') === wrapper,
+          holderClass: holder?.classList.contains('-cv-page-canvas') === true,
+          holderParentClass: holder?.parentElement?.classList.contains('-cv-page-content') === true,
+        };
+      });
+    }""")
+    assert len(nested_body_holders) == 44
+    assert all(
+        row == {
+            "canvasCount": 1,
+            "wrapperContainsHolder": True,
+            "nearestPageIsWrapper": True,
+            "holderClass": True,
+            "holderParentClass": True,
+        }
+        for row in nested_body_holders
+    )
+    assert all(
+        audit["globalDelta"] == 2
+        and audit["captureDelta"] == 0
+        and audit["record"]["canonicalCiWrapper"] is True
+        and audit["record"]["classTokenSetsSame"] is True
+        and audit["record"]["canonicalCiClassNoop"] is True
+        and audit["record"]["captureGeneration"] is not None
+        and audit["widgetRecord"]["ciScrollWidgetTarget"] is True
+        and audit["widgetRecord"]["targetArea"] == "wrapper_descendant"
+        and audit["widgetRecord"]["ciScrollWidgetClassNoop"] is True
+        and audit["widgetRecord"]["classRemoved"] == []
+        and audit["widgetRecord"]["captureGeneration"] is not None
+        and audit["mutationCount"] == 2
+        and audit["verified"] is True
+        for audit in ci_audits
+    )
+    assert ci_audits[0]["widgetRecord"]["classAdded"] == ["mode-scroll-bottom"]
+    assert all(audit["widgetRecord"]["classAdded"] == [] for audit in ci_audits[1:])
+    assert len(adapter.initial_ui_metrics) == len(encode_events) > 0
+    assert all(
+        metric["navOpen"] is False
+        and metric["splashCount"] == 0
+        and isinstance(metric["afterFinalSettleMs"], (int, float))
+        and metric["afterFinalSettleMs"] >= 1_000
+        for metric in adapter.initial_ui_metrics
+    )
+    assert all(
+        event["navOpen"] is False
+        and event["splashCount"] == 0
+        and event["afterFinalSettleMs"] >= 1_000
+        for event in encode_events
+    )
+    output_page_bytes = {
+        Path(page["file"]).name: (output_dir / Path(page["file"]).name).read_bytes()
+        for page in manifest["pages"]
+    }
+    package = package_crawl_output(
+        output_dir,
+        adapter.get_output_metadata(),
+        library_dir=tmp_path / "library",
+    )
+    assert adapter.fixture_pixel_authority is not None
+    source_pixels = {
+        int(slot): _rgba_from_png_data_url(value)
+        for slot, value in adapter.fixture_pixel_authority["sources"].items()
+    }
+    manifest_pages = manifest["pages"]
+    with zipfile.ZipFile(package.archive_path) as archive:
+        members = {Path(name).name: archive.read(name) for name in archive.namelist()}
+        assert len(members) == 44
+        assert sum(name.endswith(".png") for name in members) == 0
+        assert sum(name.endswith(".webp") for name in members) == 44
+        for index, page_record in enumerate(manifest_pages):
+            physical_slot = index + 2
+            filename = Path(page_record["file"]).name
+            output_bytes = output_page_bytes[filename]
+            assert members[filename] == output_bytes
+            actual_size, actual_rgba = _rgba_from_output(output_bytes)
+            expected_size, expected_rgba = source_pixels[physical_slot]
+            assert actual_size == expected_size
+            assert hashlib.sha256(actual_rgba).digest() == hashlib.sha256(expected_rgba).digest()
+
+
+@pytest.mark.parametrize(
+    ("case", "malformed_field", "malformed_value"),
+    [
+        ("unsettled_ui", None, None),
+        ("malformed_nav_type", "viewerNavOpen", 0),
+        ("malformed_splash_type", "viewerSplashCount", True),
+    ],
+)
+async def test_younganimal_initial_ui_unknown_or_unsettled_fails_before_capture(
+    browser_page,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    case: str,
+    malformed_field: str | None,
+    malformed_value: object,
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page,
+        top_empty=True,
+        top_empty_initial_nav_open=case == "unsettled_ui",
+        top_empty_initial_splash_count=1 if case == "unsettled_ui" else 0,
+    )
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 30)
+    monkeypatch.setattr(
+        younganimal_adapter_module,
+        "INITIAL_QUIET_DEADLINE_MS",
+        200 if case == "unsettled_ui" else 1_000,
+    )
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+    original_evaluate = browser_page.evaluate
+    collection_calls: list[str] = []
+
+    async def monitor_capture(expression, *args, **kwargs):
+        result = await original_evaluate(expression, *args, **kwargs)
+        if expression in {
+            younganimal_adapter_module.COLLECT_NATIVE_CAPTURE_SCRIPT,
+            younganimal_adapter_module.COLLECT_CAPTURE_SCRIPT,
+        }:
+            collection_calls.append(expression)
+        if (
+            malformed_field is not None
+            and expression == younganimal_adapter_module.SNAPSHOT_SCRIPT
+            and args
+            and args[0].get("pixelSlots")
+        ):
+            result["snapshot"][malformed_field] = malformed_value
+        return result
+
+    monkeypatch.setattr(browser_page, "evaluate", monitor_capture)
+    encoding_calls: list[object] = []
+    original_encode = younganimal_adapter_module.encode_native_webp
+
+    def track_encoding(images):
+        encoding_calls.append(images)
+        return original_encode(images)
+
+    monkeypatch.setattr(younganimal_adapter_module, "encode_native_webp", track_encoding)
+    adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
+    output_dir = tmp_path / f"younganimal-initial-ui-{case}"
+    expected_error = (
+        "did not settle within its 5 second bound"
+        if case == "unsettled_ui"
+        else "initial navigation or splash state is unknown"
+    )
+    with pytest.raises(UnknownPageStateError, match=expected_error):
+        await CrawlerRunner(
+            RunConfig(
+                site="younganimal",
+                source_url=EPISODE_URL,
+                output_dir=output_dir,
+                diagnostics_dir=tmp_path / f"diagnostics-{case}",
+                page_turn_delay_ms=0,
+                max_pages=50,
+                max_same_content=3,
+                page_change_timeout_ms=2_000,
+            )
+        ).run(browser_page, adapter)
+
+    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    assert collection_calls == []
+    assert encoding_calls == []
+    assert list(output_dir.rglob("page-*.*")) == []
+    assert list(tmp_path.rglob("*.zip")) == []
+    status = await original_evaluate("() => window.__younganimalNativeCapture.status()")
+    assert status == {"candidateCount": 0, "proofCount": 0, "integrity": True}
+
+
+async def test_younganimal_native_selection_cancellation_releases_unreturned_proof(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    await _install_fixture(browser_page, native_source_slots=(1, 2))
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+
+    original_evaluate = browser_page.evaluate
+    selected = asyncio.Event()
+    selected_result: dict[str, object] | None = None
+
+    async def hold_after_selection(expression, *args, **kwargs):
+        nonlocal selected_result
+        result = await original_evaluate(expression, *args, **kwargs)
+        if expression == younganimal_adapter_module.COLLECT_NATIVE_CAPTURE_SCRIPT:
+            selected_result = result
+            selected.set()
+            await asyncio.Future()
+        return result
+
+    monkeypatch.setattr(browser_page, "evaluate", hold_after_selection)
+    adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "auto")
+    initial_url = adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await browser_page.goto(initial_url, wait_until="commit")
+    await adapter.initialize(browser_page)
+    task = asyncio.create_task(adapter.capture_page(browser_page))
+    await asyncio.wait_for(selected.wait(), timeout=10)
+    assert isinstance(selected_result, dict)
+    assert selected_result.get("mode") == "native"
+    assert isinstance(selected_result.get("token"), str)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    status = await original_evaluate("() => window.__younganimalNativeCapture.status()")
+    assert status == {"candidateCount": 0, "proofCount": 0, "integrity": True}
+    assert not list(tmp_path.glob("*.zip"))
+
+
+@pytest.mark.parametrize(
+    ("drift", "mutation"),
+    [
+        (
+            "variant",
+            "document.querySelector('#comici-viewer').classList.add('mode-has-top-emptypage')",
+        ),
+        (
+            "wrapper_count",
+            "document.querySelector('#xCVPages').append(document.createElement('div'))",
+        ),
+        (
+            "tail_role",
+            (
+                "const ci=document.querySelector('#xCVPages').children[17];"
+                "ci.className='-cv-page mode-good'"
+            ),
+        ),
+    ],
+)
+async def test_younganimal_capture_rejects_frozen_mapping_drift_before_native_or_png_fallback(
+    browser_page,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    drift: str,
+    mutation: str,
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    await _install_fixture(browser_page, native_source_slots=(1, 2))
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+
+    class MappingDriftAdapter(YounganimalAdapter):
+        def __init__(self) -> None:
+            super().__init__(preflight_work_url=WORK_URL)
+            self.drifted = False
+
+        async def get_content_identity(self, page):
+            identity = await super().get_content_identity(page)
+            if not self.drifted:
+                await page.evaluate(mutation)
+                self.drifted = True
+            return identity
+
+    output_dir = tmp_path / f"younganimal-frozen-mapping-{drift}"
+    adapter = MappingDriftAdapter()
+    with pytest.raises(UnknownPageStateError, match="Younganimal"):
+        await CrawlerRunner(
+            RunConfig(
+                site="younganimal",
+                source_url=EPISODE_URL,
+                output_dir=output_dir,
+                diagnostics_dir=tmp_path / f"mapping-diagnostics-{drift}",
+                page_turn_delay_ms=0,
+                max_pages=20,
+                max_same_content=3,
+                page_change_timeout_ms=2_000,
+            )
+        ).run(browser_page, adapter)
+
+    status = await browser_page.evaluate("() => window.__younganimalNativeCapture.status()")
+    assert status["candidateCount"] == 0
+    assert status["proofCount"] == 0
+    assert not list(output_dir.glob("page-*.*"))
+    assert not list(tmp_path.glob("*.zip"))
+
+
+async def test_younganimal_capture_rejects_valid_profile_mapping_drift_after_detect(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    await _install_fixture(browser_page, initial_seek=11, native_source_slots=(1, 2, 3, 4))
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+
+    class ValidProfileDriftAdapter(YounganimalAdapter):
+        def __init__(self) -> None:
+            super().__init__(preflight_work_url=WORK_URL)
+            self.direct_parser_result = None
+            self.capture_called = False
+            self.fallback_calls: list[object] = []
+
+        async def get_content_identity(self, page):
+            identity = await super().get_content_identity(page)
+            if self.direct_parser_result is not None or self._captured_slots != [1]:
+                return identity
+
+            before = await self._observe(page)
+            assert before.seek_value == 19
+            assert len(before.active_slots) == 2
+            before = await self._observe(page, pixel_slots=before.active_slots)
+            mutation_result = await page.evaluate(
+                """({activeSlots}) => {
+                  const viewer = document.querySelector('#comici-viewer');
+                  const pages = document.querySelector('#xCVPages');
+                  const seek = document.querySelector('#xCVSeekBar');
+                  const oldValue = Number(seek.value);
+                  const oldMax = Number(seek.max);
+                  const focus = oldMax - oldValue + 1;
+                  const active = activeSlots.map(index => pages.children[index]);
+                  const activeRects = active.map(wrapper => {
+                    const r = wrapper.getBoundingClientRect();
+                    return [r.x, r.y, r.width, r.height];
+                  });
+                  const blank = pages.children[1];
+                  blank.replaceChildren();
+                  blank.className = '-cv-page mode-empty';
+                  const ci = [...pages.children].find(node => node.classList.contains('mode-ci'));
+                  if (!ci) throw new Error('fixture_ci_missing');
+                  const unloadedBody = document.createElement('div');
+                  unloadedBody.className = '-cv-page';
+                  pages.insertBefore(unloadedBody, ci);
+                  const bodyIndex = [...pages.children].indexOf(unloadedBody);
+                  unloadedBody.style.left = `${945 + (focus - bodyIndex - 1) * 946}px`;
+                  viewer.classList.add('mode-has-top-emptypage');
+                  seek.max = String(oldMax + 2);
+                  seek.value = String(oldValue + 2);
+                  return {
+                    activeRects,
+                    value: Number(seek.value),
+                    max: Number(seek.max),
+                    bodyIndex,
+                    blankCanvasCount: blank.querySelectorAll('canvas').length,
+                    unloadedCanvasCount: unloadedBody.querySelectorAll('canvas').length,
+                    unloadedCenterInViewport: (() => {
+                      const r = unloadedBody.getBoundingClientRect();
+                      return r.width > 0 && r.height > 0 && r.x + r.width / 2 >= 0 &&
+                        r.x + r.width / 2 <= innerWidth && r.y + r.height / 2 >= 0 &&
+                        r.y + r.height / 2 <= innerHeight;
+                    })(),
+                  };
+                }""",
+                {"activeSlots": list(before.active_slots)},
+            )
+            snapshot_result = await page.evaluate(
+                younganimal_adapter_module.SNAPSHOT_SCRIPT,
+                {"pixelSlots": list(before.active_slots)},
+            )
+            assert isinstance(snapshot_result, dict)
+            assert snapshot_result.get("observerReady") is True
+            after = younganimal_adapter_module._parse_viewer_observation(
+                snapshot_result.get("snapshot"), expected_url=EPISODE_URL
+            )
+            assert mutation_result["value"] == before.seek_value + 2
+            assert mutation_result["max"] == before.seek_max + 2
+            assert mutation_result["bodyIndex"] == 17
+            assert mutation_result["blankCanvasCount"] == 0
+            assert mutation_result["unloadedCanvasCount"] == 0
+            assert mutation_result["unloadedCenterInViewport"] is False
+            assert after.layout_variant == "top_emptypage"
+            assert after.body_slots == tuple(range(2, 18))
+            assert after.ci_slot == 18
+            assert after.seek_value == 21
+            assert after.seek_min == 1 and after.seek_max == 23 and after.seek_step == 2
+            assert after.page_state == "content"
+            assert after.active_slots == before.active_slots
+            assert after.ready_slots == before.ready_slots == before.active_slots
+            for slot in before.active_slots:
+                before_row = before.raw["slots"][slot]
+                after_row = after.raw["slots"][slot]
+                assert after_row["wrapperNode"] == before_row["wrapperNode"]
+                assert after_row["wrapperRect"] == before_row["wrapperRect"]
+                assert after_row["canvas"]["node"] == before_row["canvas"]["node"]
+                assert after_row["canvas"]["rect"] == before_row["canvas"]["rect"]
+                assert after_row["canvas"]["pixels"] == before_row["canvas"]["pixels"]
+            self.direct_parser_result = after
+            return identity
+
+        async def capture_page(self, page):
+            self.capture_called = True
+            return await super().capture_page(page)
+
+        async def get_capture_targets(self, page):
+            self.fallback_calls.append(page)
+            raise AssertionError("generic capture fallback must not run")
+
+    adapter = ValidProfileDriftAdapter()
+    collect_calls: list[str] = []
+    original_evaluate = browser_page.evaluate
+
+    async def track_collection(expression, *args, **kwargs):
+        if adapter.direct_parser_result is not None and expression in {
+            younganimal_adapter_module.COLLECT_NATIVE_CAPTURE_SCRIPT,
+            younganimal_adapter_module.COLLECT_CAPTURE_SCRIPT,
+        }:
+            collect_calls.append(expression)
+        return await original_evaluate(expression, *args, **kwargs)
+
+    monkeypatch.setattr(browser_page, "evaluate", track_collection)
+    output_dir = tmp_path / "younganimal-valid-profile-mapping-drift"
+    with pytest.raises(UnknownPageStateError, match="frozen body/tail roles"):
+        await CrawlerRunner(
+            RunConfig(
+                site="younganimal",
+                source_url=EPISODE_URL,
+                output_dir=output_dir,
+                diagnostics_dir=tmp_path / "valid-profile-mapping-diagnostics",
+                page_turn_delay_ms=0,
+                max_pages=20,
+                max_same_content=3,
+                page_change_timeout_ms=2_000,
+            )
+        ).run(browser_page, adapter)
+
+    assert adapter.direct_parser_result is not None
+    assert adapter.capture_called
+    assert collect_calls == []
+    assert adapter.fallback_calls == []
+    page_files = list(output_dir.glob("page-*.*"))
+    assert len(page_files) == 1
+    assert page_files[0].name.startswith("page-0001.")
+    assert not (output_dir / "page-0002.png").exists()
+    assert not (output_dir / "page-0003.png").exists()
+    status = await browser_page.evaluate("() => window.__younganimalNativeCapture.status()")
+    assert status["candidateCount"] == 0
+    assert status["proofCount"] == 0
+    assert not list(tmp_path.glob("*.zip"))
+
+
+async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, native_source_slots=tuple(range(1, 17)))
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 30)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+
+    original_verify = younganimal_adapter_module.VERIFY_NATIVE_CAPTURE_SCRIPT
+    monkeypatch.setattr(
+        younganimal_adapter_module,
+        "VERIFY_NATIVE_CAPTURE_SCRIPT",
+        f"""async token => {{
+          const capture = window.__younganimalViewerCapture;
+          const before = capture.inspect([]);
+          const seek = document.querySelector('#xCVSeekBar');
+          if (seek?.value === '5' && !window.__yaStandardCiWidgetMutation) {{
+            const pages = document.querySelector('#xCVPages');
+            const ci = pages.children[pages.children.length - 5];
+            const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+            if (!widget) throw new Error('fixture_ci_scroll_widget_missing');
+            widget.classList.add('mode-scroll-bottom');
+            window.__yaStandardCiWidgetMutation = true;
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            const after = capture.inspect([]);
+            const mutations = capture.mutationsSince(before.domGeneration);
+            const record = mutations.records.find(item => item.ciScrollWidgetTarget === true);
+            window.__yaStandardCiWidgetAudit = {{
+              seek: seek.value,
+              globalDelta: after.domGeneration - before.domGeneration,
+              captureDelta: after.captureDomGeneration - before.captureDomGeneration,
+              record: record ? {{
+                slot: record.slot,
+                targetArea: record.targetArea,
+                ciScrollWidgetClassNoop: record.ciScrollWidgetClassNoop,
+                classAdded: record.classAdded,
+                classRemoved: record.classRemoved,
+              }} : null,
+            }};
+          }}
+          return ({original_verify})(token);
+        }}""",
+    )
+
+    class PixelAuditAdapter(YounganimalAdapter):
+        def __init__(self) -> None:
+            super().__init__(preflight_work_url=WORK_URL)
+            self.capture_modes: list[str] = []
+            self.capture_records: list[dict[str, object]] = []
+            self.source_authority: dict[str, object] | None = None
+            self.captured_by_slot: dict[int, tuple[tuple[int, int], bytes]] = {}
+
+        async def capture_page(self, page):
+            if self.source_authority is None:
+                self.source_authority = await _read_fixture_pixel_authority(page)
+            result = await super().capture_page(page)
+            self.capture_modes.append(str(self._capture_diagnostics["mode"]))
+            self.capture_records.append(dict(self._capture_diagnostics))
+            if result is not None:
+                for slot, capture in zip(self._capture_diagnostics["slots"], result, strict=True):
+                    self.captured_by_slot[int(slot)] = _rgba_from_output(capture.data)
+            return result
+
+    adapter = PixelAuditAdapter()
+    output_dir = tmp_path / "younganimal-native-crawl"
+    result = await CrawlerRunner(
+        RunConfig(
+            site="younganimal",
+            source_url=EPISODE_URL,
+            output_dir=output_dir,
+            diagnostics_dir=tmp_path / "native-diagnostics",
+            page_turn_delay_ms=0,
+            max_pages=20,
+            max_same_content=3,
+            page_change_timeout_ms=2_000,
+        )
+    ).run(browser_page, adapter)
+
+    assert result.stop_state is PageState.END
+    assert len(result.pages) == 16
+    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    assert adapter.capture_modes[0] == "native_source_canvas", adapter.capture_records[0]
+    assert adapter.capture_modes == ["native_source_canvas"] * 9, adapter.capture_modes
+    assert adapter.source_authority is not None
+    sources = adapter.source_authority["sources"]
+    assert isinstance(sources, dict)
+    assert set(adapter.captured_by_slot) == set(range(1, 17))
+    for slot, actual in adapter.captured_by_slot.items():
+        expected = _rgba_from_png_data_url(sources[str(slot)])
+        assert actual == expected
+    ci_audit = await browser_page.evaluate("() => window.__yaStandardCiWidgetAudit")
+    assert ci_audit == {
+        "seek": "5",
+        "globalDelta": 1,
+        "captureDelta": 0,
+        "record": {
+            "slot": 17,
+            "targetArea": "wrapper_descendant",
+            "ciScrollWidgetClassNoop": True,
+            "classAdded": ["mode-scroll-bottom"],
+            "classRemoved": [],
+        },
+    }
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert {(page["width"], page["height"]) for page in manifest["pages"]} == {(47, 61)}
+    assert {page["mime_type"] for page in manifest["pages"]} <= {"image/png", "image/webp"}
+    with zipfile.ZipFile(
+        package_crawl_output(
+            output_dir, adapter.get_output_metadata(), library_dir=tmp_path / "native-library"
+        ).archive_path
+    ) as archive:
+        assert len(archive.namelist()) == 16
+        assert all(name.endswith((".png", ".webp")) for name in archive.namelist())
+
+
+@pytest.mark.parametrize(
+    ("geometry_change", "expected_mode"),
+    [
+        ("pure_translation", "native_source_canvas"),
+        ("size_change", "rendered_canvas_png"),
+        ("target_relative_drift", "rendered_canvas_png"),
+    ],
+)
+async def test_younganimal_draw_to_selection_geometry_requires_pure_translation(
+    browser_page,
+    monkeypatch: pytest.MonkeyPatch,
+    geometry_change: str,
+    expected_mode: str,
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    await _install_fixture(browser_page, native_source_slots=(1, 2, 3))
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+
+    adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "auto")
+    await browser_page.goto(adapter.resolve_initial_navigation_url(EPISODE_URL), wait_until="commit")
+    await adapter.initialize(browser_page)
+
+    first = await adapter.capture_page(browser_page)
+    assert first is not None
+    assert adapter._capture_diagnostics["slots"] == [1]
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, None)
+    before_authority = await _read_fixture_pixel_authority(browser_page)
+    before = await adapter._observe(browser_page, pixel_slots=(2, 3))
+    assert before.active_slots == before.ready_slots == (2, 3)
+
+    geometry = await browser_page.evaluate(
+        """({kind}) => {
+          const pages = document.querySelector('#xCVPages');
+          const wrappers = [pages.children[2], pages.children[3]];
+          const rect = node => {
+            const r = node.getBoundingClientRect();
+            return [r.x, r.y, r.width, r.height];
+          };
+          const before = wrappers.map(wrapper => [rect(wrapper), rect(wrapper.querySelector('canvas'))]);
+          if (kind === 'pure_translation') {
+            wrappers.forEach(wrapper => { wrapper.style.transform = 'translate(20px, 5px)'; });
+          } else if (kind === 'size_change') {
+            wrappers.forEach(wrapper => { wrapper.style.width = '960px'; });
+          } else {
+            wrappers.forEach(wrapper => { wrapper.querySelector('canvas').style.transform = 'translateX(7px)'; });
+          }
+          const after = wrappers.map(wrapper => [rect(wrapper), rect(wrapper.querySelector('canvas'))]);
+          return {before, after};
+        }""",
+        {"kind": geometry_change},
+    )
+    if geometry_change == "pure_translation":
+        for before_row, after_row in zip(geometry["before"], geometry["after"], strict=True):
+            before_wrapper, before_target = before_row
+            after_wrapper, after_target = after_row
+            for before_rect, after_rect in ((before_wrapper, after_wrapper), (before_target, after_target)):
+                assert before_rect[2:] == after_rect[2:]
+                assert [after_rect[i] - before_rect[i] for i in (0, 1)] == [20, 5]
+    elif geometry_change == "size_change":
+        assert any(
+            before_rect[2:] != after_rect[2:]
+            for before_row, after_row in zip(geometry["before"], geometry["after"], strict=True)
+            for before_rect, after_rect in zip(before_row, after_row, strict=True)
+        )
+    else:
+        assert all(
+            before_row[0] == after_row[0]
+            and [after_row[1][i] - before_row[1][i] for i in (0, 1)] == [7, 0]
+            and before_row[1][2:] == after_row[1][2:]
+            for before_row, after_row in zip(geometry["before"], geometry["after"], strict=True)
+        )
+
+    captures = await adapter.capture_page(browser_page)
+    assert captures is not None and len(captures) == 2
+    assert adapter._capture_diagnostics["slots"] == [2, 3]
+    assert adapter._capture_diagnostics["mode"] == expected_mode
+    if expected_mode == "native_source_canvas":
+        assert [capture.mime_type for capture in captures] == ["image/webp", "image/webp"]
+        sources = {
+            int(slot): _rgba_from_png_data_url(value)
+            for slot, value in before_authority["sources"].items()
+        }
+        for slot, capture in zip((2, 3), captures, strict=True):
+            actual_size, actual_pixels = _rgba_from_output(capture.data)
+            expected_size, expected_pixels = sources[slot]
+            assert (capture.width, capture.height) == expected_size
+            assert actual_size == expected_size
+            assert hashlib.sha256(actual_pixels).digest() == hashlib.sha256(expected_pixels).digest()
+    else:
+        assert [capture.mime_type for capture in captures] == ["image/png", "image/png"]
+        rendered = {
+            int(slot): _rgba_from_png_data_url(value)
+            for slot, value in before_authority["rendered"].items()
+        }
+        for slot, capture in zip((2, 3), captures, strict=True):
+            actual_size, actual_pixels = _rgba_from_output(capture.data)
+            expected_size, expected_pixels = rendered[slot]
+            assert (capture.width, capture.height) == (PAGE_WIDTH, PAGE_HEIGHT)
+            assert actual_size == expected_size
+            assert hashlib.sha256(actual_pixels).digest() == hashlib.sha256(expected_pixels).digest()
+    status = await browser_page.evaluate("() => window.__younganimalNativeCapture.status()")
+    assert status == {"candidateCount": 0, "proofCount": 0, "integrity": True}
+
+
+async def test_younganimal_unsafe_or_missing_native_half_falls_back_for_whole_spread(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    await _install_fixture(browser_page, native_source_slots=(1, 2), clip_slots=(1,))
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+
+    class RecordingAdapter(YounganimalAdapter):
+        def __init__(self) -> None:
+            super().__init__(preflight_work_url=WORK_URL)
+            self.capture_modes: list[str] = []
+            self.native_cache_counts: list[dict[str, object]] = []
+
+        async def capture_page(self, page):
+            result = await super().capture_page(page)
+            self.capture_modes.append(str(self._capture_diagnostics["mode"]))
+            self.native_cache_counts.append(
+                await page.evaluate("window.__younganimalNativeCapture.status()")
+            )
+            return result
+
+    adapter = RecordingAdapter()
+    output_dir = tmp_path / "younganimal-atomic-native-fallback"
+    result = await CrawlerRunner(
+        RunConfig(
+            site="younganimal",
+            source_url=EPISODE_URL,
+            output_dir=output_dir,
+            diagnostics_dir=tmp_path / "atomic-fallback-diagnostics",
+            page_turn_delay_ms=0,
+            max_pages=20,
+            max_same_content=3,
+            page_change_timeout_ms=2_000,
+        )
+    ).run(browser_page, adapter)
+
+    assert result.stop_state is PageState.END
+    assert adapter.capture_modes[0] == "rendered_canvas_png"  # clipped snapshot was unsupported
+    assert adapter.capture_modes[1] == "rendered_canvas_png"  # slot 3 had no source candidate
+    assert adapter.native_cache_counts[0]["candidateCount"] == 0
+    assert adapter.native_cache_counts[0]["proofCount"] == 0
+    assert {(page["width"], page["height"]) for page in json.loads(
+        (output_dir / "manifest.json").read_text(encoding="utf-8")
+    )["pages"]} == {(PAGE_WIDTH, PAGE_HEIGHT)}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "redraw",
+        "same_value_reset_redraw",
+        "replacement",
+        "replacement_resized",
+        "resized",
+        "layout_translation",
+        "transient_nav_class",
+        "root_class_noop",
+        "transient_selected_class",
+        "transient_structure",
+        "rect_rounding_boundary",
+        "observer_summary_failure",
+        "ci_class_changed_restored",
+        "ci_namespaced_class_changed_restored",
+        "ci_unknown_extra",
+        "ci_nbsp",
+        "ci_vertical_tab",
+        "ci_scroll_widget_unknown_transition",
+        "ci_scroll_widget_visible_overlap",
+        "ci_scroll_widget_ambiguous_active_geometry",
+        "ci_scroll_widget_other_parent",
+        "ci_scroll_widget_reparented",
+        "ci_scroll_widget_replaced",
+        "ci_scroll_widget_missing",
+        "ci_scroll_widget_namespaced",
+        "ci_scroll_widget_scroll_removed",
+        "ci_id_noop",
+        "selected_wrapper_noop",
+        "nonselected_wrapper_noop",
+    ],
+)
+async def test_younganimal_native_post_python_mutation_stops_without_saving_page(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    scroll_widget_case = mutation.startswith("ci_scroll_widget_")
+    await _install_fixture(
+        browser_page,
+        native_source_slots=(2, 3) if scroll_widget_case else (1,),
+        top_empty=scroll_widget_case,
+    )
+    if mutation in {"ci_namespaced_class_changed_restored", "ci_scroll_widget_namespaced"}:
+        original_observer_script = younganimal_adapter_module.OBSERVER_INIT_SCRIPT
+        test_namespaced_observer = """(() => {
+          const NativeObserver = window.MutationObserver;
+          window.MutationObserver = class extends NativeObserver {
+            constructor(callback) {
+              super(records => callback(records.filter(record => record.type !== 'attributes' ||
+                (record.attributeNamespace === null && ['class', 'id'].includes(record.attributeName)) ||
+                (record.attributeNamespace !== null && record.attributeName === 'class'))));
+            }
+            observe(target, options) {
+              const testOptions = {...options};
+              delete testOptions.attributeFilter;
+              return super.observe(target, testOptions);
+            }
+          };
+        })();
+        """
+        monkeypatch.setattr(
+            younganimal_adapter_module,
+            "OBSERVER_INIT_SCRIPT",
+            test_namespaced_observer + original_observer_script,
+        )
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 10)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+    mutation_script = {
+        "redraw": """const context = canvas.getContext('2d');
+          context.fillStyle = 'rgb(1,2,3)'; context.fillRect(0, 0, 1, 1);""",
+        "same_value_reset_redraw": """const width = canvas.width;
+          canvas.setAttribute('width', String(width));
+          const context = canvas.getContext('2d');
+          context.drawImage(window.__yaSources[1], 0, 0, 47, 61, 0, 0, canvas.width, canvas.height);""",
+        "replacement": """const replacement = canvas.cloneNode(); canvas.replaceWith(replacement);
+          const capture = window.__younganimalViewerCapture;
+          const original = capture.raw.getImageData;
+          window.__yaPostproofTargetReadbacks = 0;
+          capture.raw.getImageData = function(...args) {
+            if (this.canvas?.isConnected && this.canvas.closest('.-cv-page'))
+              window.__yaPostproofTargetReadbacks += 1;
+            return Reflect.apply(original, this, args);
+          };""",
+        "replacement_resized": """const replacement = canvas.cloneNode();
+          replacement.width = canvas.width + 1; canvas.replaceWith(replacement);
+          const capture = window.__younganimalViewerCapture;
+          const original = capture.raw.getImageData;
+          window.__yaPostproofTargetReadbacks = 0;
+          capture.raw.getImageData = function(...args) {
+            if (this.canvas?.isConnected && this.canvas.closest('.-cv-page'))
+              window.__yaPostproofTargetReadbacks += 1;
+            return Reflect.apply(original, this, args);
+          };""",
+        "resized": """const capture = window.__younganimalViewerCapture;
+          const original = capture.raw.getImageData;
+          window.__yaPostproofTargetReadbacks = 0;
+          capture.raw.getImageData = function(...args) {
+            if (this.canvas === canvas) window.__yaPostproofTargetReadbacks += 1;
+            return Reflect.apply(original, this, args);
+          };
+          canvas.width = canvas.width + 1;""",
+        "layout_translation": """const wrapper = document.querySelector('#xCVPages').children[1];
+          wrapper.style.transform = 'translateX(7px)';""",
+        "transient_nav_class": """const viewer = document.querySelector('#comici-viewer');
+          const context = canvas.getContext('2d', {willReadFrequently: true});
+          const beforePixels = new Uint8ClampedArray(
+            context.getImageData(0, 0, canvas.width, canvas.height).data);
+          viewer.classList.add('mode-nav-open');
+          viewer.classList.remove('mode-nav-open');
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          const afterCanvas = document.querySelector('#xCVPages').children[1].querySelector('canvas');
+          const afterPixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+          let samePixels = beforePixels.length === afterPixels.length;
+          for (let index = 0; samePixels && index < beforePixels.length; index += 1) {
+            samePixels = beforePixels[index] === afterPixels[index];
+          }
+          window.__yaTransientNavMutationAudit = {
+            sameNode: canvas === afterCanvas,
+            samePixels,
+          };""",
+        "root_class_noop": """const viewer = document.querySelector('#comici-viewer');
+          viewer.setAttribute('class', viewer.getAttribute('class'));""",
+        "transient_selected_class": """const wrapper = document.querySelector('#xCVPages').children[1];
+          wrapper.classList.add('mode-loading'); wrapper.classList.remove('mode-loading');""",
+        "transient_structure": """const viewer = document.querySelector('#comici-viewer');
+          const marker = document.createElement('span'); viewer.append(marker); marker.remove();""",
+        "rect_rounding_boundary": """const viewer = document.querySelector('#comici-viewer');
+          const before = canvas.getBoundingClientRect();
+          let delta = null;
+          for (let step = 1; step < 100 && delta === null; step += 1) {
+            for (const sign of [1, -1]) {
+              const candidate = sign * step / 10000;
+              if (Math.round((before.x + candidate) * 100) !== Math.round(before.x * 100)) {
+                delta = candidate; break;
+              }
+            }
+          }
+          if (delta === null) throw new Error('could_not_choose_rounding_boundary');
+          canvas.style.transform = `translateX(${delta}px)`;
+          const after = canvas.getBoundingClientRect();
+          window.__yaRectRoundingAudit = {
+            rawTargetSame: Math.abs(after.x - before.x) < 0.01,
+            roundedTargetSame: Math.abs(Math.round(after.x * 100) - Math.round(before.x * 100)) < 1,
+          };
+          viewer.setAttribute('class', viewer.className);""",
+        "observer_summary_failure": """const viewer = document.querySelector('#comici-viewer');
+          const classValue = viewer.className;
+          const original = Element.prototype.getAttribute;
+          let didThrow = false;
+          Element.prototype.getAttribute = function(name) {
+            if (!didThrow && this === viewer && name === 'class') {
+              didThrow = true; throw new Error('diagnostic test fault');
+            }
+            return Reflect.apply(original, this, [name]);
+          };
+          viewer.setAttribute('class', classValue);
+          const marker = document.createElement('span'); viewer.append(marker);
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          Element.prototype.getAttribute = original;
+          window.__yaMutationSummaryFaultObserved = didThrow;""",
+        "ci_class_changed_restored": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          ci.classList.add('mode-diagnostic-extra');
+          ci.classList.remove('mode-diagnostic-extra');""",
+        "ci_namespaced_class_changed_restored": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          ci.setAttributeNS('urn:fixture', 'fixture:class', 'private-user-token');
+          ci.setAttribute('class', '-cv-page  mode-ci');
+          ci.setAttributeNS('urn:fixture', 'fixture:class', '-cv-page mode-ci');
+          ci.setAttribute('class', '-cv-page mode-ci');""",
+        "ci_unknown_extra": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          ci.classList.add('private-user-token');""",
+        "ci_nbsp": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          ci.setAttribute('class', '-cv-page mode-ci' + String.fromCharCode(160));""",
+        "ci_vertical_tab": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          ci.setAttribute('class', '-cv-page mode-ci' + String.fromCharCode(11));""",
+        "ci_scroll_widget_unknown_transition": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          widget.classList.add('mode-scroll-unknown');""",
+        "ci_scroll_widget_visible_overlap": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const activeBody = pages.children[2];
+          ci.style.left = `${activeBody.getBoundingClientRect().left}px`;
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          widget.classList.add('mode-scroll-bottom');""",
+        "ci_scroll_widget_ambiguous_active_geometry": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const activeBody = pages.children[2];
+          activeBody.append(document.createElement('canvas'));
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          widget.classList.add('mode-scroll-bottom');""",
+        "ci_scroll_widget_other_parent": """const pages = document.querySelector('#xCVPages');
+          const widget = pages.children[2].querySelector('.-cv-ci-content');
+          if (!widget) throw new Error('fixture_body_scroll_decoy_missing');
+          widget.classList.add('mode-scroll-bottom');""",
+        "ci_scroll_widget_reparented": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          const otherParent = document.createElement('div'); otherParent.className = '-cv-other';
+          widget.parentElement.append(otherParent); otherParent.append(widget);
+          widget.classList.add('mode-scroll-bottom');""",
+        "ci_scroll_widget_replaced": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          const replacement = widget.cloneNode(true); widget.replaceWith(replacement);
+          replacement.classList.add('mode-scroll-bottom');""",
+        "ci_scroll_widget_missing": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const decoy = document.createElement('div'); decoy.className = '-cv-ci-content';
+          ci.append(decoy); decoy.classList.add('mode-scroll-bottom');""",
+        "ci_scroll_widget_namespaced": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          widget.setAttributeNS('urn:fixture', 'fixture:class', 'mode-scroll-bottom');""",
+        "ci_scroll_widget_scroll_removed": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          widget.setAttribute('class', '-cv-ci-content');""",
+        "ci_id_noop": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          ci.setAttribute('id', ci.getAttribute('id') || 'ya-ci-test');
+          ci.setAttribute('id', ci.getAttribute('id'));""",
+        "selected_wrapper_noop": """const wrapper = document.querySelector('#xCVPages').children[1];
+          wrapper.setAttribute('class', wrapper.getAttribute('class'));""",
+        "nonselected_wrapper_noop": """const wrapper = document.querySelector('#xCVPages').children[2];
+          wrapper.setAttribute('class', wrapper.getAttribute('class'));""",
+    }[mutation]
+    monkeypatch.setattr(
+        younganimal_adapter_module,
+        "VERIFY_NATIVE_CAPTURE_SCRIPT",
+        f"""async token => {{
+          const canvas = document.querySelector('#xCVPages').children[1].querySelector('canvas');
+          {mutation_script}
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          return window.__younganimalNativeCapture.verify(token);
+        }}""",
+    )
+    output_dir = tmp_path / "younganimal-native-postproof-mutation"
+
+    adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
+    if mutation in {
+        "ci_namespaced_class_changed_restored", "ci_scroll_widget_namespaced",
+        "ci_scroll_widget_missing", "ci_scroll_widget_other_parent",
+        "ci_scroll_widget_scroll_removed",
+    }:
+        original_initialize = adapter.initialize
+
+        async def initialize_with_namespaced_ci(page) -> None:
+            await original_initialize(page)
+            await page.evaluate("""mutation => {
+              const pages = document.querySelector('#xCVPages');
+              const ci = pages.children[pages.children.length - 5];
+              if (mutation === 'ci_namespaced_class_changed_restored') {
+                ci.setAttributeNS('urn:fixture', 'fixture:class', '-cv-page mode-ci');
+              } else if (mutation === 'ci_scroll_widget_namespaced') {
+                ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content')
+                  .setAttributeNS('urn:fixture', 'fixture:class', '-cv-ci-content');
+              } else if (mutation === 'ci_scroll_widget_missing') {
+                ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content').remove();
+              } else if (mutation === 'ci_scroll_widget_other_parent') {
+                const wrapper = pages.children[2];
+                const parent = document.createElement('div');
+                parent.className = '-cv-ci -cv-page-content';
+                parent.style.cssText = 'position:absolute;left:-30000px;top:0;width:628px;height:886px';
+                const widget = document.createElement('div');
+                widget.className = '-cv-ci-content';
+                widget.style.cssText = 'position:absolute;left:90px;top:207px;width:450px;height:470px';
+                parent.append(widget); wrapper.append(parent);
+              } else if (mutation === 'ci_scroll_widget_scroll_removed') {
+                ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content')
+                  .classList.add('mode-scroll-bottom');
+              }
+              return new Promise(resolve => requestAnimationFrame(resolve));
+            }""", mutation)
+
+        monkeypatch.setattr(adapter, "initialize", initialize_with_namespaced_ci)
+    locator_fallbacks: list[object] = []
+    original_get_capture_targets = adapter.get_capture_targets
+
+    async def track_locator_fallback(page):
+        locator_fallbacks.append(page)
+        return await original_get_capture_targets(page)
+
+    monkeypatch.setattr(adapter, "get_capture_targets", track_locator_fallback)
+    with pytest.raises(UnknownPageStateError, match="native post-encoding proof failed"):
+        await CrawlerRunner(
+            RunConfig(
+                site="younganimal",
+                source_url=EPISODE_URL,
+                output_dir=output_dir,
+                diagnostics_dir=tmp_path / "native-postproof-diagnostics",
+                page_turn_delay_ms=0,
+                max_pages=20,
+                max_same_content=3,
+                page_change_timeout_ms=2_000,
+            )
+        ).run(browser_page, adapter)
+
+    assert not list(output_dir.glob("page-*.*"))
+    assert locator_fallbacks == []
+    status = await browser_page.evaluate("() => window.__younganimalNativeCapture.status()")
+    assert status == {"candidateCount": 0, "proofCount": 0, "integrity": True}
+    diagnostics = await adapter.collect_debug_metadata(browser_page)
+    capture_diagnostics = diagnostics["capture"]
+    assert capture_diagnostics["mode"] == "native_capture_failed"
+    assert capture_diagnostics["stage"] == "native_post_encoding_verify"
+    expected_reasons = {
+        "redraw": "native_target_generation_or_write_changed",
+        "same_value_reset_redraw": "native_target_generation_or_write_changed",
+        "replacement": "native_reader_layout_changed",
+        "replacement_resized": "native_reader_layout_changed",
+        "resized": "native_target_generation_or_write_changed",
+        "layout_translation": "native_target_layout_changed",
+        "transient_nav_class": "native_reader_layout_changed",
+        "root_class_noop": "native_reader_layout_changed",
+        "transient_selected_class": "native_reader_layout_changed",
+        "transient_structure": "native_reader_layout_changed",
+        "rect_rounding_boundary": "native_reader_layout_changed",
+        "observer_summary_failure": "native_reader_layout_changed",
+        "ci_class_changed_restored": "native_reader_layout_changed",
+        "ci_namespaced_class_changed_restored": "native_reader_layout_changed",
+        "ci_unknown_extra": "native_reader_layout_changed",
+        "ci_nbsp": "native_reader_layout_changed",
+        "ci_vertical_tab": "native_reader_layout_changed",
+        "ci_scroll_widget_unknown_transition": "native_reader_layout_changed",
+        "ci_scroll_widget_visible_overlap": "native_reader_layout_changed",
+        "ci_scroll_widget_ambiguous_active_geometry": "native_reader_layout_changed",
+        "ci_scroll_widget_other_parent": "native_reader_layout_changed",
+        "ci_scroll_widget_reparented": "native_reader_layout_changed",
+        "ci_scroll_widget_replaced": "native_reader_layout_changed",
+        "ci_scroll_widget_missing": "native_reader_layout_changed",
+        "ci_scroll_widget_namespaced": "native_reader_layout_changed",
+        "ci_scroll_widget_scroll_removed": "native_reader_layout_changed",
+        "ci_id_noop": "native_reader_layout_changed",
+        "selected_wrapper_noop": "native_reader_layout_changed",
+        "nonselected_wrapper_noop": "native_reader_layout_changed",
+    }
+    assert capture_diagnostics["reason"] == expected_reasons[mutation]
+    assert capture_diagnostics["initial_canvas_quiet"]["status"] == "settled"
+    detail = capture_diagnostics["details"]
+    assert detail["available"] is True
+    expected_active_slots = [2, 3] if scroll_widget_case else [1]
+    assert detail["expected"]["activeSlots"] == expected_active_slots
+    assert detail["observed"]["viewerIdentity"] is True
+    assert detail["observed"]["layoutAvailable"] is (
+        mutation not in {"ci_unknown_extra", "ci_nbsp", "ci_vertical_tab"}
+    )
+    assert type(detail["expected"]["captureDomGeneration"]) is int
+    assert type(detail["observed"]["captureDomGeneration"]) is int
+    assert detail["observed"]["queryPresent"] is False
+    assert detail["observed"]["hashPresent"] is False
+    assert len(detail["selected"]) == len(expected_active_slots)
+    for selected in detail["selected"]:
+        expected_target_same = mutation not in {"replacement", "replacement_resized"}
+        if mutation == "ci_scroll_widget_ambiguous_active_geometry" and selected["slot"] == 2:
+            expected_target_same = False
+        assert selected["targetSame"] is expected_target_same, selected
+        assert type(selected["proofGeneration"]) is int
+        assert type(selected["proofWrites"]) is int
+        if mutation in {"redraw", "same_value_reset_redraw"}:
+            assert not (selected["generationMatches"] and selected["writesMatch"])
+        elif mutation not in {"replacement", "replacement_resized", "resized"} and not (
+            mutation == "ci_scroll_widget_ambiguous_active_geometry" and selected["slot"] == 2
+        ):
+            assert selected["generationMatches"] is True
+            assert selected["writesMatch"] is True
+        readback_unavailable = mutation in {"replacement", "replacement_resized", "resized"} or (
+            mutation == "ci_scroll_widget_ambiguous_active_geometry" and selected["slot"] == 2
+        )
+        if readback_unavailable:
+            assert selected["readbackAvailable"] is False
+            assert selected["contextMatches"] is None
+            assert selected["pixelsMatchProof"] is None
+            assert selected["replayMatchesProof"] is None
+            if mutation != "ci_scroll_widget_ambiguous_active_geometry":
+                assert await browser_page.evaluate("() => window.__yaPostproofTargetReadbacks") == 0
+            if mutation in {"replacement_resized", "resized"}:
+                assert selected["width"] == selected["proofWidth"] + 1
+                assert selected["height"] == selected["proofHeight"]
+        else:
+            assert selected["readbackAvailable"] is True
+            assert selected["pixelsMatchProof"] is (mutation not in {"redraw"})
+    assert detail["mutations"]["available"] is True
+    if mutation == "observer_summary_failure":
+        assert await browser_page.evaluate("() => window.__yaMutationSummaryFaultObserved") is True
+        assert detail["mutations"]["complete"] is False
+        assert detail["mutations"]["coverageContiguous"] is False
+        assert detail["mutations"]["unrecordedCount"] >= 1
+        assert detail["mutations"]["toGeneration"] >= detail["mutations"]["fromGeneration"] + 2
+        assert detail["observed"]["captureDomGeneration"] > detail["expected"]["captureDomGeneration"]
+        assert detail["selected"][0]["generationMatches"] is True
+        assert detail["selected"][0]["writesMatch"] is True
+        assert detail["selected"][0]["pixelsMatchProof"] is True
+    else:
+        assert detail["mutations"]["complete"] is True
+        assert detail["mutations"]["coverageContiguous"] is True
+    if mutation in {
+        "ci_class_changed_restored", "ci_namespaced_class_changed_restored",
+        "ci_unknown_extra", "ci_nbsp", "ci_vertical_tab",
+        "ci_id_noop", "selected_wrapper_noop", "nonselected_wrapper_noop",
+        "ci_scroll_widget_unknown_transition", "ci_scroll_widget_other_parent",
+        "ci_scroll_widget_reparented", "ci_scroll_widget_replaced", "ci_scroll_widget_missing",
+        "ci_scroll_widget_namespaced", "ci_scroll_widget_scroll_removed",
+    }:
+        assert detail["observed"]["captureDomGeneration"] > detail["expected"]["captureDomGeneration"]
+    if mutation.startswith("ci_scroll_widget_"):
+        records = detail["mutations"]["records"]
+        if mutation == "ci_scroll_widget_unknown_transition":
+            assert any(
+                record["ciScrollWidgetTarget"] is True
+                and record["ciScrollWidgetClassNoop"] is False
+                for record in records
+            )
+        elif mutation == "ci_scroll_widget_visible_overlap":
+            assert detail["observed"]["captureDomGeneration"] == detail["expected"]["captureDomGeneration"] + 1
+            assert any(
+                record["ciScrollWidgetTarget"] is True
+                and record["ciScrollWidgetClassNoop"] is False
+                and record["classAdded"] == ["mode-scroll-bottom"]
+                for record in records
+            )
+        elif mutation == "ci_scroll_widget_ambiguous_active_geometry":
+            assert detail["observed"]["captureDomGeneration"] == detail["expected"]["captureDomGeneration"] + 2
+            assert any(record["kind"] == "childList" and record["slot"] == 2 for record in records)
+            assert any(
+                record["ciScrollWidgetTarget"] is True
+                and record["ciScrollWidgetClassNoop"] is False
+                and record["classAdded"] == ["mode-scroll-bottom"]
+                for record in records
+            )
+        elif mutation == "ci_scroll_widget_other_parent":
+            assert any(
+                record["slot"] == 2 and record["ciScrollWidgetTarget"] is False
+                for record in records
+            )
+        elif mutation == "ci_scroll_widget_reparented":
+            assert any(
+                record["slot"] == 46 and record["ciScrollWidgetTarget"] is False
+                for record in records
+            )
+        elif mutation == "ci_scroll_widget_replaced":
+            assert any(
+                record["kind"] == "childList" and record["slot"] == 46
+                for record in records
+            )
+        elif mutation == "ci_scroll_widget_missing":
+            assert any(
+                record["slot"] == 46 and record["targetArea"] == "wrapper_descendant"
+                and record["ciScrollWidgetTarget"] is False
+                for record in records
+            )
+        elif mutation == "ci_scroll_widget_namespaced":
+            assert any(record["namespacePresent"] is True for record in records)
+            assert all(record["ciScrollWidgetTarget"] is not True for record in records)
+        elif mutation == "ci_scroll_widget_scroll_removed":
+            assert any(
+                record["ciScrollWidgetTarget"] is True
+                and record["ciScrollWidgetClassNoop"] is False
+                for record in records
+            )
+    if mutation == "ci_class_changed_restored":
+        assert detail["observed"]["captureDomGeneration"] == detail["expected"]["captureDomGeneration"] + 2
+        changed_ci_records = [
+            record for record in detail["mutations"]["records"]
+            if record["canonicalCiWrapper"] is True
+        ]
+        assert len(changed_ci_records) == 2
+        assert all(record["canonicalCiClassNoop"] is False for record in changed_ci_records)
+    if mutation == "ci_namespaced_class_changed_restored":
+        assert detail["observed"]["captureDomGeneration"] == (
+            detail["expected"]["captureDomGeneration"] + 2
+        )
+        records = detail["mutations"]["records"]
+        namespaced_ci_records = [
+            record for record in records
+            if record["targetArea"] == "wrapper" and record["namespacePresent"] is True
+        ]
+        ordinary_ci_records = [
+            record for record in records
+            if record["targetArea"] == "wrapper" and record["attributeName"] == "class"
+            and record["namespacePresent"] is False
+        ]
+        assert len(namespaced_ci_records) == 2
+        assert all(record["attributeName"] == "class" for record in namespaced_ci_records)
+        assert all(record["changed"] is None for record in namespaced_ci_records)
+        assert all(record["sameAssignment"] is None for record in namespaced_ci_records)
+        assert all(record["canonicalCiClassNoop"] is False for record in namespaced_ci_records)
+        assert len(ordinary_ci_records) == 2
+        assert all(record["canonicalCiClassNoop"] is True for record in ordinary_ci_records)
+    if mutation in {"transient_nav_class", "root_class_noop", "transient_selected_class", "transient_structure"}:
+        assert detail["mutations"]["records"]
+    serialized = json.dumps(capture_diagnostics, ensure_ascii=True)
+    assert "data:image" not in serialized
+    assert "younganimal.com" not in serialized
+    assert "private-user-token" not in serialized
+    persisted = json.loads(
+        (tmp_path / "native-postproof-diagnostics" / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert persisted["adapter_debug"]["capture"] == capture_diagnostics
+    if mutation == "transient_nav_class":
+        audit = await browser_page.evaluate("() => window.__yaTransientNavMutationAudit")
+        assert audit == {"sameNode": True, "samePixels": True}
+    if mutation == "root_class_noop":
+        root_record = next(
+            record for record in detail["mutations"]["records"]
+            if record["targetArea"] == "viewer" and record["attributeName"] == "class"
+        )
+        assert root_record["sameAssignment"] is True
+    if mutation == "transient_structure":
+        assert any(record["kind"] == "childList" for record in detail["mutations"]["records"])
+    if mutation == "rect_rounding_boundary":
+        audit = await browser_page.evaluate("() => window.__yaRectRoundingAudit")
+        assert audit["rawTargetSame"] is True
+        assert audit["roundedTargetSame"] is False
+        assert detail["selected"][0]["rectsSame"] is audit["rawTargetSame"]
+
+
+async def test_younganimal_mutation_journal_is_bounded_and_marks_lost_coverage(
+    browser_page,
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    await _install_fixture(browser_page)
+    adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
+    await adapter.prepare_page(browser_page)
+    await browser_page.goto(EPISODE_URL, wait_until="load")
+    generation = await browser_page.evaluate(
+        "() => window.__younganimalViewerCapture.inspect([]).domGeneration"
+    )
+    result = await browser_page.evaluate("""generation => {
+      const viewer = document.querySelector('#comici-viewer');
+      for (let index = 0; index < 80; index += 1) {
+        viewer.classList.toggle('mode-hide', index % 2 === 0);
+      }
+      return new Promise(resolve => requestAnimationFrame(() =>
+        resolve(window.__younganimalViewerCapture.mutationsSince(generation))));
+    }""", generation)
+
+    assert result["available"] is True
+    assert result["complete"] is False
+    assert result["droppedCount"] >= 16
+    assert len(result["records"]) == 64
+    assert all(record["targetArea"] == "viewer" for record in result["records"])
+
+
+async def test_younganimal_manual_entry_rejects_nonfree_row_before_episode_navigation(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page)
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
+    await adapter.prepare_page(browser_page)
+    await browser_page.goto(WORK_URL, wait_until="commit")
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    # The fixture's target is free by default. Mutate only its exact public-row
+    # badge to prove that the adapter will not enter the episode after an unknown label.
+    await browser_page.route(
+        "https://younganimal.com/series/aee4fa742b0fe/1",
+        lambda route: route.fulfill(
+            status=200,
+            body=(
+                '<!doctype html><html><head><meta charset="utf-8"></head><body><h1>Fixture Work</h1>'
+                + _listing(selected_range=True).replace("無料", "待つと無料")
+                + "</body></html>"
+            ),
+            content_type="text/html",
+        ),
+    )
+    await browser_page.locator(".series-eplist-main").wait_for(state="visible")
+    with pytest.raises(UnknownPageStateError, match="exact free label"):
+        await adapter.initialize(browser_page)
+    assert f"/episodes/{EPISODE_ID}" not in requested
+
+
+async def test_younganimal_canvas_mutation_fails_without_runner_fallback_or_saved_page(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page)
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 500)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
+    adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
+    fallback_calls: list[object] = []
+    capture_page = adapter.capture_page
+
+    async def mutate_during_atomic_capture(page):
+        await page.evaluate(
+            """(() => {
+              const original = HTMLCanvasElement.prototype.toDataURL;
+              HTMLCanvasElement.prototype.toDataURL = function(...args) {
+                const result = Reflect.apply(original, this, args);
+                const context = this.getContext('2d', {willReadFrequently: true});
+                context.fillStyle = 'rgb(1,2,3)';
+                context.fillRect(0, 0, 1, 1);
+                return result;
+              };
+            })();"""
+        )
+        return await capture_page(page)
+
+    monkeypatch.setattr(adapter, "capture_page", mutate_during_atomic_capture)
+
+    async def forbid_fallback(page) -> None:
+        fallback_calls.append(page)
+        raise AssertionError("generic capture fallback must not run")
+
+    monkeypatch.setattr(adapter, "get_capture_targets", forbid_fallback)
+    output_dir = tmp_path / "younganimal-mutated-canvas"
+    with pytest.raises(UnknownPageStateError, match="integrity observer is missing"):
+        await CrawlerRunner(
+            RunConfig(
+                site="younganimal",
+                source_url=EPISODE_URL,
+                output_dir=output_dir,
+                diagnostics_dir=tmp_path / "mutation-diagnostics",
+                page_turn_delay_ms=0,
+                max_pages=20,
+                max_same_content=3,
+                page_change_timeout_ms=2_000,
+            )
+        ).run(browser_page, adapter)
+
+    assert requested == [f"/series/{WORK_ID}", f"/series/{WORK_ID}/1", f"/episodes/{EPISODE_ID}"]
+    assert fallback_calls == []
+    assert list(output_dir.glob("page-*.png")) == []
+
+
+async def test_younganimal_range_429_stops_before_episode_navigation(
+    browser_page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page)
+    monkeypatch.setattr(younganimal_adapter_module, "MANUAL_RANGE_PACING_MS", 0)
+    attempts: list[str] = []
+
+    async def rate_limit(route) -> None:
+        attempts.append(route.request.url.split("?", 1)[0])
+        await route.fulfill(
+            status=429,
+            headers={"Retry-After": "1"},
+            body="temporarily unavailable",
+            content_type="text/plain",
+        )
+
+    await browser_page.route(f"{WORK_URL}/1", rate_limit)
+    adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
+    await adapter.prepare_page(browser_page)
+    await browser_page.goto(WORK_URL, wait_until="commit")
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+
+    with pytest.raises(UnknownPageStateError, match="429"):
+        await adapter.initialize(browser_page)
+
+    assert attempts == [f"{WORK_URL}/1"]
+    assert requested == [f"/series/{WORK_ID}"]
+    assert f"/episodes/{EPISODE_ID}" not in requested

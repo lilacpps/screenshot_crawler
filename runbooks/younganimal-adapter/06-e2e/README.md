@@ -1,11 +1,15 @@
 # Phase 06 — independent E2E, regression and handoff
 
-Status: LOCAL TEST/ARTIFACT AUDIT PASS; LIVE E2E INCOMPLETE. Latest independent Tester: 42 passed, 0 skipped, 140 existing asyncio deprecation warnings in 9.00s; four isolated Catalogs were opened read-only and each contained one pre-created Work row with all other tables empty. No live capture, ZIP, entitlement state, or complete Catalog flow was verified.
+Status: Attempt 9 passed final-code free Batch E2E for both live profiles. The standard target captured 16/16 native VP8L pages across 9 spreads; the top-empty target captured 44/44 across 22 spreads. Both reached END, passed ZIP/CRC and isolated Catalog checks, and preserved source fingerprints. Independent audit: `output/younganimal_experiment/phase04_batch_e2e_20261011/attempt-9/independent-final-audit.json`. Discovery (925 positions), Phase 03 review, and Phase 04 direct-only Batch are complete. Phase 05 wait/resource semantics remain UNKNOWN and unimplemented; the overall request to support wait-free episodes is not complete.
+
+The historical D-only attempt remains `PASS_WITH_STATUS_PROVENANCE_LIMIT`: its completion status was restored from a measured snapshot after a later experiment overwrote the attempt status. Attempt 3 completed 16 ordered pages through a mixed capture path and passed independent artifact audit with one exact native VP8L page and 15 rendered PNG pages. These older results remain historical and are not used as the final all-native standard-target claim.
 
 ## Current result (2026-10-11)
-- Earlier independent local Tester audit: PASS; 27 passed, 0 skipped, 23 existing deprecation warnings, 4.31s across the two Younganimal test files. Latest independent audit: PASS; 42 passed, 0 skipped, 140 existing asyncio deprecation warnings, 9.00s.
-- Four isolated Catalogs were opened read-only; each had one Work row created before adapter invocation and zero items, episode sources, targets, runs, artifacts, or quota states. JSON sanitation passed. The 03A retry report records one listing main-frame navigation, then a page-originated Younganimal fetch HTTP 429 (`Retry-After: 1`) and zero episode main-frame navigations/seek positions. No manual navigation or retry was issued after the stop; in-flight automatic requests are not ruled out.
-- This local audit does not establish live Viewer capture, END, ZIP, entitlement, or complete Catalog synchronization. Live E2E remains incomplete because full Discovery stopped at `/6` without a response status and the later 03A attempt stopped on HTTP 429.
+
+- Final affected capture-unit plus Younganimal browser suite: `84 passed, 0 skipped`, 5 existing pytest-asyncio deprecation warnings, 133.19s. Full `ruff check src tests` passed. Full `pytest -q` was not run because changes are site-local.
+- The independent attempt-9 audit confirms 16 standard-target and 44 top-empty native VP8L outputs, decoded-RGBA/byte and ZIP/CRC checks, END, isolated Catalog completion, and unchanged source fingerprints. The separate artifacts are `attempt-9/provided-free/audit.json` and `attempt-9/topempty-free/audit.json` beneath `output/younganimal_experiment/phase04_batch_e2e_20261011/`; the combined independent report is linked above.
+- Attempts 7 and 8 remain historical: attempt 7 timed out before top-empty capture; attempt 8 failed closed during native verification before page save. Attempt 9 supersedes those incomplete attempts on the final code. The older attempt-6 top-empty pass used a preceding geometry rule.
+- Phase 05's latest public probe measured both blank-row SVG icons visible at 24x24 with visible parents, but did not identify active icon/access semantics, authentication state, or a safe wait operation. No episode navigation, CTA, wait, or resource action occurred.
 
 Tester audit report: ignored `output/younganimal_experiment/tester/final_post429_local_audit.md`.
 

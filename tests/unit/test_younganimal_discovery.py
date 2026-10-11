@@ -8,6 +8,10 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from screenshot_crawler.core.errors import AccessStopError
 from screenshot_crawler.discovery import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.younganimal import discovery as younganimal_discovery
+from screenshot_crawler.site_adapters.younganimal.access import (
+    YOUNGANIMAL_RELEVANT_HOSTS,
+    is_younganimal_relevant_host,
+)
 from screenshot_crawler.site_adapters.younganimal.discovery import (
     YounganimalEpisodeIdentity,
     YounganimalListingRow,
@@ -86,6 +90,17 @@ def test_younganimal_access_needs_one_exact_free_label(labels, expected) -> None
     observed = classify_younganimal_access(labels)
     assert observed.raw_labels == labels
     assert observed.access_mode == expected
+
+
+def test_younganimal_access_profile_uses_observed_content_hosts_only() -> None:
+    assert YOUNGANIMAL_RELEVANT_HOSTS == frozenset(
+        {"younganimal.com", "viewer.younganimal.com", "cdn-public.comici.jp"}
+    )
+    assert is_younganimal_relevant_host("https://younganimal.com/episodes/example")
+    assert is_younganimal_relevant_host("https://viewer.younganimal.com/image/sample")
+    assert is_younganimal_relevant_host("https://cdn-public.comici.jp/page/sample.webp")
+    assert not is_younganimal_relevant_host("https://api-ai.comici.jp/pixel/sample")
+    assert not is_younganimal_relevant_host("https://younganimal.com.evil.example/")
 
 
 def test_younganimal_range_map_requires_contiguous_oldest_first_routes() -> None:
@@ -289,7 +304,7 @@ async def test_younganimal_guard_checkpoint_timeout_fails_closed(
         await _guard_checkpoint(SlowGuard(), page)  # type: ignore[arg-type]
 
 
-async def test_younganimal_range_pacing_is_one_second_before_guard_checkpoint() -> None:
+async def test_younganimal_range_pacing_is_three_seconds_before_guard_checkpoint() -> None:
     calls: list[tuple[str, object]] = []
 
     class FakePage:
@@ -306,7 +321,7 @@ async def test_younganimal_range_pacing_is_one_second_before_guard_checkpoint() 
         FakePage(), FakeGuard()  # type: ignore[arg-type]
     )
 
-    assert calls == [("wait", 1_000), ("guard", f"{BASE}/series/{WORK_ID}")]
+    assert calls == [("wait", 3_000), ("guard", f"{BASE}/series/{WORK_ID}")]
 
 
 class _FakeNavigationRequest:

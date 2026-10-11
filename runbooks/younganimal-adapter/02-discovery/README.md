@@ -1,6 +1,6 @@
 # Phase 02 - Younganimal Discovery
 
-Status: PARTIAL DISCOVERY IMPLEMENTATION VERIFIED by Reviewer (BLOCKING 0); 1-second pacing and positive-evidence timeout recovery pass local tests and Reviewer (BLOCKING 0). The latest full traversal stopped at `/6` after `/1`–`/5` returned 200; it buffered 150 rows but did not receive a response status for `/6`, and yielded no records. Complete 925-row Discovery remains unverified. The later 03A viewer probe separately encountered an immediate guarded HTTP 429; no manual navigation or retry followed that stop, while in-flight automatic requests are not ruled out.
+Status: full 925-row live Discovery PASS on 2026-10-11. The live pass used a 3000 ms harness override; production pacing was subsequently set to 3000 ms before each numeric range request. The completed pass validated all 31 ranges, 925 unique episode positions, and the target at position 1 with exact free status. Older /6 timeout and HTTP 429 stops remain historical, separate attempts. The completed pass observed no 403, 429, challenge, or CAPTCHA.
 Prerequisite: Phase 01 VERIFIED / BLOCKING 0.
 
 ## Contract and safety deviation
@@ -22,7 +22,7 @@ The original proposal used an episode URL as the Watchlist seed. Review rejected
 
 Unit tests cover strict site/work URLs, episode-seed rejection, range maps, duplicate identities, classification, positions, and bounded cleanup. Synthetic Playwright Integration tests cover full/incremental/bounded Discovery, a conflicting duplicate in `epListUser` with zero records yielded and existing sources preserved, and episode-seed rejection with zero navigation. The CLI registry test confirms Discovery-only registration.
 
-The adapter waits 1 second before every numeric range navigation, including
+The adapter waits 3 seconds before every numeric range navigation, including
 the first range after the canonical listing. Unit tests verify the exact delay
 without wall-clock waiting; browser-backed tests verify pacing occurs before
 the first and subsequent range requests using a zero-duration test override.
@@ -37,7 +37,7 @@ status, non-200, redirect/route drift, other Playwright errors, and access stops
 are not retried. This contains the earlier unexplained navigation timeout; it
 does not establish its cause.
 
-## Live evidence and gate (2026-10-11)
+## Historical live evidence and gate (superseded by the 925-row pass below; 2026-10-11)
 
 - The canonical work page declared 31 numeric ranges, `1-30` through `901-925`. Fresh `/1` returned 30 rows and 30 unique IDs; its selected `1-30` route pointed to the canonical work URL. Bounded samples `/2` and `/3` through `/5` also returned 30 rows. These samples do not establish all 925 rows.
 - This historical live attempt used the earlier episode-seed draft, before the current series-only and history-row fixes. It stopped after nine range pages (11 navigations total) in 13.066 seconds when the shared AccessGuard observed HTTP 429 at `/series/aee4fa742b0fe/9`. No episode records were yielded. `Retry-After` was not retained. No further manual navigation or retry was issued in that run; the report does not establish whether any in-flight automatic request completed. Later bounded preflight and partial full passes exercised the corrected series-seed code, but none completed all 925 rows.
@@ -73,20 +73,22 @@ global position 1 with exact row label `無料`. The isolated Catalog contains
 one pre-created Work and zero episode items/sources/targets because the adapter
 buffers the complete listing before yielding. The 925-row target remains
 unverified; do not claim full live Discovery. The Lead later authorized a
-bounded 03A metadata probe as a separate safe activity while complete Discovery
-remained externally incomplete. That probe does not clear the full Discovery
-gate; 03B integration and capture implementation remain blocked.
+bounded 03A metadata probe and, after that probe supplied a target-scoped
+layout contract, a separate manual Viewer/Capture implementation. Those steps
+do not clear the full Discovery gate or implement Discovery-to-Batch integration.
 
 The earlier HTTP 429 run and the resumed navigation-incomplete run are separate
 observations. No further manual navigation or retry was issued after either
 stop; reports do not establish that every in-flight automatic request had
 finished. No alternate endpoint/profile or guard bypass was used. Phase 03A was later authorized as a
 separate safe probe while complete Discovery remained externally incomplete;
-it does not accept or imply 925-row completeness. Phase 03/04 production work
-is not implemented. Reviewer gate for the pacing and timeout-recovery changes
-is PASS / BLOCKING 0; the complete live Discovery gate remains open.
+it does not accept or imply 925-row completeness. At this historical checkpoint,
+Phase 03/04 production work had not been implemented; the current Phase 03A
+implementation and its review status are recorded in the parent progress file.
+Reviewer gate for the pacing and timeout-recovery changes is PASS / BLOCKING 0;
+the complete live Discovery gate remains open.
 
-## Latest full traversal after the reviewed bounded-recovery change
+## Earlier incomplete full traversal (superseded by the completed pass below)
 
 The single authorized full pass used the canonical series seed and isolated
 `resume_20261011_retry1` Catalog/Watchlist/output. It completed `/1`–`/5` with
@@ -106,5 +108,24 @@ This is an incomplete traversal, not an accepted listing or a fix for the
 unknown route delay. The later Phase 03A access stop is recorded in the parent
 runbook progress and does not authorize another Discovery request.
 
-Prior local gates: Reviewer VERIFIED the partial implementation/tests/docs with BLOCKING 0. Before pacing, targeted tests passed `28 passed`, and the independent Tester run over the two Younganimal files passed `27 passed, 0 skipped` with 23 existing warnings in 4.31s. After the pacing and bounded-retry changes, targeted Younganimal Unit/Integration plus CLI registry passed `42 passed, 0 skipped` with 140 existing asyncio deprecation warnings in 9.20s. `ruff check src tests` passed. Root regression groups from the earlier implementation passed: Hanayume 201/0 skips and generic CLI/registry/discovery/catalog/watchlist 214/0 skips; the focused Younganimal registry test is included in the latter.
+Prior local gates: Reviewer VERIFIED the partial implementation/tests/docs with BLOCKING 0. Before pacing, targeted tests passed `28 passed`, and the independent Tester run over the two Younganimal files passed `27 passed, 0 skipped` with 23 existing warnings in 4.31s. After the pacing and bounded-retry changes, targeted Younganimal Unit/Integration plus CLI registry passed `42 passed, 0 skipped` with 140 existing asyncio deprecation warnings in 9.20s. `ruff check src tests` passed. Latest Root regression: the Hanayume six-file run initially had 198 passed, 3 failed, 0 skipped, with 90 existing warnings in 140.49s. The three timing-boundary failures (two adapter, one Discovery) passed when rerun alone: 3 passed, 0 skipped, 9 warnings in 7.91s; do not treat the full group as a clean pass. The generic CLI/registry/discovery/catalog/watchlist group passed 214/0 skips; the focused Younganimal registry test is included in that group.
 Tester local artifact audit PASS: both read-only isolated Catalogs contained one pre-created Work row and zero other records; JSON sanitation passed. The Tester did not run live E2E. Historical and resumed access stops had no subsequent manual navigation or retry in those runs; in-flight automatic requests are not ruled out.
+
+
+## Superseding full traversal (2026-10-11)
+
+The later authorized Discovery pass completed all 31 numeric ranges
+using a 3000 ms harness override: 32 document navigations (canonical root plus the 31
+ranges), 925 unique episode identities at positions 1-925, and the target once
+at position 1 with exact free status. The isolated Catalog contains one Work,
+925 Items, Sources, and Targets, and zero Runs, Artifacts, or quota states. Its
+labels classify 3 rows as free and 922 as unknown; the latter are not claimed to
+be paid. The AccessGuard observed 8,701 events with HTTP 200, 204, and 304 only,
+and no 403, 429, challenge, CAPTCHA, or timeout. Report:
+`output/younganimal_experiment/discovery_3sec/report.json`.
+
+The live run used a temporary module-level 3000 ms override. The production
+pacing constant was changed to 3000 ms after that live pass. Its HTTP 429 cooldown/retry path was not exercised; any
+separate retry must honor Retry-After and wait at least 60 seconds. The earlier
+unexplained /6 timeout and distinct /9 HTTP 429 retain their original UNKNOWN
+causes and are not evidence about this successful pass.

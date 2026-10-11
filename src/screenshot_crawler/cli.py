@@ -405,7 +405,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _registry() -> AdapterRegistry:
+def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     registry = AdapterRegistry()
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysAdapter
@@ -414,6 +414,7 @@ def _registry() -> AdapterRegistry:
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
     from screenshot_crawler.site_adapters.piccoma import PiccomaAdapter
+    from screenshot_crawler.site_adapters.younganimal.adapter import YounganimalAdapter
     from screenshot_crawler.site_adapters.zeblack import ZeblackAdapter
 
     registry.register("bookwalker", BookWalkerAdapter)
@@ -424,6 +425,11 @@ def _registry() -> AdapterRegistry:
     registry.register("comicdays", ComicDaysAdapter)
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
+    younganimal_work_url = env_value("YOUNGANIMAL_WORK_URL", values or {})
+    registry.register(
+        "younganimal",
+        lambda: YounganimalAdapter(preflight_work_url=younganimal_work_url),
+    )
     return registry
 
 
@@ -438,6 +444,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
     from screenshot_crawler.site_adapters.piccoma import PiccomaAdapter
+    from screenshot_crawler.site_adapters.younganimal.adapter import YounganimalAdapter
     from screenshot_crawler.site_adapters.zeblack import ZeblackAdapter
 
     registry.register(
@@ -454,6 +461,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     registry.register("comicdays", ComicDaysAdapter)
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
+    registry.register("younganimal", YounganimalAdapter)
     return registry
 
 
@@ -492,9 +500,11 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("zeblack", ZeblackSitePolicy)
     from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
     from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
+    from screenshot_crawler.site_policies.younganimal import YounganimalSitePolicy
     registry.register("comicdays", ComicDaysSitePolicy)
     registry.register("piccoma", PiccomaSitePolicy)
     registry.register("hanayume", HanayumeSitePolicy)
+    registry.register("younganimal", YounganimalSitePolicy)
     return registry
 
 
@@ -671,7 +681,8 @@ async def _run_probe(args: argparse.Namespace) -> None:
 
 
 async def _run_crawl(args: argparse.Namespace) -> None:
-    registry = _registry()
+    values = read_env_file(args.env_file) if args.env_file.is_file() else {}
+    registry = _registry(values)
     adapter = registry.create(args.site)
     output_dir = normalize_path(args.output_dir)
     diagnostics_dir = (
@@ -706,7 +717,6 @@ async def _run_crawl(args: argparse.Namespace) -> None:
         },
     )
 
-    values = read_env_file(args.env_file) if args.env_file.is_file() else {}
     endpoint = resolve_cdp_endpoint(
         site=args.site,
         cli_endpoint=args.cdp_endpoint,

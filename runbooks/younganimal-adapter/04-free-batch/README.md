@@ -1,7 +1,7 @@
 # Phase 04 — 「無料」 direct-only Site Policy / Batch
-
-Status: BLOCKED / NOT IMPLEMENTED. Requires accepted complete Discovery and Phase 03 Viewer/Capture proof; neither gate is complete.
-Next: [Wait-free](../05-wait-free/README.md) + [E2E](../06-e2e/README.md)。
+Status: Direct-only Site Policy/Batch implementation and synthetic BatchExecutor-to-Runner-to-ZIP coverage passed independent review. Attempt 9 passed both final-code live profiles: 16/16 standard-target and 44/44 top-empty pages used native VP8L through END, ZIP, and isolated Catalog completion. The combined independent audit is `output/younganimal_experiment/phase04_batch_e2e_20261011/attempt-9/independent-final-audit.json`.
+Next: wait-free remains UNKNOWN and unimplemented. The verified direct-only Batch does not use a wait, grant, entitlement, or resource path.
+Phase 05 remains unknown-only; no wait or resource operation is enabled.
 
 ## Objective
 `無料`を完全Discovery→Catalog→direct-only Batch→Crawl→Manifest/ZIP
@@ -39,3 +39,10 @@ Next: [Wait-free](../05-wait-free/README.md) + [E2E](../06-e2e/README.md)。
 
 Exit: independent Reviewer BLOCKING 0、free E2Eが成功した範囲を明記。
 **全体終了ではなくPhase 05へ自律的に進む**。
+
+## Phase 04 implementation checkpoint (2026-10-11)
+
+- YounganimalSitePolicy selects direct only when the Catalog source is currently available and access_mode is exactly free. Unknown, paid, owned, grant, rental, quota, unavailable, and unsupported states are ineligible. The policy exposes no resource or grant-only route and does not mutate quota/grant state.
+- Configured Batch requires access_strategy=direct, an exact {13-lower-hex-work-id}:{13-lower-hex-episode-id} source external ID, and a nonempty opaque work_key. It validates the Catalog episode URL before navigation, opens that episode once without a series-listing roundtrip, then checks the fresh embedded exact-free row and expected work header before viewer initialization. Manual Crawl remains auto with its fresh series-listing preflight.
+- Synthetic tests exercise BatchExecutor through Runner, ZIP creation, and Catalog completion. Stale free status, wrong work identity/header, and a mismatched entry URL fail before capture or artifact creation. Tests assert unchanged canonical source URL and untouched entitlement/quota fields.
+- Direct-only policy/Batch review and both provided-target and top-empty direct Batch live runs passed in attempt 9. Phase 05 did not establish wait-free eligibility; both blank-row SVG icons are visible, but the active icon and access state remain unknown.

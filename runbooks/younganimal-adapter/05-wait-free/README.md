@@ -4,6 +4,23 @@ Status: DOCUMENTATION / UNKNOWN-ONLY CLASSIFICATION; wait flow NOT IMPLEMENTED. 
 Prereq: Phase 02までの作品一覧/ラベル契約、Phase 03/04で確立したViewer/Batch。
 Next: [E2E](../06-e2e/README.md)。
 
+## Bounded listing metadata evidence (2026-10-11)
+
+Ignored report: `output/younganimal_experiment/wait_state_probe/phase05_public_listing_20261011.json`.
+After the supplied exact-free target had already passed the standard Runner D-path
+Crawl, a metadata-only probe opened the public homepage and two other public work
+listings (`423d7471396e9` and `a8c1ab1ce0788`), one request per page. Each listing
+exposed 10 episode rows. Observed labels included exact `無料`, `今なら無料`, blank
+icons, and numeric-60 rows with a paid class. Exact `待つと無料`, timer/resource
+attributes, authentication state, and safe wait semantics were not observed. The
+`無料` and `今なら無料` rows shared `mode-free` / `eliFreeBadge`; that class alone
+does not distinguish access eligibility. No episode was opened, no CTA was
+clicked, no waiting/resource action occurred, and no resource state was read.
+One homepage/known-work metadata sub-operation did not retain response status due
+to a probe output-encoding issue, so that status is UNKNOWN. This evidence narrows
+public listing vocabulary only; it does not pass Phase 05 or authorize a wait
+action.
+
 ## Goal
 正規の`待つと無料`を、**未開始 / 待機中 / 閲覧可能 / 期限切れ**
 の実態に従ってDiscoveryし、適正なタイミングで通常のBatchから取り込む。
@@ -58,3 +75,15 @@ Exit: supported free+waiting契約をREADME/note/PROGRESSに記載。
 **freeだけ通ったことを「待つと無料を実装済」と言わない**。
 待機対象や検証可能な状態が実サイトに無ければ、可能な範囲の
 read-only分類と合成テストまで実装し、実際の欠落gateを分離して報告。
+
+## Latest public metadata probe (2026-10-11)
+
+The first metadata report is `output/younganimal_experiment/wait_state_probe/phase05_public_metadata_live_20261011.json`;
+the visibility follow-up is `phase05_icon_visibility_attempt2.json` with summary
+`phase05_icon_visibility_attempt2_summary.json`. The two blank-badge rows each
+contained both `eliWfIcon` and `eliIfIcon` SVGs. Both measured visible at 24x24
+with visible parents; neither exposed SVG title, ARIA/use, or a preexisting
+tooltip. A generic access-icon hover showed no tooltip, but the second icon was
+not separately hovered. The active icon and access meaning remain UNKNOWN.
+Authentication remains UNKNOWN. These probes made no episode navigation, CTA,
+wait, or resource operation and do not establish wait eligibility.

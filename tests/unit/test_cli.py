@@ -20,6 +20,7 @@ from screenshot_crawler.catalog import (
 )
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.cli import _parser
+from screenshot_crawler.core.errors import UnknownPageStateError
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
@@ -368,7 +369,7 @@ async def test_crawl_disconnects_browser_before_packaging(
             status_path=tmp_path / "status.json",
         )
 
-    monkeypatch.setattr(cli, "_registry", lambda: FakeRegistry())
+    monkeypatch.setattr(cli, "_registry", lambda _values=None: FakeRegistry())
     monkeypatch.setattr(cli, "BrowserSession", FakeSession)
     monkeypatch.setattr(cli, "CrawlerRunner", FakeRunner)
     monkeypatch.setattr(cli, "package_crawl_output", fake_package)
@@ -818,6 +819,7 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
         "magapoke",
         "mangaone",
         "piccoma",
+        "younganimal",
         "zeblack",
     )
     policy = cli._batch_policy_registry().create("hanayume")
@@ -834,9 +836,20 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "magapoke",
         "mangaone",
         "piccoma",
+        "younganimal",
         "zeblack",
     )
-    expected_batch_sites = expected_crawl_sites
+    expected_batch_sites = (
+        "bookwalker",
+        "comicdays",
+        "hanayume",
+        "jumpplus",
+        "magapoke",
+        "mangaone",
+        "piccoma",
+        "younganimal",
+        "zeblack",
+    )
     assert cli._registry().sites() == expected_crawl_sites
     assert cli._batch_adapter_registry({}).sites() == expected_batch_sites
     assert cli._discovery_registry().sites() == (
@@ -854,6 +867,28 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     assert "comicdays" in cli._batch_policy_registry().sites()
     assert "piccoma" in cli._batch_policy_registry().sites()
     assert "hanayume" in cli._batch_policy_registry().sites()
+    assert "younganimal" in cli._batch_policy_registry().sites()
+
+
+def test_younganimal_crawl_registry_uses_configured_work_entry_before_navigation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("YOUNGANIMAL_WORK_URL", raising=False)
+    registry = cli._registry({"YOUNGANIMAL_WORK_URL": "https://younganimal.com/series/aee4fa742b0fe"})
+    adapter = registry.create("younganimal")
+
+    assert adapter.resolve_initial_navigation_url(
+        "https://younganimal.com/episodes/55889b8a851cb"
+    ) == "https://younganimal.com/series/aee4fa742b0fe"
+
+    with pytest.raises(UnknownPageStateError, match="canonical episode URL"):
+        cli._registry({}).create("younganimal").resolve_initial_navigation_url(
+            "https://younganimal.com/episodes/55889b8a851cb?unexpected=1"
+        )
+    with pytest.raises(UnknownPageStateError, match="YOUNGANIMAL_WORK_URL"):
+        cli._registry({}).create("younganimal").resolve_initial_navigation_url(
+            "https://younganimal.com/episodes/55889b8a851cb"
+        )
 
 
 def test_batch_run_parser_accepts_execution_options() -> None:

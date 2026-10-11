@@ -1,13 +1,18 @@
 # 00. Core 現行実装ノート
 
-## Younganimal Discovery CLI registration (2026-10-11)
+## Younganimal Discovery and manual Crawl CLI registration (2026-10-11)
 
-`YounganimalDiscoveryAdapter` is registered in the Discovery CLI registry only.
-It uses the existing `DiscoveryService`, Catalog, and shared CDP
-`BrowserSession`/Playwright Page; no Core or Catalog schema branch was added.
-Younganimal is not registered for manual crawl or Batch. The site-local
-Discovery contract and its incomplete live-verification status are in
-`note/11_younganimal.md`.
+Younganimal Discovery, manual Crawl, and direct-only Batch use the existing
+DiscoveryService, Catalog, CrawlerRunner, shared CDP BrowserSession/Playwright
+Page, AccessGuard, BatchExecutor, and packager. The site is registered in the
+Discovery, crawl, Batch adapter, and Batch Site Policy registries. Manual Crawl
+reads YOUNGANIMAL_WORK_URL from the selected env file as its canonical initial
+series route while preserving the requested episode URL as the output source
+URL. Batch uses the canonical Catalog episode URL as its sole initial
+navigation and requires a configured strict work/episode external identity.
+Only available Catalog sources with `access_mode=free` are Batch eligible. No
+Core branch or Catalog schema field was added. Site-local routes, entry checks,
+capture contract, and live-verification status are in note/11_younganimal.md.
 
 ## Hanayume Discovery, Viewer, and direct-only Batch registration (updated 2026-10-11)
 
