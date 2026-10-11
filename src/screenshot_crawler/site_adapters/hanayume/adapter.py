@@ -63,13 +63,16 @@ CAPTURE_BUDGET_SECONDS = 10.0
 RANGE_PACING_MS = 350
 VIEWER_COUNTER_READY_TIMEOUT_MS = 5_000
 VIEWER_COUNTER_POLL_INTERVAL_MS = 100
+INITIAL_CANVAS_QUIET_MS = 1_000
+INITIAL_CANVAS_SETTLE_TIMEOUT_MS = 5_000
+INITIAL_CANVAS_POLL_INTERVAL_MS = 100
 MAX_RANGE_PAGES = 100
 MAX_LISTING_ROWS = RANGE_PAGE_SIZE * MAX_RANGE_PAGES
 INITIALIZE_TIMEOUT_MS = 240_000
 MAX_PNG_BYTES = 8_000_000
 POLL_INTERVAL_SECONDS = 0.15
 
-SNAPSHOT_SCRIPT = r"""({includePng = false} = {}) => {
+SNAPSHOT_SCRIPT = r"""({includePng = false, stabilitySlots = []} = {}) => {
   const one = selector => {
     const nodes = [...document.querySelectorAll(selector)];
     return nodes.length === 1 ? nodes[0] : null;
@@ -120,6 +123,9 @@ SNAPSHOT_SCRIPT = r"""({includePng = false} = {}) => {
     totalText: totalNode?.textContent?.trim() ?? null,
     seek: seek ? {type: seek.type, min: seek.min, max: seek.max, step: seek.step, value: seek.value} : null,
     viewport,
+    canvasStability: stabilitySlots.length &&
+      typeof window.__hanayumeNativeCapture?.stability === 'function'
+      ? window.__hanayumeNativeCapture.stability(stabilitySlots) : null,
     slots
   };
 }"""
@@ -501,7 +507,7 @@ def _next_body_slots(
 
 
 def _slot_role(
-    index: int, total: int, classes: object, *, has_top_empty_page: bool = False
+    index: int, last_slot: int, classes: object, *, has_top_empty_page: bool = False
 ) -> str:
     if not isinstance(classes, list) or not all(isinstance(value, str) for value in classes):
         raise UnknownPageStateError("Hanayume viewer slot classes are malformed")
@@ -510,11 +516,11 @@ def _slot_role(
         raise UnknownPageStateError("Hanayume viewer slot is missing its page wrapper")
     tails = {
         0: {"-cv-page", "mode-empty", "mode-pr", "mode-top-pr"},
-        total - 4: {"-cv-page", "mode-ci"},
-        total - 3: {"-cv-page", "mode-empty", "mode-pr"},
-        total - 2: {"-cv-page", "mode-empty", "mode-pr"},
-        total - 1: {"-cv-page", "mode-good"},
-        total: {"-cv-page", "mode-last"},
+        last_slot - 4: {"-cv-page", "mode-ci"},
+        last_slot - 3: {"-cv-page", "mode-empty", "mode-pr"},
+        last_slot - 2: {"-cv-page", "mode-empty", "mode-pr"},
+        last_slot - 1: {"-cv-page", "mode-good"},
+        last_slot: {"-cv-page", "mode-last"},
     }
     if index in tails:
         if actual != tails[index]:
@@ -524,7 +530,7 @@ def _slot_role(
         if actual != {"-cv-page", "mode-empty"}:
             raise UnknownPageStateError("Hanayume top-empty lead-in slot changed structure")
         return "nonbody"
-    if not 1 <= index <= total - 5:
+    if not 1 <= index <= last_slot - 5:
         raise UnknownPageStateError("Hanayume viewer slot is outside the known layout")
     state_classes = actual - {"-cv-page"}
     if not (
@@ -583,11 +589,17 @@ def _parse_viewer_observation(raw: object) -> ViewerObservation:
     ):
         raise UnknownPageStateError("Hanayume viewer counter and public seek control disagree")
     slots = raw.get("slots")
-    if not isinstance(slots, list) or len(slots) != total + 1:
-        raise UnknownPageStateError("Hanayume viewer page-wrapper count is incomplete")
     has_top_empty_page = "mode-has-top-emptypage" in raw["viewerClasses"]
+    if not isinstance(slots, list) or not (
+        len(slots) == total + 1
+        or (not has_top_empty_page and total % 2 == 1 and len(slots) == total)
+    ):
+        raise UnknownPageStateError("Hanayume viewer page-wrapper count is incomplete")
+    # The observed odd-body layout has an extra counter position, not a DOM page.
+    # Keep seek/counter semantics separate from the fully validated physical tail.
+    last_slot = len(slots) - 1
     body_start = 2 if has_top_empty_page else 1
-    body_slots = tuple(range(body_start, total - 4))
+    body_slots = tuple(range(body_start, last_slot - 4))
     if not body_slots:
         raise UnknownPageStateError("Hanayume viewer has no body slots in its observed layout")
     body_total = len(body_slots)
@@ -598,7 +610,7 @@ def _parse_viewer_observation(raw: object) -> ViewerObservation:
         if not isinstance(slot, dict) or slot.get("index") != index:
             raise UnknownPageStateError("Hanayume viewer page-wrapper order is invalid")
         role = _slot_role(
-            index, total, slot.get("classes"), has_top_empty_page=has_top_empty_page
+            index, last_slot, slot.get("classes"), has_top_empty_page=has_top_empty_page
         )
         if has_top_empty_page and index == 1 and (
             slot.get("canvasCount") != 0 or slot.get("canvas") is not None
@@ -683,6 +695,7 @@ class HanayumeAdapter(SiteAdapter):
         self._capture_diagnostics: dict[str, object] = {}
         self._webp_encode_job: asyncio.Task[tuple[CaptureResult, ...]] | None = None
         self._capture_attempt: dict[str, object] | None = None
+        self._initial_canvas_settle: dict[str, object] = {}
 
     async def prepare_page(self, page: Page) -> None:
         try:
@@ -731,6 +744,7 @@ class HanayumeAdapter(SiteAdapter):
         self._pending = None
         self._ended = False
         self._last_capture_slots = ()
+        self._initial_canvas_settle = {}
         initial_work = await self._read_episode_work(page)
         if self._expected_work_id is not None and initial_work != self._expected_work_id:
             raise UnknownPageStateError("Hanayume episode belongs to a different Catalog work")
@@ -775,6 +789,7 @@ class HanayumeAdapter(SiteAdapter):
                 and row.active_slots == expected_first_spread
                 and row.ready_slots == expected_first_spread,
                 reason="Hanayume top-empty first body spread did not become ready",
+                initial_canvas_slots=expected_first_spread,
             )
         else:
             first = await self._wait_for_observation(
@@ -785,6 +800,7 @@ class HanayumeAdapter(SiteAdapter):
                 and row.active_slots == (1,)
                 and row.ready_slots == (1,),
                 reason="Hanayume viewer did not settle at its first body page",
+                initial_canvas_slots=(1,),
             )
         self._work_id = initial_work
 
@@ -1232,10 +1248,16 @@ class HanayumeAdapter(SiteAdapter):
         ):
             raise UnknownPageStateError("Hanayume current episode work identity changed")
 
-    async def _observe(self, page: Page, *, include_png: bool = False) -> ViewerObservation:
+    async def _observe(
+        self, page: Page, *, include_png: bool = False,
+        stability_slots: tuple[int, ...] = (),
+    ) -> ViewerObservation:
         try:
             raw = await asyncio.wait_for(
-                page.evaluate(SNAPSHOT_SCRIPT, {"includePng": include_png}),
+                page.evaluate(
+                    SNAPSHOT_SCRIPT,
+                    {"includePng": include_png, "stabilitySlots": list(stability_slots)},
+                ),
                 timeout=OBSERVATION_TIMEOUT_SECONDS,
             )
         except (PlaywrightError, TimeoutError) as exc:
@@ -1254,13 +1276,31 @@ class HanayumeAdapter(SiteAdapter):
             raise UnknownPageStateError("Hanayume viewer body layout changed during the attempt")
         return observation
 
-    async def _wait_for_observation(self, page: Page, predicate, *, reason: str) -> ViewerObservation:
-        deadline = time.monotonic() + self.page_change_timeout_ms / 1000
+    async def _wait_for_observation(
+        self, page: Page, predicate, *, reason: str,
+        initial_canvas_slots: tuple[int, ...] = (),
+    ) -> ViewerObservation:
+        started = time.monotonic()
+        timeout_ms = (
+            INITIAL_CANVAS_SETTLE_TIMEOUT_MS if initial_canvas_slots
+            else self.page_change_timeout_ms
+        )
+        deadline = started + timeout_ms / 1000
         previous: tuple[object, ...] | None = None
         stable = 0
+        quiet_since = started
         last: ViewerObservation | None = None
         while time.monotonic() < deadline:
-            observation = await self._observe(page)
+            if initial_canvas_slots:
+                try:
+                    observation = await asyncio.wait_for(
+                        self._observe(page, stability_slots=initial_canvas_slots),
+                        timeout=max(0, deadline - time.monotonic()),
+                    )
+                except TimeoutError:
+                    break
+            else:
+                observation = await self._observe(page)
             last = observation
             signature = (
                 observation.current,
@@ -1272,7 +1312,30 @@ class HanayumeAdapter(SiteAdapter):
                 observation.body_slots,
                 observation.has_top_empty_page,
             )
-            if predicate(observation) and signature == previous:
+            ready = predicate(observation)
+            if initial_canvas_slots:
+                # Startup can reset/redraw identical pixels after the ready classes appear.
+                # Wait for a quiet first canvas; do not weaken the later native proof gate.
+                signature += (
+                    observation.raw.get("canvasStability"),
+                    observation.raw.get("viewport"),
+                    tuple(observation.raw["slots"][slot] for slot in initial_canvas_slots),
+                )
+                now = time.monotonic()
+                if not ready or signature != previous:
+                    quiet_since = now
+                settled = ready and (now - quiet_since) * 1000 >= INITIAL_CANVAS_QUIET_MS
+                self._initial_canvas_settle = {
+                    "status": "settled" if settled else "waiting",
+                    "quiet_ms": INITIAL_CANVAS_QUIET_MS,
+                    "timeout_ms": timeout_ms,
+                    "elapsed_ms": round((now - started) * 1000, 3),
+                    "canvas_tracking": observation.raw.get("canvasStability") is not None,
+                    "last_stability": observation.raw.get("canvasStability"),
+                }
+                if settled:
+                    return observation
+            elif ready and signature == previous:
                 stable += 1
                 if stable >= 2:
                     return observation
@@ -1281,7 +1344,11 @@ class HanayumeAdapter(SiteAdapter):
             previous = signature
             remaining = deadline - time.monotonic()
             if remaining > 0:
-                await page.wait_for_timeout(min(150, int(remaining * 1000)))
+                interval_ms = INITIAL_CANVAS_POLL_INTERVAL_MS if initial_canvas_slots else 150
+                await page.wait_for_timeout(min(interval_ms, int(remaining * 1000)))
+        if initial_canvas_slots:
+            self._initial_canvas_settle["status"] = "timeout"
+            self._initial_canvas_settle["elapsed_ms"] = round((time.monotonic() - started) * 1000, 3)
         raise PageChangeTimeoutError(reason if last is None else f"{reason}; last counter={last.current}/{last.total}")
 
     async def detect_state(self, page: Page) -> PageState:
@@ -1442,6 +1509,7 @@ class HanayumeAdapter(SiteAdapter):
             token = raw_token
             if not isinstance(token, str) or not token:
                 raise UnknownPageStateError("Hanayume native capture proof token is missing")
+            encode_started = time.monotonic()
             encode_task = asyncio.create_task(asyncio.to_thread(encode_native_webp, images))
             self._webp_encode_job = encode_task
             encode_task.add_done_callback(self._clear_webp_encode_job)
@@ -1459,14 +1527,22 @@ class HanayumeAdapter(SiteAdapter):
                     CaptureResult(item.png, item.width, item.height, "image/png", ".png")
                     for item in images
                 )
+            encode_elapsed_ms = round((time.monotonic() - encode_started) * 1000, 3)
             verified = await self._verify_native_capture(page, token)
             if not verified:
+                verification = self._capture_diagnostics.get("verification", {})
                 self._capture_diagnostics = {
                     "mode": "capture_failed",
                     "reason": "native_target_changed_after_encoding",
                     "source_slots": list(expected),
+                    "encode_elapsed_ms": encode_elapsed_ms,
+                    "verification": verification,
                 }
-                raise UnknownPageStateError("Hanayume selected canvas changed after native image encoding")
+                detail = verification.get("reason", "unknown") if isinstance(verification, dict) else "unknown"
+                raise UnknownPageStateError(
+                    "Hanayume selected canvas changed after native image encoding "
+                    f"(verification={detail})"
+                )
             output_format = _capture_output_format(captures)
             self._capture_diagnostics = {
                 "mode": f"source_canvas_lossless_{output_format}",
@@ -1520,9 +1596,20 @@ class HanayumeAdapter(SiteAdapter):
                 page.evaluate(VERIFY_CAPTURE_SCRIPT, token),
                 timeout=OBSERVATION_TIMEOUT_SECONDS,
             )
-        except (PlaywrightError, TimeoutError):
+        except TimeoutError:
+            self._capture_diagnostics["verification"] = {
+                "ok": False, "reason": "verification_timeout",
+            }
             return False
-        return value is True
+        except PlaywrightError:
+            self._capture_diagnostics["verification"] = {
+                "ok": False, "reason": "verification_evaluation_failed",
+            }
+            return False
+        if not isinstance(value, dict) or not isinstance(value.get("ok"), bool):
+            value = {"ok": False, "reason": "verification_result_malformed"}
+        self._capture_diagnostics["verification"] = value
+        return value["ok"] is True
 
     async def _release_capture_attempt(self, page: Page) -> None:
         attempt = self._capture_attempt
@@ -1656,6 +1743,7 @@ class HanayumeAdapter(SiteAdapter):
             "body_total": self._body_total,
             "last_slots": list(self._last_capture_slots),
             "source_native": str(self._capture_diagnostics.get("mode", "")).startswith("source_canvas_"),
+            "initial_canvas_settle": dict(self._initial_canvas_settle),
         }
 
     async def _clear_native_cache(self, page: Page) -> None:

@@ -31,6 +31,9 @@ NOW_FREE_LABEL = "\u4eca\u306a\u3089\u7121\u6599"
 def _short_hanayume_initialization_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hanayume_discovery_module, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr(hanayume_adapter_module, "VIEWER_COUNTER_READY_TIMEOUT_MS", 400)
+    monkeypatch.setattr(hanayume_adapter_module, "INITIAL_CANVAS_QUIET_MS", 60)
+    monkeypatch.setattr(hanayume_adapter_module, "INITIAL_CANVAS_POLL_INTERVAL_MS", 20)
+    monkeypatch.setattr(hanayume_adapter_module, "INITIAL_CANVAS_SETTLE_TIMEOUT_MS", 800)
 
 
 def _row(episode_id: str, label: str) -> str:
@@ -82,6 +85,7 @@ def _episode_html(
     counter_duplicate: bool = False, counter_malformed: bool = False,
     top_empty: bool = False, top_empty_seek_locked: bool = False,
     top_empty_first_marker_missing: bool = False, top_empty_interior_empty: bool = False,
+    padded_counter: bool = False,
 ) -> str:
     public_values = episode_rows if episode_rows is not None else [
         (EPISODE_ID, label),
@@ -120,16 +124,17 @@ def _episode_html(
       <script>
         (() => {{
           const total = 9;
+          const lastSlot = total - {int(padded_counter)};
           const topEmpty = {json.dumps(top_empty)};
           const bodyStart = topEmpty ? 2 : 1;
-          const bodyEnd = total - 5;
+          const bodyEnd = lastSlot - 5;
           const bodyTotal = bodyEnd - bodyStart + 1;
           const root = document.querySelector('#comici-viewer');
           const pageRoot = document.querySelector('#xCVPages');
           const seek = document.querySelector('#xCVSeekBar');
           const currentText = document.querySelector('.-cv-f-page-current');
           const wrappers = [];
-          for (let i = 0; i <= total; i++) {{
+          for (let i = 0; i <= lastSlot; i++) {{
             const node = document.createElement('div');
             node.className = '-cv-page';
             node.style.cssText = 'position:absolute;top:0;width:100px;height:100px;left:-3000px';
@@ -156,10 +161,10 @@ def _episode_html(
           const classFor = index => {{
             if (index === 0) return '-cv-page mode-empty mode-pr mode-top-pr';
             if (topEmpty && index === 1) return '-cv-page mode-empty';
-            if (index === total - 4) return '-cv-page mode-ci';
-            if (index === total - 3 || index === total - 2) return '-cv-page mode-empty mode-pr';
-            if (index === total - 1) return '-cv-page mode-good';
-            if (index === total) return '-cv-page mode-last';
+            if (index === lastSlot - 4) return '-cv-page mode-ci';
+            if (index === lastSlot - 3 || index === lastSlot - 2) return '-cv-page mode-empty mode-pr';
+            if (index === lastSlot - 1) return '-cv-page mode-good';
+            if (index === lastSlot) return '-cv-page mode-last';
             return '-cv-page';
           }};
           function render(current, terminal = false) {{
@@ -171,7 +176,7 @@ def _episode_html(
             root.classList.toggle('mode-first-page', topEmpty && current === 1 &&
               !{json.dumps(top_empty_first_marker_missing)});
             const visible = current === 1 ? [0, 1] : [current - 1, current];
-            for (let i = 0; i <= total; i++) {{
+            for (let i = 0; i <= lastSlot; i++) {{
               const node = wrappers[i];
               node.replaceChildren();
               node.className = classFor(i);
@@ -180,6 +185,7 @@ def _episode_html(
             if (current === 1) wrappers[0].style.left = '200px';
             if (topEmpty && current === 1) wrappers[1].style.left = '0px';
             visible.forEach((index, side) => {{
+              if (index > lastSlot) return;
               wrappers[index].style.left = `${{side * 100}}px`;
               if (index < bodyStart || index > bodyEnd) return;
               if (topEmpty && {json.dumps(top_empty_interior_empty)} && index === bodyStart) {{
@@ -261,6 +267,7 @@ async def _install_mock_site(
     top_empty_seek_locked: bool = False,
     top_empty_first_marker_missing: bool = False,
     top_empty_interior_empty: bool = False,
+    padded_counter: bool = False,
 ) -> dict[str, object]:
     state: dict[str, object] = {"episode_visits": 0, "paths": []}
 
@@ -279,6 +286,7 @@ async def _install_mock_site(
                 top_empty=top_empty, top_empty_seek_locked=top_empty_seek_locked,
                 top_empty_first_marker_missing=top_empty_first_marker_missing,
                 top_empty_interior_empty=top_empty_interior_empty,
+                padded_counter=padded_counter,
             )
         elif path == f"/series/{WORK_ID}":
             body = (
@@ -423,6 +431,91 @@ async def _body_state(page: Page, adapter: HanayumeAdapter) -> None:
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("top_empty", [False, True])
+@pytest.mark.parametrize("continuous", [False, True], ids=("late-reset", "never-quiet"))
+async def test_hanayume_initial_canvas_wait_restarts_after_same_pixel_reset(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch,
+    top_empty: bool, continuous: bool,
+) -> None:
+    await _install_mock_site(browser_page, resume_current=1, top_empty=top_empty)
+    monkeypatch.setattr(hanayume_adapter_module, "INITIAL_CANVAS_QUIET_MS", 160)
+    monkeypatch.setattr(hanayume_adapter_module, "INITIAL_CANVAS_SETTLE_TIMEOUT_MS", 450)
+    adapter = HanayumeAdapter()
+    original_observe = adapter._observe
+    scheduled = False
+
+    async def observe(page, *, include_png=False, stability_slots=()):
+        nonlocal scheduled
+        result = await original_observe(
+            page, include_png=include_png, stability_slots=stability_slots,
+        )
+        if stability_slots and not scheduled:
+            scheduled = True
+            await page.evaluate(
+                """({slots, continuous}) => {
+                  const redraw = () => {
+                    for (const slot of slots) {
+                      const canvas = document.querySelector('#xCVPages').children[slot].querySelector('canvas');
+                      const source = document.createElement('canvas');
+                      source.width = 960; source.height = 1540;
+                      const ctx = source.getContext('2d');
+                      ctx.fillStyle = `rgb(${slot * 20},40,60)`;
+                      ctx.fillRect(0, 0, 960, 1540);
+                      canvas.width = canvas.width; canvas.height = canvas.height;
+                      canvas.getContext('2d').drawImage(source, 0, 0, 960, 1540, 0, 0, canvas.width, canvas.height);
+                    }
+                    window.lastInitialResetAt = performance.now();
+                  };
+                  window.initialResetTimer = continuous ? setInterval(redraw, 40) : setTimeout(redraw, 60);
+                }""",
+                {"slots": list(stability_slots), "continuous": continuous},
+            )
+        return result
+
+    monkeypatch.setattr(adapter, "_observe", observe)
+    try:
+        if continuous:
+            with pytest.raises(PageChangeTimeoutError, match="did not"):
+                await _initialized(browser_page, adapter=adapter)
+            debug = await adapter.collect_debug_metadata(browser_page)
+            assert debug["initial_canvas_settle"]["status"] == "timeout"
+            assert adapter._captured_slots == []
+        else:
+            await _initialized(browser_page, adapter=adapter)
+            elapsed = await browser_page.evaluate("performance.now() - window.lastInitialResetAt")
+            assert elapsed >= 160
+            debug = await adapter.collect_debug_metadata(browser_page)
+            assert debug["initial_canvas_settle"]["status"] == "settled"
+            assert debug["initial_canvas_settle"]["canvas_tracking"] is True
+            assert await adapter.detect_state(browser_page) is PageState.CONTENT
+            captures = await adapter.capture_page(browser_page)
+            assert len(captures) == (2 if top_empty else 1)
+            assert all(item.mime_type == "image/webp" for item in captures)
+    finally:
+        await browser_page.evaluate("clearInterval(window.initialResetTimer)")
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_initial_canvas_wait_preserves_observer_missing_rendered_fallback(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _install_mock_site(browser_page, resume_current=1)
+    adapter = HanayumeAdapter()
+
+    async def unavailable_observer(_page):
+        pass
+
+    monkeypatch.setattr(adapter, "prepare_page", unavailable_observer)
+    await _initialized(browser_page, adapter=adapter)
+    debug = await adapter.collect_debug_metadata(browser_page)
+    assert debug["initial_canvas_settle"]["status"] == "settled"
+    assert debug["initial_canvas_settle"]["canvas_tracking"] is False
+    assert debug["initial_canvas_settle"]["elapsed_ms"] >= 60
+    captures = await adapter.capture_page(browser_page)
+    assert len(captures) == 1 and captures[0].mime_type == "image/png"
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_spreads_and_ends(
     browser_page: Page,
 ) -> None:
@@ -560,6 +653,8 @@ async def test_hanayume_top_empty_flag_drift_during_native_encoding_discards_pro
     with pytest.raises(UnknownPageStateError, match="changed after native image encoding"):
         await task
     assert adapter._captured_slots == []
+    debug = await adapter.collect_debug_metadata(browser_page)
+    assert debug["capture"]["verification"]["reason"] == "body_layout_changed"
     status = await browser_page.evaluate("() => window.__hanayumeNativeCapture.status()")
     assert status["proofCount"] == 0
 
@@ -815,15 +910,18 @@ async def test_hanayume_native_replay_exception_falls_back_to_rendered_spread(
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("padded_counter", [False, True])
 async def test_hanayume_native_proof_is_single_outstanding_and_release_keeps_preloads(
-    browser_page: Page,
+    browser_page: Page, padded_counter: bool,
 ) -> None:
-    await _install_mock_site(browser_page, authenticated=True)
+    await _install_mock_site(browser_page, authenticated=True, padded_counter=padded_counter)
     adapter = await _initialized(browser_page)
     await _body_state(browser_page, adapter)
     args = {
-        "expectedSlots": [1], "expectedCurrent": 1, "expectedBodyTotal": 4,
-        "expectedBodySlots": [1, 2, 3, 4], "hasTopEmptyPage": False,
+        "expectedSlots": [1], "expectedCurrent": 1,
+        "expectedBodyTotal": 3 if padded_counter else 4,
+        "expectedBodySlots": [1, 2, 3] if padded_counter else [1, 2, 3, 4],
+        "hasTopEmptyPage": False,
         "episodePath": f"/episodes/{EPISODE_ID}",
     }
     first = await browser_page.evaluate(
@@ -846,6 +944,46 @@ async def test_hanayume_native_proof_is_single_outstanding_and_release_keeps_pre
     )
     assert released["proofCount"] == 0
     assert released["candidateCount"] == 1
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "document.querySelector('#xCVPages').children[4].className = '-cv-page'",
+        "document.querySelector('#xCVPages').lastElementChild.remove()",
+        "document.querySelector('#comici-viewer').classList.add('mode-has-top-emptypage')",
+    ],
+    ids=["tail-class", "wrapper-count", "top-empty-flag"],
+)
+async def test_hanayume_padded_native_capture_rejects_wrong_body_and_layout_drift(
+    browser_page: Page, mutation: str,
+) -> None:
+    await _install_mock_site(browser_page, padded_counter=True)
+    adapter = await _initialized(browser_page)
+    args = {
+        "expectedSlots": [1], "expectedCurrent": 1, "expectedBodyTotal": 4,
+        "expectedBodySlots": [1, 2, 3, 4], "hasTopEmptyPage": False,
+        "episodePath": f"/episodes/{EPISODE_ID}",
+    }
+    wrong = await browser_page.evaluate(
+        "args => window.__hanayumeNativeCapture.collect(args)", args
+    )
+    assert wrong["ok"] is False and wrong["reason"] == "selected_page_changed"
+    args.update(expectedBodyTotal=3, expectedBodySlots=[1, 2, 3])
+    valid = await browser_page.evaluate(
+        "args => window.__hanayumeNativeCapture.collect(args)", args
+    )
+    assert valid["ok"] is True and valid["mode"] == "native"
+    await browser_page.evaluate(f"() => {{ {mutation}; }}")
+    assert await browser_page.evaluate(
+        "token => window.__hanayumeNativeCapture.verify(token)", valid["token"]
+    ) is False
+    changed = await browser_page.evaluate(
+        "args => window.__hanayumeNativeCapture.collect(args)", args
+    )
+    assert changed["ok"] is False and changed["reason"] == "selected_page_changed"
+    assert adapter._captured_slots == []
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -908,8 +1046,37 @@ async def test_hanayume_aborted_native_capture_releases_its_proof_and_keeps_prel
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    ("mutation", "reason", "pixel_comparison"),
+    [
+        ("canvas.getContext('2d').fillRect(0, 0, 1, 1)", "canvas_writes_changed", "different"),
+        (
+            (
+                "const ctx = canvas.getContext('2d'); "
+                "ctx.putImageData(ctx.getImageData(0, 0, canvas.width, canvas.height), 0, 0)"
+            ),
+            "canvas_writes_changed", "equal",
+        ),
+        ("canvas.width = canvas.width", "canvas_generation_changed", "different"),
+        ("canvas.replaceWith(canvas.cloneNode())", "canvas_replaced", "not_compared"),
+        ("canvas.style.marginLeft = '-3000px'", "canvas_readiness_or_visibility_changed", "equal"),
+        (
+            "canvas.closest('.-cv-page').style.left = '-3000px'",
+            "active_slots_changed", "equal",
+        ),
+        (
+            "document.querySelector('.-cv-f-page-current').textContent = '3'",
+            "episode_or_counter_changed", "equal",
+        ),
+    ],
+    ids=(
+        "changed-pixels", "same-pixel-redraw", "bitmap-reset", "replacement",
+        "visibility", "position", "counter",
+    ),
+)
 async def test_hanayume_target_change_after_native_encoding_discards_encoded_snapshot(
-    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, tmp_path,
+    mutation: str, reason: str, pixel_comparison: str,
 ) -> None:
     await _install_mock_site(browser_page)
     adapter = await _initialized(browser_page)
@@ -928,13 +1095,43 @@ async def test_hanayume_target_change_after_native_encoding_discards_encoded_sna
     task = asyncio.create_task(adapter.capture_page(browser_page))
     assert await asyncio.to_thread(entered.wait, 3)
     await browser_page.locator("#xCVPages > .-cv-page:nth-child(2) canvas").evaluate(
-        "canvas => canvas.getContext('2d').fillRect(0, 0, 1, 1)"
+        f"canvas => {{ {mutation}; }}"
     )
     continue_encoding.set()
 
-    with pytest.raises(UnknownPageStateError, match="changed after native image encoding"):
+    with pytest.raises(UnknownPageStateError, match=f"verification={reason}") as caught:
         await task
 
+    debug = await adapter.collect_debug_metadata(browser_page)
+    capture = debug["capture"]
+    verification = capture["verification"]
+    assert verification["reason"] == reason
+    assert verification["ok"] is False
+    assert capture["encode_elapsed_ms"] >= 0
+    assert verification["elapsed_ms"] >= 0
+    assert verification["expected"]["selected_slots"] == [1]
+    row = verification["rows"][0]
+    assert row["pixel_comparison"] == pixel_comparison
+    assert row["expected"]["canvas"]["width"] == 5
+    if reason == "canvas_writes_changed":
+        assert row["observed_writes"] > row["expected_writes"]
+        assert row["observed_generation"] == row["expected_generation"]
+    if reason == "canvas_generation_changed":
+        assert row["observed_generation"] > row["expected_generation"]
+    if reason == "canvas_replaced":
+        assert row["same_canvas"] is False
+    if reason == "active_slots_changed":
+        assert row["observed"]["wrapper"] != row["expected"]["wrapper"]
+    # Exercise the actual failure diagnostics writer; cleanup must retain the evidence.
+    if pixel_comparison == "different" and reason == "canvas_writes_changed":
+        runner = CrawlerRunner(RunConfig(
+            site="hanayume", source_url=EPISODE_URL,
+            output_dir=tmp_path / "output", diagnostics_dir=tmp_path / "diagnostics",
+        ))
+        await runner._write_failure_diagnostics(browser_page, caught.value, adapter=adapter)
+        saved = json.loads((tmp_path / "diagnostics" / "metadata.json").read_text(encoding="utf-8"))
+        assert saved["adapter_debug"]["capture"]["verification"] == verification
+        assert "data:image" not in json.dumps(saved["adapter_debug"])
     status = await browser_page.evaluate("() => window.__hanayumeNativeCapture.status()")
     assert status["proofCount"] == 0
     assert status["candidateCount"] == 1
@@ -979,8 +1176,11 @@ async def test_hanayume_runner_does_not_fall_back_to_locator_capture(
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_hanayume_local_viewer_fails_closed_when_spread_half_is_missing(browser_page: Page) -> None:
-    await _install_mock_site(browser_page)
+@pytest.mark.parametrize("padded_counter", [False, True])
+async def test_hanayume_local_viewer_fails_closed_when_spread_half_is_missing(
+    browser_page: Page, padded_counter: bool,
+) -> None:
+    await _install_mock_site(browser_page, padded_counter=padded_counter)
     adapter = await _initialized(browser_page)
     await _body_state(browser_page, adapter)
     await adapter.capture_page(browser_page)
@@ -1097,8 +1297,11 @@ async def test_hanayume_centered_spread_ignores_clipped_previous_wrapper_and_wai
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_hanayume_local_viewer_rejects_terminal_before_complete_body_coverage(browser_page: Page) -> None:
-    await _install_mock_site(browser_page)
+@pytest.mark.parametrize("padded_counter", [False, True])
+async def test_hanayume_local_viewer_rejects_terminal_before_complete_body_coverage(
+    browser_page: Page, padded_counter: bool,
+) -> None:
+    await _install_mock_site(browser_page, padded_counter=padded_counter)
     adapter = await _initialized(browser_page)
     await browser_page.locator("#xCVSeekBar").focus()
     await browser_page.locator("#xCVSeekBar").press("Home")
@@ -1120,10 +1323,13 @@ async def test_hanayume_local_viewer_rejects_work_mismatch_before_preflight(brow
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("padded_counter", [False, True])
 async def test_hanayume_configured_batch_target_skips_listing_preflight_and_captures_to_end(
-    browser_page: Page,
+    browser_page: Page, padded_counter: bool,
 ) -> None:
-    state = await _install_mock_site(browser_page, episode_rows=_preview_rows())
+    state = await _install_mock_site(
+        browser_page, episode_rows=_preview_rows(), padded_counter=padded_counter
+    )
     adapter = HanayumeAdapter()
     await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", "opaque-catalog-key")
     url = adapter.resolve_initial_navigation_url(EPISODE_URL)
@@ -1141,13 +1347,18 @@ async def test_hanayume_configured_batch_target_skips_listing_preflight_and_capt
             break
         assert state_now is PageState.CONTENT
         identity = await adapter.get_content_identity(browser_page)
-        assert await adapter.capture_page(browser_page)
+        captures = await adapter.capture_page(browser_page)
+        assert captures
+        assert adapter._capture_diagnostics["mode"] == "source_canvas_lossless_webp"
+        assert [Image.open(io.BytesIO(item.data)).convert("RGB").getpixel((0, 0)) for item in captures] == [
+            (slot * 20, 40, 60) for slot in adapter._last_capture_slots
+        ]
         captured.extend(adapter._last_capture_slots)
         await adapter.go_next(browser_page)
         await adapter.wait_for_change(browser_page, identity)
 
     assert await adapter.detect_state(browser_page) is PageState.END
-    assert captured == [1, 2, 3, 4]
+    assert captured == ([1, 2, 3] if padded_counter else [1, 2, 3, 4])
     assert state["paths"] == [f"/episodes/{EPISODE_ID}"]
 
 

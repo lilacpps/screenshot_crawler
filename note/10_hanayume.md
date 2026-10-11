@@ -34,6 +34,132 @@ The reader contract remains the observed desktop `mode-spread` layout. Viewer co
 
 For the R8-probed leading-empty layout, `mode-has-top-emptypage` must be present and physical slot 1 must be exactly `-cv-page mode-empty` with no canvas. That slot is excluded from the body; physical body slots are frozen as 2 through `total-5`, giving 11 body pages for the observed 17-page episode. The initial counter-1 state must also contain `mode-first-page`; the adapter uses one normal public seek step to counter 3, then captures body slots 2/3 onward. The top-empty flag, exact blank lead-in, and body-slot tuple remain bound through native collection and verification. Unflagged blanks, interior empty slots, changed layout, missing spread sides, or incomplete terminal coverage fail closed. Archive capture order is sequential while identities retain physical slot IDs.
 
+### Supported counter/physical-wrapper variant: episode `e2a7ca7bd6dd7`
+
+Investigation on 2026-10-11 reproduced the normal Batch failure for Item/Source `25142` (`番外編 食の都③`). The failing metrics run `4082ffbbf88447dca0c2032c5562bf51` stopped after 1.946 seconds with `Hanayume viewer page-wrapper count is incomplete`; its summary records no HTTP 403/429/5xx, challenge, or CAPTCHA event. Two bounded fresh-page CDP metadata probes reproduced a stable counter `1/17` with **17 physical wrappers**, rather than the former parser's required `total + 1 = 18`. The first probe retained that shape through 8.671 seconds, excluding a short initialization delay as the explanation for the observed mismatch.
+
+There is no `mode-has-top-emptypage` flag: slot 1 is rendered body, slots 1–11 precede `mode-ci` at 12, PR placeholders at 13/14, `mode-good` at 15, and `mode-last` at 16. Every trailing role is one physical slot earlier than the former `total`-based contract. A normal public seek `Home` produced counter `17/17`, seek value 1, and `mode-last-page` with the same 17 wrappers. The probe rewound to counter 1 and closed only its own page. The metadata probe alone did not establish captured coverage; the subsequent standard Batch verification below did. The viewer's internal rounding/padding algorithm remains unproven and is not used as an implementation assumption.
+
+Current behavior accepts the existing `wrapper_count == total + 1` layout, and additionally the observed `wrapper_count == total` variant only for an odd total without the top-empty flag. Let `last_slot = wrapper_count - 1`. Both variants require the exact top PR and five-tail structure relative to `last_slot`; unknown/missing/shifted tail classes fail closed. Body slots are frozen from 1 (or 2 for the existing flagged leading blank) through `last_slot - 5`. The public counter/seek validation remains unchanged. For the affected target this yields exactly physical slots 1–11, rather than incorrectly treating slot 12 (`mode-ci`) as body.
+
+Native collect and post-encode verification independently validate this physical tail and exact body tuple. Proofs also retain the wrapper count; count/tail/flag drift rejects the capture, with no generic screenshot fallback. Existing leading-empty support is unchanged and does not admit the shorter wrapper variant. Synthetic tests cover the 17-counter/17-wrapper observation, complete native capture to END, rejected tail/count/flag changes, missing spread halves, and premature END alongside the prior layouts.
+
+Probe evidence: `output/hanayume-wrapper-investigation-20261011.json`; bounded metadata probe: `output/hanayume_wrapper_probe.py`. Post-fix standard CLI Batch evidence: `output/hanayume-wrapper-live-20261011-bc7bbdb0/verification.json`, prepared/audited by `output/hanayume_wrapper_live_verify.py`. The affected target completed 11 pages, ordinary control `90868f4de278f` completed 12, and leading-empty control `c8904d8e3f912` completed 11; all reached END, completed their isolated Items, and created present ZIP Artifacts. All 34 members decoded as 960x1540 VP8L WebP; ZIP CRC, sequential member names, whole-archive size/SHA-256, SQLite integrity, and crawl-status page counts passed. Packaging removed generated source directories as designed. The initial audit incorrectly expected retained manifests; its correction audited the existing completed target ZIP without repeating that crawl. No independent source-canvas RGBA comparison or visual review was performed for these 34 pages, and those historical 134-page proofs are not extended by this run.
+
+Each live case used a dedicated Catalog/output/library and working directory (including metrics). Exact available/free source, target, work, and item metadata were copied from the explicitly selected normal Catalog through a read-only connection; only the isolated retry Item was set pending. The normal Catalog, including the affected Item's existing skipped status, was not written. Access eligibility, pacing, CLI, and max-pages/same-content safeguards did not change. Adapter/native Unit + viewer browser Integration: 115 passed, 0 skipped; Discovery/policy Unit + Discovery browser Integration: 69 passed, 0 skipped (184 total). Ruff (`src tests`) and diff checks passed. All three live metrics summaries recorded zero HTTP 403/429/5xx and zero retries. Full suite was not run because this is confined to the Hanayume viewer/native layout contract; research-helper tests were not needed for production acceptance.
+
+## Post-encoding verification diagnostics (2026-10-11)
+
+The user-reported Item/Source `25190` failure stopped at physical body slot 1 with zero saved pages,
+`native_target_changed_after_encoding`, and a candidate duration of about 2.8 seconds. Read-only
+inspection found 13 saved diagnostic failures with that reason, all at zero saved pages / slot 1.
+This supports an initialization race hypothesis but the old boolean verification result does not
+identify its cause. The pre-fix readiness checks stabilized counter/seek/active/ready/layout metadata,
+without checking canvas generation, writes, or bitmap dimensions. The additional initial-canvas
+quiet wait described below addresses that gap; post-encoding pixel proof remains unchanged.
+
+Native post-encoding verification now returns a structured result while retaining the existing
+strict gates and one-shot proof deletion. The legacy observer `verify(token)` still returns a
+boolean for probe compatibility; production uses `verifyDetailed(token)`. Failures retain the
+first failed gate and a bounded selected-row comparison: wrapper/canvas identity equality,
+generation/write counts, bitmap dimensions, wrapper/canvas rectangles, readiness/visibility,
+viewport, seek, page counters, body slots, and top-empty flag. Pixel comparison on failure reads
+only the same selected canvas with unchanged dimensions and records `equal`, `different`,
+`unreadable`, or `not_compared`; no pixels, PNG/base64, credentials, or browser storage are added
+to these diagnostics. A same-pixel redraw still fails the original write/generation gate.
+
+The existing failed-run path persists these details at
+`output/batch/hanayume/<run>/diagnostics/metadata.json` under
+`adapter_debug.capture.verification`; `adapter_debug.capture.encode_elapsed_ms` times Python
+encoding, and verification `elapsed_ms` is the browser interval since proof collection, including
+transport, Python decoding, and encoding. The terminal error/metrics includes
+`(verification=<reason>)`. Missing observer/proof, observer integrity loss, timeout, evaluation
+failure, and malformed verification results remain fail-closed with distinct reason codes.
+The diagnostics addition alone introduced no CLI/config change, readiness delay, automatic retry,
+capture fallback, navigation, or Core change. The current startup wait is described below.
+Capture-attempt cleanup releases the same resources and preserves the
+diagnostic metadata. Only existing Hanayume source/tests/README and this site note are changed;
+the shared Core note needs no update because its existing diagnostics contract is unchanged.
+
+Synthetic browser tests cover changed pixels, same-pixel redraw, bitmap reset, canvas replacement,
+visibility/position/counter/layout drift, and persistence through the existing failure diagnostics
+writer. Unit tests cover verification timeout/evaluation/malformed-result failures. No real-site
+reproduction was performed when adding these diagnostics. The subsequent user-run failure below
+provides the first detailed live observation.
+
+User-run diagnostic analysis, Item/Source `25220` (`第38話③`, episode `6ef7cf9906de5`):
+metrics run `fe912201adfa42d1922adc51d9fa20cf` failed on 2026-10-11 at the first body slot,
+zero saved pages, after 2.925 seconds. The saved evidence is
+`output/batch/hanayume/item-25220-source-25220-20261011T112455149880+0900-54c915f4d76c4997b58687d06ac11729/diagnostics/metadata.json`.
+The gate was `canvas_generation_changed`: generation 4 -> 6 and writes 8 -> 12 during a
+461.6 ms browser proof interval; Python WebP encoding took 336.691 ms. Wrapper and canvas object
+identities matched. Before/after selected-row metadata was exactly equal: 828x1329 bitmap,
+552x886 displayed canvas, the same wrapper/canvas rectangles, ready/visible flags and classes.
+Counter 1/15, seek 15, viewport 1906x986, body slots and wrapper count were unchanged.
+Failure-only full RGBA comparison was `equal`. Thus the observed failure is strict invalidation
+of the same selected canvas after bitmap reset activity despite identical final pixels; it is
+not evidence of a page transition, changed final dimensions, canvas replacement, or a pixel
+mismatch. The metric summary recorded zero 403/429/5xx/challenge/CAPTCHA events.
+
+Generation +2 / writes +4 is consistent with width and height being reassigned (including
+same-value setters) followed by one drawImage, because each reset adds one generation/write and
+drawImage adds two writes. This specific call sequence is a hypothesis, not an observed stack
+or operation trace: reset(), dimension-attribute APIs and context lost/restored events can also
+increment generation. The reset initiator and transient intermediate pixels remain unknown.
+The same Item completed in 11.643 seconds in run `0bd98ee7cb504c3eafd67871edcb7398`, starting
+2026-10-11 11:25:28.978 JST, about 34 seconds after the failed candidate started. Neither candidate
+used CLI retries. These facts support an initial-render reset/redraw race for this case, without
+proving that all older failures have the same cause. This checkpoint changes only the site note;
+no implementation, wait/retry policy, tests, or real-site browser operation is changed.
+
+Validation: `tests/unit/test_hanayume_adapter.py` plus
+`tests/integration/test_hanayume_adapter_browser.py`: 122 passed, 0 skipped;
+`tests/unit/test_hanayume_native_capture.py`: 4 passed, 0 skipped.
+`ruff check src tests` and `git diff --check` passed. The pytest runs emitted existing
+asyncio event-loop-policy deprecation warnings. Full suite and Research/Live verification were
+not run: this change adds site-local failure diagnostics, and synthetic browser tests exercise
+the relevant proof gates and actual diagnostics persistence without operating the shared viewer.
+
+## Initial body-canvas quiet wait (2026-10-11)
+
+After rewind, ordinary-layout initialization waits at counter 1 / body slot 1; top-empty
+initialization first performs its existing intro seek, then waits at counter 3 / body slots 2/3.
+These first-body readiness waits now require 1000 ms of unchanged selected-canvas state, sampled
+every 100 ms, with a separate 5000 ms deadline including observation calls. Native-observer
+generation/write counts and ephemeral wrapper/canvas IDs join the existing counter, seek,
+active/ready/body layout, plus selected-row bitmap dimensions, classes, geometry and viewport.
+Any observed change restarts the quiet interval. The strict parser still rejects UNKNOWN/layout
+drift; persistent rendering/loading times out rather than capturing or navigating past it.
+
+Sampling is metadata-only: it does not encode, hash, read pixels, delete source candidates, or
+create native proofs. Node identity tracking uses a WeakMap; only selected rows are returned.
+If the source observer is unavailable or fails its integrity check, the existing rendered-PNG
+fallback remains available after the same quiet interval using visible metadata only. Diagnostics
+mark this distinction with `adapter_debug.initial_canvas_settle.canvas_tracking=false`.
+The settle diagnostic also records status, quiet/timeout/elapsed milliseconds and the final
+selected-row generation/write/identity sample. Successful tracked waits use `canvas_tracking=true`.
+These fields carry no pixels or credentials and require no new CLI option.
+
+Only the first body capture gets this extended quiet wait. Ordinary page-turn pacing/readiness,
+native source attribution, WebP/PNG encoding, post-encoding proof, ordered page coverage and END
+are unchanged. A reset during later native encoding still stops with the existing detailed error;
+no automatic capture retry or acceptance of stale/same-pixel proof is added. This is mitigation
+based on the observed initial-reset race, not a guarantee against arbitrarily late initialization.
+
+Synthetic browser tests reproduce a late same-pixel bitmap reset for ordinary and top-empty
+layouts, require a fresh quiet interval and verified native capture, and reject continuous resets
+at the deadline. They also preserve observer-missing rendered-PNG fallback. Existing post-encode
+generation/write/identity/layout/position failure tests continue to require rejection.
+Validation: affected Adapter/native-capture Unit tests passed (45); Adapter browser Integration
+passed (87), totaling 132 unique cases with zero skips. The new stalled-observation Unit test
+also proves the initial quiet deadline bounds the observation itself. Ruff and diff checks passed;
+existing asyncio deprecation warnings remain. Research and full suite were not run because the
+change is restricted to Hanayume initialization and the affected Unit/browser boundaries passed.
+No new live run is performed while the user's two existing Batch processes are active; the shared
+browser remains untouched. Live reduction in failure frequency needs subsequent user runs.
+Source changes are limited to Hanayume Adapter/native observer, their Unit/Integration tests,
+README and this site note; the shared Core note is unchanged because Core behavior is unchanged.
+
 ## R5 bounded readiness handling (independent review PASS; final E2E PASS)
 
 On an exact canonical series route with a structurally valid listing, authentication polling waits at 150 ms intervals for at most five seconds for the complete positive marker set. The route and listing are revalidated on every poll. Deadline means authentication was not proven and exact `今なら無料` remains unknown; it is not treated as proof of logout. Viewer initialization waits up to five seconds for the known unique current/total counter nodes to contain text before the first strict observation; duplicates or malformed nonempty values still fail closed.
@@ -93,7 +219,7 @@ Evidence: `output/hanayume_experiment/tester/runs/r7-first-slot-20261011T000424Z
 
 The bounded mapping probe `output/hanayume_experiment/tester/runs/r8-topempty-mapping-20261011T001336Z-a1f9f190/probe_report.json` used one fresh exact-target/authenticated preflight and metadata-only observations. At counter 1/17, the viewer had `mode-has-top-emptypage` and `mode-first-page`; slot 1 was exactly `-cv-page mode-empty`, centered, and canvas-free. The top-empty marker remained present at counters 1 through 17; `mode-first-page` appeared only at counter 1 and the terminal marker only at 17. The public seek property was 17 at counter 1; eight ordinary step-2 seek changes reached counters 3 through 17. Body candidates 2 through 12 were active and ready exactly once across counters 3 through 13; counter 15 showed promotional slots and counter 17 showed the known terminal tail. No pixels or image bytes were read. The probe observed no 403/429/challenge/CAPTCHA.
 
-Production now derives and freezes an explicit physical `body_slots` tuple: normal layout 1 through `total-5`; the narrowly flagged layout 2 through `total-5`. It accepts the leading blank only with the exact viewer flag, exact slot-1 class set, and zero canvas; `mode-first-page` is required for the initial counter-1 intro, followed by one public seek to the ready counter-3 spread. Capture identity, sequential body coverage, END, and native proof use physical slots. Normal layouts and their identity numbering remain unchanged. Synthetic browser tests cover top-empty success, missing first marker, failed initial seek, interior empty state, layout drift before/after native encoding, missing spread side, and premature END. Two post-fix standard CLI E2E cases now pass; see the R8 live verification below.
+Production derives and freezes an explicit physical `body_slots` tuple using `last_slot = wrapper_count - 1`: normal layout 1 through `last_slot-5`; the narrowly flagged layout 2 through `last_slot-5`. For the R8 layouts `last_slot == total`, so their bounds and identity numbering remain unchanged. It accepts the leading blank only with the exact viewer flag, exact slot-1 class set, and zero canvas; `mode-first-page` is required for the initial counter-1 intro, followed by one public seek to the ready counter-3 spread. Capture identity, sequential body coverage, END, and native proof use physical slots. Synthetic browser tests cover top-empty success, missing first marker, failed initial seek, interior empty state, layout drift before/after native encoding, missing spread side, and premature END. Two R8 standard CLI E2E cases passed; see the R8 live verification below and the newer wrapper-variant verification above.
 
 R8 post-fix standard CLI E2E and independent artifact audit (2026-10-11)
 

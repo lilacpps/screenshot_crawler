@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from playwright.async_api import Error as PlaywrightError
 
 from screenshot_crawler.core.capture import CaptureResult
-from screenshot_crawler.core.errors import UnknownPageStateError
+from screenshot_crawler.core.errors import PageChangeTimeoutError, UnknownPageStateError
 from screenshot_crawler.site_adapters.hanayume import adapter as hanayume_adapter
 from screenshot_crawler.site_adapters.hanayume.adapter import (
     HanayumeAdapter,
@@ -19,6 +20,53 @@ from screenshot_crawler.site_adapters.hanayume.adapter import (
 )
 
 WORK_ID = "1f9f5b0d4cd52"
+
+
+async def test_hanayume_initial_canvas_deadline_bounds_a_stalled_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(hanayume_adapter, "INITIAL_CANVAS_SETTLE_TIMEOUT_MS", 20)
+    adapter = HanayumeAdapter()
+
+    async def stalled_observation(_page, **_kwargs):
+        await asyncio.Future()
+
+    monkeypatch.setattr(adapter, "_observe", stalled_observation)
+    with pytest.raises(PageChangeTimeoutError, match="initial canvas did not settle"):
+        await asyncio.wait_for(
+            adapter._wait_for_observation(
+                None, lambda _: True, reason="initial canvas did not settle",
+                initial_canvas_slots=(1,),
+            ),
+            timeout=0.5,
+        )
+    assert adapter._initial_canvas_settle["status"] == "timeout"
+    assert adapter._captured_slots == []
+
+
+@pytest.mark.parametrize(
+    ("result", "error", "reason"),
+    [
+        (None, TimeoutError(), "verification_timeout"),
+        (None, PlaywrightError("synthetic evaluation failure"), "verification_evaluation_failed"),
+        (True, None, "verification_result_malformed"),
+        ({"ok": "true"}, None, "verification_result_malformed"),
+        ({"ok": False, "reason": "proof_missing"}, None, "proof_missing"),
+    ],
+)
+async def test_hanayume_native_verification_transport_failure_is_diagnostic_and_closed(
+    result, error, reason: str,
+) -> None:
+    class FakePage:
+        async def evaluate(self, _script, _token):
+            if error is not None:
+                raise error
+            return result
+
+    adapter = HanayumeAdapter()
+    assert await adapter._verify_native_capture(FakePage(), "h1") is False
+    debug = await adapter.collect_debug_metadata(FakePage())
+    assert debug["capture"]["verification"] == {"ok": False, "reason": reason}
 
 
 def _episode_rows(ids: tuple[str, ...], label: str = "無料") -> list[dict[str, object]]:
@@ -149,25 +197,26 @@ def _range_entries(*, selected_page: int | None = None) -> list[dict[str, object
 
 
 def _viewer_snapshot(
-    *, current: int = 1, visible: tuple[int, ...] | None = None, top_empty: bool = False
+    *, current: int = 1, visible: tuple[int, ...] | None = None, top_empty: bool = False,
+    padded_counter: bool = False, total: int = 9,
 ) -> dict[str, object]:
-    total = 9
-    body_slots = tuple(range(2 if top_empty else 1, total - 4))
+    last_slot = total - int(padded_counter)
+    body_slots = tuple(range(2 if top_empty else 1, last_slot - 4))
     visible = visible if visible is not None else _expected_active_slots(current, body_slots)
     viewport = {"width": 1906, "height": 986}
     slots = []
-    for index in range(total + 1):
+    for index in range(last_slot + 1):
         if index == 0:
             classes = ["-cv-page", "mode-empty", "mode-pr", "mode-top-pr"]
         elif index == 1 and top_empty:
             classes = ["-cv-page", "mode-empty"]
-        elif index == total - 4:
+        elif index == last_slot - 4:
             classes = ["-cv-page", "mode-ci"]
-        elif index in {total - 3, total - 2}:
+        elif index in {last_slot - 3, last_slot - 2}:
             classes = ["-cv-page", "mode-empty", "mode-pr"]
-        elif index == total - 1:
+        elif index == last_slot - 1:
             classes = ["-cv-page", "mode-good"]
-        elif index == total:
+        elif index == last_slot:
             classes = ["-cv-page", "mode-last"]
         else:
             classes = ["-cv-page"]
@@ -354,6 +403,40 @@ def test_hanayume_viewer_rejects_missing_half_of_a_spread() -> None:
     assert observation.active_slots == (2,)
     assert observation.ready_slots == (2,)
     assert observation.ready_slots != _expected_active_slots(3, observation.body_slots)
+
+
+@pytest.mark.parametrize("current", [1, 3, 11, 17])
+def test_hanayume_padded_counter_uses_complete_physical_tail_and_body(current: int) -> None:
+    snapshot = _viewer_snapshot(current=current, total=17, padded_counter=True)
+    if current == 17:
+        snapshot["viewerClasses"].append("mode-last-page")
+    observation = _parse_viewer_observation(snapshot)
+    assert observation.total == 17
+    assert len(observation.raw["slots"]) == 17
+    assert observation.body_total == 11
+    assert observation.body_slots == tuple(range(1, 12))
+    assert observation.active_slots == observation.ready_slots == (
+        () if current == 17 else (1,) if current == 1 else (current - 1, current)
+    )
+    assert observation.terminal == (current == 17)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda raw: raw["slots"].pop(),
+        lambda raw: raw["slots"].append({"index": 17, "classes": ["-cv-page"]}),
+        lambda raw: raw["slots"][12].update(classes=["-cv-page"]),
+        lambda raw: raw["slots"][11].update(classes=["-cv-page", "mode-empty"]),
+        lambda raw: raw["slots"][16].update(classes=["-cv-page", "mode-good"]),
+        lambda raw: raw["viewerClasses"].append("mode-has-top-emptypage"),
+    ],
+)
+def test_hanayume_padded_counter_rejects_missing_or_changed_layout(mutate) -> None:
+    snapshot = _viewer_snapshot(total=17, padded_counter=True)
+    mutate(snapshot)
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(snapshot)
 
 
 def test_hanayume_viewer_uses_physical_body_slots_for_observed_top_empty_layout() -> None:

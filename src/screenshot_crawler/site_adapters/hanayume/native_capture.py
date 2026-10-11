@@ -27,6 +27,13 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   let disabledReason = null;
   let nextProof = 1;
   const proofs = new Map();
+  const stabilityNodeIds = new WeakMap();
+  let nextStabilityNodeId = 1;
+  const stabilityNodeId = node => {
+    if (!node) return null;
+    if (!stabilityNodeIds.has(node)) stabilityNodeIds.set(node, nextStabilityNodeId++);
+    return stabilityNodeIds.get(node);
+  };
   const nativeDraw = CanvasRenderingContext2D.prototype.drawImage;
   const nativeGetContext = HTMLCanvasElement.prototype.getContext;
   const nativeGetImageData = CanvasRenderingContext2D.prototype.getImageData;
@@ -420,7 +427,48 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       actual?.set === expected?.set && actual?.writable === expected?.writable &&
       actual?.enumerable === expected?.enumerable && actual?.configurable === expected?.configurable;
   });
+  const bodyLayout = observation => {
+    const total = Number(observation.totalText);
+    const slots = observation.slots;
+    const topEmpty = observation.viewerClasses.includes('mode-has-top-emptypage');
+    if (!Number.isInteger(total) || total < 8 ||
+        !(slots.length === total + 1 ||
+          (!topEmpty && total % 2 === 1 && slots.length === total))) return null;
+    const last = slots.length - 1;
+    const exactClasses = (index, expected) => {
+      const row = slots[index];
+      return row?.index === index && row.classes.length === expected.length &&
+        expected.every(name => row.classes.includes(name));
+    };
+    const tails = [
+      [0, ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']],
+      [last - 4, ['-cv-page', 'mode-ci']],
+      [last - 3, ['-cv-page', 'mode-empty', 'mode-pr']],
+      [last - 2, ['-cv-page', 'mode-empty', 'mode-pr']],
+      [last - 1, ['-cv-page', 'mode-good']],
+      [last, ['-cv-page', 'mode-last']],
+    ];
+    if (tails.some(([index, classes]) => !exactClasses(index, classes)) ||
+        (topEmpty && (!exactClasses(1, ['-cv-page', 'mode-empty']) ||
+          slots[1].canvasCount !== 0 || slots[1].canvas !== null))) return null;
+    const start = topEmpty ? 2 : 1;
+    const length = last - 4 - start;
+    return length > 0 ? Array.from({length}, (_, offset) => start + offset) : null;
+  };
   const api = {
+    stability(expectedSlots) {
+      // Read counters/identity only; preserve draw-time source candidates for capture.
+      if (!integrityOk()) return null;
+      const pages = document.querySelector('#xCVPages');
+      return expectedSlots.map(slot => {
+        const wrapper = pages?.children[slot];
+        const canvases = wrapper?.querySelectorAll('canvas');
+        const canvas = canvases?.length === 1 ? canvases[0] : null;
+        const state = canvas ? stateFor(canvas) : null;
+        return {slot, wrapperId: stabilityNodeId(wrapper), canvasId: stabilityNodeId(canvas),
+          generation: state?.generation ?? null, writes: state?.writes ?? null};
+      });
+    },
     collect({expectedSlots, expectedCurrent, expectedBodyTotal, expectedBodySlots,
              hasTopEmptyPage, episodePath}) {
       proofs.clear();
@@ -428,24 +476,16 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       const current = Number(observation.currentText);
       const total = Number(observation.totalText);
       const observedTopEmpty = observation.viewerClasses.includes('mode-has-top-emptypage');
-      const firstSlot = observation.slots[1];
-      const expectedLayoutSlots = Array.from(
-        {length: Math.max(0, total - (observedTopEmpty ? 6 : 5))},
-        (_, offset) => offset + (observedTopEmpty ? 2 : 1),
-      );
-      const expectedLayoutValid = Array.isArray(expectedBodySlots) &&
+      const expectedLayoutSlots = bodyLayout(observation);
+      const expectedLayoutValid = expectedLayoutSlots !== null && Array.isArray(expectedBodySlots) &&
         expectedBodySlots.length === expectedLayoutSlots.length &&
         expectedBodySlots.every((slot, index) => slot === expectedLayoutSlots[index]) &&
-        observedTopEmpty === hasTopEmptyPage &&
-        (!observedTopEmpty || (firstSlot?.classes.length === 2 &&
-          firstSlot.classes.includes('-cv-page') && firstSlot.classes.includes('mode-empty') &&
-          firstSlot.canvasCount === 0 && firstSlot.canvas === null));
+        observedTopEmpty === hasTopEmptyPage;
       if (location.pathname !== episodePath || location.search || location.hash || !Array.isArray(expectedSlots) ||
           current !== expectedCurrent || !Array.isArray(expectedBodySlots) ||
           expectedBodySlots.length !== expectedBodyTotal ||
           !expectedLayoutValid ||
-          expectedSlots.some(slot => !expectedBodySlots.includes(slot)) ||
-          observation.slots.length !== total + 1) return {ok: false, reason: 'selected_page_changed', observation};
+          expectedSlots.some(slot => !expectedBodySlots.includes(slot))) return {ok: false, reason: 'selected_page_changed', observation};
       const selected = [];
       for (const index of expectedSlots) {
         const row = observation.slots[index];
@@ -547,6 +587,10 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         token = `h${nextProof++}`;
         proofs.set(token, {
           current, total, episodePath,
+          collectedAt: performance.now(),
+          viewport: observation.viewport,
+          seek: observation.seek,
+          wrapperCount: observation.slots.length,
           expectedSlots: expectedSlots.slice(),
           expectedBodySlots: expectedBodySlots.slice(),
           hasTopEmptyPage: observedTopEmpty,
@@ -558,6 +602,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
             writes: item.candidate.writes,
             width: item.candidate.targetWidth,
             height: item.candidate.targetHeight,
+            observation: observation.slots[item.selectedRow.index],
             pixels: item.targetPixels,
           })),
         });
@@ -578,48 +623,82 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       }
       return {candidateCount: candidates.size, proofCount: proofs.size};
     },
-    verify(token) {
+    verify(token) { return api.verifyDetailed(token).ok; },
+    verifyDetailed(token) {
       const proof = proofs.get(token);
       proofs.delete(token);
-      if (!proof || !integrityOk()) return false;
+      if (!proof) return {ok: false, reason: 'proof_missing'};
+      if (!integrityOk()) return {ok: false, reason: 'observer_integrity_lost'};
       const observation = currentObservation();
+      const elapsedMs = performance.now() - proof.collectedAt;
+      const fail = reason => ({
+        ok: false, reason, elapsed_ms: elapsedMs,
+        expected: {current: proof.current, total: proof.total, viewport: proof.viewport,
+          seek: proof.seek, wrapper_count: proof.wrapperCount,
+          body_slots: proof.expectedBodySlots, selected_slots: proof.expectedSlots,
+          has_top_empty_page: proof.hasTopEmptyPage},
+        observed: {current: Number(observation.currentText), total: Number(observation.totalText),
+          viewport: observation.viewport, seek: observation.seek,
+          wrapper_count: observation.slots.length,
+          body_slots: bodyLayout(observation),
+          has_top_empty_page: observation.viewerClasses.includes('mode-has-top-emptypage'),
+          document_ready_state: document.readyState},
+        rows: proof.rows.map(row => {
+          const wrapper = document.querySelector('#xCVPages')?.children[row.slot];
+          const canvas = wrapper?.querySelector('canvas');
+          const state = stateFor(row.target);
+          let pixelComparison = 'not_compared';
+          // Failure-only readback distinguishes a same-pixel redraw from changed content.
+          // Never serialize pixels or read a replacement/other-sized canvas.
+          if (canvas === row.target && canvas.width === row.width && canvas.height === row.height) {
+            try { pixelComparison = compare(pixels(canvas), row.pixels) ? 'equal' : 'different'; }
+            catch (_) { pixelComparison = 'unreadable'; }
+          }
+          return {slot: row.slot, same_wrapper: wrapper === row.wrapper, same_canvas: canvas === row.target,
+            expected_generation: row.generation, observed_generation: state.generation,
+            expected_writes: row.writes, observed_writes: state.writes,
+            expected: row.observation, observed: observation.slots[row.slot] ?? null,
+            pixel_comparison: pixelComparison};
+        }),
+      });
       if (location.pathname !== proof.episodePath || location.search || location.hash ||
-          Number(observation.currentText) !== proof.current || Number(observation.totalText) !== proof.total) return false;
+          Number(observation.currentText) !== proof.current || Number(observation.totalText) !== proof.total)
+        return fail('episode_or_counter_changed');
       const hasTopEmptyPage = observation.viewerClasses.includes('mode-has-top-emptypage');
-      const firstSlot = observation.slots[1];
-      const currentBodySlots = Array.from(
-        {length: Math.max(0, proof.total - (hasTopEmptyPage ? 6 : 5))},
-        (_, offset) => offset + (hasTopEmptyPage ? 2 : 1),
-      );
-      if (hasTopEmptyPage !== proof.hasTopEmptyPage ||
+      const currentBodySlots = bodyLayout(observation);
+      if (currentBodySlots === null || hasTopEmptyPage !== proof.hasTopEmptyPage ||
           currentBodySlots.length !== proof.expectedBodySlots.length ||
-          currentBodySlots.some((slot, index) => slot !== proof.expectedBodySlots[index]) ||
-          (hasTopEmptyPage && !(firstSlot?.classes.length === 2 &&
-            firstSlot.classes.includes('-cv-page') && firstSlot.classes.includes('mode-empty') &&
-            firstSlot.canvasCount === 0 && firstSlot.canvas === null))) return false;
-      if (observation.slots.length !== proof.total + 1 || proof.rows.length !== proof.expectedSlots.length ||
-          proof.rows.some((row, index) => row.slot !== proof.expectedSlots[index])) return false;
+          currentBodySlots.some((slot, index) => slot !== proof.expectedBodySlots[index]))
+        return fail('body_layout_changed');
+      if (observation.slots.length !== proof.wrapperCount || proof.rows.length !== proof.expectedSlots.length ||
+          proof.rows.some((row, index) => row.slot !== proof.expectedSlots[index]))
+        return fail('wrapper_or_proof_slots_changed');
       const active = [];
       for (const index of proof.expectedBodySlots) {
         const row = observation.slots[index];
         if (row?.wrapperCenterInViewport) active.push(index);
       }
       if (active.length !== proof.expectedSlots.length ||
-          active.some((value, index) => value !== proof.expectedSlots[index])) return false;
+          active.some((value, index) => value !== proof.expectedSlots[index]))
+        return fail('active_slots_changed');
       for (const row of proof.rows) {
         const wrapper = document.querySelector('#xCVPages')?.children[row.slot];
         const canvas = wrapper?.querySelector('canvas');
         const state = stateFor(row.target);
         const observed = observation.slots[row.slot];
-        if (wrapper !== row.wrapper || canvas !== row.target || state.generation !== row.generation ||
-            state.writes !== row.writes || canvas.width !== row.width || canvas.height !== row.height) return false;
+        if (wrapper !== row.wrapper) return fail('wrapper_replaced');
+        if (canvas !== row.target) return fail('canvas_replaced');
+        if (state.generation !== row.generation) return fail('canvas_generation_changed');
+        if (state.writes !== row.writes) return fail('canvas_writes_changed');
+        if (canvas.width !== row.width || canvas.height !== row.height) return fail('canvas_dimensions_changed');
         if (!observed?.canvas?.ready || !observed.canvas.visible || !observed.wrapperCenterInViewport ||
-            !observed.classes.includes('mode-loaded') || !observed.classes.includes('mode-rendered')) return false;
+            !observed.classes.includes('mode-loaded') || !observed.classes.includes('mode-rendered'))
+          return fail('canvas_readiness_or_visibility_changed');
         let currentPixels;
-        try { currentPixels = pixels(canvas); } catch (_) { return false; }
-        if (!compare(currentPixels, row.pixels)) return false;
+        try { currentPixels = pixels(canvas); } catch (_) { return fail('canvas_pixels_unreadable'); }
+        if (!compare(currentPixels, row.pixels)) return fail('canvas_pixels_changed');
       }
-      return true;
+      return {ok: true, reason: null, elapsed_ms: elapsedMs};
     },
     clear() { candidates.clear(); proofs.clear(); disabledReason = 'capture_cache_cleared'; },
     status() { return {candidateCount: candidates.size, proofCount: proofs.size,
@@ -639,7 +718,9 @@ COLLECT_CAPTURE_SCRIPT = r"""args => {
 
 VERIFY_CAPTURE_SCRIPT = r"""token => {
   const api = window.__hanayumeNativeCapture;
-  return !!api && typeof api.verify === 'function' && api.verify(token);
+  if (!api || typeof api.verifyDetailed !== 'function')
+    return {ok: false, reason: 'capture_observer_missing'};
+  return api.verifyDetailed(token);
 }"""
 
 

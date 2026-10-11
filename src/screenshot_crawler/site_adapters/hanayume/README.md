@@ -20,13 +20,50 @@ The observed desktop spread layout uses explicit counter, wrapper, readiness, vi
 
 For the observed layout only, the viewer's `mode-has-top-emptypage` flag together with physical slot 1 having exactly `-cv-page mode-empty` and no canvas identifies a non-body lead-in. The adapter freezes physical body slots 2 through `total-5` (11 body pages in the probed 17-page episode), waits for the initial `mode-first-page` state, and performs one observed public seek step from counter 1 to counter 3 before capture. It preserves physical slot IDs for identity and native proof, while capture/archive order stays sequential. An unflagged blank slot, any other empty body slot, flag drift, missing spread side, or incomplete END fails closed. This passed synthetic browser tests and a standard CLI Batch run for the observed 11-body-page target; an ordinary-layout 12-page control also passed. The latest run verified artifact format/dimensions and packaging, but did not independently compare the 23 output pages against source-canvas RGBA. See the runbook and site note for exact evidence and limits.
 
+### Counter and physical-wrapper variant
+
+The adapter also supports the observed unflagged episode `e2a7ca7bd6dd7`, whose counter is 17 but whose physical wrapper count is 17. The existing `total + 1` wrapper contract remains supported; `total` wrappers are accepted only for odd totals without the leading-empty flag and with the complete exact top PR/five-tail structure. Body bounds use the last physical wrapper, so this episode captures slots 1–11 and excludes `mode-ci` at 12. Counter/seek validation is unchanged. Native collection and post-encode proof use the same physical bounds and reject tail/count/flag drift. Unknown layouts, missing spread halves, and END without full body coverage still fail closed.
+
+Post-fix standard CLI Batch verification passed for this target (11 pages), an ordinary control (12), and a leading-empty control (11), all at END with verified ZIPs and completed isolated Catalog Items. All 34 members decoded as 960x1540 VP8L WebP; CRC, ordering, archive hashes/sizes, and Catalog/crawl-status checks passed. Independent source-canvas RGBA equality was not measured for these runs. Evidence: `output/hanayume-wrapper-live-20261011-bc7bbdb0/verification.json`; details and test scope are in the site note. No normal Catalog was changed by verification.
+
 ## Bounded readiness
 
 On a structurally valid canonical series listing, authentication proof is polled for up to five seconds at 150 ms intervals until the complete positive marker set appears. The route and listing must remain exact throughout; timeout leaves `今なら無料` unknown. Viewer initialization waits up to five seconds for the existing unique current/total counter nodes to contain text. Duplicate nodes fail immediately and malformed values still fail in the strict parser. Synthetic browser tests cover delayed and missing counter/auth states. The auth probe observed markers arriving at 150 ms; the counter-missing probe did not directly measure a delayed transition. The final E2E passed after these bounded readiness checks.
 
 ## Capture fidelity
 
+Before its first body capture, initialization now requires one second of unchanged canvas
+generation/write counts, wrapper/canvas identities, bitmap dimensions, geometry, viewport and
+existing strict readiness metadata, sampled every 100 ms. Changes restart this quiet interval;
+failure to settle within five seconds stops initialization. This applies to slot 1 in ordinary
+layouts and slots 2/3 after the existing leading-empty intro seek. Later page turns and strict
+post-encoding proof are unchanged; a later reset still stops without a capture retry.
+Sampling adds no image/pixel readback. If the native observer is unavailable, the existing
+rendered-PNG fallback uses a one-second metadata-only quiet wait. The tracking mode and timing
+are recorded at `adapter_debug.initial_canvas_settle` in failure diagnostics. No new option is
+required. Synthetic browser tests pass late same-pixel reset cases and reject continuous resets;
+live reduction in failures has not yet been verified.
+
 R2 captures the observed opaque sRGB/unorm8 960x1540 full-frame canvas at draw time into a bounded immutable copy tied to the exact target and episode. Selection requires target/slot/generation/write proof, safe full-frame state, and exact no-background RGBA replay. Strict single-chunk VP8L WebP method 4 is accepted only after full RGBA round-trip validation; encoder failure returns the same verified native PNG. Native unavailability uses clean rendered-canvas PNG for the whole spread at actual dimensions. In the final E2E all 134 pages were native source-canvas WebP with 134/134 independent exact RGBA matches and zero rendered fallbacks. This is decoded source-canvas fidelity, not original JPEG bytes or tile reconstruction.
+
+### Post-encoding verification diagnostics
+
+Native proof rejection still stops capture without retries or a weaker fallback. The error now
+includes `verification=<reason>` for console/metrics correlation. Failure details are written to
+`diagnostics/metadata.json` under `adapter_debug.capture.verification`: the first failed gate,
+before/after selected-slot canvas dimensions, wrapper/canvas geometry, readiness/visibility,
+viewport/seek/counters, wrapper/canvas identity equality, and bitmap generation/write counts.
+`encode_elapsed_ms` measures the Python encoding stage; verification `elapsed_ms` measures the
+browser interval since proof collection, including transport/decode/encoding time.
+
+A failure-only pixel comparison reports `equal`, `different`, `unreadable`, or `not_compared`.
+It compares only the same selected canvas at unchanged bitmap dimensions and stores no pixels.
+Generation/write changes remain failures even when pixels are equal. Verification timeouts,
+evaluation failures, missing observer/proof, and malformed results have distinct reasons.
+No new CLI switch is needed. These diagnostics do not establish the cause of historical failures;
+the next live failure is needed to identify the actual gate. Synthetic browser coverage includes
+same-pixel redraw, pixel change, bitmap reset, replacement, visibility/position/counter/layout drift,
+and persistence through the existing failure diagnostics writer.
 
 ## Batch policy and execution
 
