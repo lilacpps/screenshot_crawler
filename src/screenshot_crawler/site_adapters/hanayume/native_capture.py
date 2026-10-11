@@ -421,13 +421,30 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       actual?.enumerable === expected?.enumerable && actual?.configurable === expected?.configurable;
   });
   const api = {
-    collect({expectedSlots, expectedCurrent, expectedBodyTotal, episodePath}) {
+    collect({expectedSlots, expectedCurrent, expectedBodyTotal, expectedBodySlots,
+             hasTopEmptyPage, episodePath}) {
       proofs.clear();
       const observation = currentObservation();
       const current = Number(observation.currentText);
       const total = Number(observation.totalText);
+      const observedTopEmpty = observation.viewerClasses.includes('mode-has-top-emptypage');
+      const firstSlot = observation.slots[1];
+      const expectedLayoutSlots = Array.from(
+        {length: Math.max(0, total - (observedTopEmpty ? 6 : 5))},
+        (_, offset) => offset + (observedTopEmpty ? 2 : 1),
+      );
+      const expectedLayoutValid = Array.isArray(expectedBodySlots) &&
+        expectedBodySlots.length === expectedLayoutSlots.length &&
+        expectedBodySlots.every((slot, index) => slot === expectedLayoutSlots[index]) &&
+        observedTopEmpty === hasTopEmptyPage &&
+        (!observedTopEmpty || (firstSlot?.classes.length === 2 &&
+          firstSlot.classes.includes('-cv-page') && firstSlot.classes.includes('mode-empty') &&
+          firstSlot.canvasCount === 0 && firstSlot.canvas === null));
       if (location.pathname !== episodePath || location.search || location.hash || !Array.isArray(expectedSlots) ||
-          current !== expectedCurrent || total - 5 !== expectedBodyTotal ||
+          current !== expectedCurrent || !Array.isArray(expectedBodySlots) ||
+          expectedBodySlots.length !== expectedBodyTotal ||
+          !expectedLayoutValid ||
+          expectedSlots.some(slot => !expectedBodySlots.includes(slot)) ||
           observation.slots.length !== total + 1) return {ok: false, reason: 'selected_page_changed', observation};
       const selected = [];
       for (const index of expectedSlots) {
@@ -531,6 +548,8 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         proofs.set(token, {
           current, total, episodePath,
           expectedSlots: expectedSlots.slice(),
+          expectedBodySlots: expectedBodySlots.slice(),
+          hasTopEmptyPage: observedTopEmpty,
           rows: native.map(item => ({
             target: item.selectedRow.canvas,
             wrapper: item.selectedRow.wrapper,
@@ -566,10 +585,22 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       const observation = currentObservation();
       if (location.pathname !== proof.episodePath || location.search || location.hash ||
           Number(observation.currentText) !== proof.current || Number(observation.totalText) !== proof.total) return false;
+      const hasTopEmptyPage = observation.viewerClasses.includes('mode-has-top-emptypage');
+      const firstSlot = observation.slots[1];
+      const currentBodySlots = Array.from(
+        {length: Math.max(0, proof.total - (hasTopEmptyPage ? 6 : 5))},
+        (_, offset) => offset + (hasTopEmptyPage ? 2 : 1),
+      );
+      if (hasTopEmptyPage !== proof.hasTopEmptyPage ||
+          currentBodySlots.length !== proof.expectedBodySlots.length ||
+          currentBodySlots.some((slot, index) => slot !== proof.expectedBodySlots[index]) ||
+          (hasTopEmptyPage && !(firstSlot?.classes.length === 2 &&
+            firstSlot.classes.includes('-cv-page') && firstSlot.classes.includes('mode-empty') &&
+            firstSlot.canvasCount === 0 && firstSlot.canvas === null))) return false;
       if (observation.slots.length !== proof.total + 1 || proof.rows.length !== proof.expectedSlots.length ||
           proof.rows.some((row, index) => row.slot !== proof.expectedSlots[index])) return false;
       const active = [];
-      for (let index = 1; index <= proof.total - 5; index += 1) {
+      for (const index of proof.expectedBodySlots) {
         const row = observation.slots[index];
         if (row?.wrapperCenterInViewport) active.push(index);
       }

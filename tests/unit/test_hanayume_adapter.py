@@ -57,6 +57,20 @@ async def test_capture_budget_timeout_fails_closed_without_generic_capture(
     }
 
 
+@pytest.mark.asyncio
+async def test_hanayume_leading_empty_page_has_no_content_identity() -> None:
+    adapter = HanayumeAdapter()
+    observation = _parse_viewer_observation(_viewer_snapshot(top_empty=True))
+
+    async def intro(_page, *, include_png: bool = False):
+        del include_png
+        return observation
+
+    adapter._observe = intro  # type: ignore[method-assign]
+    with pytest.raises(UnknownPageStateError, match="non-body lead-in"):
+        await adapter.get_content_identity(None)  # type: ignore[arg-type]
+
+
 def _range_entries(*, selected_page: int | None = None) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     for page, (start, end) in enumerate(((1, 30), (31, 31)), start=1):
@@ -74,15 +88,19 @@ def _range_entries(*, selected_page: int | None = None) -> list[dict[str, object
     return entries
 
 
-def _viewer_snapshot(*, current: int = 1, visible: tuple[int, ...] | None = None) -> dict[str, object]:
+def _viewer_snapshot(
+    *, current: int = 1, visible: tuple[int, ...] | None = None, top_empty: bool = False
+) -> dict[str, object]:
     total = 9
-    body_total = total - 5
-    visible = visible if visible is not None else _expected_active_slots(current, body_total)
+    body_slots = tuple(range(2 if top_empty else 1, total - 4))
+    visible = visible if visible is not None else _expected_active_slots(current, body_slots)
     viewport = {"width": 1906, "height": 986}
     slots = []
     for index in range(total + 1):
         if index == 0:
             classes = ["-cv-page", "mode-empty", "mode-pr", "mode-top-pr"]
+        elif index == 1 and top_empty:
+            classes = ["-cv-page", "mode-empty"]
         elif index == total - 4:
             classes = ["-cv-page", "mode-ci"]
         elif index in {total - 3, total - 2}:
@@ -95,9 +113,11 @@ def _viewer_snapshot(*, current: int = 1, visible: tuple[int, ...] | None = None
             classes = ["-cv-page"]
             if index in visible:
                 classes += ["mode-loaded", "mode-rendered"]
-        selected = index in visible and 1 <= index <= body_total
+        selected = index in visible and index in body_slots
         if selected:
             wrapper_x = 0 if index == current else 100
+        elif top_empty and current == 1 and index == 1:
+            wrapper_x = 0
         elif current > 1 and index == current - 2:
             wrapper_x = viewport["width"] - 15.3333
         else:
@@ -129,7 +149,11 @@ def _viewer_snapshot(*, current: int = 1, visible: tuple[int, ...] | None = None
         )
     return {
         "viewerCount": 1,
-        "viewerClasses": ["-cv", "mode-spread"],
+        "viewerClasses": [
+            "-cv", "mode-spread",
+            *( ["mode-has-top-emptypage"] if top_empty else [] ),
+            *( ["mode-first-page"] if top_empty and current == 1 else [] ),
+        ],
         "pagesCount": 1,
         "seekCount": 1,
         "currentText": str(current),
@@ -207,7 +231,7 @@ def test_hanayume_viewer_accepts_offscreen_loaded_placeholder_but_checks_active_
     assert observation.body_total == 4
     assert observation.active_slots == (1,)
     assert observation.ready_slots == (1,)
-    assert _expected_active_slots(3, observation.body_total) == (2, 3)
+    assert _expected_active_slots(3, observation.body_slots) == (2, 3)
 
 
 def test_hanayume_viewer_keeps_observed_loading_placeholder_out_of_ready_pages() -> None:
@@ -269,7 +293,39 @@ def test_hanayume_viewer_rejects_missing_half_of_a_spread() -> None:
     observation = _parse_viewer_observation(snapshot)
     assert observation.active_slots == (2,)
     assert observation.ready_slots == (2,)
-    assert observation.ready_slots != _expected_active_slots(3, observation.body_total)
+    assert observation.ready_slots != _expected_active_slots(3, observation.body_slots)
+
+
+def test_hanayume_viewer_uses_physical_body_slots_for_observed_top_empty_layout() -> None:
+    intro = _parse_viewer_observation(_viewer_snapshot(top_empty=True))
+    assert intro.has_top_empty_page is True
+    assert intro.body_slots == (2, 3, 4)
+    assert intro.body_total == 3
+    assert intro.active_slots == ()
+    assert intro.ready_slots == ()
+    assert intro.raw["slots"][1]["wrapperCenterInViewport"] is True
+
+    first_spread = _parse_viewer_observation(_viewer_snapshot(current=3, top_empty=True))
+    assert first_spread.body_slots == (2, 3, 4)
+    assert first_spread.active_slots == (2, 3)
+    assert first_spread.ready_slots == (2, 3)
+    assert _expected_active_slots(5, first_spread.body_slots) == (4,)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda snapshot: snapshot["viewerClasses"].remove("mode-has-top-emptypage"),
+        lambda snapshot: snapshot["slots"][1].update(classes=["-cv-page", "mode-empty", "mode-pr"]),
+        lambda snapshot: snapshot["slots"][1].update(canvasCount=1, canvas={"width": 1, "height": 1}),
+        lambda snapshot: snapshot["slots"][2].update(classes=["-cv-page", "mode-empty"]),
+    ],
+)
+def test_hanayume_top_empty_layout_rejects_unobserved_or_interior_empty_state(mutate) -> None:
+    snapshot = _viewer_snapshot(top_empty=True)
+    mutate(snapshot)
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(snapshot)
 
 
 def test_hanayume_viewer_keeps_loading_spread_side_active_without_prior_sliver() -> None:
@@ -296,4 +352,4 @@ def test_hanayume_viewer_keeps_loading_spread_side_active_without_prior_sliver()
 
     assert observation.active_slots == (2, 3)
     assert observation.ready_slots == (3,)
-    assert observation.ready_slots != _expected_active_slots(3, observation.body_total)
+    assert observation.ready_slots != _expected_active_slots(3, observation.body_slots)

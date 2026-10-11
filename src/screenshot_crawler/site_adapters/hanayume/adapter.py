@@ -203,6 +203,8 @@ class ViewerObservation:
     seek_max: int
     seek_step: int
     body_total: int
+    body_slots: tuple[int, ...]
+    has_top_empty_page: bool
     active_slots: tuple[int, ...]
     ready_slots: tuple[int, ...]
     terminal: bool
@@ -405,15 +407,26 @@ def _capture_output_format(captures: list[CaptureResult]) -> str:
 
 
 
-def _expected_active_slots(current: int, body_total: int) -> tuple[int, ...]:
+def _expected_active_slots(current: int, body_slots: tuple[int, ...]) -> tuple[int, ...]:
     if current == 1:
         raw = (1,)
     else:
         raw = (current - 1, current)
-    return tuple(index for index in raw if 1 <= index <= body_total)
+    available = set(body_slots)
+    return tuple(index for index in raw if index in available)
 
 
-def _slot_role(index: int, total: int, classes: object) -> str:
+def _next_body_slots(
+    captured_slots: list[int], body_slots: tuple[int, ...], count: int
+) -> tuple[int, ...]:
+    if tuple(captured_slots) != body_slots[: len(captured_slots)]:
+        raise UnknownPageStateError("Hanayume captured body slot sequence changed")
+    return body_slots[len(captured_slots) : len(captured_slots) + count]
+
+
+def _slot_role(
+    index: int, total: int, classes: object, *, has_top_empty_page: bool = False
+) -> str:
     if not isinstance(classes, list) or not all(isinstance(value, str) for value in classes):
         raise UnknownPageStateError("Hanayume viewer slot classes are malformed")
     actual = set(classes)
@@ -430,6 +443,10 @@ def _slot_role(index: int, total: int, classes: object) -> str:
     if index in tails:
         if actual != tails[index]:
             raise UnknownPageStateError("Hanayume non-body viewer slot changed structure")
+        return "nonbody"
+    if index == 1 and has_top_empty_page:
+        if actual != {"-cv-page", "mode-empty"}:
+            raise UnknownPageStateError("Hanayume top-empty lead-in slot changed structure")
         return "nonbody"
     if not 1 <= index <= total - 5:
         raise UnknownPageStateError("Hanayume viewer slot is outside the known layout")
@@ -492,17 +509,28 @@ def _parse_viewer_observation(raw: object) -> ViewerObservation:
     slots = raw.get("slots")
     if not isinstance(slots, list) or len(slots) != total + 1:
         raise UnknownPageStateError("Hanayume viewer page-wrapper count is incomplete")
-    body_total = total - 5
+    has_top_empty_page = "mode-has-top-emptypage" in raw["viewerClasses"]
+    body_start = 2 if has_top_empty_page else 1
+    body_slots = tuple(range(body_start, total - 4))
+    if not body_slots:
+        raise UnknownPageStateError("Hanayume viewer has no body slots in its observed layout")
+    body_total = len(body_slots)
     active: list[int] = []
     ready: list[int] = []
     terminal = "mode-last-page" in raw["viewerClasses"]
     for index, slot in enumerate(slots):
         if not isinstance(slot, dict) or slot.get("index") != index:
             raise UnknownPageStateError("Hanayume viewer page-wrapper order is invalid")
-        role = _slot_role(index, total, slot.get("classes"))
+        role = _slot_role(
+            index, total, slot.get("classes"), has_top_empty_page=has_top_empty_page
+        )
+        if has_top_empty_page and index == 1 and (
+            slot.get("canvasCount") != 0 or slot.get("canvas") is not None
+        ):
+            raise UnknownPageStateError("Hanayume top-empty lead-in slot unexpectedly has a canvas")
         if role != "body":
             continue
-        if slot.get("wrapperCenterInViewport") is True:
+        if index in body_slots and slot.get("wrapperCenterInViewport") is True:
             active.append(index)
         canvas_count = slot.get("canvasCount")
         canvas = slot.get("canvas")
@@ -526,6 +554,8 @@ def _parse_viewer_observation(raw: object) -> ViewerObservation:
         seek_max=seek_max,
         seek_step=seek_step,
         body_total=body_total,
+        body_slots=body_slots,
+        has_top_empty_page=has_top_empty_page,
         active_slots=tuple(active),
         ready_slots=tuple(ready),
         terminal=terminal,
@@ -568,6 +598,8 @@ class HanayumeAdapter(SiteAdapter):
         self._opaque_work_key: str | None = None
         self._work_id: str | None = None
         self._body_total: int | None = None
+        self._body_slots: tuple[int, ...] | None = None
+        self._has_top_empty_page: bool | None = None
         self._captured_slots: list[int] = []
         self._pending: tuple[str, int, tuple[int, ...]] | None = None
         self._ended = False
@@ -616,6 +648,13 @@ class HanayumeAdapter(SiteAdapter):
     async def initialize(self, page: Page) -> None:
         if self._target_url is None or self._episode_id is None or page.url != self._target_url:
             raise UnknownPageStateError("Hanayume initial episode URL does not match its target")
+        self._body_total = None
+        self._body_slots = None
+        self._has_top_empty_page = None
+        self._captured_slots = []
+        self._pending = None
+        self._ended = False
+        self._last_capture_slots = ()
         initial_work = await self._read_episode_work(page)
         if self._expected_work_id is not None and initial_work != self._expected_work_id:
             raise UnknownPageStateError("Hanayume episode belongs to a different Catalog work")
@@ -626,6 +665,9 @@ class HanayumeAdapter(SiteAdapter):
         await self._wait_for_locator(page, SEEK_SELECTOR, state="attached")
         await self._wait_for_viewer_counter_readiness(page)
         first = await self._observe(page)
+        self._body_total = first.body_total
+        self._body_slots = first.body_slots
+        self._has_top_empty_page = first.has_top_empty_page
         if first.terminal or first.current != 1 or first.seek_value != first.seek_max:
             seek = page.locator(SEEK_SELECTOR)
             try:
@@ -633,19 +675,95 @@ class HanayumeAdapter(SiteAdapter):
                 await asyncio.wait_for(seek.press("End", timeout=1_500), timeout=2.0)
             except (PlaywrightError, TimeoutError) as exc:
                 raise UnknownPageStateError("Hanayume viewer could not rewind with its observed seek control") from exc
-        first = await self._wait_for_observation(
-            page,
-            lambda row: not row.terminal
-            and row.current == 1
-            and row.seek_value == row.seek_max
-            and row.ready_slots == (1,),
-            reason="Hanayume viewer did not settle at its first body page",
-        )
+        if first.has_top_empty_page:
+            first = await self._wait_for_observation(
+                page,
+                self._is_top_empty_intro,
+                reason="Hanayume top-empty first page did not settle at its observed lead-in",
+            )
+            next_value = first.seek_value - first.seek_step
+            if next_value < first.seek_min or next_value > first.seek_max:
+                raise UnknownPageStateError("Hanayume first body seek is outside its observed range")
+            await self._set_public_seek_value(
+                page, first, next_value, failure="Hanayume first body public seek failed"
+            )
+            expected_first_spread = _expected_active_slots(3, first.body_slots)
+            if expected_first_spread != (2, 3):
+                raise UnknownPageStateError("Hanayume top-empty body does not start at slots 2 and 3")
+            first = await self._wait_for_observation(
+                page,
+                lambda row: not row.terminal
+                and row.current == 3
+                and row.seek_value == row.seek_max - 2
+                and row.active_slots == expected_first_spread
+                and row.ready_slots == expected_first_spread,
+                reason="Hanayume top-empty first body spread did not become ready",
+            )
+        else:
+            first = await self._wait_for_observation(
+                page,
+                lambda row: not row.terminal
+                and row.current == 1
+                and row.seek_value == row.seek_max
+                and row.active_slots == (1,)
+                and row.ready_slots == (1,),
+                reason="Hanayume viewer did not settle at its first body page",
+            )
         self._work_id = initial_work
-        self._body_total = first.body_total
-        self._captured_slots = []
-        self._pending = None
-        self._ended = False
+
+    @staticmethod
+    def _is_top_empty_intro(observation: ViewerObservation) -> bool:
+        slots = observation.raw.get("slots")
+        first_slot = slots[1] if isinstance(slots, list) and len(slots) > 1 else None
+        viewer_classes = observation.raw.get("viewerClasses")
+        return (
+            observation.has_top_empty_page
+            and observation.current == 1
+            and observation.seek_value == observation.seek_max
+            and not observation.terminal
+            and observation.active_slots == ()
+            and observation.ready_slots == ()
+            and isinstance(viewer_classes, list)
+            and "mode-first-page" in viewer_classes
+            and isinstance(first_slot, dict)
+            and first_slot.get("classes") == ["-cv-page", "mode-empty"]
+            and first_slot.get("canvasCount") == 0
+            and first_slot.get("canvas") is None
+            and first_slot.get("wrapperCenterInViewport") is True
+        )
+
+    async def _set_public_seek_value(
+        self,
+        page: Page,
+        observation: ViewerObservation,
+        value: int,
+        *,
+        failure: str,
+    ) -> None:
+        if (
+            not isinstance(value, int)
+            or value < observation.seek_min
+            or value > observation.seek_max
+            or (observation.seek_max - value) % observation.seek_step != 0
+        ):
+            raise UnknownPageStateError("Hanayume public seek value is outside its observed range")
+        try:
+            await asyncio.wait_for(
+                page.locator(SEEK_SELECTOR).evaluate(
+                    """(input, nextValue) => {
+                      const min = Number(input.min), max = Number(input.max), step = Number(input.step);
+                      if (!Number.isInteger(nextValue) || nextValue < min || nextValue > max ||
+                          (max - nextValue) % step !== 0) throw new Error('seek_value_out_of_range');
+                      input.value = String(nextValue);
+                      input.dispatchEvent(new Event('input', {bubbles: true}));
+                      input.dispatchEvent(new Event('change', {bubbles: true}));
+                    }""",
+                    value,
+                ),
+                timeout=OBSERVATION_TIMEOUT_SECONDS,
+            )
+        except (PlaywrightError, TimeoutError) as exc:
+            raise PageChangeTimeoutError(failure) from exc
 
     async def _fresh_free_preflight(self, page: Page, work_id: str) -> None:
         work_url = f"{BASE_URL}/series/{work_id}"
@@ -978,7 +1096,14 @@ class HanayumeAdapter(SiteAdapter):
         expected_url = self._target_url
         if expected_url is not None and page.url != expected_url:
             raise UnknownPageStateError("Hanayume viewer moved away from the selected episode")
-        return _parse_viewer_observation(raw)
+        observation = _parse_viewer_observation(raw)
+        if self._body_slots is not None and (
+            observation.body_slots != self._body_slots
+            or observation.body_total != self._body_total
+            or observation.has_top_empty_page != self._has_top_empty_page
+        ):
+            raise UnknownPageStateError("Hanayume viewer body layout changed during the attempt")
+        return observation
 
     async def _wait_for_observation(self, page: Page, predicate, *, reason: str) -> ViewerObservation:
         deadline = time.monotonic() + self.page_change_timeout_ms / 1000
@@ -995,6 +1120,8 @@ class HanayumeAdapter(SiteAdapter):
                 observation.active_slots,
                 observation.ready_slots,
                 observation.terminal,
+                observation.body_slots,
+                observation.has_top_empty_page,
             )
             if predicate(observation) and signature == previous:
                 stable += 1
@@ -1017,19 +1144,23 @@ class HanayumeAdapter(SiteAdapter):
         if observation.terminal:
             if (
                 self._body_total is not None
+                and self._body_slots is not None
                 and len(self._captured_slots) == self._body_total
+                and tuple(self._captured_slots) == self._body_slots
                 and observation.ready_slots == ()
             ):
                 self._ended = True
                 await self._clear_native_cache(page)
                 return PageState.END
             raise UnknownPageStateError("Hanayume reached END before all body slots were captured")
-        expected = _expected_active_slots(observation.current, observation.body_total)
+        expected = _expected_active_slots(observation.current, observation.body_slots)
         if observation.active_slots != expected:
             return PageState.LOADING
         if observation.ready_slots != expected:
             return PageState.LOADING
-        expected_next = tuple(range(len(self._captured_slots) + 1, len(self._captured_slots) + 1 + len(expected)))
+        if not expected:
+            raise UnknownPageStateError("Hanayume viewer is at a non-body lead-in state")
+        expected_next = _next_body_slots(self._captured_slots, observation.body_slots, len(expected))
         if expected != expected_next:
             raise UnknownPageStateError("Hanayume body slot order has a gap or repetition")
         return PageState.CONTENT
@@ -1063,8 +1194,10 @@ class HanayumeAdapter(SiteAdapter):
 
     async def _capture_page_within_budget(self, page: Page) -> tuple[CaptureResult, ...] | None:
         observation = await self._observe(page)
-        expected = _expected_active_slots(observation.current, observation.body_total)
-        next_slots = tuple(range(len(self._captured_slots) + 1, len(self._captured_slots) + 1 + len(expected)))
+        expected = _expected_active_slots(observation.current, observation.body_slots)
+        if not expected:
+            raise UnknownPageStateError("Hanayume capture cannot include a non-body lead-in")
+        next_slots = _next_body_slots(self._captured_slots, observation.body_slots, len(expected))
         if observation.terminal or not expected or expected != next_slots:
             raise UnknownPageStateError("Hanayume capture is not the next complete body page/spread")
         if observation.active_slots != expected or observation.ready_slots != expected:
@@ -1073,7 +1206,11 @@ class HanayumeAdapter(SiteAdapter):
             raise UnknownPageStateError("Hanayume previous bounded WebP encode is still running")
         episode_path = urlsplit(self._target_url or "").path
         self._capture_attempt = {
-            "expectedSlots": list(expected), "episodePath": episode_path, "token": None,
+            "expectedSlots": list(expected),
+            "expectedBodySlots": list(observation.body_slots),
+            "hasTopEmptyPage": observation.has_top_empty_page,
+            "episodePath": episode_path,
+            "token": None,
         }
         try:
             raw = await asyncio.wait_for(
@@ -1083,6 +1220,8 @@ class HanayumeAdapter(SiteAdapter):
                         "expectedSlots": list(expected),
                         "expectedCurrent": observation.current,
                         "expectedBodyTotal": observation.body_total,
+                        "expectedBodySlots": list(observation.body_slots),
+                        "hasTopEmptyPage": observation.has_top_empty_page,
                         "episodePath": episode_path,
                     },
                 ),
@@ -1099,6 +1238,8 @@ class HanayumeAdapter(SiteAdapter):
             if (
                 rendered.current != observation.current
                 or rendered.body_total != observation.body_total
+                or rendered.body_slots != observation.body_slots
+                or rendered.has_top_empty_page != observation.has_top_empty_page
                 or rendered.active_slots != expected
                 or rendered.ready_slots != expected
             ):
@@ -1134,6 +1275,8 @@ class HanayumeAdapter(SiteAdapter):
         if (
             current_observation.current != observation.current
             or current_observation.body_total != observation.body_total
+            or current_observation.body_slots != observation.body_slots
+            or current_observation.has_top_empty_page != observation.has_top_empty_page
             or current_observation.active_slots != expected
             or current_observation.ready_slots != expected
         ):
@@ -1244,6 +1387,8 @@ class HanayumeAdapter(SiteAdapter):
                     {
                         "token": attempt.get("token"),
                         "expectedSlots": attempt.get("expectedSlots"),
+                        "expectedBodySlots": attempt.get("expectedBodySlots"),
+                        "hasTopEmptyPage": attempt.get("hasTopEmptyPage"),
                         "episodePath": attempt.get("episodePath"),
                     },
                 ),
@@ -1254,10 +1399,10 @@ class HanayumeAdapter(SiteAdapter):
 
     async def get_content_identity(self, page: Page) -> ContentIdentity:
         observation = await self._observe(page)
-        expected = _expected_active_slots(observation.current, observation.body_total)
-        next_slots = tuple(
-            range(len(self._captured_slots) + 1, len(self._captured_slots) + 1 + len(expected))
-        )
+        expected = _expected_active_slots(observation.current, observation.body_slots)
+        if not expected:
+            raise UnknownPageStateError("Hanayume non-body lead-in has no content identity")
+        next_slots = _next_body_slots(self._captured_slots, observation.body_slots, len(expected))
         if observation.active_slots != expected or observation.ready_slots != expected or expected != next_slots:
             raise UnknownPageStateError("Hanayume current spread has no stable body identity")
         return ContentIdentity(
@@ -1280,12 +1425,12 @@ class HanayumeAdapter(SiteAdapter):
             raise UnknownPageStateError("Hanayume previous seek transition has not been verified")
         if self._body_total is None or len(self._captured_slots) == 0:
             raise UnknownPageStateError("Hanayume cannot advance before capturing the current body spread")
-        if self._captured_slots != list(range(1, len(self._captured_slots) + 1)):
+        if self._body_slots is None or self._captured_slots != list(self._body_slots[: len(self._captured_slots)]):
             raise UnknownPageStateError("Hanayume captured body page sequence is not contiguous")
         if (
             observation.terminal
             or observation.ready_slots != self._last_capture_slots
-            or observation.active_slots != _expected_active_slots(observation.current, observation.body_total)
+            or observation.active_slots != _expected_active_slots(observation.current, observation.body_slots)
             or not self._last_capture_slots
         ):
             raise UnknownPageStateError("Hanayume current spread changed after its canvas capture")
@@ -1301,24 +1446,17 @@ class HanayumeAdapter(SiteAdapter):
         next_value = observation.seek_value - observation.seek_step
         if next_value < observation.seek_min or next_value > observation.seek_max:
             raise UnknownPageStateError("Hanayume next public seek value is outside its observed range")
-        try:
-            await asyncio.wait_for(
-                page.locator(SEEK_SELECTOR).evaluate(
-                    """(input, value) => {
-                      const min = Number(input.min), max = Number(input.max), step = Number(input.step);
-                      if (!Number.isInteger(value) || value < min || value > max || (max - value) % step !== 0)
-                        throw new Error('seek_value_out_of_range');
-                      input.value = String(value);
-                      input.dispatchEvent(new Event('input', {bubbles: true}));
-                      input.dispatchEvent(new Event('change', {bubbles: true}));
-                    }""",
-                    next_value,
-                ),
-                timeout=OBSERVATION_TIMEOUT_SECONDS,
-            )
-        except (PlaywrightError, TimeoutError) as exc:
-            raise PageChangeTimeoutError("Hanayume observed public seek input could not advance") from exc
-        self._pending = ("spread", observation.current, _expected_active_slots(observation.current + 2, observation.body_total))
+        await self._set_public_seek_value(
+            page,
+            observation,
+            next_value,
+            failure="Hanayume observed public seek input could not advance",
+        )
+        self._pending = (
+            "spread",
+            observation.current,
+            _expected_active_slots(observation.current + 2, observation.body_slots),
+        )
 
     async def wait_for_change(
         self, page: Page, previous_identity: ContentIdentity | None
@@ -1336,7 +1474,11 @@ class HanayumeAdapter(SiteAdapter):
                 and row.ready_slots == (),
                 reason="Hanayume did not reach its observed terminal UI after all body pages",
             )
-            if len(self._captured_slots) != observation.body_total:
+            if (
+                self._body_slots is None
+                or len(self._captured_slots) != observation.body_total
+                or tuple(self._captured_slots) != self._body_slots
+            ):
                 raise UnknownPageStateError("Hanayume terminal UI arrived before complete body coverage")
             self._ended = True
             self._pending = None
@@ -1350,7 +1492,7 @@ class HanayumeAdapter(SiteAdapter):
             and row.ready_slots == expected_slots,
             reason="Hanayume next spread did not render in exact slot order",
         )
-        expected_next = tuple(range(len(self._captured_slots) + 1, len(self._captured_slots) + 1 + len(expected_slots)))
+        expected_next = _next_body_slots(self._captured_slots, observation.body_slots, len(expected_slots))
         if observation.ready_slots != expected_next:
             raise UnknownPageStateError("Hanayume spread advance skipped or repeated body slots")
         self._pending = None

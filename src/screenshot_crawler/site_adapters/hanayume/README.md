@@ -1,6 +1,6 @@
 # Hanayume Site Adapter
 
-Status: Discovery, manual Viewer capture, and direct-only Batch are implemented on `feat/hanayume-adapter` and passed independent review. The final logged-in standard E2E completed four candidates and 134/134 original 960x1540 source-canvas pages as lossless WebP, with four verified ZIPs and zero rendered fallbacks. The full list contained 296 unique rows (3 exact `無料`, 293 exact `今なら無料`); current verified auth classified them free, and the inclusive scope selected four. Final independent review PASS / BLOCKING 0.
+Status: Discovery, manual Viewer capture, and direct-only Batch are implemented on `feat/hanayume-adapter`. R8 implementation review and independent artifact audit passed; two fresh standard CLI E2E cases passed for the observed top-empty layout and an ordinary-layout control. The earlier four-candidate E2E remains the independent source-pixel proof for its 134 pages. The two R8 cases produced 23 960x1540 VP8L WebP pages and verified END/ZIP/Catalog results, but did not independently verify per-page capture mode or source-canvas RGBA equality. Final documentation review: PASS / BLOCKING 0.
 
 ## Discovery
 
@@ -13,6 +13,10 @@ Only exact row-scoped labels are classification evidence. One exact `無料` map
 Before entry the adapter validates the exact episode URL and unique scoped work link, then checks the exact canonical same-work `/series/<work-id>` page. A unique observed account marker set on that route is an attempt-local authentication proof. It finds the target in the bare listing or follows only observed numbered ranges, validating exact routes, selected markers, stable range set, declared row counts, and unique row identity. `無料` remains eligible regardless of auth markers; `今なら無料` is eligible only with the fresh verified series auth. The exact row/work identity is checked again after episode entry. Login or paid-entry dialogs and an unavailable viewer fail closed without clicks. Page-wide upsell or resource text is not an access gate.
 
 The observed desktop spread layout uses explicit counter, wrapper, readiness, visibility, and terminal checks. The adapter captures every body slot in order and cannot reach generic locator/UI screenshot fallback. END is accepted only after full body coverage and the observed terminal UI.
+
+### R8 leading-empty layout
+
+For the observed layout only, the viewer's `mode-has-top-emptypage` flag together with physical slot 1 having exactly `-cv-page mode-empty` and no canvas identifies a non-body lead-in. The adapter freezes physical body slots 2 through `total-5` (11 body pages in the probed 17-page episode), waits for the initial `mode-first-page` state, and performs one observed public seek step from counter 1 to counter 3 before capture. It preserves physical slot IDs for identity and native proof, while capture/archive order stays sequential. An unflagged blank slot, any other empty body slot, flag drift, missing spread side, or incomplete END fails closed. This passed synthetic browser tests and a standard CLI Batch run for the observed 11-body-page target; an ordinary-layout 12-page control also passed. The latest run verified artifact format/dimensions and packaging, but did not independently compare the 23 output pages against source-canvas RGBA. See the runbook and site note for exact evidence and limits.
 
 ## Bounded readiness
 

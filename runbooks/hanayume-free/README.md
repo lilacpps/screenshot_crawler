@@ -1,6 +1,6 @@
 # 花とゆめ＋ Site Adapter — 「無料」「今なら無料」対応 Runbook
 
-Status: Phases 01-05 implementation and live acceptance PASS within the verified scope; final independent review PASS / BLOCKING 0. The final logged-in standard Batch E2E completed four exact-free candidates, 134/134 original 960x1540 source-canvas pages as lossless WebP, and four verified ZIPs. The full Discovery snapshot contained 296 unique rows (3 `無料`, 293 `今なら無料`); the authenticated attempt classified all as free, then the standard inclusive Watchlist scope selected four. No quota/resource or entitlement state changed.
+Status: Phases 01-05 and the R8 implementation passed independent code review. The R8 post-fix standard CLI E2E passed for the observed leading-empty episode and an ordinary-layout control; independent artifact audit also passed. Final documentation review: PASS / BLOCKING 0. The original four-candidate E2E remains the separate 134-page independent source-RGBA proof. The two R8 cases verified 23 960x1540 VP8L WebP pages, END, ZIPs, Catalog completion, and no entitlement mutation; they did not independently verify source-canvas RGBA equality or persist capture_mode.
 Branch: feat/hanayume-adapter。
 進捗と観測のauthority: [PROGRESS.md](PROGRESS.md)。この文書は実行契約。Phase 03-Bのlocal review gateとlive evidence gateは分けて記録し、overall Phase 03のPASSを先取りしない。
 
@@ -12,7 +12,7 @@ The final listing snapshot contained 296 unique episodes: 3 exact `無料` rows 
 
 The earlier logged-out live Batch run completed three `無料` episodes (122 rendered-canvas PNG pages); it is historical fallback evidence. The final logged-in E2E supersedes it for current acceptance: four candidates, 134 original-canvas lossless-WebP pages, four END runs, and four verified ZIPs.
 
-Current gate: Phases 01-05 implementation and live acceptance are complete; final independent review PASS / BLOCKING 0. Remaining limitations are documented below: original JPEG bytes/DCT recovery, unobserved native dimensions/layouts, and universal entry-overlay detection are not claimed.
+Current gate: R8 implementation review PASS / BLOCKING 0, two standard CLI E2E cases PASS, and independent artifact audit PASS / BLOCKING 0. The target-specific run verified the exact flagged slot-1 lead-in and captured the 11 actual body slots without creating a blank page. Artifact format/dimensions and packaging passed; independent source-canvas RGBA equality for these 23 pages is unverified. Final documentation review: PASS / BLOCKING 0. Other layouts/native dimensions may use the existing whole-spread rendered-PNG fallback; original JPEG bytes/DCT recovery and universal entry-overlay detection are not claimed.
 ## 2. 実装の基準
 
 上位authority: AGENTS.md、docs/SPEC.md、docs/ARCHITECTURE.md、
@@ -119,11 +119,7 @@ cookie、署名付きURL、token、購入画面、原画像、著作物fixture�
 
 ## 8. Current exit gates
 
-The original Discovery, Viewer, direct-only Batch, and three-episode rendered-PNG E2E gates passed independent review. The following follow-up gates remain:
-
-- R2: all-page native capture verification passed in the final E2E (134/134 exact RGBA source-canvas pages). Keep original JPEG/DCT and unsupported-layout claims bounded to the documented evidence.
-- R3/R5: authenticated eligibility, bounded readiness, END, artifact integrity, target identity, and no-entitlement-mutation checks passed in the final logged-in standard Batch E2E; final independent review PASS / BLOCKING 0.
-- Keep the prior logged-out PNG baseline distinct from these follow-up results. Update `PROGRESS.md`, the site README, and `note/10_hanayume.md` with actual reviewer/test/live outcomes before marking the follow-up gates complete.
+Current verification: the earlier four-candidate logged-in E2E independently proved exact source-canvas RGBA for 134 pages. R8 implementation review and independent artifact audit both passed, and two fresh standard CLI E2E cases passed: the top-empty target completed 11 body pages, and an ordinary-layout control completed 12. All 23 members were 960x1540 VP8L WebP; the two ZIPs and completed isolated Catalog records passed independent checks. Source-canvas RGBA equality for these latest 23 pages was not independently measured, and capture_mode was not persisted. No full pytest rerun was performed for this site-local change; the affected selection, Ruff, and diff checks passed. Final documentation review: PASS / BLOCKING 0.
 ## 9. Codex起動時
 
 最初に本READMEとPROGRESS.md・Phase 01を読み、上位authorityと現行main差分を確認する。

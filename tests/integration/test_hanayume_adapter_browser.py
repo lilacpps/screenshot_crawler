@@ -73,6 +73,8 @@ def _episode_html(
     *, current: int = 3, label: str = "無料", user_target_label: str | None = None,
     counter_delay_ms: int = 0, counter_never: bool = False,
     counter_duplicate: bool = False, counter_malformed: bool = False,
+    top_empty: bool = False, top_empty_seek_locked: bool = False,
+    top_empty_first_marker_missing: bool = False, top_empty_interior_empty: bool = False,
 ) -> str:
     return f"""<!doctype html><html><body>
       <header id="xHeader"><a class="ep-h-main-h-series" href="{WORK_URL}">work</a></header>
@@ -99,7 +101,10 @@ def _episode_html(
       <script>
         (() => {{
           const total = 9;
-          const bodyTotal = 4;
+          const topEmpty = {json.dumps(top_empty)};
+          const bodyStart = topEmpty ? 2 : 1;
+          const bodyEnd = total - 5;
+          const bodyTotal = bodyEnd - bodyStart + 1;
           const root = document.querySelector('#comici-viewer');
           const pageRoot = document.querySelector('#xCVPages');
           const seek = document.querySelector('#xCVSeekBar');
@@ -131,6 +136,7 @@ def _episode_html(
           }};
           const classFor = index => {{
             if (index === 0) return '-cv-page mode-empty mode-pr mode-top-pr';
+            if (topEmpty && index === 1) return '-cv-page mode-empty';
             if (index === total - 4) return '-cv-page mode-ci';
             if (index === total - 3 || index === total - 2) return '-cv-page mode-empty mode-pr';
             if (index === total - 1) return '-cv-page mode-good';
@@ -142,6 +148,9 @@ def _episode_html(
             document.querySelector('.-cv-f-page-total').textContent = String(total);
             seek.value = String(total - (current - 1));
             root.classList.toggle('mode-last-page', terminal);
+            root.classList.toggle('mode-has-top-emptypage', topEmpty);
+            root.classList.toggle('mode-first-page', topEmpty && current === 1 &&
+              !{json.dumps(top_empty_first_marker_missing)});
             const visible = current === 1 ? [0, 1] : [current - 1, current];
             for (let i = 0; i <= total; i++) {{
               const node = wrappers[i];
@@ -150,9 +159,14 @@ def _episode_html(
               node.style.left = '-3000px';
             }}
             if (current === 1) wrappers[0].style.left = '200px';
+            if (topEmpty && current === 1) wrappers[1].style.left = '0px';
             visible.forEach((index, side) => {{
               wrappers[index].style.left = `${{side * 100}}px`;
-              if (index < 1 || index > bodyTotal) return;
+              if (index < bodyStart || index > bodyEnd) return;
+              if (topEmpty && {json.dumps(top_empty_interior_empty)} && index === bodyStart) {{
+                wrappers[index].className = '-cv-page mode-empty';
+                return;
+              }}
               const canvas = index % 2 === 1 ? reusedCanvas : secondCanvas;
               const context = canvas.getContext('2d');
               const holder = document.createElement('div');
@@ -178,7 +192,7 @@ def _episode_html(
               preloaded.add(secondCanvas);
               wrapper.classList.add('mode-loaded', 'mode-req-render');
             }}
-            if (current === 3) {{
+            if (current === 3 && !topEmpty) {{
               const previous = wrappers[1];
               previous.style.left = `${{innerWidth - 15.3333}}px`;
               const offscreen = baseCanvas();
@@ -191,8 +205,14 @@ def _episode_html(
             }}
             if (current === 1) wrappers[2].classList.add('mode-loaded');
           }}
-          seek.addEventListener('input', () => render(total - Number(seek.value) + 1));
-          seek.addEventListener('change', () => render(total - Number(seek.value) + 1));
+          seek.addEventListener('input', () => {{
+            if (topEmpty && {json.dumps(top_empty_seek_locked)} && currentText.textContent === '1') return;
+            render(total - Number(seek.value) + 1);
+          }});
+          seek.addEventListener('change', () => {{
+            if (topEmpty && {json.dumps(top_empty_seek_locked)} && currentText.textContent === '1') return;
+            render(total - Number(seek.value) + 1);
+          }});
           seek.addEventListener('keydown', event => {{
             if (event.key === 'End') {{ event.preventDefault(); render(1); }}
             if (event.key === 'Home') {{ event.preventDefault(); render(total, true); }}
@@ -216,6 +236,10 @@ async def _install_mock_site(
     counter_never: bool = False,
     counter_duplicate: bool = False,
     counter_malformed: bool = False,
+    top_empty: bool = False,
+    top_empty_seek_locked: bool = False,
+    top_empty_first_marker_missing: bool = False,
+    top_empty_interior_empty: bool = False,
 ) -> dict[str, object]:
     state: dict[str, object] = {"episode_visits": 0, "paths": []}
 
@@ -230,6 +254,9 @@ async def _install_mock_site(
                 current=resume_current, label=label, user_target_label=user_target_label,
                 counter_delay_ms=counter_delay_ms, counter_never=counter_never,
                 counter_duplicate=counter_duplicate, counter_malformed=counter_malformed,
+                top_empty=top_empty, top_empty_seek_locked=top_empty_seek_locked,
+                top_empty_first_marker_missing=top_empty_first_marker_missing,
+                top_empty_interior_empty=top_empty_interior_empty,
             )
         elif path == f"/series/{WORK_ID}":
             body = (
@@ -408,6 +435,134 @@ async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_sprea
     await adapter.go_next(browser_page)
     await adapter.wait_for_change(browser_page, final_identity)
     assert await adapter.detect_state(browser_page) is PageState.END
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_top_empty_lead_in_captures_only_physical_body_slots_and_ends(
+    browser_page: Page,
+) -> None:
+    await _install_mock_site(browser_page, resume_current=3, top_empty=True)
+    adapter = await _initialized(browser_page)
+
+    observation = await adapter._observe(browser_page)
+    assert observation.current == 3
+    assert observation.has_top_empty_page is True
+    assert observation.body_slots == (2, 3, 4)
+    assert observation.body_total == 3
+    assert observation.active_slots == observation.ready_slots == (2, 3)
+    assert adapter._captured_slots == []
+
+    await _body_state(browser_page, adapter)
+    first_identity = await adapter.get_content_identity(browser_page)
+    first = await adapter.capture_page(browser_page)
+    assert first is not None and len(first) == 2
+    assert first_identity.page_id == "2,3" and first_identity.page_number == 2
+    assert all(item.mime_type == "image/webp" for item in first)
+    assert [Image.open(io.BytesIO(item.data)).convert("RGB").getpixel((0, 0)) for item in first] == [
+        (40, 40, 60), (60, 40, 60)
+    ]
+
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, first_identity)
+    await _body_state(browser_page, adapter)
+    final_identity = await adapter.get_content_identity(browser_page)
+    assert final_identity.page_id == "4" and final_identity.page_number == 4
+    final = await adapter.capture_page(browser_page)
+    assert final is not None and len(final) == 1
+    assert Image.open(io.BytesIO(final[0].data)).convert("RGB").getpixel((0, 0)) == (80, 40, 60)
+    assert adapter._captured_slots == [2, 3, 4]
+
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, final_identity)
+    assert await adapter.detect_state(browser_page) is PageState.END
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    ("fixture_kwargs", "error_type", "message"),
+    [
+        ({"top_empty_first_marker_missing": True}, PageChangeTimeoutError, "did not settle at its observed lead-in"),
+        ({"top_empty_seek_locked": True}, UnknownPageStateError, "counter and public seek control disagree"),
+        ({"top_empty_interior_empty": True}, UnknownPageStateError, "unknown state class"),
+    ],
+)
+async def test_hanayume_top_empty_lead_in_rejects_marker_seek_or_interior_drift(
+    browser_page: Page, fixture_kwargs: dict[str, bool], error_type, message: str
+) -> None:
+    resume_current = 1 if fixture_kwargs.get("top_empty_seek_locked") else 3
+    await _install_mock_site(
+        browser_page, resume_current=resume_current, top_empty=True, **fixture_kwargs
+    )
+    adapter = HanayumeAdapter()
+    adapter.page_change_timeout_ms = 800
+    url = adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    response = await browser_page.goto(url, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    with pytest.raises(error_type, match=message):
+        await adapter.initialize(browser_page)
+    assert adapter._captured_slots == []
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_top_empty_flag_drift_during_native_encoding_discards_proof(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_mock_site(browser_page, resume_current=3, top_empty=True)
+    adapter = await _initialized(browser_page)
+    entered = threading.Event()
+    continue_encoding = threading.Event()
+    original_encoder = hanayume_adapter_module.encode_native_webp
+
+    def delayed_encoder(images):
+        entered.set()
+        if not continue_encoding.wait(timeout=3):
+            raise TimeoutError("synthetic encoder wait timed out")
+        return original_encoder(images)
+
+    monkeypatch.setattr(hanayume_adapter_module, "encode_native_webp", delayed_encoder)
+    task = asyncio.create_task(adapter.capture_page(browser_page))
+    assert await asyncio.to_thread(entered.wait, 3)
+    await browser_page.locator("#comici-viewer").evaluate(
+        "viewer => viewer.classList.remove('mode-has-top-emptypage')"
+    )
+    continue_encoding.set()
+
+    with pytest.raises(UnknownPageStateError, match="changed after native image encoding"):
+        await task
+    assert adapter._captured_slots == []
+    status = await browser_page.evaluate("() => window.__hanayumeNativeCapture.status()")
+    assert status["proofCount"] == 0
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_top_empty_flag_drift_before_capture_fails_closed(browser_page: Page) -> None:
+    await _install_mock_site(browser_page, resume_current=3, top_empty=True)
+    adapter = await _initialized(browser_page)
+    await browser_page.locator("#comici-viewer").evaluate(
+        "viewer => viewer.classList.remove('mode-has-top-emptypage')"
+    )
+    with pytest.raises(UnknownPageStateError):
+        await adapter.detect_state(browser_page)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_top_empty_missing_spread_half_and_premature_end_fail_closed(
+    browser_page: Page,
+) -> None:
+    await _install_mock_site(browser_page, resume_current=3, top_empty=True)
+    adapter = await _initialized(browser_page)
+    await browser_page.locator("#xCVPages > .-cv-page:nth-child(3) .-cv-page-canvas").evaluate(
+        "node => node.remove()"
+    )
+    assert await adapter.detect_state(browser_page) is PageState.LOADING
+    with pytest.raises(UnknownPageStateError):
+        await adapter.capture_page(browser_page)
+
+    await browser_page.locator("#xCVSeekBar").focus()
+    await browser_page.locator("#xCVSeekBar").press("Home")
+    with pytest.raises(UnknownPageStateError, match="END before all body slots"):
+        await adapter.detect_state(browser_page)
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -639,6 +794,7 @@ async def test_hanayume_native_proof_is_single_outstanding_and_release_keeps_pre
     await _body_state(browser_page, adapter)
     args = {
         "expectedSlots": [1], "expectedCurrent": 1, "expectedBodyTotal": 4,
+        "expectedBodySlots": [1, 2, 3, 4], "hasTopEmptyPage": False,
         "episodePath": f"/episodes/{EPISODE_ID}",
     }
     first = await browser_page.evaluate(
@@ -678,6 +834,7 @@ async def test_hanayume_native_candidate_is_bound_to_draw_time_episode_route(
         "args => window.__hanayumeNativeCapture.collect(args)",
         {
             "expectedSlots": [1], "expectedCurrent": 1, "expectedBodyTotal": 4,
+            "expectedBodySlots": [1, 2, 3, 4], "hasTopEmptyPage": False,
             "episodePath": f"/episodes/{NOW_ID}",
         },
     )
