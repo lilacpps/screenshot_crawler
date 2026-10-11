@@ -28,7 +28,6 @@ Watchlistに入力した1話URLからその作品の**全エピソード**を列
   `待つと無料`は実測された状態に応じ将来`quota`等の候補だが、
   Phase 05で確定するまでは`unknown`として保存可能。ラベルがないことを「待機済み」と推定しない。
   raw badgeは必要ならsite-local diagnosticsで保持し、Catalog schema変更を先取りしない。
-- ユーザーの通知表/本棚とは無関係な外部アクセス機能を作らない。
 
 ## Tests
 - Unit: URL/domain厳密性、canonical redirectとwork mismatch、分割話/同名、
