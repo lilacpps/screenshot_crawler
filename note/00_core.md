@@ -1,5 +1,22 @@
 # 00. Core 現行実装ノート
 
+## Hanayume Discovery, Viewer, and direct-only Batch registration (updated 2026-10-11)
+
+`HanayumeDiscoveryAdapter` is registered in the Discovery registry. `HanayumeAdapter` is registered in the manual crawl and Batch adapter registries, and `HanayumeSitePolicy` is registered in the Batch policy registry. All paths use the shared CDP BrowserSession/Page and existing DiscoveryService/Planner/Executor/Runner/Packager; no Hanayume-specific Core branch or Catalog schema field was added. Discovery authentication reads the canonical series route under `series.mode-series-top[data-e2e=pageSeries]`; episode row identity uses `div.ep-main.series-safe-filter-target[data-e2e=pageEpisode] > div.series.mode-ep` (the inner `.series.mode-ep` has no `data-e2e`). Both enumerate only a unique direct public `epList`; known history siblings are checked for overlapping badge conflicts, never merged into Discovery results.
+
+Exact row-local `無料` maps to `access_mode=free`. Exact `今なら無料` maps to free only when a fresh current-attempt check on the canonical same-work `/series/<id>` page proves the observed account markers (`#xHeader.h`, `hUserMenu`, `hUserIcon`, `signoutBtn` under `.h-usermenu`, and no login anchor). Missing/ambiguous auth structure leaves that label unknown; other ambiguous row labels remain unknown. The auth result is not persisted or reused across attempts, and Catalog still stores only `access_mode`. Final logged-in E2E verified four scoped candidates including exact `今なら無料`; full-list Discovery observed 296 unique rows (3 exact `無料`, 293 exact `今なら無料`) and the current verified attempt classified all as free. Page-wide purchase/resource copy is not used to infer access.
+
+The site-local manual Viewer path freshly checks the same-work row before capture and its label again after episode entry. Login/paid entry dialogs or unavailable viewer structure fail closed without CTA actions. The document-start source observer snapshots an observed opaque sRGB/unorm8 960x1540 full-frame canvas at draw time and requires exact selected-canvas RGBA replay. Verified pixels use strict lossless VP8L WebP method 4 with full RGBA round-trip validation; encoder failure keeps the same verified PNG. Missing/unsafe native proof uses clean rendered body-canvas PNG for the whole spread at actual dimensions. This does not claim original JPEG bytes or tile reconstruction. Final live E2E verified 134/134 original 960x1540 source-canvas pages as single-chunk VP8L lossless WebP with exact independent RGBA equality and zero rendered fallbacks. Four candidates reached END and produced four verified ZIPs without quota or entitlement mutation. The prior 122-page Phase 05 rendered-PNG run is historical baseline evidence. Details and limits are in `note/10_hanayume.md` and the Hanayume runbook.
+
+## AccessGuard selector cancellation (2026-10-10)
+
+The shared visible-CAPTCHA provider selector check now re-raises
+`asyncio.CancelledError` before its best-effort Playwright-error handling. This
+allows the monitor task to terminate when `AccessGuard.close()` cancels it
+during a pending selector operation. A unit regression uses a blocked locator
+count to reproduce and verify prompt cleanup. Access-stop classification,
+relevant-host rules, and response handling are unchanged.
+
 ## Piccoma current adapter registration (2026-10-09)
 
 The Discovery registry includes `PiccomaDiscoveryAdapter`; the manual crawl and Batch adapter registries include `PiccomaAdapter`; and the Batch Site Policy registry includes `PiccomaSitePolicy`. The adapters use the existing BrowserSession/CDP Page contract. Manual access strategies are limited to `auto` and `direct`, both requiring a fresh exact-free product-listing check. Batch policy admits only available sources classified as free and uses the normal direct path; all other access modes are rejected with no resource or grant-only passes. Viewer/Capture and local Batch integration behavior are summarized in `note/09_piccoma.md`; independent Phase 04 review passed with BLOCKING 0 (130 passed, 0 skipped), and Phase 05 live Discovery-to-ZIP E2E passed for one free episode from each product. The earlier Phase 06-B live Batch-to-ZIP and PNG comparisons are historical. Phase 06-D's default native result is lossless WebP only after strict Piccoma-local JPEG tile replay, proven white compositing, single-VP8L validation, and exact full-RGB round-trip. Verified native pixels remain PNG if encoding fails; guarded Core fallback remains PNG. Phase 06-D code review and independent live Tester passed with BLOCKING 0: all 39 pages in the two-product Batch-to-ZIP run used the validated WebP path. Focused Piccoma, packaging, Ruff, and diff checks passed; the full suite was not rerun after the final site-local adjustments. Other layouts/resources and unobserved draw/backdrop variants remain unsupported. Details and limits are in `note/09_piccoma.md` and the Piccoma runbook progress.
@@ -229,7 +246,6 @@ read-only Batch planning and Manga ONE Policy. Phase
 このファイルはScreenshot Crawler Coreの**現在の実装詳細**と、採用済みのBrowser Session移行方針をまとめる。Core / Runner / browser / output / packaging / diagnostics / resume方針を変更した場合は、このnoteも同じ変更で更新する。
 
 最終同期: 2026-10-02
-
 
 ### Test execution policy（2026-09-27）
 
@@ -1331,7 +1347,6 @@ CrawlRun(failed)へ記録し、Itemはpending、Artifactは作成しない。
 `batch plan`は引き続きCatalog read-onlyであり、`batch run`だけがquota local stateと
 CrawlRun / Artifact / Item statusを書き換える。Manga ONEとBookWalkerのquota policyは既存挙動を
 維持し、Android targetはCatalogへ保持できるがPhase 3 Executorでは実行しない。
-
 
 ### Catalog v6 / Magapoke M3c1 current update
 

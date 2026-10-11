@@ -1,0 +1,82 @@
+# Hanayume Site Adapter
+
+Status: Discovery, manual Viewer capture, and direct-only Batch are implemented on `feat/hanayume-adapter`. R8 review/artifact audit passed for its 23 pages, without independent source-RGBA proof. R9 source/tests review passed (342 passed, 0 skipped; Ruff/diff PASS). The configured target and normal-control live Batch cases and their independent artifact audits passed; final documentation review: PASS / BLOCKING 0. Neither R9 case has independent source-canvas RGBA proof.
+
+## Discovery
+
+Watchlist targets use the strict episode URL `https://hanayume.com/episodes/<13-lowercase-hex-id>`. Discovery reads rows only from the unique public `epList` under the route-specific observed ancestry. Episode pages use `div.ep-main.series-safe-filter-target[data-e2e="pageEpisode"] > div.series.mode-ep` (the child has no `data-e2e`) > `.series-eplist-wrap` > `.series-eplist-main`; canonical work pages use `div.series.mode-series-top.series-safe-filter-target[data-e2e="pageSeries"]` directly above the wrapper. The public root is direct under main; `eli` rows are descendants inside `.series-eplist-default.has-store-item.mode-last`. The observed direct `epListUser` history sibling is not enumerated; overlapping copies must agree on exact labels. Unknown/nested/duplicate roots and conflicts fail closed. Full range/count/identity validation, global oldest-first positions, buffering, and latest-first/bounded output remain unchanged.
+
+Only exact row-scoped labels are classification evidence. One exact `無料` maps to `access_mode=free`. One exact `今なら無料` maps to `free` only when the current Discovery attempt verifies the observed account markers on the canonical `/series/<work-id>` route; otherwise it remains `unknown`. Missing/duplicate/conflicting/other labels are `unknown`. Catalog stores only `access_mode`, not the raw label. Auth is attempt-local and never persisted. On an exact route/listing, a missing positive marker set is polled for at most five seconds at 150 ms intervals; deadline means no proof and keeps `今なら無料` unknown. Discovery follows the seed's observed work link, reads auth on the canonical series route, returns to the exact seed, and revalidates work/title/ranges before enumeration.
+
+## Viewer capture
+
+Manual Viewer entry validates the exact episode URL and scoped work link, then checks the canonical same-work series listing, auth, and target row. `無料` remains eligible regardless of auth markers; `今なら無料` requires fresh verified series auth. If the target is absent from the episode page, its episode preview must match the nonempty, unselected fresh bare-series preview by complete ordered ID/label signature or exact reverse; target-present entry continues to require the exact matching row. Unknown branches, history-only target copies, conflicts, duplicates, and preview drift fail closed.
+
+Configured Batch targets use the Catalog source's `available` and `access_mode=free` as eligibility. This path verifies the canonical episode URL and configured work identity, then requires normal strict Viewer readiness, ordered body capture, native or rendered pixel proof, and END. It does not refresh the latest badge or auth state at Batch time; this follows the user's current direct-entry request and is not a fresh listing check. Manual URL entry retains its fresh preflight. The automated path does not handle `待つと無料で読む` or `この話をレンタルする` and never clicks those or other entry controls. An unreadable/incomplete Viewer stops without capture; a ready Viewer plus a gate overlay remains an unobserved case. Page-wide upsell or resource copy is not treated as a gate.
+
+The observed desktop spread layout uses explicit counter, wrapper, readiness, visibility, and terminal checks. The adapter captures every body slot in order and cannot reach generic locator/UI screenshot fallback. END is accepted only after full body coverage and the observed terminal UI.
+
+### R8 leading-empty layout
+
+For the observed layout only, the viewer's `mode-has-top-emptypage` flag together with physical slot 1 having exactly `-cv-page mode-empty` and no canvas identifies a non-body lead-in. The adapter freezes physical body slots 2 through `total-5` (11 body pages in the probed 17-page episode), waits for the initial `mode-first-page` state, and performs one observed public seek step from counter 1 to counter 3 before capture. It preserves physical slot IDs for identity and native proof, while capture/archive order stays sequential. An unflagged blank slot, any other empty body slot, flag drift, missing spread side, or incomplete END fails closed. This passed synthetic browser tests and a standard CLI Batch run for the observed 11-body-page target; an ordinary-layout 12-page control also passed. The latest run verified artifact format/dimensions and packaging, but did not independently compare the 23 output pages against source-canvas RGBA. See the runbook and site note for exact evidence and limits.
+
+### Counter and physical-wrapper variant
+
+The adapter also supports the observed unflagged episode `e2a7ca7bd6dd7`, whose counter is 17 but whose physical wrapper count is 17. The existing `total + 1` wrapper contract remains supported; `total` wrappers are accepted only for odd totals without the leading-empty flag and with the complete exact top PR/five-tail structure. Body bounds use the last physical wrapper, so this episode captures slots 1–11 and excludes `mode-ci` at 12. Counter/seek validation is unchanged. Native collection and post-encode proof use the same physical bounds and reject tail/count/flag drift. Unknown layouts, missing spread halves, and END without full body coverage still fail closed.
+
+Post-fix standard CLI Batch verification passed for this target (11 pages), an ordinary control (12), and a leading-empty control (11), all at END with verified ZIPs and completed isolated Catalog Items. All 34 members decoded as 960x1540 VP8L WebP; CRC, ordering, archive hashes/sizes, and Catalog/crawl-status checks passed. Independent source-canvas RGBA equality was not measured for these runs. Evidence: `output/hanayume-wrapper-live-20261011-bc7bbdb0/verification.json`; details and test scope are in the site note. No normal Catalog was changed by verification.
+
+## Bounded readiness
+
+On a structurally valid canonical series listing, authentication proof is polled for up to five seconds at 150 ms intervals until the complete positive marker set appears. The route and listing must remain exact throughout; timeout leaves `今なら無料` unknown. Viewer initialization waits up to five seconds for the existing unique current/total counter nodes to contain text. Duplicate nodes fail immediately and malformed values still fail in the strict parser. Synthetic browser tests cover delayed and missing counter/auth states. The auth probe observed markers arriving at 150 ms; the counter-missing probe did not directly measure a delayed transition. The final E2E passed after these bounded readiness checks.
+
+## Capture fidelity
+
+Before its first body capture, initialization now requires one second of unchanged canvas
+generation/write counts, wrapper/canvas identities, bitmap dimensions, geometry, viewport and
+existing strict readiness metadata, sampled every 100 ms. Changes restart this quiet interval;
+failure to settle within five seconds stops initialization. This applies to slot 1 in ordinary
+layouts and slots 2/3 after the existing leading-empty intro seek. Later page turns and strict
+post-encoding proof are unchanged; a later reset still stops without a capture retry.
+Sampling adds no image/pixel readback. If the native observer is unavailable, the existing
+rendered-PNG fallback uses a one-second metadata-only quiet wait. The tracking mode and timing
+are recorded at `adapter_debug.initial_canvas_settle` in failure diagnostics. No new option is
+required. Synthetic browser tests pass late same-pixel reset cases and reject continuous resets;
+live reduction in failures has not yet been verified.
+
+R2 captures the observed opaque sRGB/unorm8 960x1540 full-frame canvas at draw time into a bounded immutable copy tied to the exact target and episode. Selection requires target/slot/generation/write proof, safe full-frame state, and exact no-background RGBA replay. Strict single-chunk VP8L WebP method 4 is accepted only after full RGBA round-trip validation; encoder failure returns the same verified native PNG. Native unavailability uses clean rendered-canvas PNG for the whole spread at actual dimensions. In the final E2E all 134 pages were native source-canvas WebP with 134/134 independent exact RGBA matches and zero rendered fallbacks. This is decoded source-canvas fidelity, not original JPEG bytes or tile reconstruction.
+
+### Post-encoding verification diagnostics
+
+Native proof rejection still stops capture without retries or a weaker fallback. The error now
+includes `verification=<reason>` for console/metrics correlation. Failure details are written to
+`diagnostics/metadata.json` under `adapter_debug.capture.verification`: the first failed gate,
+before/after selected-slot canvas dimensions, wrapper/canvas geometry, readiness/visibility,
+viewport/seek/counters, wrapper/canvas identity equality, and bitmap generation/write counts.
+`encode_elapsed_ms` measures the Python encoding stage; verification `elapsed_ms` measures the
+browser interval since proof collection, including transport/decode/encoding time.
+
+A failure-only pixel comparison reports `equal`, `different`, `unreadable`, or `not_compared`.
+It compares only the same selected canvas at unchanged bitmap dimensions and stores no pixels.
+Generation/write changes remain failures even when pixels are equal. Verification timeouts,
+evaluation failures, missing observer/proof, and malformed results have distinct reasons.
+No new CLI switch is needed. These diagnostics do not establish the cause of historical failures;
+the next live failure is needed to identify the actual gate. Synthetic browser coverage includes
+same-pixel redraw, pixel change, bitmap reset, replacement, visibility/position/counter/layout drift,
+and persistence through the existing failure diagnostics writer.
+
+## Batch policy and execution
+
+`HanayumeSitePolicy` remains direct-only and admits only available Catalog sources with `access_mode=free`; it rejects `unknown`, `quota`, `paid`, `owned`, `grant`, and `rental` and declares no quota resource or grant-only pass. Discovery may classify `今なら無料` as free only after the current run's verified series auth; logged-out or ambiguous labels stay unknown. Batch uses the persisted Catalog classification and configured identity, then enforces strict Viewer/capture/END checks. Failed entry or capture creates no Artifact and does not complete the Item.
+
+The earlier logged-out Phase 05 E2E completed 122 rendered-canvas PNG pages and remains historical baseline evidence only. The final run `output/hanayume_experiment/tester/runs/20261010T231618Z-a02345e9/` completed four candidates (12+50+40+32 pages), all at END, with four ZIPs and four completed Catalog items. All 134 original 960x1540 canvas outputs were lossless WebP and independently RGBA-equal; rendered fallback was zero. The Tester visually reviewed 12 first/middle/final samples. `login-nowfree-metadata-20261010T210447Z-86b4f281.json` contains the one-entry ready Viewer pilot; `r3-auth-marker-20261010T214015Z-6fc6ccb8.json` contains series auth/listing only, not Viewer entry. Final full-run evidence is in `final_report.json` and independent audit files in the run directory.
+
+## R9 configured Batch live verification
+
+The target case `aca2240729bd0` completed 10 pages at END; its isolated ZIP audit passed for 10 960x1540 single-chunk VP8L WebP members (7,161,994 bytes; SHA-256 `69e1ff1fcd1bc460e3ab76d28289454cd2432e74c9b23d25f74b35baa37232c9`). Its metrics record one canonical episode document request and zero series/range document requests. The normal control case in `output/hanayume_experiment/tester/runs/r9-control-diagnostic-20261011T015208Z/` performed fresh standard Discovery from one isolated Watchlist target and then Batch; one source was added, and its 12-page run reached END with a CRC-passing ZIP containing 960x1540 VP8L WebP. Its Batch metrics also show one canonical episode document request and zero series document requests. Independent ZIP/Catalog audit and first/middle/last visual review passed for the control. One non-document HTTP 502 was recorded; the run completed with zero retries. Neither case independently compared source-canvas RGBA. Full reports and the metrics-output side effect are recorded in the [progress log](../../../../runbooks/hanayume-free/PROGRESS.md).
+
+## Runtime and verification
+
+The adapter uses the shared Crawler Chrome through the existing CDP `BrowserSession` and Playwright `Page`; it does not launch Chrome or select a profile. The AccessGuard relevant-host profile includes `hanayume.com`, `www.hanayume.com`, and the observed image host `viewer.hanayume.com`.
+
+Implementation details, live evidence, test results, deferred authentication, and the next phase gate are recorded in the [Hanayume site note](../../../../note/10_hanayume.md) and [free-only runbook](../../../../runbooks/hanayume-free/README.md).
