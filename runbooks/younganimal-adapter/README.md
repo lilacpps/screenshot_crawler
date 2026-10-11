@@ -1,8 +1,11 @@
 # Young Animal Web — 無料・待つと無料 Site Adapter 実装 Runbook
 
-Status: **PLANNED / implementation not started**（2026-10-11）
+Status: IN PROGRESS (2026-10-11). Phase 01 verified. Phase 02 partial Discovery implementation/tests/docs are Reviewer VERIFIED (BLOCKING 0) and local checks pass; full target live Discovery remains incomplete on HTTP 429, and the corrected code was not live-tested. Phases 03-04 are not implemented; Phase 05 is documentation/unknown-only with waiting not implemented; Phase 06 local audit passes but live E2E is incomplete.
 Execution branch: `feat/younganimal-adapter` (base: `main` @ `43d9218`)
 Authority for observations and actual completion: [PROGRESS.md](PROGRESS.md)
+
+Current phase gate: 01 VERIFIED; 02 partial Discovery REVIEWER VERIFIED (BLOCKING 0), LOCAL PASS, full live Discovery INCOMPLETE (HTTP 429; corrected code not live); 03-04 NOT IMPLEMENTED; 05 documentation/unknown-only, wait flow NOT IMPLEMENTED; 06 local Tester audit PASS, live E2E INCOMPLETE. No post-429 live request was made and no human approval is pending; the HTTP 429 is an external blocker.
+Future authorized live Discovery entry after the HTTP 429 stop clears: `https://younganimal.com/series/aee4fa742b0fe` (the observed target work listing; the adapter accepts canonical `/series/<work-id>` URLs, not an ID allowlist).
 
 ## 1. 目的と最終的な受け入れ範囲
 

@@ -847,6 +847,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "magapoke",
         "mangaone",
         "piccoma",
+        "younganimal",
         "zeblack",
     )
     assert "zeblack" in cli._batch_policy_registry().sites()

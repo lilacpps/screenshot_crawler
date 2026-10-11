@@ -1,6 +1,6 @@
 # Phase 04 — 「無料」 direct-only Site Policy / Batch
 
-Status: NOT STARTED。Prereq: Discovery/Viewer/capture review passes。
+Status: BLOCKED / NOT IMPLEMENTED. Requires accepted complete Discovery and Phase 03 Viewer/Capture proof; neither gate is complete.
 Next: [Wait-free](../05-wait-free/README.md) + [E2E](../06-e2e/README.md)。
 
 ## Objective

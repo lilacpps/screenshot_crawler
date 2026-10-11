@@ -1,21 +1,31 @@
 # Phase 01 — Evidence-first bounded site Probe
 
-Status: NOT STARTED。
-Next: [Discovery](../02-discovery/README.md) and [Viewer Capture](../03-viewer-capture/README.md)。
+Status: **VERIFIED — Reviewer PASS / BLOCKING 0**。
+Next: Continue [Discovery](../02-discovery/README.md) and
+[Viewer Capture](../03-viewer-capture/README.md); bounded follow-up probes belong to those phases.
 
 ## Goal
 前回の互換性研究が未確認で終わった重要情報を、**実装を進められる最小限**だけ再Probeする。
 研究単独で終了しない。観測済み結果からすぐ実装に進める。
 
 ## Known / Unknown
-- 前回観測: `younganimal.com` のシリーズ/エピソードURL、2作品の`無料` token候補、
-  `#comici-viewer`、`mode-spread`、925x1329表示Canvas3件。
-- 未確認: exact無料badge、ログイン分類、対象作品の完全話数、
-  `待つと無料`の正確な対象/待機状態、body slot/counter/END、
-  original JPEGとsource-native pixels。
+- 追加Probeで確認: 対象episode `/episodes/55889b8a851cb` はwork
+  `/series/aee4fa742b0fe` の行にあり、row内の
+  `span.series-eplist-item-access-text.mode-free` がexact `無料`。
+  同じ初期一覧にはexact `今なら無料` もあるが、待機状態とは未確認。
+- Viewer初期状態は `#comici-viewer.mode-spread.mode-first-page.mode-top-pr-page`、
+  `#xCVSeekBar` value 21 / min 1 / max 21 / step 2、22 physical wrappers。
+  durable probe reportはvalue 11のmiddle candidateまで。先行実行のvalue 1 / `mode-last-page`
+  はconsole summaryだけに残り、現在のprobe artifactには保存されていないため、終端は未確認扱い。
+- 未確認: ログイン正例/匿名正例、全件一覧・loaderの展開、各body slot identity、
+  last bodyと通常END遷移、`待つと無料`の正確な対象・待機状態、
+  original JPEGの本文帰属、source/canvas pixel equality。
 - 2話目の`domcontentloaded`が30秒timeout。原因は不明。cleanupも中断した。
   429/WAF・サイト不具合と決めつけない。
 - Hanayumeの現行mainはR8/R9/R10まであり、旧research branchと異なる。
+- 初期一覧は31 range links (`1-30`〜`901-925`) と`もっと見る`を持つが、
+  DOMには10 episode rowsのみ。全件列挙はPhase 02で続ける。
+- Probe結果・詳細は[PROGRESS.md](../PROGRESS.md#phase-01-checkpoint--bounded-live-probe-2026-10-11)。
 
 ## Steps / bounded observations
 

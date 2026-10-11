@@ -467,6 +467,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     from screenshot_crawler.site_adapters.magapoke import MagapokeDiscoveryAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneDiscoveryAdapter
     from screenshot_crawler.site_adapters.piccoma import PiccomaDiscoveryAdapter
+    from screenshot_crawler.site_adapters.younganimal import YounganimalDiscoveryAdapter
     from screenshot_crawler.site_adapters.zeblack import ZeblackDiscoveryAdapter
 
     registry = DiscoveryAdapterRegistry()
@@ -478,6 +479,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     registry.register("zeblack", ZeblackDiscoveryAdapter)
     registry.register("comicdays", ComicDaysDiscoveryAdapter)
     registry.register("hanayume", HanayumeDiscoveryAdapter)
+    registry.register("younganimal", YounganimalDiscoveryAdapter)
     return registry
 
 

@@ -1,6 +1,6 @@
 # Phase 03 — Viewer / original-image-first Capture
 
-Status: NOT STARTED。Prereq: verified current free episode/identity from Phase 01/02。
+Status: BLOCKED / NOT IMPLEMENTED. Target body sequence, END, and source/native attribution remain unproven; live work stopped after HTTP 429 in Phase 02. No further live requests were made. Prereq: Phase 02 review and safely available live evidence.
 Next: [free Batch](../04-free-batch/README.md)。
 
 ## Primary design

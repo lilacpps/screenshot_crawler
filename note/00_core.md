@@ -1,5 +1,14 @@
 # 00. Core 現行実装ノート
 
+## Younganimal Discovery CLI registration (2026-10-11)
+
+`YounganimalDiscoveryAdapter` is registered in the Discovery CLI registry only.
+It uses the existing `DiscoveryService`, Catalog, and shared CDP
+`BrowserSession`/Playwright Page; no Core or Catalog schema branch was added.
+Younganimal is not registered for manual crawl or Batch. The site-local
+Discovery contract and its incomplete live-verification status are in
+`note/11_younganimal.md`.
+
 ## Hanayume Discovery, Viewer, and direct-only Batch registration (updated 2026-10-11)
 
 `HanayumeDiscoveryAdapter` is registered in the Discovery registry. `HanayumeAdapter` is registered in the manual crawl and Batch adapter registries, and `HanayumeSitePolicy` is registered in the Batch policy registry. All paths use the shared CDP BrowserSession/Page and existing DiscoveryService/Planner/Executor/Runner/Packager; no Hanayume-specific Core branch or Catalog schema field was added. Discovery authentication reads the canonical series route under `series.mode-series-top[data-e2e=pageSeries]`; episode row identity uses `div.ep-main.series-safe-filter-target[data-e2e=pageEpisode] > div.series.mode-ep` (the inner `.series.mode-ep` has no `data-e2e`). Both enumerate only a unique direct public `epList`; known history siblings are checked for overlapping badge conflicts, never merged into Discovery results.

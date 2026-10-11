@@ -1,6 +1,6 @@
 # Phase 05 — 「待つと無料」 state / waiting / Batch
 
-Status: NOT STARTED / waiting semantics unverified in previous research。
+Status: DOCUMENTATION / UNKNOWN-ONLY CLASSIFICATION; wait flow NOT IMPLEMENTED. Official documentation is not live state evidence. No waiting, grant, entitlement, or resource action has been performed.
 Prereq: Phase 02までの作品一覧/ラベル契約、Phase 03/04で確立したViewer/Batch。
 Next: [E2E](../06-e2e/README.md)。
 

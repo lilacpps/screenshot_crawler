@@ -1,6 +1,11 @@
 # Phase 06 — independent E2E, regression and handoff
 
-Status: NOT STARTED。Prereq: Phases 01〜05で支持された実装とReview。
+Status: LOCAL TEST/ARTIFACT AUDIT PASS; LIVE E2E INCOMPLETE. Tester: 27 passed, 0 skipped, 23 warnings in 4.31s; no live capture, ZIP, entitlement state, or complete Catalog flow was verified.
+
+## Current result (2026-10-11)
+- Independent local Tester audit: PASS; 27 passed, 0 skipped, 23 existing deprecation warnings, 4.31s across the two Younganimal test files.
+- Both isolated Catalogs contain one Work row created before adapter invocation and zero items, episode sources, targets, runs, artifacts, or quota states. JSON sanitation passed. No site request followed the HTTP 429.
+- This local audit does not establish live Viewer capture, END, ZIP, entitlement, or complete Catalog synchronization. Live E2E remains incomplete because Discovery stopped at HTTP 429.
 
 ## Objective
 「無料」「待つと無料」それぞれの**実際にサポートするstate**で、
@@ -13,7 +18,7 @@ Shared Crawler Chrome + Playwright/CDPを使うが、通常DB/profileの未許�
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
-.\.venv\Scripts\python.exe -m screenshot_crawler.cli watch add --watchlist output\younganimal_experiment\watchlist.yaml --key younganimal-sample --work-key younganimal-sample-work --site younganimal --url "<currently verified episode URL>" --label "Younganimal sample"
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli watch add --watchlist output\younganimal_experiment\watchlist.yaml --key younganimal-sample --work-key younganimal-sample-work --site younganimal --url "https://younganimal.com/series/aee4fa742b0fe" --label "Younganimal sample"
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli discover --key younganimal-sample --mode full --watchlist output\younganimal_experiment\watchlist.yaml --catalog output\younganimal_experiment\catalog.sqlite
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli discover --key younganimal-sample --mode incremental --watchlist output\younganimal_experiment\watchlist.yaml --catalog output\younganimal_experiment\catalog.sqlite
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli batch plan --site younganimal --catalog output\younganimal_experiment\catalog.sqlite
