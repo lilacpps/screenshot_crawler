@@ -50,3 +50,6 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
   discovery/capture/direct-batch/E2E implementation contract (planned).
 - [花とゆめ＋「無料」「今なら無料」Site Adapter](hanayume-free/README.md) —
   five-phase Discovery → source-faithful Capture → direct Batch → independent E2E contract (planned).
+
+- [Young Animal Web — 無料・待つと無料 Site Adapter](younganimal-adapter/README.md) —
+  independent-first implementation runbook: Discovery, original/native capture, free direct Batch, waiting-free and E2E.
