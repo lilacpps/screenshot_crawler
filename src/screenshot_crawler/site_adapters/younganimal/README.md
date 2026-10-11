@@ -35,17 +35,40 @@ It does not register manual crawl or Batch support.
   bounded scopes retain the whole-work display positions.
 
 The adapter uses the existing shared CDP `BrowserSession` and Playwright Page,
-the shared `AccessGuard`, 350 ms between range navigations, finite navigation
-and observation deadlines, a maximum of 100 ranges / 3,000 rows, and bounded
-AccessGuard cleanup. It does not launch Chrome or select a browser profile.
+the shared `AccessGuard`, and a 1-second wait immediately before every numeric
+range navigation, including canonical-root-to-first-range. It keeps finite
+navigation and observation deadlines, a maximum of 100 ranges / 3,000 rows,
+and bounded AccessGuard cleanup. A Playwright `DOMContentLoaded` timeout is
+retried only when that exact `goto` attempt observed one matching main-frame
+document request and its HTTP 200 response, the current page URL is still the
+expected URL, and the guard permits continuing. The adapter waits 2 seconds,
+checks the guard and URL again, then allows at most one retry for that route
+and two retries across the whole work. Unknown status, non-200, redirect or
+route drift, other Playwright errors, and guard stops are not retried. This is
+bounded recovery, not proof of the earlier timeout's cause. It does not launch
+Chrome or select a browser profile.
 
 ## Verification status
 
-Unit and browser-backed synthetic tests cover strict seed URLs, episode rejection with zero navigation, history conflict preservation, known selector controls, exact labels, route/range completeness, global positions, bounded scope, incomplete Catalog preservation, and cleanup deadlines.
-The user-provided work declared 31 ranges (`1-30` through `901-925`). The final bounded live run
-used the earlier episode-seed draft and stopped on the shared AccessGuard's
-HTTP 429 signal at range `/9`; the corrected series-seed code has not been live
-tested. Full live Discovery is **not verified**. The isolated DiscoveryService
-Catalogs contain one pre-created Work row and no items/sources or other run
-data; the normal Catalog was untouched. No alternate endpoint/profile or retry
-is allowed while the 429 stop remains.
+Unit and browser-backed synthetic tests cover strict seed URLs, episode rejection with zero navigation, history conflict preservation, known selector controls, exact labels, route/range completeness, global positions, bounded scope, incomplete Catalog preservation, cleanup deadlines, attempt-specific timeout evidence, retry backoff/guard ordering, cancellation cleanup, and the two-retry work budget.
+The user-provided work declared 31 ranges (`1-30` through `901-925`). The
+reviewed-recovery full pass returned matching main-frame HTTP 200 responses for
+`/1`–`/5`, buffering 150 distinct rows at positions 1–150. `/6` had no response
+status, so it was not eligible for retry; Discovery yielded no episode records.
+Full 925-row Discovery remains **not verified**. The isolated Catalog had one
+pre-created Work and zero episode items/sources; the normal Catalog was
+untouched.
+
+Viewer/Capture is **not implemented**. The first bounded 03A probe verified the
+exact target row as free and navigated to its exact episode route, but the
+public seek read `1..1` immediately after DCL, unlike prior durable evidence of
+`1..21 step 2`; the probe stopped before seeking. A second 03A attempt stopped
+before episode main-frame navigation when a page-originated Younganimal fetch
+to the target path returned HTTP 429 (`Retry-After: 1`). No manual navigation
+or retry followed; in-flight automatic requests are not ruled out. No page or
+response bytes were saved. Readiness, 11 positions, canvas stability, body
+continuity, END, and source/native attribution remain unverified. Do not add
+viewer/capture behavior from these probes. Any 403/429/challenge/CAPTCHA is an
+immediate stop. The latest independent Tester audit passed 42 tests, 0 skipped,
+140 existing asyncio deprecation warnings; four isolated Catalogs were read
+only and each contained one pre-created Work with all other tables empty.

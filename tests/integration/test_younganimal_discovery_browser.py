@@ -8,6 +8,7 @@ import pytest
 from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, WorkInput
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
 from screenshot_crawler.site_adapters.younganimal import YounganimalDiscoveryAdapter
+from screenshot_crawler.site_adapters.younganimal import discovery as younganimal_discovery
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -167,8 +168,23 @@ async def _install_pages(
     return requested
 
 
-async def test_younganimal_full_incremental_and_bounded_discovery(browser_page, tmp_path: Path) -> None:
+async def test_younganimal_full_incremental_and_bounded_discovery(
+    browser_page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     requested = await _install_pages(browser_page)
+    pacing_navigation_counts: list[int] = []
+    original_pacing = younganimal_discovery._pace_before_range_navigation
+
+    async def record_pacing(page, guard) -> None:
+        pacing_navigation_counts.append(len(requested))
+        await original_pacing(page, guard)
+
+    monkeypatch.setattr(younganimal_discovery, "RANGE_PACING_MS", 0)
+    monkeypatch.setattr(
+        younganimal_discovery,
+        "_pace_before_range_navigation",
+        record_pacing,
+    )
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     service = DiscoveryService(catalog, _registry())
 
@@ -185,16 +201,20 @@ async def test_younganimal_full_incremental_and_bounded_discovery(browser_page, 
     assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(3)}").access_mode == "unknown"
     assert requested.count(f"/series/{WORK_ID}/1") == 1
     assert requested.count(f"/series/{WORK_ID}/2") == 1
-
+    assert pacing_navigation_counts == [1, 2]
     requested.clear()
+    pacing_navigation_counts.clear()
     incremental = await service.discover(browser_page, _target(), "incremental")
     assert incremental.complete is None
     assert incremental.stopped_reason == "known_streak"
     assert incremental.observed_count == 5
     assert requested.count(f"/series/{WORK_ID}/1") == 1
     assert requested.count(f"/series/{WORK_ID}/2") == 1
+    assert pacing_navigation_counts == [1, 2]
 
     bounded_catalog = CatalogService(tmp_path / "bounded.sqlite")
+    requested.clear()
+    pacing_navigation_counts.clear()
     bounded = await DiscoveryService(bounded_catalog, _registry()).discover(
         browser_page,
         _target(
@@ -212,6 +232,50 @@ async def test_younganimal_full_incremental_and_bounded_discovery(browser_page, 
         29,
         28,
     ]
+    assert pacing_navigation_counts == [1, 2]
+
+
+async def test_younganimal_navigation_retry_budget_is_shared_across_work(
+    browser_page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_pages(browser_page)
+    monkeypatch.setattr(younganimal_discovery, "RANGE_PACING_MS", 0)
+    original_navigate = younganimal_discovery._navigate
+    observed_budgets: list[tuple[str, int]] = []
+
+    async def consume_two_retries_across_work(
+        page, url: str, guard, *, retry_budget_remaining: int
+    ) -> int:
+        observed_budgets.append((urlsplit(url).path, retry_budget_remaining))
+        retries_used = await original_navigate(
+            page,
+            url,
+            guard,
+            retry_budget_remaining=retry_budget_remaining,
+        )
+        simulated_retry_use = 1 if len(observed_budgets) <= 2 else 0
+        assert retries_used == 0
+        return simulated_retry_use
+
+    monkeypatch.setattr(
+        younganimal_discovery,
+        "_navigate",
+        consume_two_retries_across_work,
+    )
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    result = await DiscoveryService(catalog, _registry()).discover(
+        browser_page,
+        _target(),
+        "full",
+    )
+
+    assert result.complete is True
+    assert observed_budgets == [
+        (f"/series/{WORK_ID}", 2),
+        (f"/series/{WORK_ID}/1", 1),
+        (f"/series/{WORK_ID}/2", 0),
+    ]
+    assert len(catalog.list_sources(site="younganimal")) == TOTAL
 
 
 async def test_younganimal_incomplete_range_yields_nothing_and_preserves_catalog(

@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page
+from playwright.async_api import Page, Request, Response
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.errors import AccessStopError
@@ -38,9 +39,13 @@ RANGE_PAGE_SIZE = 30
 MAX_RANGE_PAGES = 100
 MAX_LISTING_ROWS = RANGE_PAGE_SIZE * MAX_RANGE_PAGES
 NAVIGATION_TIMEOUT_MS = 20_000
+NAVIGATION_RETRY_BACKOFF_MS = 2_000
+MAX_NAVIGATION_RETRIES = 1
+MAX_WORK_NAVIGATION_RETRIES = 2
+MAX_NAVIGATION_EVIDENCE_REQUESTS = 8
 DOM_TIMEOUT_MS = 12_000
 OBSERVATION_TIMEOUT_SECONDS = 15
-RANGE_PACING_MS = 350
+RANGE_PACING_MS = 1_000
 GUARD_CLEANUP_TIMEOUT_SECONDS = 5
 FREE_LABEL = "無料"
 LATEST_LABEL = "最新話から"
@@ -89,6 +94,15 @@ class YounganimalListingRow:
     title: str
     access: YounganimalAccessObservation
     global_position: int
+
+
+@dataclass(frozen=True, slots=True)
+class _NavigationAttempt:
+    response: Response | None
+    timeout_error: PlaywrightTimeoutError | None
+    exact_main_document_200: bool
+    main_frame_document_requests: tuple[str, ...]
+    matching_document_responses: tuple[tuple[str, int], ...]
 
 
 def _strict_site_url(url: str, pattern: re.Pattern[str]) -> re.Match[str] | None:
@@ -331,15 +345,146 @@ async def _close_guard_bounded(guard: AccessGuard) -> None:
     _consume_cleanup_result(task)
 
 
-async def _navigate(page: Page, url: str, guard: AccessGuard) -> None:
+async def _goto_once(page: Page, url: str) -> _NavigationAttempt:
+    """Capture bounded, attempt-local proof for a possible DCL timeout retry."""
+
+    main_frame = page.main_frame
+    navigation_requests: list[Request] = []
+    navigation_responses: list[tuple[Request, str, int]] = []
+    observation_failed = False
+    overflow = False
+
+    def on_request(request: Request) -> None:
+        nonlocal observation_failed, overflow
+        try:
+            if (
+                request.resource_type != "document"
+                or not request.is_navigation_request()
+                or request.frame is not main_frame
+            ):
+                return
+            if len(navigation_requests) >= MAX_NAVIGATION_EVIDENCE_REQUESTS:
+                overflow = True
+                return
+            navigation_requests.append(request)
+        except PlaywrightError:
+            observation_failed = True
+
+    def on_response(response: Response) -> None:
+        nonlocal observation_failed, overflow
+        try:
+            request = response.request
+            if any(request is candidate for candidate in navigation_requests):
+                if len(navigation_responses) >= MAX_NAVIGATION_EVIDENCE_REQUESTS:
+                    overflow = True
+                    return
+                navigation_responses.append((request, response.url, response.status))
+        except PlaywrightError:
+            observation_failed = True
+
+    page.on("request", on_request)
+    page.on("response", on_response)
+    response: Response | None = None
+    timeout_error: PlaywrightTimeoutError | None = None
     try:
-        response = await page.goto(url, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
-    except (PlaywrightError, TimeoutError) as exc:
+        response = await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=NAVIGATION_TIMEOUT_MS,
+        )
+    except PlaywrightTimeoutError as exc:
+        timeout_error = exc
+    finally:
+        page.remove_listener("request", on_request)
+        page.remove_listener("response", on_response)
+
+    exact_main_document_200 = False
+    if (
+        timeout_error is not None
+        and not observation_failed
+        and not overflow
+        and len(navigation_requests) == 1
+    ):
+        request = navigation_requests[0]
+        matching_responses = [
+            (response_url, status)
+            for observed_request, response_url, status in navigation_responses
+            if observed_request is request
+        ]
+        exact_main_document_200 = (
+            request.url == url
+            and len(matching_responses) == 1
+            and matching_responses[0] == (url, 200)
+        )
+
+    main_frame_document_requests = tuple(request.url for request in navigation_requests)
+    matching_document_responses = tuple(
+        (response_url, status)
+        for request, response_url, status in navigation_responses
+        if any(request is candidate for candidate in navigation_requests)
+    )
+    return _NavigationAttempt(
+        response,
+        timeout_error,
+        exact_main_document_200,
+        main_frame_document_requests,
+        matching_document_responses,
+    )
+
+
+async def _navigate(
+    page: Page,
+    url: str,
+    guard: AccessGuard,
+    *,
+    retry_budget_remaining: int,
+) -> int:
+    """Navigate with at most one retry for a proven current-attempt DCL timeout.
+
+    Return the number of retries used so the whole-work caller can enforce its
+    separate two-retry budget.
+    """
+
+    if not 0 <= retry_budget_remaining <= MAX_WORK_NAVIGATION_RETRIES:
+        raise ValueError("Younganimal navigation retry budget is out of range")
+
+    retries_used = 0
+    attempt = await _goto_once(page, url)
+    while attempt.timeout_error is not None:
+        # A timeout is only retryable after the ordinary guard checkpoint and
+        # positive evidence tied to this exact Page.goto attempt.
         await _guard_checkpoint(guard, page)
-        raise DiscoveryIncompleteError("Younganimal page navigation did not complete") from exc
+        retryable = (
+            attempt.exact_main_document_200
+            and page.url == url
+            and retries_used < MAX_NAVIGATION_RETRIES
+            and retries_used < retry_budget_remaining
+        )
+        if not retryable:
+            raise DiscoveryIncompleteError(
+                "Younganimal page navigation timed out without retry-eligible HTTP 200 proof"
+            ) from attempt.timeout_error
+
+        await page.wait_for_timeout(NAVIGATION_RETRY_BACKOFF_MS)
+        await _guard_checkpoint(guard, page)
+        if page.url != url:
+            raise DiscoveryIncompleteError(
+                "Younganimal navigation route changed before its bounded retry"
+            ) from attempt.timeout_error
+        retries_used += 1
+        attempt = await _goto_once(page, url)
+
     await _guard_checkpoint(guard, page)
-    if response is None or response.status != 200:
+    if attempt.response is None or attempt.response.status != 200:
         raise DiscoveryIncompleteError("Younganimal page did not return HTTP 200")
+    return retries_used
+
+
+async def _pace_before_range_navigation(page: Page, guard: AccessGuard) -> None:
+    """Wait between listing requests, including canonical root -> first range."""
+
+    await page.wait_for_timeout(RANGE_PACING_MS)
+    await _guard_checkpoint(guard, page)
 
 
 async def _wait_for_series_listing(page: Page, guard: AccessGuard) -> None:
@@ -568,7 +713,14 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
         )
         guard.start(page)
         try:
-            await _navigate(page, work_url, guard)
+            retry_budget_remaining = MAX_WORK_NAVIGATION_RETRIES
+            retries_used = await _navigate(
+                page,
+                work_url,
+                guard,
+                retry_budget_remaining=retry_budget_remaining,
+            )
+            retry_budget_remaining -= retries_used
             if page.url != work_url:
                 raise DiscoveryIncompleteError("Younganimal canonical work route changed during navigation")
             await _wait_for_series_listing(page, guard)
@@ -578,11 +730,15 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
 
             rows_oldest_first: list[YounganimalListingRow] = []
             all_episode_ids: set[str] = set()
-            for index, episode_range in enumerate(ranges):
-                if index:
-                    await page.wait_for_timeout(RANGE_PACING_MS)
-                    await _guard_checkpoint(guard, page)
-                await _navigate(page, episode_range.url, guard)
+            for episode_range in ranges:
+                await _pace_before_range_navigation(page, guard)
+                retries_used = await _navigate(
+                    page,
+                    episode_range.url,
+                    guard,
+                    retry_budget_remaining=retry_budget_remaining,
+                )
+                retry_budget_remaining -= retries_used
                 expected_page_url = episode_range.url
                 if page.url != expected_page_url and not (
                     episode_range.page_number == 1 and page.url == work_url

@@ -16,8 +16,8 @@ rejected before AccessGuard startup or any navigation because opening an episode
 seed would reach the viewer before Discovery has established its row's free
 label. The episode URL parser remains for public row identity and bounded-scope
 boundaries. This is a Lead-approved Phase 02 safety deviation from the original
-episode-seed plan; no live request has tested this corrected seed contract after
-the HTTP 429 stop.
+episode-seed plan. Later bounded preflight and partial full traversals exercised
+the corrected series-seed contract but did not prove all 925 rows.
 
 The adapter validates the canonical work title and buffers every contiguous
 numeric range before yielding a record. Each range must preserve the same full
@@ -45,10 +45,19 @@ observation; Catalog schema is unchanged. Authentication state is unknown and
 is not inferred. No waiting, ticket, coin, purchase, grant, or resource action
 is implemented.
 
-The adapter has a maximum of 100 ranges / 3,000 rows, 350 ms between range
-navigations, finite navigation/DOM/observation deadlines, and a 5-second
-best-effort AccessGuard cleanup bound. It relies only on the shared generic
-AccessGuard signals and does not add site-specific challenge text heuristics.
+The adapter has a maximum of 100 ranges / 3,000 rows, a 1-second wait before
+every numeric range navigation (including canonical-root-to-first-range),
+finite navigation/DOM/observation deadlines, and a 5-second best-effort
+AccessGuard cleanup bound. A Playwright `DOMContentLoaded` timeout is eligible
+for one retry only when that exact `goto` attempt observed one main-frame
+navigation request for the exact expected URL and the matching request object
+returned HTTP 200, with `page.url` still exact after timeout and again after a
+2-second backoff plus guard check. There is at most one retry per navigation
+and two per whole work. Unknown status, non-200, redirect/drift, other
+Playwright errors, and access stops do not retry. The cause of the previously
+observed `/3` timeout remains unknown; this fail-closed recovery does not
+attribute it. The adapter relies only on shared generic AccessGuard signals
+and adds no site-specific challenge text heuristics.
 
 ## Current verification and limits
 
@@ -60,18 +69,44 @@ canonical work URL. The first-party range page uses a public `epList` root plus 
 separate `epListUser` root. Empty history roots are supported; any history row
 fails closed until duplicate identity/title/access consistency is verified.
 
-Full live Discovery is **not verified**. The final 180-second-capped,
-31-range-capped attempt stopped after nine range pages (11 navigations total)
-in 13.066 seconds when the shared AccessGuard observed HTTP 429 at
-`/series/aee4fa742b0fe/9`. No episode records were yielded. `Retry-After` was
-not captured; no request was made after the 429. Earlier diagnostic timeouts
-are recorded in the runbook; their cause is unknown and they do not override
-the explicit 429 stop. The final live traversal used the earlier episode-seed draft, before the
-series-only seed and history-row review fixes; the corrected code has not been
-live-tested. The isolated DiscoveryService catalogs contain one Work row
-created before the adapter runs and zero items, episode sources, targets, runs,
-artifacts, or quota states. No normal Catalog was used.
+Full live Discovery is **not verified**. The earlier 180-second-capped attempt
+used the episode-seed draft and stopped at HTTP 429 after nine range pages;
+no further manual navigation or retry followed within that run, while any
+in-flight automatic request is not ruled out. The resumed bounded preflight
+returned HTTP 200 at the canonical root and `/1`. A full canonical-series pass
+then stopped at `/3` after 24.010 seconds with no response status. A later
+bounded diagnostic returned HTTP 200 at `/3` and `/2` and strictly validated
+30 unique rows at positions 61–90 and 31–60, but did not explain the earlier
+delay. The reviewed positive-response retry rule was implemented and locally
+verified. Its single full pass completed `/1`–`/5` with matching main-frame
+HTTP 200 responses, buffering 150 distinct rows at positions 1–150; `/6` had
+no response status, so no retry was eligible and no records were yielded. The
+isolated Catalog had one pre-created Work and zero episode items/sources.
+Report: ignored
+`output/younganimal_experiment/resume_20261011_retry1/phase02_full_discovery_retry_20261011.json`.
 
-Final local validation: targeted Younganimal Unit/Integration plus the Discovery CLI registry test passed (`28 passed`, 23 existing pytest-asyncio warnings). The independent Tester reran the two Younganimal files: `27 passed, 0 skipped`, 23 warnings, 4.31s. Full `ruff check src tests` passed. Lead-run regressions passed separately: Hanayume `201 passed, 0 skipped`; generic CLI/registry/discovery/catalog/watchlist `214 passed, 0 skipped` (the focused Younganimal CLI registry test is part of this generic group).
+Viewer/Capture remains **not implemented**. A separate Lead-approved 03A probe
+freshly validated the exact free target before opening it. Its first episode
+navigation returned 200, but immediately after DCL the public seek read
+`value=1,min=1,max=1,step=1`, unlike prior durable same-target evidence
+`21,1..21,step2`. The probe stopped before seeking; early initialization is
+possible but unproven. On a second 03A attempt, the canonical `/1` listing and
+free-row check passed, then a page-originated `younganimal.com` fetch for the
+episode path returned HTTP 429 (`Retry-After: 1`) before any episode main-frame
+navigation. AccessGuard stopped; no manual navigation or retry followed, and
+in-flight automatic requests are not ruled out. The fetch cause is unknown.
+No image, HTML, or response body was saved. No viewer readiness, seek positions,
+body continuity, END, canvas stability, source/native attribution, or capture
+behavior is verified. Current Viewer/Capture implementation is absent. No
+further live operation may follow the 429 without new authorization/state
+change.
 
-The final Reviewer verified the partial Discovery implementation, tests, and docs with BLOCKING 0. The Tester local artifact audit also passed: both isolated Catalogs contain one pre-created Work row and zero other records; JSON sanitation passed; no live call followed HTTP 429. Complete live range coverage, full Catalog synchronization, and site-wide behavior remain unverified. The corrected series-seed/history handling has not been live-tested. The HTTP 429 is the sole external live blocker; no human approval is pending. Wait eligibility and timer/resource semantics remain unknown and waiting stays unimplemented.
+The independent local Tester rerun passed 42 tests, 0 skipped, with 140
+existing asyncio deprecation warnings in 9.00s. Four isolated Catalogs were
+opened read-only; each had one pre-created Work and all other tables empty.
+JSON sanitation passed. Full live Discovery, Viewer capture, and E2E remain
+incomplete; no normal Catalog was used.
+
+Local validation after the bounded retry change: targeted Younganimal Discovery Unit/Integration plus the CLI registry test passed (`42 passed, 0 skipped`, 140 existing pytest-asyncio deprecation warnings in 9.20s); full `ruff check src tests` passed. The independent Tester and Lead regression groups from the earlier phase checkpoint remain recorded in the runbook: Younganimal `27 passed, 0 skipped`; Hanayume `201 passed, 0 skipped`; generic CLI/registry/discovery/catalog/watchlist `214 passed, 0 skipped` (the focused Younganimal CLI registry test overlaps this generic group).
+
+The Final Reviewer gate for the safe partial implementation/tests/docs is PASS / BLOCKING 0. The latest full Discovery pass used 0 retries, buffered 150 rows from `/1`–`/5`, and stopped at `/6` without response status; it yielded no episode records, so full range coverage and Catalog synchronization remain unverified. The later 03A attempt stopped on an AccessGuard HTTP 429 before the episode main-frame navigation. No explicit site navigation or retry was issued after that stop; in-flight automatic traffic is unknown. The independent Tester audit passed 42 tests, 0 skipped, with 140 existing asyncio deprecation warnings; the four isolated Catalogs were read-only and each contained one pre-created Work row with all other tables empty. Wait eligibility/resource semantics remain unknown and waiting stays unimplemented. Viewer/Capture, body continuity, END, Phase 04, and live E2E remain unverified or unimplemented.

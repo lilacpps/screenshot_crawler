@@ -1,7 +1,16 @@
 # Phase 03 — Viewer / original-image-first Capture
 
-Status: BLOCKED / NOT IMPLEMENTED. Target body sequence, END, and source/native attribution remain unproven; live work stopped after HTTP 429 in Phase 02. No further live requests were made. Prereq: Phase 02 review and safely available live evidence.
-Next: [free Batch](../04-free-batch/README.md)。
+Status: 03A PROBE INCOMPLETE; VIEWER/CAPTURE NOT IMPLEMENTED. The first fresh-free-target attempt navigated to the exact episode successfully but found seek `1..1` immediately after DCL and stopped before seeking. A second fresh-listing attempt hit a guarded `younganimal.com` fetch HTTP 429 (`Retry-After: 1`) before any episode main-frame navigation. No manual navigation or retry followed that stop; in-flight automatic requests are not ruled out. Body sequence, END, and source/native attribution remain unproven.
+Prerequisite for implementation: safely resolve the external access stop, then complete bounded 03A readiness/position/END proof. Phase 02 full 925-row Discovery remains incomplete, so 03B integration and Phase 04 remain blocked.
+Next: [free Batch](../04-free-batch/README.md) only after the blocked gates are accepted.
+
+## Current 03A evidence and resume boundary (2026-10-11)
+
+- The Lead/Reviewer allowed 03A as a separate metadata-only probe while Phase 02 full Discovery was incomplete; this split does not accept complete Discovery or authorize 03B/capture code.
+- `output/younganimal_experiment/phase03a_viewer_probe_20261011.json` (ignored): fresh canonical `/1` returned 200 and proved the 31-range map, 30 unique rows, and user target at position 1 with only exact `無料`. The one episode navigation returned 200 at exact `/episodes/55889b8a851cb`; immediately after DCL, the public seek was `value=1,min=1,max=1,step=1`. This contradicted earlier durable same-target evidence `21,1..21,step2`, so the probe stopped before any position. Early initialization is possible but unproven.
+- `output/younganimal_experiment/phase03a_viewer_probe_20261011_retry2.json` (ignored): a second fresh `/1` passed the same strict free-row proof, then an automatic page-originated fetch to `/episodes/55889b8a851cb` returned 429 with `Retry-After: 1`. AccessGuard stopped before the episode main-frame navigation (0 episode navigations, 0 seek positions). The fetch cause is UNKNOWN. No manual navigation or retry was issued after this stop; in-flight automatic requests are not ruled out. No further live operation is authorized under the current stop.
+- No page image, HTML, or response body was saved. The second attempt did not reach readiness polling or RGBA digest capture. Viewer readiness, all 11 positions, body continuity, terminal marker, END, pixel/layout stability, and source/native attribution remain unverified. No Viewer or capture implementation has been added.
+- If resumed after the stop is cleared, retain a fresh exact-free listing preflight and AccessGuard. After target DCL, poll at most 20 seconds / 250 ms for a unique Viewer, a valid seek, and stable wrapper structure across two polls. Verify expected positions `21,19,…,1` through the public control only; record metadata and in-page RGBA SHA-256 digests, never pixel bytes. Stop immediately on an access signal. Production capture still needs positive body continuity and normal terminal/END proof.
 
 ## Primary design
 まずHanayumeの現行main `adapter.py`（R8/R9/R10）と

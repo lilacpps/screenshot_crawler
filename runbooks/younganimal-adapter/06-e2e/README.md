@@ -1,11 +1,13 @@
 # Phase 06 — independent E2E, regression and handoff
 
-Status: LOCAL TEST/ARTIFACT AUDIT PASS; LIVE E2E INCOMPLETE. Tester: 27 passed, 0 skipped, 23 warnings in 4.31s; no live capture, ZIP, entitlement state, or complete Catalog flow was verified.
+Status: LOCAL TEST/ARTIFACT AUDIT PASS; LIVE E2E INCOMPLETE. Latest independent Tester: 42 passed, 0 skipped, 140 existing asyncio deprecation warnings in 9.00s; four isolated Catalogs were opened read-only and each contained one pre-created Work row with all other tables empty. No live capture, ZIP, entitlement state, or complete Catalog flow was verified.
 
 ## Current result (2026-10-11)
-- Independent local Tester audit: PASS; 27 passed, 0 skipped, 23 existing deprecation warnings, 4.31s across the two Younganimal test files.
-- Both isolated Catalogs contain one Work row created before adapter invocation and zero items, episode sources, targets, runs, artifacts, or quota states. JSON sanitation passed. No site request followed the HTTP 429.
-- This local audit does not establish live Viewer capture, END, ZIP, entitlement, or complete Catalog synchronization. Live E2E remains incomplete because Discovery stopped at HTTP 429.
+- Earlier independent local Tester audit: PASS; 27 passed, 0 skipped, 23 existing deprecation warnings, 4.31s across the two Younganimal test files. Latest independent audit: PASS; 42 passed, 0 skipped, 140 existing asyncio deprecation warnings, 9.00s.
+- Four isolated Catalogs were opened read-only; each had one Work row created before adapter invocation and zero items, episode sources, targets, runs, artifacts, or quota states. JSON sanitation passed. The 03A retry report records one listing main-frame navigation, then a page-originated Younganimal fetch HTTP 429 (`Retry-After: 1`) and zero episode main-frame navigations/seek positions. No manual navigation or retry was issued after the stop; in-flight automatic requests are not ruled out.
+- This local audit does not establish live Viewer capture, END, ZIP, entitlement, or complete Catalog synchronization. Live E2E remains incomplete because full Discovery stopped at `/6` without a response status and the later 03A attempt stopped on HTTP 429.
+
+Tester audit report: ignored `output/younganimal_experiment/tester/final_post429_local_audit.md`.
 
 ## Objective
 「無料」「待つと無料」それぞれの**実際にサポートするstate**で、
