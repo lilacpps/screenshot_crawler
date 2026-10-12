@@ -2,7 +2,7 @@
 
 ## Current phase
 
-P1 Discovery passed independent review (BLOCKING=0). P2 implementation is pending its phase contract; P3 Batch/ZIP integration and P4 independent end-to-end verification are not implemented. The source-native reader research in `runbooks/kadocomi/PROGRESS.md` is evidence for later work, not a production capture guarantee.
+P1 Discovery and P2 capture passed independent review (P2 BLOCKING=0). The corrected production Runner also passed live verification on the observed episode 4.1 variant. P3 Batch/ZIP integration and P4 independent end-to-end verification are not implemented. Other observed reader layouts remain unsupported and fail closed.
 
 ## Discovery contract
 
@@ -21,6 +21,16 @@ The row deadline is read only from the observed `\u914d\u4fe1\u671f\u9650\uff1aY
 The adapter sets `allow_inferred_display_positions=False` and emits no global position hints. Existing positions stay unchanged and new positions remain NULL. A complete full Discovery can mark absent Sources unavailable; an incomplete full run cannot reconcile missing Sources. Incremental Discovery leaves unseen Sources unchanged. Reusing an external ID preserves Source, Item, Completed, CrawlRun, and Artifact history through disappearance and republication.
 
 The shared Discovery service initializes `Work.title` from the dedicated Watchlist label and does not apply the adapter's `canonical_title`. Set that label to the actual work title.
+
+## P2 direct capture behavior
+
+`KadocomiAdapter` accepts only `access_strategy="direct"`, rejects quota resources and entry-only runs, and requires an exact episode URL. It initially navigates to the corresponding work page, re-runs the complete public-list Discovery contract, and proceeds only when that exact row is present, available, currently classified free, and not expired. It then opens the canonical query-free episode URL and verifies the final work/episode IDs, exact episode H1 and `og:title`, and absence of a visible dialog. The canonical Catalog source URL is retained.
+
+The adapter installs a non-interfering observer before navigation. It preserves the original `URL.createObjectURL` and `drawImage` calls, retaining only bounded Blob references and immutable draw-time metadata. A capture succeeds only when the active unique Kadocomi reader slide has the next expected content slot or right-to-left spread; each canvas must map through its last full-frame identity `HTMLImageElement` draw to the retained Blob, and decoded Blob RGBA pixels must equal the finished canvas both before and after asynchronous byte reads. The original Blob bytes are returned unchanged as `.webp` / `image/webp`. Missing, changed, composed, transformed, oversized, or non-WebP proof fails hard. Locator and screenshot fallback are disabled.
+
+The content slot inventory is derived from the live reader DOM. The observed shape is one first canvas, then two canvases per content slide in physical right-to-left order, followed by the explicit end-of-book slide. The end marker defines the stop boundary; one observed trailing non-content recommendation slide may follow, but the adapter never turns into or captures it. It stops only after every unique content slot has been captured and the active slide contains the explicit end-of-book marker. The bounded native capture currently covers at most 8,000,000 total decoded pixels per capture and 4 MiB per source Blob.
+
+Local synthetic browser tests use the observed DOM shape: content wrappers `DIV._pageCanvasWrapper_...[data-type=contents]` each own one `canvas._root_bx4cr_1`; the paired main END wrappers are distinguished from the trailing recommendation end marker. They cover byte-exact WebP output, spread order, explicit END/trailing-slide exclusion, wrong Blob attribution, asynchronous canvas mutation, transformed draws, expired/missing targets, foreign-episode redirects, missing main END, and skipped/reversed slots. The corrected live Runner completed all 21 content slots and stopped at the paired main-reader END markers; every output passed native WebP provenance/pixel checks at 836x1200. The independent Reviewer also passed P2 with BLOCKING=0. The live audit and earlier selector failure are recorded in `runbooks/kadocomi/PROGRESS.md`; P3 is not started.
 
 ## Operational validation
 
