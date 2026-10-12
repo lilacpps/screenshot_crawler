@@ -118,6 +118,10 @@ def _reader_html(
     mixed_key_behavior: str = "advance",
     beginning_fault: str | None = None,
     beginning_key_behavior: str = "advance",
+    first_pr_fault: str | None = None,
+    final_pr_fault: str | None = None,
+    final_pr_key_behavior: str = "advance",
+    final_pr_mutate_during_capture: bool = False,
     include_legacy_pr: bool = False,
     metadata_fault: str | None = None,
 ) -> str:
@@ -143,6 +147,64 @@ def _reader_html(
                 {"images": [], "trailing": True},
             ]
         )
+    elif reader_layout == "beginning_pr_final_pr":
+        if len(images) < 3 or len(images) % 2 != 1:
+            raise ValueError("beginning/final PR fixture requires paired spreads and one final page")
+        pages = [{"images": [], "beginning_pr": True}]
+        pages.extend(
+            {"images": [index, index + 1]}
+            for index in range(0, len(images) - 1, 2)
+        )
+        pages.extend(
+            [
+                {"images": [len(images) - 1], "final_pr": True},
+                {"images": [], "end_numbers": ["1", "2"] if include_end else []},
+                {"images": [], "trailing": True},
+            ]
+        )
+        if final_pr_fault == "final_slot_missing":
+            pages[-3]["images"] = []
+        elif final_pr_fault in {"secondary_missing", "secondary_duplicate", "secondary_wrong_owner"}:
+            if final_pr_fault == "secondary_missing":
+                pages[-1]["trailing"] = False
+            elif final_pr_fault == "secondary_duplicate":
+                pages[-1]["trailing_count"] = 2
+            else:
+                pages[-1]["trailing"] = False
+                pages[-2]["trailing"] = True
+        elif final_pr_fault == "content_at_recommendation":
+            pages[-1]["images"] = [len(images)]
+        elif final_pr_fault == "extra_after_recommendation":
+            pages.append({"images": []})
+    elif reader_layout == "content_first_final_pr":
+        if len(images) < 4 or len(images) % 2 != 0:
+            raise ValueError("content-first final PR fixture requires a first/final page and paired middle")
+        pages = [{"images": [0]}]
+        pages.extend(
+            {"images": [index, index + 1]}
+            for index in range(1, len(images) - 1, 2)
+        )
+        pages.extend(
+            [
+                {"images": [len(images) - 1], "final_pr": True},
+                {"images": [], "end_numbers": ["1", "2"] if include_end else []},
+                {"images": [], "trailing": True},
+            ]
+        )
+        if final_pr_fault == "final_slot_missing":
+            pages[-3]["images"] = []
+        elif final_pr_fault in {"secondary_missing", "secondary_duplicate", "secondary_wrong_owner"}:
+            if final_pr_fault == "secondary_missing":
+                pages[-1]["trailing"] = False
+            elif final_pr_fault == "secondary_duplicate":
+                pages[-1]["trailing_count"] = 2
+            else:
+                pages[-1]["trailing"] = False
+                pages[-2]["trailing"] = True
+        elif final_pr_fault == "content_at_recommendation":
+            pages[-1]["images"] = [len(images)]
+        elif final_pr_fault == "extra_after_recommendation":
+            pages.append({"images": []})
     elif reader_layout in {
         "mixed_final",
         "mixed_final_with_recommendation",
@@ -225,7 +287,7 @@ def _reader_html(
             for marker_index, number in enumerate(page.get("end_numbers", []))
         )
         beginning_markup = ""
-        if reader_layout in {"beginning_pr", "beginning_pr_mixed_final"} and index == 0:
+        if reader_layout in {"beginning_pr", "beginning_pr_mixed_final", "beginning_pr_final_pr"} and index == 0:
             if beginning_fault not in {"unknown_empty", "missing_root"}:
                 pr_markup = ""
                 if beginning_fault not in {"missing_pr", "wrong_owner"}:
@@ -263,11 +325,26 @@ def _reader_html(
                     '<div class="_endOfBook_1w5tt_50" data-type="pr" '
                     'style="position:absolute;left:0;top:0;width:80px;height:400px"></div>'
                 )
-        if reader_layout in {"beginning_pr", "beginning_pr_mixed_final"} and index == 1 and beginning_fault == "wrong_owner":
+        if reader_layout in {"beginning_pr", "beginning_pr_mixed_final", "beginning_pr_final_pr"} and index == 1 and beginning_fault == "wrong_owner":
             beginning_markup += (
                 '<div class="_endOfBook_1w5tt_50" data-type="pr" '
                 'style="position:absolute;left:0;top:0;width:80px;height:400px"></div>'
             )
+        if reader_layout == "content_first_final_pr" and first_pr_fault != "missing":
+            first_owner = 1 if first_pr_fault == "wrong_owner" else 0
+            if index == first_owner:
+                first_class = (
+                    "_endOfBook_1w5tt_50"
+                    if first_pr_fault == "wrong_class"
+                    else "_endOfBookWrapper_k9w27_34"
+                )
+                first_type = "unknown" if first_pr_fault == "wrong_type" else "pr"
+                first_number = "2" if first_pr_fault == "wrong_number" else "1"
+                first_markup = (
+                    f'<div class="{first_class}" data-type="{first_type}" data-n="{first_number}" '
+                    'style="position:absolute;left:0;top:0;width:36px;height:36px"></div>'
+                )
+                marker_markup += first_markup * (2 if first_pr_fault == "duplicate" else 1)
         if reader_layout.startswith("mixed_final") and index == 0:
             marker_markup += (
                 '<div class="_endOfBookWrapper_k9w27_34" data-type="pr" '
@@ -278,12 +355,34 @@ def _reader_html(
                 '<div class="_endOfBookWrapper_k9w27_34" data-type="pr" data-n="1" '
                 'style="position:absolute;left:0;top:0;width:36px;height:36px"></div>'
             )
+        if reader_layout in {"beginning_pr_final_pr", "content_first_final_pr"}:
+            final_content_index = len(pages) - 3
+            owns_final_pr = index == final_content_index
+            if final_pr_fault == "final_pr_wrong_owner":
+                owns_final_pr = index == final_content_index - 1
+            if owns_final_pr and final_pr_fault != "final_pr_missing":
+                final_pr_class = (
+                    "_endOfBook_1w5tt_50"
+                    if final_pr_fault == "final_pr_wrong_class"
+                    else "_endOfBookWrapper_k9w27_34"
+                )
+                final_pr_type = "unknown" if final_pr_fault == "final_pr_wrong_type" else "pr"
+                final_pr_number = "1" if final_pr_fault == "final_pr_wrong_number" else "2"
+                final_pr_markup = (
+                    f'<div class="{final_pr_class}" data-type="{final_pr_type}" '
+                    f'data-n="{final_pr_number}" '
+                    'style="position:absolute;left:0;top:0;width:36px;height:36px"></div>'
+                )
+                marker_markup += final_pr_markup
+                if final_pr_fault == "final_pr_duplicate":
+                    marker_markup += final_pr_markup
         trailing_count = page.get("trailing_count", 1 if page.get("trailing") else 0)
         trailing_markup = (
             '<a href="/detail/other-work">Related work</a>'
             + "".join(
                 '<div class="_root_1w5tt_1" data-type="end">'
-                '<div class="_endOfBook_1w5tt_50" data-type="end-of-book"></div></div>'
+                '<div class="_endOfBook_1w5tt_50" data-type="end-of-book" '
+                'style="position:absolute;left:0;top:0;width:36px;height:36px"></div></div>'
                 for _ in range(trailing_count)
             )
             if trailing_count
@@ -297,7 +396,7 @@ def _reader_html(
             + trailing_markup
             + (
                 ""
-                if reader_layout in {"beginning_pr", "beginning_pr_mixed_final"} and index == 0
+                if reader_layout in {"beginning_pr", "beginning_pr_mixed_final", "beginning_pr_final_pr"} and index == 0
                 else '<div class="_cover_bx4cr_11" data-turn="next"></div>'
             )
             + "</div>"
@@ -323,6 +422,17 @@ def _reader_html(
     is_mixed_layout = reader_layout.startswith("mixed_final") or reader_layout == "beginning_pr_mixed_final"
     mixed_end_index = len(pages) - (2 if reader_layout == "mixed_final_with_recommendation" else 1)
     mixed_final_content_index = mixed_end_index - 1
+    final_pr_content_index = len(pages) - 3
+    final_pr_mutation_script = (
+        "const originalArrayBuffer = Blob.prototype.arrayBuffer; let changedFinalPr = false; "
+        "Blob.prototype.arrayBuffer = async function(...args) { "
+        "const active = document.querySelector('.splide__slide.is-active'); "
+        "const marker = active?.querySelector('div[data-type=pr][data-n=\\\"2\\\"]'); "
+        "if (marker && !changedFinalPr) { changedFinalPr = true; marker.style.left = '4px'; } "
+        "return Reflect.apply(originalArrayBuffer, this, args); };"
+        if final_pr_mutate_during_capture
+        else ""
+    )
     delayed_metadata_script = (
         f"setTimeout(() => {{ document.title = {json.dumps(episode_title)}; "
         "document.querySelector('meta[property=\\\"og:title\\\"]')?.setAttribute('content', "
@@ -367,14 +477,15 @@ def _reader_html(
           if ({str(skip_to_end).lower()} && index === 0) {{
             slides[index].classList.remove('is-active');
             slides[{2 if reader_layout == 'paired' else mixed_end_index}].classList.add('is-active');
-          }} else if ({str(is_mixed_layout).lower()} && index === {mixed_final_content_index}) {{
+          }} else if (({str(is_mixed_layout).lower()} && index === {mixed_final_content_index}) ||
+                     ({str(reader_layout in {'beginning_pr_final_pr', 'content_first_final_pr'}).lower()} && index === {final_pr_content_index})) {{
             return;
           }} else if (index >= 0 && index + 1 < slides.length) {{
             slides[index].classList.remove('is-active');
             slides[index + 1].classList.add('is-active');
           }}
         }});
-        if ({str(reader_layout in {'beginning_pr', 'beginning_pr_mixed_final'}).lower()}) {{
+        if ({str(reader_layout in {'beginning_pr', 'beginning_pr_mixed_final', 'beginning_pr_final_pr'}).lower()}) {{
           document.addEventListener('keydown', event => {{
             if (event.key !== 'ArrowLeft') return;
             const index = slides.findIndex(slide => slide.classList.contains('is-active'));
@@ -408,6 +519,22 @@ def _reader_html(
             }}
           }});
         }}
+        if ({str(reader_layout in {'beginning_pr_final_pr', 'content_first_final_pr'}).lower()}) {{
+          document.addEventListener('keydown', event => {{
+            if (event.key !== 'ArrowLeft') return;
+            const index = slides.findIndex(slide => slide.classList.contains('is-active'));
+            if (index !== {final_pr_content_index}) return;
+            const behavior = {json.dumps(final_pr_key_behavior)};
+            if (behavior === 'advance') {{
+              slides[index].classList.remove('is-active');
+              slides[index + 1].classList.add('is-active');
+            }} else if (behavior === 'skip') {{
+              slides[index].classList.remove('is-active');
+              slides[index + 2].classList.add('is-active');
+            }}
+          }});
+        }}
+        {final_pr_mutation_script}
         {delayed_metadata_script}
       </script></body></html>"""
 
@@ -473,6 +600,10 @@ async def _install_reader_routes(
     mixed_key_behavior: str = "advance",
     beginning_fault: str | None = None,
     beginning_key_behavior: str = "advance",
+    first_pr_fault: str | None = None,
+    final_pr_fault: str | None = None,
+    final_pr_key_behavior: str = "advance",
+    final_pr_mutate_during_capture: bool = False,
     include_legacy_pr: bool = False,
     metadata_fault: str | None = None,
     episode_status: int = 200,
@@ -491,6 +622,10 @@ async def _install_reader_routes(
         mixed_key_behavior=mixed_key_behavior,
         beginning_fault=beginning_fault,
         beginning_key_behavior=beginning_key_behavior,
+        first_pr_fault=first_pr_fault,
+        final_pr_fault=final_pr_fault,
+        final_pr_key_behavior=final_pr_key_behavior,
+        final_pr_mutate_during_capture=final_pr_mutate_during_capture,
         include_legacy_pr=include_legacy_pr,
         metadata_fault=metadata_fault,
     )
@@ -640,6 +775,8 @@ async def test_kadocomi_native_capture_requires_source_mapping_and_stable_full_f
         "mixed_final_with_recommendation",
         "beginning_pr",
         "beginning_pr_mixed_final",
+        "beginning_pr_final_pr",
+        "content_first_final_pr",
     ]
 )
 async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explicit_end(
@@ -659,6 +796,8 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
         "mixed_final_with_recommendation": 20,
         "beginning_pr": 18,
         "beginning_pr_mixed_final": 11,
+        "beginning_pr_final_pr": 11,
+        "content_first_final_pr": 14,
     }[reader_layout]
     images = _fixture_images(image_count)
     await _install_reader_routes(
@@ -719,6 +858,35 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
             assert final_snapshot["markerSlideIndexes"] == [2, 2]
             assert final_snapshot["markerNumbers"] == ["1", "2"]
             assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [3]
+    elif reader_layout == "beginning_pr_final_pr":
+        assert len(final_snapshot["slideRows"]) == 9
+        assert final_snapshot["activeIndex"] == 7
+        assert final_snapshot["markerSlideIndexes"] == [7, 7]
+        assert final_snapshot["markerNumbers"] == ["1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [8]
+        assert [len(row["contentSlots"]) for row in final_snapshot["slideRows"]] == [
+            0, 2, 2, 2, 2, 2, 1, 0, 0
+        ]
+        assert final_snapshot["beginningMarkerCount"] == 1
+        assert final_snapshot["prMarkerCount"] == 2
+        assert final_snapshot["prMarkers"][0]["beginningOwnerIndex"] == 0
+        assert final_snapshot["prMarkers"][1]["beginningOwnerIndex"] == -1
+        assert final_snapshot["prMarkers"][1]["dataN"] == "2"
+        assert final_snapshot["slideRows"][8]["active"] is False
+    elif reader_layout == "content_first_final_pr":
+        assert len(final_snapshot["slideRows"]) == 10
+        assert final_snapshot["activeIndex"] == 8
+        assert final_snapshot["markerSlideIndexes"] == [8, 8]
+        assert final_snapshot["markerNumbers"] == ["1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [9]
+        assert [len(row["contentSlots"]) for row in final_snapshot["slideRows"]] == [
+            1, 2, 2, 2, 2, 2, 2, 1, 0, 0
+        ]
+        assert final_snapshot["beginningMarkerCount"] == 0
+        assert final_snapshot["prMarkerCount"] == 2
+        assert [(marker["dataType"], marker["dataN"], marker["slideIndex"])
+                for marker in final_snapshot["prMarkers"]] == [("pr", "1", 0), ("pr", "2", 7)]
+        assert final_snapshot["slideRows"][9]["active"] is False
     elif reader_layout == "mixed_final":
         assert len(final_snapshot["slideRows"]) == 21
         assert final_snapshot["activeIndex"] == 20
@@ -862,6 +1030,44 @@ async def test_kadocomi_runner_waits_for_delayed_same_page_metadata(
         "beginning_mixed_wrong_final_marker",
         "beginning_mixed_final_no_arrow",
         "beginning_mixed_early_end",
+        "beginning_final_pr_missing_beginning_pr",
+        "beginning_final_pr_duplicate_beginning_pr",
+        "beginning_final_pr_entry_no_arrow",
+        "beginning_final_pr_entry_skip",
+        "beginning_final_pr_missing_final_pr",
+        "beginning_final_pr_duplicate_final_pr",
+        "beginning_final_pr_wrong_final_owner",
+        "beginning_final_pr_wrong_final_class",
+        "beginning_final_pr_wrong_final_number",
+        "beginning_final_pr_wrong_final_type",
+        "beginning_final_pr_missing_recommendation",
+        "beginning_final_pr_duplicate_recommendation",
+        "beginning_final_pr_wrong_recommendation_owner",
+        "beginning_final_pr_content_at_recommendation",
+        "beginning_final_pr_extra_slide",
+        "beginning_final_pr_final_no_arrow",
+        "beginning_final_pr_final_skip",
+        "beginning_final_pr_async_mutation",
+        "content_first_final_pr_first_missing",
+        "content_first_final_pr_first_duplicate",
+        "content_first_final_pr_first_wrong_owner",
+        "content_first_final_pr_first_wrong_class",
+        "content_first_final_pr_first_wrong_number",
+        "content_first_final_pr_first_wrong_type",
+        "content_first_final_pr_final_missing",
+        "content_first_final_pr_final_duplicate",
+        "content_first_final_pr_final_wrong_owner",
+        "content_first_final_pr_final_wrong_class",
+        "content_first_final_pr_final_wrong_number",
+        "content_first_final_pr_final_wrong_type",
+        "content_first_final_pr_rec_missing",
+        "content_first_final_pr_rec_duplicate",
+        "content_first_final_pr_rec_wrong_owner",
+        "content_first_final_pr_rec_content",
+        "content_first_final_pr_rec_extra_slide",
+        "content_first_final_pr_final_no_arrow",
+        "content_first_final_pr_final_skip",
+        "content_first_final_pr_async_mutation",
     ],
 )
 async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
@@ -878,6 +1084,8 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
     mixed = scenario.startswith("mixed_")
     mixed_rec = scenario.startswith("mixed_rec_")
     beginning_mixed = scenario.startswith("beginning_mixed_")
+    beginning_final_pr = scenario.startswith("beginning_final_pr_")
+    content_first_final_pr = scenario.startswith("content_first_final_pr_")
     beginning = scenario.startswith("beginning_")
     image_count = (
         21
@@ -886,6 +1094,9 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         if mixed_rec
         else 11
         if beginning_mixed
+        or beginning_final_pr
+        else 14
+        if content_first_final_pr
         else 39
         if scenario == "mixed_content_at_end"
         else 38
@@ -913,7 +1124,80 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         options["reverse_spread"] = True
     elif scenario == "skip_slide":
         options["skip_to_end"] = True
-    if beginning_mixed:
+    if content_first_final_pr:
+        options["reader_layout"] = "content_first_final_pr"
+        suffix = scenario.removeprefix("content_first_final_pr_")
+        if suffix.startswith("first_"):
+            options["first_pr_fault"] = {
+                "first_missing": "missing",
+                "first_duplicate": "duplicate",
+                "first_wrong_owner": "wrong_owner",
+                "first_wrong_class": "wrong_class",
+                "first_wrong_number": "wrong_number",
+                "first_wrong_type": "wrong_type",
+            }[suffix]
+        elif suffix.startswith("final_") and suffix not in {"final_no_arrow", "final_skip"}:
+            options["final_pr_fault"] = {
+                "final_missing": "final_pr_missing",
+                "final_duplicate": "final_pr_duplicate",
+                "final_wrong_owner": "final_pr_wrong_owner",
+                "final_wrong_class": "final_pr_wrong_class",
+                "final_wrong_number": "final_pr_wrong_number",
+                "final_wrong_type": "final_pr_wrong_type",
+            }[suffix]
+        elif suffix.startswith("rec_"):
+            options["final_pr_fault"] = {
+                "rec_missing": "secondary_missing",
+                "rec_duplicate": "secondary_duplicate",
+                "rec_wrong_owner": "secondary_wrong_owner",
+                "rec_content": "content_at_recommendation",
+                "rec_extra_slide": "extra_after_recommendation",
+            }[suffix]
+        elif suffix == "final_no_arrow":
+            options["final_pr_key_behavior"] = "none"
+        elif suffix == "final_skip":
+            options["final_pr_key_behavior"] = "skip"
+        elif suffix == "async_mutation":
+            options["final_pr_mutate_during_capture"] = True
+    elif beginning_final_pr:
+        options["reader_layout"] = "beginning_pr_final_pr"
+        suffix = scenario.removeprefix("beginning_final_pr_")
+        if suffix == "entry_no_arrow":
+            options["beginning_key_behavior"] = "none"
+        elif suffix == "entry_skip":
+            options["beginning_key_behavior"] = "skip"
+        elif suffix in {"missing_beginning_pr", "duplicate_beginning_pr"}:
+            options["beginning_fault"] = "missing_pr" if suffix == "missing_beginning_pr" else "duplicate_pr"
+        elif suffix in {
+            "missing_final_pr", "duplicate_final_pr", "wrong_final_owner",
+            "wrong_final_class", "wrong_final_number", "wrong_final_type",
+        }:
+            options["final_pr_fault"] = {
+                "missing_final_pr": "final_pr_missing",
+                "duplicate_final_pr": "final_pr_duplicate",
+                "wrong_final_owner": "final_pr_wrong_owner",
+                "wrong_final_class": "final_pr_wrong_class",
+                "wrong_final_number": "final_pr_wrong_number",
+                "wrong_final_type": "final_pr_wrong_type",
+            }[suffix]
+        elif suffix in {
+            "missing_recommendation", "duplicate_recommendation",
+            "wrong_recommendation_owner", "content_at_recommendation", "extra_slide",
+        }:
+            options["final_pr_fault"] = {
+                "missing_recommendation": "secondary_missing",
+                "duplicate_recommendation": "secondary_duplicate",
+                "wrong_recommendation_owner": "secondary_wrong_owner",
+                "content_at_recommendation": "content_at_recommendation",
+                "extra_slide": "extra_after_recommendation",
+            }[suffix]
+        elif suffix == "final_no_arrow":
+            options["final_pr_key_behavior"] = "none"
+        elif suffix == "final_skip":
+            options["final_pr_key_behavior"] = "skip"
+        elif suffix == "async_mutation":
+            options["final_pr_mutate_during_capture"] = True
+    elif beginning_mixed:
         options["reader_layout"] = "beginning_pr_mixed_final"
         if scenario == "beginning_mixed_no_arrow":
             options["beginning_key_behavior"] = "none"
@@ -979,6 +1263,9 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         "beginning_no_arrow",
         "beginning_mixed_no_arrow",
         "beginning_mixed_final_no_arrow",
+        "beginning_final_pr_entry_no_arrow",
+        "beginning_final_pr_final_no_arrow",
+        "content_first_final_pr_final_no_arrow",
     }:
         monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
     output_dir = tmp_path / scenario / "output"
@@ -1005,6 +1292,9 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
             "beginning_mixed_no_arrow",
             "beginning_mixed_final_no_arrow",
             "beginning_mixed_early_end",
+            "beginning_final_pr_entry_no_arrow",
+            "beginning_final_pr_final_no_arrow",
+            "content_first_final_pr_final_no_arrow",
         }
         else UnknownPageStateError
     )
@@ -1021,11 +1311,26 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         "mixed_final_no_arrow",
         "mixed_rec_final_no_arrow",
         "beginning_mixed_final_no_arrow",
+        "beginning_final_pr_final_no_arrow",
+        "beginning_final_pr_final_skip",
+        "content_first_final_pr_final_no_arrow",
+        "content_first_final_pr_final_skip",
     }:
         manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
         assert len(manifest["pages"]) == image_count
         assert "status" not in manifest
         assert len(list(output_dir.glob("page-*.webp"))) == image_count
+    elif scenario in {
+        "beginning_final_pr_async_mutation",
+        "content_first_final_pr_async_mutation",
+    }:
+        manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert len(manifest["pages"]) == image_count - 1
+        assert "status" not in manifest
+        assert len(list(output_dir.glob("page-*.webp"))) == image_count - 1
+        assert await browser_page.locator(
+            '.splide__slide.is-active [data-type="pr"][data-n="2"]'
+        ).evaluate("node => node.style.left") == "4px"
     else:
         assert list(output_dir.glob("page-*.webp")) == []
         assert not (output_dir / "manifest.json").exists()
@@ -1061,6 +1366,8 @@ async def _seed_kadocomi_batch_candidate(
         "mixed_final_with_recommendation": 20,
         "beginning_pr": 18,
         "beginning_pr_mixed_final": 11,
+        "beginning_pr_final_pr": 11,
+        "content_first_final_pr": 14,
     }[reader_layout]
     images = _fixture_images(image_count)
     await _install_reader_routes(browser_page, images, reader_layout=reader_layout)
@@ -1104,6 +1411,8 @@ async def _seed_kadocomi_batch_candidate(
         "mixed_final_with_recommendation",
         "beginning_pr",
         "beginning_pr_mixed_final",
+        "beginning_pr_final_pr",
+        "content_first_final_pr",
     ],
 )
 async def test_kadocomi_batch_discovers_captures_packages_and_completes(
@@ -1180,6 +1489,13 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
         "beginning_no_arrow",
         "beginning_skip",
         "beginning_mixed_final_no_arrow",
+        "beginning_final_pr_missing_final_pr",
+        "beginning_final_pr_wrong_final_owner",
+        "beginning_final_pr_missing_recommendation",
+        "beginning_final_pr_entry_skip",
+        "beginning_final_pr_final_no_arrow",
+        "beginning_final_pr_final_skip",
+        "beginning_final_pr_async_mutation",
     ],
 )
 async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
@@ -1195,7 +1511,25 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     )
     await browser_page.unroute_all()
     options: dict[str, object] = {}
-    if failure.startswith("beginning_mixed_"):
+    if failure.startswith("beginning_final_pr_"):
+        images = _fixture_images(11)
+        options["reader_layout"] = "beginning_pr_final_pr"
+        suffix = failure.removeprefix("beginning_final_pr_")
+        if suffix in {"missing_final_pr", "wrong_final_owner", "missing_recommendation"}:
+            options["final_pr_fault"] = {
+                "missing_final_pr": "final_pr_missing",
+                "wrong_final_owner": "final_pr_wrong_owner",
+                "missing_recommendation": "secondary_missing",
+            }[suffix]
+        elif suffix == "entry_skip":
+            options["beginning_key_behavior"] = "skip"
+        elif suffix == "final_no_arrow":
+            options["final_pr_key_behavior"] = "none"
+        elif suffix == "final_skip":
+            options["final_pr_key_behavior"] = "skip"
+        elif suffix == "async_mutation":
+            options["final_pr_mutate_during_capture"] = True
+    elif failure.startswith("beginning_mixed_"):
         images = _fixture_images(11)
         options["reader_layout"] = "beginning_pr_mixed_final"
     elif failure.startswith("mixed_rec_"):
@@ -1226,8 +1560,12 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
         "mixed_final_no_arrow",
         "mixed_rec_final_no_arrow",
         "beginning_mixed_final_no_arrow",
+        "beginning_final_pr_final_no_arrow",
     }:
-        options["mixed_key_behavior"] = "none"
+        if failure == "beginning_final_pr_final_no_arrow":
+            options["final_pr_key_behavior"] = "none"
+        else:
+            options["mixed_key_behavior"] = "none"
         monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
     elif failure.startswith("beginning_"):
         if failure == "beginning_no_arrow":

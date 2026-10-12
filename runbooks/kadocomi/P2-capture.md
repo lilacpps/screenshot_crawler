@@ -1,6 +1,6 @@
 # P2 — Viewer、原本優先の画像取得、本文完全性
 
-Status: Five exact observed reader layouts pass the bounded evidence, local, and independent gates. Episode 20.2 adds only a strict beginning-PR plus mixed-final composition. The observed route had five paired content slides; validation requires at least one paired content slide (end index >=3), then a final singleton and immediate empty paired END, with no trailing recommendation. Its manual normal-renderer source/END probe proved 11 native WebP pages; it was not a CrawlerRunner run. The normal CLI ZIP matched the 11 recorded P0 source hashes and byte lengths. Episode 22.2 passed as the current 18-page CLI control matching its P0 source files. Native byte/pixel proof rules remain unchanged. Final documentation review PASS (Reviewer BLOCKING=0, NONBLOCKING=0; Lead accepted bounded scope); see [PROGRESS](PROGRESS.md).
+Status: P2 implementation and evidence gates passed for seven observed reader layouts across six strict profiles; the mixed-final profile accepts two reviewed recommendation forms. Episodes 8.2 and 7.2 add profile-specific PR roles while preserving native Blob/RGBA proof and paired main-END requirements; their bounded P0 probes were manual normal-renderer probes, not CrawlerRunner runs. The 15-target normal CLI Batch/ZIP sweep and Episode 22.2 control retest passed. Exact evidence and source-comparison limits are in [PROGRESS](PROGRESS.md); Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope).
 
 ## 変更範囲と優先順位
 

@@ -1,6 +1,6 @@
 # P4 — 独立E2E、レビュー、最終判定
 
-Status: P4 Tester, independent live-evidence Reviewer, and Lead gates passed for the Episode 20.2 target and Episode 22.2 18-page control. Episode 20.2 produced an 11-member CRC-valid WebP ZIP matching the recorded P0 manual source-proof hashes and byte lengths; the P4 audit did not run a fresh Blob/RGBA hook. The 22.2 control matched all 18 P0 source-proof files. Final documentation review PASS (Reviewer BLOCKING=0, NONBLOCKING=0; Lead accepted bounded scope); see [PROGRESS](PROGRESS.md) for ZIP hashes and post-Discovery/backup results.
+Status: P4 Tester, independent live-evidence Reviewer, and Lead gates passed for the 15 selected target episodes and the Episode 22.2 18-page control retest. The initial target run completed two episodes, then retained a pre-capture Episode 7.2 failure; the resumed 13 completed. The first 22.2 control attempt also remains failed with unknown cause, while one authorized unchanged-code retest completed successfully. Episode 8.2 and 7.2 ZIP members matched their saved P0 manual source proofs; the 22.2 retest matched its P0 files. The P4 runs did not use a fresh independent Blob/RGBA observer. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope); hashes and post-Discovery/backup state are in [PROGRESS](PROGRESS.md).
 
 ## Direct-entry follow-up (2026-10-12)
 
@@ -63,7 +63,7 @@ final singleton without entering the recommendation. The production CLI run
 also succeeded through its normal Runner path. Sanitized report:
 `work/kadocomi/p4-episode79-independent-20261012/independent-live-20-audit.json`.
 The post-Discovery Catalog audit passed; the final live-evidence Reviewer gate
-passed (BLOCKING=0, NONBLOCKING=0), and Lead accepted the bounded scope. Final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). See [PROGRESS](PROGRESS.md).
+passed (BLOCKING=0, NONBLOCKING=0), and Lead accepted the bounded scope. At that earlier checkpoint, docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). See [PROGRESS](PROGRESS.md).
 
 ## First-episode 38-slot extension audit (2026-10-12)
 

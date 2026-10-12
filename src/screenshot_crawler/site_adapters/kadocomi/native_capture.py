@@ -379,8 +379,10 @@ NATIVE_CAPTURE_SCRIPT = r"""async args => {
     secondaryEndMarkers: snapshot.secondaryEndMarkers,
     beginningMarkerCount: snapshot.beginningMarkerCount,
     beginningMarkers: snapshot.beginningMarkers,
-    prMarkerCount: snapshot.beginningMarkerCount > 0 ? snapshot.prMarkerCount : 0,
-    prMarkers: snapshot.beginningMarkerCount > 0 ? snapshot.prMarkers : [],
+    prMarkerCount: (args.trackPrMarkers === true || snapshot.beginningMarkerCount > 0)
+      ? snapshot.prMarkerCount : 0,
+    prMarkers: (args.trackPrMarkers === true || snapshot.beginningMarkerCount > 0)
+      ? snapshot.prMarkers : [],
     slideRows: snapshot.slideRows.map(row => ({
       id: row.id,
       index: row.index,
@@ -477,7 +479,7 @@ NATIVE_CAPTURE_SCRIPT = r"""async args => {
       JSON.stringify(last.secondaryEndMarkers) !== JSON.stringify(first.secondaryEndMarkers) ||
       last.beginningMarkerCount !== first.beginningMarkerCount ||
       JSON.stringify(last.beginningMarkers) !== JSON.stringify(first.beginningMarkers) ||
-      (first.beginningMarkerCount > 0 &&
+      ((args.trackPrMarkers === true || first.beginningMarkerCount > 0) &&
         (last.prMarkerCount !== first.prMarkerCount ||
          JSON.stringify(last.prMarkers) !== JSON.stringify(first.prMarkers))) ||
       JSON.stringify(last.slideRows.map(row => [row.id, row.contentSlots])) !==
