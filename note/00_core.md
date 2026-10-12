@@ -37,10 +37,17 @@ No numeric archive prefix is inferred while display positions are NULL.
 The canonical work title from detail-page og:title is exposed by Discovery but
 the shared DiscoveryService initializes Work.title from the Watchlist label.
 Set a dedicated Watchlist label to the actual Work name. P3 policy and local
-end-to-end validation passed independent review. P4 independently verified one
-isolated live CLI Batch/ZIP/Completed run; Lead accepted that observed scope.
-Repository-wide pytest completed with one known baseline failure reproduced at
-`ceb3434`; full Ruff passed. Limits are in the Kadocomi progress ledger.
+end-to-end validation passed independent review. P4 Tester, Reviewer, and Lead
+accepted isolated live CLI Batch/ZIP/Completed runs for the observed 4.1 and
+first-episode 38-slot variants; independent ZIP members matched every live
+source Blob and full-RGBA canvas audit. The 21-slot normal CLI control and final
+post-Discovery/Catalog stability audit also passed: all 53 Sources/IDs and NULL
+positions remained stable, both Artifacts remained stable, and the actual-catalog
+renumber dry-run proposed no moves. Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout.
+The prior repository-wide pytest run had
+one known baseline failure reproduced at `ceb3434` before the 38-slot extension;
+full Ruff passed. Current limits and exact evidence are in the Kadocomi progress
+ledger.
 
 ## Younganimal Discovery and manual Crawl CLI registration (2026-10-11)
 

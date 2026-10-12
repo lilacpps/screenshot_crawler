@@ -1,9 +1,11 @@
 # P4 — 独立E2E、レビュー、最終判定
 
-Status: PASS for one isolated live target and independent ZIP/source audit.
-Tester and Reviewer passed (BLOCKING=0, NONBLOCKING=0), and Lead accepted the
-observed episode 4.1 scope. Repository-wide pytest completed with one known
-baseline failure, reproduced at `ceb3434`; full Ruff passed. Alternate reader
+Status: PASS for the isolated episode 4.1 and first-episode 38-slot CLI Batch,
+ZIP, and independent source/canvas audits (Tester and Reviewer BLOCKING=0;
+NONBLOCKING=0). The separate 21-slot control and post-Discovery/Catalog
+stability audit also passed. Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout. The
+prior repository-wide pytest run had one known baseline failure, reproduced at
+`ceb3434`; it predates the 38-slot extension. Full Ruff passed. Other reader
 variants and lifetime-position reconstruction remain unsupported. See
 [PROGRESS](PROGRESS.md).
 **目的**: Discovery→Catalog→Batch→全本文の完全性→ZIP/Completedを確認し、
@@ -35,6 +37,36 @@ retained manifest file. Exact CLI commands, isolated report paths, and audit
 limits are recorded in [PROGRESS](PROGRESS.md). The independent Tester phase
 passed; final P4 review and Lead acceptance passed for the bounded target scope.
 The full-suite baseline failure and unsupported variants remain recorded above.
+
+## First-episode 38-slot extension audit (2026-10-12)
+
+Tester ran the normal isolated CLI Batch path for the first-episode target.
+The 38 ordinal ZIP members were CRC-valid 835x1200 WebP and matched the
+independent normal-renderer source Blob bytes and full-RGBA canvas audit exactly.
+The source aggregate was 6,326,198 bytes; ZIP size was 6,328,964 bytes with
+SHA-256 `7a98969ce7c2ee05c4ac93a0a593fa671451f7b5389f1fe74eeccad37c5365ea`.
+The reader traversed 20 content slides with slot counts `[1, 2 x 18, 1]`, then
+one ArrowLeft advance reached the empty slide 20 with the same episode identity
+and explicit END `n=1,n=2`. All 38 ZIP members had exact ordinal bytes,
+full-RGBA equality, and valid CRCs. Tester and independent Reviewer passed this
+variant with BLOCKING=0. Sanitized evidence is under
+`work/kadocomi/p4-first38-independent-20261012/`.
+
+The 21-slot normal CLI control passed: the normal CLI produced 21 ordinal WebP
+members with valid CRCs, matching the independent P2 page-file bytes and
+836x1200 dimensions; CrawlRun succeeded at explicit END and produced its
+Artifact/Completed state under the direct strategy with no quota resource. The
+ZIP size was 3,278,163 bytes with SHA-256
+`943c469041da7a2629eea810927694acea7cb5e6bdaf09b5441735edac089942`.
+The final post-Discovery/Catalog stability audit preserved 53 original Sources
+and external IDs, 53 available/free Sources (46 explicit deadlines, 7 NULL), all
+NULL positions, 2 Completed Items, 51 pending Items, and both Artifacts. The
+isolated Catalog backup integrity check returned `ok`. Actual-catalog
+renumber dry-run selected 53 Sources with zero renames, 53 `no_position`, and
+zero artifact collisions/errors. No fresh synthetic apply was run. Final
+Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout. The normal CLI removes temporary
+source output after packaging, so this evidence covers the ZIP, run/status,
+Artifact, and Completed state rather than a retained manifest.
 
 ## 必須確認マトリクス
 

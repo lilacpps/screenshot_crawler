@@ -1,6 +1,6 @@
 # カドコミ (comic-walker.com) Free-Only Site Adapter — 実装 Runbook
 
-Status (2026-10-12): P0 evidence contract and P1/P1.5/P2/P3 gates passed. P4 Tester and independent Reviewer passed one live CLI Batch/ZIP verification for the supported episode 4.1 variant; Lead accepted this bounded scope. Repository-wide pytest finished with 2448 passed, one known baseline failure, and zero skips; full Ruff passed. Site-wide/alternate-variant limits remain as stated in [PROGRESS](PROGRESS.md).
+Status (2026-10-12): P0 evidence contract and P1/P1.5/P2/P3 gates passed. P4 Tester and independent Reviewer accepted live CLI Batch/ZIP verification for episode 4.1 and the first-episode 38-slot variant; the separate 21-slot normal CLI control and final post-Discovery/Catalog audit also passed. Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout. The prior repository-wide pytest run (before the 38-slot extension) finished with 2448 passed, one known baseline failure, and zero skips; full Ruff passed. Remaining site-wide limits are in [PROGRESS](PROGRESS.md).
 Execution branch: `feat/kadocomi-adapter`
 Site key: `kadocomi`
 Sample work: https://comic-walker.com/detail/KC_004915_S?episodeType=first
@@ -161,13 +161,13 @@ The adapter validates and exposes the work-page `og:title`; set the Watchlist
 label to the actual work name.
 
 P0 evidence and P2 implementation establish a source-native path for the
-observed episode 4.1 target: the normal renderer's retained WebP Blob maps by
-`currentSrc` to each full-frame 836x1200 identity draw. P2 verifies every page's
-Blob provenance, decoded pixels, and stable canvas before preserving bytes.
-Tester independently audited all 21 P2 page files and, during P4, all 21 ZIP
-members against the independent live Blob/page-file evidence. The 38-canvas
-first-episode layout remains unsupported.
+observed episode 4.1 and first-episode targets: the normal renderer's retained
+WebP Blob maps by `currentSrc` to each full-frame identity draw. P2 verifies
+every page's Blob provenance, decoded pixels, and stable canvas before
+preserving bytes. Tester and Reviewer independently audited all 21 episode 4.1
+ZIP members and all 38 first-episode ZIP members against separate live
+Blob/canvas evidence; each member was byte-exact and pixel-equal.
 
-P0's exact public list and the episode 4.1 reader are supported. P1 stores the 53 observed episode rows without assigning inferred positions, and preserves Catalog history on disappearance/reappearance. P2 uses retained normal-renderer WebP Blob bytes with per-page source/canvas proof. P3 admits direct-only free sources and rechecks the exact current row before navigation. P4 Tester and independent Reviewer verified one isolated CLI Batch run: 21 pages were packaged byte-for-byte into a valid WebP ZIP and the Catalog Item reached Completed only after END. Lead accepted P4 for this observed scope. Repository-wide pytest completed with one known pre-existing Younganimal failure reproduced at baseline `ceb3434`; full Ruff passed. See `PROGRESS.md` for audit details and limits.
+P0's exact public list and both observed reader variants are supported. P1 stores the 53 observed episode rows without assigning inferred positions and preserves Catalog history on disappearance/reappearance. P2 uses retained normal-renderer WebP Blob bytes with per-page source/canvas proof. P3 admits direct-only free sources and rechecks the exact current row before navigation. P4 Tester and independent Reviewer verified isolated CLI Batch runs for episode 4.1 (21 pages) and the first episode (38 pages); both ZIPs matched their independent live source/canvas audits and reached Completed only after explicit END. The separate 21-slot control and final post-Discovery audit passed: 53 Sources and external IDs remained stable, both Artifacts remained stable, all positions remained NULL, and Catalog integrity and actual-catalog renumber dry-run were clean. Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout. The prior repository-wide pytest run had one known pre-existing Younganimal failure reproduced at baseline `ceb3434`; it predates the 38-slot extension. Full Ruff passed. See `PROGRESS.md` for audit details and limits.
 
-The independently observed first-episode variant (38 content canvases over 21 slides) remains unsupported. Exact lifetime episode gaps, no-deadline access on other works, and production archive renumbering are not inferred. The P4 CLI cleanup removes its temporary source output after packaging, so the independent audit covers ZIP pages, CrawlRun/status, and Catalog Artifact/Completed state; it does not claim a retained manifest file. P4 verified one isolated episode 4.1 target, not a second viewer variant or a real-time unpublish/republish lifecycle. The independent run details, ZIP SHA-256, exact discovery counts, and baseline-test failure are in `PROGRESS.md`.
+The first-episode 38-slot topology is supported only for the independently verified `KC_004915_S` episode target and the exact observed mixed-final layout. Other works/layouts, exact lifetime episode gaps, no-deadline access on other works, and production archive renumbering are not inferred. The P4 CLI removes temporary source output after packaging, so the independent audit covers ZIP pages, CrawlRun/status, and Catalog Artifact/Completed state; it does not claim a retained manifest file. The separate 21-slot control and final post-Discovery/Catalog stability audit passed; Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout. The independent run details, ZIP hashes, exact Discovery counts, and baseline-test failure are in `PROGRESS.md`.
