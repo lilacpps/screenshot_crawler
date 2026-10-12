@@ -60,6 +60,7 @@ from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
     JumpPlusSitePolicy,
+    KadocomiSitePolicy,
     MagapokeSitePolicy,
     MangaOneSitePolicy,
     PiccomaSitePolicy,
@@ -411,6 +412,7 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.comicdays import ComicDaysAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
+    from screenshot_crawler.site_adapters.kadocomi import KadocomiAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
     from screenshot_crawler.site_adapters.piccoma import PiccomaAdapter
@@ -425,6 +427,7 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     registry.register("comicdays", ComicDaysAdapter)
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
+    registry.register("kadocomi", KadocomiAdapter)
     younganimal_work_url = env_value("YOUNGANIMAL_WORK_URL", values or {})
     registry.register(
         "younganimal",
@@ -441,6 +444,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     from screenshot_crawler.site_adapters.comicdays import ComicDaysAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
+    from screenshot_crawler.site_adapters.kadocomi import KadocomiAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneAdapter
     from screenshot_crawler.site_adapters.piccoma import PiccomaAdapter
@@ -461,6 +465,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     registry.register("comicdays", ComicDaysAdapter)
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
+    registry.register("kadocomi", KadocomiAdapter)
     registry.register("younganimal", YounganimalAdapter)
     return registry
 
@@ -506,6 +511,7 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("comicdays", ComicDaysSitePolicy)
     registry.register("piccoma", PiccomaSitePolicy)
     registry.register("hanayume", HanayumeSitePolicy)
+    registry.register("kadocomi", KadocomiSitePolicy)
     registry.register("younganimal", YounganimalSitePolicy)
     return registry
 

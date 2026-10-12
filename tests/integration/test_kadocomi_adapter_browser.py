@@ -5,12 +5,17 @@ import io
 import json
 from pathlib import Path
 from urllib.parse import urlsplit
+from zipfile import ZipFile
 
 import pytest
 import pytest_asyncio
 from PIL import Image
 from playwright.async_api import Browser, Page
 
+from screenshot_crawler import cli
+from screenshot_crawler.batch import BatchExecutor, BatchPlanner, CandidateExecutionError
+from screenshot_crawler.catalog import CatalogService
+from screenshot_crawler.catalog.service import now_jst
 from screenshot_crawler.core.errors import (
     PageChangeTimeoutError,
     UnknownPageStateError,
@@ -19,11 +24,15 @@ from screenshot_crawler.core.errors import (
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
+from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
+from screenshot_crawler.runtime_settings import SiteRuntimeSettings
+from screenshot_crawler.site_adapters.kadocomi import KadocomiDiscoveryAdapter
 from screenshot_crawler.site_adapters.kadocomi.adapter import KadocomiAdapter
 from screenshot_crawler.site_adapters.kadocomi.native_capture import (
     NATIVE_CAPTURE_SCRIPT,
     NATIVE_OBSERVER_INIT_SCRIPT,
 )
+from screenshot_crawler.watchlist.models import WatchlistTarget
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -430,6 +439,158 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
     else:
         assert list(output_dir.glob("page-*.webp")) == []
         assert not (output_dir / "manifest.json").exists()
+
+
+async def test_kadocomi_catalog_target_requires_canonical_query_free_episode_url() -> None:
+    adapter = KadocomiAdapter()
+    await adapter.configure_target_identity(
+        f"{WORK_ID}:{EPISODE_ID}", f"kadocomi:{WORK_ID}"
+    )
+
+    assert adapter.resolve_initial_navigation_url(EPISODE_URL) == WORK_URL
+    with pytest.raises(UnknownPageStateError, match="canonical query-free"):
+        adapter.resolve_initial_navigation_url(
+            f"{EPISODE_URL}?co=true&episodeType=first"
+        )
+
+
+async def _seed_kadocomi_batch_candidate(browser_page: Page, tmp_path: Path, monkeypatch):
+    from screenshot_crawler.site_adapters.kadocomi import discovery
+
+    monkeypatch.setattr(discovery, "SETTLEMENT_INTERVAL_MS", 5)
+    monkeypatch.setattr(discovery, "SETTLEMENT_TIMEOUT_SECONDS", 1.0)
+    images = [
+        _webp((30, 90, 150, 255)),
+        _webp((170, 30, 70, 193)),
+        _webp((20, 180, 80, 255)),
+    ]
+    await _install_reader_routes(browser_page, images)
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    registry = DiscoveryAdapterRegistry()
+    registry.register("kadocomi", KadocomiDiscoveryAdapter)
+    target = WatchlistTarget(
+        key="kadocomi-batch-test",
+        work_key=f"kadocomi:{WORK_ID}",
+        site="kadocomi",
+        url=WORK_URL,
+        label=WORK_TITLE,
+    )
+    discovery = await DiscoveryService(catalog, registry).discover(
+        browser_page, target, "full"
+    )
+    assert discovery.complete is True and discovery.observed_count == 1
+
+    policies = cli._batch_policy_registry()
+    plan = BatchPlanner(catalog, policies).plan(site="kadocomi", now=now_jst())
+    assert len(plan.candidates) == 1
+    candidate = plan.candidates[0]
+    assert candidate.locator == EPISODE_URL
+    assert candidate.external_id == f"{WORK_ID}:{EPISODE_ID}"
+    assert candidate.access_strategy == "direct"
+    assert candidate.consumes_quota is False and candidate.quota_resource is None
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        cli._batch_adapter_registry({}),
+        runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
+    )
+    return catalog, plan, candidate, executor, images
+
+
+async def test_kadocomi_batch_discovers_captures_packages_and_completes(
+    browser_page: Page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog, _plan, candidate, executor, images = await _seed_kadocomi_batch_candidate(
+        browser_page, tmp_path, monkeypatch
+    )
+
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch-output",
+        library_dir=tmp_path / "library",
+        max_pages=10,
+        now=now_jst(),
+    )
+
+    item = catalog.get_item(candidate.item_id)
+    source = catalog.get_source(candidate.source_id)
+    run = catalog.get_crawl_run(result.crawl_run_id)
+    artifacts = catalog.list_artifacts(item_id=item.id)
+    work = catalog.get_work(item.work_id)
+    assert result.stop_reason == "end" and result.page_count == 3
+    assert item.status == "completed" and item.completed_at is not None
+    assert work.title == WORK_TITLE
+    assert item.order_label == EPISODE_LABEL
+    assert source.available is True and source.access_mode == "free"
+    assert source.quota_started_at is None and source.access_granted_until is None
+    assert source.display_position is None
+    assert run.status == "succeeded" and run.stop_reason == "end" and run.page_count == 3
+    assert run.locator_snapshot == EPISODE_URL
+    assert run.external_id_snapshot == f"{WORK_ID}:{EPISODE_ID}"
+    assert len(artifacts) == 1
+    assert (artifacts[0].format, artifacts[0].state) == ("zip", "present")
+    assert result.archive_path.is_file()
+    assert WORK_TITLE in result.archive_path.name
+    assert EPISODE_LABEL in result.archive_path.name
+    with ZipFile(result.archive_path) as archive:
+        members = archive.namelist()
+        assert members == ["page-0001.webp", "page-0002.webp", "page-0003.webp"]
+        assert [archive.read(member) for member in members] == images
+        for member in members:
+            with Image.open(io.BytesIO(archive.read(member))) as image:
+                assert image.format == "WEBP"
+                assert image.size == (16, 12)
+    status = json.loads(result.status_path.read_text(encoding="utf-8"))
+    assert status["status"] == "completed" and status["page_count"] == 3
+    second_plan = BatchPlanner(catalog, executor.policies).plan(
+        site="kadocomi", now=now_jst()
+    )
+    assert all(entry.item_id != item.id for entry in second_plan.candidates)
+    assert any(entry.item_id == item.id and entry.reason == "completed" for entry in second_plan.skipped)
+
+
+@pytest.mark.parametrize("failure", ["expired", "foreign_redirect", "missing_end"])
+async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
+    browser_page: Page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from screenshot_crawler.site_adapters.kadocomi import adapter as kadocomi_adapter
+
+    catalog, _plan, candidate, executor, images = await _seed_kadocomi_batch_candidate(
+        browser_page, tmp_path, monkeypatch
+    )
+    await browser_page.unroute_all()
+    options: dict[str, object] = {}
+    if failure == "expired":
+        options["deadline"] = "2020/10/14 11:00"
+    elif failure == "foreign_redirect":
+        options["redirect_foreign_episode"] = True
+    else:
+        options["include_end"] = False
+        monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
+    await _install_reader_routes(browser_page, images, **options)
+
+    with pytest.raises(CandidateExecutionError):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch-output",
+            library_dir=tmp_path / "library",
+            max_pages=10,
+            now=now_jst(),
+        )
+
+    item = catalog.get_item(candidate.item_id)
+    assert item.status == "pending" and item.completed_at is None
+    assert catalog.list_artifacts(item_id=item.id) == []
+    runs = catalog.list_crawl_runs(item_id=item.id)
+    assert len(runs) == 1 and runs[0].status == "failed"
+    assert list((tmp_path / "library").rglob("*.zip")) == []
 
 
 async def test_kadocomi_adapter_rejects_auto_quota_and_locator_fallback(browser_page: Page) -> None:

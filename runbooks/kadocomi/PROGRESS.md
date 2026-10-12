@@ -1,9 +1,11 @@
 # Kadocomi Free-Only Adapter - Progress / evidence ledger
 
-Status: P1 Discovery PASS after independent review (BLOCKING=0) and bounded live validation.
-P2 capture passed local tests, corrected production live verification (21 pages
-through END at 1920x1080), and independent review (BLOCKING=0). P3 Batch/ZIP and
-P4 independent E2E have not started. Unverified layouts are not recorded as success.
+Status: P1 Discovery and P2 capture passed independent review (BLOCKING=0) and
+bounded live validation. P3 direct-only policy, CLI registrations, and local
+Catalog-to-ZIP integration passed targeted and affected tests and independent
+review (BLOCKING=0). P4 live CLI Batch and independent
+archive/completion audit have not started. Unverified layouts are not recorded
+as success.
 
 ## Stage checkpoints
 
@@ -12,8 +14,8 @@ P4 independent E2E have not started. Unverified layouts are not recorded as succ
 | P0 Site and source research | CONTRACT PASS | Exact 53 episode rows plus one explicit ended-publication marker in the public UL; anonymous work/episode identity; target-scoped no-deadline proof; source-to-draw WebP proof; reader END observed. Exact historical episode set remains unknown. |
 | P1 Discovery | PASS | Strict scoped list parser, exact known ended-publication placeholder handling, history-safe full/incremental behavior, 18 focused passes, isolated live full/incremental validation, independent Reviewer BLOCKING=0. |
 | P1.5 Position safety | PASS | Shared opt-out hook committed as ceb3434; independent Reviewer BLOCKING=0; 51 passed / 0 skipped. Kadocomi opts out and its persistence behavior is covered in P1 integration. |
-| P2 Viewer/Capture | PASS | Corrected production Runner captured all 21 source-native WebP pages through explicit END; independent review BLOCKING=0 and 16 independent targeted passes. The separate 38-page layout remains unsupported. P4 independent ZIP/source audit remains pending. |
-| P3 Free-only Batch / ZIP | NOT STARTED | Add site policy and validate direct-only planning, execution, artifact/ZIP behavior after P2. |
+| P2 Viewer/Capture | PASS | Corrected production Runner captured all 21 source-native WebP pages through explicit END; independent review BLOCKING=0 and 16 independent targeted passes. Tester independently audited every saved page against its normal-renderer Blob and canvas with zero pixel mismatch. The separate 38-page layout remains unsupported. |
+| P3 Free-only Batch / ZIP | PASS | Direct-only policy and CLI wiring, real local Catalog → Planner → Executor → Runner → ZIP/Artifact/Completed; runtime failures preserve pending. 301 affected passes and 54 independent passes; Reviewer BLOCKING=0, NONBLOCKING=0. |
 | P4 Independent E2E | NOT STARTED | Fresh isolated Catalog, live run, independent image/archive audit, and Reviewer BLOCKING=0. |
 
 ## Initial target and containment
@@ -104,7 +106,17 @@ P4 independent E2E have not started. Unverified layouts are not recorded as succ
 - The first P2 production Runner attempt used canonical query-free episode `KC_004915_S:KC_0049150000400011_E`, direct strategy, a fresh anonymous Context from shared Crawler Chrome/CDP, and 1920x1080@1 viewport. It failed closed because the implementation's incorrect `canvas[data-type="contents"]` selector returned no slots; it did not prove that site content was unavailable. Independent Tester DOM diagnostics established the correct wrapper/canvas and paired END-marker shapes above. The owned page/context were closed and remote Chrome remained running. Artifacts are isolated under ignored `work/kadocomi/p2-live-20261012/` and are not committed.
 - The corrected production Runner passed live verification on 2026-10-12 from a fresh anonymous context connected through shared Crawler Chrome/CDP. It measured a 1920x1080 viewport, started from the canonical query-free episode 4.1 route, and retained the exact `KC_004915_S:KC_0049150000400011_E` identity through END. The Runner returned `stop_state=end` with 21 captures: one initial slot followed by ten two-canvas spreads. Every captured source slot passed currentSrc-to-retained-Blob provenance, full-frame draw, decoded-pixel equality, and stable-layout checks; every output was byte-preserved `.webp` / `image/webp`, RIFF/WEBP magic, 836x1200. No screenshot or re-encoding path was used.
 - The final live snapshot had 13 slides and 21 content slots; the explicit main END was at slide index 11 with the paired `data-n=1,2` markers, while the trailing recommendation marker was at index 12 and was not captured. The observed main reader retained `splide--rtl`, physical right-to-left slot order, and computed `rtl`; the capture hooks were installed and there was no content outside the reader slides. The fresh context observed only HTTP 200/204 responses. Owned context was closed and shared Chrome remained running. Lead independently opened all 21 isolated output artifacts with Pillow and confirmed valid WebP files at 836x1200; this checks artifact metadata, not source-pixel provenance. Sanitized audit is in ignored `work/kadocomi/p2-live-20261012/attempt4/result.json`.
+- Independent Tester used a separate normal-renderer Blob/draw hook to audit all 21 live page files. Each saved byte sequence matched its corresponding WebP Blob exactly; all 21 decoded to 836x1200, full-frame identity draws with zero RGBA mismatch against the actual canvas. Physical slot x-coordinates descended in right-to-left order; 11 ordinary one-slide advances, including the final advance to END, reached explicit END without changing episode identity. This is an independent viewer-source-to-page-file audit, not a ZIP audit and not a claim about opaque original network responses.
 - P2 focused local tests passed 16 / 0 skipped, with Ruff and `git diff --check` passing. Independent Reviewer reran 16 tests / 0 skipped and verified the corrected production diff, final live evidence, and current site notes: final P2 PASS, BLOCKING=0. Lead accepts P2 and advances to P3. Independent Tester also found a different first-episode layout (38 content canvases over 21 slides) whose order/END pattern is not covered; it remains unsupported and is not generalized from the 4.1 evidence. P4 independent ZIP/source audit is still required.
+
+## P3 policy and local Batch/ZIP integration (2026-10-12)
+
+- Added `KadocomiSitePolicy` and registered it with the manual Crawl adapter, Batch adapter, and Batch Policy registries. Direct is the only accepted strategy; named quota and grant-only resources remain unsupported.
+- A candidate requires `site=kadocomi`, `available=true`, `access_mode=free`, a well-formed work-scoped `work_id:episode_id`, and either a NULL deadline or an aware future `free_until`. Expired/equal, malformed, or naive deadlines and non-free modes are ineligible. In Batch, the adapter binds the canonical query-free Catalog target to the configured external identity and rechecks current list membership/free state/deadline before episode entry.
+- Manual Crawl accepts explicit `--access-strategy direct`; its default `auto` is rejected by the adapter. Batch uses the existing plan/run CLI and shared executor/runner/packager. Display position remains NULL; no title/order-derived numeric prefix, archive renumbering, or Catalog/Core/Batch changes were introduced.
+- Local browser integration now exercises Discovery → Catalog → Planner → Executor → CrawlerRunner → native WebP manifest pages → ZIP → Artifact/Completed. The nominal run packages three fixture source bytes unchanged, confirms canonical source and Catalog metadata precedence, and uses only the explicit END stop. Fresh-runtime expired row, foreign episode redirect, and missing END each fail with Item still pending and no Artifact/ZIP.
+- Targeted P3 command passed: Kadocomi policy, CLI registries, canonical-target guard, nominal Batch flow, and runtime-failure cases → 27 passed / 0 skipped (5 asyncio deprecation warnings).
+- Affected regression command passed across Batch, Executor, naming, Catalog, packaging, and the existing site-policy suite → 301 passed / 0 skipped (469 asyncio deprecation warnings, 34.28s). No real site was used for P3; local browser-backed fixtures were used. Independent Reviewer verified the final material diff and current notes, with 25 focused passes (13 deselected, 0 skipped) plus 29 CLI/packaging passes (0 skipped): P3 PASS, BLOCKING=0, NONBLOCKING=0. Lead accepts P3 and advances to P4. The shared-CDP CLI Batch and independent ZIP/completion audit remain required; Root's final full suite is running.
 
 ## Checkpoint template (phase完了時に追記)
 

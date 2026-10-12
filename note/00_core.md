@@ -1,14 +1,15 @@
 # 00. Core 現行実装ノート
 
-## Kadocomi Discovery registration and history safety (2026-10-12)
+## Kadocomi Discovery, direct capture, and Batch registration (2026-10-12)
 
-The Kadocomi site adapter currently has a Discovery implementation only. The
-CLI's Discovery registry includes kadocomi; the viewer Crawl registry, Batch
-registry, Core Runner, Catalog schema, and existing adapters are unchanged.
-See note/12_kadocomi.md and runbooks/kadocomi/PROGRESS.md for site evidence
-and limits.
+Kadocomi Discovery, manual Crawl, Batch adapter, and Batch Policy use the
+existing DiscoveryService, Catalog, CrawlerRunner, shared CDP BrowserSession /
+Playwright Page, Batch Planner/Executor, and generic packager. The CLI registers
+Kadocomi in those site-local registries. No shared Core, Batch, Catalog schema,
+or existing adapter behavior was changed. See note/12_kadocomi.md and
+runbooks/kadocomi/PROGRESS.md for live facts, current phase gates, and limits.
 
-The adapter snapshots only the unique public EpisodesTabContents UL after
+Discovery snapshots only the unique public EpisodesTabContents UL after
 clicking the exact declared-count expansion button. It requires two identical
 scoped identity/deadline snapshots and the exact declared row count, buffers and
 validates all rows before yielding newest-first, and excludes recommendations.
@@ -20,15 +21,24 @@ Artifacts after a source disappears and later returns.
 Future explicit row deadlines classify free and refresh free_until; a later
 NULL clears the old value. A no-deadline row is free only for the independently
 verified KC_004915_S work; no-deadline rows on other works and expired
-deadlines remain unknown. The adapter opts out of inferred display positions:
-existing positions remain intact and new Sources remain NULL. No site-wide rank
-is derived from episode IDs or compact list order.
+deadlines remain unknown. Inferred display positions are disabled: existing
+positions remain intact and new Sources remain NULL.
 
-The validated canonical work title comes from the detail page's og:title.
-DiscoveryService still creates Work from the Watchlist label and does not
-consume DiscoveredItem.canonical_title; the adapter does not change this
-shared metadata behavior. Set a dedicated Watchlist label to the actual Work
-name.
+The Batch Policy admits only available `kadocomi` sources with `access_mode=free`,
+a strict work-scoped external ID, and a valid future or NULL `free_until`. The
+Adapter requires `direct`, rejects quota/grant-only resources, and validates a
+canonical query-free Catalog episode target against its configured external ID.
+Before viewer entry, it repeats live target-row membership and current free /
+deadline validation. The generic Planner only selects pending Items; the
+Executor creates ZIP Artifacts and Completed status only after the Runner reaches
+the adapter's verified END. Manual Crawl also requires explicit `direct`.
+No numeric archive prefix is inferred while display positions are NULL.
+
+The canonical work title from detail-page og:title is exposed by Discovery but
+the shared DiscoveryService initializes Work.title from the Watchlist label.
+Set a dedicated Watchlist label to the actual Work name. Current P3 policy and
+local end-to-end validation passed independent review. P4 live CLI status is in
+the Kadocomi progress ledger.
 
 ## Younganimal Discovery and manual Crawl CLI registration (2026-10-11)
 

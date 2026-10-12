@@ -1,8 +1,8 @@
-# Kadocomi Discovery adapter
+# Kadocomi Site Adapter
 
 ## Current phase
 
-P1 Discovery and P2 capture passed independent review (P2 BLOCKING=0). The corrected production Runner also passed live verification on the observed episode 4.1 variant. P3 Batch/ZIP integration and P4 independent end-to-end verification are not implemented. Other observed reader layouts remain unsupported and fail closed.
+P1 Discovery and P2 capture passed independent review (P2 BLOCKING=0). P3 direct-only Batch policy, CLI registration, and local Catalog-to-ZIP integration passed independent review with BLOCKING=0. P4 shared-CDP CLI Batch and independent ZIP/source/completion verification are pending. Other observed reader layouts remain unsupported and fail closed.
 
 ## Discovery contract
 
@@ -22,6 +22,12 @@ The adapter sets `allow_inferred_display_positions=False` and emits no global po
 
 The shared Discovery service initializes `Work.title` from the dedicated Watchlist label and does not apply the adapter's `canonical_title`. Set that label to the actual work title.
 
+## P3 Batch eligibility and CLI
+
+`KadocomiSitePolicy` selects only `site=kadocomi`, `available=true`, `access_mode=free` Sources with a strict work-scoped `work_id:episode_id`. `free_until` may be NULL (no deadline was displayed at the last Discovery) or an aware future datetime. Expired/equal, malformed, or timezone-naive values fail closed. Quota, paid, unknown, owned, grant, rental, quota-resource, and grant-only paths are unsupported. The P1 Discovery adapter marks a no-deadline row free only for the independently verified work; the policy trusts Catalog's current `access_mode` classification and never infers free from NULL expiry alone.
+
+The manual `crawl` CLI registry and Batch adapter/Policy registries include Kadocomi. Manual Crawl must use `--access-strategy direct`; the default `auto` is rejected. Batch keeps the generic pending-only Planner and Executor. The Batch adapter requires a canonical query-free exact episode Catalog target matching its configured external identity, then repeats target-local listing membership and current free/deadline validation immediately before viewer navigation. Candidate URLs and display positions are not renumbered or rewritten.
+
 ## P2 direct capture behavior
 
 `KadocomiAdapter` accepts only `access_strategy="direct"`, rejects quota resources and entry-only runs, and requires an exact episode URL. It initially navigates to the corresponding work page, re-runs the complete public-list Discovery contract, and proceeds only when that exact row is present, available, currently classified free, and not expired. It then opens the canonical query-free episode URL and verifies the final work/episode IDs, exact episode H1 and `og:title`, and absence of a visible dialog. The canonical Catalog source URL is retained.
@@ -30,10 +36,28 @@ The adapter installs a non-interfering observer before navigation. It preserves 
 
 The content slot inventory is derived from the live reader DOM. The observed shape is one first canvas, then two canvases per content slide in physical right-to-left order, followed by the explicit end-of-book slide. The end marker defines the stop boundary; one observed trailing non-content recommendation slide may follow, but the adapter never turns into or captures it. It stops only after every unique content slot has been captured and the active slide contains the explicit end-of-book marker. The bounded native capture currently covers at most 8,000,000 total decoded pixels per capture and 4 MiB per source Blob.
 
-Local synthetic browser tests use the observed DOM shape: content wrappers `DIV._pageCanvasWrapper_...[data-type=contents]` each own one `canvas._root_bx4cr_1`; the paired main END wrappers are distinguished from the trailing recommendation end marker. They cover byte-exact WebP output, spread order, explicit END/trailing-slide exclusion, wrong Blob attribution, asynchronous canvas mutation, transformed draws, expired/missing targets, foreign-episode redirects, missing main END, and skipped/reversed slots. The corrected live Runner completed all 21 content slots and stopped at the paired main-reader END markers; every output passed native WebP provenance/pixel checks at 836x1200. The independent Reviewer also passed P2 with BLOCKING=0. The live audit and earlier selector failure are recorded in `runbooks/kadocomi/PROGRESS.md`; P3 is not started.
+Local synthetic browser tests use the observed DOM shape: content wrappers `DIV._pageCanvasWrapper_...[data-type=contents]` each own one `canvas._root_bx4cr_1`; the paired main END wrappers are distinguished from the trailing recommendation end marker. They cover byte-exact WebP output, spread order, explicit END/trailing-slide exclusion, wrong Blob attribution, asynchronous canvas mutation, transformed draws, expired/missing targets, foreign-episode redirects, missing main END, and skipped/reversed slots. The corrected live Runner completed all 21 content slots and stopped at the paired main-reader END markers; every output passed native WebP provenance/pixel checks at 836x1200. The independent Reviewer passed P2 with BLOCKING=0. A separate Tester audit independently matched all 21 output byte sequences to renderer Blob bytes and found zero RGBA mismatches against their canvases. The live audit and earlier selector failure are recorded in `runbooks/kadocomi/PROGRESS.md`.
+
+The local Kadocomi Batch integration test uses real Discovery, Catalog, Planner, Executor, Runner, and packager code with a browser fixture. It verifies byte-preserved WebP ZIP members, canonical Catalog source identity, Watchlist/Catalog title and episode-label naming, Artifact registration, and Completed only after END. Runtime expiry, foreign-episode redirect, and missing END do not produce a ZIP/Artifact or complete the Item. The targeted P3 set passed 27 / 0 skipped; affected Batch, Executor, naming, Catalog, packaging, and existing site-policy regressions passed 301 / 0 skipped (469 pytest-asyncio deprecation warnings). The independent Reviewer passed P3 with BLOCKING=0 and NONBLOCKING=0: 54 independent tests passed, none skipped (25 selected plus 29 CLI/packaging; 13 deselected by selection). P4 live CLI Batch and independent ZIP/source/completion audit remain outstanding.
 
 ## Operational validation
 
 Use only a dedicated Watchlist and Catalog beneath ignored `work/kadocomi/`; never point at the normal user Catalog/output. Real-site browser access uses the existing shared Crawler Chrome through CDP and Playwright. The adapter does not launch Chrome or select a profile. Do not log in, buy, consume tickets/coins/points, access rental/purchased content, or bypass gates.
 
 For phase status, exact observed counts, test commands, live results, uncertainties, and P2 source evidence, see `runbooks/kadocomi/PROGRESS.md`. Detailed phase contracts are in `runbooks/kadocomi/`.
+
+Example isolated direct-only commands (using the already-populated dedicated Watchlist/Catalog):
+
+```powershell
+python -m screenshot_crawler.cli crawl --site kadocomi `
+  --url https://comic-walker.com/detail/KC_004915_S/episodes/KC_0049150000400011_E `
+  --access-strategy direct --output-dir work/kadocomi/manual-output `
+  --library-dir work/kadocomi/manual-library
+python -m screenshot_crawler.cli batch plan --site kadocomi `
+  --catalog work/kadocomi/catalog.sqlite
+python -m screenshot_crawler.cli batch run --site kadocomi `
+  --catalog work/kadocomi/catalog.sqlite --output-root work/kadocomi/batch-output `
+  --library-dir work/kadocomi/batch-library --limit 1
+```
+
+Always use a dedicated test Catalog, Watchlist and output root. P4 live validation uses separate fresh paths and must not reuse an already-completed item.

@@ -195,7 +195,12 @@ class KadocomiAdapter(SiteAdapter):
         external = f"{identity.work_id}:{identity.episode_id}"
         if self._external_id is not None and self._external_id != external:
             raise UnknownPageStateError("Kadocomi URL differs from the configured Catalog source")
-        self._source_url = canonical_kadocomi_episode_url(source_url)
+        canonical_url = canonical_kadocomi_episode_url(source_url)
+        if self._opaque_work_key is not None and source_url != canonical_url:
+            raise UnknownPageStateError(
+                "Kadocomi Batch target must be a canonical query-free episode URL"
+            )
+        self._source_url = canonical_url
         self._target_url = self._source_url
         self._work_id = identity.work_id
         self._episode_id = identity.episode_id

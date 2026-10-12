@@ -816,6 +816,7 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
         "comicdays",
         "hanayume",
         "jumpplus",
+        "kadocomi",
         "magapoke",
         "mangaone",
         "piccoma",
@@ -825,6 +826,9 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     policy = cli._batch_policy_registry().create("hanayume")
     assert policy.supported_access_resources() == ()
     assert policy.grant_only_supported_access_resources() == ()
+    kadocomi_policy = cli._batch_policy_registry().create("kadocomi")
+    assert kadocomi_policy.supported_access_resources() == ()
+    assert kadocomi_policy.grant_only_supported_access_resources() == ()
 
 
 def test_discovery_and_batch_registries_contain_supported_sites() -> None:
@@ -833,6 +837,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "comicdays",
         "hanayume",
         "jumpplus",
+        "kadocomi",
         "magapoke",
         "mangaone",
         "piccoma",
@@ -844,6 +849,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "comicdays",
         "hanayume",
         "jumpplus",
+        "kadocomi",
         "magapoke",
         "mangaone",
         "piccoma",
@@ -869,6 +875,20 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     assert "piccoma" in cli._batch_policy_registry().sites()
     assert "hanayume" in cli._batch_policy_registry().sites()
     assert "younganimal" in cli._batch_policy_registry().sites()
+    assert cli._registry().create("kadocomi").__class__.__name__ == "KadocomiAdapter"
+    assert cli._batch_adapter_registry({}).create("kadocomi").__class__.__name__ == "KadocomiAdapter"
+    manual = cli._parser().parse_args(
+        [
+            "crawl",
+            "--site",
+            "kadocomi",
+            "--url",
+            "https://comic-walker.com/detail/KC_004915_S/episodes/KC_0049150000400011_E",
+            "--access-strategy",
+            "direct",
+        ]
+    )
+    assert manual.access_strategy == "direct"
 
 
 def test_younganimal_crawl_registry_uses_configured_work_entry_before_navigation(
