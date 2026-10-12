@@ -1,157 +1,71 @@
-# カドコミ Free-Only Adapter — Progress / evidence ledger
+# Kadocomi Free-Only Adapter - Progress / evidence ledger
 
-Status: **P0/P2 RESEARCH IN PROGRESS; P1.5 SHARED HOOK VERIFIED**
-(2026-10-12)。P1 Kadocomi adapter実装は未開始。現在の公開一覧とquery-free episode
-input identityは限定確認済み。過去/配信終了分の完全性、no-deadlineのfree判定、original-byte
-帰属、reader ENDは未確定。この文書はLeadが更新する。**未検証のことを成功記録にしない。**
+Status: P1 Discovery PASS after independent review (BLOCKING=0) and bounded live validation.
+P0 listing/access contract and P2 capture evidence/design gates passed review. P2
+capture implementation, P3 Batch/ZIP, and P4 independent E2E have not started.
+Unverified behavior is not recorded as success.
 
 ## Stage checkpoints
 
-| Stage | 状態 | 根拠/残課題 |
+| Stage | Status | Evidence / remaining work |
 | --- | --- | --- |
-| P0 Site/Original research | IN PROGRESS | Exact ULで現在の53/53 entriesをsettle確認し、query-free exact episode inputもidentity照合。expired gaps / no-deadline free / original-byte attribution / ENDは未確定 |
-| P1 Discovery | NOT STARTED | list展開、free分類、free_until、full/incremental、履歴を実装 |
-| P1.5 Position | SHARED HOOK PASS | 独立Reviewer BLOCKING=0、51 passed / 0 skipped。Kadocomi adapter側での利用と履歴検証はP1実装時 |
-| P2 Viewer/Capture | IN PROGRESS | 最初の3 source slotで同寸法full-frame drawを確認。byte/source/page provenance、page order、ENDは未確定 |
-| P3 Free-only Batch | NOT STARTED | directだけを既存Planner/Executor/ZIPに統合 |
-| P4 Independent E2E | NOT STARTED | fresh Catalog実サイト、独立画像監査、Reviewer BLOCKING=0 |
+| P0 Site and source research | CONTRACT PASS | Exact 53 episode rows plus one explicit ended-publication marker in the public UL; anonymous work/episode identity; target-scoped no-deadline proof; source-to-draw WebP proof; reader END observed. Exact historical episode set remains unknown. |
+| P1 Discovery | PASS | Strict scoped list parser, exact known ended-publication placeholder handling, history-safe full/incremental behavior, 18 focused passes, isolated live full/incremental validation, independent Reviewer BLOCKING=0. |
+| P1.5 Position safety | PASS | Shared opt-out hook committed as ceb3434; independent Reviewer BLOCKING=0; 51 passed / 0 skipped. Kadocomi opts out and its persistence behavior is covered in P1 integration. |
+| P2 Viewer/Capture | EVIDENCE AND DESIGN PASS; IMPLEMENTATION NOT STARTED | Normal-renderer source Blob mapping and five exact pixel comparisons, 21 source slots, 11 content slides, explicit END marker. Implement guarded source-native capture after P1 review. |
+| P3 Free-only Batch / ZIP | NOT STARTED | Add site policy and validate direct-only planning, execution, artifact/ZIP behavior after P2. |
+| P4 Independent E2E | NOT STARTED | Fresh isolated Catalog, live run, independent image/archive audit, and Reviewer BLOCKING=0. |
 
-## Initial user-provided observations (hypotheses, not evidence)
+## Initial target and containment
 
-- 作品URL: https://comic-walker.com/detail/KC_004915_S?episodeType=first
-- 「全XX話を表示」で話一覧を展開。
-- 公開中の話に無料バッジがない場合があり、配信期限がある場合もある。
-- 終了した話は「第XX話から第XX話は配信が終了しました」等で表現。
-- 単行本や他の導線も混じりうる。
-- 配信終了/再公開に伴い、途中話のID・位置・公開状態が変わる可能性がある。
+- Worktree/branch: C:/Users/kensu/projects/screenshot_crawler_kadocomi, feat/kadocomi-adapter; the original workspace dirty crawler.yaml, watchlist.yaml, and debug.log were preserved.
+- Real-site probing used the already-running shared Crawler Chrome over CDP and an owned anonymous BrowserContext; only the owned context was closed. No separate browser/profile was launched.
+- No login, purchase, ticket, coin, point, rental, DRM, or access-control bypass was used. No 403, 429, or CAPTCHA was encountered.
+- Dedicated probe artifacts are excluded from Git. No page bodies, image bytes, credentials, cookies, or tokens are committed.
 
-これらの初期メモは仮説として扱う。確度を分けた現行live evidenceとUNKNOWNは以下に記録する。
+## P0 OBSERVED
 
-## P0 live evidence (incomplete; 2026-10-12)
+- Anonymous work URL https://comic-walker.com/detail/KC_004915_S?episodeType=first returned HTTP 200. The exact episode-list parent is DIV.EpisodesTabContents_root__VrJZ1; its unique UL.EpisodesTabContents_episodeList__cIDQz settled to 53 distinct episode links, equal to the displayed 53-episode count, in two identical snapshots 500 ms apart. A duplicate teaser outside that UL was excluded.
+- The visible linked sequence contains labels 1 through 26 and then 78/79. The UL has 53 episode rows plus one explicit non-episode placeholder at direct-child index 51. Its exact text is `その他の話は公開終了しました` (other episodes have ended publication), between `第26話その2` and `第78話`. This confirms an ended-publication gap marker but does not establish the exact former episode set or lifetime numbering.
+- Forty-six rows show the exact Japanese delivery-deadline label with timestamp 2026/10/14 11:00; seven show no deadline. The page-level campaign banner is not row-level access evidence.
+- The target chapter title is under a descendant whose class begins EpisodeThumbnail_title__. Its publication date and deadline text are separate nodes; dates do not belong in order_label.
+- Work detail og:title and document.title contain the stable Work name plus Comic Walker branding. Its H1 is chapter-prefixed, so it is not the Work title. The target episode route is /detail/KC_004915_S/episodes/KC_0049150000400011_E?co=true&episodeType=first; queryless input returned the same work/episode identity, after which the site added episodeType=first.
+- A second no-deadline row, KC_0049150000100011_E, was reached anonymously on the same exact work and public list. It rendered the expected episode H1 without password, CAPTCHA, expired message, or ticket/coin/point/purchase gate. Official Comic Walker help describes WEB as a free manga portal (https://help.comic-walker.com/hc/ja/articles/24221086268697); its deadline FAQ says deadlines appear only when configured and a no-deadline episode may end without notice (https://help.comic-walker.com/hc/ja/articles/24220791385241).
+- On the target episode, a normal renderer hook retained five already-created Blob references while preserving the original URL.createObjectURL call. Draw-time HTMLImageElement.currentSrc mapped the exact Blob and content canvas for DOM slots 0, 1, 2, 19, and 20; observed byte lengths were 169566, 141084, 133452, 126880, and 199144, with RIFF/WEBP signatures. Five representative Blob-to-canvas full-RGBA comparisons had zero mismatches. Each observed image/canvas was 836x1200 with full-frame identity draw. These are native viewer source-image bytes, not proof that opaque network responses contain the same original bytes.
+- Reader navigation through ordinary LEFToverlay clicks traversed 21 content slots over 11 right-to-left content slides while remaining on the exact episode. The next slide (12 of 13) had no content and exposed two div._endOfBookWrapper[data-type=end-of-book] markers. A separate PR element was excluded. No copyrighted pixels or source bytes were retained in repository evidence.
 
-### Environment / containment
+## P0 INFERRED, LIMITED
 
-- Branch/worktree: `feat/kadocomi-adapter` in the dedicated
-  `screenshot_crawler_kadocomi` worktree. The original workspace's dirty
-  `crawler.yaml`, `watchlist.yaml`, and `debug.log` were not touched.
-- Connected to the already-running shared Crawler Chrome at
-  `http://127.0.0.1:9222` using Playwright from the original workspace venv
-  (Python 3.14.6). The shared profile's one existing tab was blank.
-- All site navigation used an additional fresh anonymous BrowserContext; only
-  the probe-owned context was closed. Remote Chrome remained running. The
-  anonymous context had no `user` in the site's `/api/auth/session` response;
-  the site did set anonymous cookies during navigation.
-- No screenshots, response bodies, cookies, tokens, or image files were saved.
-  Source-byte signatures were checked in memory only. Local `work/kadocomi/`
-  is excluded via this worktree's Git info/exclude; no persistent probe output
-  is currently required.
-- No production code changed; no test suite was run for this research-only
-  checkpoint.
+- Public-list membership plus official free-WEB service and a positive anonymous exact episode supports the observed public WEB row variant. Explicit future deadlines classify free; no-deadline rows classify free only for the independently verified work KC_004915_S. Other no-deadline works and expired-deadline rows remain unknown.
+- Source positions must not be inferred from compact visible rank or episode IDs. Existing positions remain unchanged and new positions remain NULL until a site-wide order authority is proven.
+- The retained Blob source gives a non-screenshot, source-native capture path for the observed renderer. P2 code still needs per-capture provenance, pixel equality, page identity/order, and safe END handling.
 
-### OBSERVED
+## P0 UNKNOWN / NOT VERIFIED
 
-- The seed detail page returned HTTP 200 in a fresh anonymous context. Its
-  initial UI showed `全53話を表示`, a page-level `無料話増量中` banner/countdown,
-  and episode links. The seed URL included `episodeType=first`.
-- Clicking the unique expansion control exposed the exact observed list
-  container `DIV.EpisodesTabContents_root__VrJZ1 >
-  UL.EpisodesTabContents_episodeList__cIDQz`. That UL contained 53 distinct
-  episode links, matching the declared 53. Two identity-and-deadline snapshots
-  0.5 seconds apart matched. A broader page-anchor query found an extra teaser
-  outside the UL; it duplicated a list episode and is excluded from the count.
-  The visible sequence includes labels 1 through 26 and then 78/79, with no
-  explicit 配信終了 range placeholder observed in this list.
-- The `無料話増量中` banner is page-level, not a row badge. 46 of the 53 exact
-  list rows had the explicit deadline `2026-10-14 11:00`; the other rows had no
-  displayed deadline. Exact target 4.1 (`KC_0049150000400011_E`) is one of the
-  deadline rows. No row-specific campaign marker was observed.
-- Query-free episode input
-  `https://comic-walker.com/detail/KC_004915_S/episodes/KC_0049150000400011_E`
-  returned HTTP 200 and rendered the same work/episode H1 in an anonymous
-  context. The site then added `?episodeType=first` to the route; episode
-  identity remained the requested target. No password field, CAPTCHA, expired
-  message, ticket/coin/point/purchase gate, 403, or 429 was observed. A generic
-  login button remained in site navigation; it was not used.
-- `/api/contents/viewer` returned a 200 response with 21 manuscript entries
-  numbered 1..21 for target 4.1. The seed's initial `episodeType=first` view
-  separately returned 38 entries, so first-episode preview state and exact
-  episode state must be bound to the canonical work/episode path before use.
-  The returned viewer object exposed promotion time fields but no explicit
-  free/access flag in the inspected top-level schema. A
-  `/api/contents/viewer-jump-forward` response described an in-place next
-  episode with 11 pages; this was metadata only, and no next transition was
-  clicked.
-- Target reader DOM had 21 canvas elements and a visible slide-navigation UI.
-  An independent bounded renderer inspection observed the first three source
-  slots (0, 1, 2) drawn full-frame at 836x1200 with an identity transform.
-  Earlier inspection also observed 836x1200 canvas backing dimensions with a
-  smaller CSS display size. This does not yet prove exact source-byte
-  attribution, all page identities, navigation order, or END.
-- Some first-party resource responses observed during the target reader session
-  had `.webp` path suffixes and `application/octet-stream` MIME. In-memory
-  prefixes did not contain RIFF/WEBP magic and Pillow could not identify them
-  as images. Exact draw-source-to-response correlation is unproven. No decode,
-  decryption, or transformation was attempted; no bytes were saved. They are
-  opaque candidates, not verified original images.
+- The exact historical episode set and lifetime ordering behind the ended-publication marker, the complete behavior of ended ranges, and whether this 53-row list is complete beyond this exact public UL.
+- Stable episode IDs across real unpublish/republication events; tests cover Catalog behavior for recurrence of the same ID, not a live lifecycle.
+- Whether no-deadline rows on other works are free. They remain unknown until the exact variant is positively established.
+- Other reader layouts, transformed/composed draws, and capture inputs lacking currentSrc-to-Blob-to-canvas identity or exact pixels.
 
-### INFERRED (limited)
+## P1 Discovery implementation (2026-10-12)
 
-- The stable 53/53 UL is the currently observed public episode list, not a
-  lifetime episode count. The visible sequence gap and absent end-range text
-  leave the reason/count of missing historical positions unknown.
-- Compacting the current linked list to 1..53 would assign unsupported
-  historical positions. Preserve existing Catalog positions; new/unproven
-  positions should remain NULL until a site-wide position authority is proved.
-- Official Comic Walker help describes WEB as a free manga portal
-  ([service overview](https://help.comic-walker.com/hc/ja/articles/24221086268697));
-  the deadline FAQ states deadlines are shown only when configured and a
-  no-deadline episode may end without notice
-  ([deadline FAQ](https://help.comic-walker.com/hc/ja/articles/24220791385241)).
-  Together with exact public-list membership, the row's future deadline, and
-  anonymous exact-episode readability, this supports only the observed
-  deadline-row target as free. The page-level campaign is not row evidence and
-  does not establish free status for rows without deadlines.
-- Raw response bodies do not currently support direct original-byte capture.
-  A normal-renderer source/draw observation may still establish native pixels;
-  opaque bytes alone do not prove that route impossible.
+- Added a Kadocomi-only Discovery adapter and CLI Discovery-registry entry; viewer Crawl registry, Batch registry, Core Runner, Catalog schema, and other adapters are unchanged.
+- It accepts only the verified HTTPS work route and observed query shapes, opens the unique public episode list, clicks the unique exact expansion control, and waits at most 12 seconds for two identical scoped snapshots 500 ms apart with episode-row count equal to the declared total. It allows only zero or one exact known ended-publication placeholder (`その他の話は公開終了しました`) with one paragraph, no attributes, links, or episode title. The marker text, index, and adjacent episode labels participate in settlement stability; unknown or duplicate non-episode children fail closed. It does not count page-wide recommendations or teaser links.
+- Every row is validated and buffered before yielding. Wrong-work IDs, duplicate IDs, ambiguous rows, access-gate text, malformed deadline text, a missing title node, a changed heading/title, or an incomplete count fails closed. A clean list is emitted newest-first.
+- Source external IDs are work_id:episode_id; saved episode locators are canonical query-free URLs. order_label comes only from the observed EpisodeThumbnail_title__ node. No numeric position is inferred.
+- Future explicit row deadlines classify free and set free_until; a later observed NULL clears stale expiry. A no-deadline row classifies free only on KC_004915_S; other no-deadline rows and expired deadlines remain unknown. Current observed public rows are available=true.
+- Full may mark absent Sources unavailable only after the entire declared list is validated. Incomplete full runs yield no records and do not reconcile missing Sources. Incremental leaves unobserved Sources untouched. Existing Source/Item IDs, Completed status/timestamp, CrawlRuns, and Artifacts survive disappearance/reappearance with the same external ID.
+- allow_inferred_display_positions=False is set on the Kadocomi adapter. Existing display positions are preserved; new Sources have NULL positions. No global hints are emitted.
+- The shared service initializes Work.title from WatchlistTarget.label and does not consume DiscoveredItem.canonical_title; the adapter reports the validated canonical name from work-page og:title but does not rewrite Work metadata. Use the actual Work name as the dedicated Watchlist label.
 
-### UNKNOWN / NOT VERIFIED
+## P1 validation (2026-10-12)
 
-- Whether another page/pagination contains entries outside this exact UL, and
-  why historical labels 27..77 are absent. Two stable snapshots establish the
-  current 53-row UL only; a full-list disappearance policy still needs more
-  than this one work's observed surface.
-- Any exact ended-range row format, semantics for partial episodes, and how a
-  range maps to historic source IDs/positions.
-- Stable episode IDs across unpublish/republication, episode ordering
-  authority, and episode-code-to-display-position mapping. Do not derive
-  position from IDs or compact list rank.
-- Whether rows without a displayed deadline are free; the bounded anonymous
-  no-deadline variant attempt stopped before navigation because row selection
-  was not verified, so it produced no target evidence. Treat them as UNKNOWN.
-- An explicit public FREE/access field in DOM or official API.
-- Whether all original response bytes map to the observed renderer draws, and
-  stable first/middle/last page identity, reader navigation order, composition,
-  loading behavior, and END. The first three draw observations do not settle
-  these facts.
-- Whether accessing rendered canvas pixels is an acceptable capture route given
-  the opaque original responses. No DRM/access-control bypass is authorized.
-- A structurally different work and an explicitly labeled ended-range example.
-
-### Next bounded probes / checkpoint
-
-1. Complete bounded normal-reader identity/order checks through the site's
-   ordinary controls and verify last page/END; do not use drag gestures that
-   can cross episode boundaries.
-2. Correlate normal renderer source objects/currentSrc to exact episode/page
-   responses and determine whether original bytes are available without
-   bypassing access controls. Keep source pixels/copies out of committed
-   evidence.
-3. If a fresh anonymous no-deadline target can be safely identified from the
-   exact UL, test only that public page and preserve UNKNOWN if no positive
-   access evidence appears.
-4. P1.5 shared-hook implementation passed independent review;
-   P1 Kadocomi Discovery implementation has not started. P2 remains open.
+- Added strict parser/access unit coverage, CLI registry coverage, and browser-backed local synthetic-listing tests. The integration fixture exercises `[1,2,3] -> [2,4] -> [1,2,3,4]`, deadline-to-NULL refresh, an ended-publication placeholder, rejection of an unknown non-episode child, a completed source disappearing and returning with its Source/Item/Completed/CrawlRun/Artifact identities intact, position preservation, incomplete-full no-reconciliation, and incremental unseen-source behavior.
+- Focused command passed: `tests/unit/test_kadocomi_discovery.py tests/integration/test_kadocomi_discovery_browser.py tests/unit/test_cli.py::test_discovery_and_batch_registries_contain_supported_sites` -> 18 passed / 0 skipped after the sibling-title containment guard and malformed-row regression case. Ruff passed on changed Python files.
+- The affected shared Discovery/Catalog/CLI plus Kadocomi command reported 205 passed, 1 failed, 734 warnings. The only failure was `test_younganimal_crawl_registry_uses_configured_work_entry_before_navigation`; the root reproduced it against the pre-Kadocomi CLI baseline (`ceb3434`), confirming it is not a Kadocomi regression. No unrelated fix was made.
+- Independent Reviewer initially reported 67 passed / 0 skipped. Its final review verified the exact title, ended-placeholder classification, restored title-within-anchor guard, and completed-source disappearance/revival fixture. The final changed browser cases independently passed 2 / 0 skipped. Final P1 gate: PASS, BLOCKING=0. Lead accepts P1 and advances to P2.
+- Bounded live full command, using only the isolated `work/kadocomi/p1-live-20261012/` Watchlist and Catalog through shared Crawler Chrome CDP, completed with 53 observed, 53 new, complete=true. The subsequent incremental command returned 5 observed, 0 new, known-streak stop. Catalog audit confirmed 53 unique work-scoped external IDs, all available=true, all display positions NULL, 46 explicit future deadlines, 7 NULL deadlines, and 53 canonical query-free episode targets. The Watchlist label remains Work.title. No viewer was opened during P1 live verification.
+- Live checks exercised the canonical no-query work URL and the observed `?episodeType=first` variant; both returned HTTP 200, redirected to/add `episodeType=first`, and exposed identical `og:title` and document title. The exact title suffix includes U+30A6 (`ウ`) before U+30A9 (`ォ`); an earlier fixture/validator omitted that character and failed closed. The validator and fixtures now match the observed public title.
 
 ## P1.5 shared position-inference hook (2026-10-12)
 

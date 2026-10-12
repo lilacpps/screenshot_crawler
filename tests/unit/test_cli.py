@@ -857,6 +857,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         "comicdays",
         "hanayume",
         "jumpplus",
+        "kadocomi",
         "magapoke",
         "mangaone",
         "piccoma",

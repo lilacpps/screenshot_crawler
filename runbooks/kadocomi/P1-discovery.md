@@ -1,6 +1,6 @@
 # P1 — Discovery / Catalog / 無料状態
 
-Status: NOT STARTED。P0の証拠確定後に実施。入口は [README](README.md)。
+Status: IMPLEMENTED; local tests pass; independent Reviewer checkpoint pending.
 **目的**: 作品の現在公開中のエピソードのみをSourceとして同期し、
 過去Sourceの取得・Completed履歴を保全する。
 

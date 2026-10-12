@@ -1,0 +1,44 @@
+# 12. Kadocomi current implementation
+
+## Status (2026-10-12)
+
+P1 Discovery passed independent review with BLOCKING=0. P2 implementation is pending its phase contract; independent source-native evidence is documented below, but no production capture code exists. P3 Batch/ZIP and P4 independent end-to-end verification have not started.
+
+## Discovery behavior
+
+`src/screenshot_crawler/site_adapters/kadocomi/discovery.py` implements the site adapter. `screenshot_crawler.cli` registers it only for Discovery. It uses the connected Playwright `Page` and shared access guard; the adapter does not launch Chrome or select a browser profile.
+
+Supported input is an HTTPS work-detail route on `comic-walker.com` matching the strict `KC_<six digits>_S` work-ID shape and observed query forms. Live listing verification was performed for `KC_004915_S`; the no-deadline free classification is limited to that work, and other no-deadline works remain unknown. Bounded `from_url` / `through_url` Discovery is unsupported. The adapter requires the unique work-scoped `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*` container and exact visible expansion control `\u5168{N}\u8a71\u3092\u8868\u793a` when present. It waits at most 12 seconds for two identical scoped snapshots 500 ms apart; the validated episode-row count must equal the declared total. Page-wide recommendations and teaser links do not count.
+
+Every row is validated before any record is yielded. A row must be a direct `LI` with exactly one episode link; the unique `EpisodeThumbnail_title__*` title node must be contained inside that link. The URL must identify the same work and a unique episode. Saved episode URLs are canonical query-free paths. Publication dates and deadline dates are separate from the title node and do not become the order label. Any malformed row, sibling title outside the link, duplicate ID, wrong-work identity, unsupported query, unknown deadline syntax, gate-like text, changed work metadata, missing title, or incomplete count fails closed. Valid records are buffered and emitted newest-first.
+
+The observed ended-publication marker is `\u305d\u306e\u4ed6\u306e\u8a71\u306f\u516c\u958b\u7d42\u4e86\u3057\u307e\u3057\u305f`. The only accepted marker shape is one attribute-free direct `LI` with exactly one direct paragraph, no links, no episode title, and no other text. Zero or one marker is allowed. The marker's direct-child index, exact text, and adjacent episode labels participate in settlement. Other non-episode children and multiple markers fail closed. It indicates that other episodes ended publication, but does not establish their IDs or lifetime ordering.
+
+Source external IDs are `work_id:episode_id`; saved targets are canonical query-free episode paths. The adapter sets `allow_inferred_display_positions=False`: existing positions are preserved, new positions remain NULL, and no global position hints are emitted. Full Discovery may mark absent Sources unavailable only after a complete validated list. Incomplete full runs do not reconcile missing Sources. Incremental Discovery leaves unseen Sources unchanged. Reusing the same external ID preserves the Source and its Item, Completed status, CrawlRuns, and Artifacts across disappearance and republication.
+
+An exact future row deadline is classified as free and recorded as `free_until`; a later observed NULL clears stale expiry. A no-deadline row is classified free only for the independently verified work `KC_004915_S`. Other no-deadline works and expired deadlines remain unknown. The adapter reports `available=true` for validated public rows; gate-like row text fails closed.
+
+The shared Discovery service initializes `Work.title` from `WatchlistTarget.label` and does not apply `DiscoveredItem.canonical_title`. Kadocomi validates and exposes the work-page `og:title`; it does not rewrite Work metadata. Use the actual work name in the dedicated Watchlist label.
+
+## Observed evidence and limits
+
+The anonymous public list for `KC_004915_S` settled to 53 of 53 distinct episode rows in the exact list container, plus one ended-publication marker. The visible labels run 1 through 26 and then 78/79. The marker text is `\u305d\u306e\u4ed6\u306e\u8a71\u306f\u516c\u958b\u7d42\u4e86\u3057\u307e\u3057\u305f`, between `\u7b2c26\u8a71\u305d\u306e2` and `\u7b2c78\u8a71`. Exact missing episode IDs and lifetime numbering remain unknown. Forty-six rows showed an explicit 2026-10-14 11:00 delivery deadline and seven had no deadline. Official Comic Walker help describes WEB as a free manga portal and says episodes without configured deadlines may end without notice. Anonymous readability of a no-deadline episode was independently confirmed only for this work.
+
+The work detail `og:title` and `document.title` are `\u592b\u5a66\u4ee5\u4e0a\u3001\u604b\u4eba\u672a\u6e80\u3002\uff5c\u30ab\u30c9\u30b3\u30df (\u30b3\u30df\u30c3\u30af\u30a6\u30a9\u30fc\u30ab\u30fc)`. Its H1 is chapter-prefixed and is not a Work title. A query-free exact episode route returned the same work/episode identity as the observed `co=true&episodeType=first` row link; saved episode locators omit those query values.
+
+Independent P2 research retained five WebP Blob references created by the normal renderer without replacing the site's `URL.createObjectURL` call. Draw-time `HTMLImageElement.currentSrc` mapped DOM slots 0, 1, 2, 19, and 20 to the exact Blob and content canvas. The observed byte lengths were 169566, 141084, 133452, 126880, and 199144, with RIFF/WEBP signatures. Five full-RGBA comparisons had zero mismatches. Each observed image and canvas was 836 by 1200 with a full-frame identity draw. These are native viewer source-image bytes, not proof that opaque initial network responses contain the same bytes.
+
+Ordinary `LEFToverlay` navigation traversed 21 content slots over 11 right-to-left content slides while staying on the exact episode. The next slide had no content and exposed two `data-type=end-of-book` wrappers. A separate PR element was excluded. No source bytes or copyrighted pixels are stored in the repository.
+
+P2 implementation must still require per-capture currentSrc-to-immutable-Blob provenance, dimensions, full-frame identity, pixel equality, exact work/episode/page identity, safe state, validated content order, and explicit END. Screenshot fallback is not selected while this observed normal source-native path remains available. Other works, reader layouts, transformed draws, and no-deadline variants on other works remain unverified.
+
+## Operational checks
+
+Use a dedicated Watchlist and Catalog beneath ignored `work/kadocomi/`. Never allow Discovery to fall back to the user's normal Catalog or Watchlist. The CLI shape is:
+
+```powershell
+python -m screenshot_crawler.cli discover --key kadocomi-sample --mode full `
+  --watchlist work/kadocomi/watchlist.yaml --catalog work/kadocomi/catalog.sqlite
+```
+
+The Watchlist target URL must be the observed work-detail URL, and its label must be the true work title. Shared Chrome uses the existing CDP endpoint configuration. P1 validation results, current phase gate, and remaining uncertainties are in `runbooks/kadocomi/PROGRESS.md`.

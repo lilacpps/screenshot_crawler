@@ -472,6 +472,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     from screenshot_crawler.site_adapters.comicdays import ComicDaysDiscoveryAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeDiscoveryAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusDiscoveryAdapter
+    from screenshot_crawler.site_adapters.kadocomi import KadocomiDiscoveryAdapter
     from screenshot_crawler.site_adapters.magapoke import MagapokeDiscoveryAdapter
     from screenshot_crawler.site_adapters.mangaone import MangaOneDiscoveryAdapter
     from screenshot_crawler.site_adapters.piccoma import PiccomaDiscoveryAdapter
@@ -485,6 +486,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     registry.register("mangaone", MangaOneDiscoveryAdapter)
     registry.register("piccoma", PiccomaDiscoveryAdapter)
     registry.register("zeblack", ZeblackDiscoveryAdapter)
+    registry.register("kadocomi", KadocomiDiscoveryAdapter)
     registry.register("comicdays", ComicDaysDiscoveryAdapter)
     registry.register("hanayume", HanayumeDiscoveryAdapter)
     registry.register("younganimal", YounganimalDiscoveryAdapter)

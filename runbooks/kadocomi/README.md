@@ -1,6 +1,6 @@
 # カドコミ (comic-walker.com) Free-Only Site Adapter — 実装 Runbook
 
-Status: **PLANNED / 未実装・実サイト未検証** (2026-10-12)
+Status: P1 Discovery implemented; independent review pending (2026-10-12)
 Execution branch: `feat/kadocomi-adapter`
 Site key (proposed): `kadocomi`
 Sample work: https://comic-walker.com/detail/KC_004915_S?episodeType=first
@@ -126,3 +126,43 @@ incomplete/配信終了/誤Sourceは更新や完成処理を誤らない。
 `site_adapters/kadocomi/README.md`、対応`note/`、`PROGRESS.md`を同期。
 Reviewer BLOCKING=0。未検証・サイト依存・失敗した原画像候補を明記。
 報告は変更ファイル、証拠、実行コマンドと結果、スキップ理由、未解決リスク、次の操作まで。
+
+## Current P1 Discovery implementation
+
+`KadocomiDiscoveryAdapter` is registered only in the Discovery CLI registry.
+It accepts the verified work detail URL on `https://comic-walker.com`, reads
+the unique `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*`
+container, and expands the exact `全{N}話を表示` control. It requires two
+identical scoped snapshots 500 ms apart, at the declared row count, within a
+12-second bound before yielding any record. Page-wide recommendations are
+outside scope. Rows are buffered and validated before newest-first emission.
+Bounded `from_url` / `through_url` Discovery is unsupported.
+
+Episode source identity is `work_id:episode_id`; persisted reader targets are
+canonical query-free episode URLs. The order label comes from the observed
+`EpisodeThumbnail_title__` descendant, not publication or deadline dates. No
+numeric display position is inferred: old positions stay unchanged and new
+positions stay NULL.
+
+The exact row deadline marker is `配信期限：YYYY/MM/DD HH:MM`. A future explicit
+deadline is stored as `free_until`; a later NULL observation clears it. A
+no-deadline row is classified free only for the independently verified work
+`KC_004915_S`. Other no-deadline works and expired deadlines remain UNKNOWN.
+Access-gate text, unknown deadline syntax, malformed identity, duplicates,
+wrong-work IDs, and incomplete counts fail closed. Full reconciliation runs
+only after a clean complete list; incremental Discovery leaves unseen Sources
+unchanged.
+
+`Work.title` remains initialized from the dedicated Watchlist label because
+the shared Discovery service does not apply `DiscoveredItem.canonical_title`.
+The adapter validates and exposes the work-page `og:title`; set the Watchlist
+label to the actual work name.
+
+P0 evidence established a source-native viewer path for the observed target:
+the normal renderer's retained WebP Blob mapped by `currentSrc` to full-frame
+836x1200 identity draws. Five full-RGBA comparisons at DOM slots 0, 1, 2, 19,
+and 20 had zero mismatches. Ordinary navigation showed 21 content slots over
+11 content slides and an explicit END slide. This remains research evidence;
+P2 capture implementation and per-page provenance checks are pending.
+
+Local validation and independent review are recorded in `PROGRESS.md`.

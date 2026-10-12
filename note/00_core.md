@@ -1,5 +1,35 @@
 # 00. Core 現行実装ノート
 
+## Kadocomi Discovery registration and history safety (2026-10-12)
+
+The Kadocomi site adapter currently has a Discovery implementation only. The
+CLI's Discovery registry includes kadocomi; the viewer Crawl registry, Batch
+registry, Core Runner, Catalog schema, and existing adapters are unchanged.
+See note/12_kadocomi.md and runbooks/kadocomi/PROGRESS.md for site evidence
+and limits.
+
+The adapter snapshots only the unique public EpisodesTabContents UL after
+clicking the exact declared-count expansion button. It requires two identical
+scoped identity/deadline snapshots and the exact declared row count, buffers and
+validates all rows before yielding newest-first, and excludes recommendations.
+A failed or incomplete full list cannot mark absent Sources unavailable.
+Incremental Discovery leaves unseen Sources unchanged. Stable external IDs reuse
+the same Catalog Source and Item, preserving Completed state, CrawlRuns, and
+Artifacts after a source disappears and later returns.
+
+Future explicit row deadlines classify free and refresh free_until; a later
+NULL clears the old value. A no-deadline row is free only for the independently
+verified KC_004915_S work; no-deadline rows on other works and expired
+deadlines remain unknown. The adapter opts out of inferred display positions:
+existing positions remain intact and new Sources remain NULL. No site-wide rank
+is derived from episode IDs or compact list order.
+
+The validated canonical work title comes from the detail page's og:title.
+DiscoveryService still creates Work from the Watchlist label and does not
+consume DiscoveredItem.canonical_title; the adapter does not change this
+shared metadata behavior. Set a dedicated Watchlist label to the actual Work
+name.
+
 ## Younganimal Discovery and manual Crawl CLI registration (2026-10-11)
 
 Younganimal Discovery, manual Crawl, and direct-only Batch use the existing
