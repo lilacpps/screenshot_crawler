@@ -247,6 +247,49 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
     const markerNumbers = markers.map(marker => marker.getAttribute('data-n'));
     const secondaryEndMarkerSlideIndexes = secondaryEndNodes.map(marker =>
       slides.indexOf(marker.closest('.splide__slide')));
+    const markerBox = node => {
+      const owner = node.closest('.splide__slide');
+      if (!owner) return null;
+      const ownerRect = owner.getBoundingClientRect();
+      const rect = node.getBoundingClientRect();
+      return {
+        x: rect.x - ownerRect.x,
+        y: rect.y - ownerRect.y,
+        width: rect.width,
+        height: rect.height,
+        slideWidth: ownerRect.width,
+        slideHeight: ownerRect.height
+      };
+    };
+    const beginningNodes = [...root.querySelectorAll('div[data-type="beginning"]')];
+    const prNodes = [...root.querySelectorAll('div[data-type="pr"]')];
+    const beginningMarkers = beginningNodes.map(node => {
+      const owner = node.closest('.splide__slide');
+      return {
+        tagName: node.tagName,
+        rootClass: hasClassPrefix(node, '_root_1w5tt_'),
+        dataType: node.getAttribute('data-type'),
+        dataN: node.getAttribute('data-n'),
+        slideIndex: slides.indexOf(owner),
+        box: markerBox(node),
+        prMarkerCount: [...node.querySelectorAll('div[data-type="pr"]')].length
+      };
+    });
+    const prMarkers = prNodes.map(node => {
+      const owner = node.closest('.splide__slide');
+      const beginning = node.closest('div[data-type="beginning"]');
+      return {
+        tagName: node.tagName,
+        wrapperClass: hasClassPrefix(node, '_endOfBookWrapper_'),
+        secondaryClass: hasClassPrefix(node, '_endOfBook_'),
+        dataType: node.getAttribute('data-type'),
+        dataN: node.getAttribute('data-n'),
+        slideIndex: slides.indexOf(owner),
+        beginningOwnerIndex: beginning
+          ? slides.indexOf(beginning.closest('.splide__slide')) : -1,
+        box: markerBox(node)
+      };
+    });
     const markerRecord = node => {
       const owner = node.closest('.splide__slide');
       const ownerRect = owner ? owner.getBoundingClientRect() : null;
@@ -286,6 +329,10 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
       mainEndMarkers,
       secondaryEndMarkerSlideIndexes,
       secondaryEndMarkers,
+      beginningMarkerCount: beginningMarkers.length,
+      beginningMarkers,
+      prMarkerCount: prMarkers.length,
+      prMarkers,
       unclassifiedEndMarkerCount,
       hooksInstalled: state.hooksInstalled,
       ...(includeNodes ? {root} : {})
@@ -330,6 +377,10 @@ NATIVE_CAPTURE_SCRIPT = r"""async args => {
     mainEndMarkers: snapshot.mainEndMarkers,
     secondaryEndMarkerSlideIndexes: snapshot.secondaryEndMarkerSlideIndexes,
     secondaryEndMarkers: snapshot.secondaryEndMarkers,
+    beginningMarkerCount: snapshot.beginningMarkerCount,
+    beginningMarkers: snapshot.beginningMarkers,
+    prMarkerCount: snapshot.beginningMarkerCount > 0 ? snapshot.prMarkerCount : 0,
+    prMarkers: snapshot.beginningMarkerCount > 0 ? snapshot.prMarkers : [],
     slideRows: snapshot.slideRows.map(row => ({
       id: row.id,
       index: row.index,
@@ -424,6 +475,11 @@ NATIVE_CAPTURE_SCRIPT = r"""async args => {
       JSON.stringify(last.mainEndMarkers) !== JSON.stringify(first.mainEndMarkers) ||
       JSON.stringify(last.secondaryEndMarkerSlideIndexes) !== JSON.stringify(first.secondaryEndMarkerSlideIndexes) ||
       JSON.stringify(last.secondaryEndMarkers) !== JSON.stringify(first.secondaryEndMarkers) ||
+      last.beginningMarkerCount !== first.beginningMarkerCount ||
+      JSON.stringify(last.beginningMarkers) !== JSON.stringify(first.beginningMarkers) ||
+      (first.beginningMarkerCount > 0 &&
+        (last.prMarkerCount !== first.prMarkerCount ||
+         JSON.stringify(last.prMarkers) !== JSON.stringify(first.prMarkers))) ||
       JSON.stringify(last.slideRows.map(row => [row.id, row.contentSlots])) !==
       JSON.stringify(first.slideRows.map(row => [row.id, row.contentSlots]))) return fail('snapshot_changed');
   for (const capture of captures) {

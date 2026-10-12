@@ -1,12 +1,16 @@
 # P4 — 独立E2E、レビュー、最終判定
 
-Status: The original 4.1, first-episode 38-slot, and Episode 79 normal CLI
-Batch/ZIP audits passed their independent gates before the direct-entry
-follow-up. The follow-up now passes a bounded anonymous direct Runner probe
-(one canonical episode document navigation, 20 native WebP pages, explicit
-END) and local Runner/Batch fixtures. Its normal CLI/ZIP path was not rerun
-live after the navigation change. The direct-entry code/test Reviewer gate
-passed; the bounded live Runner evidence and current test results are in
+Status: The original 4.1, first-episode 38-slot, Episode 79, and 21-slot
+normal CLI Batch/ZIP audits passed their independent gates. The Episode 22.2
+normal CLI Batch run also passed: 18 CRC-valid 1115x1600 WebP pages matched
+the bounded native source proof, reached explicit END, and registered
+Completed plus an Artifact. Its ZIP is 7,035,725 bytes with SHA-256
+`96fa42b95b9cb5328aba15d255efc24fc440d3d147337937b9c19f154f035f8d`. The
+existing 21-slot Episode 4.1 CLI control also passed with 21 pages, explicit
+END, Completed, Artifact, and valid ZIP CRC. Its legacy slide-0 PR item remained
+non-content and outside the new beginning-slide validator. Final post-Discovery
+and backup audits passed, as did the final Reviewer gate and Lead acceptance.
+Final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0); evidence and validation limits are in
 [PROGRESS](PROGRESS.md).
 **目的**: Discovery→Catalog→Batch→全本文の完全性→ZIP/Completedを確認し、
 再公開/期限変更/非公開履歴で実害のある不具合を残さない。

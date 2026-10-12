@@ -116,6 +116,9 @@ def _reader_html(
     reader_layout: str = "paired",
     mixed_fault: str | None = None,
     mixed_key_behavior: str = "advance",
+    beginning_fault: str | None = None,
+    beginning_key_behavior: str = "advance",
+    include_legacy_pr: bool = False,
     metadata_fault: str | None = None,
 ) -> str:
     image_data = [base64.b64encode(image).decode("ascii") for image in images]
@@ -126,6 +129,20 @@ def _reader_html(
             {"images": [], "end_numbers": ["1", "2"] if include_end else []},
             {"images": [], "trailing": True},
         ]
+    elif reader_layout == "beginning_pr":
+        if len(images) < 2 or len(images) % 2:
+            raise ValueError("beginning PR fixture requires nonempty paired content")
+        pages = [{"images": [], "beginning_pr": True}]
+        pages.extend(
+            {"images": [index, index + 1]}
+            for index in range(0, len(images), 2)
+        )
+        pages.extend(
+            [
+                {"images": [], "end_numbers": ["1", "2"] if include_end else []},
+                {"images": [], "trailing": True},
+            ]
+        )
     elif reader_layout in {"mixed_final", "mixed_final_with_recommendation"}:
         mixed_slot_count = len(images) - (
             1 if mixed_fault in {"content_at_end", "content_at_recommendation"} else 0
@@ -180,12 +197,11 @@ def _reader_html(
     for index, page in enumerate(pages):
         active = " is-active" if index == 0 else ""
         canvas_markup = []
-        for image_index in page["images"]:
-            left = 35 if reverse_spread and len(page["images"]) == 2 and image_index % 2 == 1 else (
-                350 if len(page["images"]) == 1 or image_index % 2 == 1 else 35
-            )
-            if reverse_spread and len(page["images"]) == 2 and image_index % 2 == 0:
+        for slot_index, image_index in enumerate(page["images"]):
+            if len(page["images"]) == 1:
                 left = 350
+            else:
+                left = 35 if (slot_index == 0) == reverse_spread else 350
             canvas_markup.append(
                 f'<div class="_pageCanvasWrapper_k9w27_25" data-type="contents" '
                 f'style="position:absolute;left:{left}px;top:30px">'
@@ -197,10 +213,59 @@ def _reader_html(
             'width:36px;height:36px"></div>'
             for marker_index, number in enumerate(page.get("end_numbers", []))
         )
+        beginning_markup = ""
+        if reader_layout == "beginning_pr" and index == 0:
+            if beginning_fault not in {"unknown_empty", "missing_root"}:
+                pr_markup = ""
+                if beginning_fault not in {"missing_pr", "wrong_owner"}:
+                    pr_type = "unknown" if beginning_fault == "wrong_type" else "pr"
+                    pr_class = (
+                        "_endOfBookWrapper_k9w27_34"
+                        if beginning_fault == "wrong_class"
+                        else "_endOfBook_1w5tt_50"
+                    )
+                    number = ' data-n="1"' if beginning_fault == "wrong_number" else ""
+                    pr_markup = (
+                        f'<div class="{pr_class}" data-type="{pr_type}"{number} '
+                        'style="position:absolute;left:0;top:0;width:80px;height:400px"></div>'
+                    )
+                    if beginning_fault == "duplicate_pr":
+                        pr_markup += (
+                            '<div class="_endOfBook_1w5tt_50" data-type="pr" '
+                            'style="position:absolute;left:80px;top:0;width:80px;height:400px"></div>'
+                        )
+                beginning_markup = (
+                    '<div class="_root_1w5tt_1" data-type="beginning" '
+                    'style="position:absolute;left:0;top:0;width:700px;height:400px">'
+                    + pr_markup
+                    + "</div>"
+                )
+                if beginning_fault == "duplicate_root":
+                    beginning_markup += (
+                        '<div class="_root_1w5tt_1" data-type="beginning" '
+                        'style="position:absolute;left:0;top:0;width:700px;height:400px">'
+                        '<div class="_endOfBook_1w5tt_50" data-type="pr" '
+                        'style="position:absolute;left:0;top:0;width:80px;height:400px"></div></div>'
+                    )
+            elif beginning_fault == "missing_root":
+                beginning_markup = (
+                    '<div class="_endOfBook_1w5tt_50" data-type="pr" '
+                    'style="position:absolute;left:0;top:0;width:80px;height:400px"></div>'
+                )
+        if reader_layout == "beginning_pr" and index == 1 and beginning_fault == "wrong_owner":
+            beginning_markup += (
+                '<div class="_endOfBook_1w5tt_50" data-type="pr" '
+                'style="position:absolute;left:0;top:0;width:80px;height:400px"></div>'
+            )
         if reader_layout.startswith("mixed_final") and index == 0:
             marker_markup += (
                 '<div class="_endOfBookWrapper_k9w27_34" data-type="pr" '
                 'data-n="1" style="position:absolute;left:0;top:0;width:36px;height:36px"></div>'
+            )
+        if include_legacy_pr and index == 0:
+            marker_markup += (
+                '<div class="_endOfBookWrapper_k9w27_34" data-type="pr" data-n="1" '
+                'style="position:absolute;left:0;top:0;width:36px;height:36px"></div>'
             )
         trailing_count = page.get("trailing_count", 1 if page.get("trailing") else 0)
         trailing_markup = (
@@ -216,9 +281,15 @@ def _reader_html(
         page_markup.append(
             f'<div class="splide__slide{active}" data-slide="{index}">'
             + "".join(canvas_markup)
+            + beginning_markup
             + marker_markup
             + trailing_markup
-            + '<div class="_cover_bx4cr_11" data-turn="next"></div></div>'
+            + (
+                ""
+                if reader_layout == "beginning_pr" and index == 0
+                else '<div class="_cover_bx4cr_11" data-turn="next"></div>'
+            )
+            + "</div>"
         )
     episode_heading = f"\u3010{EPISODE_LABEL}\u3011{WORK_TITLE}"
     episode_title = f"{episode_heading}{SITE_SUFFIX}"
@@ -292,6 +363,25 @@ def _reader_html(
             slides[index + 1].classList.add('is-active');
           }}
         }});
+        if ({str(reader_layout == 'beginning_pr').lower()}) {{
+          document.addEventListener('keydown', event => {{
+            if (event.key !== 'ArrowLeft') return;
+            const index = slides.findIndex(slide => slide.classList.contains('is-active'));
+            if (index !== 0) return;
+            const behavior = {json.dumps(beginning_key_behavior)};
+            if (behavior === 'advance') {{
+              slides[0].classList.remove('is-active');
+              slides[1].classList.add('is-active');
+            }} else if (behavior === 'skip') {{
+              slides[0].classList.remove('is-active');
+              slides[2].classList.add('is-active');
+            }} else if (behavior === 'inventory_change') {{
+              slides[0].querySelector('div[data-type="beginning"]')?.remove();
+              slides[0].classList.remove('is-active');
+              slides[1].classList.add('is-active');
+            }}
+          }});
+        }}
         if ({str(is_mixed_layout).lower()}) {{
           document.addEventListener('keydown', event => {{
             if (event.key !== 'ArrowLeft') return;
@@ -311,18 +401,32 @@ def _reader_html(
       </script></body></html>"""
 
 
-def _native_capture_html(webp_b64: str, *, fault: str | None = None) -> str:
+def _native_capture_html(
+    webp_b64: str, *, fault: str | None = None, legacy_pr: bool = False
+) -> str:
     transform = "context.setTransform(1,0,0,1,1,0);" if fault == "transform" else ""
     delay_array_buffer = (
         "const originalArrayBuffer = blob.arrayBuffer.bind(blob);"
         "blob.arrayBuffer = async () => { await new Promise(resolve => setTimeout(resolve, 10));"
         "context.fillRect(0,0,1,1); return originalArrayBuffer(); };"
         if fault == "mutate"
+        else "const originalArrayBuffer = blob.arrayBuffer.bind(blob);"
+        "blob.arrayBuffer = async () => { await new Promise(resolve => setTimeout(resolve, 10));"
+        "const pr = document.querySelector('[data-type=pr]');"
+        "pr.style.width = '64px'; pr.style.backgroundColor = 'rgb(1,2,3)';"
+        "pr.setAttribute('data-n', '9'); return originalArrayBuffer(); };"
+        if fault == "unused_pr_mutate"
+        else ""
+    )
+    pr_markup = (
+        '<div class="_endOfBookWrapper_k9w27_34" data-type="pr" data-n="1" '
+        'style="position:absolute;left:0;top:0;width:36px;height:36px"></div>'
+        if legacy_pr
         else ""
     )
     return f"""<!doctype html><html><body>
       <div class="_mainScreen_191o7_1"><div class="splide _root_1542n_1 splide--rtl">
-        <div class="splide__slide is-active"><div class="_pageCanvasWrapper_k9w27_25" data-type="contents"><canvas class="_root_bx4cr_1"></canvas></div></div>
+        <div class="splide__slide is-active"><div class="_pageCanvasWrapper_k9w27_25" data-type="contents"><canvas class="_root_bx4cr_1"></canvas></div>{pr_markup}</div>
         <div class="splide__slide"><div class="_endOfBookWrapper_k9w27_34" data-type="end-of-book" data-n="1"></div><div class="_endOfBookWrapper_k9w27_34" data-type="end-of-book" data-n="2"></div></div>
       </div></div><script>
         const bytes = Uint8Array.from(atob({json.dumps(webp_b64)}), c => c.charCodeAt(0));
@@ -356,6 +460,9 @@ async def _install_reader_routes(
     reader_layout: str = "paired",
     mixed_fault: str | None = None,
     mixed_key_behavior: str = "advance",
+    beginning_fault: str | None = None,
+    beginning_key_behavior: str = "advance",
+    include_legacy_pr: bool = False,
     metadata_fault: str | None = None,
     episode_status: int = 200,
     http_error_with_viewer: bool = False,
@@ -371,6 +478,9 @@ async def _install_reader_routes(
         reader_layout=reader_layout,
         mixed_fault=mixed_fault,
         mixed_key_behavior=mixed_key_behavior,
+        beginning_fault=beginning_fault,
+        beginning_key_behavior=beginning_key_behavior,
+        include_legacy_pr=include_legacy_pr,
         metadata_fault=metadata_fault,
     )
 
@@ -430,10 +540,18 @@ def _watch_main_document_requests(page: Page) -> list[str]:
     return urls
 
 
-async def _run_native_capture_fixture(page: Page, webp: bytes, *, fault: str | None = None):
+async def _run_native_capture_fixture(
+    page: Page,
+    webp: bytes,
+    *,
+    fault: str | None = None,
+    legacy_pr: bool = False,
+):
     await page.add_init_script(NATIVE_OBSERVER_INIT_SCRIPT)
     url = "https://kadocomi-native-fixture.test/reader"
-    html = _native_capture_html(base64.b64encode(webp).decode("ascii"), fault=fault)
+    html = _native_capture_html(
+        base64.b64encode(webp).decode("ascii"), fault=fault, legacy_pr=legacy_pr
+    )
 
     async def fulfill(route) -> None:
         await route.fulfill(status=200, body=html, content_type="text/html; charset=utf-8")
@@ -448,13 +566,20 @@ async def _run_native_capture_fixture(page: Page, webp: bytes, *, fault: str | N
     return slot
 
 
-@pytest.mark.parametrize("fault", [None, "wrong_blob", "mutate", "transform"])
+@pytest.mark.parametrize(
+    "fault", [None, "wrong_blob", "mutate", "transform", "unused_pr_mutate"]
+)
 async def test_kadocomi_native_capture_requires_source_mapping_and_stable_full_frame(
     browser_page: Page, fault: str | None
 ) -> None:
     original = _webp((30, 90, 150, 177))
     wrong = _webp((190, 20, 30, 255))
-    slot = await _run_native_capture_fixture(browser_page, original, fault=fault)
+    slot = await _run_native_capture_fixture(
+        browser_page,
+        original,
+        fault=fault,
+        legacy_pr=fault == "unused_pr_mutate",
+    )
     if fault == "wrong_blob":
         await browser_page.evaluate(
             """wrong => {
@@ -481,7 +606,7 @@ async def test_kadocomi_native_capture_requires_source_mapping_and_stable_full_f
         },
     )
 
-    if fault is None:
+    if fault in {None, "unused_pr_mutate"}:
         assert raw["ok"] is True
         assert base64.b64decode(raw["captures"][0]["data"]) == original
         assert raw["captures"][0]["mimeType"] == "image/webp"
@@ -498,7 +623,12 @@ async def test_kadocomi_native_capture_requires_source_mapping_and_stable_full_f
 
 @pytest.mark.parametrize("computed_direction", ["ltr", "rtl"])
 @pytest.mark.parametrize(
-    "reader_layout", ["paired", "mixed_final", "mixed_final_with_recommendation"]
+    "reader_layout", [
+        "paired",
+        "mixed_final",
+        "mixed_final_with_recommendation",
+        "beginning_pr",
+    ]
 )
 async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explicit_end(
     browser_page: Page,
@@ -515,6 +645,7 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
         "paired": 3,
         "mixed_final": 38,
         "mixed_final_with_recommendation": 20,
+        "beginning_pr": 18,
     }[reader_layout]
     images = _fixture_images(image_count)
     await _install_reader_routes(
@@ -547,12 +678,34 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
     final_snapshot = await browser_page.evaluate(
         "window.__kadocomiNativeCaptureV1.snapshot()"
     )
-    if reader_layout == "paired":
-        assert len(final_snapshot["slideRows"]) == 4
-        assert final_snapshot["activeIndex"] == 2
-        assert final_snapshot["markerSlideIndexes"] == [2, 2]
-        assert final_snapshot["markerNumbers"] == ["1", "2"]
-        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [3]
+    if reader_layout in {"paired", "beginning_pr"}:
+        if reader_layout == "beginning_pr":
+            assert len(final_snapshot["slideRows"]) == 12
+            assert final_snapshot["activeIndex"] == 10
+            assert final_snapshot["markerSlideIndexes"] == [10, 10]
+            assert final_snapshot["markerNumbers"] == ["1", "2"]
+            assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [11]
+            assert [len(row["contentSlots"]) for row in final_snapshot["slideRows"]] == [
+                0,
+                *([2] * 9),
+                0,
+                0,
+            ]
+            assert final_snapshot["beginningMarkerCount"] == 1
+            assert final_snapshot["beginningMarkers"][0]["dataType"] == "beginning"
+            assert final_snapshot["beginningMarkers"][0]["slideIndex"] == 0
+            assert final_snapshot["beginningMarkers"][0]["prMarkerCount"] == 1
+            assert final_snapshot["prMarkerCount"] == 1
+            assert final_snapshot["prMarkers"][0]["dataType"] == "pr"
+            assert final_snapshot["prMarkers"][0]["dataN"] is None
+            assert final_snapshot["prMarkers"][0]["beginningOwnerIndex"] == 0
+            assert final_snapshot["slideRows"][11]["active"] is False
+        else:
+            assert len(final_snapshot["slideRows"]) == 4
+            assert final_snapshot["activeIndex"] == 2
+            assert final_snapshot["markerSlideIndexes"] == [2, 2]
+            assert final_snapshot["markerNumbers"] == ["1", "2"]
+            assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [3]
     elif reader_layout == "mixed_final":
         assert len(final_snapshot["slideRows"]) == 21
         assert final_snapshot["activeIndex"] == 20
@@ -571,6 +724,33 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
         assert final_snapshot["endMarkerCount"] == 3
     assert final_snapshot["slideRows"][-1]["contentSlots"] == []
     assert len(list((tmp_path / "output").glob("page-*.webp"))) == len(images)
+
+
+async def test_kadocomi_legacy_paired_layout_keeps_unrelated_pr_outside_capture_contract(
+    browser_page: Page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from screenshot_crawler.site_adapters.kadocomi import discovery
+
+    monkeypatch.setattr(discovery, "SETTLEMENT_INTERVAL_MS", 5)
+    monkeypatch.setattr(discovery, "SETTLEMENT_TIMEOUT_SECONDS", 1.0)
+    images = _fixture_images(3)
+    await _install_reader_routes(browser_page, images, include_legacy_pr=True)
+    result = await CrawlerRunner(
+        RunConfig(
+            site="kadocomi",
+            source_url=EPISODE_URL,
+            output_dir=tmp_path / "output",
+            diagnostics_dir=tmp_path / "diagnostics",
+            access_strategy="direct",
+            page_turn_delay_ms=0,
+            max_pages=10,
+        )
+    ).run(browser_page, KadocomiAdapter())
+
+    assert result.stop_state is PageState.END
+    assert [(tmp_path / "output" / page.file).read_bytes() for page in result.pages] == images
 
 
 async def test_kadocomi_runner_waits_for_delayed_same_page_metadata(
@@ -632,6 +812,18 @@ async def test_kadocomi_runner_waits_for_delayed_same_page_metadata(
         "mixed_rec_content",
         "mixed_rec_extra_slide",
         "mixed_rec_final_no_arrow",
+        "beginning_unknown_empty",
+        "beginning_missing_root",
+        "beginning_missing_pr",
+        "beginning_wrong_owner",
+        "beginning_wrong_type",
+        "beginning_wrong_class",
+        "beginning_wrong_number",
+        "beginning_duplicate_pr",
+        "beginning_duplicate_root",
+        "beginning_no_arrow",
+        "beginning_skip",
+        "beginning_inventory_change",
     ],
 )
 async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
@@ -647,6 +839,7 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
     monkeypatch.setattr(discovery, "SETTLEMENT_TIMEOUT_SECONDS", 1.0)
     mixed = scenario.startswith("mixed_")
     mixed_rec = scenario.startswith("mixed_rec_")
+    beginning = scenario.startswith("beginning_")
     image_count = (
         21
         if scenario == "mixed_rec_content"
@@ -656,6 +849,8 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         if scenario == "mixed_content_at_end"
         else 38
         if mixed
+            else 18
+            if beginning
         else 3
     )
     images = _fixture_images(image_count)
@@ -698,12 +893,22 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
             options["reverse_spread"] = True
         elif scenario == "mixed_final_no_arrow":
             options["mixed_key_behavior"] = "none"
+    elif beginning:
+        options["reader_layout"] = "beginning_pr"
+        if scenario == "beginning_no_arrow":
+            options["beginning_key_behavior"] = "none"
+        elif scenario == "beginning_skip":
+            options["beginning_key_behavior"] = "skip"
+        elif scenario == "beginning_inventory_change":
+            options["beginning_key_behavior"] = "inventory_change"
+        else:
+            options["beginning_fault"] = scenario.removeprefix("beginning_")
     await _install_reader_routes(browser_page, images, **options)
     if scenario in {"missing_end", "nonrender"}:
         monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
     if scenario in {"missing_heading", "og_mismatch", "dialog"}:
         monkeypatch.setattr(kadocomi_adapter, "METADATA_READY_TIMEOUT_SECONDS", 0.2)
-    if scenario in {"mixed_final_no_arrow", "mixed_rec_final_no_arrow"}:
+    if scenario in {"mixed_final_no_arrow", "mixed_rec_final_no_arrow", "beginning_no_arrow"}:
         monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
     output_dir = tmp_path / scenario / "output"
     runner = CrawlerRunner(
@@ -720,7 +925,7 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
 
     expected_error = (
         PageChangeTimeoutError
-        if scenario in {"missing_end", "nonrender", "mixed_final_no_arrow", "mixed_rec_final_no_arrow"}
+        if scenario in {"missing_end", "nonrender", "mixed_final_no_arrow", "mixed_rec_final_no_arrow", "beginning_no_arrow"}
         else UnknownPageStateError
     )
     with pytest.raises(expected_error):
@@ -770,6 +975,7 @@ async def _seed_kadocomi_batch_candidate(
         "paired": 3,
         "mixed_final": 38,
         "mixed_final_with_recommendation": 20,
+        "beginning_pr": 18,
     }[reader_layout]
     images = _fixture_images(image_count)
     await _install_reader_routes(browser_page, images, reader_layout=reader_layout)
@@ -806,7 +1012,7 @@ async def _seed_kadocomi_batch_candidate(
 
 
 @pytest.mark.parametrize(
-    "reader_layout", ["paired", "mixed_final", "mixed_final_with_recommendation"]
+    "reader_layout", ["paired", "mixed_final", "mixed_final_with_recommendation", "beginning_pr"]
 )
 async def test_kadocomi_batch_discovers_captures_packages_and_completes(
     browser_page: Page,
@@ -877,6 +1083,10 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
         "mixed_missing_marker",
         "mixed_final_no_arrow",
         "mixed_rec_final_no_arrow",
+        "beginning_missing_pr",
+        "beginning_wrong_owner",
+        "beginning_no_arrow",
+        "beginning_skip",
     ],
 )
 async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
@@ -898,6 +1108,9 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     elif failure.startswith("mixed_"):
         images = _fixture_images(38)
         options["reader_layout"] = "mixed_final"
+    elif failure.startswith("beginning_"):
+        images = _fixture_images(18)
+        options["reader_layout"] = "beginning_pr"
     if failure == "http_404":
         options["episode_status"] = 404
     elif failure == "http_500_with_viewer":
@@ -916,6 +1129,14 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     elif failure in {"mixed_final_no_arrow", "mixed_rec_final_no_arrow"}:
         options["mixed_key_behavior"] = "none"
         monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
+    elif failure.startswith("beginning_"):
+        if failure == "beginning_no_arrow":
+            options["beginning_key_behavior"] = "none"
+            monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
+        elif failure == "beginning_skip":
+            options["beginning_key_behavior"] = "skip"
+        else:
+            options["beginning_fault"] = failure.removeprefix("beginning_")
     await _install_reader_routes(browser_page, images, **options)
     main_document_urls = _watch_main_document_requests(browser_page)
 

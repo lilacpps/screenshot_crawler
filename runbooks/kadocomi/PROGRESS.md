@@ -2,18 +2,21 @@
 
 Status: The original P0 evidence contract and P1/P1.5/P2/P3 gates passed. P4
 Tester, Reviewer, and Lead accepted the isolated episode 4.1, first-episode
-38-slot, and Episode 79 CLI Batch/ZIP/source audits; the separate 21-slot
-control and post-Discovery/Catalog audits also passed. The direct-entry follow-up
-now opens an exact canonical episode in one main-document navigation, without
-a work-list preflight or second navigation. Its bounded anonymous Episode 79
-Runner probe passed with 20 native WebP pages and explicit END; local Runner and
-Batch fixtures cover all three supported variants and direct-entry failures.
-Independent code/test review passed with BLOCKING=0 and NONBLOCKING=0. A live
-Batch CLI run after the direct-entry change was not performed, so earlier CLI
-audits remain historical evidence for that behavior. The prior repository-wide
-pytest run predates this change: 2448 passed, one known baseline failure, and
-zero skips; it is not a full-suite result for the current change. Other
-unverified layouts remain unsupported and fail closed.
+38-slot, Episode 79, and 21-slot control CLI Batch/ZIP/source audits, plus the
+post-Discovery/Catalog audits. Direct entry opens an exact canonical episode
+in one main-document navigation, without work-list preflight or a second
+navigation. The Episode 22.2 beginning-PR layout is implemented under a
+strict site-local contract; its bounded anonymous native-source/END probe,
+18-page source proof, local Runner/Batch tests, independent code/test review,
+and normal CLI/ZIP run passed. The existing 21-slot Episode 4.1 CLI control
+also passed. Final post-Discovery/backup audits, P4 Reviewer gate, and Lead
+acceptance passed; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0).
+The final local
+affected selection passed 231 tests / 0 failed / 0 skipped (819 asyncio
+deprecation warnings), and `ruff check src tests` passed. The previous full
+repository run predates this site-local extension: 2448 passed, one known
+baseline failure, and zero skips; it is not a full-suite result for the current
+change. Other unobserved layouts remain unsupported and fail closed.
 
 ## Stage checkpoints
 
@@ -22,9 +25,9 @@ unverified layouts remain unsupported and fail closed.
 | P0 Site and source research | CONTRACT PASS | Exact 53 episode rows plus one explicit ended-publication marker in the public UL; anonymous work/episode identity; target-scoped no-deadline proof; source-to-draw WebP proof; reader END observed. Exact historical episode set remains unknown. |
 | P1 Discovery | PASS | Strict scoped list parser, exact known ended-publication placeholder handling, history-safe full/incremental behavior, 18 focused passes, isolated live full/incremental validation, independent Reviewer BLOCKING=0. |
 | P1.5 Position safety | PASS | Shared opt-out hook committed as ceb3434; independent Reviewer BLOCKING=0; 51 passed / 0 skipped. Kadocomi opts out and its persistence behavior is covered in P1 integration. |
-| P2 Viewer/Capture | PASS for episode 4.1, first-episode 38-slot layout, and Episode 79 extension; direct-entry follow-up code/test review PASS | Strict native source/pixel/END proofs are unchanged. Direct entry performs one canonical episode navigation and bounded same-page response/metadata/reader validation; its bounded Episode 79 Runner probe passed at explicit END. Current code/test Reviewer gate: BLOCKING=0, NONBLOCKING=0. |
-| P3 Free-only Batch / ZIP | Original live Batch/ZIP scope PASS; direct-entry local Runner/Batch fixtures and code/test review PASS | Direct-only policy and CLI wiring remain unchanged. Local Batch fixtures cover all three supported layouts and one-navigation failure behavior. A live Batch CLI run after direct entry was not performed; prior CLI results below are historical for the earlier navigation behavior. |
-| P4 Independent E2E | Original episode 4.1/38-slot runs, 21-slot control, and Episode 79 CLI/source/post-Discovery audits PASS; direct-entry Runner probe and code/test review PASS; Lead accepted | The earlier isolated Discovery/Batch CLI/ZIP and independent source audits remain valid for their original behavior. Direct-entry validation includes a bounded anonymous Episode 79 Runner capture but no post-change live Batch CLI run. The prior user trial remains unchanged. |
+| P2 Viewer/Capture | PASS for 4.1, first-episode 38-slot, Episode 79, and Episode 22.2 beginning-PR layout; independent code/test review PASS | Episode 22.2 native-source/END probe verified the exact beginning marker, one ordinary advance, 18 native WebP pages, and paired END. The source/END probe used the normal renderer and ordinary navigation, not CrawlerRunner. |
+| P3 Free-only Batch / ZIP | Existing live Batch/ZIP audits PASS; Episode 22.2 local fixtures, independent code/test review, and normal CLI/ZIP PASS | Direct-only policy and CLI wiring are unchanged. Local fixtures cover four layouts and one-navigation failure behavior. The 22.2 CLI run completed explicit END and registered its Artifact/Completed state. |
+| P4 Independent E2E | Episode 22.2 and 21-slot Episode 4.1 CLI/ZIP PASS; post-Discovery/backup, final Reviewer, and Lead gates PASS | The prior user trial remains unchanged. Current isolated P4 validation used a dedicated Catalog/output and did not touch the user's normal Catalog or output. Final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). |
 
 ## Initial target and containment
 
@@ -194,7 +197,7 @@ unverified layouts remain unsupported and fail closed.
 
 - The current Kadocomi adapter uses the canonical query-free Catalog episode URL as Runner's sole main-document navigation. It no longer opens a work-list page or issues a second document navigation. A response observer installed before Runner navigation requires a successful final HTTP 200 and work/episode-preserving redirects. Bounded same-page checks require a consistent H1/`og:title`/`document.title`, no visible dialog, and a settled recognized reader; each capture revalidates URL and metadata identity. Native Blob provenance, decoded-pixel, layout, ordering, explicit-END, and fallback guards are unchanged.
 - A bounded direct Runner probe used a fresh anonymous BrowserContext over the existing shared Crawler Chrome/CDP endpoint at 1920x1080 for `https://comic-walker.com/detail/KC_004915_S/episodes/KC_0049150008500011_E`. It observed exactly one main-document request to the canonical episode path, successful work/episode identity, title `夫婦以上、恋人未満。`, order label `第79話`, 20 byte-preserved native WebP captures, and explicit END. It did not run Batch CLI. Sanitized summary and output are isolated under ignored `work/kadocomi/direct-entry-date/`; the owned context was closed and remote Chrome was left running.
-- Local tests verify exactly one episode navigation through Runner and Batch for all three supported layouts. Failure coverage includes HTTP 404, HTTP 500 with valid viewer markup, non-render, foreign-episode redirect, missing or inconsistent same-page metadata, and a visible dialog; expiry remains a Site Policy eligibility test. The combined affected selection passed 210 / 0 skipped (819 existing pytest-asyncio deprecation warnings); the final focused cases passed 10 / 0 skipped (39 deselected). Independent Reviewer passed the final browser selection with 9 passed / 40 deselected / 0 skipped, BLOCKING=0, NONBLOCKING=0. Final code/test/docs review passed with BLOCKING=0 and NONBLOCKING=0; Lead accepted the direct-entry follow-up. `ruff check src tests` and `git diff --check` passed.
+- At that direct-entry checkpoint, local tests verified exactly one episode navigation through Runner and Batch for the three then-supported layouts. Failure coverage included HTTP 404, HTTP 500 with valid viewer markup, non-render, foreign-episode redirect, missing or inconsistent same-page metadata, and a visible dialog; expiry remains a Site Policy eligibility test. The affected selection passed 210 / 0 skipped (819 existing pytest-asyncio deprecation warnings); focused cases passed 10 / 0 skipped (39 deselected). Independent Reviewer passed the final browser selection with 9 passed / 40 deselected / 0 skipped, BLOCKING=0, NONBLOCKING=0. Final code/test/docs review passed with BLOCKING=0 and NONBLOCKING=0; Lead accepted the direct-entry follow-up. `ruff check src tests` and `git diff --check` passed.
 - Direct-entry validation command (using the shared environment's original Python installation with this repository on `PYTHONPATH`):
 
   ```powershell
@@ -206,7 +209,24 @@ unverified layouts remain unsupported and fail closed.
     tests/unit/test_packaging.py tests/unit/test_batch_executor.py
   ```
 
-- A post-change live Batch CLI/ZIP run was not performed. The earlier normal-CLI/ZIP audits remain valid for the previously reviewed behavior, but do not verify Batch's new single-navigation route. The previous repository-wide test result also predates this site-local change.
+- At that direct-entry checkpoint, a live Batch CLI/ZIP run was not performed. The earlier normal-CLI/ZIP audits remain valid for the previously reviewed behavior, but do not verify Batch's new single-navigation route. The previous repository-wide test result also predates this site-local change.
+
+## Episode 22.2 beginning-PR spread extension (2026-10-12; P4/docs PASS)
+
+- The exact target was `KC_004915_S:KC_0049150002200021_E` (`第22話その2`). A bounded fresh-anonymous probe used the existing shared Chrome/CDP session and the normal episode route. The public episode identity remained exact; no login, purchase, ticket, coin, point, rental, or gate bypass was used.
+- The observed main reader has 12 slides with content counts `[0, 2 x 9, 0, 0]`: slide 0 is an empty `data-type="beginning"` root that owns one visible `data-type="pr"` marker, slides 1–9 contain 18 RTL-ordered content slots, and slide 10 is the empty main END with `n=1,n=2`. Slide 11 is a secondary recommendation and was not entered. The beginning marker is validated only for this exact observed empty-first topology; the old three content-first contracts remain unchanged.
+- The bounded native-source/END probe used the normal renderer and ordinary navigation, not `CrawlerRunner`. It proved all 18 WebP Blob sources against their completed canvases with zero full-RGBA mismatches, preserved source bytes, and reached paired END on the same episode without entering the recommendation. All 18 measured pages were 1115x1600; aggregate source bytes were 7,106,618. Sanitized metadata-only evidence is ignored under `work/kadocomi/episode22-spread-diagnosis-20261012/episode22-live-evidence.json`; no page image bytes or bodies are committed.
+- The site-local implementation adds only a strict beginning-PR entry branch: require the unique beginning root and its owned, visible PR marker with positive geometry; perform exactly one ordinary `ArrowLeft` transition from index 0 to index 1; confirm same-page identity and unchanged inventory; then use the existing capture/native-source/END proof. It does not skip an unknown empty slide or generalize PR checks to existing content-first layouts. Native Blob/RGBA proof rules are unchanged.
+- Local Runner and Batch fixtures cover all four observed layouts, including the 18-page target, and fail closed for missing/duplicate/wrong-owner/wrong-type markers, unsafe or non-advancing entry, skipped turns, and inventory changes. The final combined selection passed: `231 passed, 0 failed, 0 skipped` in 148.71 seconds (819 existing pytest-asyncio deprecation warnings). It included Kadocomi adapter/discovery browser tests, Kadocomi policy/native/discovery units, `test_core_features.py`, `test_packaging.py`, and `test_batch_executor.py`. `ruff check src tests` passed.
+- Independent Reviewer passed the implementation and material test gate (BLOCKING=0, NONBLOCKING=0; its browser selection reported 31 passed / 39 deselected / 0 skipped, plus 3 native-capture unit passes). Tester completed a fresh isolated full Discovery (53 rows) and incremental check (5 known Sources), selected the target Item 11, skipped the other 52 isolated test Items, then ran the normal CLI Batch path. The target completed at explicit END with 18 CRC-valid 1115x1600 WebP members, one Artifact, and Completed status. Every ZIP member matched the P0 source proof. ZIP size is 7,035,725 bytes; SHA-256 is `96fa42b95b9cb5328aba15d255efc24fc440d3d147337937b9c19f154f035f8d`. The run recorded one completed item and zero failed, retry, 403/429/5xx, challenge, or CAPTCHA events. One target episode document GET returned HTTP 200; nine third-party iframe document requests were also observed, so this does not claim there was only one total document request. The isolated run is under `work/kadocomi/episode22-independent-20261012-154100/`; the user's normal Catalog/output remains untouched. The 21-slot control and final P4 artifact audit passed; final Reviewer gate and Lead acceptance are recorded below. No full repository pytest was rerun because the change is limited to this site-local topology and the affected selection covers the adapter plus shared Runner/packaging/Executor boundaries.
+
+## Final P4 audit and closeout (2026-10-12)
+
+- The final Tester report `work/kadocomi/episode22-independent-20261012-154100/p4-final-independent-report.json` returned PASS for the isolated Episode 22.2 run, existing Episode 4.1 control, and post-Discovery audit. Full Discovery observed all 53 Sources and completed/exhausted. Post-capture incremental returned 5/5 known Sources; post-capture full returned 53/53 known Sources, complete/exhausted, with no new Sources.
+- Final Catalog state retained 53 unique Source IDs/Items, 2 Completed (Episodes 22.2 and 4.1), 51 Pending, and 0 Skipped. Both Artifacts remained present. Current and backup Catalog integrity checks returned `ok` with schema version 6, 2 CrawlRuns, and 2 Artifacts; the backup was 143,360 bytes. The temporary skip setup was restored. The user's normal Catalog, output, and old trial were untouched.
+- Episode 22.2's 18-member ZIP was 7,035,725 bytes with SHA-256 `96fa42b95b9cb5328aba15d255efc24fc440d3d147337937b9c19f154f035f8d`; it passed CRC checks and every member matched the previously captured P0 source proof at 1115x1600. Episode 4.1's 21-member ZIP was 3,278,163 bytes with SHA-256 `ef2b58b21ac26874a814e6f5292eb8254409577e2f8ecd06428db5f5a8beead4`; it passed ZIP CRC/format/dimension and explicit-END/Completed/Artifact checks at 836x1200. No fresh byte-for-byte source comparison is claimed for the 21-page control because those prior page-source files were unavailable in the isolated workspace. Both runs removed temporary page output after packaging; no retained manifest is claimed.
+- The Episode 4.1 control's old reader shape was 13 slides with content counts `[1, 2 x 10, 0, 0]`. Slide 0 included the legacy `DIV._endOfBookWrapper_k9w27_34[data-type="pr"][data-n="1"]` marker; main END was at index 11 and recommendation at index 12. That PR remained non-content and did not trigger the beginning-slide validator. The Episode 22.2 run recorded one target episode document GET returning HTTP 200 plus nine third-party iframe document resources; this is not a claim of one total document request. The 4.1 control recorded one target episode GET returning HTTP 200 and zero errors or retries.
+- Final independent Reviewer evidence gate passed with BLOCKING=0 and NONBLOCKING=0; Lead accepted the bounded Episode 22.2 and 21-slot control scope. Final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0).
 
 ## Changed-file inventory (from `1be6405`)
 

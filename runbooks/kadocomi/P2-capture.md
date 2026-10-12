@@ -2,11 +2,15 @@
 
 Status: The original episode 4.1, first-episode 38-slot, and Episode 79
 native capture contracts passed their bounded live, local, and independent
-gates. The direct-entry follow-up is implemented and its anonymous live
-Episode 79 Runner probe passed with one episode document navigation, 20
-native WebP pages, and explicit END. The direct-entry Adapter/test review
-passed; prior P4 CLI/ZIP results predate this navigation change. See
-[PROGRESS](PROGRESS.md) for the exact current test and live evidence.
+gates. Direct entry uses one episode document navigation. A bounded anonymous
+Episode 22.2 native-source/END probe verified the strict empty beginning-PR
+slide, one ordinary advance, 18 native WebP pages, and paired END without
+entering the recommendation. Its normal CLI run produced 18 CRC-valid,
+source-matching WebP members and Completed/Artifact state. Local Runner/Batch
+fixtures cover four observed layouts, and independent code/test review passed
+(BLOCKING=0, NONBLOCKING=0). The existing 21-slot CLI control, final
+post-Discovery/backup audit, final Reviewer gate, and Lead acceptance passed.
+See [PROGRESS](PROGRESS.md) for evidence and validation limits.
 **目的**: 無条件無料話を先頭から全本文ページ、正しい読書順で取り、終端を確実に検証する。
 
 ## 変更範囲と優先順位
