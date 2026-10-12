@@ -53,3 +53,7 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 
 - [Young Animal Web — 無料・待つと無料 Site Adapter](younganimal-adapter/README.md) —
   independent-first implementation runbook: Discovery, original/native capture, free direct Batch, waiting-free and E2E.
+
+- [ComicFUZ anonymous free-only Site Adapter](comicfuz-free/README.md) —
+  logged-out public-free Discovery → Catalog → direct Batch → verified ZIP/E2E;
+  charge/ticket/medal research and consumption deliberately deferred to a later phase.
