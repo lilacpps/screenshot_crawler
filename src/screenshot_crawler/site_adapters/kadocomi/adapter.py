@@ -44,6 +44,7 @@ MAX_CANVAS_SLOTS = 500
 _PAIRED_END_LAYOUT = "paired_end"
 _MIXED_FINAL_END_LAYOUT = "mixed_final_end"
 _BEGINNING_PR_PAIRED_LAYOUT = "beginning_pr_paired"
+_BEGINNING_PR_MIXED_FINAL_LAYOUT = "beginning_pr_mixed_final"
 _EXTERNAL_ID = re.compile(r"^(?P<work>KC_[0-9]{6}_S):(?P<episode>KC_[0-9]{16}_E)$")
 _EPISODE_HEADING = re.compile(r"^\u3010(?P<order>[^\u3011]+)\u3011(?P<work>.+)$")
 _OG_TITLE_SUFFIX = "\uFF5C\u30AB\u30C9\u30B3\u30DF (\u30B3\u30DF\u30C3\u30AF\u30A6\u30A9\u30FC\u30AB\u30FC)"
@@ -392,7 +393,10 @@ class KadocomiAdapter(SiteAdapter):
             self._validate_current_episode_url(page)
             await self._wait_for_episode_metadata(page)
             await self._wait_for_initial_reader(page)
-            if self._reader_layout == _BEGINNING_PR_PAIRED_LAYOUT:
+            if self._reader_layout in {
+                _BEGINNING_PR_PAIRED_LAYOUT,
+                _BEGINNING_PR_MIXED_FINAL_LAYOUT,
+            }:
                 await self._advance_beginning_pr_entry(page)
         finally:
             self._remove_response_listener(page)
@@ -713,6 +717,15 @@ class KadocomiAdapter(SiteAdapter):
                 ("2", end_index),
             ]
             expected_secondary_indexes = [end_index + 1] if len(rows) - end_index - 1 else []
+            first_row = rows[0]
+            first_slots = first_row.get("contentSlots") if isinstance(first_row, dict) else None
+            if not isinstance(first_slots, list):
+                raise UnknownPageStateError("Kadocomi initial slide inventory is malformed")
+            if not first_slots:
+                if end_index < 3 or len(rows) - end_index - 1 != 0:
+                    raise UnknownPageStateError("Kadocomi beginning/mixed-final boundary is unsupported")
+                self._validate_beginning_pr_markers(snapshot)
+                layout = _BEGINNING_PR_MIXED_FINAL_LAYOUT
         else:
             raise UnknownPageStateError("Kadocomi END marker topology is unsupported or ambiguous")
         if snapshot.get("endMarkerCount") != len(expected_main_markers):
@@ -745,6 +758,14 @@ class KadocomiAdapter(SiteAdapter):
                     raise UnknownPageStateError("Kadocomi beginning PR or paired content shape changed")
                 if index >= end_index and slots:
                     raise UnknownPageStateError("Kadocomi found content at or after its explicit END")
+            elif layout == _BEGINNING_PR_MIXED_FINAL_LAYOUT:
+                if (
+                    (index == 0 and slots)
+                    or (0 < index < end_index - 1 and len(slots) != 2)
+                    or (index == end_index - 1 and len(slots) != 1)
+                    or (index >= end_index and slots)
+                ):
+                    raise UnknownPageStateError("Kadocomi beginning PR or mixed-final content shape changed")
             elif (
                 (index == 0 and len(slots) != 1)
                 or (0 < index < end_index - 1 and len(slots) != 2)
@@ -769,7 +790,7 @@ class KadocomiAdapter(SiteAdapter):
             flattened.extend(slots)
         if len(flattened) > MAX_CANVAS_SLOTS or len(flattened) != len(set(flattened)):
             raise UnknownPageStateError("Kadocomi content canvas inventory is duplicated or too large")
-        if layout == _BEGINNING_PR_PAIRED_LAYOUT:
+        if layout in {_BEGINNING_PR_PAIRED_LAYOUT, _BEGINNING_PR_MIXED_FINAL_LAYOUT}:
             if slide_slots[0] or any(not slide_slots[index] for index in range(1, end_index)):
                 raise UnknownPageStateError("Kadocomi beginning PR layout has an unexplained empty slide")
         elif any(not slide_slots[index] for index in range(end_index)):
@@ -785,7 +806,10 @@ class KadocomiAdapter(SiteAdapter):
             slots != self._all_slots
             or slide_slots != self._slide_slots
             or end_index != self._end_slide_index
-            or layout != _BEGINNING_PR_PAIRED_LAYOUT
+            or layout not in {
+                _BEGINNING_PR_PAIRED_LAYOUT,
+                _BEGINNING_PR_MIXED_FINAL_LAYOUT,
+            }
             or snapshot.get("activeIndex") != 0
         ):
             raise UnknownPageStateError("Kadocomi beginning PR entry changed before navigation")
@@ -809,7 +833,7 @@ class KadocomiAdapter(SiteAdapter):
             settled_slots != self._all_slots
             or settled_slides != self._slide_slots
             or settled_end != self._end_slide_index
-            or settled_layout != _BEGINNING_PR_PAIRED_LAYOUT
+            or settled_layout != layout
             or settled.get("activeIndex") != 1
         ):
             raise UnknownPageStateError("Kadocomi beginning PR did not advance to the exact first content slide")
@@ -840,7 +864,10 @@ class KadocomiAdapter(SiteAdapter):
                 slots, slide_slots, end_index, layout = self._validate_inventory(snapshot)
                 if snapshot.get("activeIndex") != 0:
                     raise UnknownPageStateError("Kadocomi episode did not open at its first reader slide")
-                if layout == _BEGINNING_PR_PAIRED_LAYOUT:
+                if layout in {
+                    _BEGINNING_PR_PAIRED_LAYOUT,
+                    _BEGINNING_PR_MIXED_FINAL_LAYOUT,
+                }:
                     ready = True
                 else:
                     first_canvas = snapshot["slideRows"][0]["contentCanvases"][0]
@@ -886,7 +913,10 @@ class KadocomiAdapter(SiteAdapter):
         active_index = snapshot.get("activeIndex")
         if isinstance(active_index, bool) or not isinstance(active_index, int):
             raise UnknownPageStateError("Kadocomi active slide index is invalid")
-        if self._reader_layout == _BEGINNING_PR_PAIRED_LAYOUT and active_index == 0:
+        if self._reader_layout in {
+            _BEGINNING_PR_PAIRED_LAYOUT,
+            _BEGINNING_PR_MIXED_FINAL_LAYOUT,
+        } and active_index == 0:
             raise UnknownPageStateError("Kadocomi beginning PR slide was not advanced during initialization")
         if active_index == self._end_slide_index:
             if not self._is_verified_terminal(snapshot, slide_slots, end_index):
@@ -940,6 +970,7 @@ class KadocomiAdapter(SiteAdapter):
                 _PAIRED_END_LAYOUT,
                 _MIXED_FINAL_END_LAYOUT,
                 _BEGINNING_PR_PAIRED_LAYOUT,
+                _BEGINNING_PR_MIXED_FINAL_LAYOUT,
             }
             or tuple(self._captured_slots) != self._all_slots
             or end_index != self._end_slide_index
@@ -1095,7 +1126,10 @@ class KadocomiAdapter(SiteAdapter):
         ):
             raise UnknownPageStateError("Kadocomi page turn is not bound to the last native capture")
         is_mixed_final_turn = (
-            self._reader_layout == _MIXED_FINAL_END_LAYOUT
+            self._reader_layout in {
+                _MIXED_FINAL_END_LAYOUT,
+                _BEGINNING_PR_MIXED_FINAL_LAYOUT,
+            }
             and self._end_slide_index is not None
             and active_index == self._end_slide_index - 1
         )

@@ -1,19 +1,6 @@
 # P4 — 独立E2E、レビュー、最終判定
 
-Status: The original 4.1, first-episode 38-slot, Episode 79, and 21-slot
-normal CLI Batch/ZIP audits passed their independent gates. The Episode 22.2
-normal CLI Batch run also passed: 18 CRC-valid 1115x1600 WebP pages matched
-the bounded native source proof, reached explicit END, and registered
-Completed plus an Artifact. Its ZIP is 7,035,725 bytes with SHA-256
-`96fa42b95b9cb5328aba15d255efc24fc440d3d147337937b9c19f154f035f8d`. The
-existing 21-slot Episode 4.1 CLI control also passed with 21 pages, explicit
-END, Completed, Artifact, and valid ZIP CRC. Its legacy slide-0 PR item remained
-non-content and outside the new beginning-slide validator. Final post-Discovery
-and backup audits passed, as did the final Reviewer gate and Lead acceptance.
-Final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0); evidence and validation limits are in
-[PROGRESS](PROGRESS.md).
-**目的**: Discovery→Catalog→Batch→全本文の完全性→ZIP/Completedを確認し、
-再公開/期限変更/非公開履歴で実害のある不具合を残さない。
+Status: P4 Tester, independent live-evidence Reviewer, and Lead gates passed for the Episode 20.2 target and Episode 22.2 18-page control. Episode 20.2 produced an 11-member CRC-valid WebP ZIP matching the recorded P0 manual source-proof hashes and byte lengths; the P4 audit did not run a fresh Blob/RGBA hook. The 22.2 control matched all 18 P0 source-proof files. Final documentation review PASS (Reviewer BLOCKING=0, NONBLOCKING=0; Lead accepted bounded scope); see [PROGRESS](PROGRESS.md) for ZIP hashes and post-Discovery/backup results.
 
 ## Direct-entry follow-up (2026-10-12)
 

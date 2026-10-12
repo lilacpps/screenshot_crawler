@@ -1,17 +1,6 @@
 # P2 — Viewer、原本優先の画像取得、本文完全性
 
-Status: The original episode 4.1, first-episode 38-slot, and Episode 79
-native capture contracts passed their bounded live, local, and independent
-gates. Direct entry uses one episode document navigation. A bounded anonymous
-Episode 22.2 native-source/END probe verified the strict empty beginning-PR
-slide, one ordinary advance, 18 native WebP pages, and paired END without
-entering the recommendation. Its normal CLI run produced 18 CRC-valid,
-source-matching WebP members and Completed/Artifact state. Local Runner/Batch
-fixtures cover four observed layouts, and independent code/test review passed
-(BLOCKING=0, NONBLOCKING=0). The existing 21-slot CLI control, final
-post-Discovery/backup audit, final Reviewer gate, and Lead acceptance passed.
-See [PROGRESS](PROGRESS.md) for evidence and validation limits.
-**目的**: 無条件無料話を先頭から全本文ページ、正しい読書順で取り、終端を確実に検証する。
+Status: Five exact observed reader layouts pass the bounded evidence, local, and independent gates. Episode 20.2 adds only a strict beginning-PR plus mixed-final composition. The observed route had five paired content slides; validation requires at least one paired content slide (end index >=3), then a final singleton and immediate empty paired END, with no trailing recommendation. Its manual normal-renderer source/END probe proved 11 native WebP pages; it was not a CrawlerRunner run. The normal CLI ZIP matched the 11 recorded P0 source hashes and byte lengths. Episode 22.2 passed as the current 18-page CLI control matching its P0 source files. Native byte/pixel proof rules remain unchanged. Final documentation review PASS (Reviewer BLOCKING=0, NONBLOCKING=0; Lead accepted bounded scope); see [PROGRESS](PROGRESS.md).
 
 ## 変更範囲と優先順位
 

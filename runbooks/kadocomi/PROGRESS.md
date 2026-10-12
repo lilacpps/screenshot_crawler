@@ -1,22 +1,7 @@
 # Kadocomi Free-Only Adapter - Progress / evidence ledger
 
-Status: The original P0 evidence contract and P1/P1.5/P2/P3 gates passed. P4
-Tester, Reviewer, and Lead accepted the isolated episode 4.1, first-episode
-38-slot, Episode 79, and 21-slot control CLI Batch/ZIP/source audits, plus the
-post-Discovery/Catalog audits. Direct entry opens an exact canonical episode
-in one main-document navigation, without work-list preflight or a second
-navigation. The Episode 22.2 beginning-PR layout is implemented under a
-strict site-local contract; its bounded anonymous native-source/END probe,
-18-page source proof, local Runner/Batch tests, independent code/test review,
-and normal CLI/ZIP run passed. The existing 21-slot Episode 4.1 CLI control
-also passed. Final post-Discovery/backup audits, P4 Reviewer gate, and Lead
-acceptance passed; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0).
-The final local
-affected selection passed 231 tests / 0 failed / 0 skipped (819 asyncio
-deprecation warnings), and `ruff check src tests` passed. The previous full
-repository run predates this site-local extension: 2448 passed, one known
-baseline failure, and zero skips; it is not a full-suite result for the current
-change. Other unobserved layouts remain unsupported and fail closed.
+Status: P0/P1/P1.5/P2/P3 and the P4 Tester, live-evidence Reviewer, and Lead gates passed for five strictly observed layouts on `KC_004915_S`. Current coverage includes direct entry, Episode 22.2 beginning-PR entry, and the Episode 20.2 beginning-PR plus mixed-final composition. P4 normal CLI ZIP runs passed for Episode 20.2 and the Episode 22.2 control; post-Discovery/backup audits passed. Final documentation review PASS (Reviewer BLOCKING=0, NONBLOCKING=0; Lead accepted bounded scope).
+The current nine-file regression selection passed 298 tests / 0 failed / 0 skipped in 223.22 seconds (1,269 existing pytest-asyncio deprecation warnings). After the approved lint-only test setup merge, the focused `beginning_mixed` rerun passed 13 / 0 failed / 0 skipped (73 deselected). Independent material Reviewer selection: 30 passed / 56 deselected / 0 skipped, BLOCKING=0/NONBLOCKING=0. `ruff check src tests` and `git diff --check` passed. The prior full repository run predates this site-local extension: 2448 passed, one known baseline failure, and zero skips; it is not a full-suite result for the current change. Other unobserved layouts remain unsupported and fail closed.
 
 ## Stage checkpoints
 
@@ -25,9 +10,9 @@ change. Other unobserved layouts remain unsupported and fail closed.
 | P0 Site and source research | CONTRACT PASS | Exact 53 episode rows plus one explicit ended-publication marker in the public UL; anonymous work/episode identity; target-scoped no-deadline proof; source-to-draw WebP proof; reader END observed. Exact historical episode set remains unknown. |
 | P1 Discovery | PASS | Strict scoped list parser, exact known ended-publication placeholder handling, history-safe full/incremental behavior, 18 focused passes, isolated live full/incremental validation, independent Reviewer BLOCKING=0. |
 | P1.5 Position safety | PASS | Shared opt-out hook committed as ceb3434; independent Reviewer BLOCKING=0; 51 passed / 0 skipped. Kadocomi opts out and its persistence behavior is covered in P1 integration. |
-| P2 Viewer/Capture | PASS for 4.1, first-episode 38-slot, Episode 79, and Episode 22.2 beginning-PR layout; independent code/test review PASS | Episode 22.2 native-source/END probe verified the exact beginning marker, one ordinary advance, 18 native WebP pages, and paired END. The source/END probe used the normal renderer and ordinary navigation, not CrawlerRunner. |
-| P3 Free-only Batch / ZIP | Existing live Batch/ZIP audits PASS; Episode 22.2 local fixtures, independent code/test review, and normal CLI/ZIP PASS | Direct-only policy and CLI wiring are unchanged. Local fixtures cover four layouts and one-navigation failure behavior. The 22.2 CLI run completed explicit END and registered its Artifact/Completed state. |
-| P4 Independent E2E | Episode 22.2 and 21-slot Episode 4.1 CLI/ZIP PASS; post-Discovery/backup, final Reviewer, and Lead gates PASS | The prior user trial remains unchanged. Current isolated P4 validation used a dedicated Catalog/output and did not touch the user's normal Catalog or output. Final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). |
+| P2 Viewer/Capture | PASS for five exact observed layouts; independent code/test review PASS | Episode 20.2 adds the observed beginning-PR plus mixed-final profile: empty owned PR slide, five observed content pairs, final singleton, immediate empty paired END, and no trailing recommendation. The validator requires at least one paired content slide (end index >=3), not exactly five. Its manual native-source/END probe used the normal renderer, not CrawlerRunner. |
+| P3 Free-only Batch / ZIP | PASS for five observed layouts; direct-only policy unchanged | Local Runner/Batch fixtures cover Episode 20.2. Normal CLI ZIPs passed for Episode 20.2 and the Episode 22.2 control; source-proof comparison limits are recorded below. |
+| P4 Independent E2E | Episode 20.2 and Episode 22.2 control PASS; Tester, live-evidence Reviewer, and Lead PASS | Post-Discovery and backup audits passed using dedicated Catalog/output only. The user's Catalog/output and earlier trial remain unchanged. Final documentation review PASS (Reviewer BLOCKING=0, NONBLOCKING=0; Lead accepted bounded scope). |
 
 ## Initial target and containment
 
@@ -227,6 +212,15 @@ change. Other unobserved layouts remain unsupported and fail closed.
 - Episode 22.2's 18-member ZIP was 7,035,725 bytes with SHA-256 `96fa42b95b9cb5328aba15d255efc24fc440d3d147337937b9c19f154f035f8d`; it passed CRC checks and every member matched the previously captured P0 source proof at 1115x1600. Episode 4.1's 21-member ZIP was 3,278,163 bytes with SHA-256 `ef2b58b21ac26874a814e6f5292eb8254409577e2f8ecd06428db5f5a8beead4`; it passed ZIP CRC/format/dimension and explicit-END/Completed/Artifact checks at 836x1200. No fresh byte-for-byte source comparison is claimed for the 21-page control because those prior page-source files were unavailable in the isolated workspace. Both runs removed temporary page output after packaging; no retained manifest is claimed.
 - The Episode 4.1 control's old reader shape was 13 slides with content counts `[1, 2 x 10, 0, 0]`. Slide 0 included the legacy `DIV._endOfBookWrapper_k9w27_34[data-type="pr"][data-n="1"]` marker; main END was at index 11 and recommendation at index 12. That PR remained non-content and did not trigger the beginning-slide validator. The Episode 22.2 run recorded one target episode document GET returning HTTP 200 plus nine third-party iframe document resources; this is not a claim of one total document request. The 4.1 control recorded one target episode GET returning HTTP 200 and zero errors or retries.
 - Final independent Reviewer evidence gate passed with BLOCKING=0 and NONBLOCKING=0; Lead accepted the bounded Episode 22.2 and 21-slot control scope. Final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0).
+
+## Episode 20.2 beginning-PR plus mixed-final extension (2026-10-12)
+
+- The exact target was `KC_004915_S:KC_0049150002000021_E`. A bounded fresh-anonymous normal-renderer probe used one ordinary beginning transition, ordinary spread turns, and one final ArrowLeft to END; this was a manual native-source/END probe, not a CrawlerRunner run. It observed eight slides with content counts `[0, 2 x 5, 1, 0]`: a known beginning root owning one visible PR at index 0, five paired content slides, a final singleton at index 6 owning main END `n=2`, and empty paired END at index 7 owning `n=1,n=2`. There was no trailing recommendation. All 11 currentSrc-to-Blob sources preserved WebP bytes and matched the completed canvas RGBA with zero mismatches; each was 1115x1600, totaling 4,212,120 bytes. No page bodies or image bytes were saved.
+- The additive site-local profile preserves the existing four layouts. It requires the owned beginning PR, at least one paired content slide (terminal index >=3), a final singleton, and the immediate empty paired END; the observed Episode 20.2 route had five pairs. Unknown/duplicate/misowned markers, content at END, changed inventory, skipped/no-advance turns, recommendations, and trailing slides fail closed.
+- In a fresh dedicated Catalog/output, normal CLI Batch completed the exact target with 11 CRC-valid 1115x1600 WebP ZIP members (4,161,916 bytes; SHA-256 `1e64a25c18af8e5569ab985216e955cc87dbf582b04fa76b6666ae3dafb1916a`). All members matched the recorded P0 manual source-proof SHA-256 and byte-length records. This P4 audit did not install a fresh independent Blob/RGBA hook. The target episode GET returned HTTP 200; the run reached END, registered one Artifact, and marked the Item Completed.
+- Episode 22.2 passed as the current 18-page control: the 7,035,725-byte ZIP has SHA-256 `a8ed4ce56f9f09ab78fd1ea64a14f0f9729fe440fa27b0b015f5282bd0570185`; all 18 members matched its P0 source-proof files. The target episode GET returned HTTP 200 and the run had zero errors.
+- Final post-Discovery state retained 53 Sources/Items and all NULL positions, with 2 Completed, 51 Pending, 0 Skipped, and 2 stable Artifacts/ZIP hashes. Post-incremental Discovery returned 5 known/0 new; post-full returned 53 known/0 new and complete. Current and backup Catalog integrity checks passed. P4 Tester, independent live-evidence Reviewer, and Lead accepted this bounded extension. Final documentation review PASS (Reviewer BLOCKING=0, NONBLOCKING=0; Lead accepted bounded scope).
+- The current nine-file regression selection was 298 passed / 0 failed / 0 skipped (223.22 seconds, 1,269 existing deprecation warnings); the post-lint-fix focused selection was 13 passed / 73 deselected / 0 skipped. Ruff and diff-check passed. The independent material gate reported 30 passed / 56 deselected / 0 skipped and BLOCKING=0/NONBLOCKING=0. Sanitized report: `work/kadocomi/episode20-2-independent-20261012/p4-final-independent-report.json`; the P0 manual metadata-only report is under ignored `work/kadocomi/episode20-2-fix-20261012/`.
 
 ## Changed-file inventory (from `1be6405`)
 
