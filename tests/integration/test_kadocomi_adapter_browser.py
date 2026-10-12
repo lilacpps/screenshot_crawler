@@ -116,6 +116,7 @@ def _reader_html(
     reader_layout: str = "paired",
     mixed_fault: str | None = None,
     mixed_key_behavior: str = "advance",
+    metadata_fault: str | None = None,
 ) -> str:
     image_data = [base64.b64encode(image).decode("ascii") for image in images]
     if reader_layout == "paired":
@@ -221,11 +222,35 @@ def _reader_html(
         )
     episode_heading = f"\u3010{EPISODE_LABEL}\u3011{WORK_TITLE}"
     episode_title = f"{episode_heading}{SITE_SUFFIX}"
+    if metadata_fault == "delayed":
+        document_title = ""
+        og_title = ""
+    else:
+        document_title = episode_title
+        og_title = f"{episode_title} wrong" if metadata_fault == "og_mismatch" else episode_title
+    heading_markup = (
+        ""
+        if metadata_fault in {"missing_heading", "delayed"}
+        else f"<h1>{episode_heading}</h1>"
+    )
+    dialog_markup = (
+        '<div role="dialog" style="position:fixed;inset:0;z-index:100">access</div>'
+        if metadata_fault == "dialog"
+        else ""
+    )
     is_mixed_layout = reader_layout.startswith("mixed_final")
     mixed_end_index = len(pages) - (2 if reader_layout == "mixed_final_with_recommendation" else 1)
     mixed_final_content_index = mixed_end_index - 1
+    delayed_metadata_script = (
+        f"setTimeout(() => {{ document.title = {json.dumps(episode_title)}; "
+        "document.querySelector('meta[property=\\\"og:title\\\"]')?.setAttribute('content', "
+        f"{json.dumps(episode_title)}); const h1 = document.createElement('h1'); "
+        f"h1.textContent = {json.dumps(episode_heading)}; document.body.prepend(h1); }}, 300);"
+        if metadata_fault == "delayed"
+        else ""
+    )
     return f"""<!doctype html><html><head><meta charset="utf-8">
-      <title>{episode_title}</title><meta property="og:title" content="{episode_title}">
+      <title>{document_title}</title><meta property="og:title" content="{og_title}">
       <style>
         body {{ margin:0; }}
         ._mainScreen_191o7_1 {{ position:relative;width:800px;height:600px; }}
@@ -235,7 +260,7 @@ def _reader_html(
         ._root_bx4cr_1 {{ width:16px;height:12px; }}
         ._cover_bx4cr_11 {{ position:absolute;left:0;top:0;width:80px;height:100%;z-index:5; }}
       </style></head><body>
-      <h1>{episode_heading}</h1><div class="_mainScreen_191o7_1">
+      {heading_markup}{dialog_markup}<div class="_mainScreen_191o7_1">
         <div class="splide _root_1542n_1 splide--rtl">{''.join(page_markup)}</div>
       </div>
       <script>
@@ -282,6 +307,7 @@ def _reader_html(
             }}
           }});
         }}
+        {delayed_metadata_script}
       </script></body></html>"""
 
 
@@ -330,6 +356,10 @@ async def _install_reader_routes(
     reader_layout: str = "paired",
     mixed_fault: str | None = None,
     mixed_key_behavior: str = "advance",
+    metadata_fault: str | None = None,
+    episode_status: int = 200,
+    http_error_with_viewer: bool = False,
+    nonrender: bool = False,
 ) -> None:
     listing = _listing_html(episode_id=listed_episode_id, deadline=deadline)
     viewer = _reader_html(
@@ -341,6 +371,7 @@ async def _install_reader_routes(
         reader_layout=reader_layout,
         mixed_fault=mixed_fault,
         mixed_key_behavior=mixed_key_behavior,
+        metadata_fault=metadata_fault,
     )
 
     async def fulfill(route) -> None:
@@ -354,13 +385,49 @@ async def _install_reader_routes(
                     headers={"Location": f"/detail/{WORK_ID}/episodes/KC_0049150000400012_E"},
                 )
                 return
-            await route.fulfill(status=200, body=viewer, content_type="text/html; charset=utf-8")
+            if episode_status != 200 and not http_error_with_viewer:
+                await route.fulfill(status=episode_status, body="unavailable")
+                return
+            if nonrender:
+                episode_heading = f"\u3010{EPISODE_LABEL}\u3011{WORK_TITLE}"
+                episode_title = f"{episode_heading}{SITE_SUFFIX}"
+                body = (
+                    "<!doctype html><html><head><title>"
+                    + episode_title
+                    + '</title><meta property="og:title" content="'
+                    + episode_title
+                    + '"></head><body><h1>'
+                    + episode_heading
+                    + "</h1></body></html>"
+                )
+                await route.fulfill(status=200, body=body, content_type="text/html; charset=utf-8")
+                return
+            await route.fulfill(
+                status=episode_status,
+                body=viewer,
+                content_type="text/html; charset=utf-8",
+            )
         elif path.startswith(f"/detail/{WORK_ID}/episodes/"):
             await route.fulfill(status=200, body=viewer, content_type="text/html; charset=utf-8")
         else:
             await route.fulfill(status=404, body="not found")
 
     await page.route("https://comic-walker.com/**", fulfill)
+
+
+def _watch_main_document_requests(page: Page) -> list[str]:
+    urls: list[str] = []
+
+    def record(request) -> None:
+        if (
+            request.is_navigation_request()
+            and request.resource_type == "document"
+            and request.frame == page.main_frame
+        ):
+            urls.append(request.url)
+
+    page.on("request", record)
+    return urls
 
 
 async def _run_native_capture_fixture(page: Page, webp: bytes, *, fault: str | None = None):
@@ -456,6 +523,7 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
         computed_direction=computed_direction,
         reader_layout=reader_layout,
     )
+    main_document_urls = _watch_main_document_requests(browser_page)
     adapter = KadocomiAdapter()
     result = await CrawlerRunner(
         RunConfig(
@@ -470,6 +538,7 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
     ).run(browser_page, adapter)
 
     assert result.stop_state is PageState.END
+    assert main_document_urls == [EPISODE_URL]
     assert len(result.pages) == len(images)
     assert [page.file_extension for page in result.pages] == [".webp"] * len(images)
     assert [page.mime_type for page in result.pages] == ["image/webp"] * len(images)
@@ -504,11 +573,46 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
     assert len(list((tmp_path / "output").glob("page-*.webp"))) == len(images)
 
 
+async def test_kadocomi_runner_waits_for_delayed_same_page_metadata(
+    browser_page: Page,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from screenshot_crawler.site_adapters.kadocomi import adapter as kadocomi_adapter
+
+    monkeypatch.setattr(kadocomi_adapter, "METADATA_READY_TIMEOUT_SECONDS", 2.0)
+    images = _fixture_images(3)
+    await _install_reader_routes(browser_page, images, metadata_fault="delayed")
+    main_document_urls = _watch_main_document_requests(browser_page)
+
+    adapter = KadocomiAdapter()
+    result = await CrawlerRunner(
+        RunConfig(
+            site="kadocomi",
+            source_url=EPISODE_URL,
+            output_dir=tmp_path / "output",
+            diagnostics_dir=tmp_path / "diagnostics",
+            access_strategy="direct",
+            page_turn_delay_ms=0,
+            max_pages=10,
+        )
+    ).run(browser_page, adapter)
+
+    assert result.stop_state is PageState.END
+    assert len(result.pages) == len(images)
+    assert main_document_urls == [EPISODE_URL]
+    assert adapter.get_output_metadata() == {"title": WORK_TITLE, "order": EPISODE_LABEL}
+
+
 @pytest.mark.parametrize(
     "scenario",
     [
-        "expired",
-        "missing_target",
+        "http_404",
+        "http_500_with_viewer",
+        "nonrender",
+        "missing_heading",
+        "og_mismatch",
+        "dialog",
         "foreign_redirect",
         "missing_end",
         "reverse_spread",
@@ -556,10 +660,15 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
     )
     images = _fixture_images(image_count)
     options: dict[str, object] = {}
-    if scenario == "expired":
-        options["deadline"] = "2020/10/14 11:00"
-    elif scenario == "missing_target":
-        options["listed_episode_id"] = "KC_0049150000400012_E"
+    if scenario == "http_404":
+        options["episode_status"] = 404
+    elif scenario == "http_500_with_viewer":
+        options["episode_status"] = 500
+        options["http_error_with_viewer"] = True
+    elif scenario == "nonrender":
+        options["nonrender"] = True
+    elif scenario in {"missing_heading", "og_mismatch", "dialog"}:
+        options["metadata_fault"] = scenario
     elif scenario == "foreign_redirect":
         options["redirect_foreign_episode"] = True
     elif scenario == "missing_end":
@@ -590,8 +699,10 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         elif scenario == "mixed_final_no_arrow":
             options["mixed_key_behavior"] = "none"
     await _install_reader_routes(browser_page, images, **options)
-    if scenario == "missing_end":
+    if scenario in {"missing_end", "nonrender"}:
         monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
+    if scenario in {"missing_heading", "og_mismatch", "dialog"}:
+        monkeypatch.setattr(kadocomi_adapter, "METADATA_READY_TIMEOUT_SECONDS", 0.2)
     if scenario in {"mixed_final_no_arrow", "mixed_rec_final_no_arrow"}:
         monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
     output_dir = tmp_path / scenario / "output"
@@ -609,7 +720,7 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
 
     expected_error = (
         PageChangeTimeoutError
-        if scenario in {"missing_end", "mixed_final_no_arrow", "mixed_rec_final_no_arrow"}
+        if scenario in {"missing_end", "nonrender", "mixed_final_no_arrow", "mixed_rec_final_no_arrow"}
         else UnknownPageStateError
     )
     with pytest.raises(expected_error):
@@ -637,7 +748,7 @@ async def test_kadocomi_catalog_target_requires_canonical_query_free_episode_url
         f"{WORK_ID}:{EPISODE_ID}", f"kadocomi:{WORK_ID}"
     )
 
-    assert adapter.resolve_initial_navigation_url(EPISODE_URL) == WORK_URL
+    assert adapter.resolve_initial_navigation_url(EPISODE_URL) == EPISODE_URL
     with pytest.raises(UnknownPageStateError, match="canonical query-free"):
         adapter.resolve_initial_navigation_url(
             f"{EPISODE_URL}?co=true&episodeType=first"
@@ -706,6 +817,7 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
     catalog, _plan, candidate, executor, images = await _seed_kadocomi_batch_candidate(
         browser_page, tmp_path, monkeypatch, reader_layout=reader_layout
     )
+    main_document_urls = _watch_main_document_requests(browser_page)
 
     result = await executor.execute_candidate(
         browser_page,
@@ -722,6 +834,7 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
     artifacts = catalog.list_artifacts(item_id=item.id)
     work = catalog.get_work(item.work_id)
     assert result.stop_reason == "end" and result.page_count == len(images)
+    assert main_document_urls == [EPISODE_URL]
     assert item.status == "completed" and item.completed_at is not None
     assert work.title == WORK_TITLE
     assert item.order_label == EPISODE_LABEL
@@ -756,7 +869,9 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
 @pytest.mark.parametrize(
     "failure",
     [
-        "expired",
+        "http_404",
+        "http_500_with_viewer",
+        "nonrender",
         "foreign_redirect",
         "missing_end",
         "mixed_missing_marker",
@@ -783,8 +898,14 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     elif failure.startswith("mixed_"):
         images = _fixture_images(38)
         options["reader_layout"] = "mixed_final"
-    if failure == "expired":
-        options["deadline"] = "2020/10/14 11:00"
+    if failure == "http_404":
+        options["episode_status"] = 404
+    elif failure == "http_500_with_viewer":
+        options["episode_status"] = 500
+        options["http_error_with_viewer"] = True
+    elif failure == "nonrender":
+        options["nonrender"] = True
+        monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
     elif failure == "foreign_redirect":
         options["redirect_foreign_episode"] = True
     elif failure == "missing_end":
@@ -796,6 +917,7 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
         options["mixed_key_behavior"] = "none"
         monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
     await _install_reader_routes(browser_page, images, **options)
+    main_document_urls = _watch_main_document_requests(browser_page)
 
     with pytest.raises(CandidateExecutionError):
         await executor.execute_candidate(
@@ -813,6 +935,12 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     runs = catalog.list_crawl_runs(item_id=item.id)
     assert len(runs) == 1 and runs[0].status == "failed"
     assert list((tmp_path / "library").rglob("*.zip")) == []
+    expected_navigation_paths = (
+        [EPISODE_URL, f"{WORK_URL}/episodes/KC_0049150000400012_E"]
+        if failure == "foreign_redirect"
+        else [EPISODE_URL]
+    )
+    assert main_document_urls == expected_navigation_paths
 
 
 async def test_kadocomi_adapter_rejects_auto_quota_and_locator_fallback(browser_page: Page) -> None:

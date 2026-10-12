@@ -1,18 +1,19 @@
 # Kadocomi Free-Only Adapter - Progress / evidence ledger
 
 Status: The original P0 evidence contract and P1/P1.5/P2/P3 gates passed. P4
-Tester, Reviewer, and Lead accepted the isolated episode 4.1 and first-episode
-38-slot live CLI Batch/ZIP/source audits; the separate 21-slot control and
-post-Discovery/Catalog audit also passed. The Episode 79 strict trailing-
-recommendation extension is now implemented, its bounded live 20-slot native
-source and END proof passed, and current selected tests/Ruff pass. Independent
-Reviewer code review passed (45 targeted tests, BLOCKING=0). A fresh isolated
-normal CLI run for Episode 79 succeeded and produced a 20-page WebP ZIP. The
-independent all-20 source/RGBA-to-ZIP audit and final post-Discovery Catalog
-audit also passed. The final live-evidence Reviewer gate passed (BLOCKING=0, NONBLOCKING=0), and Lead accepted the bounded Episode 79 scope; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0).
-The prior repository-wide pytest run predates the extension: 2448 passed, one
-known baseline failure, and zero skips; it is not a green full-suite result for
-the extension. Other unverified layouts remain unsupported and fail closed.
+Tester, Reviewer, and Lead accepted the isolated episode 4.1, first-episode
+38-slot, and Episode 79 CLI Batch/ZIP/source audits; the separate 21-slot
+control and post-Discovery/Catalog audits also passed. The direct-entry follow-up
+now opens an exact canonical episode in one main-document navigation, without
+a work-list preflight or second navigation. Its bounded anonymous Episode 79
+Runner probe passed with 20 native WebP pages and explicit END; local Runner and
+Batch fixtures cover all three supported variants and direct-entry failures.
+Independent code/test review passed with BLOCKING=0 and NONBLOCKING=0. A live
+Batch CLI run after the direct-entry change was not performed, so earlier CLI
+audits remain historical evidence for that behavior. The prior repository-wide
+pytest run predates this change: 2448 passed, one known baseline failure, and
+zero skips; it is not a full-suite result for the current change. Other
+unverified layouts remain unsupported and fail closed.
 
 ## Stage checkpoints
 
@@ -21,9 +22,9 @@ the extension. Other unverified layouts remain unsupported and fail closed.
 | P0 Site and source research | CONTRACT PASS | Exact 53 episode rows plus one explicit ended-publication marker in the public UL; anonymous work/episode identity; target-scoped no-deadline proof; source-to-draw WebP proof; reader END observed. Exact historical episode set remains unknown. |
 | P1 Discovery | PASS | Strict scoped list parser, exact known ended-publication placeholder handling, history-safe full/incremental behavior, 18 focused passes, isolated live full/incremental validation, independent Reviewer BLOCKING=0. |
 | P1.5 Position safety | PASS | Shared opt-out hook committed as ceb3434; independent Reviewer BLOCKING=0; 51 passed / 0 skipped. Kadocomi opts out and its persistence behavior is covered in P1 integration. |
-| P2 Viewer/Capture | PASS for episode 4.1 and first-episode 38-slot layouts; Episode 79 extension implemented, source/END probe and independent code review PASS | The extension accepts only the observed mixed-final inventory with 20 ordered content slots, an empty paired END at index 11, and one recognized trailing recommendation at index 12. The bounded live probe proved all 20 original Blob-to-canvas pixels and the final END transition. Focused local Runner/Batch tests pass; Reviewer passed 45 independent targeted tests with BLOCKING=0. Episode 79 normal CLI and independent all-20 source/RGBA-to-ZIP audit passed. |
-| P3 Free-only Batch / ZIP | PASS for the original reviewed scope; local fixture now covers all three observed variants | Direct-only policy and CLI wiring, local Catalog → Planner → Executor → Runner → ZIP/Artifact/Completed, with runtime failures preserving pending. Current local Batch fixtures exercise episode 4.1, the first-episode 38-slot layout, and Episode 79's strict trailing-recommendation variant. Reviewer BLOCKING=0, NONBLOCKING=0 for the original P3 gate; Episode 79 extension review passed (45 targeted tests, BLOCKING=0). Its normal CLI run and independent all-page source audit are recorded below. |
-| P4 Independent E2E | Original episode 4.1/38-slot runs and 21-slot control PASS; Episode 79 CLI, source audit, and post-Discovery audit PASS; final docs review PASS (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted | A fresh full Discovery returned 53 rows; incremental returned 5 known Sources; normal plan had 53 pending Items. `batch run --limit 1` captured Episode 79 and produced a 20-member WebP ZIP. The independent audit matched every ordinal member byte-for-byte to its normal-renderer source Blob and confirmed zero full-RGBA mismatches. Post-run incremental/full Discovery retained all 53 Sources and IDs, 53 available/free rows, 46 deadlines/7 NULL, and NULL positions; one Item is Completed, 52 pending, and the Artifact remains stable with current and backup integrity checks `ok` (backup 143,360 bytes). The final live-evidence Reviewer gate passed (BLOCKING=0, NONBLOCKING=0), and Lead accepted the bounded Episode 79 scope; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). ZIP size is 4,824,007 bytes, SHA-256 `fcbbc4b389f8606461495c2cec836fa7ffa3ca5b4a8c03679c3ccebed7428852`; see the Episode 79 CLI section below. The prior user trial remains unchanged. |
+| P2 Viewer/Capture | PASS for episode 4.1, first-episode 38-slot layout, and Episode 79 extension; direct-entry follow-up code/test review PASS | Strict native source/pixel/END proofs are unchanged. Direct entry performs one canonical episode navigation and bounded same-page response/metadata/reader validation; its bounded Episode 79 Runner probe passed at explicit END. Current code/test Reviewer gate: BLOCKING=0, NONBLOCKING=0. |
+| P3 Free-only Batch / ZIP | Original live Batch/ZIP scope PASS; direct-entry local Runner/Batch fixtures and code/test review PASS | Direct-only policy and CLI wiring remain unchanged. Local Batch fixtures cover all three supported layouts and one-navigation failure behavior. A live Batch CLI run after direct entry was not performed; prior CLI results below are historical for the earlier navigation behavior. |
+| P4 Independent E2E | Original episode 4.1/38-slot runs, 21-slot control, and Episode 79 CLI/source/post-Discovery audits PASS; direct-entry Runner probe and code/test review PASS; Lead accepted | The earlier isolated Discovery/Batch CLI/ZIP and independent source audits remain valid for their original behavior. Direct-entry validation includes a bounded anonymous Episode 79 Runner capture but no post-change live Batch CLI run. The prior user trial remains unchanged. |
 
 ## Initial target and containment
 
@@ -104,7 +105,7 @@ the extension. Other unverified layouts remain unsupported and fail closed.
 
 ## P2 capture implementation and live status (2026-10-12)
 
-- Added a Kadocomi-only direct adapter and bounded native capture observer. Initialization validates the exact listed episode and current free deadline before entering its canonical episode URL, then verifies work/episode metadata and reader identity. No shared Core, Batch, policy, or CLI behavior changed.
+- At the original P2 checkpoint, initialization validated the exact listed episode and current free deadline before entering its canonical episode URL. The direct-entry follow-up below removes that work-list navigation and runtime listing recheck; the native capture observer and source proofs remain unchanged. No shared Core, Batch, policy, or CLI behavior changed.
 - The original episode 4.1 P2 gate accepted one first-page canvas wrapper, two wrappers per following content slide in physical right-to-left order, the paired main-reader END markers at one boundary, and at most one trailing non-content slide. The first-episode mixed-final extension now adds its independently observed strict topology below; it does not loosen the original 4.1 checks. Each wrapper must have the observed `_pageCanvasWrapper_` class prefix and `data-type="contents"`, with exactly one owned `_root_bx4cr_` canvas. Only wrapper-owned canvas slots before the validated END are captured.
 - Every output WebP is the original retained Blob byte sequence. Before returning it, the adapter checks draw-time `currentSrc` to Blob identity, full-frame source/destination geometry, identity transform, safe draw state, bounded size/pixels, decoded RGBA equality with the canvas, and unchanged source/canvas/layout after asynchronous reads. Blob references are released after successful consumption. Locator and screenshot fallbacks fail hard.
 - P2-specific changed paths: `src/screenshot_crawler/site_adapters/kadocomi/adapter.py`, `native_capture.py`, package exports and site README; `tests/unit/test_kadocomi_native_capture.py`; `tests/integration/test_kadocomi_adapter_browser.py`; and `note/12_kadocomi.md`.
@@ -119,9 +120,9 @@ the extension. Other unverified layouts remain unsupported and fail closed.
 ## P3 policy and local Batch/ZIP integration (2026-10-12)
 
 - Added `KadocomiSitePolicy` and registered it with the manual Crawl adapter, Batch adapter, and Batch Policy registries. Direct is the only accepted strategy; named quota and grant-only resources remain unsupported.
-- A candidate requires `site=kadocomi`, `available=true`, `access_mode=free`, a well-formed work-scoped `work_id:episode_id`, and either a NULL deadline or an aware future `free_until`. Expired/equal, malformed, or naive deadlines and non-free modes are ineligible. In Batch, the adapter binds the canonical query-free Catalog target to the configured external identity and rechecks current list membership/free state/deadline before episode entry.
+- A candidate requires `site=kadocomi`, `available=true`, `access_mode=free`, a well-formed work-scoped `work_id:episode_id`, and either a NULL deadline or an aware future `free_until`. Expired/equal, malformed, or naive deadlines and non-free modes are ineligible. At the original P3 checkpoint, the adapter also rechecked current listing membership/free state/deadline before entry; the direct-entry follow-up below removes that runtime listing request. Catalog eligibility remains governed by Discovery and Site Policy.
 - Manual Crawl accepts explicit `--access-strategy direct`; its default `auto` is rejected by the adapter. Batch uses the existing plan/run CLI and shared executor/runner/packager. Display position remains NULL; no title/order-derived numeric prefix, archive renumbering, or Catalog/Core/Batch changes were introduced.
-- Local browser integration now exercises Discovery → Catalog → Planner → Executor → CrawlerRunner → native WebP manifest pages → ZIP → Artifact/Completed. The nominal run packages three fixture source bytes unchanged, confirms canonical source and Catalog metadata precedence, and uses only the explicit END stop. Fresh-runtime expired row, foreign episode redirect, and missing END each fail with Item still pending and no Artifact/ZIP.
+- The original P3 local browser integration exercised Discovery → Catalog → Planner → Executor → CrawlerRunner → native WebP pages → ZIP → Artifact/Completed. Its expired-row fixture tested the then-current listing preflight and is historical. The current direct-entry fixtures cover HTTP 404, HTTP 500 with valid viewer content, non-render, foreign-episode redirect, missing/inconsistent same-page metadata, and visible dialogs; expiry remains covered by Site Policy tests. Runtime failures leave the Item pending with no Artifact/ZIP.
 - Targeted P3 command passed: Kadocomi policy, CLI registries, canonical-target guard, nominal Batch flow, and runtime-failure cases → 27 passed / 0 skipped (5 asyncio deprecation warnings).
 - Affected regression command passed across Batch, Executor, naming, Catalog, packaging, and the existing site-policy suite → 301 passed / 0 skipped (469 asyncio deprecation warnings, 34.28s). No real site was used for P3; local browser-backed fixtures were used. Independent Reviewer verified the final material diff and current notes, with 25 focused passes (13 deselected, 0 skipped) plus 29 CLI/packaging passes (0 skipped): P3 PASS, BLOCKING=0, NONBLOCKING=0. Lead accepted P3 and advanced to P4. The shared-CDP CLI Batch and independent ZIP/completion audit subsequently passed as recorded below.
 
@@ -188,6 +189,24 @@ the extension. Other unverified layouts remain unsupported and fail closed.
 - Independent Tester audit passed for all 20 members: ordinal ZIP bytes exactly matched the normal-renderer Blob bytes and each full-RGBA comparison to the corresponding canvas had zero mismatches. The independent audit observed slots `[1, 2 x 9, 1, 0, 0]`, main END markers at slides 10/11, the secondary recommendation marker at slide 12, and excluded the PR marker at slide 0. Its own navigation used ten normal `ArrowLeft` advances through the paired spreads and one final `ArrowLeft` after the singleton to reach the same-episode empty END slide 11; recommendation slide 12 remained inactive. The production CLI run independently succeeded through its normal cover-turn sequence and final `ArrowLeft`. Sanitized Tester report: `work/kadocomi/p4-episode79-independent-20261012/independent-live-20-audit.json`.
 - Post-run incremental and full Discovery completed with 5/0 new and 53/0 new, respectively. The final isolated Catalog contains all 53 original Sources/IDs, all available/free, 46 explicit deadlines and 7 NULL deadlines, all NULL positions, one Completed Item and 52 pending Items. The Artifact stayed stable and current/backup Catalog integrity checks returned `ok`. The user trial Catalog/output was unchanged. CLI metrics recorded 900 responses and zero 403/429/5xx, challenge/CAPTCHA, or retry events; shared Chrome remained alive and the browser lease is released.
 - The final live-evidence Reviewer gate passed (BLOCKING=0, NONBLOCKING=0), and Lead accepted the bounded Episode 79 scope; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0).
+
+## Direct episode-entry follow-up (2026-10-12)
+
+- The current Kadocomi adapter uses the canonical query-free Catalog episode URL as Runner's sole main-document navigation. It no longer opens a work-list page or issues a second document navigation. A response observer installed before Runner navigation requires a successful final HTTP 200 and work/episode-preserving redirects. Bounded same-page checks require a consistent H1/`og:title`/`document.title`, no visible dialog, and a settled recognized reader; each capture revalidates URL and metadata identity. Native Blob provenance, decoded-pixel, layout, ordering, explicit-END, and fallback guards are unchanged.
+- A bounded direct Runner probe used a fresh anonymous BrowserContext over the existing shared Crawler Chrome/CDP endpoint at 1920x1080 for `https://comic-walker.com/detail/KC_004915_S/episodes/KC_0049150008500011_E`. It observed exactly one main-document request to the canonical episode path, successful work/episode identity, title `夫婦以上、恋人未満。`, order label `第79話`, 20 byte-preserved native WebP captures, and explicit END. It did not run Batch CLI. Sanitized summary and output are isolated under ignored `work/kadocomi/direct-entry-date/`; the owned context was closed and remote Chrome was left running.
+- Local tests verify exactly one episode navigation through Runner and Batch for all three supported layouts. Failure coverage includes HTTP 404, HTTP 500 with valid viewer markup, non-render, foreign-episode redirect, missing or inconsistent same-page metadata, and a visible dialog; expiry remains a Site Policy eligibility test. The combined affected selection passed 210 / 0 skipped (819 existing pytest-asyncio deprecation warnings); the final focused cases passed 10 / 0 skipped (39 deselected). Independent Reviewer passed the final browser selection with 9 passed / 40 deselected / 0 skipped, BLOCKING=0, NONBLOCKING=0. Final code/test/docs review passed with BLOCKING=0 and NONBLOCKING=0; Lead accepted the direct-entry follow-up. `ruff check src tests` and `git diff --check` passed.
+- Direct-entry validation command (using the shared environment's original Python installation with this repository on `PYTHONPATH`):
+
+  ```powershell
+  $env:PYTHONPATH='C:/Users/kensu/projects/screenshot_crawler_starter/src'
+  & 'C:/Users/kensu/projects/screenshot_crawler_starter/.venv/Scripts/python.exe' -m pytest -q `
+    tests/unit/test_kadocomi_policy.py tests/unit/test_kadocomi_native_capture.py `
+    tests/unit/test_kadocomi_discovery.py tests/integration/test_kadocomi_discovery_browser.py `
+    tests/integration/test_kadocomi_adapter_browser.py tests/unit/test_core_features.py `
+    tests/unit/test_packaging.py tests/unit/test_batch_executor.py
+  ```
+
+- A post-change live Batch CLI/ZIP run was not performed. The earlier normal-CLI/ZIP audits remain valid for the previously reviewed behavior, but do not verify Batch's new single-navigation route. The previous repository-wide test result also predates this site-local change.
 
 ## Changed-file inventory (from `1be6405`)
 

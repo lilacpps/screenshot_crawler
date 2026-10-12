@@ -6,13 +6,11 @@ import asyncio
 import base64
 import math
 import re
-from datetime import datetime
 from typing import Any
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page, Response
 
-from screenshot_crawler.catalog.service import now_jst
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import (
@@ -22,13 +20,10 @@ from screenshot_crawler.core.errors import (
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.discovery.models import DiscoveredRecord
 from screenshot_crawler.site_adapters.base import SiteAdapter
 from screenshot_crawler.site_adapters.kadocomi.access import kadocomi_access_profile
 from screenshot_crawler.site_adapters.kadocomi.discovery import (
-    KadocomiDiscoveryAdapter,
     canonical_kadocomi_episode_url,
-    canonical_kadocomi_work_url,
     parse_kadocomi_episode_url,
 )
 from screenshot_crawler.site_adapters.kadocomi.native_capture import (
@@ -39,18 +34,17 @@ from screenshot_crawler.site_adapters.kadocomi.native_capture import (
     NATIVE_OBSERVER_INIT_SCRIPT,
     capture_kadocomi_webp,
 )
-from screenshot_crawler.watchlist.models import WatchlistTarget
 
-SITE_HOST = "comic-walker.com"
 INITIALIZE_TIMEOUT_MS = 90_000
-NAVIGATION_TIMEOUT_MS = 20_000
 VIEWER_READY_TIMEOUT_SECONDS = 35.0
+METADATA_READY_TIMEOUT_SECONDS = 10.0
 VIEWER_POLL_MS = 150
 PAGE_CHANGE_TIMEOUT_SECONDS = 12.0
 MAX_CANVAS_SLOTS = 500
 _PAIRED_END_LAYOUT = "paired_end"
 _MIXED_FINAL_END_LAYOUT = "mixed_final_end"
 _EXTERNAL_ID = re.compile(r"^(?P<work>KC_[0-9]{6}_S):(?P<episode>KC_[0-9]{16}_E)$")
+_EPISODE_HEADING = re.compile(r"^\u3010(?P<order>[^\u3011]+)\u3011(?P<work>.+)$")
 _OG_TITLE_SUFFIX = "\uFF5C\u30AB\u30C9\u30B3\u30DF (\u30B3\u30DF\u30C3\u30AF\u30A6\u30A9\u30FC\u30AB\u30FC)"
 
 _READ_EPISODE_METADATA_SCRIPT = r"""() => {
@@ -238,12 +232,31 @@ class KadocomiAdapter(SiteAdapter):
         self._pending_next_index: int | None = None
         self._ended = False
         self._capture_diagnostics: dict[str, object] = {"mode": "not_started"}
+        self._main_document_responses: list[tuple[str, int]] = []
+        self._response_listener: Any | None = None
 
     async def prepare_page(self, page: Page) -> None:
         try:
             await page.add_init_script(NATIVE_OBSERVER_INIT_SCRIPT)
         except PlaywrightError as exc:
             raise UnknownPageStateError("Kadocomi native image observer could not be installed") from exc
+
+        self._main_document_responses = []
+
+        def observe_response(response: Response) -> None:
+            request = response.request
+            try:
+                if (
+                    request.is_navigation_request()
+                    and request.resource_type == "document"
+                    and request.frame == page.main_frame
+                ):
+                    self._main_document_responses.append((response.url, response.status))
+            except PlaywrightError:
+                return
+
+        self._response_listener = observe_response
+        page.on("response", observe_response)
 
     def resolve_initial_navigation_url(self, source_url: str) -> str:
         identity = parse_kadocomi_episode_url(source_url)
@@ -262,7 +275,7 @@ class KadocomiAdapter(SiteAdapter):
         self._work_id = identity.work_id
         self._episode_id = identity.episode_id
         self._external_id = external
-        return canonical_kadocomi_work_url(f"https://{SITE_HOST}/detail/{identity.work_id}")
+        return self._target_url
 
     def get_access_profile(self) -> AccessProfile:
         return kadocomi_access_profile()
@@ -313,73 +326,45 @@ class KadocomiAdapter(SiteAdapter):
         self._slide_slots = ()
         self._end_slide_index = None
         self._reader_layout = None
-        records = await self._read_public_work_listing(page)
-        record = self._find_target_record(records)
-        self._validate_free_record(record)
-        canonical_url = canonical_kadocomi_episode_url(record.source.url)
-        if canonical_url != self._target_url:
-            raise UnknownPageStateError("Kadocomi public row URL differs from the exact source")
-        title = record.item.canonical_title
-        order_label = record.item.order_label
-        if not isinstance(title, str) or not title.strip() or not isinstance(order_label, str) or not order_label.strip():
-            raise UnknownPageStateError("Kadocomi public row work or episode title is incomplete")
-        self._work_title = title.strip()
-        self._order_label = order_label.strip()
-
         try:
-            response: Response | None = await page.goto(
-                self._target_url,
-                wait_until="domcontentloaded",
-                timeout=NAVIGATION_TIMEOUT_MS,
-            )
-        except PlaywrightError as exc:
-            raise UnknownPageStateError("Kadocomi exact episode navigation failed") from exc
-        if response is None or response.status != 200:
-            raise UnknownPageStateError("Kadocomi exact episode route did not return HTTP 200")
-        self._validate_current_episode_url(page)
-        await self._validate_episode_metadata(page)
-        await self._wait_for_initial_reader(page)
+            await self._validate_initial_navigation_response(page)
+            self._validate_current_episode_url(page)
+            await self._wait_for_episode_metadata(page)
+            await self._wait_for_initial_reader(page)
+        finally:
+            self._remove_response_listener(page)
 
-    async def _read_public_work_listing(self, page: Page) -> list[DiscoveredRecord]:
-        if self._work_id is None:
-            raise UnknownPageStateError("Kadocomi target work identity is missing")
-        target = WatchlistTarget(
-            key="kadocomi-capture-preflight",
-            work_key=self._opaque_work_key or f"kadocomi:{self._work_id}",
-            site="kadocomi",
-            url=canonical_kadocomi_work_url(f"https://{SITE_HOST}/detail/{self._work_id}"),
-            label="Kadocomi capture preflight",
-        )
-        adapter = KadocomiDiscoveryAdapter()
-        records: list[DiscoveredRecord] = []
-        try:
-            async for record in adapter.iter_records(page, target, "full"):
-                records.append(record)
-        except Exception as exc:
-            if isinstance(exc, UnknownPageStateError):
-                raise
-            raise UnknownPageStateError("Kadocomi complete public episode list could not be verified") from exc
-        if not records:
-            raise UnknownPageStateError("Kadocomi public episode list is empty")
-        return records
+    def _remove_response_listener(self, page: Page) -> None:
+        if self._response_listener is not None:
+            page.remove_listener("response", self._response_listener)
+            self._response_listener = None
 
-    def _find_target_record(self, records: list[DiscoveredRecord]) -> DiscoveredRecord:
-        matches = [record for record in records if record.source.external_id == self._external_id]
-        if len(matches) != 1:
-            raise UnknownPageStateError("Kadocomi exact target is absent or duplicated in the public list")
-        return matches[0]
-
-    def _validate_free_record(self, record: DiscoveredRecord) -> None:
-        source = record.source
-        if source.available is not True or source.access_mode != "free":
-            raise UnknownPageStateError("Kadocomi exact public row is not positively free")
-        expiry = source.free_until
-        if expiry is not None and (
-            not isinstance(expiry, datetime)
-            or expiry.tzinfo is None
-            or expiry <= now_jst()
+    async def _validate_initial_navigation_response(self, page: Page) -> None:
+        responses = self._main_document_responses
+        self._main_document_responses = []
+        if not responses:
+            raise UnknownPageStateError("Kadocomi exact episode navigation had no document response")
+        for response_url, status in responses:
+            identity = parse_kadocomi_episode_url(response_url)
+            if (
+                identity is None
+                or identity.work_id != self._work_id
+                or identity.episode_id != self._episode_id
+                or status < 200
+                or status >= 400
+            ):
+                raise UnknownPageStateError("Kadocomi exact episode navigation was unavailable or redirected")
+        final_url, final_status = responses[-1]
+        final_identity = parse_kadocomi_episode_url(final_url)
+        page_identity = parse_kadocomi_episode_url(page.url)
+        if (
+            final_status != 200
+            or final_identity is None
+            or page_identity is None
+            or final_identity.work_id != page_identity.work_id
+            or final_identity.episode_id != page_identity.episode_id
         ):
-            raise UnknownPageStateError("Kadocomi exact public row is expired or has unknown expiry")
+            raise UnknownPageStateError("Kadocomi exact episode route did not return HTTP 200")
 
     def _validate_current_episode_url(self, page: Page) -> None:
         identity = parse_kadocomi_episode_url(page.url)
@@ -390,16 +375,51 @@ class KadocomiAdapter(SiteAdapter):
         ):
             raise UnknownPageStateError("Kadocomi navigation changed the exact work or episode")
 
-    async def _validate_episode_metadata(self, page: Page) -> None:
+    async def _read_episode_metadata(self, page: Page) -> dict[str, Any] | None:
         self._validate_current_episode_url(page)
         try:
             raw = await asyncio.wait_for(page.evaluate(_READ_EPISODE_METADATA_SCRIPT), timeout=4)
         except (PlaywrightError, TimeoutError) as exc:
             raise UnknownPageStateError("Kadocomi episode metadata could not be read") from exc
-        expected_heading = f"\u3010{self._order_label}\u3011{self._work_title}"
-        expected_title = f"{expected_heading}{_OG_TITLE_SUFFIX}"
+        return raw if isinstance(raw, dict) else None
+
+    async def _wait_for_episode_metadata(self, page: Page) -> None:
+        deadline = asyncio.get_running_loop().time() + METADATA_READY_TIMEOUT_SECONDS
+        while asyncio.get_running_loop().time() < deadline:
+            raw = await self._read_episode_metadata(page)
+            if raw is None:
+                await page.wait_for_timeout(VIEWER_POLL_MS)
+                continue
+            if raw.get("visibleDialogCount") != 0:
+                raise UnknownPageStateError("Kadocomi episode opened a visible access dialog")
+            heading = raw.get("heading")
+            match = _EPISODE_HEADING.fullmatch(heading) if isinstance(heading, str) else None
+            title = f"{heading}{_OG_TITLE_SUFFIX}" if isinstance(heading, str) else None
+            if (
+                match is not None
+                and raw.get("headingCount") == 1
+                and raw.get("titleCount") == 1
+                and raw.get("ogTitle") == title
+                and raw.get("documentTitle") == title
+                and match.group("order").strip()
+                and match.group("work").strip()
+            ):
+                self._order_label = match.group("order").strip()
+                self._work_title = match.group("work").strip()
+                return
+            await page.wait_for_timeout(VIEWER_POLL_MS)
+        raise UnknownPageStateError("Kadocomi exact episode metadata did not settle consistently")
+
+    async def _validate_episode_metadata(self, page: Page) -> None:
+        raw = await self._read_episode_metadata(page)
+        expected_heading = (
+            f"\u3010{self._order_label}\u3011{self._work_title}"
+            if self._order_label is not None and self._work_title is not None
+            else None
+        )
+        expected_title = f"{expected_heading}{_OG_TITLE_SUFFIX}" if expected_heading else None
         if (
-            not isinstance(raw, dict)
+            raw is None
             or raw.get("headingCount") != 1
             or raw.get("heading") != expected_heading
             or raw.get("titleCount") != 1
@@ -752,6 +772,8 @@ class KadocomiAdapter(SiteAdapter):
         raise UnknownPageStateError("Kadocomi does not permit locator or screenshot fallback")
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        self._validate_current_episode_url(page)
+        await self._validate_episode_metadata(page)
         if await self.detect_state(page) is not PageState.CONTENT:
             raise UnknownPageStateError("Kadocomi has no verified active content slide")
         snapshot = await self._snapshot(page)
@@ -813,6 +835,7 @@ class KadocomiAdapter(SiteAdapter):
                 raise UnknownPageStateError("Kadocomi original viewer Blob is not a supported WebP")
             results.append(result)
         self._validate_current_episode_url(page)
+        await self._validate_episode_metadata(page)
         after = await self._snapshot(page)
         after_slots, after_slides, after_end_index, after_layout = self._validate_inventory(after)
         if (

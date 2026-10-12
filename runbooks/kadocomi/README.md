@@ -1,7 +1,7 @@
 # カドコミ (comic-walker.com) Free-Only Site Adapter — 実装 Runbook
 
-Status (2026-10-12): P0/P1/P1.5/P2/P3 gates and the original P4 audits for episode 4.1 and the first-episode 38-slot variant passed. The separate 21-slot CLI control and post-Discovery/Catalog audit also passed. The Episode 79 mixed-final-with-recommendation extension is implemented; its bounded live 20-slot Blob/canvas and END proof, local Runner/Batch fixtures, current Ruff, independent code review (45 targeted tests, BLOCKING=0), normal isolated CLI Batch run producing a 20-member ZIP, and independent all-20 source/RGBA-to-ZIP audit passed. Final post-Discovery Catalog audit passed; final live-evidence Reviewer gate passed (BLOCKING=0, NONBLOCKING=0) and Lead accepted the bounded target; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). Its earlier user trial failed closed before capture and remains read-only. The prior repository-wide pytest result predates this extension (2448 passed, one known baseline failure, zero skips); it is not a full-suite result for the extension. Remaining limits are in [PROGRESS](PROGRESS.md).
-Execution branch: `feat/kadocomi-adapter`
+Status (2026-10-12): The original P0/P1/P1.5/P2/P3/P4 acceptance passed; the original Episode 4.1, first-episode 38-slot, Episode 79, and 21-slot CLI/ZIP audits are historical evidence. The direct-entry follow-up now opens the canonical episode in one main-document navigation; its local Runner/Batch tests, independent code/test review, and bounded anonymous Episode 79 Runner probe passed (20 native WebP pages, explicit END). A post-change live Batch CLI/ZIP run was not performed. See [PROGRESS](PROGRESS.md).
+Execution branch: `main` for the direct-entry follow-up; the original Site Adapter phase work used `feat/kadocomi-adapter`.
 Site key: `kadocomi`
 Sample work: https://comic-walker.com/detail/KC_004915_S?episodeType=first
 
@@ -11,7 +11,7 @@ Sample work: https://comic-walker.com/detail/KC_004915_S?episodeType=first
 `Watchlist → discover (full/incremental) → Catalog → batch plan/run → Crawl → manifest/ZIP → Completed`
 を、従来のCLI/共通Browser Session/Batch/Packagerの契約で完走させる。
 ログイン、購入、チケット/コイン/ポイント/レンタル、アプリ専用コンテンツは対象外。
-実サイトで正の根拠が揃った1作品・1 reader variantをサポートする。別構造のvariantは確認できても、話順/END契約とcaptureが未承認なら対象を広げない。
+実サイトで正の根拠が揃った作品と、厳密に検証済みのreader variantだけをサポートする。現在は`KC_004915_S`の観測済みepisode routesに対応する3 variantを確認している。別構造は話順/END契約とcaptureが未検証ならfail closedにする。
 
 ユーザーからの事前観察（**P0で要再検証**）:
 - 作品画面に「全XX話を表示」があり、押すと対象の話一覧が展開される。
@@ -46,10 +46,11 @@ TesterはP2/P4の実画像・end-to-end検証で原則利用する。独立read-
 
 ## 不変条件
 
-1. **権利確認**: 公開中の無条件無料である正の根拠があるSourceのみ`free`。
-   Viewerが開けた/アカウントで読めるだけでは無料の根拠にしない。本文進入前にライブ状態を再確認。
-   期限表示なし ≠ 非公開。確認できた公開中Sourceの`free_until`は毎Discoveryで更新し、
-   明示期限がなければ **NULLで古い値を消す**。
+1. **無料判定**: P1 Discovery/CatalogとP3 PolicyがEligibilityを決める。
+   CaptureはCatalogのcanonical episode URLへ1回だけdocument navigationし、
+   response、work/episode identity、同一ページのtitle metadata、dialog状態、
+   reader readinessを検証する。work pageへの移動や2回目のnavigationは行わない。
+   `free_until=NULL`だけでfreeとは判定しない。
 2. **履歴**: Source / Item / Artifact / Completedは配信終了後も削除・リセットしない。
    `full` の **completeな全件観測のみ** 未観測Sourceを`available=false`にしてよい。
    `incremental` は既知話境界で通常の早期停止を使い、未観測Sourceを変更しない。
@@ -168,6 +169,6 @@ preserving bytes. Tester and Reviewer independently audited all 21 episode 4.1
 ZIP members and all 38 first-episode ZIP members against separate live
 Blob/canvas evidence; each member was byte-exact and pixel-equal.
 
-P0's exact public list and the three observed reader variants are supported by current strict contracts. P1 stores the 53 observed episode rows without assigning inferred positions and preserves Catalog history on disappearance/reappearance. P2 uses retained normal-renderer WebP Blob bytes with per-page source/canvas proof. P3 admits direct-only free sources and rechecks the exact current row before navigation. P4 Tester and independent Reviewer verified isolated CLI Batch runs for episode 4.1 (21 pages) and the first episode (38 pages); both ZIPs matched their independent live source/canvas audits and reached Completed only after explicit END. Episode 79's 20-slot source/END proof, independent code review, normal isolated CLI ZIP run, and independent all-page source/RGBA-to-ZIP audit passed. The separate 21-slot control and final post-Discovery audit passed: 53 Sources and external IDs remained stable, both Artifacts remained stable, all positions remained NULL, and Catalog integrity and actual-catalog renumber dry-run were clean. The Episode 79 post-Discovery Catalog audit passed; final live-evidence Reviewer gate passed (BLOCKING=0, NONBLOCKING=0) and Lead accepted the bounded target; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). The prior repository-wide pytest run had one known pre-existing Younganimal failure reproduced at baseline `ceb3434`; it predates the 38-slot and Episode 79 extensions. Current selected tests and full Ruff pass. See `PROGRESS.md` for audit details and limits.
+P0/P1 retain the exact public-list scope, 53 observed rows, and history/NULL-position safety contract. P3 selects only direct-only free Catalog Sources; current capture opens the exact canonical episode once and validates its main-document response, same-page identity/title metadata, dialog state, and native reader readiness without rechecking the work list. Earlier P4 CLI/ZIP audits for episodes 4.1, first episode, and Episode 79 passed byte/pixel/END review before this navigation follow-up. The follow-up passed local Runner/Batch fixtures, independent code/test review, and one bounded anonymous Episode 79 Runner capture. A live Batch CLI rerun under direct entry was not performed. Earlier post-Discovery audits, NULL positions, Catalog integrity, and renumber dry-run remain valid historical evidence. Full prior-suite baseline and current validation are in `PROGRESS.md`.
 
-The first-episode 38-slot and Episode 79 20-slot topologies are supported only for their exact observed episode targets on the independently verified work `KC_004915_S`. Episode 79's bounded live source proof, independent code review, normal CLI ZIP run, and independent all-20 source/RGBA-to-ZIP audit passed; its post-Discovery Catalog audit passed; final live-evidence Reviewer gate passed (BLOCKING=0, NONBLOCKING=0) and Lead accepted the bounded target; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). Other works/layouts, exact lifetime episode gaps, no-deadline access on other works, and production archive renumbering are not inferred. The P4 CLI removes temporary source output after packaging, so the independent audit covers ZIP pages, CrawlRun/status, and Catalog Artifact/Completed state; it does not claim a retained manifest file. The separate 21-slot control and final post-Discovery/Catalog stability audit passed. The independent run details, ZIP hashes, exact Discovery counts, and baseline-test failure are in `PROGRESS.md`.
+The first-episode 38-slot and Episode 79 20-slot topologies are supported only for their exact observed episode targets on the independently verified work `KC_004915_S`. The direct-entry follow-up adds no reader variants and preserves these source, pixel, and END contracts. Prior CLI ZIP evidence does not establish a post-change live Batch CLI run. Other works/layouts, exact lifetime episode gaps, no-deadline access on other works, and production archive renumbering are not inferred. The P4 CLI removes temporary source output after packaging, so prior audits cover ZIP pages, CrawlRun/status, and Catalog Artifact/Completed state, not a retained manifest file. See `PROGRESS.md` for the direct-entry Runner evidence, current tests, and limits.

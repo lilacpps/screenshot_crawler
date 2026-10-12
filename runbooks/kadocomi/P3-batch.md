@@ -1,9 +1,10 @@
 # P3 — Free-only Site Policy、Batch、ZIP/Completed
 
-Status: PASS — direct-only Policy/CLI wiring and the local Catalog-to-ZIP flow
-passed targeted/affected tests and independent review (BLOCKING=0,
-NONBLOCKING=0). The independent live CLI/ZIP check is recorded under P4 and
-[PROGRESS](PROGRESS.md).
+Status: Direct-only Policy/CLI and local Catalog-to-ZIP integration passed
+their independent gates. The later direct-entry change also passed the
+bounded live Runner probe and focused Runner/Batch browser fixtures. The
+normal CLI/ZIP evidence below predates direct entry; current scope and
+validation are summarized in [PROGRESS](PROGRESS.md).
 **目的**: 既存CLI `batch plan`/`batch run`からカドコミの現在無料で未取得の話を
 安全に選択、全ページ保存、ZIP化、Completedにする。
 
@@ -19,17 +20,22 @@ Batch Executor / Core Runner / Catalog schemaの大規模改修禁止。
 - `Item.status=pending`、`Source.site=kadocomi`、`available=true`、
   `access_mode=free`、正しく解釈できる未来の`free_until`またはNULL
   （期限なし）、有効なcanonical web targetのみ候補。
-- `free_until=NULL`は「永久保証」ではなく「そのDiscovery観測で期限表示なし」。
-  Plannerでは候補でも、**本実行時はtarget-localなfreshな無料判定/配信状態**
-  を必ず再検証する。期限表示が変わっていたら安全側。
+- `free_until=NULL` means Discovery observed no deadline; it is not
+  a permanent entitlement. Planner eligibility comes from the
+  current Catalog Source and Kadocomi Policy. Capture does not repeat
+  Discovery or open a work-list page; on the exact episode route it
+  validates the main document response, same-page identity/metadata,
+  visible gate/dialog state, and bounded native-reader readiness.
 - `quota/paid/unknown/owned`の特別な利用、ログイン、チケット/コイン/ポイント消費、
   click-to-unlock、purchase、grant-only、自動購入は全て不許可。
   認証済sessionの可読状態はfree保証にならない。
 - `direct`以外のaccess strategyはreject/unsupported。batch/手動crawlの
   entry policyで課金動線をクリックしない。正常に無料Viewerへ入った後の
   非消費ページ送りだけ行う。
-- Discord等外部ソースではなくサイト自身のlive表示を権威とし、
-  `RunConfig.source_url`/Catalog target一致を検証。別episodeへredirectなら停止。
+- The exact Catalog locator and configured `work_id:episode_id` must
+  agree. A redirect to another work/episode or an unsuccessful main
+  document response is a failure; no work-list request or second
+  navigation is part of the capture run.
 - `manifest`が全ページを指し、END正常が確認されたときだけpackagingと
   `completed`更新。missing page、見開き片側、last transition失敗、
   読めない/期限切れでは完成扱いしない。

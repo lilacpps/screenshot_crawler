@@ -28,10 +28,14 @@ The Batch Policy admits only available `kadocomi` sources with `access_mode=free
 a strict work-scoped external ID, and a valid future or NULL `free_until`. The
 Adapter requires `direct`, rejects quota/grant-only resources, and validates a
 canonical query-free Catalog episode target against its configured external ID.
-Before viewer entry, it repeats live target-row membership and current free /
-deadline validation. The generic Planner only selects pending Items; the
-Executor creates ZIP Artifacts and Completed status only after the Runner reaches
-the adapter's verified END. Manual Crawl also requires explicit `direct`.
+The Runner opens that exact episode as its single main-document navigation.
+The Adapter checks the final main-document HTTP 200 response, exact work/episode
+identity, consistent same-page H1/og:title/document.title metadata, no visible
+dialog, and a settled recognized reader. It does not navigate to the work list
+or issue a second document navigation. The generic Planner only selects pending
+Items; the Executor creates ZIP Artifacts and Completed status only after the
+Runner reaches the adapter's verified END. Manual Crawl also requires explicit
+`direct`.
 No numeric archive prefix is inferred while display positions are NULL.
 
 The canonical work title from detail-page og:title is exposed by Discovery but
@@ -46,8 +50,11 @@ positions remained stable, both Artifacts remained stable, and the actual-catalo
 renumber dry-run proposed no moves. Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout.
 The prior repository-wide pytest run had
 one known baseline failure reproduced at `ceb3434` before the 38-slot extension;
-full Ruff passed. Current limits and exact evidence are in the Kadocomi progress
-ledger.
+full Ruff passed. The direct-entry follow-up now uses one canonical episode
+navigation and same-page response, identity, title, gate, and reader checks.
+Its bounded live Runner probe and local Runner/Batch fixtures passed independent
+code/test review; no live Batch CLI run was repeated after this change. Current
+tests and exact evidence are in the Kadocomi progress ledger.
 
 ## Younganimal Discovery and manual Crawl CLI registration (2026-10-11)
 

@@ -1,20 +1,30 @@
 # P4 — 独立E2E、レビュー、最終判定
 
-Status: PASS for the isolated episode 4.1 and first-episode 38-slot CLI Batch,
-ZIP, and independent source/canvas audits (Tester and Reviewer BLOCKING=0;
-NONBLOCKING=0). The separate 21-slot control and post-Discovery/Catalog
-stability audit also passed. The Episode 79 extension has live source/END proof,
-passing local Runner/Batch tests, independent code review PASS (45 targeted
-tests, BLOCKING=0), and a successful normal CLI Batch run producing a 20-member
-ZIP. The independent all-20 source/RGBA-to-ZIP audit and post-Discovery Catalog
-audit passed; final live-evidence Reviewer gate passed (BLOCKING=0, NONBLOCKING=0) and Lead accepted the bounded target; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). The prior repository-wide pytest run had one known
-baseline failure, reproduced at `ceb3434`; it predates the 38-slot and Episode
-79 extensions. Other unverified reader variants and lifetime-position
-reconstruction remain unsupported. See [PROGRESS](PROGRESS.md).
+Status: The original 4.1, first-episode 38-slot, and Episode 79 normal CLI
+Batch/ZIP audits passed their independent gates before the direct-entry
+follow-up. The follow-up now passes a bounded anonymous direct Runner probe
+(one canonical episode document navigation, 20 native WebP pages, explicit
+END) and local Runner/Batch fixtures. Its normal CLI/ZIP path was not rerun
+live after the navigation change. The direct-entry code/test Reviewer gate
+passed; the bounded live Runner evidence and current test results are in
+[PROGRESS](PROGRESS.md).
 **目的**: Discovery→Catalog→Batch→全本文の完全性→ZIP/Completedを確認し、
 再公開/期限変更/非公開履歴で実害のある不具合を残さない。
 
-## P4 execution result (2026-10-12)
+## Direct-entry follow-up (2026-10-12)
+
+A fresh anonymous context on shared Crawler Chrome/CDP ran the exact Episode
+79 canonical URL directly through `CrawlerRunner`. The only main-document
+request was that episode URL. The Adapter verified the main response and
+same-page title/episode identity, captured 20 native `.webp` pages (1115x1600
+or 1129x1600), and reached explicit END. The run wrote only to ignored
+`work/kadocomi/direct-entry-date/`; no user Catalog or output was used.
+The existing P4 CLI/ZIP evidence in sections below is from the earlier
+three-navigation implementation and does not claim a post-change live Batch
+CLI run. Local Batch fixtures assert one direct episode navigation and
+fail-closed Catalog/runtime state for HTTP errors, non-render, and redirects.
+
+## Earlier P4 execution result (pre direct-entry, 2026-10-12)
 
 Tester completed a fresh isolated CLI run for `KC_004915_S:KC_0049150000400011_E`.
 Full Discovery returned 53/53 complete; incremental returned five known Sources

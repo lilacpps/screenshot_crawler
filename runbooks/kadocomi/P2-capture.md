@@ -1,13 +1,12 @@
 # P2 — Viewer、原本優先の画像取得、本文完全性
 
-Status: PASS for the observed episode 4.1 and first-episode 38-slot readers.
-The Episode 79 strict trailing-recommendation extension is implemented and its
-bounded live all-20-source/END proof and local Runner/Batch tests passed.
-Independent code review passed (45 targeted tests, BLOCKING=0), and the normal
-CLI Batch run produced a 20-member ZIP. The independent all-20 source/RGBA-to-ZIP
-audit also passed. The prior 21/38 CLI, source/ZIP audits and review remain passed
-(BLOCKING=0); opaque network-original bytes remain unclaimed. See
-[PROGRESS](PROGRESS.md) for current status.
+Status: The original episode 4.1, first-episode 38-slot, and Episode 79
+native capture contracts passed their bounded live, local, and independent
+gates. The direct-entry follow-up is implemented and its anonymous live
+Episode 79 Runner probe passed with one episode document navigation, 20
+native WebP pages, and explicit END. The direct-entry Adapter/test review
+passed; prior P4 CLI/ZIP results predate this navigation change. See
+[PROGRESS](PROGRESS.md) for the exact current test and live evidence.
 **目的**: 無条件無料話を先頭から全本文ページ、正しい読書順で取り、終端を確実に検証する。
 
 ## 変更範囲と優先順位
@@ -35,26 +34,27 @@ native候補が失敗した根拠（source URL/response mapping、境界、clip�
 
 ## Viewer contract
 
-- `RunConfig.source_url` はCatalogのcanonicalエピソードURL。
-  入口に別URLが必要なら既存の `resolve_initial_navigation_url` 相当のhookを検討し、
-  Catalog/Manifestのauthorityを別URLへ置換しない。
-- 初期遷移でwork ID/episode IDを再確認し、サイトの正のFREE根拠を
-  **freshに**再確認する。既知の期限切れ・購読要求・個人session閲覧や
-  gate不明な状態に対しては進入しない。別話に移ったら停止する。
-- 初期位置は必ず先頭。既知の再開dialogがあれば要素/文言/操作を正確に証明した
-  cancel/firstへの復帰のみ使用。未知のmodalや途中開始は停止。
-- page ID/位置/total、前後変化、loading、広告、spread、終端DOM/状態を
-  P0で確認し、`CONTENT/LOADING/END/NEXT_CONTENT/UNKNOWN`へ正しくマッピング。
-- 見開きの左右欠落/反転、同一画像重複、途中のlazy canvas、白紙と実本文の誤判定、
-  PRや単行本導線の混入を避ける。実サイトで検証済みの構造だけをサポート。
-- 正しい最後の本文後にのみEND。END判定不能は正常完了にしない。
-  先頭・中間・最終ページの実画素を独立監査可能にする。
-- 画像取得補助はrendererに干渉しない。draw hookで重いencode/hash、
-  全画像の長時間保持をしない。network観測はbounded、fallbackが既存頁移動を妨げない。
-- `CaptureResult`のmime/file extension/manifestとの一致を保証。
-  WebPのlosslessはbitstreamをdecoded pixel比較し、RGBA時はalpha/色管理の差も確認。
-  Canvasで既に低解像度化されている場合は「lossless」でもoriginalの解像度ではない
-  と記録。表示サイズから元のpixelを推定しない。
+- `RunConfig.source_url` remains the canonical Catalog episode URL. The
+  adapter returns that exact URL for Runner's single initial main-document
+  navigation; it does not navigate to the work page, reload, or issue a
+  second document navigation.
+- P1 Discovery/Catalog and the P3 Policy remain the free/availability
+  authority. On the exact episode navigation, the site-local response
+  observer requires a final HTTP 200 document response and rejects any
+  redirect that changes configured work/episode identity. No additional
+  HTTP request is made.
+- Initialization waits a bounded time for one visible H1 matching the
+  observed `【order】work` format, with `og:title` and `document.title`
+  exactly equal to that H1 plus the verified Kadocomi suffix. Missing or
+  ambiguous metadata, visible dialogs, and a non-settling reader fail closed.
+- The exact work/episode URL and same-page metadata are rechecked for each
+  capture. Preserve the verified first slide, native Blob provenance, full
+  pixel equality, stable source mapping, slot order, page bounds, and END
+  contracts below without fallback to screenshots.
+- Page identity, transitions, loading, ads, spreads, terminal DOM, and output
+  format remain bounded and fail-closed as described below.
+- Capture observers do not encode or hash in the renderer hook and retain
+  only bounded Blob references. See the native source evidence in `PROGRESS.md`.
 
 ## テスト（単体 → local Browser → live → 独立評価）
 
