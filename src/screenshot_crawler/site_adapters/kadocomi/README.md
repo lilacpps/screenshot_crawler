@@ -2,7 +2,7 @@
 
 ## Current phase
 
-P1 Discovery and P2 capture passed independent review (BLOCKING=0). P3 direct-only Batch policy, CLI registration, and local Catalog-to-ZIP integration passed independent review (BLOCKING=0, NONBLOCKING=0). P4 Tester and Reviewer passed isolated shared-CDP CLI Batch/ZIP/source/Completed audits for both episode 4.1 and the first-episode 38-slot target (BLOCKING=0, NONBLOCKING=0); the 21-slot normal CLI control and final post-Discovery/Catalog audit also passed. Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout. The earlier repository-wide pytest run had one known baseline failure reproduced at `ceb3434`; full Ruff passed. Other observed reader layouts remain unsupported and fail closed.
+P1 Discovery and P2 capture passed independent review (BLOCKING=0). P3 direct-only Batch policy, CLI registration, and local Catalog-to-ZIP integration passed independent review (BLOCKING=0, NONBLOCKING=0). P4 Tester and Reviewer passed isolated shared-CDP CLI Batch/ZIP/source/Completed audits for both episode 4.1 and the first-episode 38-slot target (BLOCKING=0, NONBLOCKING=0); the 21-slot normal CLI control and final post-Discovery/Catalog audit also passed. Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout. The earlier repository-wide pytest run had one known baseline failure reproduced at `ceb3434`; full Ruff passed. Episode 79 is a known unsupported layout: its empty paired END is followed by a recommendation slide with a secondary END marker, so inventory validation fails before capture. Other unobserved reader layouts also remain unsupported and fail closed.
 
 ## Discovery contract
 
