@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import math
 import re
 from datetime import datetime
 from typing import Any
@@ -47,6 +48,8 @@ VIEWER_READY_TIMEOUT_SECONDS = 35.0
 VIEWER_POLL_MS = 150
 PAGE_CHANGE_TIMEOUT_SECONDS = 12.0
 MAX_CANVAS_SLOTS = 500
+_PAIRED_END_LAYOUT = "paired_end"
+_MIXED_FINAL_END_LAYOUT = "mixed_final_end"
 _EXTERNAL_ID = re.compile(r"^(?P<work>KC_[0-9]{6}_S):(?P<episode>KC_[0-9]{16}_E)$")
 _OG_TITLE_SUFFIX = "\uFF5C\u30AB\u30C9\u30B3\u30DF (\u30B3\u30DF\u30C3\u30AF\u30A6\u30A9\u30FC\u30AB\u30FC)"
 
@@ -124,6 +127,34 @@ _NAVIGATION_TARGET_SCRIPT = r"""() => {
   return {ok: false, reason: 'left_overlay_hit_test_failed'};
 }"""
 
+_MIXED_FINAL_ARROW_SAFE_SCRIPT = r"""args => {
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+  if (screens.length !== 1) return {ok: false, reason: 'main_screen_count'};
+  const roots = [...screens[0].querySelectorAll('.splide._root_1542n_1')];
+  if (roots.length !== 1) return {ok: false, reason: 'reader_root_count'};
+  const root = roots[0];
+  if (!root.classList.contains('splide--rtl')) return {ok: false, reason: 'rtl_class'};
+  const slides = [...root.querySelectorAll('.splide__slide')];
+  const active = slides.filter(slide => slide.classList.contains('is-active'));
+  if (active.length !== 1 || slides.indexOf(active[0]) !== args.activeIndex)
+    return {ok: false, reason: 'active_slide'};
+  const canvases = [...active[0].querySelectorAll('div[data-type="contents"]')]
+    .filter(node => [...node.classList].some(name => name.startsWith('_pageCanvasWrapper_')));
+  if (canvases.length !== 1 || canvases.length !== args.slotCount)
+    return {ok: false, reason: 'final_content_shape'};
+  const terminalMarker = [...active[0].querySelectorAll('div[data-type="end-of-book"][data-n="2"]')]
+    .filter(node => [...node.classList].some(name => name.startsWith('_endOfBookWrapper_')));
+  if (terminalMarker.length !== 1) return {ok: false, reason: 'final_end_marker'};
+  const dialogs = [...document.querySelectorAll('[role="dialog"], dialog')]
+    .filter(node => node.getClientRects().length > 0 &&
+      getComputedStyle(node).visibility !== 'hidden' && getComputedStyle(node).display !== 'none');
+  if (dialogs.length) return {ok: false, reason: 'visible_dialog'};
+  const focus = document.activeElement;
+  if (focus !== document.body && focus !== document.documentElement)
+    return {ok: false, reason: 'unexpected_focus'};
+  return {ok: true, activeIndex: slides.indexOf(active[0]), slotCount: canvases.length};
+}"""
+
 
 def _snapshot_signature(snapshot: dict[str, Any]) -> tuple[object, ...]:
     rows = snapshot.get("slideRows")
@@ -158,6 +189,31 @@ def _snapshot_signature(snapshot: dict[str, Any]) -> tuple[object, ...]:
                 ),
             )
         )
+    for marker_key in ("mainEndMarkers", "secondaryEndMarkers"):
+        markers = snapshot.get(marker_key)
+        if not isinstance(markers, list):
+            signature.append((marker_key, None))
+            continue
+        signature.append(
+            (
+                marker_key,
+                tuple(
+                    (
+                        marker.get("tagName"),
+                        marker.get("wrapperClass"),
+                        marker.get("secondaryClass"),
+                        marker.get("dataType"),
+                        marker.get("dataN"),
+                        marker.get("slideIndex"),
+                        tuple(sorted((marker.get("box") or {}).items()))
+                        if isinstance(marker.get("box"), dict)
+                        else None,
+                    )
+                    for marker in markers
+                    if isinstance(marker, dict)
+                ),
+            )
+        )
     return tuple(signature)
 
 
@@ -176,6 +232,7 @@ class KadocomiAdapter(SiteAdapter):
         self._all_slots: tuple[str, ...] = ()
         self._slide_slots: tuple[tuple[str, ...], ...] = ()
         self._end_slide_index: int | None = None
+        self._reader_layout: str | None = None
         self._captured_slots: list[str] = []
         self._last_capture_slots: tuple[str, ...] = ()
         self._pending_next_index: int | None = None
@@ -252,6 +309,10 @@ class KadocomiAdapter(SiteAdapter):
         self._last_capture_slots = ()
         self._pending_next_index = None
         self._ended = False
+        self._all_slots = ()
+        self._slide_slots = ()
+        self._end_slide_index = None
+        self._reader_layout = None
         records = await self._read_public_work_listing(page)
         record = self._find_target_record(records)
         self._validate_free_record(record)
@@ -363,9 +424,80 @@ class KadocomiAdapter(SiteAdapter):
             raise UnknownPageStateError("Kadocomi viewer observer is unavailable")
         return value
 
+    @staticmethod
+    def _validate_main_end_markers(
+        snapshot: dict[str, Any], expected: list[tuple[str, int]]
+    ) -> None:
+        indexes = snapshot.get("markerSlideIndexes")
+        numbers = snapshot.get("markerNumbers")
+        records = snapshot.get("mainEndMarkers")
+        if (
+            not isinstance(indexes, list)
+            or indexes != [slide_index for _number, slide_index in expected]
+            or numbers != [number for number, _slide_index in expected]
+            or not isinstance(records, list)
+            or len(records) != len(expected)
+        ):
+            raise UnknownPageStateError("Kadocomi main END marker order or ownership changed")
+        for record, (number, slide_index) in zip(records, expected, strict=True):
+            if (
+                not isinstance(record, dict)
+                or record.get("tagName") != "DIV"
+                or record.get("wrapperClass") is not True
+                or record.get("secondaryClass") is not False
+                or record.get("dataType") != "end-of-book"
+                or record.get("dataN") != number
+                or record.get("slideIndex") != slide_index
+            ):
+                raise UnknownPageStateError("Kadocomi main END marker class or slide owner changed")
+            box = record.get("box")
+            fields = ("x", "y", "width", "height", "slideWidth", "slideHeight")
+            if (
+                not isinstance(box, dict)
+                or any(
+                    isinstance(box.get(field), bool)
+                    or not isinstance(box.get(field), (int, float))
+                    or not math.isfinite(box[field])
+                    for field in fields
+                )
+                or box["width"] <= 0
+                or box["height"] <= 0
+                or box["slideWidth"] <= 0
+                or box["slideHeight"] <= 0
+                or box["x"] < -1
+                or box["y"] < -1
+                or box["x"] + box["width"] > box["slideWidth"] + 1
+                or box["y"] + box["height"] > box["slideHeight"] + 1
+            ):
+                raise UnknownPageStateError("Kadocomi main END marker geometry is invalid")
+
+    @staticmethod
+    def _validate_secondary_end_markers(
+        snapshot: dict[str, Any], expected_indexes: list[int]
+    ) -> None:
+        indexes = snapshot.get("secondaryEndMarkerSlideIndexes")
+        records = snapshot.get("secondaryEndMarkers")
+        if (
+            not isinstance(indexes, list)
+            or indexes != expected_indexes
+            or not isinstance(records, list)
+            or len(records) != len(expected_indexes)
+        ):
+            raise UnknownPageStateError("Kadocomi recommendation END marker ownership changed")
+        for record, slide_index in zip(records, expected_indexes, strict=True):
+            if (
+                not isinstance(record, dict)
+                or record.get("tagName") != "DIV"
+                or record.get("wrapperClass") is not False
+                or record.get("secondaryClass") is not True
+                or record.get("dataType") != "end-of-book"
+                or record.get("slideIndex") != slide_index
+            ):
+                raise UnknownPageStateError("Kadocomi recommendation END marker class changed")
+
     def _validate_inventory(
         self, snapshot: dict[str, Any]
-    ) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...], int]:
+    ) -> tuple[tuple[str, ...], tuple[tuple[str, ...], ...], int, str]:
         if (
             snapshot.get("status") != "ok"
             or snapshot.get("contentOutsideSlides") != 0
@@ -379,28 +511,50 @@ class KadocomiAdapter(SiteAdapter):
             raise UnknownPageStateError("Kadocomi reader slide list is incomplete or too large")
         marker_count = snapshot.get("endMarkerCount")
         marker_indexes = snapshot.get("markerSlideIndexes")
+        marker_numbers = snapshot.get("markerNumbers")
         if (
             isinstance(marker_count, bool)
             or not isinstance(marker_count, int)
-            or marker_count != 2
             or not isinstance(marker_indexes, list)
             or len(marker_indexes) != marker_count
             or any(isinstance(index, bool) or not isinstance(index, int) for index in marker_indexes)
-            or len(set(marker_indexes)) != 1
-            or snapshot.get("markerNumbers") != ["1", "2"]
             or snapshot.get("unclassifiedEndMarkerCount") != 0
         ):
-            raise UnknownPageStateError("Kadocomi explicit end marker is missing or ambiguous")
-        end_index = marker_indexes[0]
-        trailing_count = len(rows) - end_index - 1
-        if end_index < 1 or trailing_count not in (0, 1):
-            raise UnknownPageStateError("Kadocomi explicit END boundary or trailing slide is unknown")
-        secondary_markers = snapshot.get("secondaryEndMarkerSlideIndexes")
+            raise UnknownPageStateError("Kadocomi explicit end marker is missing or malformed")
         if (
-            not isinstance(secondary_markers, list)
-            or secondary_markers != ([end_index + 1] if trailing_count == 1 else [])
+            marker_count == 2
+            and len(set(marker_indexes)) == 1
+            and marker_numbers == ["1", "2"]
         ):
-            raise UnknownPageStateError("Kadocomi recommendation end marker is ambiguous")
+            layout = _PAIRED_END_LAYOUT
+            end_index = marker_indexes[0]
+            trailing_count = len(rows) - end_index - 1
+            if end_index < 1 or trailing_count not in (0, 1):
+                raise UnknownPageStateError("Kadocomi paired END boundary or trailing slide is unknown")
+            expected_main_markers = [("1", end_index), ("2", end_index)]
+            expected_secondary_indexes = [end_index + 1] if trailing_count == 1 else []
+        elif (
+            marker_count == 3
+            and marker_numbers == ["2", "1", "2"]
+            and len(rows) >= 4
+            and marker_indexes[0] + 1 == marker_indexes[1] == marker_indexes[2]
+            and marker_indexes[1] == len(rows) - 1
+            and snapshot.get("secondaryEndMarkerSlideIndexes") == []
+        ):
+            layout = _MIXED_FINAL_END_LAYOUT
+            end_index = marker_indexes[1]
+            expected_main_markers = [
+                ("2", end_index - 1),
+                ("1", end_index),
+                ("2", end_index),
+            ]
+            expected_secondary_indexes = []
+        else:
+            raise UnknownPageStateError("Kadocomi END marker topology is unsupported or ambiguous")
+        if snapshot.get("endMarkerCount") != len(expected_main_markers):
+            raise UnknownPageStateError("Kadocomi main END marker count is inconsistent")
+        self._validate_main_end_markers(snapshot, expected_main_markers)
+        self._validate_secondary_end_markers(snapshot, expected_secondary_indexes)
         slide_slots: list[tuple[str, ...]] = []
         flattened: list[str] = []
         for index, row in enumerate(rows):
@@ -415,12 +569,20 @@ class KadocomiAdapter(SiteAdapter):
                 or len(canvases) != len(slots)
             ):
                 raise UnknownPageStateError("Kadocomi content slot identity is incomplete")
-            if index < end_index and (len(slots) > 2 or (index == 0 and len(slots) != 1)):
-                raise UnknownPageStateError("Kadocomi reader spread shape is unsupported")
-            if 0 < index < end_index and len(slots) != 2:
-                raise UnknownPageStateError("Kadocomi observed right-to-left spread shape changed")
-            if index >= end_index and slots:
-                raise UnknownPageStateError("Kadocomi found content at or after its explicit END")
+            if layout == _PAIRED_END_LAYOUT:
+                if index < end_index and (len(slots) > 2 or (index == 0 and len(slots) != 1)):
+                    raise UnknownPageStateError("Kadocomi reader spread shape is unsupported")
+                if 0 < index < end_index and len(slots) != 2:
+                    raise UnknownPageStateError("Kadocomi observed right-to-left spread shape changed")
+                if index >= end_index and slots:
+                    raise UnknownPageStateError("Kadocomi found content at or after its explicit END")
+            elif (
+                (index == 0 and len(slots) != 1)
+                or (0 < index < end_index - 1 and len(slots) != 2)
+                or (index == end_index - 1 and len(slots) != 1)
+                or (index == end_index and slots)
+            ):
+                raise UnknownPageStateError("Kadocomi mixed-final content or END slide shape changed")
             canvas_boxes: list[dict[str, object]] = []
             for slot, canvas in zip(slots, canvases, strict=True):
                 if not isinstance(canvas, dict) or canvas.get("slot") != slot:
@@ -440,7 +602,7 @@ class KadocomiAdapter(SiteAdapter):
             raise UnknownPageStateError("Kadocomi content canvas inventory is duplicated or too large")
         if any(not slide_slots[index] for index in range(end_index)):
             raise UnknownPageStateError("Kadocomi content inventory has an unexplained empty slide")
-        return tuple(flattened), tuple(slide_slots), end_index
+        return tuple(flattened), tuple(slide_slots), end_index, layout
 
     async def _wait_for_initial_reader(self, page: Page) -> None:
         deadline = asyncio.get_running_loop().time() + VIEWER_READY_TIMEOUT_SECONDS
@@ -465,7 +627,7 @@ class KadocomiAdapter(SiteAdapter):
                     previous = None
                     await page.wait_for_timeout(VIEWER_POLL_MS)
                     continue
-                slots, slide_slots, end_index = self._validate_inventory(snapshot)
+                slots, slide_slots, end_index, layout = self._validate_inventory(snapshot)
                 if snapshot.get("activeIndex") != 0:
                     raise UnknownPageStateError("Kadocomi episode did not open at its first reader slide")
                 first_canvas = snapshot["slideRows"][0]["contentCanvases"][0]
@@ -485,6 +647,7 @@ class KadocomiAdapter(SiteAdapter):
                     self._all_slots = slots
                     self._slide_slots = slide_slots
                     self._end_slide_index = end_index
+                    self._reader_layout = layout
                     return
                 previous = signature if ready else None
             else:
@@ -499,26 +662,19 @@ class KadocomiAdapter(SiteAdapter):
             raise UnknownPageStateError("Kadocomi reader wrapper or END marker shape changed")
         if snapshot.get("status") != "ok":
             return PageState.LOADING
-        slots, slide_slots, end_index = self._validate_inventory(snapshot)
+        slots, slide_slots, end_index, layout = self._validate_inventory(snapshot)
         if (
             slots != self._all_slots
             or slide_slots != self._slide_slots
             or end_index != self._end_slide_index
+            or layout != self._reader_layout
         ):
             raise UnknownPageStateError("Kadocomi reader canvas inventory changed during capture")
         active_index = snapshot.get("activeIndex")
         if isinstance(active_index, bool) or not isinstance(active_index, int):
             raise UnknownPageStateError("Kadocomi active slide index is invalid")
-        marker_indexes = snapshot.get("markerSlideIndexes")
         if active_index == self._end_slide_index:
-            if (
-                self._captured_slots != list(self._all_slots)
-                or snapshot.get("endMarkerCount", 0) != 2
-                or snapshot.get("markerNumbers") != ["1", "2"]
-                or not isinstance(marker_indexes, list)
-                or any(index != active_index for index in marker_indexes)
-                or slide_slots[active_index]
-            ):
+            if not self._is_verified_terminal(snapshot, slide_slots, end_index):
                 raise UnknownPageStateError("Kadocomi reached END before all exact content slots were captured")
             self._ended = True
             return PageState.END
@@ -557,6 +713,33 @@ class KadocomiAdapter(SiteAdapter):
             ):
                 return PageState.LOADING
         return PageState.CONTENT
+
+    def _is_verified_terminal(
+        self,
+        snapshot: dict[str, Any],
+        slide_slots: tuple[tuple[str, ...], ...],
+        end_index: int,
+    ) -> bool:
+        if (
+            self._reader_layout not in {_PAIRED_END_LAYOUT, _MIXED_FINAL_END_LAYOUT}
+            or tuple(self._captured_slots) != self._all_slots
+            or end_index != self._end_slide_index
+            or not 0 <= end_index < len(slide_slots)
+            or slide_slots[end_index]
+            or snapshot.get("activeIndex") != end_index
+        ):
+            return False
+        indexes = snapshot.get("markerSlideIndexes")
+        numbers = snapshot.get("markerNumbers")
+        if not isinstance(indexes, list) or not isinstance(numbers, list):
+            return False
+        if self._reader_layout == _PAIRED_END_LAYOUT:
+            return indexes == [end_index, end_index] and numbers == ["1", "2"]
+        return (
+            indexes == [end_index - 1, end_index, end_index]
+            and numbers == ["2", "1", "2"]
+            and bool(slide_slots[end_index - 1])
+        )
 
     async def get_capture_target(self, page: Page) -> Locator:
         del page
@@ -629,11 +812,12 @@ class KadocomiAdapter(SiteAdapter):
             results.append(result)
         self._validate_current_episode_url(page)
         after = await self._snapshot(page)
-        after_slots, after_slides, after_end_index = self._validate_inventory(after)
+        after_slots, after_slides, after_end_index, after_layout = self._validate_inventory(after)
         if (
             after_slots != self._all_slots
             or after_slides != self._slide_slots
             or after_end_index != self._end_slide_index
+            or after_layout != self._reader_layout
             or after.get("activeIndex") != active_index
         ):
             raise UnknownPageStateError("Kadocomi active slide changed after native byte transfer")
@@ -674,15 +858,45 @@ class KadocomiAdapter(SiteAdapter):
         if await self.detect_state(page) is not PageState.CONTENT:
             raise UnknownPageStateError("Kadocomi cannot advance from a non-content state")
         snapshot = await self._snapshot(page)
+        slots, slide_slots, end_index, layout = self._validate_inventory(snapshot)
         active_index = snapshot.get("activeIndex")
         if (
-            not isinstance(active_index, int)
+            slots != self._all_slots
+            or slide_slots != self._slide_slots
+            or end_index != self._end_slide_index
+            or layout != self._reader_layout
+            or not isinstance(active_index, int)
             or isinstance(active_index, bool)
             or self._pending_next_index is not None
             or self._last_capture_slots != self._slide_slots[active_index]
             or tuple(self._captured_slots[-len(self._last_capture_slots) :]) != self._last_capture_slots
         ):
             raise UnknownPageStateError("Kadocomi page turn is not bound to the last native capture")
+        is_mixed_final_turn = (
+            self._reader_layout == _MIXED_FINAL_END_LAYOUT
+            and self._end_slide_index is not None
+            and active_index == self._end_slide_index - 1
+        )
+        if is_mixed_final_turn:
+            if tuple(self._captured_slots) != self._all_slots or len(self._last_capture_slots) != 1:
+                raise UnknownPageStateError("Kadocomi mixed-final END is not bound to the final exact slot")
+            try:
+                target = await page.evaluate(
+                    _MIXED_FINAL_ARROW_SAFE_SCRIPT,
+                    {"activeIndex": active_index, "slotCount": len(self._last_capture_slots)},
+                )
+            except PlaywrightError as exc:
+                raise UnknownPageStateError("Kadocomi mixed-final key target could not be verified") from exc
+            if (
+                not isinstance(target, dict)
+                or target.get("ok") is not True
+                or target.get("activeIndex") != active_index
+                or target.get("slotCount") != 1
+            ):
+                raise UnknownPageStateError("Kadocomi mixed-final END key target is unsafe")
+            await page.keyboard.press("ArrowLeft")
+            self._pending_next_index = active_index
+            return
         try:
             target = await page.evaluate(_NAVIGATION_TARGET_SCRIPT)
         except PlaywrightError as exc:
@@ -720,11 +934,12 @@ class KadocomiAdapter(SiteAdapter):
                 if snapshot.get("status") != "ok":
                     await page.wait_for_timeout(VIEWER_POLL_MS)
                     continue
-                slots, slide_slots, end_index = self._validate_inventory(snapshot)
+                slots, slide_slots, end_index, layout = self._validate_inventory(snapshot)
                 if (
                     slots != self._all_slots
                     or slide_slots != self._slide_slots
                     or end_index != self._end_slide_index
+                    or layout != self._reader_layout
                 ):
                     raise UnknownPageStateError("Kadocomi page turn changed the content inventory")
                 active_index = snapshot.get("activeIndex")
@@ -734,14 +949,7 @@ class KadocomiAdapter(SiteAdapter):
                 if active_index != previous_index + 1:
                     raise UnknownPageStateError("Kadocomi page turn skipped a reader slide")
                 if active_index == self._end_slide_index:
-                    if (
-                        tuple(self._captured_slots) != self._all_slots
-                        or slide_slots[active_index]
-                        or not snapshot.get("markerSlideIndexes")
-                        or snapshot.get("endMarkerCount") != 2
-                        or snapshot.get("markerNumbers") != ["1", "2"]
-                        or any(index != active_index for index in snapshot["markerSlideIndexes"])
-                    ):
+                    if not self._is_verified_terminal(snapshot, slide_slots, end_index):
                         raise UnknownPageStateError("Kadocomi terminal slide is not a complete explicit END")
                     self._pending_next_index = None
                     return

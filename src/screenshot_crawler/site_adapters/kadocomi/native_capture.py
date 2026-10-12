@@ -247,6 +247,29 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
     const markerNumbers = markers.map(marker => marker.getAttribute('data-n'));
     const secondaryEndMarkerSlideIndexes = secondaryEndNodes.map(marker =>
       slides.indexOf(marker.closest('.splide__slide')));
+    const markerRecord = node => {
+      const owner = node.closest('.splide__slide');
+      const ownerRect = owner ? owner.getBoundingClientRect() : null;
+      const rect = node.getBoundingClientRect();
+      return {
+        tagName: node.tagName,
+        wrapperClass: hasClassPrefix(node, '_endOfBookWrapper_'),
+        secondaryClass: hasClassPrefix(node, '_endOfBook_'),
+        dataType: node.getAttribute('data-type'),
+        dataN: node.getAttribute('data-n'),
+        slideIndex: slides.indexOf(owner),
+        box: ownerRect ? {
+          x: rect.x - ownerRect.x,
+          y: rect.y - ownerRect.y,
+          width: rect.width,
+          height: rect.height,
+          slideWidth: ownerRect.width,
+          slideHeight: ownerRect.height
+        } : null
+      };
+    };
+    const mainEndMarkers = markers.map(markerRecord);
+    const secondaryEndMarkers = secondaryEndNodes.map(markerRecord);
     const activeIndex = slides.indexOf(active[0]);
     if (unclassifiedEndMarkerCount > 0) return {status: 'end_marker_shape'};
     return {
@@ -260,7 +283,9 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
       endMarkerCount: markers.length,
       markerSlideIndexes,
       markerNumbers,
+      mainEndMarkers,
       secondaryEndMarkerSlideIndexes,
+      secondaryEndMarkers,
       unclassifiedEndMarkerCount,
       hooksInstalled: state.hooksInstalled,
       ...(includeNodes ? {root} : {})
@@ -302,7 +327,9 @@ NATIVE_CAPTURE_SCRIPT = r"""async args => {
     endMarkerCount: snapshot.endMarkerCount,
     markerSlideIndexes: snapshot.markerSlideIndexes,
     markerNumbers: snapshot.markerNumbers,
+    mainEndMarkers: snapshot.mainEndMarkers,
     secondaryEndMarkerSlideIndexes: snapshot.secondaryEndMarkerSlideIndexes,
+    secondaryEndMarkers: snapshot.secondaryEndMarkers,
     slideRows: snapshot.slideRows.map(row => ({
       id: row.id,
       index: row.index,
@@ -394,7 +421,9 @@ NATIVE_CAPTURE_SCRIPT = r"""async args => {
       last.activeIndex !== first.activeIndex ||
       last.endMarkerCount !== first.endMarkerCount ||
       JSON.stringify(last.markerNumbers) !== JSON.stringify(first.markerNumbers) ||
+      JSON.stringify(last.mainEndMarkers) !== JSON.stringify(first.mainEndMarkers) ||
       JSON.stringify(last.secondaryEndMarkerSlideIndexes) !== JSON.stringify(first.secondaryEndMarkerSlideIndexes) ||
+      JSON.stringify(last.secondaryEndMarkers) !== JSON.stringify(first.secondaryEndMarkers) ||
       JSON.stringify(last.slideRows.map(row => [row.id, row.contentSlots])) !==
       JSON.stringify(first.slideRows.map(row => [row.id, row.contentSlots]))) return fail('snapshot_changed');
   for (const capture of captures) {

@@ -76,6 +76,13 @@ def _webp(color: tuple[int, int, int, int], *, width: int = 16, height: int = 12
     return output.getvalue()
 
 
+def _fixture_images(count: int) -> list[bytes]:
+    return [
+        _webp(((index * 37 + 17) % 256, (index * 71 + 29) % 256, (index * 113 + 43) % 256, 255 - index % 80))
+        for index in range(count)
+    ]
+
+
 def _listing_html(*, episode_id: str = EPISODE_ID, deadline: str = "2099/10/14 11:00") -> str:
     heading = f"\u3010\u7b2c1\u8a71\u3011{WORK_TITLE}"
     og_title = f"{WORK_TITLE}{SITE_SUFFIX}"
@@ -106,14 +113,47 @@ def _reader_html(
     reverse_spread: bool = False,
     skip_to_end: bool = False,
     computed_direction: str = "ltr",
+    reader_layout: str = "paired",
+    mixed_fault: str | None = None,
+    mixed_key_behavior: str = "advance",
 ) -> str:
     image_data = [base64.b64encode(image).decode("ascii") for image in images]
-    pages = [
-        {"images": [0]},
-        {"images": [1, 2]},
-        {"images": [], "end": include_end},
-        {"images": [], "trailing": True},
-    ]
+    if reader_layout == "paired":
+        pages = [
+            {"images": [0]},
+            {"images": [1, 2]},
+            {"images": [], "end_numbers": ["1", "2"] if include_end else []},
+            {"images": [], "trailing": True},
+        ]
+    elif reader_layout == "mixed_final":
+        pages = [{"images": [0]}]
+        pages.extend({"images": [index, index + 1]} for index in range(1, 36, 2))
+        pages.extend(
+            [
+                {"images": [37], "end_numbers": ["2"]},
+                {"images": [], "end_numbers": ["1", "2"]},
+            ]
+        )
+        if mixed_fault == "missing_marker":
+            pages[-2]["end_numbers"] = []
+        elif mixed_fault == "moved_marker":
+            pages[-3]["end_numbers"] = ["2"]
+            pages[-2]["end_numbers"] = []
+        elif mixed_fault == "duplicate_marker":
+            pages[-2]["end_numbers"] = ["2", "2"]
+        elif mixed_fault == "wrong_marker_n":
+            pages[-2]["end_numbers"] = ["1"]
+        elif mixed_fault == "content_at_end":
+            pages[-1]["images"] = [38]
+        elif mixed_fault == "extra_slide":
+            pages.append({"images": []})
+        elif mixed_fault == "missing_terminal_pair":
+            pages[-1]["end_numbers"] = ["2"]
+        if mixed_fault == "missing_end":
+            pages[-2]["end_numbers"] = []
+            pages[-1]["end_numbers"] = []
+    else:
+        raise ValueError(f"unknown reader fixture layout: {reader_layout}")
     page_markup = []
     for index, page in enumerate(pages):
         active = " is-active" if index == 0 else ""
@@ -129,11 +169,11 @@ def _reader_html(
                 f'style="position:absolute;left:{left}px;top:30px">'
                 f'<canvas class="_root_bx4cr_1" data-image="{image_index}"></canvas></div>'
             )
-        marker_markup = (
-            '<div class="_endOfBookWrapper_k9w27_34" data-type="end-of-book" data-n="1"></div>'
-            '<div class="_endOfBookWrapper_k9w27_34" data-type="end-of-book" data-n="2"></div>'
-            if page.get("end")
-            else ""
+        marker_markup = "".join(
+            '<div class="_endOfBookWrapper_k9w27_34" data-type="end-of-book" '
+            f'data-n="{number}" style="position:absolute;left:{marker_index * 42}px;top:0;'
+            'width:36px;height:36px"></div>'
+            for marker_index, number in enumerate(page.get("end_numbers", []))
         )
         trailing_markup = (
             '<a href="/detail/other-work">Related work</a>'
@@ -186,12 +226,29 @@ def _reader_html(
           const index = slides.findIndex(slide => slide.classList.contains('is-active'));
           if ({str(skip_to_end).lower()} && index === 0) {{
             slides[index].classList.remove('is-active');
-            slides[2].classList.add('is-active');
+            slides[{2 if reader_layout == 'paired' else len(pages) - 2}].classList.add('is-active');
+          }} else if ({str(reader_layout == 'mixed_final').lower()} && index === slides.length - 2) {{
+            return;
           }} else if (index >= 0 && index + 1 < slides.length) {{
             slides[index].classList.remove('is-active');
             slides[index + 1].classList.add('is-active');
           }}
         }});
+        if ({str(reader_layout == 'mixed_final').lower()}) {{
+          document.addEventListener('keydown', event => {{
+            if (event.key !== 'ArrowLeft') return;
+            const index = slides.findIndex(slide => slide.classList.contains('is-active'));
+            if (index !== slides.length - 2) return;
+            const behavior = {json.dumps(mixed_key_behavior)};
+            if (behavior === 'advance') {{
+              slides[index].classList.remove('is-active');
+              slides[index + 1].classList.add('is-active');
+            }} else if (behavior === 'skip') {{
+              slides[index].classList.remove('is-active');
+              slides[0].classList.add('is-active');
+            }}
+          }});
+        }}
       </script></body></html>"""
 
 
@@ -237,6 +294,9 @@ async def _install_reader_routes(
     reverse_spread: bool = False,
     skip_to_end: bool = False,
     computed_direction: str = "ltr",
+    reader_layout: str = "paired",
+    mixed_fault: str | None = None,
+    mixed_key_behavior: str = "advance",
 ) -> None:
     listing = _listing_html(episode_id=listed_episode_id, deadline=deadline)
     viewer = _reader_html(
@@ -245,6 +305,9 @@ async def _install_reader_routes(
         reverse_spread=reverse_spread,
         skip_to_end=skip_to_end,
         computed_direction=computed_direction,
+        reader_layout=reader_layout,
+        mixed_fault=mixed_fault,
+        mixed_key_behavior=mixed_key_behavior,
     )
 
     async def fulfill(route) -> None:
@@ -334,22 +397,25 @@ async def test_kadocomi_native_capture_requires_source_mapping_and_stable_full_f
 
 
 @pytest.mark.parametrize("computed_direction", ["ltr", "rtl"])
+@pytest.mark.parametrize("reader_layout", ["paired", "mixed_final"])
 async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explicit_end(
     browser_page: Page,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     computed_direction: str,
+    reader_layout: str,
 ) -> None:
     from screenshot_crawler.site_adapters.kadocomi import discovery
 
     monkeypatch.setattr(discovery, "SETTLEMENT_INTERVAL_MS", 5)
     monkeypatch.setattr(discovery, "SETTLEMENT_TIMEOUT_SECONDS", 1.0)
-    images = [
-        _webp((30, 90, 150, 255)),
-        _webp((170, 30, 70, 193)),
-        _webp((20, 180, 80, 255)),
-    ]
-    await _install_reader_routes(browser_page, images, computed_direction=computed_direction)
+    images = _fixture_images(3 if reader_layout == "paired" else 38)
+    await _install_reader_routes(
+        browser_page,
+        images,
+        computed_direction=computed_direction,
+        reader_layout=reader_layout,
+    )
     adapter = KadocomiAdapter()
     result = await CrawlerRunner(
         RunConfig(
@@ -359,31 +425,55 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
             diagnostics_dir=tmp_path / "diagnostics",
             access_strategy="direct",
             page_turn_delay_ms=0,
-            max_pages=10,
+            max_pages=50,
         )
     ).run(browser_page, adapter)
 
     assert result.stop_state is PageState.END
-    assert len(result.pages) == 3
-    assert [page.file_extension for page in result.pages] == [".webp"] * 3
-    assert [page.mime_type for page in result.pages] == ["image/webp"] * 3
+    assert len(result.pages) == len(images)
+    assert [page.file_extension for page in result.pages] == [".webp"] * len(images)
+    assert [page.mime_type for page in result.pages] == ["image/webp"] * len(images)
     assert [(tmp_path / "output" / page.file).read_bytes() for page in result.pages] == images
     assert adapter.get_output_metadata() == {"title": WORK_TITLE, "order": EPISODE_LABEL}
     final_snapshot = await browser_page.evaluate(
         "window.__kadocomiNativeCaptureV1.snapshot()"
     )
-    assert len(final_snapshot["slideRows"]) == 4
-    assert final_snapshot["activeIndex"] == 2
-    assert final_snapshot["markerSlideIndexes"] == [2, 2]
-    assert final_snapshot["markerNumbers"] == ["1", "2"]
-    assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [3]
-    assert final_snapshot["slideRows"][3]["contentSlots"] == []
-    assert len(list((tmp_path / "output").glob("page-*.webp"))) == 3
+    if reader_layout == "paired":
+        assert len(final_snapshot["slideRows"]) == 4
+        assert final_snapshot["activeIndex"] == 2
+        assert final_snapshot["markerSlideIndexes"] == [2, 2]
+        assert final_snapshot["markerNumbers"] == ["1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [3]
+    else:
+        assert len(final_snapshot["slideRows"]) == 21
+        assert final_snapshot["activeIndex"] == 20
+        assert final_snapshot["markerSlideIndexes"] == [19, 20, 20]
+        assert final_snapshot["markerNumbers"] == ["2", "1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == []
+        assert len(final_snapshot["slideRows"][19]["contentSlots"]) == 1
+    assert final_snapshot["slideRows"][-1]["contentSlots"] == []
+    assert len(list((tmp_path / "output").glob("page-*.webp"))) == len(images)
 
 
 @pytest.mark.parametrize(
     "scenario",
-    ["expired", "missing_target", "foreign_redirect", "missing_end", "reverse_spread", "skip_slide"],
+    [
+        "expired",
+        "missing_target",
+        "foreign_redirect",
+        "missing_end",
+        "reverse_spread",
+        "skip_slide",
+        "mixed_missing_marker",
+        "mixed_moved_marker",
+        "mixed_duplicate_marker",
+        "mixed_wrong_marker_n",
+        "mixed_content_at_end",
+        "mixed_extra_slide",
+        "mixed_missing_terminal_pair",
+        "mixed_reverse_spread",
+        "mixed_final_no_arrow",
+    ],
 )
 async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
     browser_page: Page,
@@ -396,7 +486,8 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
 
     monkeypatch.setattr(discovery, "SETTLEMENT_INTERVAL_MS", 5)
     monkeypatch.setattr(discovery, "SETTLEMENT_TIMEOUT_SECONDS", 1.0)
-    images = [_webp((30, 90, 150, 255)), _webp((170, 30, 70, 193)), _webp((20, 180, 80, 255))]
+    mixed = scenario.startswith("mixed_")
+    images = _fixture_images(39 if scenario == "mixed_content_at_end" else (38 if mixed else 3))
     options: dict[str, object] = {}
     if scenario == "expired":
         options["deadline"] = "2020/10/14 11:00"
@@ -410,9 +501,19 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         options["reverse_spread"] = True
     elif scenario == "skip_slide":
         options["skip_to_end"] = True
+    if mixed:
+        options["reader_layout"] = "mixed_final"
+        if scenario.startswith("mixed_") and scenario not in {"mixed_reverse_spread", "mixed_final_no_arrow"}:
+            options["mixed_fault"] = scenario.removeprefix("mixed_")
+        if scenario == "mixed_reverse_spread":
+            options["reverse_spread"] = True
+        elif scenario == "mixed_final_no_arrow":
+            options["mixed_key_behavior"] = "none"
     await _install_reader_routes(browser_page, images, **options)
     if scenario == "missing_end":
         monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
+    if scenario == "mixed_final_no_arrow":
+        monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
     output_dir = tmp_path / scenario / "output"
     runner = CrawlerRunner(
         RunConfig(
@@ -422,11 +523,15 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
             diagnostics_dir=tmp_path / scenario / "diagnostics",
             access_strategy="direct",
             page_turn_delay_ms=0,
-            max_pages=10,
+            max_pages=50,
         )
     )
 
-    expected_error = PageChangeTimeoutError if scenario == "missing_end" else UnknownPageStateError
+    expected_error = (
+        PageChangeTimeoutError
+        if scenario in {"missing_end", "mixed_final_no_arrow"}
+        else UnknownPageStateError
+    )
     with pytest.raises(expected_error):
         await runner.run(browser_page, KadocomiAdapter())
 
@@ -436,6 +541,11 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         assert manifest["pages"][0]["file"] == "page-0001.webp"
         assert "status" not in manifest
         assert list(output_dir.glob("page-*.webp")) == [output_dir / "page-0001.webp"]
+    elif scenario == "mixed_final_no_arrow":
+        manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert len(manifest["pages"]) == 38
+        assert "status" not in manifest
+        assert len(list(output_dir.glob("page-*.webp"))) == 38
     else:
         assert list(output_dir.glob("page-*.webp")) == []
         assert not (output_dir / "manifest.json").exists()
@@ -454,17 +564,19 @@ async def test_kadocomi_catalog_target_requires_canonical_query_free_episode_url
         )
 
 
-async def _seed_kadocomi_batch_candidate(browser_page: Page, tmp_path: Path, monkeypatch):
+async def _seed_kadocomi_batch_candidate(
+    browser_page: Page,
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    reader_layout: str = "paired",
+):
     from screenshot_crawler.site_adapters.kadocomi import discovery
 
     monkeypatch.setattr(discovery, "SETTLEMENT_INTERVAL_MS", 5)
     monkeypatch.setattr(discovery, "SETTLEMENT_TIMEOUT_SECONDS", 1.0)
-    images = [
-        _webp((30, 90, 150, 255)),
-        _webp((170, 30, 70, 193)),
-        _webp((20, 180, 80, 255)),
-    ]
-    await _install_reader_routes(browser_page, images)
+    images = _fixture_images(3 if reader_layout == "paired" else 38)
+    await _install_reader_routes(browser_page, images, reader_layout=reader_layout)
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     registry = DiscoveryAdapterRegistry()
     registry.register("kadocomi", KadocomiDiscoveryAdapter)
@@ -497,13 +609,15 @@ async def _seed_kadocomi_batch_candidate(browser_page: Page, tmp_path: Path, mon
     return catalog, plan, candidate, executor, images
 
 
+@pytest.mark.parametrize("reader_layout", ["paired", "mixed_final"])
 async def test_kadocomi_batch_discovers_captures_packages_and_completes(
     browser_page: Page,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    reader_layout: str,
 ) -> None:
     catalog, _plan, candidate, executor, images = await _seed_kadocomi_batch_candidate(
-        browser_page, tmp_path, monkeypatch
+        browser_page, tmp_path, monkeypatch, reader_layout=reader_layout
     )
 
     result = await executor.execute_candidate(
@@ -511,7 +625,7 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
         candidate,
         output_root=tmp_path / "batch-output",
         library_dir=tmp_path / "library",
-        max_pages=10,
+        max_pages=50,
         now=now_jst(),
     )
 
@@ -520,14 +634,14 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
     run = catalog.get_crawl_run(result.crawl_run_id)
     artifacts = catalog.list_artifacts(item_id=item.id)
     work = catalog.get_work(item.work_id)
-    assert result.stop_reason == "end" and result.page_count == 3
+    assert result.stop_reason == "end" and result.page_count == len(images)
     assert item.status == "completed" and item.completed_at is not None
     assert work.title == WORK_TITLE
     assert item.order_label == EPISODE_LABEL
     assert source.available is True and source.access_mode == "free"
     assert source.quota_started_at is None and source.access_granted_until is None
     assert source.display_position is None
-    assert run.status == "succeeded" and run.stop_reason == "end" and run.page_count == 3
+    assert run.status == "succeeded" and run.stop_reason == "end" and run.page_count == len(images)
     assert run.locator_snapshot == EPISODE_URL
     assert run.external_id_snapshot == f"{WORK_ID}:{EPISODE_ID}"
     assert len(artifacts) == 1
@@ -537,14 +651,14 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
     assert EPISODE_LABEL in result.archive_path.name
     with ZipFile(result.archive_path) as archive:
         members = archive.namelist()
-        assert members == ["page-0001.webp", "page-0002.webp", "page-0003.webp"]
+        assert members == [f"page-{index:04d}.webp" for index in range(1, len(images) + 1)]
         assert [archive.read(member) for member in members] == images
         for member in members:
             with Image.open(io.BytesIO(archive.read(member))) as image:
                 assert image.format == "WEBP"
                 assert image.size == (16, 12)
     status = json.loads(result.status_path.read_text(encoding="utf-8"))
-    assert status["status"] == "completed" and status["page_count"] == 3
+    assert status["status"] == "completed" and status["page_count"] == len(images)
     second_plan = BatchPlanner(catalog, executor.policies).plan(
         site="kadocomi", now=now_jst()
     )
@@ -552,7 +666,10 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
     assert any(entry.item_id == item.id and entry.reason == "completed" for entry in second_plan.skipped)
 
 
-@pytest.mark.parametrize("failure", ["expired", "foreign_redirect", "missing_end"])
+@pytest.mark.parametrize(
+    "failure",
+    ["expired", "foreign_redirect", "missing_end", "mixed_missing_marker", "mixed_final_no_arrow"],
+)
 async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     browser_page: Page,
     tmp_path: Path,
@@ -566,13 +683,21 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     )
     await browser_page.unroute_all()
     options: dict[str, object] = {}
+    if failure.startswith("mixed_"):
+        images = _fixture_images(38)
+        options["reader_layout"] = "mixed_final"
     if failure == "expired":
         options["deadline"] = "2020/10/14 11:00"
     elif failure == "foreign_redirect":
         options["redirect_foreign_episode"] = True
-    else:
+    elif failure == "missing_end":
         options["include_end"] = False
         monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
+    elif failure == "mixed_missing_marker":
+        options["mixed_fault"] = "missing_marker"
+    elif failure == "mixed_final_no_arrow":
+        options["mixed_key_behavior"] = "none"
+        monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
     await _install_reader_routes(browser_page, images, **options)
 
     with pytest.raises(CandidateExecutionError):
@@ -581,7 +706,7 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
             candidate,
             output_root=tmp_path / "batch-output",
             library_dir=tmp_path / "library",
-            max_pages=10,
+            max_pages=50,
             now=now_jst(),
         )
 
