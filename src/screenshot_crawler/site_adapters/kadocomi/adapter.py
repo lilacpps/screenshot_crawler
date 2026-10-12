@@ -538,8 +538,10 @@ class KadocomiAdapter(SiteAdapter):
             and marker_numbers == ["2", "1", "2"]
             and len(rows) >= 4
             and marker_indexes[0] + 1 == marker_indexes[1] == marker_indexes[2]
-            and marker_indexes[1] == len(rows) - 1
-            and snapshot.get("secondaryEndMarkerSlideIndexes") == []
+            and marker_indexes[1] >= 2
+            and len(rows) - marker_indexes[1] - 1 in (0, 1)
+            and snapshot.get("secondaryEndMarkerSlideIndexes")
+            == ([marker_indexes[1] + 1] if len(rows) - marker_indexes[1] - 1 == 1 else [])
         ):
             layout = _MIXED_FINAL_END_LAYOUT
             end_index = marker_indexes[1]
@@ -548,7 +550,7 @@ class KadocomiAdapter(SiteAdapter):
                 ("1", end_index),
                 ("2", end_index),
             ]
-            expected_secondary_indexes = []
+            expected_secondary_indexes = [end_index + 1] if len(rows) - end_index - 1 else []
         else:
             raise UnknownPageStateError("Kadocomi END marker topology is unsupported or ambiguous")
         if snapshot.get("endMarkerCount") != len(expected_main_markers):
@@ -580,7 +582,7 @@ class KadocomiAdapter(SiteAdapter):
                 (index == 0 and len(slots) != 1)
                 or (0 < index < end_index - 1 and len(slots) != 2)
                 or (index == end_index - 1 and len(slots) != 1)
-                or (index == end_index and slots)
+                or (index >= end_index and slots)
             ):
                 raise UnknownPageStateError("Kadocomi mixed-final content or END slide shape changed")
             canvas_boxes: list[dict[str, object]] = []

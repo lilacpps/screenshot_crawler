@@ -1,13 +1,13 @@
 # P2 — Viewer、原本優先の画像取得、本文完全性
 
 Status: PASS for the observed episode 4.1 and first-episode 38-slot readers.
-Production Runner and normal CLI Batch completed source-native WebP captures
-through explicit END; independent review and ZIP/source audits found byte-exact
-members and full-RGBA equality for all pages (BLOCKING=0). Opaque network-original
-bytes remain unclaimed. The separate 21-slot normal CLI control and final
-post-Discovery/Catalog stability verification passed. The final documentation
-Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout. See
-[PROGRESS](PROGRESS.md).
+The Episode 79 strict trailing-recommendation extension is implemented and its
+bounded live all-20-source/END proof and local Runner/Batch tests passed.
+Independent code review passed (45 targeted tests, BLOCKING=0); normal CLI
+Batch/ZIP verification for that extension is pending. The prior 21/38 CLI,
+source/ZIP audits and review remain passed (BLOCKING=0); opaque network-original
+bytes remain unclaimed. See
+[PROGRESS](PROGRESS.md) for current status.
 **目的**: 無条件無料話を先頭から全本文ページ、正しい読書順で取り、終端を確実に検証する。
 
 ## 変更範囲と優先順位

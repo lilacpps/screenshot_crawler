@@ -125,15 +125,23 @@ def _reader_html(
             {"images": [], "end_numbers": ["1", "2"] if include_end else []},
             {"images": [], "trailing": True},
         ]
-    elif reader_layout == "mixed_final":
+    elif reader_layout in {"mixed_final", "mixed_final_with_recommendation"}:
+        mixed_slot_count = len(images) - (
+            1 if mixed_fault in {"content_at_end", "content_at_recommendation"} else 0
+        )
         pages = [{"images": [0]}]
-        pages.extend({"images": [index, index + 1]} for index in range(1, 36, 2))
+        pages.extend(
+            {"images": [index, index + 1]}
+            for index in range(1, mixed_slot_count - 1, 2)
+        )
         pages.extend(
             [
-                {"images": [37], "end_numbers": ["2"]},
+                {"images": [mixed_slot_count - 1], "end_numbers": ["2"]},
                 {"images": [], "end_numbers": ["1", "2"]},
             ]
         )
+        if reader_layout == "mixed_final_with_recommendation":
+            pages.append({"images": [], "trailing": True})
         if mixed_fault == "missing_marker":
             pages[-2]["end_numbers"] = []
         elif mixed_fault == "moved_marker":
@@ -144,14 +152,27 @@ def _reader_html(
         elif mixed_fault == "wrong_marker_n":
             pages[-2]["end_numbers"] = ["1"]
         elif mixed_fault == "content_at_end":
-            pages[-1]["images"] = [38]
+            end_page_index = -2 if reader_layout == "mixed_final_with_recommendation" else -1
+            pages[end_page_index]["images"] = [mixed_slot_count]
         elif mixed_fault == "extra_slide":
             pages.append({"images": []})
         elif mixed_fault == "missing_terminal_pair":
             pages[-1]["end_numbers"] = ["2"]
+        elif mixed_fault == "secondary_missing":
+            pages[-1]["trailing"] = False
+        elif mixed_fault == "secondary_duplicate":
+            pages[-1]["trailing_count"] = 2
+        elif mixed_fault == "secondary_wrong_owner":
+            pages[-1]["trailing"] = False
+            pages[-2]["trailing"] = True
+        elif mixed_fault == "content_at_recommendation":
+            pages[-1]["images"] = [mixed_slot_count]
+        elif mixed_fault == "extra_after_recommendation":
+            pages.append({"images": []})
         if mixed_fault == "missing_end":
-            pages[-2]["end_numbers"] = []
-            pages[-1]["end_numbers"] = []
+            end_page_index = -2 if reader_layout == "mixed_final_with_recommendation" else -1
+            pages[end_page_index - 1]["end_numbers"] = []
+            pages[end_page_index]["end_numbers"] = []
     else:
         raise ValueError(f"unknown reader fixture layout: {reader_layout}")
     page_markup = []
@@ -175,11 +196,20 @@ def _reader_html(
             'width:36px;height:36px"></div>'
             for marker_index, number in enumerate(page.get("end_numbers", []))
         )
+        if reader_layout.startswith("mixed_final") and index == 0:
+            marker_markup += (
+                '<div class="_endOfBookWrapper_k9w27_34" data-type="pr" '
+                'data-n="1" style="position:absolute;left:0;top:0;width:36px;height:36px"></div>'
+            )
+        trailing_count = page.get("trailing_count", 1 if page.get("trailing") else 0)
         trailing_markup = (
             '<a href="/detail/other-work">Related work</a>'
-            '<div class="_root_1w5tt_1" data-type="end">'
-            '<div class="_endOfBook_1w5tt_50" data-type="end-of-book"></div></div>'
-            if page.get("trailing")
+            + "".join(
+                '<div class="_root_1w5tt_1" data-type="end">'
+                '<div class="_endOfBook_1w5tt_50" data-type="end-of-book"></div></div>'
+                for _ in range(trailing_count)
+            )
+            if trailing_count
             else ""
         )
         page_markup.append(
@@ -191,6 +221,9 @@ def _reader_html(
         )
     episode_heading = f"\u3010{EPISODE_LABEL}\u3011{WORK_TITLE}"
     episode_title = f"{episode_heading}{SITE_SUFFIX}"
+    is_mixed_layout = reader_layout.startswith("mixed_final")
+    mixed_end_index = len(pages) - (2 if reader_layout == "mixed_final_with_recommendation" else 1)
+    mixed_final_content_index = mixed_end_index - 1
     return f"""<!doctype html><html><head><meta charset="utf-8">
       <title>{episode_title}</title><meta property="og:title" content="{episode_title}">
       <style>
@@ -226,23 +259,23 @@ def _reader_html(
           const index = slides.findIndex(slide => slide.classList.contains('is-active'));
           if ({str(skip_to_end).lower()} && index === 0) {{
             slides[index].classList.remove('is-active');
-            slides[{2 if reader_layout == 'paired' else len(pages) - 2}].classList.add('is-active');
-          }} else if ({str(reader_layout == 'mixed_final').lower()} && index === slides.length - 2) {{
+            slides[{2 if reader_layout == 'paired' else mixed_end_index}].classList.add('is-active');
+          }} else if ({str(is_mixed_layout).lower()} && index === {mixed_final_content_index}) {{
             return;
           }} else if (index >= 0 && index + 1 < slides.length) {{
             slides[index].classList.remove('is-active');
             slides[index + 1].classList.add('is-active');
           }}
         }});
-        if ({str(reader_layout == 'mixed_final').lower()}) {{
+        if ({str(is_mixed_layout).lower()}) {{
           document.addEventListener('keydown', event => {{
             if (event.key !== 'ArrowLeft') return;
             const index = slides.findIndex(slide => slide.classList.contains('is-active'));
-            if (index !== slides.length - 2) return;
+            if (index !== {mixed_final_content_index}) return;
             const behavior = {json.dumps(mixed_key_behavior)};
             if (behavior === 'advance') {{
               slides[index].classList.remove('is-active');
-              slides[index + 1].classList.add('is-active');
+              slides[{mixed_end_index}].classList.add('is-active');
             }} else if (behavior === 'skip') {{
               slides[index].classList.remove('is-active');
               slides[0].classList.add('is-active');
@@ -397,7 +430,9 @@ async def test_kadocomi_native_capture_requires_source_mapping_and_stable_full_f
 
 
 @pytest.mark.parametrize("computed_direction", ["ltr", "rtl"])
-@pytest.mark.parametrize("reader_layout", ["paired", "mixed_final"])
+@pytest.mark.parametrize(
+    "reader_layout", ["paired", "mixed_final", "mixed_final_with_recommendation"]
+)
 async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explicit_end(
     browser_page: Page,
     tmp_path: Path,
@@ -409,7 +444,12 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
 
     monkeypatch.setattr(discovery, "SETTLEMENT_INTERVAL_MS", 5)
     monkeypatch.setattr(discovery, "SETTLEMENT_TIMEOUT_SECONDS", 1.0)
-    images = _fixture_images(3 if reader_layout == "paired" else 38)
+    image_count = {
+        "paired": 3,
+        "mixed_final": 38,
+        "mixed_final_with_recommendation": 20,
+    }[reader_layout]
+    images = _fixture_images(image_count)
     await _install_reader_routes(
         browser_page,
         images,
@@ -444,13 +484,22 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
         assert final_snapshot["markerSlideIndexes"] == [2, 2]
         assert final_snapshot["markerNumbers"] == ["1", "2"]
         assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [3]
-    else:
+    elif reader_layout == "mixed_final":
         assert len(final_snapshot["slideRows"]) == 21
         assert final_snapshot["activeIndex"] == 20
         assert final_snapshot["markerSlideIndexes"] == [19, 20, 20]
         assert final_snapshot["markerNumbers"] == ["2", "1", "2"]
         assert final_snapshot["secondaryEndMarkerSlideIndexes"] == []
         assert len(final_snapshot["slideRows"][19]["contentSlots"]) == 1
+    else:
+        assert len(final_snapshot["slideRows"]) == 13
+        assert final_snapshot["activeIndex"] == 11
+        assert final_snapshot["markerSlideIndexes"] == [10, 11, 11]
+        assert final_snapshot["markerNumbers"] == ["2", "1", "2"]
+        assert final_snapshot["secondaryEndMarkerSlideIndexes"] == [12]
+        assert len(final_snapshot["slideRows"][10]["contentSlots"]) == 1
+        assert final_snapshot["slideRows"][12]["active"] is False
+        assert final_snapshot["endMarkerCount"] == 3
     assert final_snapshot["slideRows"][-1]["contentSlots"] == []
     assert len(list((tmp_path / "output").glob("page-*.webp"))) == len(images)
 
@@ -473,6 +522,12 @@ async def test_kadocomi_runner_captures_right_to_left_spread_and_requires_explic
         "mixed_missing_terminal_pair",
         "mixed_reverse_spread",
         "mixed_final_no_arrow",
+        "mixed_rec_missing_marker",
+        "mixed_rec_duplicate_marker",
+        "mixed_rec_wrong_owner",
+        "mixed_rec_content",
+        "mixed_rec_extra_slide",
+        "mixed_rec_final_no_arrow",
     ],
 )
 async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
@@ -487,7 +542,19 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
     monkeypatch.setattr(discovery, "SETTLEMENT_INTERVAL_MS", 5)
     monkeypatch.setattr(discovery, "SETTLEMENT_TIMEOUT_SECONDS", 1.0)
     mixed = scenario.startswith("mixed_")
-    images = _fixture_images(39 if scenario == "mixed_content_at_end" else (38 if mixed else 3))
+    mixed_rec = scenario.startswith("mixed_rec_")
+    image_count = (
+        21
+        if scenario == "mixed_rec_content"
+        else 20
+        if mixed_rec
+        else 39
+        if scenario == "mixed_content_at_end"
+        else 38
+        if mixed
+        else 3
+    )
+    images = _fixture_images(image_count)
     options: dict[str, object] = {}
     if scenario == "expired":
         options["deadline"] = "2020/10/14 11:00"
@@ -501,7 +568,20 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         options["reverse_spread"] = True
     elif scenario == "skip_slide":
         options["skip_to_end"] = True
-    if mixed:
+    if mixed_rec:
+        options["reader_layout"] = "mixed_final_with_recommendation"
+        recommendation_faults = {
+            "mixed_rec_missing_marker": "secondary_missing",
+            "mixed_rec_duplicate_marker": "secondary_duplicate",
+            "mixed_rec_wrong_owner": "secondary_wrong_owner",
+            "mixed_rec_content": "content_at_recommendation",
+            "mixed_rec_extra_slide": "extra_after_recommendation",
+        }
+        if scenario in recommendation_faults:
+            options["mixed_fault"] = recommendation_faults[scenario]
+        elif scenario == "mixed_rec_final_no_arrow":
+            options["mixed_key_behavior"] = "none"
+    elif mixed:
         options["reader_layout"] = "mixed_final"
         if scenario.startswith("mixed_") and scenario not in {"mixed_reverse_spread", "mixed_final_no_arrow"}:
             options["mixed_fault"] = scenario.removeprefix("mixed_")
@@ -512,7 +592,7 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
     await _install_reader_routes(browser_page, images, **options)
     if scenario == "missing_end":
         monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
-    if scenario == "mixed_final_no_arrow":
+    if scenario in {"mixed_final_no_arrow", "mixed_rec_final_no_arrow"}:
         monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
     output_dir = tmp_path / scenario / "output"
     runner = CrawlerRunner(
@@ -529,7 +609,7 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
 
     expected_error = (
         PageChangeTimeoutError
-        if scenario in {"missing_end", "mixed_final_no_arrow"}
+        if scenario in {"missing_end", "mixed_final_no_arrow", "mixed_rec_final_no_arrow"}
         else UnknownPageStateError
     )
     with pytest.raises(expected_error):
@@ -541,11 +621,11 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         assert manifest["pages"][0]["file"] == "page-0001.webp"
         assert "status" not in manifest
         assert list(output_dir.glob("page-*.webp")) == [output_dir / "page-0001.webp"]
-    elif scenario == "mixed_final_no_arrow":
+    elif scenario in {"mixed_final_no_arrow", "mixed_rec_final_no_arrow"}:
         manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-        assert len(manifest["pages"]) == 38
+        assert len(manifest["pages"]) == image_count
         assert "status" not in manifest
-        assert len(list(output_dir.glob("page-*.webp"))) == 38
+        assert len(list(output_dir.glob("page-*.webp"))) == image_count
     else:
         assert list(output_dir.glob("page-*.webp")) == []
         assert not (output_dir / "manifest.json").exists()
@@ -575,7 +655,12 @@ async def _seed_kadocomi_batch_candidate(
 
     monkeypatch.setattr(discovery, "SETTLEMENT_INTERVAL_MS", 5)
     monkeypatch.setattr(discovery, "SETTLEMENT_TIMEOUT_SECONDS", 1.0)
-    images = _fixture_images(3 if reader_layout == "paired" else 38)
+    image_count = {
+        "paired": 3,
+        "mixed_final": 38,
+        "mixed_final_with_recommendation": 20,
+    }[reader_layout]
+    images = _fixture_images(image_count)
     await _install_reader_routes(browser_page, images, reader_layout=reader_layout)
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     registry = DiscoveryAdapterRegistry()
@@ -609,7 +694,9 @@ async def _seed_kadocomi_batch_candidate(
     return catalog, plan, candidate, executor, images
 
 
-@pytest.mark.parametrize("reader_layout", ["paired", "mixed_final"])
+@pytest.mark.parametrize(
+    "reader_layout", ["paired", "mixed_final", "mixed_final_with_recommendation"]
+)
 async def test_kadocomi_batch_discovers_captures_packages_and_completes(
     browser_page: Page,
     tmp_path: Path,
@@ -668,7 +755,14 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
 
 @pytest.mark.parametrize(
     "failure",
-    ["expired", "foreign_redirect", "missing_end", "mixed_missing_marker", "mixed_final_no_arrow"],
+    [
+        "expired",
+        "foreign_redirect",
+        "missing_end",
+        "mixed_missing_marker",
+        "mixed_final_no_arrow",
+        "mixed_rec_final_no_arrow",
+    ],
 )
 async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     browser_page: Page,
@@ -683,7 +777,10 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     )
     await browser_page.unroute_all()
     options: dict[str, object] = {}
-    if failure.startswith("mixed_"):
+    if failure.startswith("mixed_rec_"):
+        images = _fixture_images(20)
+        options["reader_layout"] = "mixed_final_with_recommendation"
+    elif failure.startswith("mixed_"):
         images = _fixture_images(38)
         options["reader_layout"] = "mixed_final"
     if failure == "expired":
@@ -695,7 +792,7 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
         monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
     elif failure == "mixed_missing_marker":
         options["mixed_fault"] = "missing_marker"
-    elif failure == "mixed_final_no_arrow":
+    elif failure in {"mixed_final_no_arrow", "mixed_rec_final_no_arrow"}:
         options["mixed_key_behavior"] = "none"
         monkeypatch.setattr(kadocomi_adapter, "PAGE_CHANGE_TIMEOUT_SECONDS", 2.0)
     await _install_reader_routes(browser_page, images, **options)

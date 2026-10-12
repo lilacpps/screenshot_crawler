@@ -3,11 +3,12 @@
 Status: PASS for the isolated episode 4.1 and first-episode 38-slot CLI Batch,
 ZIP, and independent source/canvas audits (Tester and Reviewer BLOCKING=0;
 NONBLOCKING=0). The separate 21-slot control and post-Discovery/Catalog
-stability audit also passed. Final docs synchronization review passed (Reviewer BLOCKING=0, NONBLOCKING=0); Lead accepted closeout. The
-prior repository-wide pytest run had one known baseline failure, reproduced at
-`ceb3434`; it predates the 38-slot extension. Full Ruff passed. Other reader
-variants and lifetime-position reconstruction remain unsupported. See
-[PROGRESS](PROGRESS.md).
+stability audit also passed. The Episode 79 extension has live source/END proof,
+passing local Runner/Batch tests, and independent code review PASS (45 targeted
+tests, BLOCKING=0); its normal CLI Batch/ZIP gate is pending. The prior repository-wide pytest run had one known
+baseline failure, reproduced at `ceb3434`; it predates the 38-slot and Episode
+79 extensions. Other unverified reader variants and lifetime-position
+reconstruction remain unsupported. See [PROGRESS](PROGRESS.md).
 **目的**: Discovery→Catalog→Batch→全本文の完全性→ZIP/Completedを確認し、
 再公開/期限変更/非公開履歴で実害のある不具合を残さない。
 
@@ -36,7 +37,7 @@ the ZIP, CrawlRun/status, Artifact, and Completed record; it does not claim a
 retained manifest file. Exact CLI commands, isolated report paths, and audit
 limits are recorded in [PROGRESS](PROGRESS.md). The independent Tester phase
 passed; final P4 review and Lead acceptance passed for the bounded target scope.
-The full-suite baseline failure and unsupported variants remain recorded above.
+The full-suite baseline failure and other unverified variants remain recorded above.
 
 ## First-episode 38-slot extension audit (2026-10-12)
 
