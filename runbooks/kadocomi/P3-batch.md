@@ -1,6 +1,9 @@
 # P3 — Free-only Site Policy、Batch、ZIP/Completed
 
-Status: NOT STARTED。P1/P2の必要なgateに合格後に実施。
+Status: PASS — direct-only Policy/CLI wiring and the local Catalog-to-ZIP flow
+passed targeted/affected tests and independent review (BLOCKING=0,
+NONBLOCKING=0). The independent live CLI/ZIP check is recorded under P4 and
+[PROGRESS](PROGRESS.md).
 **目的**: 既存CLI `batch plan`/`batch run`からカドコミの現在無料で未取得の話を
 安全に選択、全ページ保存、ZIP化、Completedにする。
 

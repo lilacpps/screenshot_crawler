@@ -1,8 +1,40 @@
 # P4 — 独立E2E、レビュー、最終判定
 
-Status: NOT STARTED。Lead/Reviewer/Testerが最終品質を判定。
+Status: PASS for one isolated live target and independent ZIP/source audit.
+Tester and Reviewer passed (BLOCKING=0, NONBLOCKING=0), and Lead accepted the
+observed episode 4.1 scope. Repository-wide pytest completed with one known
+baseline failure, reproduced at `ceb3434`; full Ruff passed. Alternate reader
+variants and lifetime-position reconstruction remain unsupported. See
+[PROGRESS](PROGRESS.md).
 **目的**: Discovery→Catalog→Batch→全本文の完全性→ZIP/Completedを確認し、
 再公開/期限変更/非公開履歴で実害のある不具合を残さない。
+
+## P4 execution result (2026-10-12)
+
+Tester completed a fresh isolated CLI run for `KC_004915_S:KC_0049150000400011_E`.
+Full Discovery returned 53/53 complete; incremental returned five known Sources
+and left the other 48 untouched. A normal Batch plan contained 53 pending Items;
+in the isolated test Catalog, 52 non-target Items were marked skipped through
+`CatalogService` so `batch run --limit 1` exercised the production CLI path for
+the one exact target. The run captured 21 WebP pages, reached explicit END on
+the same episode, created one ZIP Artifact, and marked one Item Completed.
+
+An independent ZIP audit found 21 ordinally named, CRC-valid 836x1200 WebP
+members. Each member matched both its corresponding P2 page file and the
+independent normal-renderer live Blob bytes. The ZIP is 3,278,163 bytes with
+SHA-256 `d64fd2a66c6982c3045a70940b36846cd7f12af4685551f9488174673099e6ff`.
+Post-run incremental/full Discovery retained the Artifact and Completed state;
+final isolated Catalog counts were 52 pending, 1 completed, 53 available/free
+Sources, and 53 NULL positions. The actual Catalog's renumber dry-run proposed
+no moves because positions are unknown; one separate synthetic fixture verified
+apply/locator update while preserving ZIP bytes. No real archive was renamed.
+
+The normal CLI removed temporary source output after packaging, so P4 validates
+the ZIP, CrawlRun/status, Artifact, and Completed record; it does not claim a
+retained manifest file. Exact CLI commands, isolated report paths, and audit
+limits are recorded in [PROGRESS](PROGRESS.md). The independent Tester phase
+passed; final P4 review and Lead acceptance passed for the bounded target scope.
+The full-suite baseline failure and unsupported variants remain recorded above.
 
 ## 必須確認マトリクス
 

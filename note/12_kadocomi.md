@@ -2,7 +2,7 @@
 
 ## Status (2026-10-12)
 
-P1 Discovery and P2 capture passed independent review with BLOCKING=0. P3 direct-only policy, CLI registrations, and local Batch-to-ZIP integration passed independent review with BLOCKING=0. P4 live CLI Batch and independent ZIP/source/completion verification remain pending.
+P1 Discovery and P2 capture passed independent review with BLOCKING=0. P3 direct-only policy, CLI registrations, and local Batch-to-ZIP integration passed independent review with BLOCKING=0. P4 Tester and independent Reviewer passed one isolated live CLI Batch and ZIP/source/Completed audit (BLOCKING=0, NONBLOCKING=0); Lead accepted the observed episode 4.1 scope. Full pytest completed with 2448 passed, one known baseline failure, and zero skips; full Ruff passed.
 
 ## Discovery behavior
 
@@ -38,7 +38,13 @@ Independent Tester used a separate normal-renderer Blob/draw hook to audit all 2
 
 Manual Crawl, Batch adapter, and Batch Policy CLI registries include Kadocomi. Manual crawl requires `--access-strategy direct`; auto/quota and all named resources remain rejected. A Batch run requires a canonical query-free exact Catalog episode target matching the configured external ID. Before viewer entry, the adapter rechecks complete public-list membership, current availability/free classification, and deadline with the live target work.
 
-The local end-to-end fixture runs Discovery, Catalog, Planner, Executor, Runner, and the production packager. It confirms native WebP bytes in the ZIP, canonical source identity, Catalog title/order metadata, ZIP Artifact registration and Completed only after explicit END. A runtime expired row, foreign-episode redirect, or missing END leaves the Item pending and creates no ZIP/Artifact. Targeted P3 tests passed 27 / 0 skipped; the affected Batch, Executor, naming, Catalog, packaging, and existing site-policy regression set passed 301 / 0 skipped (469 pytest-asyncio deprecation warnings). The independent Reviewer passed P3 with BLOCKING=0 and NONBLOCKING=0, with 54 independent tests passing and no skips (25 selected plus 29 CLI/packaging; 13 deselected by selection). No live site was used for P3. P4 will exercise the normal CLI Batch flow against the live site using fresh dedicated paths and independently audit ZIP and completion state.
+The local end-to-end fixture runs Discovery, Catalog, Planner, Executor, Runner, and the production packager. It confirms native WebP bytes in the ZIP, canonical source identity, Catalog title/order metadata, ZIP Artifact registration and Completed only after explicit END. A runtime expired row, foreign-episode redirect, or missing END leaves the Item pending and creates no ZIP/Artifact. Targeted P3 tests passed 27 / 0 skipped; the affected Batch, Executor, naming, Catalog, packaging, and existing site-policy regression set passed 301 / 0 skipped (469 pytest-asyncio deprecation warnings). The independent Reviewer passed P3 with BLOCKING=0 and NONBLOCKING=0, with 54 independent tests passing and no skips (25 selected plus 29 CLI/packaging; 13 deselected by selection). No live site was used for P3.
+
+## Current P4 independent live validation
+
+Tester used a fresh isolated Watchlist, Catalog, output root, and library for one live CLI Batch run of the exact episode 4.1 target. Full Discovery returned 53/53 complete; incremental returned 5 known and left 48 unseen Sources unchanged. With 52 non-target Items skipped in the test Catalog, the normal `batch run --limit 1` captured 21 WebP pages, reached explicit END, and created one archive Artifact and one Completed Item. An independent audit matched every ZIP member byte-for-byte to both the P2 page file and independently observed live renderer Blob; all CRCs passed and all members decoded to 836x1200 WebP. ZIP SHA-256 is `d64fd2a66c6982c3045a70940b36846cd7f12af4685551f9488174673099e6ff` (3,278,163 bytes). Full/incremental rediscovery preserved the completed Artifact and Catalog target identity. The actual-catalog renumber dry-run proposed no moves because all positions remain NULL; one isolated synthetic apply preserved archive bytes. No real archive was renamed.
+
+The CLI removed its temporary page-output directory after packaging; this verifies the ZIP, run/status, Artifact, and Completed state, not a retained manifest file. The 38-canvas first-episode layout, other-work no-deadline rows, and exact lifetime gaps remain unsupported. P4 Tester, independent Reviewer, and Lead acceptance passed for the observed episode 4.1 scope. Repository-wide pytest had one known failure reproduced at baseline `ceb3434`; details are in `runbooks/kadocomi/PROGRESS.md`.
 
 ## Observed evidence and limits
 

@@ -1,8 +1,8 @@
 # カドコミ (comic-walker.com) Free-Only Site Adapter — 実装 Runbook
 
-Status: P1 Discovery implemented; independent review pending (2026-10-12)
+Status (2026-10-12): P0 evidence contract and P1/P1.5/P2/P3 gates passed. P4 Tester and independent Reviewer passed one live CLI Batch/ZIP verification for the supported episode 4.1 variant; Lead accepted this bounded scope. Repository-wide pytest finished with 2448 passed, one known baseline failure, and zero skips; full Ruff passed. Site-wide/alternate-variant limits remain as stated in [PROGRESS](PROGRESS.md).
 Execution branch: `feat/kadocomi-adapter`
-Site key (proposed): `kadocomi`
+Site key: `kadocomi`
 Sample work: https://comic-walker.com/detail/KC_004915_S?episodeType=first
 
 ## 目的と完成形
@@ -11,7 +11,7 @@ Sample work: https://comic-walker.com/detail/KC_004915_S?episodeType=first
 `Watchlist → discover (full/incremental) → Catalog → batch plan/run → Crawl → manifest/ZIP → Completed`
 を、従来のCLI/共通Browser Session/Batch/Packagerの契約で完走させる。
 ログイン、購入、チケット/コイン/ポイント/レンタル、アプリ専用コンテンツは対象外。
-最初は1作品の実サイト検証、その後構造の異なる無料話でも確認する。
+実サイトで正の根拠が揃った1作品・1 reader variantをサポートする。別構造のvariantは確認できても、話順/END契約とcaptureが未承認なら対象を広げない。
 
 ユーザーからの事前観察（**P0で要再検証**）:
 - 作品画面に「全XX話を表示」があり、押すと対象の話一覧が展開される。
@@ -89,7 +89,7 @@ P1.5の**高度な過去位置復元はbest-effortでありP3完了の条件で�
 ## 開始前の実行環境と検証例（実装後）
 
 通常Catalogではなく専用パスを使用する。既存共有Crawler ChromeへCDP接続。
-以下はCLI形の参考であり、実装されるまで`kadocomi`は未登録。
+以下は登録済みCLIを専用Catalog/Watchlist/outputへ向ける形の例。
 
 ```powershell
 python -m screenshot_crawler.cli discover --key kadocomi-sample --mode full `
@@ -127,10 +127,12 @@ incomplete/配信終了/誤Sourceは更新や完成処理を誤らない。
 Reviewer BLOCKING=0。未検証・サイト依存・失敗した原画像候補を明記。
 報告は変更ファイル、証拠、実行コマンドと結果、スキップ理由、未解決リスク、次の操作まで。
 
-## Current P1 Discovery implementation
+## Current implementation and phase gates
 
-`KadocomiDiscoveryAdapter` is registered only in the Discovery CLI registry.
-It accepts the verified work detail URL on `https://comic-walker.com`, reads
+`KadocomiDiscoveryAdapter` is registered in the Discovery CLI registry.
+`KadocomiAdapter` is separately registered for manual Crawl and Batch, with
+`KadocomiSitePolicy` in the Batch policy registry. Discovery accepts the
+verified work detail URL on `https://comic-walker.com`, reads
 the unique `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*`
 container, and expands the exact `全{N}話を表示` control. It requires two
 identical scoped snapshots 500 ms apart, at the declared row count, within a
@@ -158,11 +160,14 @@ the shared Discovery service does not apply `DiscoveredItem.canonical_title`.
 The adapter validates and exposes the work-page `og:title`; set the Watchlist
 label to the actual work name.
 
-P0 evidence established a source-native viewer path for the observed target:
-the normal renderer's retained WebP Blob mapped by `currentSrc` to full-frame
-836x1200 identity draws. Five full-RGBA comparisons at DOM slots 0, 1, 2, 19,
-and 20 had zero mismatches. Ordinary navigation showed 21 content slots over
-11 content slides and an explicit END slide. This remains research evidence;
-P2 capture implementation and per-page provenance checks are pending.
+P0 evidence and P2 implementation establish a source-native path for the
+observed episode 4.1 target: the normal renderer's retained WebP Blob maps by
+`currentSrc` to each full-frame 836x1200 identity draw. P2 verifies every page's
+Blob provenance, decoded pixels, and stable canvas before preserving bytes.
+Tester independently audited all 21 P2 page files and, during P4, all 21 ZIP
+members against the independent live Blob/page-file evidence. The 38-canvas
+first-episode layout remains unsupported.
 
-Local validation and independent review are recorded in `PROGRESS.md`.
+P0's exact public list and the episode 4.1 reader are supported. P1 stores the 53 observed episode rows without assigning inferred positions, and preserves Catalog history on disappearance/reappearance. P2 uses retained normal-renderer WebP Blob bytes with per-page source/canvas proof. P3 admits direct-only free sources and rechecks the exact current row before navigation. P4 Tester and independent Reviewer verified one isolated CLI Batch run: 21 pages were packaged byte-for-byte into a valid WebP ZIP and the Catalog Item reached Completed only after END. Lead accepted P4 for this observed scope. Repository-wide pytest completed with one known pre-existing Younganimal failure reproduced at baseline `ceb3434`; full Ruff passed. See `PROGRESS.md` for audit details and limits.
+
+The independently observed first-episode variant (38 content canvases over 21 slides) remains unsupported. Exact lifetime episode gaps, no-deadline access on other works, and production archive renumbering are not inferred. The P4 CLI cleanup removes its temporary source output after packaging, so the independent audit covers ZIP pages, CrawlRun/status, and Catalog Artifact/Completed state; it does not claim a retained manifest file. P4 verified one isolated episode 4.1 target, not a second viewer variant or a real-time unpublish/republish lifecycle. The independent run details, ZIP SHA-256, exact discovery counts, and baseline-test failure are in `PROGRESS.md`.

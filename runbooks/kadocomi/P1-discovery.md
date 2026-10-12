@@ -1,6 +1,8 @@
 # P1 — Discovery / Catalog / 無料状態
 
-Status: IMPLEMENTED; local tests pass; independent Reviewer checkpoint pending.
+Status: PASS — focused/local tests, isolated live full and incremental Discovery,
+history-preservation checks, and independent Reviewer gate passed (BLOCKING=0).
+See [PROGRESS](PROGRESS.md) for exact counts and the known historical-gap limit.
 **目的**: 作品の現在公開中のエピソードのみをSourceとして同期し、
 過去Sourceの取得・Completed履歴を保全する。
 

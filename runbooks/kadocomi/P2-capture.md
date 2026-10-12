@@ -1,6 +1,10 @@
 # P2 — Viewer、原本優先の画像取得、本文完全性
 
-Status: NOT STARTED。P0のlive evidenceで仕様を確定。入口は [README](README.md)。
+Status: PASS for the observed episode 4.1 reader — production Runner completed
+21 source-native WebP captures through explicit END, local tests and independent
+review passed (BLOCKING=0), and the independent page-file audit found byte and
+pixel equality. Opaque network-original bytes and the separate 38-canvas reader
+variant remain unclaimed/unsupported. See [PROGRESS](PROGRESS.md).
 **目的**: 無条件無料話を先頭から全本文ページ、正しい読書順で取り、終端を確実に検証する。
 
 ## 変更範囲と優先順位

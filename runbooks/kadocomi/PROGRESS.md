@@ -1,11 +1,12 @@
 # Kadocomi Free-Only Adapter - Progress / evidence ledger
 
-Status: P1 Discovery and P2 capture passed independent review (BLOCKING=0) and
-bounded live validation. P3 direct-only policy, CLI registrations, and local
-Catalog-to-ZIP integration passed targeted and affected tests and independent
-review (BLOCKING=0). P4 live CLI Batch and independent
-archive/completion audit have not started. Unverified layouts are not recorded
-as success.
+Status: P0 evidence contract, P1 Discovery, P1.5 history-safe position handling,
+P2 capture, and P3 Batch integration passed their gates. P4 Tester completed an
+isolated live CLI Batch and independent all-page ZIP/source audit successfully.
+All phase gates, including P4 Reviewer and Lead acceptance for the observed
+bounded scope, passed. Repository-wide pytest finished with one known baseline
+failure; this is reported explicitly rather than treated as a green suite.
+Unverified layouts are not recorded as success.
 
 ## Stage checkpoints
 
@@ -16,7 +17,7 @@ as success.
 | P1.5 Position safety | PASS | Shared opt-out hook committed as ceb3434; independent Reviewer BLOCKING=0; 51 passed / 0 skipped. Kadocomi opts out and its persistence behavior is covered in P1 integration. |
 | P2 Viewer/Capture | PASS | Corrected production Runner captured all 21 source-native WebP pages through explicit END; independent review BLOCKING=0 and 16 independent targeted passes. Tester independently audited every saved page against its normal-renderer Blob and canvas with zero pixel mismatch. The separate 38-page layout remains unsupported. |
 | P3 Free-only Batch / ZIP | PASS | Direct-only policy and CLI wiring, real local Catalog → Planner → Executor → Runner → ZIP/Artifact/Completed; runtime failures preserve pending. 301 affected passes and 54 independent passes; Reviewer BLOCKING=0, NONBLOCKING=0. |
-| P4 Independent E2E | NOT STARTED | Fresh isolated Catalog, live run, independent image/archive audit, and Reviewer BLOCKING=0. |
+| P4 Independent E2E | PASS — OBSERVED EPISODE 4.1 SCOPE | Fresh isolated Catalog; full/incremental Discovery; one direct live Batch run; independent audit matched all 21 ZIP members to separately verified live Blob bytes and P2 page files; Completed/Artifact and Catalog stability verified. Independent Reviewer BLOCKING=0/NONBLOCKING=0; Lead accepted the bounded scope. One reader/work only; alternate layouts and site-wide extrapolations remain unsupported. |
 
 ## Initial target and containment
 
@@ -92,8 +93,8 @@ as success.
 - No live-site work was performed in this iteration. Independent Reviewer
   verified the exact final diff: BLOCKING=0, outstanding NON-BLOCKING=0,
   independent targeted validation 51 passed / 0 skipped, diff check clean.
-  Lead accepts this shared-hook checkpoint and advances to P1 implementation.
-  Site-local history/republication fixtures remain required for the P1 gate.
+  Lead accepted this shared-hook checkpoint. The P1 fixtures subsequently
+  verified history preservation and same-ID disappearance/republication.
 
 ## P2 capture implementation and live status (2026-10-12)
 
@@ -107,7 +108,7 @@ as success.
 - The corrected production Runner passed live verification on 2026-10-12 from a fresh anonymous context connected through shared Crawler Chrome/CDP. It measured a 1920x1080 viewport, started from the canonical query-free episode 4.1 route, and retained the exact `KC_004915_S:KC_0049150000400011_E` identity through END. The Runner returned `stop_state=end` with 21 captures: one initial slot followed by ten two-canvas spreads. Every captured source slot passed currentSrc-to-retained-Blob provenance, full-frame draw, decoded-pixel equality, and stable-layout checks; every output was byte-preserved `.webp` / `image/webp`, RIFF/WEBP magic, 836x1200. No screenshot or re-encoding path was used.
 - The final live snapshot had 13 slides and 21 content slots; the explicit main END was at slide index 11 with the paired `data-n=1,2` markers, while the trailing recommendation marker was at index 12 and was not captured. The observed main reader retained `splide--rtl`, physical right-to-left slot order, and computed `rtl`; the capture hooks were installed and there was no content outside the reader slides. The fresh context observed only HTTP 200/204 responses. Owned context was closed and shared Chrome remained running. Lead independently opened all 21 isolated output artifacts with Pillow and confirmed valid WebP files at 836x1200; this checks artifact metadata, not source-pixel provenance. Sanitized audit is in ignored `work/kadocomi/p2-live-20261012/attempt4/result.json`.
 - Independent Tester used a separate normal-renderer Blob/draw hook to audit all 21 live page files. Each saved byte sequence matched its corresponding WebP Blob exactly; all 21 decoded to 836x1200, full-frame identity draws with zero RGBA mismatch against the actual canvas. Physical slot x-coordinates descended in right-to-left order; 11 ordinary one-slide advances, including the final advance to END, reached explicit END without changing episode identity. This is an independent viewer-source-to-page-file audit, not a ZIP audit and not a claim about opaque original network responses.
-- P2 focused local tests passed 16 / 0 skipped, with Ruff and `git diff --check` passing. Independent Reviewer reran 16 tests / 0 skipped and verified the corrected production diff, final live evidence, and current site notes: final P2 PASS, BLOCKING=0. Lead accepts P2 and advances to P3. Independent Tester also found a different first-episode layout (38 content canvases over 21 slides) whose order/END pattern is not covered; it remains unsupported and is not generalized from the 4.1 evidence. P4 independent ZIP/source audit is still required.
+- P2 focused local tests passed 16 / 0 skipped, with Ruff and `git diff --check` passing. Independent Reviewer reran 16 tests / 0 skipped and verified the corrected production diff, final live evidence, and current site notes: final P2 PASS, BLOCKING=0. Lead accepted P2 and advanced to P3. Independent Tester also found a different first-episode layout (38 content canvases over 21 slides) whose order/END pattern is not covered; it remains unsupported and is not generalized from the 4.1 evidence. The later P4 independent ZIP/source audit is recorded below.
 
 ## P3 policy and local Batch/ZIP integration (2026-10-12)
 
@@ -116,7 +117,38 @@ as success.
 - Manual Crawl accepts explicit `--access-strategy direct`; its default `auto` is rejected by the adapter. Batch uses the existing plan/run CLI and shared executor/runner/packager. Display position remains NULL; no title/order-derived numeric prefix, archive renumbering, or Catalog/Core/Batch changes were introduced.
 - Local browser integration now exercises Discovery → Catalog → Planner → Executor → CrawlerRunner → native WebP manifest pages → ZIP → Artifact/Completed. The nominal run packages three fixture source bytes unchanged, confirms canonical source and Catalog metadata precedence, and uses only the explicit END stop. Fresh-runtime expired row, foreign episode redirect, and missing END each fail with Item still pending and no Artifact/ZIP.
 - Targeted P3 command passed: Kadocomi policy, CLI registries, canonical-target guard, nominal Batch flow, and runtime-failure cases → 27 passed / 0 skipped (5 asyncio deprecation warnings).
-- Affected regression command passed across Batch, Executor, naming, Catalog, packaging, and the existing site-policy suite → 301 passed / 0 skipped (469 asyncio deprecation warnings, 34.28s). No real site was used for P3; local browser-backed fixtures were used. Independent Reviewer verified the final material diff and current notes, with 25 focused passes (13 deselected, 0 skipped) plus 29 CLI/packaging passes (0 skipped): P3 PASS, BLOCKING=0, NONBLOCKING=0. Lead accepts P3 and advances to P4. The shared-CDP CLI Batch and independent ZIP/completion audit remain required; Root's final full suite is running.
+- Affected regression command passed across Batch, Executor, naming, Catalog, packaging, and the existing site-policy suite → 301 passed / 0 skipped (469 asyncio deprecation warnings, 34.28s). No real site was used for P3; local browser-backed fixtures were used. Independent Reviewer verified the final material diff and current notes, with 25 focused passes (13 deselected, 0 skipped) plus 29 CLI/packaging passes (0 skipped): P3 PASS, BLOCKING=0, NONBLOCKING=0. Lead accepted P3 and advanced to P4. The shared-CDP CLI Batch and independent ZIP/completion audit subsequently passed as recorded below.
+
+## P4 independent live CLI Batch and ZIP audit (2026-10-12)
+
+- Tester used a fresh, isolated Catalog, Watchlist, status directory, output root, and library under `work/kadocomi/p4-independent-20261012/`, connected through the existing shared Crawler Chrome/CDP endpoint. No production/default Catalog or output was used. Browser entry used `direct`; the report records zero quota-resource rows, no grant-only strategy, and no paid/login actions.
+- Initial `discover full` returned 53 observed/new Sources with `complete=true`: all 53 available/free, 46 future deadlines, 7 NULL deadlines, and 53 NULL display positions. `discover incremental` returned 5 already-known Sources and stopped at the configured known streak; the other 48 Sources were unchanged.
+- `batch plan` selected 53 pending Items. For a single-item validation, Tester used `CatalogService` in this isolated test Catalog to mark the 52 non-target Items skipped, leaving only `KC_004915_S:KC_0049150000400011_E` pending; no Completed state was fabricated. `batch run --limit 1` then used the normal production CLI/adapter/Planner/Executor/Runner/packager path.
+- The live Run stayed on the exact episode, made 11 ordinary one-slide advances through the final END boundary, and reported `stop_reason=end`, `page_count=21`, and `status=succeeded`. The independent reader audit confirmed 21 content pages, paired explicit main-reader END markers, zero remaining content wrappers, and same-episode identity at the terminal slide.
+- Independent ZIP audit found 21 ordinally named WebP members. Every member's bytes and hash matched both the corresponding P2 output page and the independent normal-renderer live Blob audit. All CRCs passed; all members decoded as 836x1200 WebP. ZIP `testzip` returned no error. ZIP size: 3,278,163 bytes; SHA-256: `d64fd2a66c6982c3045a70940b36846cd7f12af4685551f9488174673099e6ff`.
+- Catalog/status evidence showed exactly one Completed Item, one archive Artifact, one succeeded CrawlRun with 21 pages and END stop, and 52 pending Items. The target remained available/free with the same canonical query-free locator, NULL display position, and 2026-10-14 11:00 +09:00 deadline. Artifact locator, hash, size, and Completed status/timestamp remained stable through a subsequent `discover incremental` (5 known, no new) and `discover full` (53 observed, no new, complete). Final isolated Catalog counts were 52 pending / 1 completed, 53 available/free Sources, 46 explicit deadlines / 7 NULL, and 53 NULL positions. All four Catalog backup integrity checks returned `ok`.
+- The actual-catalog archive-renumber dry-run selected 53 Sources, proposed zero renames, reported 53 `no_position`, zero collisions/errors, and left ZIP hashes unchanged. A separate synthetic isolated fixture exercised one dry-run plus one apply; the Catalog locator/status path updated while ZIP bytes/hash stayed unchanged. No real archive was renamed.
+- The normal CLI cleanup marked `source_removed=true` after packaging. The independent audit verified ZIP members, the status record, CrawlRun, Artifact, and Completed state; it does not claim a persistent `manifest.json` remained. P2's direct Runner output had its own 21-page manifest during capture, and local tests cover manifest-to-packager behavior.
+- Reproduction used Python 3.14.6 at `C:/Users/kensu/projects/screenshot_crawler_starter/.venv/Scripts/python.exe` and set `PYTHONPATH=C:/Users/kensu/projects/screenshot_crawler_kadocomi/src`. This avoids the shared venv's editable install importing the original main workspace. Commands ran from this feature worktree with its isolated `.env`, crawler config, and Watchlist (file contents are private and are not recorded here):
+
+  ```powershell
+  $env:PYTHONPATH='C:/Users/kensu/projects/screenshot_crawler_kadocomi/src'
+  & C:/Users/kensu/projects/screenshot_crawler_starter/.venv/Scripts/python.exe -m screenshot_crawler.cli discover --key kadocomi-p4-live --mode full --watchlist work/kadocomi/p4-independent-20261012/watchlist.yaml --catalog work/kadocomi/p4-independent-20261012/catalog.sqlite --env-file work/kadocomi/p4-independent-20261012/.env --cdp-endpoint http://127.0.0.1:9222
+  & C:/Users/kensu/projects/screenshot_crawler_starter/.venv/Scripts/python.exe -m screenshot_crawler.cli discover --key kadocomi-p4-live --mode incremental --watchlist work/kadocomi/p4-independent-20261012/watchlist.yaml --catalog work/kadocomi/p4-independent-20261012/catalog.sqlite --env-file work/kadocomi/p4-independent-20261012/.env --cdp-endpoint http://127.0.0.1:9222
+  & C:/Users/kensu/projects/screenshot_crawler_starter/.venv/Scripts/python.exe -m screenshot_crawler.cli batch plan --site kadocomi --catalog work/kadocomi/p4-independent-20261012/catalog.sqlite
+  & C:/Users/kensu/projects/screenshot_crawler_starter/.venv/Scripts/python.exe -m screenshot_crawler.cli batch run --site kadocomi --catalog work/kadocomi/p4-independent-20261012/catalog.sqlite --output-root work/kadocomi/p4-independent-20261012/output --library-dir work/kadocomi/p4-independent-20261012/library --env-file work/kadocomi/p4-independent-20261012/.env --crawler-config work/kadocomi/p4-independent-20261012/crawler.yaml --cdp-endpoint http://127.0.0.1:9222 --limit 1
+  & C:/Users/kensu/projects/screenshot_crawler_starter/.venv/Scripts/python.exe scripts/renumber_archives.py --site kadocomi --catalog work/kadocomi/p4-independent-20261012/catalog.sqlite --status-dir work/kadocomi/p4-independent-20261012/crawl-status --dry-run
+  ```
+
+- Sanitized reports: `work/kadocomi/p4-independent-20261012/p4-independent-report.json` and `work/kadocomi/p4-independent-20261012/zip-independent-audit.json`. They remain in ignored work storage; no page pixels, source Blob bodies, or credentials are committed.
+- P4 Tester, independent Reviewer, and Lead acceptance: PASS for this exact one-work/episode 4.1 path; Reviewer BLOCKING=0 and NONBLOCKING=0. Other-work no-deadline access, the first-episode 38-canvas layout, lifetime episode-gap reconstruction, and broad site-wide archive renumber are not validated. Repository-wide pytest completed: 2448 passed, 1 failed, 0 skipped, 4068 warnings, 785.36s. The sole failure, `tests/unit/test_cli.py::test_younganimal_crawl_registry_uses_configured_work_entry_before_navigation`, was reproduced against baseline `ceb3434`; it is pre-existing and no unrelated fix was made. `ruff check src tests` and `git diff --check` passed.
+
+## Changed-file inventory (from `1be6405`)
+
+- Authority/docs and notes: `docs/DISCOVERY_AND_BATCH.md`; `note/README.md`, `note/00_core.md`, `note/12_kadocomi.md`.
+- Kadocomi runbooks: `runbooks/kadocomi/README.md`, `PROGRESS.md`, and P0/P1/P1.5/P2/P3/P4 phase files.
+- CLI/shared Discovery hook and Kadocomi implementation: `src/screenshot_crawler/cli.py`; `src/screenshot_crawler/discovery/base.py`, `service.py`; Kadocomi adapter files (`README.md`, `__init__.py`, `access.py`, `adapter.py`, `discovery.py`, `native_capture.py`); `src/screenshot_crawler/site_policies/__init__.py`, `kadocomi.py`.
+- Tests: Kadocomi adapter/Discovery browser integration, CLI and shared Discovery units, and Kadocomi Discovery/native-capture/policy units.
 
 ## Checkpoint template (phase完了時に追記)
 

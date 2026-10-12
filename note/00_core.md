@@ -36,9 +36,11 @@ No numeric archive prefix is inferred while display positions are NULL.
 
 The canonical work title from detail-page og:title is exposed by Discovery but
 the shared DiscoveryService initializes Work.title from the Watchlist label.
-Set a dedicated Watchlist label to the actual Work name. Current P3 policy and
-local end-to-end validation passed independent review. P4 live CLI status is in
-the Kadocomi progress ledger.
+Set a dedicated Watchlist label to the actual Work name. P3 policy and local
+end-to-end validation passed independent review. P4 independently verified one
+isolated live CLI Batch/ZIP/Completed run; Lead accepted that observed scope.
+Repository-wide pytest completed with one known baseline failure reproduced at
+`ceb3434`; full Ruff passed. Limits are in the Kadocomi progress ledger.
 
 ## Younganimal Discovery and manual Crawl CLI registration (2026-10-11)
 

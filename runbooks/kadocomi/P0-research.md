@@ -1,6 +1,8 @@
 # P0 — サイト構造・無料状態・原画像の証拠収集
 
-Status: NOT STARTED。入口は [README](README.md)、結果は [PROGRESS](PROGRESS.md)。
+Status: CONTRACT PASS for the observed work/list and episode 4.1 reader. The
+site-wide historical gap and other reader variants remain unknown; evidence is
+in [PROGRESS](PROGRESS.md).
 **目的**: 推測を実装契約にしないため、実サイトで観測可能な範囲の正の証拠を揃える。
 
 ## 対象/前提/担当
