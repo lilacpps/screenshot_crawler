@@ -3,10 +3,10 @@
 Status: PASS for the observed episode 4.1 and first-episode 38-slot readers.
 The Episode 79 strict trailing-recommendation extension is implemented and its
 bounded live all-20-source/END proof and local Runner/Batch tests passed.
-Independent code review passed (45 targeted tests, BLOCKING=0); normal CLI
-Batch/ZIP verification for that extension is pending. The prior 21/38 CLI,
-source/ZIP audits and review remain passed (BLOCKING=0); opaque network-original
-bytes remain unclaimed. See
+Independent code review passed (45 targeted tests, BLOCKING=0), and the normal
+CLI Batch run produced a 20-member ZIP. The independent all-20 source/RGBA-to-ZIP
+audit also passed. The prior 21/38 CLI, source/ZIP audits and review remain passed
+(BLOCKING=0); opaque network-original bytes remain unclaimed. See
 [PROGRESS](PROGRESS.md) for current status.
 **目的**: 無条件無料話を先頭から全本文ページ、正しい読書順で取り、終端を確実に検証する。
 

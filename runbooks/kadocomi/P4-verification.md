@@ -4,8 +4,10 @@ Status: PASS for the isolated episode 4.1 and first-episode 38-slot CLI Batch,
 ZIP, and independent source/canvas audits (Tester and Reviewer BLOCKING=0;
 NONBLOCKING=0). The separate 21-slot control and post-Discovery/Catalog
 stability audit also passed. The Episode 79 extension has live source/END proof,
-passing local Runner/Batch tests, and independent code review PASS (45 targeted
-tests, BLOCKING=0); its normal CLI Batch/ZIP gate is pending. The prior repository-wide pytest run had one known
+passing local Runner/Batch tests, independent code review PASS (45 targeted
+tests, BLOCKING=0), and a successful normal CLI Batch run producing a 20-member
+ZIP. The independent all-20 source/RGBA-to-ZIP audit and post-Discovery Catalog
+audit passed; final live-evidence Reviewer gate passed (BLOCKING=0, NONBLOCKING=0) and Lead accepted the bounded target; final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). The prior repository-wide pytest run had one known
 baseline failure, reproduced at `ceb3434`; it predates the 38-slot and Episode
 79 extensions. Other unverified reader variants and lifetime-position
 reconstruction remain unsupported. See [PROGRESS](PROGRESS.md).
@@ -38,6 +40,29 @@ retained manifest file. Exact CLI commands, isolated report paths, and audit
 limits are recorded in [PROGRESS](PROGRESS.md). The independent Tester phase
 passed; final P4 review and Lead acceptance passed for the bounded target scope.
 The full-suite baseline failure and other unverified variants remain recorded above.
+
+## Episode 79 normal CLI and independent source audit (2026-10-12)
+
+A fresh isolated setup completed full Discovery (53 rows), incremental
+Discovery (5 known Sources), and a normal plan (53 pending Items). The normal
+`batch run --limit 1` path selected Episode 79
+(`KC_004915_S:KC_0049150008500011_E`) and succeeded at explicit END, producing a
+20-member WebP ZIP. Root's ZIP metadata check found members at 1115x1600 or
+1129x1600, aggregate uncompressed size 4,904,084 bytes, ZIP size 4,824,007
+bytes, and SHA-256
+`fcbbc4b389f8606461495c2cec836fa7ffa3ca5b4a8c03679c3ccebed7428852`.
+`ZipFile.testzip()` returned `None`, confirming no CRC errors. The separate
+Tester audit matched all 20 ZIP
+members byte-for-byte to their normal-renderer Blob sources and found zero
+full-RGBA mismatches against the completed canvases. It observed slot counts
+`[1, 2 x 9, 1, 0, 0]`, excluded the slide-0 PR marker, and confirmed main END
+markers on slides 10/11 plus the secondary recommendation marker on slide 12.
+Its independent navigation reached empty same-episode END slide 11 after the
+final singleton without entering the recommendation. The production CLI run
+also succeeded through its normal Runner path. Sanitized report:
+`work/kadocomi/p4-episode79-independent-20261012/independent-live-20-audit.json`.
+The post-Discovery Catalog audit passed; the final live-evidence Reviewer gate
+passed (BLOCKING=0, NONBLOCKING=0), and Lead accepted the bounded scope. Final docs review passed (Reviewer BLOCKING=0, NONBLOCKING=0). See [PROGRESS](PROGRESS.md).
 
 ## First-episode 38-slot extension audit (2026-10-12)
 
