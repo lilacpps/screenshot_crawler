@@ -1803,8 +1803,16 @@ leave existing positions unchanged and newly created Sources NULL.
 Unbounded full Discovery retains the existing canonical newest-to-oldest stream
 followed by reverse assignment to `oldest=1 ... newest=N`. Incremental
 Discovery retains the existing observed-position baseline plus append behavior
-when it has no global hints; bounded incremental uses global hints when
-available and fails closed when they are unavailable. Item status,
+when it has no global hints by default. An Adapter may set
+`allow_inferred_display_positions = False` when the observed listing cannot
+establish lifetime positions. This opt-out suppresses only fallback inference:
+full Discovery, exhausted incremental Discovery, and early-stopped incremental
+Discovery preserve existing positions and leave new Sources NULL when complete
+global hints are absent. Complete validated global hints are still applied.
+The default is `True` to preserve existing adapters' behavior. Incomplete runs
+still do not finalize positions. Bounded incremental Discovery still requires
+a complete global hint for every observed Source and fails closed without one;
+it does not use inferred or scope-local positions. Item status,
 `completed_at`, and operator notes remain unchanged.
 
 ### Batch archive naming contract (P3 implemented)

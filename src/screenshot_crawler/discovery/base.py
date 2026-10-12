@@ -23,6 +23,11 @@ class DiscoveryAdapter(ABC):
     """Enumerate site-specific listing results without knowing Catalog."""
 
     supports_bounded_discovery: ClassVar[bool] = False
+    allow_inferred_display_positions: ClassVar[bool] = True
+
+    # Site adapters may disable inferred positions when a current listing does
+    # not establish a stable lifetime order. Complete explicit global hints
+    # remain authoritative regardless of this setting.
 
     @abstractmethod
     def iter_records(

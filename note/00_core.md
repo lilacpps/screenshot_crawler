@@ -1249,11 +1249,17 @@ Source/position mappings, and finalizes them only after safe completion.
 Unbounded full Discovery retains the existing reverse of the canonical stream
 to assign `oldest=1 ... newest=N`. Bounded full Discovery requires a global hint
 for every observed Source and fails closed without one; it never falls back to
-scope-local `1..N`. Incremental Discovery uses an available global hint as the
-authority. When an unbounded incremental run has no hints, its existing
-observed-position baseline plus append algorithm remains in force. Incomplete
-runs never finalize positions or rewrite established positions; newly created
-Sources may remain NULL.
+scope-local `1..N`. Incremental Discovery uses a complete available global hint
+as the authority. `DiscoveryAdapter.allow_inferred_display_positions` defaults
+to `True`, preserving existing fallback behavior. An Adapter may set it to
+`False` to suppress no-hint inference in full, exhausted incremental, and
+early-stopped incremental runs; established positions then remain unchanged and
+new Sources remain NULL. Complete validated global hints still apply when this
+option is `False`. Bounded incremental Discovery still requires a complete
+global hint for every observed Source and fails closed without one; it never
+uses inferred or scope-local positions. Incomplete runs never finalize
+positions or rewrite established positions; newly created Sources may remain
+NULL.
 
 Position finalization uses only records already yielded by the existing
 Discovery run; it adds no pagination, DOM, HTTP, or full-list access. Discovery

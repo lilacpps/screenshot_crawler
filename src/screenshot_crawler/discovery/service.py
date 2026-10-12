@@ -234,6 +234,9 @@ class DiscoveryService:
                 discovery_key=target.key,
                 observed_source_ids=observed_source_ids,
                 global_position_hints=global_position_hints,
+                allow_inferred_positions=getattr(
+                    adapter, "allow_inferred_display_positions", True
+                ) is True,
             )
             complete: bool | None = True
         else:
@@ -245,6 +248,9 @@ class DiscoveryService:
                 observed_source_ids=observed_source_ids,
                 stopped_reason=stopped_reason,
                 global_position_hints=global_position_hints,
+                allow_inferred_positions=getattr(
+                    adapter, "allow_inferred_display_positions", True
+                ) is True,
             )
         return DiscoveryResult(
             mode=mode,
@@ -264,6 +270,7 @@ class DiscoveryService:
         discovery_key: str,
         observed_source_ids: list[int],
         global_position_hints: dict[int, int] | None = None,
+        allow_inferred_positions: bool = True,
     ) -> None:
         if global_position_hints and all(
             source_id in global_position_hints for source_id in observed_source_ids
@@ -271,6 +278,8 @@ class DiscoveryService:
             assignments = {
                 source_id: global_position_hints[source_id] for source_id in observed_source_ids
             }
+        elif not allow_inferred_positions:
+            return
         else:
             assignments = {
                 source_id: position
@@ -290,6 +299,7 @@ class DiscoveryService:
         observed_source_ids: list[int],
         stopped_reason: str,
         global_position_hints: dict[int, int] | None = None,
+        allow_inferred_positions: bool = True,
     ) -> None:
         if stopped_reason == "exhausted":
             self._assign_full_display_positions(
@@ -297,6 +307,7 @@ class DiscoveryService:
                 discovery_key=discovery_key,
                 observed_source_ids=observed_source_ids,
                 global_position_hints=global_position_hints,
+                allow_inferred_positions=allow_inferred_positions,
             )
             return
 
@@ -311,6 +322,9 @@ class DiscoveryService:
                     for source_id in observed_source_ids
                 },
             )
+            return
+
+        if not allow_inferred_positions:
             return
 
         scope_sources = self.catalog.list_sources(site=site, discovery_key=discovery_key)
