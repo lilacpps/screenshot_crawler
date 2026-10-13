@@ -240,9 +240,20 @@ def test_native_snapshot_json_rejects_oversized_transport(
         ("1", False),
     ],
 )
-@pytest.mark.parametrize("scaled", [False, True])
+@pytest.mark.parametrize(
+    ("scaled_size", "left_offset", "offset_supported"),
+    [(None, 0, True), (None, -1 / 3, True)] + [
+        (size, offset, accepted)
+        for size in ((1350, 1920), (1125, 1600))
+        for offset, accepted in (
+            (0, True), (-1 / 3, True), (-1 / 3 + 0.009, True),
+            (-1 / 3 + 0.011, False), (-0.2, False), (-0.5, False), (1 / 3, False),
+        )
+    ],
+)
 def test_piccoma_geometry_accepts_only_finite_near_one_device_pixel_ratio(
-    device_pixel_ratio: object, supported: bool, scaled: bool
+    device_pixel_ratio: object, supported: bool, scaled_size: tuple[int, int] | None,
+    left_offset: float, offset_supported: bool,
 ) -> None:
     adapter = PiccomaAdapter()
     row = {
@@ -268,12 +279,15 @@ def test_piccoma_geometry_accepts_only_finite_near_one_device_pixel_ratio(
         "viewport": [1904, 1200, device_pixel_ratio],
         "frameRect": [530, 0, 844, 1200],
     }
-    if scaled:
-        row["canvas"].update(width=1350, height=1920, rect=[530.5, 0.5, 843.046875, 1199])
+    if scaled_size:
+        row["canvas"].update(width=scaled_size[0], height=scaled_size[1], rect=[530.5, 0.5, 843.046875, 1199])
         snapshot["frameRect"] = [530.5, 0, 843, 1200]
+        if left_offset:
+            row["canvas"]["rect"][2] = 843.0416870117188
+    row["canvas"]["rect"][0] += left_offset
 
-    if supported:
-        assert adapter._validate_canvas_geometry(snapshot, row) == ((1350, 1920) if scaled else (844, 1200))
+    if supported and offset_supported:
+        assert adapter._validate_canvas_geometry(snapshot, row) == (scaled_size or (844, 1200))
     else:
         with pytest.raises(UnknownPageStateError, match="supported viewport"):
             adapter._validate_canvas_geometry(snapshot, row)
@@ -361,7 +375,7 @@ def _jpeg(*, subsampling: int = 0, progressive: bool = False) -> bytes:
     return output.getvalue()
 
 
-@pytest.mark.parametrize(("width", "height"), [(764, 1200), (842, 1200), (844, 1200), (1350, 1920)])
+@pytest.mark.parametrize(("width", "height"), [(764, 1200), (842, 1200), (844, 1200), (1350, 1920), (1125, 1600)])
 def test_validates_full_fractional_source_and_destination_grid(width: int, height: int) -> None:
     result = validate_tile_trace(_trace(width, height), expected_width=width, expected_height=height)
 
@@ -404,7 +418,7 @@ def test_validates_full_fractional_source_and_destination_grid(width: int, heigh
         ),
     ],
 )
-@pytest.mark.parametrize(("width", "height"), [(764, 1200), (844, 1200), (1350, 1920)])
+@pytest.mark.parametrize(("width", "height"), [(764, 1200), (844, 1200), (1350, 1920), (1125, 1600)])
 def test_rejects_trace_gaps_or_unobserved_generation_changes(
     change, reason: str, width: int, height: int
 ) -> None:
@@ -415,10 +429,13 @@ def test_rejects_trace_gaps_or_unobserved_generation_changes(
         validate_tile_trace(trace, expected_width=width, expected_height=height)
 
 
-@pytest.mark.parametrize("width", [763, 765, 800])
-def test_unobserved_native_dimensions_remain_unsupported(width: int) -> None:
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [(763, 1200), (765, 1200), (800, 1200), (1124, 1600), (1126, 1600), (1125, 1601)],
+)
+def test_unobserved_native_dimensions_remain_unsupported(width: int, height: int) -> None:
     with pytest.raises(NativeCaptureUnavailable, match="target_canvas_identity_or_dimensions"):
-        validate_tile_trace(_trace(width), expected_width=width, expected_height=1200)
+        validate_tile_trace(_trace(width, height), expected_width=width, expected_height=height)
 
 
 @pytest.mark.parametrize(
@@ -439,7 +456,7 @@ def test_rejects_unstable_or_ambiguous_live_image_object_state(mutate) -> None:
         validate_tile_trace(trace, expected_width=844, expected_height=1200)
 
 
-@pytest.mark.parametrize("scaled", [False, True])
+@pytest.mark.parametrize("scaled_size", [None, (1350, 1920), (1125, 1600)])
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -457,21 +474,22 @@ def test_rejects_unstable_or_ambiguous_live_image_object_state(mutate) -> None:
         lambda rows: rows[2].update(boxShadow="0 0 2px black"),
     ],
 )
-def test_white_backdrop_gate_rejects_unobserved_paint(mutate, scaled: bool) -> None:
-    snapshot = _scaled_paint_path() if scaled else _white_paint_path()
+def test_white_backdrop_gate_rejects_unobserved_paint(mutate, scaled_size) -> None:
+    snapshot = _scaled_paint_path() if scaled_size else _white_paint_path()
     mutate(snapshot["ancestors"])
 
-    if scaled:
-        assert not validate_scaled_alpha_paint_path(snapshot, width=1350, height=1920)
+    if scaled_size:
+        assert not validate_scaled_alpha_paint_path(snapshot, width=scaled_size[0], height=scaled_size[1])
     else:
         assert not validate_white_paint_path(snapshot, width=844, height=1200)
 
 
-def test_white_backdrop_gate_accepts_only_covering_solid_white() -> None:
+@pytest.mark.parametrize(("width", "height"), [(1350, 1920), (1125, 1600)])
+def test_white_backdrop_gate_accepts_only_covering_solid_white(width: int, height: int) -> None:
     assert validate_white_paint_path(_white_paint_path(), width=844, height=1200)
     scaled = _scaled_paint_path()
-    assert validate_scaled_alpha_paint_path(scaled, width=1350, height=1920)
-    assert not validate_white_paint_path(scaled, width=1350, height=1920)
+    assert validate_scaled_alpha_paint_path(scaled, width=width, height=height)
+    assert not validate_white_paint_path(scaled, width=width, height=height)
 
 
 def test_white_backdrop_gate_rejects_visible_sibling_overlapping_canvas() -> None:

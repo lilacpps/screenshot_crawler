@@ -282,7 +282,7 @@ def _native_viewer_html(
 ) -> str:
     columns = (width + 49) // 50
     draw_count = columns * ((height + 49) // 50)
-    scaled = (width, height) == (1350, 1920)
+    scaled = (width, height) in {(1350, 1920), (1125, 1600)}
     frame_width, frame_height = (843, 1200) if scaled else (width, height)
     display_width, display_height = (843.046875, 1199) if scaled else (width, height)
     canvas_markup = '<canvas width="300" height="150"></canvas>'
@@ -504,11 +504,12 @@ async def _override_device_pixel_ratio(page: Page, value: float) -> None:
 
 
 @pytest.mark.parametrize("delay", [700, -1])
+@pytest.mark.parametrize(("width", "height"), [(1350, 1920), (1125, 1600)])
 async def test_piccoma_scaled_transition_waits_for_in_frame_canvas_without_reclick(
-    browser_page: Page, delay: int
+    browser_page: Page, delay: int, width: int, height: int
 ) -> None:
     adapter = PiccomaAdapter()
-    await _start_native_fixture(adapter, browser_page, width=1350, height=1920, transition_delay_ms=delay)
+    await _start_native_fixture(adapter, browser_page, width=width, height=height, transition_delay_ms=delay)
     adapter.page_change_timeout_ms = 1200
     previous = await adapter.get_content_identity(browser_page)
     await adapter.go_next(browser_page)
@@ -521,12 +522,19 @@ async def test_piccoma_scaled_transition_waits_for_in_frame_canvas_without_recli
     assert await browser_page.evaluate("window.forbiddenClicks") == 1
 
 
-@pytest.mark.parametrize("fault", [None, "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change", "encoder_failure", "source_budget_exhausted"])
+@pytest.mark.parametrize("fault", [None, "observed_left_offset", "unknown_left_offset", "async_left_offset", "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change", "encoder_failure", "source_budget_exhausted"])
+@pytest.mark.parametrize(("width", "height"), [(1350, 1920), (1125, 1600)])
 async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
-    browser_page: Page, monkeypatch: pytest.MonkeyPatch, fault: str | None
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, fault: str | None,
+    width: int, height: int,
 ) -> None:
     adapter = PiccomaAdapter()
-    await _start_native_fixture(adapter, browser_page, width=1350, height=1920)
+    await _start_native_fixture(adapter, browser_page, width=width, height=height)
+    if fault in {"observed_left_offset", "unknown_left_offset", "async_left_offset"}:
+        await browser_page.locator(".PCM-viewer2_zoomPageWrap").evaluate(
+            "(node, offset) => node.style.left = offset + 'px'",
+            -0.2 if fault == "unknown_left_offset" else -1 / 3,
+        )
     # A long scaled episode must keep native output beyond the ordinary 64 MB
     # budget, but still stop at its own finite budget.
     adapter._native_bytes_read = (
@@ -540,36 +548,41 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
         await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='842px'")
     elif fault == "wrong_scale":
         await browser_page.locator("canvas").evaluate("n=>n.style.height='1198px'")
-    elif fault == "async_paint_change":
+    elif fault in {"async_paint_change", "async_left_offset"}:
         evaluate = piccoma_native_capture_module._bounded_evaluate
         async def mutate_after_replay(subject, expression, argument=None, *, timeout_seconds):
             result = await evaluate(subject, expression, argument, timeout_seconds=timeout_seconds)
             if "NativeCapture.replay" in expression:
-                await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='842px'")
+                if fault == "async_left_offset":
+                    await browser_page.locator(".PCM-viewer2_zoomPageWrap").evaluate("n=>n.style.left='0px'")
+                else:
+                    await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='842px'")
             return result
         monkeypatch.setattr(piccoma_native_capture_module, "_bounded_evaluate", mutate_after_replay)
     elif fault == "encoder_failure":
         def fail_encoder(*_args, **_kwargs):
             raise piccoma_native_capture_module.NativeCaptureUnavailable("webp_codec_unavailable")
         monkeypatch.setattr(piccoma_native_capture_module, "encode_lossless_webp", fail_encoder)
-    if fault and fault != "encoder_failure":
+    if fault not in {None, "encoder_failure", "observed_left_offset"}:
         with pytest.raises(UnknownPageStateError) as error:
             await adapter.capture_page(browser_page)
+        if fault == "async_left_offset":
+            assert "changed" in str(error.value)
         if fault == "source_budget_exhausted":
             assert adapter._capture_fallback_reason == "episode_source_byte_budget_exhausted"
             assert "native_fallback=episode_source_byte_budget_exhausted" in str(error.value)
-            assert "expected=1350x1920" in str(error.value)
+            assert f"expected={width}x{height}" in str(error.value)
         return
     captures = await adapter.capture_page(browser_page)
     assert captures is not None and len(captures) == 1
     captured = captures[0]
-    assert (captured.width, captured.height, captured.mime_type) == (1350, 1920, "image/png" if fault else "image/webp")
+    assert (captured.width, captured.height, captured.mime_type) == (width, height, "image/png" if fault == "encoder_failure" else "image/webp")
     metadata = (await adapter.collect_debug_metadata(browser_page))["piccoma_capture"]
     assert metadata["source_native"] is True
     assert metadata["source_backdrop"] == "canvas_alpha_preserved"
     assert metadata["fallback_reason"] is None
-    assert metadata["method"] == ("native_tile_replay_png" if fault else "native_tile_replay_lossless_webp")
-    assert metadata["encoding_fallback_reason"] == ("webp_codec_unavailable" if fault else None)
+    assert metadata["method"] == ("native_tile_replay_png" if fault == "encoder_failure" else "native_tile_replay_lossless_webp")
+    assert metadata["encoding_fallback_reason"] == ("webp_codec_unavailable" if fault == "encoder_failure" else None)
     with Image.open(BytesIO(captured.data)) as image:
         assert image.mode in {"RGB", "RGBA"}
         native = image.convert("RGBA")
@@ -579,19 +592,23 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
     snapshot = await adapter._reader_snapshot(browser_page)
     guide = await adapter._hide_reading_guide(browser_page, snapshot)
     try:
-        await browser_page.set_viewport_size({"width": 1904, "height": 1920})
-        await browser_page.locator("#p1 canvas").evaluate("""canvas => {
+        await browser_page.set_viewport_size({"width": 1904, "height": height})
+        # Integer origin avoids Locator rounding for odd native widths; keep
+        # the fixture's fixed reader controls outside the reference image.
+        await browser_page.locator("#js_frame").evaluate("node=>node.style.margin='0 0 0 200px'")
+        await browser_page.locator("#p1 canvas").evaluate("""(canvas, [width, height]) => {
           for (let node=canvas;node;node=node.parentElement) {
             node.style.background='transparent';
             if (node.id==='react_ViewerApp') break;
-            node.style.width='1350px';node.style.height='1920px';node.style.top='0px';
+            node.style.width=width+'px';node.style.height=height+'px';
+            node.style.top='0px';node.style.left='0px';
           }
-        }""")
+        }""", [width, height])
         reference = await browser_page.locator("#p1 canvas").screenshot(omit_background=True)
     finally:
         await adapter._restore_reading_guide(browser_page, guide)
     with Image.open(BytesIO(reference)) as rendered:
-        assert rendered.size == (1350, 1920)
+        assert rendered.size == (width, height)
         assert ImageChops.difference(native, rendered.convert("RGBA")).getbbox(alpha_only=False) is None
 
 

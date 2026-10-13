@@ -35,7 +35,7 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
 )
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
     SCALED_DISPLAY_SIZE,
-    SCALED_NATIVE_SIZE,
+    SCALED_NATIVE_SIZES,
     NativeCaptureUnavailable,
     capture_native_tile_replay,
     capture_result_format_is_valid,
@@ -614,7 +614,7 @@ class PiccomaAdapter(SiteAdapter):
                     and self._canvas_renderability_is_valid(row)
                     and not (
                         self._advance_from == number - 1
-                        and (canvas.get("width"), canvas.get("height")) == SCALED_NATIVE_SIZE
+                        and (canvas.get("width"), canvas.get("height")) in SCALED_NATIVE_SIZES
                         and canvas.get("inFrame") is not True
                     )
                 ):
@@ -709,7 +709,7 @@ class PiccomaAdapter(SiteAdapter):
         if not self._canvas_renderability_is_valid(row):
             raise UnknownPageStateError("Piccoma active canvas is not visibly rendered")
         width, height = canvas.get("width"), canvas.get("height")
-        scaled = (width, height) == SCALED_NATIVE_SIZE
+        scaled = (width, height) in SCALED_NATIVE_SIZES
         display_width, display_height = SCALED_DISPLAY_SIZE if scaled else (width, height)
         if (
             not isinstance(width, int)
@@ -732,7 +732,13 @@ class PiccomaAdapter(SiteAdapter):
             or (scaled and (
                 abs(rect[2] - display_width) > 0.01 or abs(rect[3] - display_height) > 0.01
                 or abs(frame_rect[2] - 843) > 0.01 or abs(frame_rect[3] - 1200) > 0.01
-                or abs(rect[0] - frame_rect[0]) > 0.01
+                # Live scaled pages use either aligned left edges or a -1/3
+                # CSS-pixel offset (13565:664249). Keep both discrete profiles;
+                # raw geometry must still remain identical across capture.
+                or not any(
+                    abs(rect[0] - frame_rect[0] - offset) <= 0.01
+                    for offset in (0, -1 / 3)
+                )
                 or abs(rect[1] - frame_rect[1] - 0.5) > 0.01
             ))
         ):
@@ -926,7 +932,7 @@ class PiccomaAdapter(SiteAdapter):
                     bytes_already_read=self._native_bytes_read,
                     max_episode_bytes=(
                         MAX_SCALED_NATIVE_EPISODE_BYTES
-                        if expected_size == SCALED_NATIVE_SIZE
+                        if expected_size in SCALED_NATIVE_SIZES
                         else MAX_NATIVE_EPISODE_BYTES
                     ),
                 )

@@ -21,6 +21,11 @@ Phases 03 and 04 passed independent review with BLOCKING 0. Phase 05 independent
 
 The Phase 06-B/Tester PNG checkpoints are historical. Phase 06-D code review and independent live Tester verification passed with BLOCKING 0. The standard Batch-to-ZIP route produced 24 and 15 lossless WebP pages for the two selected products, with exact VP8L validation and no fallback. See the current live evidence and limits below and [runbook progress](../../../../runbooks/piccoma-free/PROGRESS.md).
 
+The scaled native profiles explicitly support 1125x1600 (736 draws) and
+1350x1920 (1053 draws), preserving full RGBA pixels in lossless WebP at the
+backing dimensions. They require the observed scaled display/frame/paint path
+and unchanged source, generation, output and geometry proof described below.
+
 ## Runtime pacing
 
 Phase 07 Stage A passed independent review. The distributed root `crawler.yaml` sets Piccoma `page_turn_delay_ms` to 200 and keeps `inter_candidate_delay_ms` at 3000 with the existing stop flags enabled. Both manual CLI and Batch use the existing site-neutral settings loader and resolve this value into `RunConfig`; no Piccoma-specific fallback or shared runtime change was added. If the Piccoma setting is absent, the common 1000ms fallback still applies. The delay remains once after save/progress and before the initial `go_next`, outside the page-change timeout. Rendering stability checks remain unchanged.
@@ -30,6 +35,118 @@ Phase 07 Stage B transports all six existing fresh native-trace snapshots as JSO
 Stage C used the reviewed object and JSON implementations with the same YAML `page_turn_delay_ms: 200` setting in four interleaved 12-page manual runs. All 48 corresponding source-native lossless WebP files were byte-identical with zero fallback. Mean normal cycle time was 3.601s (object) versus 2.743s (JSON), a measured 0.857s / 23.8% reduction in these runs; trace RPC time fell by 0.864s and JSON decoding added 0.034s. WebP method6, pacing, and page-change stability time were effectively unchanged. A dedicated 24-page Batch reached explicit END and passed ZIP CRC, lossless-member, Artifact hash/size, and Catalog checks. The fresh prepackage audit also verified all 24 per-page manifest entries, 144 native evaluations, and 144 JSON decodes, while retaining no URLs/titles/raw manifest. The final Stage C review passed with BLOCKING 0. Details and measurement limits are in the [Phase 07 profile](../../../../research/piccoma-performance/PHASE07_PROFILE.md) and [Tester report](../../../../research/piccoma-performance/PHASE07_TESTER.md).
 
 
+
+## 1125x1600 scaled canvas support (2026-10-14)
+
+Item/Source 26144 is `15876:1222987`, 第2話 (1) of がっこうぐらし！.
+Normal Batch metrics `591bcab12ed84ea0acb580e26c86a353` show 13 completed
+candidates followed by a pre-p1 geometry failure on this candidate, with no
+403/429/5xx/challenge/CAPTCHA/retry. Fresh normal CDP entry reproduced the
+failure after the existing live access check; the requested canonical viewer
+URL remained unchanged. The prior 1350x1920 left-offset fix alone cannot admit
+this different backing size.
+
+All 14 pages have 1125x1600 backing, a 23x32 grid (736 draws), and 739 trace
+events including context creation and two backing resets. Each complete graph
+and unique source JPEG passed the existing source/load-generation/context/grid
+and baseline JPEG validators in a bounded diagnostic. Total source bytes were
+14,872,508. Display rects are [530.1666870117188 or 530.5, 0.5,
+843.0416870117188, 1199] within frame [530.5, 0, 843, 1200], viewport
+1904x1200, DPR 1.0000000298023224. The existing strict scaled four-node paint
+path validates for every page. The diagnostic reached explicit END.
+
+Current native replay supports only the enumerated scaled backing sizes
+1125x1600 (23x32 grid) and 1350x1920 (27x39 grid). Both use the same observed
+843.046875x1199 display profile within the existing 0.01 tolerance, left
+offsets 0 or -1/3 CSS px, frame 843x1200, and top offset +0.5. Size/grid pairs
+remain explicit; neighboring or same-aspect-ratio sizes are not inferred.
+Both preserve the replay's full RGBA pixels in validated lossless WebP, with
+the original PNG encoding fallback and finite 128,000,000-byte scaled budget.
+Source binding, exact fractional draws, paint path, generation, full round-trip,
+raw geometry continuity, UNKNOWN/max-pages/same-content and END gates remain
+required. Transition readiness uses the existing bounded in-frame wait for
+both supported scaled sizes. No renderer resize, Core/Batch/CLI/config/schema,
+access eligibility or pacing change is needed; `note/00_core.md` is unchanged.
+
+Normal CLI Batch `--limit 1 --max-pages 20` with an online-backup Catalog
+completed p1..p14 and explicit END (CrawlRun 9749). A diagnostic wrapper only
+copied the manifest immediately before calling the standard packager.
+The 9,454,758-byte ZIP contains 14 ordered, unique, single-frame 1125x1600
+VP8L WebPs. All retained manifest entries record native replay, preserved
+canvas alpha, lossless WebP, and no capture/encoding fallback. Full decode,
+CRC, member/manifest fingerprints, Artifact SHA-256/size and isolated Catalog
+completion passed. The original Item/Source, failed runs and artifacts were
+checked unchanged. Metrics `7a5aa18ab78f41b3a3fabab13cc55fa9` record one
+completion and zero failures/retries/403/429/5xx/challenge/CAPTCHA.
+This is a production replay audit, not an independent live raw-canvas pixel
+comparison. Other products/resolutions/browser layouts remain unverified.
+Evidence is ignored under `work/piccoma/26144-geometry-20261014/`.
+
+Validation: 515 passed, 0 failed, 0 skipped (209.36s; five existing asyncio
+deprecation warnings), covering `test_piccoma_native_capture.py`,
+`test_piccoma_adapter_browser.py` and `test_packaging.py`. Existing parameterized
+cases now cover both scaled sizes: exact grid and gap rejection, nearby-size
+rejection, paint roles/styles, DPR and left offsets, capture-time mutations,
+finite source budgets, native WebP/PNG encoding fallback, bounded transitions,
+and exact synthetic RGBA equality against independent browser rendering of the
+fixture canvas. The post-capture QA reference is aligned at integer x=200 so
+odd native widths do not round up and fixed controls do not overlap it; this
+corrects the initial extended QA failures without changing production pixels.
+Live p1/p7/p14 were visually checked for missing tiles and viewer chrome.
+Global Ruff and scoped diff checks passed. Full repository, separate
+Discovery/Policy and Research suites were not run: changes are site-local and
+the affected capture/navigation/output contracts are covered above.
+
+## Scaled-page left offset maintenance (2026-10-14)
+
+Item/Source 25718 (`13565:664249`, LEVEL.261 バオウ・ザケルガ) stopped
+before p1 with `Piccoma canvas does not match the supported viewport`.
+Metrics `20e65b798f99422ba2fd84516c08ae2a` recorded no HTTP/challenge/retry
+failure. A fresh CDP entry rechecked the active manual grant and reproduced
+the geometry failure on the same `/web/viewer/s/` target.
+
+All 20 pages retain the supported 1350x1920 backing and 1056-event trace.
+At viewport 1904x1200, DPR 1.0000000298023224, the frame is
+[530.5, 0, 843, 1200] and canvas display size is 843.0416870117188x1199.
+Ten pages have x=530.5; ten have x=530.1666870117188. The latter offset
+(-0.33331298828125 CSS px) failed the former strict left-edge match.
+The existing width tolerance already accepts this measured display width.
+
+For the two enumerated scaled backing sizes above, the adapter accepts left offsets 0 and
+-1/3 CSS px, each within the existing 0.01 tolerance. It does not accept the
+intervening range. In-frame/viewport/DPR, dimensions, top offset, paint path,
+source binding, complete draw grid, generation, lossless RGBA output and exact
+raw geometry equality during capture remain mandatory. No renderer resize,
+crop, access acquisition, pacing or shared Core/Batch change is introduced;
+`note/00_core.md` needs no update. Existing unknown layouts remain unsupported.
+
+A bounded diagnostic traversed p1..p20 and END, capturing p1/p10/p20 through
+the unchanged native replay/paint proof with a diagnostic-only offset gate.
+After the production fix, normal CLI Batch `--limit 1 --max-pages 25` in an
+online-backup Catalog completed all 20 pages and explicit END (CrawlRun 9735).
+The 22,230,635-byte ZIP has 20 ordered, unique, single-frame 1350x1920 VP8L
+WebPs; full decode, CRC, Artifact SHA-256/size and isolated completion passed.
+p1/p10/p20 are byte-identical to the earlier diagnostic replay outputs.
+The original Item/Source, failed runs and artifacts were checked unchanged.
+Metrics `9337b9f654c94e4e9f2d110de461fbee` report one completion and zero
+failures/retries/403/429/5xx/challenge/CAPTCHA. This is production replay
+validation, not an independent live raw-canvas pixel comparison. Other episodes
+and browser layouts were not live-tested. No final prepackage manifest was
+retained. Evidence/scripts are ignored under `work/piccoma/25718-geometry-20261014/`.
+
+Validation: 365 passed, 0 failed, 0 skipped (176.77s; five existing asyncio
+deprecation warnings), covering `test_piccoma_native_capture.py`,
+`test_piccoma_adapter_browser.py` and `test_packaging.py`. Regressions cover
+both measured offsets, unknown offsets, the existing DPR boundary, and a
+capture-time change between supported offsets. Synthetic native RGBA output
+matches an independent 1:1 browser screenshot of the fixture canvas; the QA
+presentation resets its left position after capture to avoid screenshot
+rounding. Live p1/p10/p20 images were visually checked for missing tiles and
+viewer chrome. An initial QA fixture failed because its fractional-position
+screenshot added a column; that comparison setup was corrected without changing
+production pixels. Global Ruff and scoped diff checks passed. Full repository,
+separate Discovery/Policy and Research suites were not run because this is a
+site-local geometry change with the affected capture/navigation/output tests run.
 
 ## Long high-resolution episode budgets (2026-10-13)
 
@@ -183,9 +300,11 @@ or resource consumption was performed; quota remains quota, not free.
 
 All 22 body pages use a 1350x1920 backing canvas displayed at exactly
 843.046875x1199, inside an 843x1200 frame at the supported 1904x1200 viewport.
-Canvas/frame left edges agree; canvas top is frame top + 0.5. The existing 1:1
-geometry rule rejected this downscaled presentation. The strict new profile
-requires these measured dimensions/offsets, existing in-frame/viewport/DPR and
+This original observation has aligned canvas/frame left edges; the current
+profile also accepts the observed -1/3 CSS-pixel left offset described above.
+Canvas top remains frame top + 0.5. The former 1:1 geometry rule rejected
+this downscaled presentation. The current strict profile requires these
+measured dimensions/offsets, existing in-frame/viewport/DPR and
 ancestor visibility proof, and exact raw geometry equality throughout capture.
 It returns the backing size for output; no crop, display screenshot, forced
 canvas resize, or reflow is used by production capture.
@@ -194,8 +313,9 @@ Each page has exactly 1056 trace events: context creation, two backing resets,
 and a complete 27x39 grid of 1053 image draws. The final destination row is 20px;
 the exact source heights are 50.01 or 20.01. Source object/URL/load-generation,
 unique first-party baseline JPEG response, exact context/draw arguments and
-complete unique source/destination grids remain mandatory. Only the explicit
-1350x1920 grid was added; nearby/unknown sizes are not inferred as supported.
+complete unique source/destination grids remain mandatory. Current scaled
+native support enumerates this 1350x1920 grid and the separately verified
+1125x1600 grid described above; nearby/unknown sizes are not inferred as supported.
 Per-target trace capacity is 1152 events; the bounded simultaneous event total
 is 32768 and retired traces release their capacity. Retained canvases (16), active
 traces (128), 8 MiB full-JSON transport, 131072 traversal nodes, 8,000,000-byte

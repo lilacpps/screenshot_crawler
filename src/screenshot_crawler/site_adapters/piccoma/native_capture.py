@@ -34,8 +34,9 @@ _SOURCE_HOST = "pcm.kakaocdn.net"
 _SOURCE_PATH = re.compile(r"^/dna/[^/?#]+/[^/?#]+/[^/?#]+/i[^/?#]+\.jpg$")
 # Exact live-observed backing sizes and tile grids, never inferred from size.
 _OBSERVED_TILE_GRIDS = {(764, 1200): (16, 24), (842, 1200): (17, 24),
-                        (844, 1200): (17, 24), (1350, 1920): (27, 39)}
-SCALED_NATIVE_SIZE = (1350, 1920)
+                        (844, 1200): (17, 24), (1350, 1920): (27, 39),
+                        (1125, 1600): (23, 32)}
+SCALED_NATIVE_SIZES = frozenset({(1350, 1920), (1125, 1600)})
 SCALED_DISPLAY_SIZE = (843.046875, 1199)
 _ALLOWED_CONTEXT_ATTRIBUTES = frozenset(
     {"alpha", "colorSpace", "colorType", "desynchronized", "toneMapping", "willReadFrequently"}
@@ -1129,7 +1130,7 @@ def validate_scaled_alpha_paint_path(
 ) -> bool:
     """Validate the observed scaled path without claiming white covers its edge."""
 
-    if (width, height) != SCALED_NATIVE_SIZE:
+    if (width, height) not in SCALED_NATIVE_SIZES:
         return False
     return _validate_paint_path(snapshot, width=width, height=height, preserve_alpha=True)
 
@@ -1148,7 +1149,7 @@ def _validate_paint_path(
     first_opaque = snapshot.get("firstOpaqueIndex")
     color = snapshot.get("firstOpaqueColor")
     display_width, display_height = (
-        SCALED_DISPLAY_SIZE if (width, height) == SCALED_NATIVE_SIZE else (width, height)
+        SCALED_DISPLAY_SIZE if (width, height) in SCALED_NATIVE_SIZES else (width, height)
     )
     if (
         snapshot.get("canvasId") is None
@@ -1572,7 +1573,7 @@ async def capture_native_tile_replay(
 
     if response_registry_overflowed:
         raise NativeCaptureUnavailable("response_registry_overflow")
-    preserve_alpha = (expected_width, expected_height) == SCALED_NATIVE_SIZE
+    preserve_alpha = (expected_width, expected_height) in SCALED_NATIVE_SIZES
     paint_validator = validate_scaled_alpha_paint_path if preserve_alpha else validate_white_paint_path
     try:
         before = await _read_native_snapshot(page, canvas)
