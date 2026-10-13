@@ -3,6 +3,55 @@
 Status: P0/P1/P1.5/P2/P3 and P4 Tester, live-evidence Reviewer, and Lead gates passed for seven observed reader layouts across six strict profiles on `KC_004915_S`; the mixed-final profile covers two reviewed recommendation forms. All 15 selected target episodes completed in normal CLI Batch/ZIP across the initial and resumed runs, and the Episode 22.2 control retest completed. The first 22.2 control attempt remains a failed run with unknown cause. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope).
 The previous P4 affected site-local selection passed 293 tests / 0 failed / 0 skipped (815 existing pytest-asyncio deprecation warnings). After the approved test-only lint fix, focused async-mutation tests passed 3 / 134 deselected / 0 skipped. Independent material Reviewer and final live-evidence gates passed with BLOCKING=0/NONBLOCKING=0. `ruff check src tests` and `git diff --check` passed. The full repository suite was not rerun for that site-local change; the earlier 2448-pass/1-known-baseline-failure result predates it.
 
+## Current maintenance: 第12話-3 double END (2026-10-13)
+
+- Current adapter scope is eight observed layouts through seven strict profiles.
+  Earlier independent P4 gates above cover the original seven layouts on
+  `KC_004915_S`; this extension was implemented and verified as maintenance.
+- Item/Source 26200 is `KC_011605_S:KC_0116050001200031_E`. Both 10:57 failures
+  contain 17 source slots with counts `[2,2,2,2,2,2,2,2,1,0,0]`. There are no
+  beginning/initial PR/secondary END markers. Final singleton index 8 owns
+  main-wrapper PR `n=2`; empty slides 9 and 10 each own main END `n=1,n=2`.
+  The prior inventory accepts two or three main markers and rejects these four.
+  This is an additional observed topology, not the prior branch-sync issue.
+- A bounded shared-CDP/Playwright probe at 1904x985 verified all 17 native WebP
+  slots (1284x1825) with production source Blob/full-frame/RGBA proof and normal
+  overlay turns. Ordinary final ArrowLeft advanced 8 -> 9; slide 10 stayed
+  inactive. No source bytes or copyrighted fixtures are committed.
+- Added only the exact `paired_first_double_end` topology: at least one RTL
+  pair, final singleton with one PR n=2, two consecutive empty paired ENDs and
+  no other markers/slides/content. Marker roles, ownership, geometry and slot
+  order remain strict. PR stability and async-change checks apply. All content
+  must be captured before guarded final ArrowLeft; exact next-index END is
+  required. The second END is never entered. Core, native proof, access policy,
+  max-pages, same-content guards and bounded waits are unchanged.
+- Fresh normal CLI Batch with an isolated online-backup Catalog completed the
+  exact target: CrawlRun 9370, 17 pages, END, one ZIP Artifact, Completed only
+  in the isolated Catalog. All 17 ordered members passed CRC/WebP decoding and
+  matched fresh source SHA-256, byte length and dimensions; archive hash/size
+  matched its Artifact. This source probe uses production native-capture proof,
+  not an independent observer. Metrics: `ee014eff8be5447aab14ba2d56d4248f`.
+- The original Catalog remains pending with both failed runs intact. Its Source
+  has an explicit future free deadline; no no-deadline rule was broadened.
+  Dedicated evidence: ignored `work/kadocomi/work011605-20261013/`, including
+  `source-end-proof.json`, `zip-audit.json`, isolated Catalog/library/output.
+- Local targeted new-profile Runner/Batch tests passed 19 (0 failed/skipped,
+  137 deselected, 5 existing asyncio deprecation warnings, 21.27 seconds): both
+  CSS directions, 17 ordered pages, first-END stop, marker faults, missing
+  content, extra content/slides, no advance, skipped END and async PR mutation.
+  Negative Batch cases retain Pending and produce no ZIP/Artifact.
+- Affected all-Kadocomi selection passed **196 / 0 failed / 0 skipped**
+  (9 existing asyncio deprecation warnings, 274.96 seconds):
+  `tests/unit/test_kadocomi_{native_capture,policy,discovery}.py` plus
+  `tests/integration/test_kadocomi_{adapter,discovery}_browser.py`.
+  `ruff check src tests` and `git diff --check` passed.
+  Full repository and Research/Probe suites are not required for this site-local
+  change. The preceding branch-sync full-repository run remains historical and
+  its known Younganimal baseline failure is unrelated. Additional live episodes
+  and a separate independent source observer were not run; evidence is bounded
+  to the exact target. Shared note `00_core.md` needs no change because shared
+  code and contracts are unchanged.
+
 ## Episode 7.2 branch synchronization (2026-10-13)
 
 - Root cause: the 10:10:39 and 10:10:56 JST failures for Item/Source 26187 ran
