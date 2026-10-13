@@ -3,9 +3,71 @@
 Status: P0/P1/P1.5/P2/P3 and P4 Tester, live-evidence Reviewer, and Lead gates passed for seven observed reader layouts across six strict profiles on `KC_004915_S`; the mixed-final profile covers two reviewed recommendation forms. All 15 selected target episodes completed in normal CLI Batch/ZIP across the initial and resumed runs, and the Episode 22.2 control retest completed. The first 22.2 control attempt remains a failed run with unknown cause. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope).
 The previous P4 affected site-local selection passed 293 tests / 0 failed / 0 skipped (815 existing pytest-asyncio deprecation warnings). After the approved test-only lint fix, focused async-mutation tests passed 3 / 134 deselected / 0 skipped. Independent material Reviewer and final live-evidence gates passed with BLOCKING=0/NONBLOCKING=0. `ruff check src tests` and `git diff --check` passed. The full repository suite was not rerun for that site-local change; the earlier 2448-pass/1-known-baseline-failure result predates it.
 
-## Current maintenance: 第12話-2 and paired-first variants (2026-10-13)
+## Current maintenance: 第10話-2 direct-first PR/END (2026-10-13)
 
-- Current support: eleven observed layouts through ten strict profiles. Earlier
+The `direct_first_pr_end` maintenance profile was observed on Item/Source 26207,
+`KC_011605_S:KC_0116050001000021_E` (第10話-2). Its slot counts are
+`[1,2,2,2,2,2,2,2,0,0]`: the unique beginning root owns the directly typed
+first canvas and zero PR markers, followed by seven RTL pairs. Empty slide 8
+owns exactly PR n=1 and main END n=2; empty slide 9 owns main END n=1,n=2.
+There is no secondary recommendation or extra slide. The previous direct-first
+profile required a final singleton with PR n=2 and therefore rejected this
+different ending. Acceptance requires at least one middle pair, exact roles,
+contained positive geometry, complete unique ordered slots and stable PR data.
+After first-source capture, the existing guarded ArrowLeft must reach index 1.
+After all sources, the ordinary overlay must reach the stable empty PR/END
+slide; the existing guard, with direct-first ownership validation, allows one
+ArrowLeft within the same bounded wait to reach the paired END. The empty
+intermediate slide is neither captured nor completion. Missing/changed markers,
+unknown roots, duplicate or misplaced canvases, early/skipped END and no advance
+fail closed. Native source/RGBA proof, Core, access policy, pacing and guard
+budgets are unchanged. Only site-local Python profile handling changed.
+
+A fresh production-native source probe at 1904x985 captured all 15 WebPs and
+reached index 9. The probe uses the adapter's Blob/full-frame/RGBA proof, not an
+independent observer. The new full inventory sweep covered all 23 remaining
+sources 26207..26229: 26207 required this extension; the other 22 matched existing
+profiles. Evidence is under ignored `work/kadocomi/direct-first-26207-20261013/`.
+CLI/config/output contracts are unchanged; verification uses dedicated Catalog,
+Batch output and library paths, with the normal Catalog untouched.
+
+
+Normal CLI Batch `--limit 23` completed all 23 exact targets (26207..26229),
+347 pages, explicit END and one ZIP Artifact each in an isolated online-backup
+Catalog (CrawlRuns 9381..9403). Every archive passed CRC and WebP decoding;
+page counts matched settled inventories, filenames/order were contiguous, and
+archive SHA-256/length matched Catalog Artifacts. All 15 ordered members of
+26207 additionally matched the fresh source hashes, lengths and dimensions.
+No separate fresh source-byte comparison is claimed for the other 22 episodes.
+The normal Catalog's 23 Items remained Pending and existing failures were
+preserved; only the isolated Catalog was completed. Packaging removed generated
+page directories, so no retained per-run manifest is claimed. Evidence:
+`current-inventory.json`, `failed-dom-topology.json`, `source-proof-26207.json`,
+`batch.log`, `zip-audit.json` under the ignored directory above.
+
+Final affected Kadocomi selection: **269 passed / 0 failed / 0 skipped**
+(387.13s, 9 existing asyncio deprecation warnings), covering
+`tests/unit/test_kadocomi_{native_capture,policy,discovery}.py` and
+`tests/integration/test_kadocomi_{adapter,discovery}_browser.py`.
+The focused new-profile selection passed 23 cases; an initial negative-fixture
+failure was corrected to exercise early END through the actual keyboard path.
+The final selection includes both CSS directions, byte-exact Runner/Batch ZIP,
+missing/duplicate/misowned PR and beginning roles, invalid END/content topology,
+no advance with exactly one bridge key, skipped/early END, and async PR mutation.
+Global Ruff and diff checks passed. Full repository and separate Research/Probe
+suites were not rerun because only the site-local profile and its existing
+browser fixture changed. Other works and an independent source observer were
+not tested. Shared contracts are unchanged; `note/00_core.md` needs no update.
+
+After preserving the fixture's existing two-page paired-first minimum, final
+focused direct/paired PR/END regressions passed 40 / 0 failed / 0 skipped
+(47.91s). Live metrics `de66a848e24747c3a511236f8a28f3c1` recorded 23 completed,
+0 failed/retry/403/429/5xx/challenge/CAPTCHA. The 118 skipped planning rows include
+the deliberately excluded Items in the dedicated Catalog; they are not test skips.
+
+## Previous maintenance: 第12話-2 and paired-first variants (2026-10-13)
+
+- Current support: twelve observed layouts through eleven strict profiles. Earlier
   independent P4 gates cover the original seven layouts; this is site-local
   maintenance without a separate independent source observer or review gate.
 - Item/Source 26201 (`KC_0116050001200021_E`) has 16 slots as eight RTL pairs,
@@ -37,12 +99,10 @@ The previous P4 affected site-local selection passed 293 tests / 0 failed / 0 sk
   dimensions; archive hashes/sizes matched Artifacts. Original three Items
   remain pending, with their existing failure history preserved. Metrics:
   `b07f58d40a1f4137a8129b5be29b9594`.
-- An inventory sweep inspected remaining 29 episodes (26201..26229), not full
-  capture/ZIP for all. 27 match the paired-first profiles. 26227/26228 initially
-  failed closed with `content_wrapper_shape`: their first typed contents node
-  is a direct CANVAS inside a beginning root, rather than a page wrapper.
-  Further bounded probes and the direct-first extension below cover these two,
-  so all 29 observed inventories now match strict accepted profiles.
+- The initial inventory sweep covered 26201..26229 but had seven
+  `content_wrapper_shape` failures, not two. Only 26227/26228 were then rechecked
+  after the direct-first extension. The prior claim that all 29 inventories
+  passed was incorrect; 26207/26209/26210/26218/26219 were still unverified.
 - Added `direct_first_final_pr` after observing both actual routes: the unique
   beginning root owns one directly typed content canvas and zero PR markers;
   pairs follow, then a final singleton owning PR n=2, paired END and one
@@ -83,8 +143,8 @@ The previous P4 affected site-local selection passed 293 tests / 0 failed / 0 sk
   This includes duplicate direct canvases and directly typed canvases on later
   slides, as well as existing capture/END/navigation and Batch/ZIP regressions.
   `ruff check src tests` and `git diff --check` passed. A fresh final inventory
-  probe revalidated 26201..26206 and 26227/26228 with the final adapter; together
-  with the other 21 settled inventory records, all remaining 29 are covered.
+  probe revalidated 26201..26206 and 26227/26228 with the final adapter; five earlier collection failures
+  remained unverified at that point; the all-29 coverage claim is withdrawn.
   Full repository and separate
   Research/Probe suites are omitted for this site-local change. Core, native
   source/pixel proof rules, access eligibility, pacing, max-pages and same-content

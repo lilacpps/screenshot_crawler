@@ -2,16 +2,18 @@
 
 ## Current phase
 
-Current capture supports eleven observed layouts through ten strict profiles,
-including the 第12話-3 double-END maintenance fix described below. Local
-Latest maintenance validation, representative live Batch/ZIP runs and
+Current capture supports twelve observed layouts through eleven strict profiles,
+including the 第10話-2 direct-first PR/END maintenance fix described below.
+Latest maintenance validation, live Batch/ZIP runs and
 source comparisons are recorded in the progress ledger.
 The independent P4 gates in the following paragraph cover the original scope.
-Final maintenance selection: 246 passed / 0 failed / 0 skipped; Ruff and diff
-checks passed. Five representative normal CLI Batch/ZIP runs completed 87
-pages in isolated Catalogs, with every ordered member matching captured source
-hashes, lengths and dimensions. The remaining 29 inventories were inspected;
-all 29 were not fully crawled. See the progress ledger for evidence limits.
+Final maintenance selection: 269 passed / 0 failed / 0 skipped; Ruff and diff
+checks passed. Normal CLI Batch completed all 23 remaining episodes of
+`KC_011605_S` (347 pages) in an isolated Catalog. Every ZIP passed
+inventory-count, CRC, decoding and Artifact checks; all 15 target pages
+also matched fresh source hashes/lengths/dimensions. The earlier all-29
+inventory claim was incorrect and is corrected below. See the ledger
+for the exact evidence and limits.
 
 P1 Discovery, native P2 capture, P3 direct-only Batch, and P4 Tester/live-evidence Reviewer/Lead gates passed for seven observed reader layouts across six strict profiles (the mixed-final profile supports two reviewed recommendation forms). The final normal CLI Batch/ZIP sweep completed all 15 selected target episodes and the Episode 22.2 control retest. Its earlier pre-capture failure remains recorded with unknown cause; the successful retest did not clear that failed run. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope). Evidence and limits are in `runbooks/kadocomi/PROGRESS.md`; other unobserved layouts fail closed.
 
@@ -52,17 +54,81 @@ ArrowLeft reaches the paired END, leaving the recommendation inactive.
 
 The native DOM collector recognizes a directly typed canvas only when it is
 the sole contents node on the first slide. Adapter acceptance additionally
-requires this exact profile and validated beginning ownership/geometry; direct
+requires one of the two direct-first profiles and validated beginning ownership/geometry; direct
 canvases elsewhere, duplicates or unknown beginning/END topology fail closed.
 Native capture still requires the original Blob, full-frame identity draw,
 matching source/canvas RGBA, bounded budgets, ordered slots and async stability.
 No screenshot/re-encoding fallback or synthetic page is introduced. Native
 signature and Python settlement include the direct-first role and owner.
 
-The remaining 29 episodes of this work were inspected structurally; all observed
-variants now match strict profiles. This is not a full Batch/ZIP run of all 29.
+The previous inventory sweep did not establish support for all 29 episodes.
+Seven rows failed collection; only two were rechecked before the prior report.
+The five unrechecked rows included 26207, which still failed. The new sweep and
+full Batch/ZIP scope are recorded below; prior all-supported claims are withdrawn.
 Five representative live episodes were captured and compared with ordered ZIP
 members; other works and a separate independent source observer were not tested.
+
+## 第10話-2 direct-first PR/END maintenance
+
+The `direct_first_pr_end` maintenance profile was observed on Item/Source 26207,
+`KC_011605_S:KC_0116050001000021_E` (第10話-2). Its slot counts are
+`[1,2,2,2,2,2,2,2,0,0]`: the unique beginning root owns the directly typed
+first canvas and zero PR markers, followed by seven RTL pairs. Empty slide 8
+owns exactly PR n=1 and main END n=2; empty slide 9 owns main END n=1,n=2.
+There is no secondary recommendation or extra slide. The previous direct-first
+profile required a final singleton with PR n=2 and therefore rejected this
+different ending. Acceptance requires at least one middle pair, exact roles,
+contained positive geometry, complete unique ordered slots and stable PR data.
+After first-source capture, the existing guarded ArrowLeft must reach index 1.
+After all sources, the ordinary overlay must reach the stable empty PR/END
+slide; the existing guard, with direct-first ownership validation, allows one
+ArrowLeft within the same bounded wait to reach the paired END. The empty
+intermediate slide is neither captured nor completion. Missing/changed markers,
+unknown roots, duplicate or misplaced canvases, early/skipped END and no advance
+fail closed. Native source/RGBA proof, Core, access policy, pacing and guard
+budgets are unchanged. Only site-local Python profile handling changed.
+
+A fresh production-native source probe at 1904x985 captured all 15 WebPs and
+reached index 9. The probe uses the adapter's Blob/full-frame/RGBA proof, not an
+independent observer. The new full inventory sweep covered all 23 remaining
+sources 26207..26229: 26207 required this extension; the other 22 matched existing
+profiles. Evidence is under ignored `work/kadocomi/direct-first-26207-20261013/`.
+CLI/config/output contracts are unchanged; verification uses dedicated Catalog,
+Batch output and library paths, with the normal Catalog untouched.
+
+
+Normal CLI Batch `--limit 23` completed all 23 exact targets (26207..26229),
+347 pages, explicit END and one ZIP Artifact each in an isolated online-backup
+Catalog (CrawlRuns 9381..9403). Every archive passed CRC and WebP decoding;
+page counts matched settled inventories, filenames/order were contiguous, and
+archive SHA-256/length matched Catalog Artifacts. All 15 ordered members of
+26207 additionally matched the fresh source hashes, lengths and dimensions.
+No separate fresh source-byte comparison is claimed for the other 22 episodes.
+The normal Catalog's 23 Items remained Pending and existing failures were
+preserved; only the isolated Catalog was completed. Packaging removed generated
+page directories, so no retained per-run manifest is claimed. Evidence:
+`current-inventory.json`, `failed-dom-topology.json`, `source-proof-26207.json`,
+`batch.log`, `zip-audit.json` under the ignored directory above.
+
+Final affected Kadocomi selection: **269 passed / 0 failed / 0 skipped**
+(387.13s, 9 existing asyncio deprecation warnings), covering
+`tests/unit/test_kadocomi_{native_capture,policy,discovery}.py` and
+`tests/integration/test_kadocomi_{adapter,discovery}_browser.py`.
+The focused new-profile selection passed 23 cases; an initial negative-fixture
+failure was corrected to exercise early END through the actual keyboard path.
+The final selection includes both CSS directions, byte-exact Runner/Batch ZIP,
+missing/duplicate/misowned PR and beginning roles, invalid END/content topology,
+no advance with exactly one bridge key, skipped/early END, and async PR mutation.
+Global Ruff and diff checks passed. Full repository and separate Research/Probe
+suites were not rerun because only the site-local profile and its existing
+browser fixture changed. Other works and an independent source observer were
+not tested. Shared contracts are unchanged; `note/00_core.md` needs no update.
+
+After preserving the fixture's existing two-page paired-first minimum, final
+focused direct/paired PR/END regressions passed 40 / 0 failed / 0 skipped
+(47.91s). Live metrics `de66a848e24747c3a511236f8a28f3c1` recorded 23 completed,
+0 failed/retry/403/429/5xx/challenge/CAPTCHA. The 118 skipped planning rows include
+the deliberately excluded Items in the dedicated Catalog; they are not test skips.
 
 ## Discovery contract
 
