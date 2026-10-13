@@ -1,20 +1,49 @@
 # カドコミ (comic-walker.com) Free-Only Site Adapter — 実装 Runbook
 
-Current maintenance scope (2026-10-13): eight observed layouts through seven
-strict profiles. The added `paired_first_double_end` profile is verified on
+Current maintenance scope (2026-10-13): eleven observed layouts through ten
+strict profiles. The earlier `paired_first_double_end` profile is verified on
 `KC_011605_S:KC_0116050001200031_E` (第12話-3): paired content from the first
 slide, final singleton with PR n=2, then two empty paired main END slides.
 It stops at the first END after all source slots and one exact ordinary turn;
 the second END stays inactive. Access classification is unchanged. Earlier P4
 independent gates below cover the original seven layouts on `KC_004915_S`,
 not this maintenance extension. See [PROGRESS](PROGRESS.md) for its local/live
-validation and evidence limits.
+validation and evidence limits. The additional `paired_first_pr_end` profile
+was verified on 第12話-2/-1: all paired content, an empty PR n=1 / END n=2
+slide, then paired END. The empty intermediate slide is crossed only after all
+content, stable exact markers and one guarded ordinary ArrowLeft; completion
+requires the following paired END. `paired_first_final_pr` was verified on
+第11話-3: pairs, final singleton with PR n=2, paired END and one secondary
+recommendation. Both retain strict source, sequence and geometry checks.
 
 
 Status (2026-10-12): P0/P1/P1.5/P2/P3 and bounded P4 Tester, live-evidence Reviewer, and Lead gates passed for seven observed reader layouts (six strict adapter profiles; the mixed-final profile accepts its two reviewed recommendation forms). Fifteen target episodes and the Episode 22.2 control retest completed through normal CLI Batch/ZIP; the first Episode 22.2 control attempt remains a retained failure with unknown cause. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope). See [PROGRESS](PROGRESS.md) for exact evidence and limits.
 Execution branch: `main` for the direct-entry follow-up; the original Site Adapter phase work used `feat/kadocomi-adapter`.
 Site key: `kadocomi`
 Sample work: https://comic-walker.com/detail/KC_004915_S?episodeType=first
+
+A third maintenance variant, `direct_first_final_pr`, was verified on
+第3話-3/-2 (26227/26228, 20/16 pages). Their first slide has one directly typed
+`canvas._root_bx4cr_1[data-type=contents]` inside the unique known beginning root,
+which owns no PR marker. It is a real source page, not an empty beginning slide.
+It is followed by pairs, a final singleton owning the only main-wrapper PR n=2,
+an empty paired main END and one secondary recommendation. The first captured
+source is followed by one guarded ordinary ArrowLeft to exact index 1; final
+ArrowLeft reaches the paired END, leaving the recommendation inactive.
+
+The native DOM collector recognizes a directly typed canvas only when it is
+the sole contents node on the first slide. Adapter acceptance additionally
+requires this exact profile and validated beginning ownership/geometry; direct
+canvases elsewhere, duplicates or unknown beginning/END topology fail closed.
+Native capture still requires the original Blob, full-frame identity draw,
+matching source/canvas RGBA, bounded budgets, ordered slots and async stability.
+No screenshot/re-encoding fallback or synthetic page is introduced. Native
+signature and Python settlement include the direct-first role and owner.
+
+The remaining 29 episodes of this work were inspected structurally; all observed
+variants now match strict profiles. This is not a full Batch/ZIP run of all 29.
+Five representative live episodes were captured and compared with ordered ZIP
+members; other works and a separate independent source observer were not tested.
 
 ## 目的と完成形
 

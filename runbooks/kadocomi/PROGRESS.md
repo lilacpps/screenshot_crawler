@@ -3,9 +3,100 @@
 Status: P0/P1/P1.5/P2/P3 and P4 Tester, live-evidence Reviewer, and Lead gates passed for seven observed reader layouts across six strict profiles on `KC_004915_S`; the mixed-final profile covers two reviewed recommendation forms. All 15 selected target episodes completed in normal CLI Batch/ZIP across the initial and resumed runs, and the Episode 22.2 control retest completed. The first 22.2 control attempt remains a failed run with unknown cause. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope).
 The previous P4 affected site-local selection passed 293 tests / 0 failed / 0 skipped (815 existing pytest-asyncio deprecation warnings). After the approved test-only lint fix, focused async-mutation tests passed 3 / 134 deselected / 0 skipped. Independent material Reviewer and final live-evidence gates passed with BLOCKING=0/NONBLOCKING=0. `ruff check src tests` and `git diff --check` passed. The full repository suite was not rerun for that site-local change; the earlier 2448-pass/1-known-baseline-failure result predates it.
 
-## Current maintenance: 第12話-3 double END (2026-10-13)
+## Current maintenance: 第12話-2 and paired-first variants (2026-10-13)
 
-- Current adapter scope is eight observed layouts through seven strict profiles.
+- Current support: eleven observed layouts through ten strict profiles. Earlier
+  independent P4 gates cover the original seven layouts; this is site-local
+  maintenance without a separate independent source observer or review gate.
+- Item/Source 26201 (`KC_0116050001200021_E`) has 16 slots as eight RTL pairs,
+  followed by an empty PR n=1 / main END n=2 slide at index 8 and an empty
+  paired main END at 9. The previous mixed-final profile assumes a singleton on
+  the n=2 slide and rejects this empty slide. 26202 has the same structure with
+  14 slots. No beginning or recommendation marker exists.
+- Added `paired_first_pr_end`. All content is paired; exactly one owned
+  main-wrapper PR n=1 and main END n=2 share the next empty slide, followed
+  immediately by the final paired END. After all slots, overlay must advance
+  to the stable empty PR/END slide; within the original bounded transition,
+  metadata, marker role/geometry, visible target and focus are checked before
+  one ArrowLeft advances exactly once to the paired END. No implicit skip,
+  duplicate key retries, empty capture or intermediate completion is allowed.
+- 26203 (`KC_0116050001100031_E`) has 21 slots: ten pairs, one singleton with
+  PR n=2, paired main END and one secondary recommendation. Added strict
+  `paired_first_final_pr`; the recommendation remains inactive. The shared
+  site-local PR key guard now has three explicit known topology modes; original
+  double-END behavior is retained. Snapshot/native/Python async PR tracking,
+  complete ordered sources and strict geometry remain required.
+- Fresh shared-CDP source probes at 1904x985 captured all 16/14/21 native WebP
+  sources, retaining hashes/lengths/dimensions only. All ordinary transitions
+  reached the required paired END, including both steps across the empty PR/END.
+  These use production Blob/full-frame/RGBA proof, not an independent observer.
+- Normal CLI Batch `--limit 3` using an isolated online-backup Catalog completed
+  26201/26202/26203: CrawlRuns 9373/9374/9375, 16/14/21 pages, END, one ZIP
+  Artifact each, Completed only in the isolated Catalog. All 51 ordered WebP
+  members passed CRC/decoding and matched fresh source hashes, lengths and
+  dimensions; archive hashes/sizes matched Artifacts. Original three Items
+  remain pending, with their existing failure history preserved. Metrics:
+  `b07f58d40a1f4137a8129b5be29b9594`.
+- An inventory sweep inspected remaining 29 episodes (26201..26229), not full
+  capture/ZIP for all. 27 match the paired-first profiles. 26227/26228 initially
+  failed closed with `content_wrapper_shape`: their first typed contents node
+  is a direct CANVAS inside a beginning root, rather than a page wrapper.
+  Further bounded probes and the direct-first extension below cover these two,
+  so all 29 observed inventories now match strict accepted profiles.
+- Added `direct_first_final_pr` after observing both actual routes: the unique
+  beginning root owns one directly typed content canvas and zero PR markers;
+  pairs follow, then a final singleton owning PR n=2, paired END and one
+  secondary recommendation. The first real source page must be captured before
+  guarded ordinary ArrowLeft reaches exact index 1. Final ArrowLeft reaches
+  paired END; recommendation stays inactive. Native collection recognizes a
+  direct canvas only as the sole typed contents node on the first slide.
+  Adapter validation additionally requires exact beginning ownership/geometry
+  and this profile. Direct nodes later, duplicate typed canvases, unknown roots
+  and different marker topology still fail closed. Native Blob/full-frame/RGBA,
+  format/budget and async-stability proof is preserved; Python/native signatures
+  also retain direct-first type and beginning ownership. No DOM wrapping,
+  synthetic pages, screenshot or encoding fallback is used.
+- The two additional bounded adapter probes captured 20/16 native sources for
+  26227/26228 and reached END. A second isolated Catalog selected only those
+  two Items (other Pending rows marked Skipped in the copy only). Normal CLI
+  Batch completed both. All 36 ordered ZIP members matched the captured source
+  hash, length and dimensions, passed CRC/decoding, and matched Artifact archive
+  hashes/sizes. Original Items remain pending. Metrics:
+  `5d7344005c044297a9888c7c5a5e554c`. This uses the changed adapter's native proof,
+  not an independent observer; it is scoped to these two routes.
+- New paired-first normal cases passed 9 (includes the previous double-END
+  control, both CSS directions and Batch ZIP); new negative Batch cases passed
+  25. Faults cover PR roles/ownership/numbers, content on empty slides, missing
+  ENDs, extra slides, early/skipped END, no advance and async PR mutation. The
+  no-advance case also asserts exactly one key action, Pending and no ZIP/Artifact.
+- The first affected selection passed 227 (0 failed/skipped, 321.99s, 9
+  existing asyncio deprecation warnings) before the direct-first extension.
+  Direct-first Runner/Batch tests passed 12; source-mapping/full-frame tests
+  across both wrapper and direct-first forms plus direct-profile tests passed
+  22 (0 failed/skipped). These reject wrong Blob pixels, transforms and canvas
+  mutation without relaxing native proof. An initial direct-fixture run was
+  interrupted to correct its image-loader selector; the corrected selection
+  passed. Final affected all-Kadocomi selection passed **246 / 0 failed / 0
+  skipped** (340.47 seconds, 9 existing asyncio deprecation warnings):
+  `tests/unit/test_kadocomi_{native_capture,policy,discovery}.py` and
+  `tests/integration/test_kadocomi_{adapter,discovery}_browser.py`.
+  This includes duplicate direct canvases and directly typed canvases on later
+  slides, as well as existing capture/END/navigation and Batch/ZIP regressions.
+  `ruff check src tests` and `git diff --check` passed. A fresh final inventory
+  probe revalidated 26201..26206 and 26227/26228 with the final adapter; together
+  with the other 21 settled inventory records, all remaining 29 are covered.
+  Full repository and separate
+  Research/Probe suites are omitted for this site-local change. Core, native
+  source/pixel proof rules, access eligibility, pacing, max-pages and same-content
+  guards are unchanged, so `note/00_core.md` needs no update. Native site-local
+  DOM collection changed only for the explicit first-canvas variant; the byte
+  and pixel proof algorithm is unchanged. Other works and
+  an independent source observer were not run. Ignored evidence:
+  `work/kadocomi/paired-first-mixed-20261013/`.
+
+## Earlier maintenance: 第12話-3 double END (2026-10-13)
+
+- That maintenance expanded support to eight observed layouts through seven strict profiles.
   Earlier independent P4 gates above cover the original seven layouts on
   `KC_004915_S`; this extension was implemented and verified as maintenance.
 - Item/Source 26200 is `KC_011605_S:KC_0116050001200031_E`. Both 10:57 failures

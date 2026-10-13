@@ -163,6 +163,17 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
     return state.slideIds.get(slide);
   };
   const hasClassPrefix = (node, prefix) => [...node.classList].some(name => name.startsWith(prefix));
+  // Observed first-page variant: one directly typed canvas on the first slide.
+  // Every other content node must retain the usual wrapper contract.
+  state.contentCanvasRow = (node, firstSlide) => {
+    if (node.tagName === 'DIV' && hasClassPrefix(node, '_pageCanvasWrapper_'))
+      return [...node.querySelectorAll('canvas')];
+    if (node.tagName === 'CANVAS' && hasClassPrefix(node, '_root_bx4cr_') &&
+        node.closest('.splide__slide') === firstSlide &&
+        firstSlide.querySelectorAll('[data-type="contents"]').length === 1)
+      return [node];
+    return null;
+  };
   state.snapshot = (includeNodes = false) => {
     const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
     if (screens.length !== 1) return {status: 'root', screenCount: screens.length};
@@ -181,10 +192,9 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
     if (clones.length) return {status: 'clones', cloneCount: clones.length};
     if (!root.classList.contains('splide--rtl')) return {status: 'direction'};
     const allContentNodes = [...root.querySelectorAll('[data-type="contents"]')];
-    const contentWrappers = allContentNodes.filter(node =>
-      node.tagName === 'DIV' && hasClassPrefix(node, '_pageCanvasWrapper_'));
-    if (contentWrappers.length !== allContentNodes.length) return {status: 'content_wrapper_shape'};
-    const wrapperCanvasRows = contentWrappers.map(wrapper => [...wrapper.querySelectorAll('canvas')]);
+    const contentWrappers = allContentNodes;
+    const wrapperCanvasRows = contentWrappers.map(node => state.contentCanvasRow(node, slides[0]));
+    if (wrapperCanvasRows.some(row => row === null)) return {status: 'content_wrapper_shape'};
     const wrapperCanvasCount = wrapperCanvasRows.reduce((total, canvases) => total + canvases.length, 0);
     if (wrapperCanvasRows.some(canvases =>
       canvases.length !== 1 || !hasClassPrefix(canvases[0], '_root_bx4cr_'))) {
@@ -196,9 +206,8 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
       !hasClassPrefix(node, '_endOfBookWrapper_') && hasClassPrefix(node, '_endOfBook_'));
     const unclassifiedEndMarkerCount = allEndNodes.length - markers.length - secondaryEndNodes.length;
     const slideRows = slides.map((slide, slideIndex) => {
-      const wrappers = [...slide.querySelectorAll('div[data-type="contents"]')]
-        .filter(node => hasClassPrefix(node, '_pageCanvasWrapper_'));
-      const canvases = wrappers.map(wrapper => [...wrapper.querySelectorAll('canvas')][0]);
+      const wrappers = [...slide.querySelectorAll('[data-type="contents"]')];
+      const canvases = wrappers.map(node => state.contentCanvasRow(node, slides[0])[0]);
       return {
         id: state.idForSlide(slide),
         index: slideIndex,
@@ -317,6 +326,12 @@ NATIVE_OBSERVER_INIT_SCRIPT = r"""(() => {
     if (unclassifiedEndMarkerCount > 0) return {status: 'end_marker_shape'};
     return {
       status: 'ok',
+      directFirstContent: allContentNodes.some(node => node.tagName === 'CANVAS'),
+      directFirstBeginningOwnerIndex: (() => {
+        const canvas = allContentNodes.find(node => node.tagName === 'CANVAS');
+        const beginning = canvas && canvas.closest('div[data-type="beginning"]');
+        return beginning ? slides.indexOf(beginning.closest('.splide__slide')) : -1;
+      })(),
       rootId: state.idForSlide(root),
       slideRows,
       activeIndex,
@@ -356,11 +371,8 @@ NATIVE_CAPTURE_SCRIPT = r"""async args => {
   const active = slides[first.activeIndex];
   if (!active) return fail('active_slide_missing');
   const typedContent = [...active.querySelectorAll('[data-type="contents"]')];
-  const wrappers = typedContent.filter(node => node.tagName === 'DIV' &&
-    [...node.classList].some(name => name.startsWith('_pageCanvasWrapper_')));
-  if (wrappers.length !== typedContent.length) return fail('content_wrapper_shape');
-  const canvasRows = wrappers.map(wrapper => [...wrapper.querySelectorAll('canvas')]);
-  if (canvasRows.some(row => row.length !== 1 ||
+  const canvasRows = typedContent.map(node => state.contentCanvasRow(node, slides[0]));
+  if (canvasRows.some(row => row === null || row.length !== 1 ||
       ![...row[0].classList].some(name => name.startsWith('_root_bx4cr_'))))
     return fail('content_wrapper_shape');
   const canvases = canvasRows.map(row => row[0]);
@@ -370,6 +382,8 @@ NATIVE_CAPTURE_SCRIPT = r"""async args => {
   const usedUrls = [];
   let totalPixels = 0;
   const signature = snapshot => JSON.stringify({
+    directFirstContent: snapshot.directFirstContent,
+    directFirstBeginningOwnerIndex: snapshot.directFirstBeginningOwnerIndex,
     activeIndex: snapshot.activeIndex,
     endMarkerCount: snapshot.endMarkerCount,
     markerSlideIndexes: snapshot.markerSlideIndexes,
