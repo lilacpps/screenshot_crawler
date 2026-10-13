@@ -38,7 +38,8 @@ Both profiles require exact marker classes, numbers, ownership and positive
 contained geometry, no content at/after END, complete ordered source inventory,
 and PR stability during snapshot settlement and native/Python async capture.
 Core, native WebP source proof, access eligibility, pacing, max-pages and
-same-content guards remain unchanged. Other-work no-deadline access stays UNKNOWN.
+same-content guards remain unchanged. No-deadline access follows the current
+Discovery contract below.
 Fresh bounded source probes used the production native-capture proof, not an
 independent observer. Exact routes, output audits and test results are recorded
 in `runbooks/kadocomi/PROGRESS.md`.
@@ -132,7 +133,7 @@ the deliberately excluded Items in the dedicated Catalog; they are not test skip
 
 ## Discovery contract
 
-The adapter accepts HTTPS work-detail routes on `comic-walker.com` matching the strict `KC_<six digits>_S` work-ID shape and observed query forms. The live-verified Discovery work is `KC_004915_S`; the no-deadline free classification is limited to that work. Other no-deadline works remain unknown. Bounded `from_url` / `through_url` input is unsupported. It uses the unique work-scoped `UL.EpisodesTabContents_episodeList__*` under `DIV.EpisodesTabContents_root__*`; page-wide recommendations and teasers are outside the scope.
+The adapter accepts HTTPS work-detail routes on `comic-walker.com` matching the strict `KC_<six digits>_S` work-ID shape and observed query forms. Live Discovery was verified for `KC_004915_S` and `KC_011605_S`. No-deadline free classification is work-independent for validated public rows without access gates. Bounded `from_url` / `through_url` input is unsupported. It uses the unique work-scoped `UL.EpisodesTabContents_episodeList__*` under `DIV.EpisodesTabContents_root__*`; page-wide recommendations and teasers are outside the scope.
 
 When present, exactly one visible expansion button must match `\u5168{N}\u8a71\u3092\u8868\u793a`. The parser waits no more than 12 seconds for two identical scoped snapshots 500 ms apart. The number of validated episode rows must equal the declared total. It buffers and validates the complete list before yielding newest-first.
 
@@ -142,7 +143,9 @@ The only accepted non-episode list child observed for this work is the ended-pub
 
 ## Access and Catalog safety
 
-The row deadline is read only from the observed `\u914d\u4fe1\u671f\u9650\uff1aYYYY/MM/DD HH:MM` label, separate from publication date and title. A future explicit deadline is classified free and saved as `free_until`; a later observed missing deadline clears stale expiry. A no-deadline row is classified free only for the independently verified work `KC_004915_S`. No-deadline rows on other works and expired rows remain unknown. Current validated public rows are `available=true`.
+The row deadline is read only from the observed `\u914d\u4fe1\u671f\u9650\uff1aYYYY/MM/DD HH:MM` label, separate from publication date and title. A future explicit deadline is classified free and saved as `free_until`; a later observed missing deadline clears stale expiry. Following Kadocomi's unflagged-public-row convention, validated rows without access restrictions or deadlines are `free` with NULL expiry for every work. Expired/equal deadlines remain unknown; purchase, paid (including bare `有料`), login, ticket, coin, point, rental and app gates, malformed deadlines, and unsupported list shapes fail closed. Current validated public rows are `available=true`.
+
+The 2026-10-13 live full Discovery for `KC_011605_S` observed all 33 rows. In an isolated Catalog copy, Items/Sources 26230–26232 (第2話-2, 第2話-1, 第1話) changed from unknown to free with NULL expiry and became direct Batch candidates. All identities, display positions, 30 completed statuses, CrawlRuns and Artifacts were preserved. The normal Catalog was not changed. Refresh existing old rows with `discover --key midori-no-uta-shuushuu-gunfuu --mode full --catalog catalog.sqlite`; incremental mode can stop before reaching them. This verified listing classification and planning, not a new reader capture.
 
 The adapter sets `allow_inferred_display_positions=False` and emits no global position hints. Existing positions stay unchanged and new positions remain NULL. A complete full Discovery can mark absent Sources unavailable; an incomplete full run cannot reconcile missing Sources. Incremental Discovery leaves unseen Sources unchanged. Reusing an external ID preserves Source, Item, Completed, CrawlRun, and Artifact history through disappearance and republication.
 
@@ -150,7 +153,7 @@ The shared Discovery service initializes `Work.title` from the dedicated Watchli
 
 ## P3 Batch eligibility and CLI
 
-`KadocomiSitePolicy` selects only `site=kadocomi`, `available=true`, `access_mode=free` Sources with a strict work-scoped `work_id:episode_id`. `free_until` may be NULL (no deadline was displayed at the last Discovery) or an aware future datetime. Expired/equal, malformed, or timezone-naive values fail closed. Quota, paid, unknown, owned, grant, rental, quota-resource, and grant-only paths are unsupported. The P1 Discovery adapter marks a no-deadline row free only for the independently verified work; the policy trusts Catalog's current `access_mode` classification and never infers free from NULL expiry alone.
+`KadocomiSitePolicy` selects only `site=kadocomi`, `available=true`, `access_mode=free` Sources with a strict work-scoped `work_id:episode_id`. `free_until` may be NULL (no deadline was displayed at the last Discovery) or an aware future datetime. Expired/equal, malformed, or timezone-naive values fail closed. Quota, paid, unknown, owned, grant, rental, quota-resource, and grant-only paths are unsupported. Discovery classifies validated, unflagged no-deadline public rows as free for every work; the policy trusts Catalog's current `access_mode` classification and never infers free from NULL expiry alone.
 
 The manual `crawl` CLI registry and Batch adapter/Policy registries include Kadocomi. Manual Crawl must use `--access-strategy direct`; the default `auto` is rejected. Batch keeps the generic pending-only Planner and Executor. The Batch adapter requires a canonical query-free exact episode Catalog target matching its configured external identity. Catalog eligibility remains governed by the current Source and `KadocomiSitePolicy`; capture opens that exact episode as its only main-document navigation. Candidate URLs and display positions are not renumbered or rewritten.
 
@@ -182,7 +185,8 @@ skipped END leaves Batch pending without ZIP/Artifact. The earlier independent
 P4 gates cover the original seven layouts; this maintenance extension has local
 browser tests and a fresh bounded live source/CLI/ZIP verification, recorded in
 `runbooks/kadocomi/PROGRESS.md`. Access eligibility and native WebP proof are
-unchanged, including UNKNOWN for other works without explicit free deadlines.
+unchanged by this capture extension. Current no-deadline access classification
+is described in the Discovery contract above.
 
 ## Operational validation
 

@@ -39,7 +39,6 @@ NAVIGATION_TIMEOUT_MS = 20_000
 SETTLEMENT_TIMEOUT_SECONDS = 12.0
 SETTLEMENT_INTERVAL_MS = 500
 MAX_DECLARED_EPISODES = 1_000
-NO_DEADLINE_VERIFIED_WORK_ID = "KC_004915_S"
 
 _ALLOWED_WORK_QUERIES = frozenset({"", "episodeType=first"})
 _ALLOWED_EPISODE_QUERIES = frozenset(
@@ -62,7 +61,7 @@ _DEADLINE_LABEL = re.compile(
 _GATE_TEXT = re.compile(
     r"(?:\u30ED\u30B0\u30A4\u30F3|\u8CFC\u5165|\u30C1\u30B1\u30C3\u30C8|"
     r"\u30B3\u30A4\u30F3|\u30DD\u30A4\u30F3\u30C8|\u30EC\u30F3\u30BF\u30EB|"
-    r"\u30A2\u30D7\u30EA|\u6709\u6599\u4F1A\u54E1)"
+    r"\u30A2\u30D7\u30EA|\u6709\u6599)"
 )
 
 _LIST_SNAPSHOT_SCRIPT = r"""() => {
@@ -250,19 +249,15 @@ def classify_kadocomi_access(
     observed_at: datetime,
     work_id: str | None = None,
 ) -> tuple[str, datetime | None]:
-    """Classify only rows in the exact observed public WEB episode list."""
+    """Classify validated public WEB rows; unflagged rows are free for any work."""
 
     if _GATE_TEXT.search(row_text):
         raise ValueError("Kadocomi public row contains an access gate")
     deadline = parse_kadocomi_deadline(row_text)
     if deadline is not None and deadline > observed_at:
         return "free", deadline
-    if deadline is None and work_id == NO_DEADLINE_VERIFIED_WORK_ID:
-        # Anonymous readability was verified for a no-deadline row only in
-        # this exact work's public list. Do not generalize that proof.
-        return "free", None
     if deadline is None:
-        return "unknown", None
+        return "free", None
     return "unknown", deadline
 
 
@@ -598,7 +593,6 @@ class KadocomiDiscoveryAdapter(DiscoveryAdapter):
 
 
 __all__ = [
-    "NO_DEADLINE_VERIFIED_WORK_ID",
     "KadocomiDiscoveryAdapter",
     "KadocomiEpisodeUrl",
     "KadocomiListingRow",

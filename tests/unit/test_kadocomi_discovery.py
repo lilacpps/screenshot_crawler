@@ -7,7 +7,6 @@ import pytest
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.discovery import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.kadocomi.discovery import (
-    NO_DEADLINE_VERIFIED_WORK_ID,
     _canonical_work_title,
     _parse_listing_rows,
     _read_expand_button,
@@ -89,7 +88,8 @@ def test_kadocomi_deadline_requires_exact_label_and_valid_calendar_time() -> Non
         )
 
 
-def test_kadocomi_public_rows_classify_explicit_deadlines_and_observed_no_deadline() -> None:
+@pytest.mark.parametrize("work_id", [None, WORK_ID, "KC_011605_S", "KC_000001_S"])
+def test_kadocomi_public_rows_classify_explicit_deadlines_and_no_deadline(work_id) -> None:
     future = classify_kadocomi_access(
         "\u914D\u4FE1\u671F\u9650:2099/10/14 11:00",
         observed_at=OBSERVED_AT,
@@ -98,19 +98,15 @@ def test_kadocomi_public_rows_classify_explicit_deadlines_and_observed_no_deadli
     assert classify_kadocomi_access(
         "2026/10/07 \u7B2C1\u8A71",
         observed_at=OBSERVED_AT,
-        work_id=NO_DEADLINE_VERIFIED_WORK_ID,
+        work_id=work_id,
     ) == ("free", None)
-    assert classify_kadocomi_access(
-        "2026/10/07 \u7B2C1\u8A71", observed_at=OBSERVED_AT, work_id="KC_000001_S"
-    ) == ("unknown", None)
     assert classify_kadocomi_access(
         "\u914D\u4FE1\u671F\u9650:2026/10/01 11:00",
         observed_at=OBSERVED_AT,
     ) == ("unknown", datetime(2026, 10, 1, 11, tzinfo=JST))
-    with pytest.raises(ValueError, match="access gate"):
-        classify_kadocomi_access(
-            "\u8CFC\u5165\u3057\u3066\u8AAD\u3080", observed_at=OBSERVED_AT
-        )
+    assert classify_kadocomi_access(
+        "配信期限:2026/10/12 12:00", observed_at=OBSERVED_AT
+    ) == ("unknown", OBSERVED_AT)
 
 
 def test_kadocomi_rows_keep_episode_title_and_bind_work_identity() -> None:
@@ -146,6 +142,11 @@ def test_kadocomi_rows_keep_episode_title_and_bind_work_identity() -> None:
         [{**_raw_row(1), "rowLinkCount": 2}],
         [{**_raw_row(1), "label": " "}],
         [{**_raw_row(1), "rowText": "\u914D\u4FE1\u671F\u9650: invalid"}],
+        *[
+            [_raw_row(1, row_text=f"第1話 {gate}")]
+            for gate in ("購入", "有料", "有料会員", "ログイン", "チケット", "コイン",
+                         "ポイント", "レンタル", "アプリ")
+        ],
     ],
 )
 def test_kadocomi_malformed_or_ambiguous_rows_fail_closed(rows) -> None:

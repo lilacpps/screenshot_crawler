@@ -960,6 +960,8 @@ free_until = <known expiry>
 
 site上で終了日時を取得できない場合、`free_until = NULL` を許容する。手動status上書きを標準運用にはしない。
 
+カドコミの検証済み形式の公開WEB話一覧では、アクセス制限表示がなく配信期限もない行を、作品IDによらず `free + free_until=NULL` とする。将来の配信期限がある行は `free + free_until`、期限切れ（現在時刻と同時を含む）は `unknown` とする。有料・購入・ログイン・チケット等の制限表示、期限の不正形式、一覧構造や話の識別が不明な場合は従来どおりfail-closedとする。これはカドコミDiscoveryの分類規則であり、一般の `unknown` SourceをBatchで無料扱いする規則ではない。既存の過去話へ反映する際は `full` Discoveryを使う。
+
 ## 8. Discovery mode
 
 Discoveryは `full` と `incremental` の2modeを持つ。

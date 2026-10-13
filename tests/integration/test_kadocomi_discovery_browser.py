@@ -15,12 +15,12 @@ from screenshot_crawler.watchlist import WatchlistTarget
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 BASE = "https://comic-walker.com"
-WORK_ID = "KC_004915_S"
+WORK_ID = "KC_011605_S"
 WORK_URL = f"{BASE}/detail/{WORK_ID}?episodeType=first"
 
 
 def _episode_id(number: int) -> str:
-    return f"KC_004915{number:010d}_E"
+    return f"KC_011605{number:010d}_E"
 
 
 def _row_html(
@@ -160,6 +160,9 @@ async def test_kadocomi_full_history_republication_and_null_expiry_preserve_cata
     }
     assert set(initial) == {f"{WORK_ID}:{_episode_id(i)}" for i in (1, 2, 3)}
     assert all(source.available for source in initial.values())
+    assert all(source.access_mode == "free" for source in initial.values())
+    for number in (1, 3):
+        assert initial[f"{WORK_ID}:{_episode_id(number)}"].free_until is None
     assert all(source.display_position is None for source in initial.values())
     assert initial[f"{WORK_ID}:{_episode_id(2)}"].access_mode == "free"
     assert initial[f"{WORK_ID}:{_episode_id(2)}"].free_until is not None
@@ -241,6 +244,7 @@ async def test_kadocomi_full_history_republication_and_null_expiry_preserve_cata
     refreshed2 = catalog.find_source("kadocomi", f"{WORK_ID}:{_episode_id(2)}")
     assert refreshed2.id == item2_source.id
     assert refreshed2.free_until is None
+    assert refreshed2.access_mode == "free"
     assert refreshed2.available is True
     disappeared1 = catalog.find_source("kadocomi", f"{WORK_ID}:{_episode_id(1)}")
     assert disappeared1.id == item1_source.id

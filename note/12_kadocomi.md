@@ -2,7 +2,7 @@
 
 ## Status (2026-10-13)
 
-P1 Discovery, P2 native capture, P3 direct-only policy/CLI/Batch, and P4 Tester/live-evidence Reviewer/Lead gates passed for seven observed reader layouts using six strict adapter profiles; the mixed-final profile supports two reviewed recommendation forms. The final P4 sweep completed all 15 selected target episodes and a normal CLI control retest for Episode 22.2. Its earlier control attempt failed before capture with the unchanged beginning-PR guard; the cause is unknown and the failure remains in history. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope). Exact P0/P4 evidence, tests, hashes, and limits are in `runbooks/kadocomi/PROGRESS.md`. Unobserved layouts and other-work no-deadline access remain unsupported.
+P1 Discovery, P2 native capture, P3 direct-only policy/CLI/Batch, and P4 Tester/live-evidence Reviewer/Lead gates passed for seven observed reader layouts using six strict adapter profiles; the mixed-final profile supports two reviewed recommendation forms. The final P4 sweep completed all 15 selected target episodes and a normal CLI control retest for Episode 22.2. Its earlier control attempt failed before capture with the unchanged beginning-PR guard; the cause is unknown and the failure remains in history. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope). Exact P0/P4 evidence, tests, hashes, and limits are in `runbooks/kadocomi/PROGRESS.md`. Unobserved reader layouts remain unsupported. Current Discovery classifies validated public rows without restriction flags or deadlines as free for all work IDs, following the user-confirmed Kadocomi convention.
 
 Current capture supports twelve observed layouts through eleven strict profiles.
 The additional `paired_first_double_end` profile was verified on
@@ -17,7 +17,8 @@ once to the first END. The second END remains inactive and is never captured.
 PR markers participate in snapshot stability and both native/Python async-change
 checks. Unknown topology, missing/changed markers, skipped/no-advance turns and
 content at either END fail closed. Core, native source proof and access policy
-are unchanged; other-work no-deadline eligibility remains UNKNOWN.
+are unchanged by this capture extension; current no-deadline eligibility is
+described in the Discovery section below.
 
 Fresh bounded source proof at the failed run's 1904x985 viewport captured all
 17 native WebP slots (1284x1825) and observed exact final index 8 -> first END
@@ -78,7 +79,8 @@ Both profiles require exact marker classes, numbers, ownership and positive
 contained geometry, no content at/after END, complete ordered source inventory,
 and PR stability during snapshot settlement and native/Python async capture.
 Core, native WebP source proof, access eligibility, pacing, max-pages and
-same-content guards remain unchanged. Other-work no-deadline access stays UNKNOWN.
+same-content guards remain unchanged. No-deadline access follows the current
+Discovery contract below.
 Fresh bounded source probes used the production native-capture proof, not an
 independent observer. Exact routes, output audits and test results are recorded
 in `runbooks/kadocomi/PROGRESS.md`.
@@ -184,7 +186,7 @@ the deliberately excluded Items in the dedicated Catalog; they are not test skip
 
 `src/screenshot_crawler/site_adapters/kadocomi/discovery.py` implements the site adapter. `screenshot_crawler.cli` registers it only for Discovery. It uses the connected Playwright `Page` and shared access guard; the adapter does not launch Chrome or select a browser profile.
 
-Supported input is an HTTPS work-detail route on `comic-walker.com` matching the strict `KC_<six digits>_S` work-ID shape and observed query forms. Live listing verification was performed for `KC_004915_S`; the no-deadline free classification is limited to that work, and other no-deadline works remain unknown. Bounded `from_url` / `through_url` Discovery is unsupported. The adapter requires the unique work-scoped `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*` container and exact visible expansion control `\u5168{N}\u8a71\u3092\u8868\u793a` when present. It waits at most 12 seconds for two identical scoped snapshots 500 ms apart; the validated episode-row count must equal the declared total. Page-wide recommendations and teaser links do not count.
+Supported input is an HTTPS work-detail route on `comic-walker.com` matching the strict `KC_<six digits>_S` work-ID shape and observed query forms. Live listing verification was performed for `KC_004915_S` and `KC_011605_S`; no-deadline free classification applies to validated public rows without access gates for all work IDs. Bounded `from_url` / `through_url` Discovery is unsupported. The adapter requires the unique work-scoped `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*` container and exact visible expansion control `\u5168{N}\u8a71\u3092\u8868\u793a` when present. It waits at most 12 seconds for two identical scoped snapshots 500 ms apart; the validated episode-row count must equal the declared total. Page-wide recommendations and teaser links do not count.
 
 Every row is validated before any record is yielded. A row must be a direct `LI` with exactly one episode link; the unique `EpisodeThumbnail_title__*` title node must be contained inside that link. The URL must identify the same work and a unique episode. Saved episode URLs are canonical query-free paths. Publication dates and deadline dates are separate from the title node and do not become the order label. Any malformed row, sibling title outside the link, duplicate ID, wrong-work identity, unsupported query, unknown deadline syntax, gate-like text, changed work metadata, missing title, or incomplete count fails closed. Valid records are buffered and emitted newest-first.
 
@@ -192,7 +194,17 @@ The observed ended-publication marker is `\u305d\u306e\u4ed6\u306e\u8a71\u306f\u
 
 Source external IDs are `work_id:episode_id`; saved targets are canonical query-free episode paths. The adapter sets `allow_inferred_display_positions=False`: existing positions are preserved, new positions remain NULL, and no global position hints are emitted. Full Discovery may mark absent Sources unavailable only after a complete validated list. Incomplete full runs do not reconcile missing Sources. Incremental Discovery leaves unseen Sources unchanged. Reusing the same external ID preserves the Source and its Item, Completed status, CrawlRuns, and Artifacts across disappearance and republication.
 
-An exact future row deadline is classified as free and recorded as `free_until`; a later observed NULL clears stale expiry. A no-deadline row is classified free only for the independently verified work `KC_004915_S`. Other no-deadline works and expired deadlines remain unknown. The adapter reports `available=true` for validated public rows; gate-like row text fails closed.
+An exact future row deadline is classified as free and recorded as `free_until`; a later observed NULL clears stale expiry. Following the user-confirmed Kadocomi convention, a validated public row without restriction flags or a deadline is free with NULL expiry, regardless of work ID. The previous single-work allowlist is removed. Expired/equal deadlines remain unknown. Purchase, paid (including bare `有料`), login, ticket, coin, point, rental and app text fails closed, as do malformed deadlines and list shapes. This changes site-local Discovery classification; the Policy still rejects unknown Sources and NULL expiry alone does not establish free access. The adapter reports `available=true` for validated public rows.
+
+Live full Discovery on 2026-10-13 observed all 33 rows of `KC_011605_S`. In an isolated online backup of Catalog, Items/Sources 26230 (第2話-2), 26231 (第2話-1), and 26232 (第1話) changed from unknown to free with NULL expiry; all three became direct Batch candidates. Source/Item IDs, display positions, all 30 completed statuses and completion times, CrawlRuns and Artifacts were preserved. The normal Catalog was not modified. Evidence is under ignored `work/kadocomi/unflagged-free-20261013/`. This confirms listing classification, Catalog reconciliation and planning; it does not add reader-capture evidence for these three episodes.
+
+Existing older unknown rows require full rediscovery because incremental mode can stop before reaching them:
+
+```powershell
+.\.venv\Scripts\python.exe -m screenshot_crawler.cli discover --key midori-no-uta-shuushuu-gunfuu --mode full --catalog catalog.sqlite
+```
+
+Validation for this classification change: 95 affected unit tests (`test_kadocomi_discovery`, `test_kadocomi_policy`, `test_discovery`) and 5 browser-backed Discovery integration tests passed, with no skips. Tests cover no-deadline rows across work IDs, expired/equal deadlines, explicit access gates, malformed lists, Catalog identity/history, stale-expiry clearing and reconciliation. `ruff check src tests` and `git diff --check` passed. Full suite, Research tests and new live reader captures were not run because the change is limited to Discovery classification; live full Discovery and read-only Batch planning covered the affected operational boundary.
 
 The shared Discovery service initializes `Work.title` from `WatchlistTarget.label` and does not apply `DiscoveredItem.canonical_title`. Kadocomi validates and exposes the work-page `og:title`; it does not rewrite Work metadata. Use the actual work name in the dedicated Watchlist label.
 
@@ -210,7 +222,7 @@ Independent Tester used a separate normal-renderer Blob/draw hook to audit all 2
 
 ## Current P3 direct-only Batch integration
 
-`KadocomiSitePolicy` admits only available `kadocomi` Sources with `access_mode=free`, a strict work-scoped external ID, and either NULL `free_until` or a valid aware future value. Expired/equal, malformed, naive, quota, paid, unknown, owned, grant, rental, and unsupported IDs are ineligible. NULL means no deadline was observed by Discovery; it does not independently grant free access. P1 classifies no-deadline sources as free only for the verified work `KC_004915_S`.
+`KadocomiSitePolicy` admits only available `kadocomi` Sources with `access_mode=free`, a strict work-scoped external ID, and either NULL `free_until` or a valid aware future value. Expired/equal, malformed, naive, quota, paid, unknown, owned, grant, rental, and unsupported IDs are ineligible. NULL means no deadline was observed by Discovery; it does not independently grant free access. Discovery classifies validated public rows without restriction flags or deadlines as free for all works.
 
 Manual Crawl, Batch adapter, and Batch Policy CLI registries include Kadocomi. Manual crawl requires `--access-strategy direct`; auto/quota and all named resources remain rejected. A Batch run requires a canonical query-free exact Catalog episode target matching the configured external ID. Catalog availability, free classification, and deadline eligibility remain the P1 Discovery/P3 Policy authority. The Runner navigates directly to the exact episode once; the Adapter rejects unsuccessful document responses, redirect identity changes, inconsistent same-page metadata, visible dialogs, and a reader that does not settle. It does not re-run Discovery or navigate to the work list at capture time.
 
@@ -232,7 +244,7 @@ Independent P2 research retained five WebP Blob references created by the normal
 
 Ordinary `LEFToverlay` navigation traversed 21 content slots over 11 right-to-left content slides while staying on the exact episode. The next slide had no content and exposed the two main-reader wrapper markers with data-n 1 and 2. The 21 canvases were children of content wrappers, not themselves marked `data-type=contents`; a separate PR element was excluded. No source bytes or copyrighted pixels are stored in the repository.
 
-The adapter requires per-capture currentSrc-to-immutable-Blob provenance, dimensions, full-frame identity, pixel equality, exact work/episode/page identity, safe state, validated content order, and one of seven observed layouts represented by six strict main-reader profiles. Screenshot fallback remains disabled. The original two variants passed independent review and live CLI/ZIP/source audits for the verified work. Episode 79's strict trailing-recommendation variant passed bounded live source/END proof, local Runner/Batch tests, independent code review, normal CLI and independent all-20 source/RGBA-to-ZIP audit, final post-Discovery audit, and final live-evidence review. Episode 22.2's bounded source/END probe, local Runner/Batch tests, independent code review, and normal CLI/ZIP run passed. The 21-slot Episode 4.1 CLI control also passed; its current control audit verified the ZIP and END but did not compare against prior per-page source bytes. Final post-Discovery/backup and P4 Reviewer audits passed, and Lead accepted the bounded scope. The direct-entry Runner probe described below is earlier evidence and did not itself run Batch CLI. Other works, additional reader layouts, transformed draws, and no-deadline variants on other works remain unverified.
+The adapter requires per-capture currentSrc-to-immutable-Blob provenance, dimensions, full-frame identity, pixel equality, exact work/episode/page identity, safe state, validated content order, and one of seven observed layouts represented by six strict main-reader profiles. Screenshot fallback remains disabled. The original two variants passed independent review and live CLI/ZIP/source audits for the verified work. Episode 79's strict trailing-recommendation variant passed bounded live source/END proof, local Runner/Batch tests, independent code review, normal CLI and independent all-20 source/RGBA-to-ZIP audit, final post-Discovery audit, and final live-evidence review. Episode 22.2's bounded source/END probe, local Runner/Batch tests, independent code review, and normal CLI/ZIP run passed. The 21-slot Episode 4.1 CLI control also passed; its current control audit verified the ZIP and END but did not compare against prior per-page source bytes. Final post-Discovery/backup and P4 Reviewer audits passed, and Lead accepted the bounded scope. The direct-entry Runner probe described below is earlier evidence and did not itself run Batch CLI. Those original capture gates do not verify other works, additional reader layouts, transformed draws, or no-deadline reader variants on other works; subsequent bounded evidence is described above.
 
 ## Episode 79 failed-trial diagnosis (2026-10-12)
 
