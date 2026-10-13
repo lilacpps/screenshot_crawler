@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from io import BytesIO
 
 import pytest
@@ -18,6 +19,7 @@ from screenshot_crawler.site_adapters.piccoma.native_capture import (
     encode_lossless_webp,
     encode_lossless_webp_or_png,
     target_generation_signature,
+    validate_scaled_alpha_paint_path,
     validate_source_jpeg,
     validate_tile_trace,
     validate_white_paint_path,
@@ -47,9 +49,10 @@ DRAW_STATE = {
 }
 
 
-def _trace(width: int = 844) -> dict[str, object]:
+def _trace(width: int = 844, height: int = 1200) -> dict[str, object]:
     columns = (width + 49) // 50
-    draw_count = columns * 24
+    rows = (height + 49) // 50
+    draw_count = columns * rows
     events: list[dict[str, object]] = [
         {
             "type": "getContext",
@@ -69,12 +72,12 @@ def _trace(width: int = 844) -> dict[str, object]:
         {
             "type": "dimension_set",
             "dimension": "height",
-            "requested": 1200,
+            "requested": height,
             "before": [width, 150],
-            "after": [width, 1200],
+            "after": [width, height],
         },
     ]
-    for row in range(24):
+    for row in range(rows):
         for column in range(columns):
             destination_x = column * 50
             destination_y = row * 50
@@ -89,7 +92,7 @@ def _trace(width: int = 844) -> dict[str, object]:
                     "sourceKind": "HTMLImageElement",
                     "sourceUrl": SOURCE_URL,
                     "sourceWidth": width,
-                    "sourceHeight": 1200,
+                    "sourceHeight": height,
                     "sourceComplete": True,
                     "assignmentGeneration": 1,
                     "loadGeneration": 1,
@@ -99,21 +102,21 @@ def _trace(width: int = 844) -> dict[str, object]:
                         source_x,
                         source_y,
                         min(50, width - source_x),
-                        50.01,
+                        min(50, height - source_y) + 0.01,
                         destination_x,
                         destination_y,
                         tile_width,
-                        50,
+                        min(50, height - destination_y),
                     ],
                     "overload": 9,
                     "state": DRAW_STATE,
-                    "targetDimensions": [width, 1200],
+                    "targetDimensions": [width, height],
                 }
             )
     return {
         "id": "canvas-1",
         "initialDimensions": [300, 150],
-        "dimensions": [width, 1200],
+        "dimensions": [width, height],
         "connected": True,
         "overflow": False,
         "totalOverflow": False,
@@ -134,7 +137,7 @@ def _trace(width: int = 844) -> dict[str, object]:
                 "lastLoadedSource": SOURCE_URL,
                 "complete": True,
                 "naturalWidth": width,
-                "naturalHeight": 1200,
+                "naturalHeight": height,
             }
         ],
         "events": events,
@@ -237,8 +240,9 @@ def test_native_snapshot_json_rejects_oversized_transport(
         ("1", False),
     ],
 )
+@pytest.mark.parametrize("scaled", [False, True])
 def test_piccoma_geometry_accepts_only_finite_near_one_device_pixel_ratio(
-    device_pixel_ratio: object, supported: bool
+    device_pixel_ratio: object, supported: bool, scaled: bool
 ) -> None:
     adapter = PiccomaAdapter()
     row = {
@@ -264,12 +268,28 @@ def test_piccoma_geometry_accepts_only_finite_near_one_device_pixel_ratio(
         "viewport": [1904, 1200, device_pixel_ratio],
         "frameRect": [530, 0, 844, 1200],
     }
+    if scaled:
+        row["canvas"].update(width=1350, height=1920, rect=[530.5, 0.5, 843.046875, 1199])
+        snapshot["frameRect"] = [530.5, 0, 843, 1200]
 
     if supported:
-        assert adapter._validate_canvas_geometry(snapshot, row) == (844, 1200)
+        assert adapter._validate_canvas_geometry(snapshot, row) == ((1350, 1920) if scaled else (844, 1200))
     else:
         with pytest.raises(UnknownPageStateError, match="supported viewport"):
             adapter._validate_canvas_geometry(snapshot, row)
+
+
+def _scaled_paint_path() -> dict[str, object]:
+    snapshot = _white_paint_path()
+    old_rows = snapshot["ancestors"]
+    rows = [deepcopy(old_rows[i]) for i in (0, 1, 1, 2)]
+    roles = ["", "PCM-viewer2_canvas_wrap", "PCM-viewer2_zoomPageContent", "PCM-viewer2_zoomPageWrap"]
+    for index, (row, role) in enumerate(zip(rows, roles, strict=True)):
+        row.update(tag="CANVAS" if index == 0 else "DIV", classes=role,
+                   rect=[530.5, 0.5, 843.046875 if index == 0 else 843, 1199])
+    snapshot.update(ancestors=rows, firstOpaqueIndex=3, firstOpaqueCoversCanvas=False,
+                    canvasRect=[530.5, 0.5, 843.046875, 1199])
+    return snapshot
 
 
 def _white_paint_path(width: int = 844) -> dict[str, object]:
@@ -341,16 +361,16 @@ def _jpeg(*, subsampling: int = 0, progressive: bool = False) -> bytes:
     return output.getvalue()
 
 
-@pytest.mark.parametrize("width", [764, 842, 844])
-def test_validates_full_fractional_source_and_destination_grid(width: int) -> None:
-    result = validate_tile_trace(_trace(width), expected_width=width, expected_height=1200)
+@pytest.mark.parametrize(("width", "height"), [(764, 1200), (842, 1200), (844, 1200), (1350, 1920)])
+def test_validates_full_fractional_source_and_destination_grid(width: int, height: int) -> None:
+    result = validate_tile_trace(_trace(width, height), expected_width=width, expected_height=height)
 
     assert result.width == width
-    assert result.height == 1200
+    assert result.height == height
     assert result.source_url == SOURCE_URL
-    assert len(result.draws) == ((width + 49) // 50) * 24
-    assert all(draw["args"][3] == 50.01 for draw in result.draws)
-    assert result.draws[-1]["args"][6:] == [width % 50 or 50, 50]
+    assert len(result.draws) == ((width + 49) // 50) * ((height + 49) // 50)
+    assert all(draw["args"][3] == min(50, height - draw["args"][1]) + 0.01 for draw in result.draws)
+    assert result.draws[-1]["args"][6:] == [width % 50 or 50, height % 50 or 50]
 
 
 @pytest.mark.parametrize(
@@ -384,15 +404,15 @@ def test_validates_full_fractional_source_and_destination_grid(width: int) -> No
         ),
     ],
 )
-@pytest.mark.parametrize("width", [764, 844])
+@pytest.mark.parametrize(("width", "height"), [(764, 1200), (844, 1200), (1350, 1920)])
 def test_rejects_trace_gaps_or_unobserved_generation_changes(
-    change, reason: str, width: int
+    change, reason: str, width: int, height: int
 ) -> None:
-    trace = _trace(width)
+    trace = _trace(width, height)
     change(trace)
 
     with pytest.raises(NativeCaptureUnavailable):
-        validate_tile_trace(trace, expected_width=width, expected_height=1200)
+        validate_tile_trace(trace, expected_width=width, expected_height=height)
 
 
 @pytest.mark.parametrize("width", [763, 765, 800])
@@ -419,6 +439,7 @@ def test_rejects_unstable_or_ambiguous_live_image_object_state(mutate) -> None:
         validate_tile_trace(trace, expected_width=844, expected_height=1200)
 
 
+@pytest.mark.parametrize("scaled", [False, True])
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -436,15 +457,21 @@ def test_rejects_unstable_or_ambiguous_live_image_object_state(mutate) -> None:
         lambda rows: rows[2].update(boxShadow="0 0 2px black"),
     ],
 )
-def test_white_backdrop_gate_rejects_unobserved_paint(mutate) -> None:
-    snapshot = _white_paint_path()
+def test_white_backdrop_gate_rejects_unobserved_paint(mutate, scaled: bool) -> None:
+    snapshot = _scaled_paint_path() if scaled else _white_paint_path()
     mutate(snapshot["ancestors"])
 
-    assert not validate_white_paint_path(snapshot, width=844, height=1200)
+    if scaled:
+        assert not validate_scaled_alpha_paint_path(snapshot, width=1350, height=1920)
+    else:
+        assert not validate_white_paint_path(snapshot, width=844, height=1200)
 
 
 def test_white_backdrop_gate_accepts_only_covering_solid_white() -> None:
     assert validate_white_paint_path(_white_paint_path(), width=844, height=1200)
+    scaled = _scaled_paint_path()
+    assert validate_scaled_alpha_paint_path(scaled, width=1350, height=1920)
+    assert not validate_white_paint_path(scaled, width=1350, height=1920)
 
 
 def test_white_backdrop_gate_rejects_visible_sibling_overlapping_canvas() -> None:

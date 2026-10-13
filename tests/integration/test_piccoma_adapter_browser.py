@@ -251,11 +251,11 @@ def _synthetic_png() -> bytes:
     return output.getvalue()
 
 
-def _synthetic_tile_jpeg(*, page_salt: int = 0, width: int = NATIVE_WIDTH) -> bytes:
+def _synthetic_tile_jpeg(*, page_salt: int = 0, width: int = NATIVE_WIDTH, height: int = NATIVE_HEIGHT) -> bytes:
     columns = (width + 49) // 50
-    image = Image.new("RGB", (width, NATIVE_HEIGHT), "white")
+    image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
-    for row in range(24):
+    for row in range((height + 49) // 50):
         for column in range(columns):
             left, top = column * 50, row * 50
             tile_width = min(50, width - left)
@@ -276,21 +276,29 @@ def _native_viewer_html(
     extra_paint: bool = False,
     overlay_sibling: bool = False,
     width: int = NATIVE_WIDTH,
+    height: int = NATIVE_HEIGHT,
     left_offset: float = 0,
 ) -> str:
     columns = (width + 49) // 50
-    draw_count = columns * 24
+    draw_count = columns * ((height + 49) // 50)
+    scaled = (width, height) == (1350, 1920)
+    frame_width, frame_height = (843, 1200) if scaled else (width, height)
+    display_width, display_height = (843.046875, 1199) if scaled else (width, height)
+    canvas_markup = '<canvas width="300" height="150"></canvas>'
+    if scaled:
+        canvas_markup = '<div class="PCM-viewer2_zoomPageContent"><div class="PCM-viewer2_canvas_wrap">' + canvas_markup + '</div></div>'
     extra = "ctx.clearRect(0, 0, 1, 1);" if extra_paint else ""
     overlay = '<div class="fixtureOverlay"></div>' if overlay_sibling else ""
     return f"""<!doctype html><html><head><style>
       html,body {{ margin:0; }}
-      #js_frame {{ position:relative; left:{left_offset}px; width:{width}px; height:{NATIVE_HEIGHT}px; margin:0 auto; }}
+      #js_frame {{ position:relative; left:{left_offset}px; width:{frame_width}px; height:{frame_height}px; margin:0 auto; }}
       #react_PageListApp {{ position:absolute; inset:0; }}
       .PCM-viewer2_pageWrapper {{ position:absolute; inset:0; display:none; }}
       .PCM-viewer2_pageWrapper.current {{ display:block; }}
-      .PCM-viewer2_canvasWrapper {{ position:absolute; inset:0; width:{width}px; height:{NATIVE_HEIGHT}px; }}
-      .PCM-viewer2_zoomPageWrap {{ position:absolute; inset:0; width:{width}px; height:{NATIVE_HEIGHT}px; background:rgb(255,255,255); }}
-      .PCM-viewer2_canvasWrapper canvas {{ display:block; width:{width}px; height:{NATIVE_HEIGHT}px; }}
+      .PCM-viewer2_canvasWrapper {{ position:absolute; inset:0; width:{frame_width}px; height:{frame_height}px; }}
+      .PCM-viewer2_zoomPageWrap {{ position:absolute;left:0;top:{0.5 if scaled else 0}px; width:{frame_width}px; height:{display_height}px; background:rgb(255,255,255); }}
+      .PCM-viewer2_zoomPageContent,.PCM-viewer2_canvas_wrap {{ width:{frame_width}px;height:{display_height}px; }}
+      .PCM-viewer2_canvasWrapper canvas {{ display:block; width:{display_width}px; height:{display_height}px; }}
       .fixtureOverlay {{ position:absolute; inset:0; z-index:2; background:rgb(255,0,0); }}
       #js_scrollTypeSing {{ position:fixed; left:0; top:0; width:10px; height:10px; }}
       #js_scrollTypeSing > div {{ display:none; }}
@@ -302,7 +310,7 @@ def _native_viewer_html(
         <section id="last" class="PCM-viewer2_pageWrapper"><div id="js_viewerEnd" class="PCM-viewer2_endPage"></div></section>
         <section id="p1" class="PCM-viewer2_pageWrapper current">
           <div class="PCM-viewer2_canvasWrapper"><div class="PCM-viewer2_zoomPageWrap">
-            <canvas width="300" height="150"></canvas>{overlay}
+            {canvas_markup}{overlay}
           </div></div>
         </section>
        </section>
@@ -320,18 +328,21 @@ def _native_viewer_html(
         const canvas=document.querySelector('#p1 canvas');
         const wrapper=document.querySelector('#p1 .PCM-viewer2_canvasWrapper');
         const ctx=canvas.getContext('2d');
-        canvas.width={width}; canvas.height={NATIVE_HEIGHT};
+        canvas.width={width}; canvas.height={height};
         const image=new Image();
         window.__piccomaFixtureImage=image;
         image.onload=()=>{{
           {extra}
           for(let destination=0;destination<{draw_count};destination++){{
-            const source=(destination*37)%{draw_count};
+            const source={str(scaled).lower()} ? (destination < {draw_count-columns}
+              ? (destination*37)%{draw_count-columns}
+              : {draw_count-columns} + ((destination-{draw_count-columns})*5)%{columns})
+              : (destination*37)%{draw_count};
             const dc=destination%{columns}, dr=Math.floor(destination/{columns});
             const sc=source%{columns}, sr=Math.floor(source/{columns});
             const dx=dc*50, dy=dr*50, sx=sc*50, sy=sr*50;
             const dw=Math.min(50,{width}-dx), sw=Math.min(50,{width}-sx);
-            ctx.drawImage(image,sx,sy,sw,50.01,dx,dy,dw,50);
+            ctx.drawImage(image,sx,sy,sw,Math.min(50,{height}-sy)+0.01,dx,dy,dw,Math.min(50,{height}-dy));
           }}
           wrapper.classList.add('loaded');
           canvas.dataset.drawn='true';
@@ -434,9 +445,10 @@ async def _start_native_fixture(
     extra_paint: bool = False,
     overlay_sibling: bool = False,
     width: int = NATIVE_WIDTH,
+    height: int = NATIVE_HEIGHT,
     left_offset: float = 0,
 ) -> None:
-    body = _synthetic_tile_jpeg(width=width)
+    body = _synthetic_tile_jpeg(width=width, height=height)
 
     async def route_handler(route: object) -> None:
         request = route.request  # type: ignore[attr-defined]
@@ -453,6 +465,7 @@ async def _start_native_fixture(
                     extra_paint=extra_paint,
                     overlay_sibling=overlay_sibling,
                     width=width,
+                    height=height,
                     left_offset=left_offset,
                 ),
                 content_type="text/html; charset=utf-8",
@@ -473,6 +486,63 @@ async def _override_device_pixel_ratio(page: Page, value: float) -> None:
         "{configurable: true, get: () => value})",
         value,
     )
+
+
+@pytest.mark.parametrize("fault", [None, "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change"])
+async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, fault: str | None
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page, width=1350, height=1920)
+    if fault == "unknown_paint_role":
+        await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.className='unknown'")
+    elif fault == "paint_gap":
+        await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='842px'")
+    elif fault == "wrong_scale":
+        await browser_page.locator("canvas").evaluate("n=>n.style.height='1198px'")
+    elif fault == "async_paint_change":
+        evaluate = piccoma_native_capture_module._bounded_evaluate
+        async def mutate_after_replay(subject, expression, argument=None, *, timeout_seconds):
+            result = await evaluate(subject, expression, argument, timeout_seconds=timeout_seconds)
+            if "NativeCapture.replay" in expression:
+                await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='842px'")
+            return result
+        monkeypatch.setattr(piccoma_native_capture_module, "_bounded_evaluate", mutate_after_replay)
+    if fault:
+        with pytest.raises(UnknownPageStateError):
+            await adapter.capture_page(browser_page)
+        return
+    captures = await adapter.capture_page(browser_page)
+    assert captures is not None and len(captures) == 1
+    captured = captures[0]
+    assert (captured.width, captured.height, captured.mime_type) == (1350, 1920, "image/png")
+    metadata = (await adapter.collect_debug_metadata(browser_page))["piccoma_capture"]
+    assert metadata["source_native"] is True
+    assert metadata["source_backdrop"] == "canvas_alpha_preserved"
+    assert metadata["fallback_reason"] is None
+    with Image.open(BytesIO(captured.data)) as image:
+        assert image.mode == "RGBA"
+        native = image.convert("RGBA")
+
+    # Independent browser rendering of the original tainted canvas at 1:1,
+    # after production capture. Only QA presentation changes; no canvas paint.
+    snapshot = await adapter._reader_snapshot(browser_page)
+    guide = await adapter._hide_reading_guide(browser_page, snapshot)
+    try:
+        await browser_page.set_viewport_size({"width": 1904, "height": 1920})
+        await browser_page.locator("#p1 canvas").evaluate("""canvas => {
+          for (let node=canvas;node;node=node.parentElement) {
+            node.style.background='transparent';
+            if (node.id==='react_ViewerApp') break;
+            node.style.width='1350px';node.style.height='1920px';node.style.top='0px';
+          }
+        }""")
+        reference = await browser_page.locator("#p1 canvas").screenshot(omit_background=True)
+    finally:
+        await adapter._restore_reading_guide(browser_page, guide)
+    with Image.open(BytesIO(reference)) as rendered:
+        assert rendered.size == (1350, 1920)
+        assert ImageChops.difference(native, rendered.convert("RGBA")).getbbox(alpha_only=False) is None
 
 
 @pytest.mark.parametrize(("width", "left_offset"), [(764, -1 / 3), (842, 0), (844, 0)])
@@ -1151,7 +1221,8 @@ async def test_piccoma_global_trace_overflow_keeps_only_lightweight_generations(
     await _start_native_fixture(adapter, browser_page)
     await browser_page.evaluate(
         """() => {
-          for (let index = 0; index < 40; index++) {
+          const count = Math.ceil(window.__piccomaNativeCapture.limits.total / 500) + 1;
+          for (let index = 0; index < count; index++) {
             const canvas = document.createElement('canvas');
             canvas.width = 2; canvas.height = 2;
             document.body.append(canvas);

@@ -34,6 +34,8 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
     piccoma_manual_grant_until,
 )
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
+    SCALED_DISPLAY_SIZE,
+    SCALED_NATIVE_SIZE,
     NativeCaptureUnavailable,
     capture_native_tile_replay,
     capture_result_format_is_valid,
@@ -280,8 +282,7 @@ class PiccomaAdapter(SiteAdapter):
         return max(default_ms, INITIALIZE_TIMEOUT_MS)
 
     async def prepare_page(self, page: Page) -> None:
-        # The observed desktop horizontal reader renders native 1200px canvas
-        # height only when its owned Page starts at this viewport.
+        # Both observed 1:1 and high-resolution scaled readers use this viewport.
         await page.set_viewport_size({"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT})
         await install_native_trace(page)
         self._capture_page = page
@@ -700,6 +701,8 @@ class PiccomaAdapter(SiteAdapter):
         if not self._canvas_renderability_is_valid(row):
             raise UnknownPageStateError("Piccoma active canvas is not visibly rendered")
         width, height = canvas.get("width"), canvas.get("height")
+        scaled = (width, height) == SCALED_NATIVE_SIZE
+        display_width, display_height = SCALED_DISPLAY_SIZE if scaled else (width, height)
         if (
             not isinstance(width, int)
             or isinstance(width, bool)
@@ -707,17 +710,23 @@ class PiccomaAdapter(SiteAdapter):
             or isinstance(height, bool)
             or width <= 0
             or height <= 0
-            or abs(float(rect[2]) - width) > 0.5
-            or abs(float(rect[3]) - height) > 0.5
+            or any(type(value) not in {int, float} or not math.isfinite(value) for value in [*rect, *frame_rect])
+            or abs(float(rect[2]) - display_width) > 0.5
+            or abs(float(rect[3]) - display_height) > 0.5
             or not canvas.get("inFrame")
             or not self._viewport_is_supported(viewport)
             or float(rect[0]) < 0
             or float(rect[1]) < 0
             or float(rect[0]) + float(rect[2]) > viewport[0] + 0.5
             or float(rect[1]) + float(rect[3]) > viewport[1] + 0.5
-            or any(not isinstance(value, (int, float)) for value in frame_rect)
-            or abs(float(frame_rect[2]) - width) > 0.5
-            or abs(float(frame_rect[3]) - height) > 0.5
+            or abs(float(frame_rect[2]) - (843 if scaled else width)) > 0.5
+            or abs(float(frame_rect[3]) - (1200 if scaled else height)) > 0.5
+            or (scaled and (
+                abs(rect[2] - display_width) > 0.01 or abs(rect[3] - display_height) > 0.01
+                or abs(frame_rect[2] - 843) > 0.01 or abs(frame_rect[3] - 1200) > 0.01
+                or abs(rect[0] - frame_rect[0]) > 0.01
+                or abs(rect[1] - frame_rect[1] - 0.5) > 0.01
+            ))
         ):
             raise UnknownPageStateError("Piccoma canvas does not match the supported viewport")
         return width, height

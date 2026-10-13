@@ -2,12 +2,12 @@
 
 ## Implemented scope
 
-Piccoma Discovery and the horizontal viewer/Capture adapter support unconditional free access and already active manual unlocks. Discovery validates complete product episode lists and records observed manual-unlock expiry separately from free access. The viewer adapter rechecks the target's current listing state before entry. Capture first attempts the strictly proven, site-local JPEG tile replay and white composite, then encodes those RGB pixels as validated lossless WebP. If WebP encoding or exact round-trip proof fails, it retains the same verified native pixels as PNG with an encoding-fallback reason. If source attribution is unavailable before materialization, it uses the existing Core canvas/Locator PNG path.
+Piccoma Discovery and the horizontal viewer/Capture adapter support unconditional free access and already active manual unlocks. Discovery validates complete product episode lists and records observed manual-unlock expiry separately from free access. The viewer adapter rechecks the target's current listing state before entry. The 1200px-high profiles first attempt the strictly proven, site-local JPEG tile replay and white composite, then encodes those RGB pixels as validated lossless WebP. If WebP encoding or exact round-trip proof fails, it retains the same verified native pixels as PNG with an encoding-fallback reason. If source attribution is unavailable before materialization, it uses the existing Core canvas/Locator PNG path.
 
-Native replay supports the live-observed 764x1200 grid (16 columns, 384 draws)
+The 1200px-high native profiles support the live-observed 764x1200 grid (16 columns, 384 draws)
 and the existing 842/844x1200 grids (17 columns, 408 draws). Each trace must
 contain the exact setup/draw count and complete unique source/destination grids;
-source attribution, fractional draw arguments, white backdrop, generation,
+source attribution, fractional draw arguments, their covering-white backdrop, generation,
 output dimensions, and lossless encoding checks remain mandatory. Unknown sizes
 still fall back. Locator rounding at fractional canvas coordinates can add one
 pixel and remains a fail-closed fallback limitation; the 764px fix uses verified
@@ -28,6 +28,96 @@ Phase 07 Stage A passed independent review. The distributed root `crawler.yaml` 
 Phase 07 Stage B transports all six existing fresh native-trace snapshots as JSON strings and restores full dictionaries for the same Python validators and signatures. It preserves field values and intentional nulls, rejects unsupported JavaScript values/negative zero/ambiguous or oversized payloads, and treats transport/schema errors as unknown target state so Core fallback cannot proceed without continuity proof. Independent Stage B review passed. Call count/order, source-native JPEG binding, 408-draw replay, white composite, lossless WebP method6, encode-time and post-encode verification, and DPR raw-viewport equality are unchanged.
 
 Stage C used the reviewed object and JSON implementations with the same YAML `page_turn_delay_ms: 200` setting in four interleaved 12-page manual runs. All 48 corresponding source-native lossless WebP files were byte-identical with zero fallback. Mean normal cycle time was 3.601s (object) versus 2.743s (JSON), a measured 0.857s / 23.8% reduction in these runs; trace RPC time fell by 0.864s and JSON decoding added 0.034s. WebP method6, pacing, and page-change stability time were effectively unchanged. A dedicated 24-page Batch reached explicit END and passed ZIP CRC, lossless-member, Artifact hash/size, and Catalog checks. The fresh prepackage audit also verified all 24 per-page manifest entries, 144 native evaluations, and 144 JSON decodes, while retaining no URLs/titles/raw manifest. The final Stage C review passed with BLOCKING 0. Details and measurement limits are in the [Phase 07 profile](../../../../research/piccoma-performance/PHASE07_PROFILE.md) and [Tester report](../../../../research/piccoma-performance/PHASE07_TESTER.md).
+
+
+## High-resolution scaled canvas maintenance (2026-10-13)
+
+Item/Source 25656 is `13565:664316`, LEVEL.323 最終話 ガッシュからの手紙.
+The normal Batch completed 21 preceding candidates, then three attempts stopped
+before p1 capture with `Piccoma canvas does not match the supported viewport`.
+The posted Kadocomi log was an older run; local Piccoma metrics and diagnostics
+identified this separate failure. Fresh ordinary entry checked an already active
+manual grant and the same `/web/viewer/s/13565/664316` route. No access acquisition
+or resource consumption was performed; quota remains quota, not free.
+
+All 22 body pages use a 1350x1920 backing canvas displayed at exactly
+843.046875x1199, inside an 843x1200 frame at the supported 1904x1200 viewport.
+Canvas/frame left edges agree; canvas top is frame top + 0.5. The existing 1:1
+geometry rule rejected this downscaled presentation. The strict new profile
+requires these measured dimensions/offsets, existing in-frame/viewport/DPR and
+ancestor visibility proof, and exact raw geometry equality throughout capture.
+It returns the backing size for output; no crop, display screenshot, forced
+canvas resize, or reflow is used by production capture.
+
+Each page has exactly 1056 trace events: context creation, two backing resets,
+and a complete 27x39 grid of 1053 image draws. The final destination row is 20px;
+the exact source heights are 50.01 or 20.01. Source object/URL/load-generation,
+unique first-party baseline JPEG response, exact context/draw arguments and
+complete unique source/destination grids remain mandatory. Only the explicit
+1350x1920 grid was added; nearby/unknown sizes are not inferred as supported.
+Per-target trace capacity is now 1152 events; the bounded document total is
+32768, sufficient for the observed 22x1056 events. Retained canvases (16), active
+traces (128), 8 MiB full-JSON transport, 131072 traversal nodes, 8,000,000-byte
+per-source budget and existing episode byte/replay-time limits remain unchanged.
+JavaScript limits now derive from the Python constants. Overflow still retires
+heavy traces and keeps lightweight generations; it never truncates accepted proof.
+
+The visible canvas is 0.046875 CSS px wider than its white paint ancestors.
+Their exact four-node path is CANVAS, `PCM-viewer2_canvas_wrap`,
+`PCM-viewer2_zoomPageContent`, and `PCM-viewer2_zoomPageWrap`; the latter is the
+first opaque white node. The ordinary covering-white proof correctly fails.
+Fresh replay alpha ranged 252..255 on every real page, so dropping transparency
+or guessing an edge matte would change pixels. This profile instead preserves
+the verified replay's entire native RGBA PNG. Its separate paint-path validator
+requires the exact roles, measured small width difference, matching offsets and
+height, unchanged strict styles/pseudo-elements, and no overlapping descendants.
+It explicitly does not claim covering white. Original covering-white gates and
+WebP/RGB round-trip behavior on 764/842/844x1200 remain intact.
+
+Output uses `native_tile_replay_png`, `source_native=true`,
+`source_mime=image/jpeg`, `source_backdrop=canvas_alpha_preserved`,
+`output_format=image/png`, `output_lossless=true`, and no fallback reason.
+PNG here preserves native canvas transparency by design, not because WebP
+encoding failed. A missing source/paint/generation proof still cannot silently
+accept a smaller display screenshot: existing output-size and continuity checks
+fail closed. Reader ordering, resume cancellation, END, max-pages, same-content,
+access eligibility, pacing and shared Core/Batch/Catalog contracts are unchanged.
+No CLI/config/schema change or `note/00_core.md` update is needed.
+
+A bounded production-adapter probe captured p1..p22 and reached explicit END.
+Normal CLI Batch `--limit 1` using an isolated online-backup Catalog then completed
+all 22 pages with END, CrawlRun 9446 and one ZIP Artifact. Every ordered member
+matched the fresh production source-replay PNG hash/length, decoded as
+1350x1920 RGBA with alpha 252..255, and passed CRC. Artifact archive hash/size
+matched. The normal Item remained Pending with its failed runs preserved.
+This compares the production replay twice, not an independent live source observer.
+Metrics `e3e7f13650e1489ba6af4b88253c2224` recorded 1 completion, no failures,
+retry, 403/429/5xx, challenge or CAPTCHA. The isolated planning skips are not
+test skips. Evidence is ignored under `work/piccoma/25656-geometry-20261013/`:
+`all-geometry.json`, `capture-proof.json`, `batch.log`, `zip-audit.json` and test
+logs. JPEG bodies/signed URLs are not committed. Other high-resolution works,
+different geometry and an independent live RGBA readback remain unverified.
+
+
+Validation: the complete affected selection covered 313 Piccoma Unit/browser
+Integration cases and 26 packaging cases, all ultimately passing with zero
+skips. The final combined invocation had 338 passed and one Windows long-path
+failure in the packaging fixture (152.84s, 11 existing asyncio warnings); all
+26 packaging cases then passed with a shorter workspace-local basetemp (0.34s).
+An earlier invocation hit 37 setup errors because the sandbox could not write
+the default user Temp pytest directory; this was resolved with a workspace
+basetemp. Its historical hardcoded global-overflow fixture was also updated to
+exercise the actual bounded limit rather than the old 20000-event value.
+Focused grid/paint/RGBA cases and 35 geometry/scaled browser cases passed.
+Synthetic browser QA compared every RGBA byte against a separate 1:1 screenshot
+of the original tainted fixture canvas, after production capture; this changes
+QA presentation only, not production viewer rendering. Live p1/p11/p22 PNGs
+were visually inspected without missing tiles or viewer chrome. Ruff and diff
+checks passed. Full-repository and separate Research/Probe suites were not run:
+changes are site-local, and the affected selection covers original native
+WebP/PNG fallbacks, source/paint/async guards, trace overflow/eviction, resumed
+entry, navigation/END, Batch/Discovery and packaging. There is no separate
+independent agent review or independent live source-pixel observer for this fix.
 
 ## Discovery and identity
 
@@ -61,7 +151,7 @@ The supported observed reader is horizontal and has body classes `PCM-stt_horizo
 
 On entry, an exact known resume prompt is automatically canceled after validating its structure, text, and two expected enabled buttons. The adapter waits for it to close, returns to p1 if necessary, and verifies a loaded, stable first page before starting capture. It never uses the resume action to start midway. The observed prompt variants are the numeric-page wording and the exact last-page wording (`前回最後のページを 読んでいました。 最後のページに移動しますか？`); mixed wording or extra text is rejected. Attachment is bounded; unknown/ambiguous dialogs fail closed. This existing cancel-to-p1 behavior was live-verified on 6913:2770415 on 2026-10-10 after closing at p2 and reopening; the first capture was p1. The one known non-interactive #js_scrollTypeSing reading-direction guide is hidden only for capture after validating one of the two observed root class sets (base class alone, or base plus `_sh` and `_show`), the same exact two child groups and three expected image labels/classes, lack of meaningful text/interactive nodes, and empty pseudo-elements; its prior inline style is restored afterward.
 
-The owned Page starts at 1904x1200 before navigation. The horizontal viewer accepts only that viewport and a finite numeric DPR within `1e-7` of 1.0. This narrow allowance covers the live Chrome reading `1.0000000298023224` (about `3e-8` above 1) while rejecting ordinary scaled modes such as 1.25x and 2x; the raw viewport array must still match exactly before and after each capture. The tolerance changes no canvas, frame, renderability, source, or draw geometry checks. Synthetic browser tests cover an unchanged near-1 DPR capture and fail-closed behavior when DPR changes within the supported band during capture. The bounded live verification and its limits are recorded below. Live raw canvas readback raised `SecurityError`. For the observed horizontal viewer, the adapter proves one loaded JPEG response's exact URL and image load generation against a complete single-image 408-draw canvas trace, replays the exact fractional draw arguments and context state into a detached canvas, and composites the transparent result over a proven solid-white backdrop. The white-paint proof requires computed `background-clip:border-box`, `clip:auto`, no border widths/radius, and the other validated covering-area conditions. Per-target dimension observers detect same-value attribute resets even while the canvas is detached and are bounded to source candidates/current capture targets. The current native output is lossless WebP encoded from the verified source-derived RGB pixels; the payload must be a single VP8L chunk, decode at the expected dimensions, and reproduce every RGB byte. Raw tiled JPEG bytes are never page output. If WebP encoding or round-trip validation fails, the same verified native pixels remain PNG with an explicit encoding fallback reason. If source attribution is unavailable before materialization, Core `capture_locator` remains PNG and is accepted only while the active canvas generation stays unchanged for the entire capture. A canvas mutation during either path fails closed. Source response URLs and raw source JPEG bodies are not exposed in manifests/logs or committed; verified output page images are saved normally.
+The owned Page starts at 1904x1200 before navigation. The horizontal viewer accepts only that viewport and a finite numeric DPR within `1e-7` of 1.0. This narrow allowance covers the live Chrome reading `1.0000000298023224` (about `3e-8` above 1) while rejecting ordinary scaled modes such as 1.25x and 2x; the raw viewport array must still match exactly before and after each capture. The tolerance changes no canvas, frame, renderability, source, or draw geometry checks. Synthetic browser tests cover an unchanged near-1 DPR capture and fail-closed behavior when DPR changes within the supported band during capture. The bounded live verification and its limits are recorded below. Live raw canvas readback raised `SecurityError`. For the observed horizontal viewer, the adapter proves one loaded JPEG response's exact URL and image load generation against a complete single-image 408-draw canvas trace, replays the exact fractional draw arguments and context state into a detached canvas, and composites the transparent result over a proven solid-white backdrop. The white-paint proof requires computed `background-clip:border-box`, `clip:auto`, no border widths/radius, and the other validated covering-area conditions. Per-target dimension observers detect same-value attribute resets even while the canvas is detached and are bounded to source candidates/current capture targets. For the 1200px-high profiles, native output is lossless WebP encoded from verified source-derived RGB pixels; the payload must be a single VP8L chunk, decode at the expected dimensions, and reproduce every RGB byte. Raw tiled JPEG bytes are never page output. If WebP encoding or round-trip validation fails, the same verified native pixels remain PNG with an explicit encoding fallback reason. If source attribution is unavailable before materialization, Core `capture_locator` remains PNG and is accepted only while the active canvas generation stays unchanged for the entire capture. A canvas mutation during either path fails closed. Source response URLs and raw source JPEG bodies are not exposed in manifests/logs or committed; verified output page images are saved normally.
 
 The bounded Phase 06-C p1 audit confirmed `jpeglib.read_dct` can parse the exact observed JPEG responses, but the unchanged Jump+ coefficient-feasibility helper rejected both Piccoma mappings as `tile_geometry_not_mcu_aligned`. The sources are baseline 8-bit 4:4:4 JPEGs with 8x8 MCUs. The 408-draw traces use 50-pixel tiles, 44/42-pixel edge widths, fractional source height `50.01` to destination height `50`, and image smoothing enabled at quality `low`. Existing Jump+/Magapoke coefficient permutation requires integer, equal-size, MCU-aligned rectangles; it does not apply to this observed geometry. This conclusion is limited to that existing method and does not assert that every conceivable custom JPEG transform is impossible. The equal-50-height seam/phase analysis is diagnostic only; production rectangles are never rounded or normalized. Phase 06-C output was reconstructed/composited PNG; Phase 06-D keeps the same pixels and replay proof but encodes the current default native output as lossless WebP. The independent evidence/design review passed with BLOCKING 0. Sanitized evidence is ignored at `output/piccoma_experiment/source_capture_research/phase06c_jpeglib_p1_evidence.json`.
 

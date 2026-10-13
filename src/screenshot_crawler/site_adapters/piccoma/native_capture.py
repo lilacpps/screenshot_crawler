@@ -18,21 +18,23 @@ from playwright.async_api import Page, Response
 
 from screenshot_crawler.core.capture import CaptureResult
 
-MAX_TARGET_EVENTS = 512
+MAX_TARGET_EVENTS = 1152
 MAX_RETAINED_CANVASES = 16
-MAX_TRACE_EVENTS = 20_000
+MAX_TRACE_EVENTS = 32_768
 MAX_SOURCE_BYTES = 8_000_000
-# A new fail-closed transport ceiling admits 512 bounded target events at
-# 16 KiB/event, with a separate 256-node/event traversal guard. Neither bound
-# truncates; unusually large full traces are rejected instead.
-MAX_NATIVE_SNAPSHOT_BYTES = MAX_TARGET_EVENTS * 16_384
-MAX_NATIVE_SNAPSHOT_NODES = MAX_TARGET_EVENTS * 256
+# Keep the existing transport/traversal ceilings independent of the larger
+# observed 1056-event trace. Neither ceiling truncates a snapshot.
+MAX_NATIVE_SNAPSHOT_BYTES = 8 * 1024 * 1024
+MAX_NATIVE_SNAPSHOT_NODES = 131_072
 MAX_REPLAY_MS = 10_000
 RESPONSE_WAIT_SECONDS = 1.5
 _SOURCE_HOST = "pcm.kakaocdn.net"
 _SOURCE_PATH = re.compile(r"^/dna/[^/?#]+/[^/?#]+/[^/?#]+/i[^/?#]+\.jpg$")
-# Only live-observed 1200px-high tile grids; unknown dimensions stay on fallback.
-_OBSERVED_TILE_COLUMNS = {764: 16, 842: 17, 844: 17}
+# Exact live-observed backing sizes and tile grids, never inferred from size.
+_OBSERVED_TILE_GRIDS = {(764, 1200): (16, 24), (842, 1200): (17, 24),
+                        (844, 1200): (17, 24), (1350, 1920): (27, 39)}
+SCALED_NATIVE_SIZE = (1350, 1920)
+SCALED_DISPLAY_SIZE = (843.046875, 1199)
 _ALLOWED_CONTEXT_ATTRIBUTES = frozenset(
     {"alpha", "colorSpace", "colorType", "desynchronized", "toneMapping", "willReadFrequently"}
 )
@@ -76,8 +78,8 @@ class ValidatedTrace:
 TRACE_INIT_SCRIPT = r"""(() => {
   if (window.__piccomaNativeCapture) return;
   const CANDIDATE_HOST = 'pcm.kakaocdn.net';
-  const MAX_TARGET_EVENTS = 512, MAX_RETAINED = 16,
-    MAX_ACTIVE_TRACES = 128, MAX_TOTAL_EVENTS = 20000;
+  const MAX_TARGET_EVENTS = __MAX_EVENTS__, MAX_RETAINED = 16,
+    MAX_ACTIVE_TRACES = 128, MAX_TOTAL_EVENTS = __MAX_TOTAL_EVENTS__;
   const nativeJsonStringify = JSON.stringify;
   const canvasIds = new WeakMap(), imageIds = new WeakMap(), imageStates = new WeakMap();
   const traces = new WeakMap(), retained = new Map(), heavyTraces = new Map();
@@ -536,6 +538,7 @@ TRACE_INIT_SCRIPT = r"""(() => {
       pathNodes.push(node);
       const s = getComputedStyle(node), bg = rgba(s.backgroundColor), before = pseudo(node, '::before'), after = pseudo(node, '::after');
       rows.push({ id: objectId(canvasIds, node), tag: node.tagName, rect: rectOf(node),
+        classes: String(node.className || ''),
         backgroundColor: s.backgroundColor, backgroundImage: s.backgroundImage,
         opacity: s.opacity, filter: s.filter, backdropFilter: s.backdropFilter || 'none',
         mixBlendMode: s.mixBlendMode, maskImage: s.maskImage || 'none', clipPath: s.clipPath,
@@ -785,6 +788,9 @@ TRACE_INIT_SCRIPT = r"""(() => {
 TRACE_INIT_SCRIPT = TRACE_INIT_SCRIPT.replace(
     "__MAX_BYTES__", str(MAX_NATIVE_SNAPSHOT_BYTES)
 ).replace("__MAX_NODES__", str(MAX_NATIVE_SNAPSHOT_NODES))
+TRACE_INIT_SCRIPT = TRACE_INIT_SCRIPT.replace(
+    "__MAX_EVENTS__", str(MAX_TARGET_EVENTS)
+).replace("__MAX_TOTAL_EVENTS__", str(MAX_TRACE_EVENTS))
 
 
 SNAPSHOT_JSON_EXPRESSION = r"""(node) => {
@@ -913,7 +919,7 @@ async def _read_native_snapshot(page: Page, canvas: Any) -> dict[str, Any] | Non
 def validate_tile_trace(
     trace: dict[str, Any] | None, *, expected_width: int, expected_height: int
 ) -> ValidatedTrace:
-    """Accept only a complete live-observed 384/408-image draw graph."""
+    """Accept only complete live-observed tile draw graphs."""
 
     if (
         not isinstance(trace, dict)
@@ -927,16 +933,15 @@ def validate_tile_trace(
     if (
         trace.get("connected") is not True
         or trace.get("dimensions") != [expected_width, expected_height]
-        or expected_width not in _OBSERVED_TILE_COLUMNS
-        or expected_height != 1200
+        or (expected_width, expected_height) not in _OBSERVED_TILE_GRIDS
         or trace.get("retained") is not True
     ):
         raise NativeCaptureUnavailable("target_canvas_identity_or_dimensions")
     events = trace.get("events")
     if not isinstance(events, list) or not 1 <= len(events) <= MAX_TARGET_EVENTS:
         raise NativeCaptureUnavailable("target_trace_incomplete")
-    columns = _OBSERVED_TILE_COLUMNS[expected_width]
-    expected_draw_count = columns * 24
+    columns, rows = _OBSERVED_TILE_GRIDS[(expected_width, expected_height)]
+    expected_draw_count = columns * rows
     if len(events) != expected_draw_count + 3:
         raise NativeCaptureUnavailable("unsupported_target_operation_count")
     creation = events[0]
@@ -981,14 +986,15 @@ def validate_tile_trace(
     destination_grid: set[tuple[int, int, int, int]] = set()
     expected_sources: set[tuple[int, int, int, float]] = set()
     expected_destinations: set[tuple[int, int, int, int]] = set()
-    for row in range(24):
+    for row in range(rows):
         sy = row * 50
         for column in range(columns):
             sx = column * 50
-            expected_sources.add((sx, sy, min(50, expected_width - sx), 50.01))
+            tile_height = min(50, expected_height - sy)
+            expected_sources.add((sx, sy, min(50, expected_width - sx), tile_height + 0.01))
             dx, dy = sx, sy
             expected_destinations.add(
-                (dx, dy, min(50, expected_width - dx), 50)
+                (dx, dy, min(50, expected_width - dx), tile_height)
             )
 
     expected_state = {
@@ -1111,19 +1117,41 @@ def validate_white_paint_path(
 ) -> bool:
     """Prove the observed transparent-canvas to covering-white paint path."""
 
-    if not isinstance(snapshot, dict) or snapshot.get("firstOpaqueCoversCanvas") is not True:
+    return _validate_paint_path(snapshot, width=width, height=height, preserve_alpha=False)
+
+
+def validate_scaled_alpha_paint_path(
+    snapshot: dict[str, Any] | None, *, width: int, height: int
+) -> bool:
+    """Validate the observed scaled path without claiming white covers its edge."""
+
+    if (width, height) != SCALED_NATIVE_SIZE:
+        return False
+    return _validate_paint_path(snapshot, width=width, height=height, preserve_alpha=True)
+
+
+def _validate_paint_path(
+    snapshot: dict[str, Any] | None, *, width: int, height: int, preserve_alpha: bool
+) -> bool:
+
+    if not isinstance(snapshot, dict) or (
+        not preserve_alpha and snapshot.get("firstOpaqueCoversCanvas") is not True
+    ):
         return False
     rect = snapshot.get("canvasRect")
     rows = snapshot.get("ancestors")
     overlapping_descendants = snapshot.get("overlappingDescendants")
     first_opaque = snapshot.get("firstOpaqueIndex")
     color = snapshot.get("firstOpaqueColor")
+    display_width, display_height = (
+        SCALED_DISPLAY_SIZE if (width, height) == SCALED_NATIVE_SIZE else (width, height)
+    )
     if (
         snapshot.get("canvasId") is None
         or not isinstance(rect, list)
         or len(rect) != 4
-        or abs(rect[2] - width) > 0.5
-        or abs(rect[3] - height) > 0.5
+        or abs(rect[2] - display_width) > 0.5
+        or abs(rect[3] - display_height) > 0.5
         or not isinstance(rows, list)
         or not isinstance(first_opaque, int)
         or first_opaque < 1
@@ -1134,6 +1162,22 @@ def validate_white_paint_path(
         or overlapping_descendants
     ):
         return False
+    if preserve_alpha:
+        roles = ["", "PCM-viewer2_canvas_wrap", "PCM-viewer2_zoomPageContent", "PCM-viewer2_zoomPageWrap"]
+        if first_opaque != 3 or len(rows) != 4 or snapshot.get("firstOpaqueCoversCanvas") is not False:
+            return False
+        for index, (row, role) in enumerate(zip(rows, roles, strict=True)):
+            box = row.get("rect") if isinstance(row, dict) else None
+            if (
+                not isinstance(box, list) or len(box) != 4
+                or any(type(v) not in {int, float} or not math.isfinite(v) for v in box)
+                or row.get("tag") != ("CANVAS" if index == 0 else "DIV")
+                or (role and role not in row.get("classes", "").split())
+                or abs(box[0] - rect[0]) > 0.01 or abs(box[1] - rect[1]) > 0.01
+                or abs(box[2] - (SCALED_DISPLAY_SIZE[0] if index == 0 else 843)) > 0.01
+                or abs(box[3] - SCALED_DISPLAY_SIZE[1]) > 0.01
+            ):
+                return False
     for index, row in enumerate(rows[: first_opaque + 1]):
         if not isinstance(row, dict):
             return False
@@ -1177,7 +1221,7 @@ def validate_white_paint_path(
         if (
             node_rect[0] > rect[0] + 0.01
             or node_rect[1] > rect[1] + 0.01
-            or node_rect[0] + node_rect[2] < rect[0] + rect[2] - 0.01
+            or node_rect[0] + node_rect[2] < rect[0] + rect[2] - (0.05 if preserve_alpha else 0.01)
             or node_rect[1] + node_rect[3] < rect[1] + rect[3] - 0.01
         ):
             return False
@@ -1519,6 +1563,8 @@ async def capture_native_tile_replay(
 
     if response_registry_overflowed:
         raise NativeCaptureUnavailable("response_registry_overflow")
+    preserve_alpha = (expected_width, expected_height) == SCALED_NATIVE_SIZE
+    paint_validator = validate_scaled_alpha_paint_path if preserve_alpha else validate_white_paint_path
     try:
         before = await _read_native_snapshot(page, canvas)
         trace = validate_tile_trace(
@@ -1528,7 +1574,7 @@ async def capture_native_tile_replay(
         if (
             not isinstance(paint_before, dict)
             or paint_before.get("canvasId") != before.get("id")
-            or not validate_white_paint_path(
+            or not paint_validator(
             paint_before, width=expected_width, height=expected_height
             )
         ):
@@ -1618,7 +1664,7 @@ async def capture_native_tile_replay(
         if (
             before.get("paint") != after.get("paint")
             or after.get("paint", {}).get("canvasId") != after.get("id")
-            or not validate_white_paint_path(
+            or not paint_validator(
                 after.get("paint"), width=expected_width, height=expected_height
             )
         ):
@@ -1626,12 +1672,18 @@ async def capture_native_tile_replay(
                 "paint_path_changed_during_replay", bytes_read=len(body), unsafe_live_change=True
             )
         replay_png = _decode_replay_data_url(replayed.get("dataUrl"))
-        composited = composite_replay_png_on_white(
-            replay_png, width=expected_width, height=expected_height
-        )
-        output_result, encoding_fallback_reason = encode_lossless_webp_or_png(
-            composited, width=expected_width, height=expected_height
-        )
+        if preserve_alpha:
+            output_result = CaptureResult(replay_png, expected_width, expected_height)
+            if not capture_result_format_is_valid(output_result, width=expected_width, height=expected_height):
+                raise NativeCaptureUnavailable("replay_png_invalid", bytes_read=len(body))
+            encoding_fallback_reason = None
+        else:
+            composited = composite_replay_png_on_white(
+                replay_png, width=expected_width, height=expected_height
+            )
+            output_result, encoding_fallback_reason = encode_lossless_webp_or_png(
+                composited, width=expected_width, height=expected_height
+            )
         final_snapshot = await _read_native_snapshot(page, canvas)
         if (
             not isinstance(final_snapshot, dict)
@@ -1647,7 +1699,7 @@ async def capture_native_tile_replay(
         if (
             before.get("paint") != final_snapshot.get("paint")
             or final_snapshot.get("paint", {}).get("canvasId") != final_snapshot.get("id")
-            or not validate_white_paint_path(
+            or not paint_validator(
                 final_snapshot.get("paint"), width=expected_width, height=expected_height
             )
         ):
@@ -1664,6 +1716,7 @@ async def capture_native_tile_replay(
             target_signature=_target_signature(before),
             source_signature=_source_signature(before),
             paint_snapshot=before.get("paint"),
+            backdrop="canvas_alpha_preserved" if preserve_alpha else "verified_solid_white",
         )
     except NativeCaptureUnavailable as exc:
         if "body" in locals() and exc.bytes_read == 0:
