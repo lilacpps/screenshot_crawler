@@ -521,12 +521,19 @@ async def test_piccoma_scaled_transition_waits_for_in_frame_canvas_without_recli
     assert await browser_page.evaluate("window.forbiddenClicks") == 1
 
 
-@pytest.mark.parametrize("fault", [None, "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change", "encoder_failure"])
+@pytest.mark.parametrize("fault", [None, "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change", "encoder_failure", "source_budget_exhausted"])
 async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
     browser_page: Page, monkeypatch: pytest.MonkeyPatch, fault: str | None
 ) -> None:
     adapter = PiccomaAdapter()
     await _start_native_fixture(adapter, browser_page, width=1350, height=1920)
+    # A long scaled episode must keep native output beyond the ordinary 64 MB
+    # budget, but still stop at its own finite budget.
+    adapter._native_bytes_read = (
+        piccoma_adapter_module.MAX_SCALED_NATIVE_EPISODE_BYTES
+        if fault == "source_budget_exhausted"
+        else piccoma_adapter_module.MAX_NATIVE_EPISODE_BYTES
+    )
     if fault == "unknown_paint_role":
         await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.className='unknown'")
     elif fault == "paint_gap":
@@ -546,8 +553,12 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
             raise piccoma_native_capture_module.NativeCaptureUnavailable("webp_codec_unavailable")
         monkeypatch.setattr(piccoma_native_capture_module, "encode_lossless_webp", fail_encoder)
     if fault and fault != "encoder_failure":
-        with pytest.raises(UnknownPageStateError):
+        with pytest.raises(UnknownPageStateError) as error:
             await adapter.capture_page(browser_page)
+        if fault == "source_budget_exhausted":
+            assert adapter._capture_fallback_reason == "episode_source_byte_budget_exhausted"
+            assert "native_fallback=episode_source_byte_budget_exhausted" in str(error.value)
+            assert "expected=1350x1920" in str(error.value)
         return
     captures = await adapter.capture_page(browser_page)
     assert captures is not None and len(captures) == 1
@@ -1253,13 +1264,13 @@ async def test_piccoma_native_trace_eviction_releases_heavy_canvas_references(
     assert target_generation_signature(changed) != baseline
 
 
+@pytest.mark.parametrize("release_completed", [False, True])
 async def test_piccoma_global_trace_overflow_keeps_only_lightweight_generations(
-    browser_page: Page,
+    browser_page: Page, release_completed: bool,
 ) -> None:
     adapter = PiccomaAdapter()
     await _start_native_fixture(adapter, browser_page)
-    await browser_page.evaluate(
-        """() => {
+    pressure_script = """releaseCompleted => {
           const count = Math.ceil(window.__piccomaNativeCapture.limits.total / 500) + 1;
           for (let index = 0; index < count; index++) {
             const canvas = document.createElement('canvas');
@@ -1267,9 +1278,26 @@ async def test_piccoma_global_trace_overflow_keeps_only_lightweight_generations(
             document.body.append(canvas);
             const context = canvas.getContext('2d');
             for (let event = 0; event < 500; event++) context.fillRect(0, 0, 1, 1);
+            if (releaseCompleted) {
+              window.__piccomaNativeCapture.retire(canvas);
+              // Retirement is idempotent; repeating it must not free others' budget.
+              window.__piccomaNativeCapture.retire(canvas);
+            }
           }
         }"""
-    )
+    await browser_page.evaluate(pressure_script, release_completed)
+    if release_completed:
+        target = await adapter.get_capture_target(browser_page)
+        snapshot = await snapshot_native_trace(browser_page, target)
+        assert snapshot["totalOverflow"] is False
+        assert snapshot["retired"] is False
+        assert len(snapshot["events"]) == 411
+        captured = (await adapter.capture_page(browser_page))[0]
+        assert captured.mime_type == "image/webp"
+        assert adapter._capture_fallback_reason is None
+        # The same live limit must still trip after completed-page reuse, even
+        # though the lifetime event count has already exceeded it once.
+        await browser_page.evaluate(pressure_script, False)
     await browser_page.evaluate(
         """() => {
           const canvas = document.createElement('canvas');

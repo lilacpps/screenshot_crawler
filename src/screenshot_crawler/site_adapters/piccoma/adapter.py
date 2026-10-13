@@ -61,6 +61,9 @@ DEVICE_PIXEL_RATIO_TOLERANCE = 1e-7
 MAX_BODY_PAGES = 2_000
 MAX_NATIVE_RESPONSE_RECORDS = 512
 MAX_NATIVE_EPISODE_BYTES = 64_000_000
+# The observed 42-page 1350x1920 episode exceeds the ordinary source-read budget.
+# Keep this larger, still finite budget specific to the validated scaled profile.
+MAX_SCALED_NATIVE_EPISODE_BYTES = 128_000_000
 PAGE_CHANGE_TIMEOUT_MS = 10_000
 INITIALIZE_TIMEOUT_MS = 30_000
 RESUME_DIALOG_GRACE_MS = 1_500
@@ -921,7 +924,11 @@ class PiccomaAdapter(SiteAdapter):
                     response_count_for_url=self._native_response_count_for_url,
                     response_registry_overflowed=self._native_response_overflow,
                     bytes_already_read=self._native_bytes_read,
-                    max_episode_bytes=MAX_NATIVE_EPISODE_BYTES,
+                    max_episode_bytes=(
+                        MAX_SCALED_NATIVE_EPISODE_BYTES
+                        if expected_size == SCALED_NATIVE_SIZE
+                        else MAX_NATIVE_EPISODE_BYTES
+                    ),
                 )
             except NativeCaptureUnavailable as exc:
                 self._native_bytes_read += exc.bytes_read
@@ -1066,6 +1073,10 @@ class PiccomaAdapter(SiteAdapter):
         ):
             raise UnknownPageStateError(
                 "Piccoma rendered image format or dimensions are unsupported"
+                f" (method={self._capture_method}, "
+                f"native_fallback={self._capture_fallback_reason}, "
+                f"expected={expected_size[0]}x{expected_size[1]}, "
+                f"actual={result.width}x{result.height} {result.mime_type})"
             )
 
     async def _hide_reading_guide(

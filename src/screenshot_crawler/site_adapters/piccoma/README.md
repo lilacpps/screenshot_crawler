@@ -31,6 +31,74 @@ Stage C used the reviewed object and JSON implementations with the same YAML `pa
 
 
 
+## Long high-resolution episode budgets (2026-10-13)
+
+Item/Source 25978 is `13565:662546`, LEVEL.1 清麿、正義の味方,
+with 42 body pages at the already supported 1350x1920 backing size.
+The original normal Batch saved p1–p26 as native lossless WebP. A fresh bounded
+probe reproduced p27 with `totalOverflow=true`, a retired empty trace, and
+`trace_missing_or_overflow`: the document counter included already retired
+pages plus prefetch. Clearing the heavy trace did not release its event budget.
+Native capture became unavailable, and the scaled Locator PNG did not match
+the backing size, producing the combined format/dimensions error. The existing
+strict output-size gate correctly stopped this fallback.
+
+The 32,768-event cap now bounds simultaneously buffered events. Every trace
+retirement (completed capture, eviction, target overflow or global overflow)
+subtracts that trace's actual event count before clearing it. Repeated retirement
+releases zero additional capacity. The separate lifetime sequence and each
+canvas's mutation generation remain monotonic. Actual simultaneous overflow
+still retires all heavy traces, sets the sticky document overflow flag, and
+keeps only lightweight mutation monitoring. No trace is truncated or revived.
+The existing 1,152-event target cap, 16 retained canvases, 128 active traces,
+8 MiB snapshot transport, traversal and source-attribution gates remain intact.
+
+After that fix, replay saved p1–p30 and then p31 exhausted the ordinary
+64,000,000-byte source-read budget: p1–p30 used 62,505,281 bytes and p31's
+declared source length was 2,291,582 bytes. The validated 1350x1920 scaled
+profile now has a finite 128,000,000-byte per-episode budget. The 1:1 profiles
+retain 64,000,000 bytes. Per-source size remains 8,000,000 bytes, with the same
+declared/actual-length checks, bounded body/replay timeouts and fail-closed
+exhaustion behavior. These budgets cover source reads across the episode;
+they do not retain that amount of image data in Python simultaneously.
+Format/dimension errors now include the capture method, native-fallback reason,
+expected backing size and actual output size/type, without source URLs.
+
+Output remains verified lossless WebP with original native RGBA pixels. Access,
+navigation, END, pacing, max-pages, same-content, Core/Batch/Catalog contracts
+and CLI/config are unchanged. Existing failed outputs and the normal Catalog
+are preserved; validation uses an isolated online-backup Catalog and output.
+Evidence is ignored under `work/piccoma/25978-trace-budget-20261013/`.
+
+Final validation: 257 native-capture Unit, browser-backed adapter Integration
+and packaging tests passed, with zero skips (160.64s; five existing asyncio
+deprecation warnings). Regression cases reuse capacity after more than one
+lifetime cap of released events, retire twice, still accept a complete native
+trace, and then trigger genuine simultaneous overflow and verify sticky
+lightweight monitoring. Scaled cases prove native RGBA output after 64 MB and
+fail closed at the 128 MB budget, including the diagnostic reason. Existing
+pixel, eviction, generation, original-size, fallback, END and packaging cases
+also passed. `ruff check src tests` and scoped `git diff --check` passed.
+Full repository, Discovery/Policy and separate Research suites were not run
+because those contracts were unchanged; all changed capture/output boundaries
+ran. No independent agent or independent live raw-canvas pixel audit is claimed.
+
+Normal CLI Batch in the dedicated Catalog completed all 42 pages and explicit
+END, CrawlRun 9580, with a 52,113,477-byte ZIP. The retained prepackage manifest
+confirms native RGBA lossless WebP and no fallback on every page. Audit checked
+ordered manifest/ZIP membership, single-frame 1350x1920 VP8L decoding, 42 unique
+hashes, CRC, Artifact SHA-256/size and isolated Catalog completion. All first 26
+members are byte-identical to the original failed Batch's saved WebPs; the first
+30 also match the fresh replay probe. Remaining pages have the production
+per-capture source/trace/round-trip proof, without a separate pixel reference.
+The 42 distinct observed JPEG responses total 87,537,514 bytes, within the new
+scaled budget. Normal Item/Source fields and failed outputs remained unchanged.
+Metrics `cd8ddd25fc4f46549dfc523a39f46add` and ignored `before.json`,
+`capture.json`, `retained-manifest.json`, `audit.json`, `batch.log` and
+`final-tests.log` record this bounded result. Episodes exceeding 128 MB or
+missing native proof can still stop; scaled screenshot fallback remains subject
+to exact backing-size validation.
+
 ## RGBA lossless WebP output (2026-10-13)
 
 The 1350x1920 scaled profile now prefers lossless WebP while preserving every
@@ -128,10 +196,12 @@ the exact source heights are 50.01 or 20.01. Source object/URL/load-generation,
 unique first-party baseline JPEG response, exact context/draw arguments and
 complete unique source/destination grids remain mandatory. Only the explicit
 1350x1920 grid was added; nearby/unknown sizes are not inferred as supported.
-Per-target trace capacity is now 1152 events; the bounded document total is
-32768, sufficient for the observed 22x1056 events. Retained canvases (16), active
+Per-target trace capacity is 1152 events; the bounded simultaneous event total
+is 32768 and retired traces release their capacity. Retained canvases (16), active
 traces (128), 8 MiB full-JSON transport, 131072 traversal nodes, 8,000,000-byte
-per-source budget and existing episode byte/replay-time limits remain unchanged.
+per-source budget and replay-time limits remain unchanged. Current episode
+source-read budgets are 128,000,000 bytes for this scaled profile and
+64,000,000 bytes for the 1:1 profiles, as described above.
 JavaScript limits now derive from the Python constants. Overflow still retires
 heavy traces and keeps lightweight generations; it never truncates accepted proof.
 

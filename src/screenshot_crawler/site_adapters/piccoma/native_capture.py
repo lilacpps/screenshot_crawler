@@ -20,6 +20,8 @@ from screenshot_crawler.core.capture import CaptureResult
 
 MAX_TARGET_EVENTS = 1152
 MAX_RETAINED_CANVASES = 16
+# Bound simultaneously retained events, including prefetch; retired pages release
+# their budget. A lifetime counter would disable native capture on long episodes.
 MAX_TRACE_EVENTS = 32_768
 MAX_SOURCE_BYTES = 8_000_000
 # Keep the existing transport/traversal ceilings independent of the larger
@@ -84,7 +86,7 @@ TRACE_INIT_SCRIPT = r"""(() => {
   const canvasIds = new WeakMap(), imageIds = new WeakMap(), imageStates = new WeakMap();
   const traces = new WeakMap(), retained = new Map(), heavyTraces = new Map();
   const expectedAttributeMutations = new WeakMap();
-  let nextId = 1, totalEvents = 0, totalOverflow = false;
+  let nextId = 1, totalEvents = 0, bufferedEvents = 0, totalOverflow = false;
   const ignoredCanvases = new WeakSet(), ignoredImages = new WeakSet();
   const hooks = { imageProperties: {}, dimensions: {}, attributes: {}, paint: {}, attributeValueHookReady: false };
   const native = {
@@ -140,6 +142,7 @@ TRACE_INIT_SCRIPT = r"""(() => {
   const retireTrace = (canvas, trace) => {
     if (trace.attributeObserver) trace.attributeObserver.disconnect();
     trace.attributeObserver = null;
+    bufferedEvents -= trace.events.length;
     trace.events.length = 0;
     trace.sources.clear();
     trace.retired = true;
@@ -179,7 +182,7 @@ TRACE_INIT_SCRIPT = r"""(() => {
       heavyTraces.set(canvas, trace);
     }
     totalEvents++;
-    if (totalEvents > MAX_TOTAL_EVENTS) {
+    if (bufferedEvents >= MAX_TOTAL_EVENTS) {
       totalOverflow = true;
       retireAllHeavyTraces();
       if (!trace.retired) retireTrace(canvas, trace);
@@ -191,6 +194,7 @@ TRACE_INIT_SCRIPT = r"""(() => {
       return;
     }
     trace.events.push({ ...event, resetGeneration: trace.resetGeneration });
+    bufferedEvents++;
     trace.lastTouched = totalEvents;
   };
   const recordAttributeDimensionMutation = (canvas, name, operation) => {
