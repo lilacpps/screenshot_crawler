@@ -1,5 +1,21 @@
 # 00. Core 現行実装ノート
 
+## ComicFUZ Discovery, Crawl and Batch registries
+
+The CLI Discovery registry includes `ComicFuzDiscoveryAdapter`; manual Crawl
+and Batch registries include `ComicFuzAdapter`, and the Batch policy registry
+includes `ComicFuzSitePolicy`. Manual Crawl requires `COMICFUZ_WORK_URL`; Batch
+reads that optional value when supplied and otherwise derives the canonical
+same-work listing from the configured composite Catalog identity. In both
+paths the adapter validates the same-work public listing and exact current
+free row before reader entry.
+The policy selects only available `free` Catalog sources with `direct` access;
+resource and grant-only passes are unsupported. Discovery, capture, Batch,
+Runner and packaging use their existing site-neutral services and the shared
+CDP BrowserSession/Page without Core or schema changes. Current contracts and
+evidence are in `note/13_comicfuz.md` and
+`runbooks/comicfuz-free/PROGRESS.md`.
+
 ## Kadocomi Discovery, direct capture, and Batch registration (2026-10-12)
 
 Kadocomi Discovery, manual Crawl, Batch adapter, and Batch Policy use the

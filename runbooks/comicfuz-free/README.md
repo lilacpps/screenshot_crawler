@@ -1,9 +1,9 @@
 # ComicFUZ (comic-fuz.com) — anonymous public-free Site Adapter Runbook
 
-**Status: PLANNED / NOT IMPLEMENTED (2026-10-12).** Phase 01 site evidence and all implementation/test gates remain **NOT VERIFIED**; see [PROGRESS](PROGRESS.md).
+**Current status (2026-10-13):** Phases 01-05 are PASS. Isolated Phase 05 E2E completed for chapters 23325 and 80641, including full Catalog/plan/batch/rediscovery and independent archive/Manifest audits for 80641. Final overall Reviewer gate passed with BLOCKING=0, and the Lead accepted the work. See [PROGRESS](PROGRESS.md) for evidence and limitations. No merge to `main` was made.
 **Branch:** `feat/comicfuz-adapter` (created from `main`). **Site key:** `comicfuz`.
 **Seed:** https://comic-fuz.com/manga/1970?position=thumbnail
-The query parameter is an input hint, not a proven canonical identity; determine the canonical work route in Phase 01.
+The observed canonical work route is `/manga/1970`; `position=thumbnail` is a decorative input query accepted by Discovery. Phase 01 evidence and limits are recorded in [PROGRESS](PROGRESS.md).
 
 ## 1. Goal, scope and explicit deferral
 
