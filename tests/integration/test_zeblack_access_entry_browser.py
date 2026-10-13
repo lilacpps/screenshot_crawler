@@ -1,11 +1,34 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+from pathlib import Path
+
 import pytest
 from playwright.async_api import Page
 
+from screenshot_crawler import cli
+from screenshot_crawler.batch import BatchExecutionError, BatchExecutor, BatchPlanner
+from screenshot_crawler.batch.metrics import BatchMetricsWriter
+from screenshot_crawler.catalog import (
+    CatalogService,
+    ItemInput,
+    SourceInput,
+    SourceTargetInput,
+    WorkInput,
+)
 from screenshot_crawler.core.errors import UnsupportedAccessStrategyError
+from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_adapters.zeblack.adapter import ZeblackAdapter
-from screenshot_crawler.site_adapters.zeblack.live_access import ZeblackLiveAccessState
+from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import (
+    ConsumptionStatus,
+    ZeblackChapterV3,
+)
+from screenshot_crawler.site_adapters.zeblack.live_access import (
+    ZeblackChapterListSnapshot,
+    ZeblackLiveAccessState,
+)
+from screenshot_crawler.site_policies import SitePolicyRegistry, ZeblackSitePolicy
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -17,6 +40,193 @@ HYDRATION_TARGET_URL = (
     "https://zebrack-comic.shueisha.co.jp/title/11551/chapter/630652/viewer"
 )
 HYDRATION_MAIN_NAME = "個人指導3"
+
+
+def _prepared_catalog(tmp_path: Path):
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="prepared-work", title="作品名"))
+    for chapter_id in ("58493", "58494"):
+        item = catalog.create_item(ItemInput(order_label=MAIN_NAME), work_id=work.id)
+        source = catalog.create_source(
+            SourceInput(site="zeblack", external_id=chapter_id, access_mode="quota",
+                        discovery_key="prepared-target"), item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(backend="web", locator=TARGET_URL.replace("58493", chapter_id)),
+            source_id=source.id,
+        )
+    policies = SitePolicyRegistry()
+    policies.register("zeblack", ZeblackSitePolicy)
+    adapters = AdapterRegistry()
+    adapters.register("zeblack", ZeblackAdapter)
+    executor = BatchExecutor(catalog, policies, adapters)
+    candidates = BatchPlanner(catalog, policies).plan(site="zeblack").candidates
+    return catalog, executor, candidates
+
+
+async def _install_prepared_observation(page: Page, monkeypatch, *, paid: bool = False):
+    navigations: list[str] = []
+    observations: list[Page] = []
+
+    async def fulfill(route):
+        navigations.append(route.request.url)
+        html = _chapter_list_html(paid_control="ポイントを使って読む" if paid else None)
+        html = html.replace(
+            "document.body.innerHTML = '<img alt=\"page_1\" src=\"data:image/gif;base64,"
+            "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==\">';",
+            "document.body.innerHTML = '<img alt=\"page_1\">';"
+            "const bytes = Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='),"
+            "c => c.charCodeAt(0));"
+            "document.querySelector('img').src = URL.createObjectURL(new Blob([bytes], {type:'image/gif'}));",
+        )
+        await route.fulfill(
+            status=200, content_type="text/html; charset=utf-8",
+            body=html
+            + '<script>window.ticketClicks = 0; document.addEventListener("click", e => {'
+            + 'if (e.target.textContent === "チケットを使って読む") window.ticketClicks++;});</script>',
+        )
+
+    await page.route("https://zebrack-comic.shueisha.co.jp/**", fulfill)
+
+    async def observe(observed_page: Page, *, title_id: str, **_kwargs):
+        observations.append(observed_page)
+        assert title_id == "3890"
+        await observed_page.goto(LIST_URL, wait_until="domcontentloaded")
+        document = await observed_page.locator("html").element_handle()
+        return ZeblackChapterListSnapshot("3890", (
+            ZeblackChapterV3("58493", "3890", MAIN_NAME, None,
+                            int(ConsumptionStatus.TICKET_AVAILABLE), None),
+        ), document=document)
+
+    async def forbidden_reload(*_args, **_kwargs):
+        pytest.fail("Prepared entry must not reload the chapter list")
+
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.zeblack.access_resolver.observe_zeblack_chapter_list", observe
+    )
+    monkeypatch.setattr(
+        "screenshot_crawler.site_adapters.zeblack.adapter.observe_zeblack_live_access", forbidden_reload
+    )
+    return navigations, observations
+
+
+@pytest.mark.parametrize("finalization_fails", [False, True])
+async def test_zeblack_cli_single_list_load_then_work_cooldown_without_site_access(
+    browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    finalization_fails: bool,
+) -> None:
+    catalog, _executor, candidates = _prepared_catalog(tmp_path)
+    navigations, observations = await _install_prepared_observation(browser_page, monkeypatch)
+    watchlist_path = tmp_path / "watchlist.yaml"
+    WatchlistService(watchlist_path).add(
+        key="prepared-target", work_key="prepared-work", site="zeblack",
+        url=LIST_URL, label="最新label",
+    )
+    pages: list[Page] = []
+    ticket_clicks: list[int] = []
+
+    class Session:
+        @classmethod
+        async def connect(cls, _endpoint):
+            return cls()
+
+        async def new_page(self):
+            pages.append(browser_page)
+            assert len(pages) == 1
+            return browser_page
+
+        async def close_page(self, page):
+            ticket_clicks.append(await page.evaluate("window.ticketClicks"))
+            await page.close()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(cli, "BrowserSession", Session)
+    monkeypatch.setattr(cli, "BatchMetricsWriter", lambda *_args, **kwargs: BatchMetricsWriter(
+        tmp_path / "metrics", **kwargs
+    ))
+    args = cli._parser().parse_args([
+        "batch", "run", "--site", "zeblack", "--grant-only", "work_ticket",
+        "--catalog", str(tmp_path / "catalog.sqlite"), "--watchlist", str(watchlist_path),
+        "--env-file", str(tmp_path / "missing.env"),
+    ])
+    if finalization_fails:
+        def fail_finalization(*_args, **_kwargs):
+            raise OSError("synthetic finalization failure")
+        monkeypatch.setattr(CatalogService, "mark_crawl_run_succeeded", fail_finalization)
+        with pytest.raises(BatchExecutionError, match="synthetic finalization failure"):
+            await cli._run_batch_run(args)
+    else:
+        await cli._run_batch_run(args)
+    first_output = capsys.readouterr().out
+    assert "OK  最新label" in first_output
+    if finalization_fails:
+        assert "後処理失敗" in first_output
+    assert navigations == [LIST_URL]
+    assert observations == [browser_page]
+    assert ticket_clicks == [1]
+    state = catalog.get_quota_resource_state(
+        candidates[0].work_id, site="zeblack", resource="work_ticket"
+    )
+    assert state is not None
+    consumed_at = datetime.fromisoformat(state.last_consumed_at)
+    assert catalog.get_source(candidates[0].source_id).quota_started_at == state.last_consumed_at
+    assert catalog.list_artifacts() == []
+    assert all(item.status == "pending" for item in catalog.list_items())
+    assert _executor.grant_only_skip_reason(candidates[1], now=consumed_at + timedelta(hours=23)) is None
+    await cli._run_batch_run(args)
+    output = capsys.readouterr().out
+    assert "SKIP  最新label" in output
+    assert "次回確認可能:" in output
+    assert navigations == [LIST_URL] and len(pages) == 1 and ticket_clicks == [1]
+
+
+@pytest.mark.parametrize("fault", [
+    "reload", "wrong_page", "wrong_target", "used", "paid", "guard_stop", "adapter_declines",
+])
+async def test_zeblack_prepared_entry_rejects_changed_state_without_spending(
+    browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str,
+) -> None:
+    from dataclasses import replace
+
+    catalog, executor, candidates = _prepared_catalog(tmp_path)
+    await _install_prepared_observation(browser_page, monkeypatch, paid=fault == "paid")
+    events = []
+    executor.access_event_sink = events.append
+    prepared = None
+    with pytest.raises((BatchExecutionError, UnsupportedAccessStrategyError)):
+        async with executor.prepare_access_resource_candidates(
+            browser_page, candidates, "work_ticket"
+        ) as prepared:
+            candidate = candidates[0]
+            page = browser_page
+            if fault == "reload":
+                await page.reload()
+            elif fault == "wrong_page":
+                page = await browser_page.context.new_page()
+            elif fault == "wrong_target":
+                candidate = replace(candidate, locator=TARGET_URL.replace("58493", "58494"))
+            elif fault == "used":
+                prepared.take(page, candidate)
+            elif fault == "guard_stop":
+                prepared.guard._stop(reason="http_429", url=LIST_URL, status=429)
+            elif fault == "adapter_declines":
+                async def decline(*_args):
+                    return False
+                monkeypatch.setattr(prepared.adapter, "adopt_prepared_access_entry", decline)
+            await executor.execute_grant_only_candidate(
+                page, candidate, prepared_access=prepared, output_root=tmp_path / "batch"
+            )
+    assert await browser_page.evaluate("window.ticketClicks") == 0
+    assert catalog.get_quota_resource_state(
+        candidates[0].work_id, site="zeblack", resource="work_ticket"
+    ) is None
+    assert catalog.get_source(candidates[0].source_id).quota_started_at is None
+    assert prepared is not None and not prepared.active
+    assert prepared.guard._page is None and prepared.guard._monitor_task is None
+    assert len([event for event in events if event.event_type == "request"]) == (2 if fault == "reload" else 1)
 
 
 def _chapter_list_html(

@@ -49,7 +49,7 @@ def test_zeblack_policy_access_mapping(
     )
 
 
-def test_zeblack_policy_quota_is_work_ticket_without_local_cap_or_cooldown() -> None:
+def test_zeblack_policy_quota_is_work_ticket_with_work_cooldown_and_no_local_cap() -> None:
     policy = ZeblackSitePolicy()
     decision = policy.evaluate(
         SimpleNamespace(access_mode="quota", available=True, access_granted_until=None),
@@ -63,13 +63,37 @@ def test_zeblack_policy_quota_is_work_ticket_without_local_cap_or_cooldown() -> 
     assert decision.quota_limit is None
     assert decision.quota_commit_mode == "after_observed_consumption"
     assert policy.available_quota((), NOW) is None
-    assert policy.resource_state_scope("work_ticket") is None
+    assert policy.resource_state_scope("work_ticket") == "work"
     assert policy.access_grant_until(NOW) == NOW + timedelta(hours=71)
     assert policy.grant_only_skip_reason(
         resource="work_ticket",
         last_consumed_at=NOW,
         now=NOW,
         cooldown_hours=23,
+    ) == "work_ticket_cooldown"
+
+
+@pytest.mark.parametrize(("hours", "elapsed", "skipped"), [
+    (None, timedelta(hours=23, microseconds=-1), True),
+    (None, timedelta(hours=23), False),
+    (None, timedelta(hours=24), False),
+    (1, timedelta(minutes=59), True),
+    (1, timedelta(hours=1), False),
+    (0, timedelta(0), False),
+])
+def test_zeblack_work_cooldown_boundary(hours, elapsed, skipped) -> None:
+    policy = ZeblackSitePolicy()
+    assert bool(policy.grant_only_skip_reason(
+        resource="work_ticket", last_consumed_at=NOW, now=NOW + elapsed, cooldown_hours=hours
+    )) is skipped
+    assert policy.grant_only_retry_at(
+        resource="work_ticket", last_consumed_at=NOW, cooldown_hours=hours
+    ) == NOW + timedelta(hours=23 if hours is None else hours)
+
+
+def test_zeblack_missing_consumption_is_not_inferred_from_rental() -> None:
+    assert ZeblackSitePolicy().grant_only_skip_reason(
+        resource="work_ticket", last_consumed_at=None, now=NOW, cooldown_hours=23
     ) is None
 
 

@@ -233,12 +233,20 @@ class CrawlerRunner:
             raise PageChangeTimeoutError("Loading state did not resolve within retry limit")
         return state
 
-    async def run(self, page: Page, adapter: SiteAdapter) -> RunResult:
+    async def run(
+        self, page: Page, adapter: SiteAdapter, *,
+        prepared_entry: bool = False, access_guard: AccessGuard | None = None,
+    ) -> RunResult:
+        if prepared_entry and (not self.config.entry_only or access_guard is None):
+            raise ValueError("Prepared access requires entry_only and its active resolver guard")
+        if access_guard is not None and not prepared_entry:
+            raise ValueError("A borrowed access guard requires prepared entry")
         output_dir = normalize_path(self.config.output_dir)
         ensure_new_run(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         profile = adapter.get_access_profile()
-        guard = AccessGuard.from_profile(
+        owns_guard = access_guard is None
+        guard = access_guard or AccessGuard.from_profile(
             site=self.config.site,
             profile=profile,
             stop_on_http_403=self.config.stop_on_http_403,
@@ -248,7 +256,8 @@ class CrawlerRunner:
             event_sink=self.config.access_event_sink,
         )
         self._access_guard = guard
-        guard.start(page)
+        if owns_guard:
+            guard.start(page)
         try:
             await self._adapter_call(adapter.prepare_page(page), "prepare_page")
             await self._adapter_call(
@@ -263,11 +272,19 @@ class CrawlerRunner:
             initial_navigation_url = adapter.resolve_initial_navigation_url(
                 self.config.source_url
             )
-            await page.goto(
-                initial_navigation_url,
-                timeout=self.config.navigation_timeout_ms,
-                wait_until="commit",
-            )
+            if prepared_entry:
+                adopted = await self._adapter_call(
+                    adapter.adopt_prepared_access_entry(page, self.config.source_url),
+                    "adopt_prepared_access_entry",
+                )
+                if not adopted:
+                    raise UnknownPageStateError("Adapter rejected prepared access entry")
+            else:
+                await page.goto(
+                    initial_navigation_url,
+                    timeout=self.config.navigation_timeout_ms,
+                    wait_until="commit",
+                )
             await self._check_access(page)
             initialize = (
                 adapter.initialize_entry_only
@@ -294,7 +311,8 @@ class CrawlerRunner:
             )
         except BaseException as exc:
             await self._write_failure_diagnostics(page, exc, adapter=adapter)
-            await self._close_guard(guard, suppress_cancellation=True)
+            if owns_guard:
+                await self._close_guard(guard, suppress_cancellation=True)
             self._access_guard = None
             raise
 
@@ -487,9 +505,10 @@ class CrawlerRunner:
             )
             raise
         finally:
-            await self._close_guard(
-                guard, suppress_cancellation=primary_error is not None
-            )
+            if owns_guard:
+                await self._close_guard(
+                    guard, suppress_cancellation=primary_error is not None
+                )
             self._access_guard = None
 
     @staticmethod

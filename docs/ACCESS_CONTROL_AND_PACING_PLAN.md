@@ -121,6 +121,24 @@ Status: **IMPLEMENTED**.
 - grant-only produces no content artifact and does not complete Item,
 - existing normal Batch Work Ticket flow remains unchanged.
 
+Deferred grant-only follow-up (2026-10-14): sequential Work resolution/entry,
+no all-Work pre-scan, pacing after unavailable snapshots, stop visiting later
+Works at the shared selected-attempt limit, current Watchlist label reporting,
+resolver-only NG outcomes, and stopped/limited unattempted Work summaries are
+covered by CLI/local Catalog tests. Existing executor tests also assert positive
+consumption evidence survives a later grant-only failure and unconfirmed failure
+exposes no positive evidence. Normal Batch and non-deferred resource-pass tests
+remain regression coverage. The synthetic Zeblack entry Integration
+tests now also exercise the real CLI/Executor/Runner handoff with one list
+navigation, one selected ticket click, source/work persistence and a second run
+that creates no site Page during cooldown. Same-URL reload, wrong Page/target,
+reused handle, declining adapter, paid-control ambiguity and a stopped guard
+fail before consumption. Confirmed consumption followed by finalization failure
+retains work cooldown and positive reporting. The document is bound before
+protobuf body observation and validated within the shared observation deadline.
+Core local-viewer and AccessGuard tests cover the default lifecycle. Real ticket
+consumption is separate live verification, not a CI dependency.
+
 ## Phase 5 - Magapoke Premium / all
 
 Status: **IMPLEMENTED**.

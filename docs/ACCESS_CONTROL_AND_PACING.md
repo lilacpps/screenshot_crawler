@@ -185,6 +185,15 @@ It:
 - does not run solely because of a local-only skip,
 - is not multiplied by candidate-internal retries.
 
+Explicit deferred grant-only runs sequence their resolver and entry by Work,
+retaining the same Page/adapter/guard from snapshot through confirmed entry.
+This is one logical operation with no inter-candidate delay or reload between
+snapshot and entry. The delay runs after cleanup and before the next Work's
+resolver. No all-Work pre-scan runs. An unavailable read-only
+resolver still establishes site-access pacing state; a local-only skipped Work
+does not add another delay. See `docs/DISCOVERY_AND_BATCH.md` for the exact
+Work sequencing and attempt-limit contract. Normal Batch sequencing is unchanged.
+
 ## 7. Shared AccessGuard
 
 ### 7.1 Purpose
@@ -307,6 +316,14 @@ retry_count
 
 For resource/grant-only runs, make successful grants observable by resource where practical.
 
+Explicit deferred grant-only runs also flush `grant_result` records for each
+planned Work/resource, with its current Watchlist display label, selected source,
+OK/NG/unattempted status, reason and confirmed/false/unknown consumption. Display
+results do not change candidate counts. Print the Work result immediately and
+print the final list even on interruption; consumption-confirmed later failure
+must retain its positive consumption evidence and a failure annotation. A
+missing confirmation must never be represented as proof of no debit.
+
 ### 8.3 Candidate fields
 
 At minimum:
@@ -384,6 +401,16 @@ Adapter / live site state
 ```
 
 Live UI/state is authoritative for actual consumption.
+
+Zeblack uses the existing work resource-state contract as a local negative gate:
+confirmed use persists the Work timestamp and source grant, and the site's
+`work_ticket_cooldown_hours` defaults to 23. No consuming Page/snapshot is opened
+during that interval. A local skip prints SKIP and its next check time through
+the optional policy `grant_only_retry_at()` hook. At expiry the site must still
+confirm availability. Manual use and old rental deadlines are not inferred.
+Explicit deferred grant-only can borrow its resolver guard for prepared entry;
+the owner keeps it active and performs bounded cleanup. Default Runner entry
+and unsupported adapters keep their existing lifecycle.
 
 A local policy decision that a resource may be tried never proves that the resource is currently available.
 

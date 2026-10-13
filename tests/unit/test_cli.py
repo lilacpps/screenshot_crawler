@@ -1,6 +1,7 @@
 import asyncio
 import builtins
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -1662,6 +1663,8 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
     candidate = SimpleNamespace(
         item_id=1,
         source_id=11,
+        work_id=1,
+        site="zeblack",
         metadata={"order": "#1"},
         access_strategy="quota",
         access_mode="quota",
@@ -1689,6 +1692,9 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
 
     class FakeMetrics:
         path = tmp_path / "metrics.jsonl"
+
+        def record_grant_result(self, **_kwargs: object) -> None:
+            pass
 
         def record_planned_skips(self, _skips: object) -> None:
             pass
@@ -1732,6 +1738,11 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
         def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
             return None
 
+        @asynccontextmanager
+        async def prepare_access_resource_candidates(self, page, candidates, resource):
+            resolution = await self.resolve_access_resource_candidates(page, candidates, resource)
+            yield SimpleNamespace(page=page, resolution=resolution)
+
         async def resolve_access_resource_candidates(
             self, _page: object, candidates: object, resource: str
         ) -> object:
@@ -1754,7 +1765,12 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
                 stop_reason="entry_confirmed",
             )
 
-    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(
+        cli, "CatalogService", lambda *_args: SimpleNamespace(
+            get_work=lambda _id: SimpleNamespace(title="作品名", work_key="work"),
+            get_source=lambda _id: SimpleNamespace(discovery_key=None),
+        )
+    )
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",
@@ -1786,6 +1802,8 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
             "work_ticket",
             "--catalog",
             str(tmp_path / "catalog.sqlite"),
+            "--watchlist",
+            str(tmp_path / "absent-watchlist.yaml"),
         ]
     )
     await cli._run_batch_run(args)
@@ -1798,6 +1816,8 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
     assert "    selection: live resolver" in output
     assert "  executing: resolver-selected candidates" in output
     assert "  executing: 1" not in output
+    assert "OK  作品名 [Catalog名]" in output
+    assert "Grant-only results:" in output
 
 
 @pytest.mark.asyncio

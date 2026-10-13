@@ -159,6 +159,33 @@ class BatchMetricsWriter:
             }
         )
 
+    def record_grant_result(
+        self,
+        *,
+        work_id: int,
+        label: str,
+        resource: str,
+        source_id: int | None,
+        status: str,
+        reason: str,
+        resource_consumed: bool | None,
+    ) -> None:
+        """Flush operator-facing work results independently of candidate counters."""
+
+        self._write(
+            {
+                "type": "grant_result",
+                "run_id": self.run_id,
+                "work_id": work_id,
+                "label": label,
+                "resource": resource,
+                "source_id": source_id,
+                "status": status,
+                "reason": reason,
+                "resource_consumed": resource_consumed,
+            }
+        )
+
     def finish_candidate(
         self,
         *,

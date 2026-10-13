@@ -28,6 +28,35 @@ class ZeblackSitePolicy(SitePolicy):
 
         return True
 
+    def resource_state_scope(self, resource: str) -> str | None:
+        return "work" if resource == "work_ticket" else None
+
+    def grant_only_retry_at(
+        self, *, resource: str, last_consumed_at: datetime | None,
+        cooldown_hours: int | None,
+    ) -> datetime | None:
+        if resource != "work_ticket" or last_consumed_at is None:
+            return None
+        if last_consumed_at.tzinfo is None or last_consumed_at.utcoffset() is None:
+            raise SitePolicyError("last_consumed_at must be timezone-aware")
+        hours = 23 if cooldown_hours is None else cooldown_hours
+        if isinstance(hours, bool) or not isinstance(hours, int) or hours < 0:
+            raise SitePolicyError("cooldown_hours must be a non-negative integer")
+        return last_consumed_at.astimezone(JST) + timedelta(hours=hours)
+
+    def grant_only_skip_reason(
+        self, *, resource: str, last_consumed_at: datetime | None,
+        now: datetime, cooldown_hours: int | None,
+    ) -> str | None:
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise SitePolicyError("now must be a timezone-aware datetime")
+        retry_at = self.grant_only_retry_at(
+            resource=resource, last_consumed_at=last_consumed_at, cooldown_hours=cooldown_hours
+        )
+        if retry_at is not None and now.astimezone(JST) < retry_at:
+            return "work_ticket_cooldown"
+        return None
+
     def evaluate(
         self,
         source: Source,

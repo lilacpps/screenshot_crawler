@@ -149,6 +149,83 @@ immediately executable. Non-deferred sites retain their existing output and
 execution representation. No Catalog schema, migration, or version change is
 required.
 
+## Deferred grant-only work sequencing (2026-10-14)
+
+Explicit deferred `batch run --grant-only <resource>` and `--grant-only all`
+process one planned Work at a time: resolve that Work's live target, execute
+its selected grant through the existing entry-only executor, report the result,
+then move to the next Work. They do not resolve all Works in advance. Work order
+is the order of first appearance in the Planner pool, not Watchlist file order.
+The site-owned resolver retains authority over ChapterV3 eligibility, exact
+Catalog identity and native chapter order. A missing Work identity, a selected
+source outside the current Work, or multiple selected targets for one Work
+fails closed before any grant click.
+
+For explicit deferred grant-only, one Work uses a single Page and adapter from
+snapshot through ticket entry and consumption confirmation. The existing
+entry-only executor receives a context-scoped, single-use prepared access handle.
+The adapter validates the same Page, observation document, canonical target and
+current quota/resource configuration; only then may Runner skip its initial goto.
+Zeblack reuses that exact decoded snapshot instead of performing another live
+observer reload. A same-URL reload invalidates the document handle. Rejection,
+expired context or repeated use fails closed without a new snapshot or click.
+The resolver's AccessGuard stays active throughout entry, is borrowed by Runner,
+and is closed once by its owning context; requests are not counted twice.
+
+`inter_candidate_delay_ms` separates consecutive Works after page cleanup:
+resolver -> selected grant -> close Page -> delay -> next Work's resolver.
+Snapshot and entry are one logical operation, so no artificial delay or second
+Page is inserted inside that operation. Zeblack's chapter/list loads once per
+eligible Work in this path, followed by its existing chapter/modal/viewer flow.
+A resolver with no target still requires the delay before the next site's
+operation. Catalog-only skips do not open a Page or introduce an extra delay.
+Grant-only `--limit` counts selected grant attempts, including unavailable or
+failed entry attempts; read-only checks do not count. Once the limit is reached,
+later Works are not visited, and `all` shares the same limit across Policy passes.
+
+For these explicit deferred runs, print one `OK` / `NG` / local `SKIP` result per planned
+Work/resource immediately and print the full result list on normal completion,
+failure or interruption. Resolver-only unavailable/missing-target outcomes are
+included; non-selected sibling chapters are not additional Work failures.
+`OK` requires positive current-attempt consumption confirmation. A later
+finalization failure remains `OK` with a failure annotation, while unconfirmed
+click/entry failure is `NG` with consumption explicitly unconfirmed. Expected
+unavailability ends only the current Work, including a site-owned unavailable
+entry result; ambiguity, timeout and AccessGuard rejection stop the run. Later
+Works are `未実行`, with `stopped` or `limit_reached`, never ordinary `NG`.
+
+`batch run --watchlist PATH` defaults to `watchlist.yaml`. Display labels use
+the latest Watchlist label matched by Source.discovery_key, site and Work key.
+Missing or mismatched Watchlist entries use Work.title marked `[Catalog名]`.
+This is display-only: it does not change execution scope, enable/disable state,
+output metadata, source URLs or Catalog state. Results are incrementally flushed
+as `grant_result` records in the existing metrics JSONL (work_id, label, resource,
+source_id, status, reason and resource_consumed). These records do not increment
+candidate counters. `source_id` is NULL until a live target is selected; no
+chapter is displayed for resolver-only or unattempted outcomes. Only Works with
+planned deferred candidates appear. Interruption during the wait before a Work's
+resolver leaves that Work unattempted.
+
+Zeblack confirmed Work Ticket use now also persists existing work-scoped resource
+state. Before a site's consuming Page or snapshot is created, use that Work's
+last confirmed consumption and `work_ticket_cooldown_hours` (site default 23) as
+a local negative gate. Within the half-open interval [consumed_at, retry_at),
+print `SKIP` with the Work label and next local check time. Equality permits live
+checking; elapsed time never proves ticket availability. Normal Batch also
+filters cooling Works before its whole-pool resolver; FREE/active RENTAL direct
+reads remain eligible. Unavailable or unconfirmed entry creates no consumption
+record; confirmed consumption survives later failure. This applies to future
+confirmed consumption records; old Source grant/rental deadlines are not used to
+backfill work state, and manual account actions are not inferred.
+
+Normal Batch retains its existing direct -> whole-pool resolver/grant -> one
+post-grant direct replan cycle and its legacy selected-entry reloads.
+Non-deferred sites retain their existing resource pass behavior. Exact modal checks,
+single ticket click, same-chapter viewer confirmation, grant persistence and
+no-capture/no-package/no-completion semantics are unchanged. This change requires
+no Catalog migration. The single-list-load guarantee applies to explicit
+deferred grant-only, not the legacy normal Batch/manual quota path.
+
 ## Z5-6 Zeblack production Work Ticket entry flow
 
 `SourceTarget.locator`と`RunConfig.source_url`はcanonical viewer URLのまま保持する。
@@ -196,9 +273,10 @@ chapter is a non-terminal `AccessResourceUnavailableError`, while zero
 available chapters stops only the explicit Work Ticket resource pass.
 
 Zeblack's Site Policy exposes only `work_ticket`, uses work-scoped oldest-first
-planning with `quota_limit=None`, does not infer a local 23-hour cooldown or
-work-wide state, and commits quota state only after confirmed same-chapter
-viewer content. Grant-only uses the generic entry-only contract; it records
+planning with `quota_limit=None`, and commits source and work-wide resource state
+only after confirmed same-chapter viewer content. The local negative gate uses
+the configured work cooldown (default 23 hours); it does not infer live resource
+restoration. Grant-only uses the generic entry-only contract; it records
 confirmed consumption, leaves the Item pending, and creates no package.
 
 ### Current title-402 direct viewer navigation verification (2026-09-30)

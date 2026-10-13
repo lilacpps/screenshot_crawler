@@ -126,6 +126,14 @@ ProgressStore、CrawlRun、BatchCandidate、SourceTargetのidentityとして保�
 CrawlerRunnerは`configure_run`と`configure_quota_resource`の後、最初の`page.goto()`にだけこのhookの結果を使う。
 RunnerやGeneric Batch Coreにsite名・selector・URL分岐を追加しない。
 
+明示grant-onlyのprepared entryでは、Batch Executorの有界context managerが
+resolverとentryに同一Page・Adapter・AccessGuardを渡し、context内で一度だけ利用できる。
+Runnerは`entry_only`と借用Guardを要求し、設定・target検証後にAdapterの
+`adopt_prepared_access_entry()`で既存document/snapshotを検証して初期gotoを省略する。
+未対応Adapter、変更されたtarget/document、期限外context、再使用は停止する。
+Runnerは借用Guardを再start/closeせず、所有contextが有界cleanupを行うため、
+監視の空白やmetricsの二重計上を作らない。通常runのgoto/Guard所有権は従来どおり。
+
 Zeblackの明示的な`quota + work_ticket`はcanonical viewer URLをtargetとして保持したまま、
 最初のブラウザ入口を`/title/{title_id}/chapter/list`へ切り替える。Adapterはlive protobufで対象章の
 statusと`mainName`を再確認し、`TICKET_AVAILABLE`のときだけchapter/listの対象行、確認modal、

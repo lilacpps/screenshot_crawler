@@ -101,6 +101,37 @@ class _HangingBodyPage(_Page):
             listener(response)  # type: ignore[operator]
 
 
+@pytest.mark.parametrize("state", ["same", "changed", "timeout"])
+async def test_prepared_observation_binds_the_document_within_its_deadline(state: str) -> None:
+    class Document:
+        async def evaluate(self, _expression):
+            if state == "timeout":
+                await asyncio.sleep(3600)
+            return state == "same"
+
+    class DocumentPage(_Page):
+        def locator(self, selector):
+            assert selector == "html"
+            return self
+
+        async def element_handle(self, **_kwargs):
+            return document
+
+    document = Document()
+    page = DocumentPage(_payload(_chapter(101, 2, "#17")))
+    if state == "same":
+        snapshot = await observe_zeblack_chapter_list(
+            page, title_id="5123", timeout_ms=50, capture_document=True
+        )
+        assert snapshot.document is document and snapshot.ticket_available_ids == ("101",)
+    else:
+        with pytest.raises(ZeblackLiveAccessError, match="document changed"):
+            await observe_zeblack_chapter_list(
+                page, title_id="5123", timeout_ms=50, capture_document=True
+            )
+    assert page.listeners == []
+
+
 def test_zeblack_chapter_list_title_parser_is_strict() -> None:
     assert (
         parse_zeblack_chapter_list_title_id(

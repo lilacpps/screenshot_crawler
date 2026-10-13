@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
-from playwright.async_api import Page
+from playwright.async_api import ElementHandle, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import (
@@ -59,6 +59,7 @@ class ZeblackChapterListSnapshot:
 
     title_id: str
     chapters: tuple[ZeblackChapterV3, ...]
+    document: ElementHandle | None = field(default=None, compare=False, repr=False)
 
     @property
     def by_id(self) -> dict[str, ZeblackChapterV3]:
@@ -288,13 +289,21 @@ async def observe_zeblack_live_access(
     snapshot = await observe_zeblack_chapter_list(
         page, title_id=title_id, timeout_ms=timeout_ms
     )
+    return live_access_from_snapshot(snapshot, chapter_id=str(chapter_id))
+
+
+def live_access_from_snapshot(
+    snapshot: ZeblackChapterListSnapshot, *, chapter_id: str
+) -> ZeblackLiveAccessState:
+    """Use the exact decoded observation without another navigation or request."""
+
     target = snapshot.by_id.get(str(chapter_id))
     if target is None:
         raise ZeblackLiveAccessError(
             "Zeblack live chapter-list did not contain the target chapter"
         )
     return ZeblackLiveAccessState(
-        title_id=str(title_id),
+        title_id=snapshot.title_id,
         chapter_id=str(chapter_id),
         target_main_name=target.main_name,
         status_value=target.status_value,
@@ -309,6 +318,7 @@ async def observe_zeblack_chapter_list(
     *,
     title_id: str,
     timeout_ms: int = ZEBLACK_LIVE_ACCESS_TIMEOUT_MS,
+    capture_document: bool = False,
 ) -> ZeblackChapterListSnapshot:
     """Load one bounded chapter/list protobuf snapshot for a title."""
 
@@ -320,6 +330,7 @@ async def observe_zeblack_chapter_list(
     observer = _LiveProtobufObserver()
     observer.attach(page)
     deadline = time.monotonic() + timeout_ms / 1000
+    document = None
     try:
         try:
             navigation_timeout_ms = max(1, observer._remaining_timeout_ms(deadline))
@@ -342,7 +353,25 @@ async def observe_zeblack_chapter_list(
             raise ZeblackLiveAccessError(
                 "Zeblack chapter-list protobuf response timed out"
             )
+        if capture_document:
+            document = await page.locator("html").element_handle(timeout=remaining_ms)
+            if document is None:
+                raise ZeblackLiveAccessError("Zeblack observation document is unavailable")
+            remaining_ms = observer._remaining_timeout_ms(deadline)
+            if remaining_ms <= 0:
+                raise ZeblackLiveAccessError("Zeblack observation document timed out")
         payloads = await observer.wait_for_payloads(page, remaining_ms)
+        if document is not None:
+            remaining_ms = observer._remaining_timeout_ms(deadline)
+            try:
+                same_document = await asyncio.wait_for(
+                    document.evaluate("node => node.isConnected && node === document.documentElement"),
+                    timeout=max(0, remaining_ms) / 1000,
+                )
+            except Exception as exc:
+                raise ZeblackLiveAccessError("Zeblack observation document changed or timed out") from exc
+            if not same_document:
+                raise ZeblackLiveAccessError("Zeblack observation document changed")
     finally:
         observer.close()
 
@@ -350,6 +379,7 @@ async def observe_zeblack_chapter_list(
     return ZeblackChapterListSnapshot(
         title_id=str(title_id),
         chapters=tuple(records.values()),
+        document=document,
     )
 
 
@@ -359,6 +389,7 @@ __all__ = [
     "ZeblackLiveAccessError",
     "ZeblackLiveAccessState",
     "canonical_zeblack_chapter_list_url",
+    "live_access_from_snapshot",
     "observe_zeblack_chapter_list",
     "observe_zeblack_live_access",
     "parse_zeblack_chapter_list_title_id",

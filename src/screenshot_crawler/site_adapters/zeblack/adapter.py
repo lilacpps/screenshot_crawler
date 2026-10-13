@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from playwright.async_api import Locator, Page
+from playwright.async_api import ElementHandle, Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.core.access_guard import AccessProfile
@@ -34,6 +34,7 @@ from screenshot_crawler.site_adapters.zeblack.live_access import (
     ZeblackLiveAccessError,
     ZeblackLiveAccessState,
     canonical_zeblack_chapter_list_url,
+    live_access_from_snapshot,
     observe_zeblack_live_access,
 )
 from screenshot_crawler.site_adapters.zeblack.native_capture import (
@@ -201,6 +202,15 @@ def parse_zeblack_page_alt(value: object) -> int | None:
     return _parse_zeblack_page_alt(value)
 
 
+@dataclass
+class _PreparedZeblackEntry:
+    page: Page
+    document: ElementHandle
+    source_url: str
+    access: ZeblackLiveAccessState
+    used: bool = False
+
+
 class ZeblackAdapter(SiteAdapter):
     page_change_timeout_ms = 10_000
     render_stable_checks = 2
@@ -234,6 +244,7 @@ class ZeblackAdapter(SiteAdapter):
         self._source_responses: OrderedDict[str, object] = OrderedDict()
         self._source_response_tasks: OrderedDict[str, asyncio.Task[bytes | None]] = OrderedDict()
         self._listener_page: Page | None = None
+        self._prepared_entry: _PreparedZeblackEntry | None = None
         self._protected_source_urls: set[str] = set()
 
     def get_access_profile(self) -> AccessProfile:
@@ -303,6 +314,7 @@ class ZeblackAdapter(SiteAdapter):
         *,
         timeout_ms: int = 15_000,
     ) -> AccessResourceResolution | None:
+        self._prepared_entry = None
         if quota_resource != "work_ticket":
             raise UnsupportedAccessStrategyError(
                 f"ZeblackAdapter does not support quota_resource={quota_resource!r}"
@@ -311,11 +323,54 @@ class ZeblackAdapter(SiteAdapter):
             resolve_zeblack_work_ticket_candidates,
         )
 
-        return await resolve_zeblack_work_ticket_candidates(
+        snapshots = {}
+        resolution = await resolve_zeblack_work_ticket_candidates(
             page,
             candidates,  # type: ignore[arg-type]
             timeout_ms=timeout_ms,
+            selected_snapshots=snapshots,
         )
+        if len(resolution.selected_source_ids) == 1:
+            source_id = resolution.selected_source_ids[0]
+            selected = next(item for item in candidates if item.source_id == source_id)
+            document = snapshots[source_id].document
+            if document is None:
+                raise UnknownPageStateError("Zeblack resolver document is unavailable")
+            self._prepared_entry = _PreparedZeblackEntry(
+                page, document, selected.locator,
+                live_access_from_snapshot(snapshots[source_id], chapter_id=selected.external_id),
+            )
+        return resolution
+
+    async def adopt_prepared_access_entry(self, page: Page, source_url: str) -> bool:
+        prepared = self._prepared_entry
+        if prepared is None:
+            raise UnknownPageStateError("Zeblack prepared snapshot is unavailable")
+        if prepared.used:
+            raise UnknownPageStateError("Zeblack prepared snapshot was already used")
+        prepared.used = True
+        target = self._target_viewer
+        if (
+            page is not prepared.page
+            or source_url != prepared.source_url
+            or self._access_strategy != "quota"
+            or self._quota_resource != "work_ticket"
+            or target is None
+            or target.title_id != prepared.access.title_id
+            or target.chapter_id != prepared.access.chapter_id
+            or str(page.url) != canonical_zeblack_chapter_list_url(target.title_id)
+        ):
+            raise UnknownPageStateError("Zeblack prepared snapshot identity changed")
+        try:
+            same_document = await prepared.document.evaluate(
+                "node => node.isConnected && node === document.documentElement"
+            )
+        except Exception as exc:
+            raise UnknownPageStateError("Zeblack prepared snapshot document changed") from exc
+        if not same_document or not prepared.access.target_ticket_available:
+            raise UnknownPageStateError("Zeblack prepared snapshot is no longer valid")
+        self._live_access = prepared.access
+        return True
 
     def get_access_consumption(self) -> AccessConsumption:
         return self._access_consumption
@@ -884,15 +939,16 @@ class ZeblackAdapter(SiteAdapter):
             )
         if self._target_url is None or self._target_viewer is None:
             raise UnknownPageStateError("Zeblack target viewer identity is unavailable")
-        try:
-            self._live_access = await observe_zeblack_live_access(
-                page,
-                title_id=self._target_viewer.title_id,
-                chapter_id=self._target_viewer.chapter_id,
-                timeout_ms=self.page_change_timeout_ms,
-            )
-        except ZeblackLiveAccessError as exc:
-            raise UnknownPageStateError(str(exc)) from exc
+        if self._live_access is None:
+            try:
+                self._live_access = await observe_zeblack_live_access(
+                    page,
+                    title_id=self._target_viewer.title_id,
+                    chapter_id=self._target_viewer.chapter_id,
+                    timeout_ms=self.page_change_timeout_ms,
+                )
+            except ZeblackLiveAccessError as exc:
+                raise UnknownPageStateError(str(exc)) from exc
 
         assert self._live_access is not None
         self._target_main_name = self._live_access.target_main_name

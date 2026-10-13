@@ -27,6 +27,8 @@ from screenshot_crawler.batch import (
     BatchPlanningError,
     CandidateExecutionError,
 )
+from screenshot_crawler.batch.executor import PreparedAccessResource
+from screenshot_crawler.batch.grants import GrantOnlyReport, group_grant_candidates
 from screenshot_crawler.batch.metrics import BatchMetricsWriter
 from screenshot_crawler.catalog import CatalogError, CatalogService
 from screenshot_crawler.catalog.backup import backup_catalog, default_backup_path
@@ -362,6 +364,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     batch_run.add_argument("--site", required=True)
     batch_run.add_argument(
+        "--watchlist", type=Path, default=Path("watchlist.yaml"),
+        help="Watchlist labels for deferred grant-only results (default: watchlist.yaml)",
+    )
+    batch_run.add_argument(
         "--catalog",
         type=Path,
         default=Path("catalog.sqlite"),
@@ -390,7 +396,7 @@ def _parser() -> argparse.ArgumentParser:
     batch_run.add_argument(
         "--limit",
         type=_positive_int,
-        help="Execute only the first N planned candidates (N >= 1)",
+        help="Maximum crawl slots, or selected grant attempts for --grant-only (N >= 1)",
     )
     batch_run.add_argument(
         "--grant-only",
@@ -1177,9 +1183,11 @@ async def _resolve_access_resource_candidates(
     resource: str,
     delay_before_first_ms: int | None = None,
     metrics: BatchMetricsWriter | None = None,
+    grant_report: GrantOnlyReport | None = None,
 ) -> list[BatchCandidate]:
     """Resolve site-native candidates without counting the snapshot as an attempt."""
 
+    candidates = _filter_local_grant_candidates(executor, candidates, metrics=metrics)
     if not candidates:
         return []
     if delay_before_first_ms is not None:
@@ -1211,6 +1219,15 @@ async def _resolve_access_resource_candidates(
     finally:
         await _best_effort_cleanup(session.close_page(page))
 
+    return _apply_access_resolution(
+        candidates, resolution, metrics=metrics, grant_report=grant_report
+    )
+
+
+def _apply_access_resolution(
+    candidates: list[BatchCandidate], resolution: object, *,
+    metrics: BatchMetricsWriter | None, grant_report: GrantOnlyReport | None = None,
+) -> list[BatchCandidate]:
     if metrics is not None:
         for source_id, reason in resolution.skipped_source_reasons:
             candidate = next(
@@ -1219,7 +1236,137 @@ async def _resolve_access_resource_candidates(
             if candidate is not None:
                 metrics.record_local_skip(candidate, reason=reason)
     selected_ids = set(resolution.selected_source_ids)
+    if grant_report is not None and not selected_ids.issubset(
+        {candidate.source_id for candidate in candidates}
+    ):
+        raise BatchPlanningError("Deferred grant-only resolver selected a source outside its work")
+    if grant_report is not None and not selected_ids:
+        reasons = dict.fromkeys(reason for _source_id, reason in resolution.skipped_source_reasons)
+        grant_report.record(
+            candidates[0], status="NG",
+            reason=" / ".join(reasons) or "no_live_target",
+            resource_consumed=False,
+            selected=False,
+        )
     return [candidate for candidate in candidates if candidate.source_id in selected_ids]
+
+
+def _record_local_grant_skip(
+    executor: BatchExecutor, candidate: BatchCandidate, reason: str,
+    report: GrantOnlyReport | None = None,
+) -> None:
+    retry = getattr(executor, "grant_only_retry_at", None)
+    retry_at = retry(candidate) if callable(retry) else None
+    detail = reason
+    if retry_at is not None:
+        detail += f"／次回確認可能: {retry_at:%Y-%m-%d %H:%M %Z}"
+    if report is not None:
+        report.record(
+            candidate, status="SKIP", reason=detail, resource_consumed=False, selected=False
+        )
+    else:
+        print(f"  SKIP  {candidate.metadata.get('title', candidate.item_id)}  {detail}")
+
+
+def _filter_local_grant_candidates(
+    executor: BatchExecutor, candidates: list[BatchCandidate], *,
+    metrics: BatchMetricsWriter | None,
+) -> list[BatchCandidate]:
+    check = getattr(executor, "grant_only_skip_reason", None)
+    if not callable(check):
+        return candidates
+    eligible = []
+    displayed = set()
+    for candidate in candidates:
+        reason = check(candidate)
+        if reason is None:
+            eligible.append(candidate)
+        else:
+            if metrics is not None:
+                metrics.record_local_skip(candidate, reason=reason)
+            work = getattr(candidate, "work_id", candidate.item_id)
+            if work not in displayed:
+                _record_local_grant_skip(executor, candidate, reason)
+                displayed.add(work)
+    return eligible
+
+
+async def _execute_deferred_grants(
+    args: argparse.Namespace,
+    session: BrowserSession,
+    executor: BatchExecutor,
+    candidates: list[BatchCandidate],
+    *,
+    resource: str,
+    inter_candidate_delay_ms: int,
+    metrics: BatchMetricsWriter,
+    report: GrantOnlyReport,
+    attempt_limit: int | None,
+    previous_site_access: bool = False,
+) -> tuple[int, bool]:
+    """Resolve and grant one work before contacting the next work."""
+
+    report.prepare(candidates, resource)
+    attempts = 0
+    for group in group_grant_candidates(candidates):
+        if attempt_limit is not None and attempts >= attempt_limit:
+            break
+        selected: list[BatchCandidate] = []
+        site_operation_started = False
+        page = None
+        try:
+            # Catalog-only gates never introduce site access or a delay.
+            eligible: list[BatchCandidate] = []
+            for candidate in group:
+                reason = executor.grant_only_skip_reason(candidate)
+                if reason is None:
+                    eligible.append(candidate)
+                else:
+                    metrics.record_local_skip(candidate, reason=reason)
+            if not eligible:
+                _record_local_grant_skip(executor, group[0], reason, report)
+                continue
+            if previous_site_access:
+                await asyncio.sleep(inter_candidate_delay_ms / 1000)
+            site_operation_started = True
+            page = await session.new_page()
+            previous_site_access = True
+            print(
+                f"Batch access-resource resolver: resource={resource} "
+                f"snapshot start candidates={len(eligible)}"
+            )
+            async with executor.prepare_access_resource_candidates(page, eligible, resource) as prepared:
+                selected = _apply_access_resolution(
+                    eligible, prepared.resolution, metrics=metrics, grant_report=report
+                )
+                print(f"Batch access-resource resolver: snapshot complete selected={len(selected)}")
+                if len(selected) > 1:
+                    raise BatchPlanningError("Deferred grant-only resolver selected multiple targets for a work")
+                if not selected:
+                    continue
+                processed, _continue = await _execute_batch_candidates(
+                    args, session, executor, selected, phase=f"grant-only:{resource}",
+                    inter_candidate_delay_ms=inter_candidate_delay_ms,
+                    metrics=metrics, grant_only=True, attempt_limit=1, grant_report=report,
+                    prepared_access=prepared,
+                )
+            attempts += processed
+            # Expected resource unavailability ends only this work. Fatal access
+            # errors and ambiguous entry still propagate and stop the whole run.
+        except BaseException as exc:
+            interrupted = isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError))
+            if not report.has_result(group[0]) and (site_operation_started or not interrupted):
+                report.failure(
+                    selected[0] if len(selected) == 1 else group[0], exc,
+                    selected=len(selected) == 1,
+                )
+            if interrupted:
+                raise BatchInterruptedError("Batch interrupted during deferred grant-only work") from exc
+            raise
+        finally:
+            if page is not None:
+                await _best_effort_cleanup(session.close_page(page))
+    return attempts, previous_site_access
 
 
 def _completed_candidate_count(
@@ -1345,7 +1492,13 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
 
     session = None
     primary_error: BaseException | None = None
+    grant_report: GrantOnlyReport | None = None
+    grant_attempts = 0
     try:
+        if defer_quota and grant_only is not None:
+            grant_report = GrantOnlyReport(catalog, args.watchlist, metrics)
+            if not grant_only_all:
+                grant_report.prepare(candidates, grant_only)
         values = read_env_file(args.env_file) if args.env_file.is_file() else {}
         endpoint = resolve_cdp_endpoint(
             site=args.site,
@@ -1381,22 +1534,6 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                             defer_quota=True,
                         )
                     )
-                    resolver_had_candidates = bool(resource_candidates)
-                    resource_candidates = await _resolve_access_resource_candidates(
-                        session,
-                        executor,
-                        resource_candidates,
-                        resource=resource,
-                        delay_before_first_ms=(
-                            runtime_settings.inter_candidate_delay_ms
-                            if previous_phase_had_site_access
-                            else None
-                        ),
-                        metrics=metrics,
-                    )
-                    previous_phase_had_site_access = (
-                        previous_phase_had_site_access or resolver_had_candidates
-                    )
                 if defer_quota:
                     print("Deferred access-resource pool:")
                     print(f"  resource: {resource}")
@@ -1404,8 +1541,18 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                     print("  selection: live resolver")
                     print(
                         f"Batch grant-only resource pass ({resource}); "
-                        f"selected={len(resource_candidates)}"
+                        "selection=one work at a time"
                     )
+                    assert grant_report is not None
+                    pass_attempts, previous_phase_had_site_access = await _execute_deferred_grants(
+                        args, session, executor, resource_candidates, resource=resource,
+                        inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                        metrics=metrics, report=grant_report, attempt_limit=remaining_limit,
+                        previous_site_access=previous_phase_had_site_access,
+                    )
+                    attempts += pass_attempts
+                    grant_attempts = attempts
+                    continue
                 else:
                     print(
                         f"Batch grant-only resource pass ({resource}); "
@@ -1439,27 +1586,19 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
                 await asyncio.to_thread(input)
         elif grant_only is not None:
             if defer_quota:
-                candidates = await _resolve_access_resource_candidates(
-                    session,
-                    executor,
-                    candidates,
-                    resource=grant_only,
-                    metrics=metrics,
+                assert grant_report is not None
+                processed, _had_access = await _execute_deferred_grants(
+                    args, session, executor, candidates, resource=grant_only,
+                    inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                    metrics=metrics, report=grant_report, attempt_limit=limit,
                 )
-            processed, should_continue = await _execute_batch_candidates(
-                args,
-                session,
-                executor,
-                candidates,
-                phase=(f"{args.site} grant-only:{grant_only}" if defer_quota else f"grant-only:{grant_only}"),
-                inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
-                delay_before_first_ms=(
-                    runtime_settings.inter_candidate_delay_ms if defer_quota else None
-                ),
-                metrics=metrics,
-                grant_only=True,
-                attempt_limit=limit,
-            )
+                grant_attempts = processed
+            else:
+                processed, should_continue = await _execute_batch_candidates(
+                    args, session, executor, candidates, phase=f"grant-only:{grant_only}",
+                    inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                    metrics=metrics, grant_only=True, attempt_limit=limit,
+                )
             if processed == 0 and not candidates:
                 metrics.finish(stop_reason="no_candidates")
         elif defer_quota:
@@ -1611,6 +1750,8 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             await asyncio.to_thread(input)
     except BaseException as exc:
         primary_error = exc
+        if grant_report is not None:
+            grant_report.finish(reason="stopped")
         access_stop = getattr(exc, "access_stop", None)
         metrics.finish(
             stop_reason=(
@@ -1627,6 +1768,12 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         )
         raise
     finally:
+        if grant_report is not None:
+            grant_report.finish(reason=(
+                "stopped" if primary_error is not None
+                else "limit_reached" if limit is not None and grant_attempts >= limit
+                else "not_started"
+            ))
         cleanup_interruption: BatchInterruptedError | None = None
         if session is not None:
             try:
@@ -1683,6 +1830,8 @@ async def _execute_batch_candidates(
     metrics: BatchMetricsWriter | None = None,
     grant_only: bool = False,
     attempt_limit: int | None = None,
+    grant_report: GrantOnlyReport | None = None,
+    prepared_access: PreparedAccessResource | None = None,
 ) -> tuple[int, bool]:
     """Execute a sequential resource phase; return attempts and continue flag."""
 
@@ -1693,6 +1842,8 @@ async def _execute_batch_candidates(
         if grant_only:
             local_skip_reason = executor.grant_only_skip_reason(candidate)
             if local_skip_reason is not None:
+                if grant_report is not None:
+                    _record_local_grant_skip(executor, candidate, local_skip_reason, grant_report)
                 print(
                     f"[{phase} {index}/{len(candidates)}] item={candidate.item_id} "
                     f"SKIPPED {local_skip_reason}"
@@ -1728,7 +1879,7 @@ async def _execute_batch_candidates(
         if metrics is not None:
             metrics.start_candidate(candidate)
         try:
-            page = await session.new_page()
+            page = prepared_access.page if prepared_access is not None else await session.new_page()
             contacted_site = True
             if grant_only:
                 result = await executor.execute_grant_only_candidate(
@@ -1737,8 +1888,13 @@ async def _execute_batch_candidates(
                     output_root=args.output_root,
                     max_pages=args.max_pages,
                     max_same_content=args.max_same_content,
+                    **({"prepared_access": prepared_access} if prepared_access is not None else {}),
                 )
                 print(f"  grant confirmed: {result.resource}")
+                if grant_report is not None:
+                    grant_report.record(
+                        candidate, status="OK", reason="チケット使用確認済み", resource_consumed=True
+                    )
             else:
                 result = await executor.execute_candidate(
                     page,
@@ -1761,10 +1917,13 @@ async def _execute_batch_candidates(
                 )
         except BatchInterruptedError as exc:
             primary_error = exc
+            if grant_report is not None:
+                grant_report.failure(candidate, exc)
             if metrics is not None:
                 metrics.finish_candidate(
                     result="failed",
                     stop_reason="interrupted",
+                    resource_consumed=getattr(exc, "resource_consumed", None),
                     error_type="BatchInterruptedError",
                     error_message="Batch interrupted by user",
                 )
@@ -1776,6 +1935,8 @@ async def _execute_batch_candidates(
                 f"source={candidate.source_id}"
             )
             primary_error = interruption
+            if grant_report is not None:
+                grant_report.failure(candidate, interruption)
             if metrics is not None:
                 metrics.finish_candidate(
                     result="failed",
@@ -1787,6 +1948,10 @@ async def _execute_batch_candidates(
             raise interruption from exc
         except AccessResourceUnavailableError as exc:
             reason = exc.reason
+            if grant_report is not None:
+                grant_report.record(
+                    candidate, status="NG", reason=reason, resource_consumed=False
+                )
             print(f"  SKIPPED item={candidate.item_id} reason={reason} ({exc})")
             if metrics is not None:
                 metrics.finish_candidate(result="skipped", stop_reason=reason)
@@ -1796,11 +1961,14 @@ async def _execute_batch_candidates(
             continue_after_candidate = True
         except CandidateExecutionError as exc:
             primary_error = exc
+            if grant_report is not None:
+                grant_report.failure(candidate, exc)
             root = _candidate_failure_root(exc)
             if metrics is not None:
                 metrics.finish_candidate(
                     result="failed",
                     stop_reason=_candidate_failure_reason(exc),
+                    resource_consumed=getattr(exc, "resource_consumed", None),
                     error_type=type(root).__name__,
                     error_message=str(root)[:4000] or None,
                 )
@@ -1811,10 +1979,13 @@ async def _execute_batch_candidates(
             raise
         except BaseException as exc:
             primary_error = exc
+            if grant_report is not None:
+                grant_report.failure(candidate, exc)
             if metrics is not None:
                 access_stop = getattr(exc, "access_stop", None)
                 metrics.finish_candidate(
                     result="failed",
+                    resource_consumed=getattr(exc, "resource_consumed", None),
                     stop_reason=(
                         getattr(access_stop, "reason", None)
                         or getattr(exc, "reason", None)
@@ -1836,7 +2007,7 @@ async def _execute_batch_candidates(
             raise BatchExecutionError(str(exc)) from exc
         finally:
             try:
-                if page is not None:
+                if page is not None and prepared_access is None:
                     await _best_effort_cleanup(session.close_page(page))
                 if contacted_site and continue_after_candidate:
                     if grant_only:

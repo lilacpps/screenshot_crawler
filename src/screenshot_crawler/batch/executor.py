@@ -6,7 +6,9 @@ import asyncio
 import hashlib
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,6 +44,31 @@ from screenshot_crawler.site_policies.base import SitePolicy
 RunnerFactory = Callable[[RunConfig], CrawlerRunner]
 PackageFunction = Callable[..., PackageResult]
 _RESOLVER_CLEANUP_TIMEOUT_SECONDS = 5
+
+
+@dataclass
+class PreparedAccessResource:
+    """One resolver's live Page, adapter and guard, valid for one selected entry."""
+
+    page: Page
+    adapter: SiteAdapter
+    guard: AccessGuard
+    resolution: AccessResourceResolution
+    candidates: tuple[BatchCandidate, ...]
+    resource: str
+    used: bool = False
+    active: bool = True
+
+    def take(self, page: Page, candidate: BatchCandidate) -> None:
+        if (
+            not self.active or self.used or page is not self.page
+            or candidate not in self.candidates
+            or candidate.source_id not in self.resolution.selected_source_ids
+            or candidate.quota_resource != self.resource
+        ):
+            raise BatchExecutionError("Prepared access entry identity changed or was already used")
+        self.guard.raise_if_stopped()
+        self.used = True
 
 
 async def _write_success_entry_trace(
@@ -373,13 +400,29 @@ class BatchExecutor:
                 last_consumed_at=last_consumed_at,
                 now=current,
                 cooldown_hours=(
-                    self.runtime_settings.work_ticket_cooldown_hours
+                    getattr(self.runtime_settings, "work_ticket_cooldown_hours", None)
                     if self.runtime_settings is not None
                     else None
                 ),
             )
         except (CatalogError, SitePolicyError, ValueError, TypeError) as exc:
             raise BatchExecutionError(f"Could not evaluate resource state: {exc}") from exc
+
+    def grant_only_retry_at(self, candidate: BatchCandidate) -> datetime | None:
+        """Read a policy-owned local retry deadline without contacting the site."""
+
+        policy = self.policies.create(candidate.site)
+        if candidate.quota_resource is None:
+            return None
+        item = self.catalog.get_item(candidate.item_id)
+        state = self.catalog.get_quota_resource_state(
+            item.work_id, site=candidate.site, resource=candidate.quota_resource
+        )
+        return policy.grant_only_retry_at(
+            resource=candidate.quota_resource,
+            last_consumed_at=datetime.fromisoformat(state.last_consumed_at) if state else None,
+            cooldown_hours=getattr(self.runtime_settings, "work_ticket_cooldown_hours", None),
+        )
 
     async def resolve_access_resource_candidates(
         self,
@@ -391,9 +434,27 @@ class BatchExecutor:
     ) -> AccessResourceResolution:
         """Run one site-owned read-only resolver under the shared AccessGuard."""
 
+        if not candidates:
+            return AccessResourceResolution()
+        async with self.prepare_access_resource_candidates(
+            page, candidates, quota_resource, timeout_ms=timeout_ms
+        ) as prepared:
+            return prepared.resolution
+
+    @asynccontextmanager
+    async def prepare_access_resource_candidates(
+        self,
+        page: Page,
+        candidates: list[BatchCandidate] | tuple[BatchCandidate, ...],
+        quota_resource: str,
+        *,
+        timeout_ms: int = 15_000,
+    ) -> AsyncIterator[PreparedAccessResource]:
+        """Keep the resolver guard active through a same-page selected grant."""
+
         pending_candidates = tuple(candidates)
         if not pending_candidates:
-            return AccessResourceResolution()
+            raise BatchExecutionError("Prepared access requires candidates")
         sites = {candidate.site for candidate in pending_candidates}
         if len(sites) != 1:
             raise BatchExecutionError("access-resource resolution requires one site")
@@ -433,6 +494,8 @@ class BatchExecutor:
             )
         )
         stop = asyncio.create_task(guard.wait_for_stop())
+        prepared: PreparedAccessResource | None = None
+        primary_error: BaseException | None = None
         try:
             done, _pending = await asyncio.wait(
                 {operation, stop},
@@ -465,12 +528,30 @@ class BatchExecutor:
                     f"Site adapter {type(adapter).__name__} does not provide "
                     "an access-resource resolver"
                 )
-            return result
+            prepared = PreparedAccessResource(
+                page, adapter, guard, result, pending_candidates, quota_resource
+            )
+            yield prepared
+            guard.raise_if_stopped()
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
+            if prepared is not None:
+                prepared.active = False
             await _cancel_task_bounded(operation)
             await _cancel_task_bounded(stop)
             guard_close = asyncio.create_task(guard.close())
-            await _cancel_task_bounded(guard_close)
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(guard_close), timeout=_RESOLVER_CLEANUP_TIMEOUT_SECONDS
+                )
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                await _cancel_task_bounded(guard_close)
+                if primary_error is None:
+                    raise
+            except BaseException:  # noqa: BLE001 - cleanup must preserve the active failure
+                await _cancel_task_bounded(guard_close)
 
     async def execute_grant_only_candidate(
         self,
@@ -481,6 +562,7 @@ class BatchExecutor:
         max_pages: int = 1000,
         max_same_content: int = 3,
         now: datetime | None = None,
+        prepared_access: PreparedAccessResource | None = None,
     ) -> GrantOnlyExecutionResult:
         """Confirm one explicit access grant and leave the Item pending."""
 
@@ -501,7 +583,11 @@ class BatchExecutor:
             )
             if local_skip_reason is not None:
                 raise AccessResourceUnavailableError(local_skip_reason)
-            adapter = self.adapters.create(candidate.site)
+            if prepared_access is None:
+                adapter = self.adapters.create(candidate.site)
+            else:
+                prepared_access.take(page, candidate)
+                adapter = prepared_access.adapter
             source = self.catalog.get_source(candidate.source_id)
             work = self.catalog.get_work(self.catalog.get_item(candidate.item_id).work_id)
             configure_identity = getattr(adapter, "configure_target_identity", None)
@@ -557,7 +643,13 @@ class BatchExecutor:
                 entry_only=True,
                 output_metadata=candidate.metadata,
             )
-            crawl_result = await self.runner_factory(config).run(page, adapter)
+            runner = self.runner_factory(config)
+            if prepared_access is None:
+                crawl_result = await runner.run(page, adapter)
+            else:
+                crawl_result = await runner.run(
+                    page, adapter, prepared_entry=True, access_guard=prepared_access.guard
+                )
             if not crawl_result.entry_confirmed:
                 raise CandidateExecutionError("grant-only entry was not confirmed")
             observed = _record_observed_resource_consumption(
@@ -585,10 +677,14 @@ class BatchExecutor:
                 stop_reason=crawl_result.stop_reason,
             )
         except BaseException as exc:
+            # Preserve current-attempt proof independently of finalization. A
+            # later failure must not tell the operator to spend another ticket.
+            resource_consumed = _confirmed_grant_consumption(candidate, adapter)
             if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
                 interrupted = BatchInterruptedError(
                     f"Batch interrupted while executing item={candidate.item_id}, "
-                    f"source={candidate.source_id}"
+                    f"source={candidate.source_id}",
+                    resource_consumed=resource_consumed,
                 )
                 if not consumption_checked and adapter is not None and policy is not None:
                     try:
@@ -616,12 +712,17 @@ class BatchExecutor:
                     f"Fatal access stop for item={candidate.item_id}, "
                     f"source={candidate.source_id}: {exc.reason}",
                     access_stop=exc,
+                    resource_consumed=resource_consumed,
                 ) from exc
-            if isinstance(exc, (BatchExecutionError, AccessResourceUnavailableError)):
+            if isinstance(exc, BatchExecutionError):
+                exc.resource_consumed = resource_consumed
+                raise
+            if isinstance(exc, AccessResourceUnavailableError):
                 raise
             raise CandidateExecutionError(
                 f"Grant-only candidate failed (item={candidate.item_id}, "
-                f"source={candidate.source_id}): {exc}"
+                f"source={candidate.source_id}): {exc}",
+                resource_consumed=resource_consumed,
             ) from exc
 
     def _validate_candidate(
@@ -744,6 +845,28 @@ def _record_failed_run(
         )
     except Exception as recording_error:  # noqa: BLE001
         error.add_note(f"Could not record failed CrawlRun {run_id}: {recording_error}")
+
+
+def _confirmed_grant_consumption(
+    candidate: BatchCandidate, adapter: SiteAdapter | None
+) -> bool | None:
+    """Expose positive current-attempt evidence; absence is not proof of no debit."""
+
+    if adapter is None or candidate.quota_commit_mode != "after_observed_consumption":
+        return None
+    try:
+        consumption = adapter.get_access_consumption()
+        if (
+            consumption.consumed
+            and consumption.resource == candidate.quota_resource
+            and consumption.consumed_at is not None
+            and consumption.consumed_at.tzinfo is not None
+            and consumption.consumed_at.utcoffset() is not None
+        ):
+            return True
+    except Exception:  # noqa: BLE001 - reporting must preserve the original failure
+        return None
+    return None
 
 
 def _record_observed_resource_consumption(

@@ -35,7 +35,7 @@ from screenshot_crawler.core.packaging import PackageResult
 from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.runtime_settings import SiteRuntimeSettings, load_runtime_settings
-from screenshot_crawler.site_adapters.base import AccessConsumption
+from screenshot_crawler.site_adapters.base import AccessConsumption, AccessResourceResolution
 from screenshot_crawler.site_adapters.comicdays.adapter import ComicDaysAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
@@ -1177,10 +1177,12 @@ async def test_grant_only_consumption_survives_later_failure(
         failure=RuntimeError("entry flow failed after consumption"),
     )
 
-    with pytest.raises(BatchExecutionError, match="entry flow failed"):
+    with pytest.raises(BatchExecutionError, match="entry flow failed") as failure:
         await executor.execute_grant_only_candidate(
             object(), candidate, output_root=tmp_path / "batch", now=NOW
         )
+
+    assert failure.value.resource_consumed is True
 
     source = service.get_source(candidate.source_id)
     assert source.quota_started_at == consumed_at.isoformat()
@@ -1274,10 +1276,12 @@ async def test_grant_only_unconfirmed_failure_does_not_record_consumption(
         failure=RuntimeError("viewer confirmation failed"),
     )
 
-    with pytest.raises(BatchExecutionError, match="viewer confirmation failed"):
+    with pytest.raises(BatchExecutionError, match="viewer confirmation failed") as failure:
         await executor.execute_grant_only_candidate(
             object(), candidate, output_root=tmp_path / "batch", now=NOW
         )
+
+    assert failure.value.resource_consumed is None
 
     source = service.get_source(candidate.source_id)
     assert source.quota_started_at is None
@@ -1334,6 +1338,44 @@ async def test_resolver_task_cleanup_is_bounded_when_cancellation_is_ignored() -
     operation.cancel()
     with pytest.raises(asyncio.CancelledError):
         await operation
+
+
+@pytest.mark.parametrize("primary_failure", [False, True])
+async def test_prepared_guard_cleanup_preserves_interruption_or_primary_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, primary_failure: bool,
+) -> None:
+    service = CatalogService(tmp_path / "cleanup.sqlite")
+    candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
+    executor = make_executor(service)
+
+    class Adapter:
+        def get_access_profile(self):
+            return None
+
+        async def resolve_access_resource_candidates(self, *_args, **_kwargs):
+            return AccessResourceResolution(selected_source_ids=(candidate.source_id,))
+
+    class Guard:
+        def start(self, _page):
+            pass
+
+        def raise_if_stopped(self):
+            pass
+
+        async def wait_for_stop(self):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(executor.adapters, "create", lambda _site: Adapter())
+    monkeypatch.setattr(batch_executor_module.AccessGuard, "from_profile", lambda **_kwargs: Guard())
+    expected = RuntimeError if primary_failure else asyncio.CancelledError
+    with pytest.raises(expected):
+        async with executor.prepare_access_resource_candidates(object(), [candidate], "work_ticket") as prepared:
+            assert prepared.active
+            if primary_failure:
+                raise RuntimeError("primary entry failure")
 
 
 async def test_resolver_timeout_is_bounded_for_cancellation_resistant_adapter(

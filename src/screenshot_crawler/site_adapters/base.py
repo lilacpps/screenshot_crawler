@@ -119,6 +119,12 @@ class SiteAdapter(ABC):
 
         return AccessConsumption()
 
+    async def adopt_prepared_access_entry(self, page: Page, source_url: str) -> bool:
+        """Validate a same-page resolver handoff; unsupported adapters fail closed."""
+
+        del page, source_url
+        return False
+
     @abstractmethod
     async def initialize(self, page: Page) -> None:
         """Prepare the viewer after navigation.

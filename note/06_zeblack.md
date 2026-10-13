@@ -1,14 +1,15 @@
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 
-## Z6 current implementation snapshot (2026-09-30)
+## Current implementation snapshot (updated 2026-10-14)
 
-This section is the current authority for the implementation after the Z6
-Batch orchestration change. Older Z5 live-verification sections below remain
+This section describes the current implementation after the Z6 Batch
+orchestration and the explicit grant-only sequencing changes. Older Z5 live-verification sections below remain
 historical observations and are superseded where they describe the former
-`access_granted_until=NULL` policy or candidate-by-candidate planning.
+`access_granted_until=NULL` policy, absence of work cooldown, duplicate-load
+grant-only entry, or candidate-by-candidate planning.
 
-Catalog schema version 5 is unchanged. No migration, table, or column was
-added. Discovery still keeps broad Zeblack `quota` classification for POINT,
+Current Catalog schema is version 6. This grant-only change adds no migration,
+table, or column. Discovery still keeps broad Zeblack `quota` classification for POINT,
 TICKET_UNAVAILABLE, TICKET_AVAILABLE, and RENTAL. For an observed RENTAL
 ChapterV3 with `remainingRentalTime > 0`, it stores the current observation
 time plus that remaining duration in the existing
@@ -21,7 +22,14 @@ DOM/protobuf set validation, and incremental behavior are unchanged.
 `ZeblackSitePolicy` treats a future `access_granted_until` on a quota Source
 as `direct / active_rental / consumes_quota=False`. Confirmed Work Ticket
 consumption uses `consumed_at + 71 hours` for the local grant deadline. The
-existing `resource_state_scope("work_ticket")` remains `None`.
+existing work resource-state table now also records confirmed Work Ticket use
+(`resource_state_scope("work_ticket")="work"`). Its local negative gate defaults
+to 23 hours and honors `work_ticket_cooldown_hours`. Before a consuming Page or
+snapshot is opened, a cooling Work is SKIP with its next check time. Expiry only
+permits another live check. FREE/active RENTAL direct reads remain eligible.
+Unavailable/unconfirmed entry creates no state, but confirmed consumption keeps
+its timestamp even if later finalization fails. Old rental deadlines and manual
+account use are not used to backfill work state; no migration is needed.
 
 The site-owned Work Ticket resolver receives only pending quota/work-ticket
 Batch candidates. It groups by Work/title, loads one live chapter/list
@@ -31,9 +39,10 @@ preserves snapshot order and selects the first matching pending candidate.
 Completed or missing Catalog targets are never used as an implicit fallback;
 missing matches return `work_ticket_target_not_in_catalog`, while an empty
 ticket set returns `work_ticket_unavailable`. The selected candidate retains
-the existing production preflight and bounded modal/direct-viewer guards.
+the bounded modal/direct-viewer guards. In explicit grant-only the observation
+is reused on that same Page; normal Batch/manual quota retain their old preflight.
 
-Normal Zeblack Batch now runs `direct -> grant-access -> one replan direct`.
+Normal Zeblack Batch runs `direct -> grant-access -> one replan direct`.
 Grant-access uses the existing grant-only executor and creates no capture,
 package, Artifact, or Item completion. The post-grant direct phase crawls
 only newly active Sources, and no further grant loop runs. Normal `--limit`
@@ -44,7 +53,7 @@ kept active for resolver and production attempts. Generic Batch derives the
 deferred resolver resource from candidate `quota_resource`; the CLI does not
 hard-code `work_ticket`, and missing or mixed deferred resources fail closed.
 The resolver counts as site access for pacing: previous site access delays the
-resolver, the selected grant is delayed after the resolver, and post-grant
+resolver; in normal Batch the selected grant is delayed after the resolver, and post-grant
 direct is delayed after a confirmed grant. Phase A with zero site attempts has
 no leading resolver delay, and a resolver-only pass still affects the next
 explicit resource pass. Local Catalog skips do not create pacing delays.
@@ -58,6 +67,53 @@ bounded, with best-effort detachment if a Playwright task ignores cancellation.
 Generic Batch prints resolver snapshot start, completion, and failure messages;
 the read-only snapshot remains outside the grant attempt limit and does not
 consume a ticket.
+
+Explicit `batch run --site zeblack --grant-only work_ticket` and `--grant-only all`
+now pass one Catalog Work's candidate pool to the live resolver at a time, then
+immediately execute its selected grant on the same Page before resolving the next Work. There is
+no initial all-Work sweep. Work order remains Planner order. Target selection
+still intersects current native TICKET_AVAILABLE chapters with pending Catalog
+IDs in live list order. Missing Work identity, a foreign selected source, or
+multiple selected targets for one Work stops before grant entry. For this explicit
+path, chapter/list loads once. Resolver captures the original document handle
+before protobuf body observation and validates it within the same deadline;
+the adapter later verifies the identical Page/document/target and one-time use
+before adopting that exact snapshot. Same-URL reloads invalidate it. Runner skips
+initial goto and the quota observer does not reload. There is no blind navigation
+skip, new snapshot fallback or second ticket attempt. The prepared owner keeps
+one AccessGuard active throughout, then closes it and the Page after the result.
+
+The inter-candidate delay runs after cleanup before the next Work resolver,
+including after resolver-only unavailable/missing-target
+outcomes. Local Catalog skips do not add site access or extra waits. `--limit`
+counts selected grant attempts, not read-only snapshots; reaching it prevents
+later Work snapshots. Expected unavailability during entry ends only the current
+Work. Ambiguous entry, timeout, AccessGuard rejection and interruption still stop
+the whole run. Native modal/ticket/paid-control guards and consumption evidence,
+71-hour grant persistence, pending Item state and no-content-artifact behavior
+are unchanged. Normal Batch still resolves its whole deferred pool before entry.
+
+The CLI prints one result per planned deferred Work/resource immediately and
+as a final list, including on interruption. Names come from `--watchlist PATH`
+(default `watchlist.yaml`) via discovery key/site/Work key; missing or mismatched
+entries use Catalog title marked `[Catalog名]`. This does not rewrite metadata,
+URLs or execution scope. OK means current-attempt ticket consumption confirmed;
+confirmed consumption followed by later failure stays OK with a failure note.
+Local cooldown is SKIP with the next check time. NG includes unavailable tickets or missing Catalog target, and an unconfirmed
+failure explicitly says consumption unconfirmed. Later Works are `未実行` with
+`limit_reached` or `stopped`. Non-selected sibling chapters are not separate NGs.
+The same Work outcomes are flushed as `grant_result` JSONL records under the
+existing `output/metrics/` path. Completed/active-grant Works without planned
+deferred candidates do not appear in this list.
+
+The handoff/cooldown follow-up is verified through local CLI, policy, Catalog,
+Executor, Core and synthetic entry Integration coverage. The real CLI/Executor/
+Runner artificial Blob-viewer test proves one list load, one ticket click and
+no Page on a second run during cooldown, including after finalization failure.
+Reload/wrong Page/wrong target/reused handle/declining adapter/paid control and
+a stopped guard reject consumption. See note/00_core.md for shared validation.
+It has not been verified with real tickets; previous live modal/consumption
+observations remain the entry authority and no real ticket was spent here.
 
 ### Z7 deferred candidate representation (2026-10-01)
 
@@ -103,7 +159,7 @@ ambiguity still fails immediately. The direct-link guard and chapter-click
 flag timing remain unchanged; the flag is set only immediately before the
 single click.
 
-## Z5 Site Policy / runtime Work Ticket status (2026-09-30)
+## Z5 Site Policy / runtime Work Ticket status (historical 2026-09-30)
 
 `ZeblackSitePolicy` is implemented and registered for Batch planning. The
 policy keeps one supported access resource, `work_ticket`, and uses:

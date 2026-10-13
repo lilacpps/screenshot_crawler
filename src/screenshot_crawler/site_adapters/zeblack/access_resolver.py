@@ -10,6 +10,7 @@ from screenshot_crawler.site_adapters.base import AccessResourceResolution
 from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import ConsumptionStatus
 from screenshot_crawler.site_adapters.zeblack.live_access import (
     ZEBLACK_LIVE_ACCESS_TIMEOUT_MS,
+    ZeblackChapterListSnapshot,
     observe_zeblack_chapter_list,
 )
 
@@ -38,6 +39,7 @@ async def resolve_zeblack_work_ticket_candidates(
     candidates: Sequence[BatchCandidate],
     *,
     timeout_ms: int = ZEBLACK_LIVE_ACCESS_TIMEOUT_MS,
+    selected_snapshots: dict[int, ZeblackChapterListSnapshot] | None = None,
 ) -> AccessResourceResolution:
     """Select pending Work Ticket candidates from one live snapshot per title.
 
@@ -65,6 +67,7 @@ async def resolve_zeblack_work_ticket_candidates(
             page,
             title_id=title_id,
             timeout_ms=timeout_ms,
+            **({"capture_document": True} if selected_snapshots is not None else {}),
         )
         ticket_ids = snapshot.ticket_available_ids
         candidates_by_external_id = {
@@ -93,6 +96,8 @@ async def resolve_zeblack_work_ticket_candidates(
             continue
 
         selected.append(chosen.source_id)
+        if selected_snapshots is not None:
+            selected_snapshots[chosen.source_id] = snapshot
         skipped.extend(
             (candidate.source_id, "work_ticket_candidate_not_selected")
             for candidate, _chapter_id in group

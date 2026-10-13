@@ -130,6 +130,15 @@ class SitePolicy(ABC):
     def grant_only_unavailable_reason(self, resource: str) -> str:
         return f"{resource}_unavailable"
 
+    def grant_only_retry_at(
+        self, *, resource: str, last_consumed_at: datetime | None,
+        cooldown_hours: int | None,
+    ) -> datetime | None:
+        """Optionally expose the next local check time, not live availability."""
+
+        del resource, last_consumed_at, cooldown_hours
+        return None
+
     def resource_state_scope(self, resource: str) -> Literal["work"] | None:
         """Return the Catalog state scope for confirmed resource use, if any."""
 

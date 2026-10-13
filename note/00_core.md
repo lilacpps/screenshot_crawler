@@ -1,5 +1,94 @@
 # 00. Core 現行実装ノート
 
+## Explicit deferred grant-only sequencing and results (2026-10-14)
+
+`batch run --grant-only RESOURCE` / `--grant-only all` on a Policy that defers
+quota entry now group the planned pool by stable Catalog Work ID. For each Work,
+the CLI resolves the live target and immediately executes that single selected
+grant through the existing Executor/entry-only Runner before contacting another
+Work, using the same Page and Adapter without closing/reopening or reloading the
+list. It preserves Planner Work order and site-owned target selection. Missing
+Work identity, foreign selected IDs and multiple selected targets for one Work
+fail closed. Normal Batch's direct/grant/post-grant cycle and non-deferred site
+passes retain their previous sequencing.
+
+The inter-candidate delay separates consecutive site-accessing Works after
+cleanup, even when the resolver selects nothing. There is no artificial delay
+inside the same-page snapshot/entry operation. Catalog-only skips
+neither open Pages nor introduce extra waits. Grant-only limit counts selected
+entry attempts (including unavailable attempts); a reached limit prevents later
+Work snapshots. `all` retains its Policy order and shared attempt budget.
+
+`batch/grants.py` owns display-only Work results. `batch run --watchlist PATH`
+defaults to `watchlist.yaml`; Source.discovery_key + site + Work.work_key match
+the latest label. Missing/mismatched labels fall back to Work.title with
+`[Catalog名]`. Packaging metadata, URLs, enable state and execution scope do not
+depend on those labels. Each planned deferred Work/resource has one OK/NG result,
+local SKIP with a next check time, or `未実行` (stopped/limit_reached).
+Unselected siblings do not become extra NGs.
+Resolver-only unavailable/missing targets are visible. Expected unavailable entry
+ends the current Work; ambiguous state, timeout, cancellation and access rejection
+still stop the run. Only planned deferred Works are included, not every Watchlist
+entry or completed/active-grant Work with no deferred candidate.
+
+Results print immediately and as a final list on success, failure or interruption,
+and flush `grant_result` JSONL records without changing candidate counters. The
+grant-only Executor propagates validated positive current-attempt consumption
+in `BatchExecutionError.resource_consumed`; a later failure is OK with a failure
+annotation, while missing confirmation is NG/consumption unconfirmed. Old Catalog
+timestamps are never used as current-attempt consumption evidence. Shared
+AccessGuard and no-capture/no-package/no-completion semantics remain intact.
+No schema or site-specific Core branch was added.
+
+`BatchExecutor.prepare_access_resource_candidates()` is an async context manager
+owning the resolver Page's active Guard. It yields a single-use, context-scoped
+prepared handle. `execute_grant_only_candidate(prepared_access=...)` validates
+the selected candidate against that handle and supplies the same adapter/guard
+to Runner. Runner's internal `prepared_entry` requires `entry_only`, a borrowed
+guard and positive `adopt_prepared_access_entry()` validation; otherwise it stops
+without navigation fallback. Default entry still creates and closes its own
+guard and navigates normally. The prepared owner keeps one guard active through
+snapshot, entry and consumption confirmation, then actually awaits bounded guard
+cleanup (rather than cancelling close before it can run). It prevents duplicated
+response metrics and rejects handles used after context exit.
+
+Zeblack's policy now uses the existing work resource-state table for confirmed
+consumption and a default 23-hour local negative gate; a site setting can override
+`work_ticket_cooldown_hours`. Explicit grant-only gates before Page creation,
+normal Batch filters cooling Works before its resolver, and other direct reads
+remain eligible. `grant_only_retry_at()` optionally exposes a policy-owned next
+check time for SKIP display. Expiry permits live checking but proves no ticket.
+Only confirmed consumption creates state, including after later finalization
+failure. Old rental deadlines and manual usage do not backfill work state.
+
+Validation uses local CLI/Catalog/Executor/policy tests and synthetic browser
+entry, Core local-viewer and AccessGuard tests. The browser test uses the real
+CLI/Executor/Runner and Blob viewer, counts one list load and one ticket click,
+and proves the next run creates no site Page during cooldown. Changed/reloaded
+document, wrong Page/target, reused handle, unsupported adoption, paid control
+and a stopped guard fail before consumption. The source/work timestamp persists
+even after a simulated post-consumption finalization error. No real Work Ticket
+was spent; this new handoff is not yet live-verified. Known unrelated baseline:
+Younganimal registry test expects a series entry where its adapter now returns
+an episode; this was reproduced with the pre-change CLI. Research is unchanged.
+
+Final verification (2026-10-14): all 2891 collected tests were covered by the
+complete tests/unit tree (1779 passed, one known registry failure), tests/research
+(117 passed), and four disjoint Integration partitions (990 passed, four initial
+failures; no omitted or duplicated cases). The two Younganimal native-capture
+cases and Hanayume's 0.4-second timing assertion passed on isolated rerun with
+current code; the Younganimal pair also passed with HEAD Runner. The remaining
+Integration failure is Kadocomi's foreign redirect, blocked with
+`net::ERR_NETWORK_ACCESS_DENIED` on both current and HEAD Runner. Thus three of
+the initial five failures passed on rerun, leaving the known registry mismatch
+and environment restriction. Skipped tests: zero. After the final cleanup change,
+all Unit tests were rerun and the affected real-browser entry/AccessGuard/local
+viewer selection passed 41 tests. Cleanup cancellation is propagated on success
+and never replaces an already active entry error. Ruff and whitespace checks
+passed. Exact results, JUnit artifacts and changed files are listed in
+`output/zeblack_grant_checks/summary.json`. Real-site verification is not run;
+no real ticket was consumed.
+
 ## Kadocomi / ComicFUZ branch integration (2026-10-13)
 
 The integration branch combines the current main-branch Kadocomi direct-entry
