@@ -1,5 +1,34 @@
 # 00. Core 現行実装ノート
 
+## Kadocomi / ComicFUZ branch integration (2026-10-13)
+
+The integration branch combines the current main-branch Kadocomi direct-entry
+and PR-layout fixes with the existing ComicFUZ adapter and CLI registrations.
+Both sites use their existing site-local contracts; no new shared Runner,
+Catalog, pacing or access-resource behavior is introduced. The existing CLI
+registry test also checks that both manual and Batch Kadocomi adapters resolve
+Episode 7.2 directly to its canonical episode URL, alongside the ComicFUZ
+registration checks. This detects the older listing-preflight entry contract
+that remained on the divergent ComicFUZ feature branch. The exact Episode 7.2
+normal Batch retry passed using an isolated Catalog/output; see
+`note/12_kadocomi.md` for the reproduced failure and artifact audit.
+
+## ComicFUZ Discovery, Crawl and Batch registries
+
+The CLI Discovery registry includes `ComicFuzDiscoveryAdapter`; manual Crawl
+and Batch registries include `ComicFuzAdapter`, and the Batch policy registry
+includes `ComicFuzSitePolicy`. Manual Crawl requires `COMICFUZ_WORK_URL`; Batch
+reads that optional value when supplied and otherwise derives the canonical
+same-work listing from the configured composite Catalog identity. In both
+paths the adapter validates the same-work public listing and exact current
+free row before reader entry.
+The policy selects only available `free` Catalog sources with `direct` access;
+resource and grant-only passes are unsupported. Discovery, capture, Batch,
+Runner and packaging use their existing site-neutral services and the shared
+CDP BrowserSession/Page without Core or schema changes. Current contracts and
+evidence are in `note/13_comicfuz.md` and
+`runbooks/comicfuz-free/PROGRESS.md`.
+
 ## Kadocomi Discovery, direct capture, and Batch registration (2026-10-12)
 
 Kadocomi Discovery, manual Crawl, Batch adapter, and Batch Policy use the
@@ -53,8 +82,9 @@ one known baseline failure reproduced at `ceb3434` before the 38-slot extension;
 full Ruff passed. The direct-entry follow-up now uses one canonical episode
 navigation and same-page response, identity, title, gate, and reader checks.
 Its bounded live Runner probe and local Runner/Batch fixtures passed independent
-code/test review; no live Batch CLI run was repeated after this change. Current
-tests and exact evidence are in the Kadocomi progress ledger.
+code/test review. The 2026-10-13 integration verification also completed Episode
+7.2 through normal live Batch CLI with 14 native WebP pages and explicit END.
+Current tests and exact evidence are in the Kadocomi progress ledger.
 
 ## Younganimal Discovery and manual Crawl CLI registration (2026-10-11)
 

@@ -1,7 +1,51 @@
 # Kadocomi Free-Only Adapter - Progress / evidence ledger
 
 Status: P0/P1/P1.5/P2/P3 and P4 Tester, live-evidence Reviewer, and Lead gates passed for seven observed reader layouts across six strict profiles on `KC_004915_S`; the mixed-final profile covers two reviewed recommendation forms. All 15 selected target episodes completed in normal CLI Batch/ZIP across the initial and resumed runs, and the Episode 22.2 control retest completed. The first 22.2 control attempt remains a failed run with unknown cause. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope).
-The final affected site-local selection passed 293 tests / 0 failed / 0 skipped (815 existing pytest-asyncio deprecation warnings). After the approved test-only lint fix, focused async-mutation tests passed 3 / 134 deselected / 0 skipped. Independent material Reviewer and final live-evidence gates passed with BLOCKING=0/NONBLOCKING=0. `ruff check src tests` and `git diff --check` passed. The full repository suite was not rerun for this site-local change; the earlier 2448-pass/1-known-baseline-failure result predates it.
+The previous P4 affected site-local selection passed 293 tests / 0 failed / 0 skipped (815 existing pytest-asyncio deprecation warnings). After the approved test-only lint fix, focused async-mutation tests passed 3 / 134 deselected / 0 skipped. Independent material Reviewer and final live-evidence gates passed with BLOCKING=0/NONBLOCKING=0. `ruff check src tests` and `git diff --check` passed. The full repository suite was not rerun for that site-local change; the earlier 2448-pass/1-known-baseline-failure result predates it.
+
+## Episode 7.2 branch synchronization (2026-10-13)
+
+- Root cause: the 10:10:39 and 10:10:56 JST failures for Item/Source 26187 ran
+  before the 10:14:08 checkout from `feat/comicfuz-adapter` to main. That feature
+  branch lacked main's direct-entry and beginning/final-PR fixes. Failed HTML
+  contains the already-supported 14-slot Episode 7.2 topology. No loading-delay
+  or new-layout conclusion is supported by these failures.
+- A bounded shared-CDP probe at 1906x987 compared the same live snapshot against
+  old feature commit `4b64a3c` and the integrated adapter. Old code raised exactly
+  `Kadocomi observed right-to-left spread shape changed`; current code accepted
+  `content_first_final_pr`. No viewer turn was needed for this comparison.
+- Integrated the two existing branch histories on
+  `fix/kadocomi-comicfuz-sync-20261013`, preserving main's adapter, capture and
+  tests and the ComicFUZ implementation. Extended the existing CLI registry
+  test to assert the current direct episode entry for manual and Batch paths.
+- Normal `batch run --limit 1` with an isolated online-backup Catalog completed
+  the exact target: CrawlRun 9355, 14 pages, `stop_reason=end`, one ZIP Artifact,
+  Completed in the isolated Catalog only. All 14 ordered ZIP members passed
+  CRC/835x1200 WebP decoding and matched prior P0 source SHA-256, length and
+  dimensions. No fresh independent Blob/RGBA observer was used. Original
+  Catalog/failed runs remain unchanged and the original Item is pending.
+- Ignored evidence: `work/kadocomi/reader-hydration-20261013/` contains
+  `version-comparison.json`, `zip-audit.json`, isolated Catalog/library/output
+  and bounded probe scripts. Its name records the initial hypothesis only.
+  Successful metrics run: `4c1a56fb5e1a4f4380ab6670277668d7`.
+- Current targeted validation: the CLI registry regression plus all Kadocomi
+  native-capture, policy, parser and browser integration tests passed
+  **178 / 0 failed / 0 skipped** (9 existing asyncio deprecation warnings,
+  285.41 seconds). Full-repository coverage is split into this selection and
+  its complement to avoid repeating the same browser cases.
+- The complement completed **2493 passed / 1 failed / 0 skipped / 1 deselected**
+  (834.83 seconds). The deselected registry case is included in the targeted
+  178, so combined repository coverage is **2671 passed / 1 failed / 0 skipped**.
+  The sole failure is the known
+  `test_younganimal_crawl_registry_uses_configured_work_entry_before_navigation`:
+  it expects the work URL while the adapter returns the episode URL. A detached
+  checkout of unchanged main `470ba45`, using its own `src` on `PYTHONPATH`,
+  independently reproduced the same assertion (1 failed in 3.29 seconds).
+  No unrelated Younganimal contract was changed. Full Ruff and both working-tree
+  and staged `git diff --check` passed. This covers local Integration and
+  Research/Probe tests; additional live episodes/works and a fresh independent
+  Blob/RGBA audit were not run because this integration preserves the existing
+  site-local implementations.
 
 ## Stage checkpoints
 

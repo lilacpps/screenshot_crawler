@@ -59,6 +59,7 @@ from screenshot_crawler.runtime_settings import load_runtime_settings
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
+    ComicFuzSitePolicy,
     JumpPlusSitePolicy,
     KadocomiSitePolicy,
     MagapokeSitePolicy,
@@ -410,6 +411,7 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     registry = AdapterRegistry()
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysAdapter
+    from screenshot_crawler.site_adapters.comicfuz import ComicFuzAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.kadocomi import KadocomiAdapter
@@ -425,6 +427,11 @@ def _registry(values: dict[str, str] | None = None) -> AdapterRegistry:
     registry.register("mangaone", MangaOneAdapter)
     registry.register("zeblack", ZeblackAdapter)
     registry.register("comicdays", ComicDaysAdapter)
+    comicfuz_work_url = env_value("COMICFUZ_WORK_URL", values or {})
+    registry.register(
+        "comicfuz",
+        lambda: ComicFuzAdapter(preflight_work_url=comicfuz_work_url),
+    )
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
     registry.register("kadocomi", KadocomiAdapter)
@@ -442,6 +449,7 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     registry = AdapterRegistry()
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysAdapter
+    from screenshot_crawler.site_adapters.comicfuz import ComicFuzAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusAdapter
     from screenshot_crawler.site_adapters.kadocomi import KadocomiAdapter
@@ -463,6 +471,11 @@ def _batch_adapter_registry(values: dict[str, str]) -> AdapterRegistry:
     registry.register("mangaone", MangaOneAdapter)
     registry.register("zeblack", ZeblackAdapter)
     registry.register("comicdays", ComicDaysAdapter)
+    comicfuz_work_url = env_value("COMICFUZ_WORK_URL", values)
+    registry.register(
+        "comicfuz",
+        lambda: ComicFuzAdapter(preflight_work_url=comicfuz_work_url),
+    )
     registry.register("piccoma", PiccomaAdapter)
     registry.register("hanayume", HanayumeAdapter)
     registry.register("kadocomi", KadocomiAdapter)
@@ -475,6 +488,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
 
     from screenshot_crawler.site_adapters.bookwalker import BookWalkerDiscoveryAdapter
     from screenshot_crawler.site_adapters.comicdays import ComicDaysDiscoveryAdapter
+    from screenshot_crawler.site_adapters.comicfuz import ComicFuzDiscoveryAdapter
     from screenshot_crawler.site_adapters.hanayume import HanayumeDiscoveryAdapter
     from screenshot_crawler.site_adapters.jumpplus import JumpPlusDiscoveryAdapter
     from screenshot_crawler.site_adapters.kadocomi import KadocomiDiscoveryAdapter
@@ -495,6 +509,7 @@ def _discovery_registry() -> DiscoveryAdapterRegistry:
     registry.register("comicdays", ComicDaysDiscoveryAdapter)
     registry.register("hanayume", HanayumeDiscoveryAdapter)
     registry.register("younganimal", YounganimalDiscoveryAdapter)
+    registry.register("comicfuz", ComicFuzDiscoveryAdapter)
     return registry
 
 
@@ -505,6 +520,7 @@ def _batch_policy_registry() -> SitePolicyRegistry:
     registry.register("magapoke", MagapokeSitePolicy)
     registry.register("mangaone", MangaOneSitePolicy)
     registry.register("zeblack", ZeblackSitePolicy)
+    registry.register("comicfuz", ComicFuzSitePolicy)
     from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
     from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
     from screenshot_crawler.site_policies.younganimal import YounganimalSitePolicy

@@ -1,8 +1,29 @@
 # 12. Kadocomi current implementation
 
-## Status (2026-10-12)
+## Status (2026-10-13)
 
 P1 Discovery, P2 native capture, P3 direct-only policy/CLI/Batch, and P4 Tester/live-evidence Reviewer/Lead gates passed for seven observed reader layouts using six strict adapter profiles; the mixed-final profile supports two reviewed recommendation forms. The final P4 sweep completed all 15 selected target episodes and a normal CLI control retest for Episode 22.2. Its earlier control attempt failed before capture with the unchanged beginning-PR guard; the cause is unknown and the failure remains in history. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope). Exact P0/P4 evidence, tests, hashes, and limits are in `runbooks/kadocomi/PROGRESS.md`. Unobserved layouts and other-work no-deadline access remain unsupported.
+
+The current integration combines the main-branch Kadocomi fixes with the
+ComicFUZ feature branch; the native capture and reader acceptance rules are
+unchanged from main commit `470ba45`. The 2026-10-13 Episode 7.2 failures
+(`item=source=26187`) ran on the older `feat/comicfuz-adapter` branch, which
+diverged before the direct-entry and PR-layout fixes. At the failed run's
+1906x987 viewport, one current live snapshot with slot counts
+`[1,2,2,2,2,2,2,1,0,0]` reproduces the exact spread-shape error with that old
+adapter and passes as `content_first_final_pr` with the integrated adapter.
+This is a missing-fix integration issue, not evidence of a new reader layout.
+
+A fresh normal CLI Batch run using an isolated online-backup Catalog completed
+the exact Episode 7.2 target with 14 pages and explicit END. All ZIP members
+passed CRC and decoded as 835x1200 WebP; every ordered hash, length and dimension
+matched the prior P0 source proof. This comparison is against prior live source
+records, not a fresh independent Blob/RGBA audit. The original Catalog remains
+pending with both failed runs preserved. Evidence is under ignored
+`work/kadocomi/reader-hydration-20261013/`; the directory name reflects the initial
+hypothesis, not the established cause. Current test results are in the progress
+ledger. When running another feature branch, synchronize these existing fixes
+before diagnosing the same topology as unsupported.
 
 ## Discovery behavior
 

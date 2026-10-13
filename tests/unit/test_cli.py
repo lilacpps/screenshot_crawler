@@ -814,6 +814,7 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     assert cli._batch_policy_registry().sites() == (
         "bookwalker",
         "comicdays",
+        "comicfuz",
         "hanayume",
         "jumpplus",
         "kadocomi",
@@ -829,12 +830,16 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     kadocomi_policy = cli._batch_policy_registry().create("kadocomi")
     assert kadocomi_policy.supported_access_resources() == ()
     assert kadocomi_policy.grant_only_supported_access_resources() == ()
+    comicfuz_policy = cli._batch_policy_registry().create("comicfuz")
+    assert comicfuz_policy.supported_access_resources() == ()
+    assert comicfuz_policy.grant_only_supported_access_resources() == ()
 
 
 def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     expected_crawl_sites = (
         "bookwalker",
         "comicdays",
+        "comicfuz",
         "hanayume",
         "jumpplus",
         "kadocomi",
@@ -847,6 +852,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     expected_batch_sites = (
         "bookwalker",
         "comicdays",
+        "comicfuz",
         "hanayume",
         "jumpplus",
         "kadocomi",
@@ -861,6 +867,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     assert cli._discovery_registry().sites() == (
         "bookwalker",
         "comicdays",
+        "comicfuz",
         "hanayume",
         "jumpplus",
         "kadocomi",
@@ -875,8 +882,27 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     assert "piccoma" in cli._batch_policy_registry().sites()
     assert "hanayume" in cli._batch_policy_registry().sites()
     assert "younganimal" in cli._batch_policy_registry().sites()
+    assert "comicfuz" in cli._batch_policy_registry().sites()
     assert cli._registry().create("kadocomi").__class__.__name__ == "KadocomiAdapter"
     assert cli._batch_adapter_registry({}).create("kadocomi").__class__.__name__ == "KadocomiAdapter"
+    # Both adapters must keep the current Kadocomi entry contract when a new site is added.
+    kadocomi_url = (
+        "https://comic-walker.com/detail/KC_004915_S/episodes/KC_0049150000700021_E"
+    )
+    for registry in (cli._registry(), cli._batch_adapter_registry({})):
+        assert registry.create("kadocomi").resolve_initial_navigation_url(
+            kadocomi_url
+        ) == kadocomi_url
+    comicfuz_batch_adapter = cli._batch_adapter_registry(
+        {"COMICFUZ_WORK_URL": "https://comic-fuz.com/manga/1970?position=thumbnail"}
+    ).create("comicfuz")
+    assert comicfuz_batch_adapter.resolve_initial_navigation_url(
+        "https://comic-fuz.com/manga/viewer/80641"
+    ) == "https://comic-fuz.com/manga/1970?position=thumbnail"
+    with pytest.raises(UnknownPageStateError, match="COMICFUZ_WORK_URL"):
+        cli._batch_adapter_registry({}).create("comicfuz").resolve_initial_navigation_url(
+            "https://comic-fuz.com/manga/viewer/80641"
+        )
     manual = cli._parser().parse_args(
         [
             "crawl",
@@ -889,6 +915,25 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
         ]
     )
     assert manual.access_strategy == "direct"
+    comicfuz_manual = cli._parser().parse_args(
+        [
+            "crawl",
+            "--site",
+            "comicfuz",
+            "--url",
+            "https://comic-fuz.com/manga/viewer/80641",
+            "--access-strategy",
+            "direct",
+        ]
+    )
+    assert comicfuz_manual.site == "comicfuz"
+    assert comicfuz_manual.access_strategy == "direct"
+    comicfuz_adapter = cli._registry(
+        {"COMICFUZ_WORK_URL": "https://comic-fuz.com/manga/1970?position=thumbnail"}
+    ).create("comicfuz")
+    assert comicfuz_adapter.resolve_initial_navigation_url(
+        "https://comic-fuz.com/manga/viewer/80641"
+    ) == "https://comic-fuz.com/manga/1970?position=thumbnail"
 
 
 def test_younganimal_crawl_registry_uses_configured_work_entry_before_navigation(
