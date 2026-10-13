@@ -609,6 +609,11 @@ class PiccomaAdapter(SiteAdapter):
                     and isinstance(canvas.get("height"), int)
                     and canvas.get("height", 0) > 0
                     and self._canvas_renderability_is_valid(row)
+                    and not (
+                        self._advance_from == number - 1
+                        and (canvas.get("width"), canvas.get("height")) == SCALED_NATIVE_SIZE
+                        and canvas.get("inFrame") is not True
+                    )
                 ):
                     renderability = canvas["renderability"]
                     signature = (

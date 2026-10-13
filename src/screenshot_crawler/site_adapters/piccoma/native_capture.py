@@ -1264,28 +1264,33 @@ def composite_replay_png_on_white(data: bytes, *, width: int, height: int) -> by
         raise NativeCaptureUnavailable("replay_png_invalid") from exc
 
 
-def encode_lossless_webp(data: bytes, *, width: int, height: int) -> CaptureResult:
-    """Encode already-composited RGB pixels as lossless WebP and verify every RGB byte."""
+def encode_lossless_webp(
+    data: bytes, *, width: int, height: int, preserve_alpha: bool = False
+) -> CaptureResult:
+    """Encode verified RGB/RGBA pixels and require an exact channel round trip."""
 
     try:
         with Image.open(io.BytesIO(data)) as image:
             if image.format != "PNG" or image.size != (width, height):
                 raise NativeCaptureUnavailable("webp_input_png_invalid")
-            rgb = image.convert("RGB")
+            pixels = image.convert("RGBA" if preserve_alpha else "RGB")
         if not features.check("webp"):
             raise NativeCaptureUnavailable("webp_codec_unavailable")
         encoded = io.BytesIO()
-        rgb.save(encoded, format="WEBP", lossless=True, method=6)
+        options = {"exact": True} if preserve_alpha else {}
+        pixels.save(encoded, format="WEBP", lossless=True, method=6, **options)
         webp_bytes = encoded.getvalue()
         if not _has_single_lossless_vp8l_chunk(
-            webp_bytes, width=width, height=height
+            webp_bytes, width=width, height=height, allow_alpha=preserve_alpha
         ):
             raise NativeCaptureUnavailable("webp_output_not_single_vp8l")
         with Image.open(io.BytesIO(webp_bytes)) as decoded:
             if decoded.format != "WEBP" or decoded.size != (width, height):
                 raise NativeCaptureUnavailable("webp_output_format_or_dimensions_invalid")
-            if decoded.convert("RGB").tobytes() != rgb.tobytes():
-                raise NativeCaptureUnavailable("webp_rgb_round_trip_mismatch")
+            if decoded.convert(pixels.mode).tobytes() != pixels.tobytes():
+                raise NativeCaptureUnavailable(
+                    "webp_rgba_round_trip_mismatch" if preserve_alpha else "webp_rgb_round_trip_mismatch"
+                )
         return CaptureResult(
             data=webp_bytes,
             width=width,
@@ -1300,7 +1305,7 @@ def encode_lossless_webp(data: bytes, *, width: int, height: int) -> CaptureResu
 
 
 def encode_lossless_webp_or_png(
-    data: bytes, *, width: int, height: int
+    data: bytes, *, width: int, height: int, preserve_alpha: bool = False
 ) -> tuple[CaptureResult, str | None]:
     """Prefer verified lossless WebP; retain verified PNG pixels if encoding fails."""
 
@@ -1308,9 +1313,9 @@ def encode_lossless_webp_or_png(
     if not capture_result_format_is_valid(png_result, width=width, height=height):
         raise NativeCaptureUnavailable("webp_fallback_png_invalid")
     with Image.open(io.BytesIO(data)) as image:
-        image.convert("RGB").load()
+        image.convert("RGBA" if preserve_alpha else "RGB").load()
     try:
-        return encode_lossless_webp(data, width=width, height=height), None
+        return encode_lossless_webp(data, width=width, height=height, preserve_alpha=preserve_alpha), None
     except NativeCaptureUnavailable as exc:
         return (
             CaptureResult(
@@ -1338,7 +1343,7 @@ def capture_result_format_is_valid(result: CaptureResult, *, width: int, height:
     if expected == "PNG" and not result.data.startswith(b"\x89PNG\r\n\x1a\n"):
         return False
     if expected == "WEBP" and not _has_single_lossless_vp8l_chunk(
-        result.data, width=width, height=height
+        result.data, width=width, height=height, allow_alpha=True
     ):
         return False
     try:
@@ -1366,9 +1371,9 @@ def capture_result_format_is_valid(result: CaptureResult, *, width: int, height:
 
 
 def _has_single_lossless_vp8l_chunk(
-    data: bytes, *, width: int, height: int
+    data: bytes, *, width: int, height: int, allow_alpha: bool = False
 ) -> bool:
-    """Require the exact simple lossless WebP container emitted for RGB output."""
+    """Require one simple lossless VP8L chunk, admitting alpha only explicitly."""
 
     if (
         len(data) < 25
@@ -1395,7 +1400,7 @@ def _has_single_lossless_vp8l_chunk(
     return (
         width_minus_one + 1 == width
         and height_minus_one + 1 == height
-        and has_alpha == 0
+        and (allow_alpha or has_alpha == 0)
         and version == 0
     )
 
@@ -1673,10 +1678,9 @@ async def capture_native_tile_replay(
             )
         replay_png = _decode_replay_data_url(replayed.get("dataUrl"))
         if preserve_alpha:
-            output_result = CaptureResult(replay_png, expected_width, expected_height)
-            if not capture_result_format_is_valid(output_result, width=expected_width, height=expected_height):
-                raise NativeCaptureUnavailable("replay_png_invalid", bytes_read=len(body))
-            encoding_fallback_reason = None
+            output_result, encoding_fallback_reason = encode_lossless_webp_or_png(
+                replay_png, width=expected_width, height=expected_height, preserve_alpha=True
+            )
         else:
             composited = composite_replay_png_on_white(
                 replay_png, width=expected_width, height=expected_height

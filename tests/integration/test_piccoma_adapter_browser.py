@@ -278,6 +278,7 @@ def _native_viewer_html(
     width: int = NATIVE_WIDTH,
     height: int = NATIVE_HEIGHT,
     left_offset: float = 0,
+    transition_delay_ms: int | None = None,
 ) -> str:
     columns = (width + 49) // 50
     draw_count = columns * ((height + 49) // 50)
@@ -287,6 +288,17 @@ def _native_viewer_html(
     canvas_markup = '<canvas width="300" height="150"></canvas>'
     if scaled:
         canvas_markup = '<div class="PCM-viewer2_zoomPageContent"><div class="PCM-viewer2_canvas_wrap">' + canvas_markup + '</div></div>'
+    transition_script = "" if transition_delay_ms is None else f"""
+        const second=document.getElementById('p1').cloneNode(true);
+        second.id='p2';second.classList.remove('current');
+        second.querySelector('.PCM-viewer2_canvasWrapper').classList.add('loaded');
+        document.getElementById('react_PageListApp').append(second);
+        window.step=()=>{{
+          document.getElementById('p1').classList.remove('current');
+          second.classList.add('current');second.style.transform='translateX(-853px)';
+          if ({transition_delay_ms} >= 0) setTimeout(()=>second.style.transform='none',{transition_delay_ms});
+        }};
+    """
     extra = "ctx.clearRect(0, 0, 1, 1);" if extra_paint else ""
     overlay = '<div class="fixtureOverlay"></div>' if overlay_sibling else ""
     return f"""<!doctype html><html><head><style>
@@ -329,6 +341,7 @@ def _native_viewer_html(
         const wrapper=document.querySelector('#p1 .PCM-viewer2_canvasWrapper');
         const ctx=canvas.getContext('2d');
         canvas.width={width}; canvas.height={height};
+        {transition_script}
         const image=new Image();
         window.__piccomaFixtureImage=image;
         image.onload=()=>{{
@@ -447,6 +460,7 @@ async def _start_native_fixture(
     width: int = NATIVE_WIDTH,
     height: int = NATIVE_HEIGHT,
     left_offset: float = 0,
+    transition_delay_ms: int | None = None,
 ) -> None:
     body = _synthetic_tile_jpeg(width=width, height=height)
 
@@ -467,6 +481,7 @@ async def _start_native_fixture(
                     width=width,
                     height=height,
                     left_offset=left_offset,
+                    transition_delay_ms=transition_delay_ms,
                 ),
                 content_type="text/html; charset=utf-8",
             )  # type: ignore[attr-defined]
@@ -488,7 +503,25 @@ async def _override_device_pixel_ratio(page: Page, value: float) -> None:
     )
 
 
-@pytest.mark.parametrize("fault", [None, "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change"])
+@pytest.mark.parametrize("delay", [700, -1])
+async def test_piccoma_scaled_transition_waits_for_in_frame_canvas_without_reclick(
+    browser_page: Page, delay: int
+) -> None:
+    adapter = PiccomaAdapter()
+    await _start_native_fixture(adapter, browser_page, width=1350, height=1920, transition_delay_ms=delay)
+    adapter.page_change_timeout_ms = 1200
+    previous = await adapter.get_content_identity(browser_page)
+    await adapter.go_next(browser_page)
+    if delay < 0:
+        with pytest.raises(PageChangeTimeoutError):
+            await adapter.wait_for_change(browser_page, previous)
+    else:
+        await adapter.wait_for_change(browser_page, previous)
+        assert (await adapter.get_content_identity(browser_page)).page_id == "p2"
+    assert await browser_page.evaluate("window.forbiddenClicks") == 1
+
+
+@pytest.mark.parametrize("fault", [None, "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change", "encoder_failure"])
 async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
     browser_page: Page, monkeypatch: pytest.MonkeyPatch, fault: str | None
 ) -> None:
@@ -508,20 +541,26 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
                 await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.style.width='842px'")
             return result
         monkeypatch.setattr(piccoma_native_capture_module, "_bounded_evaluate", mutate_after_replay)
-    if fault:
+    elif fault == "encoder_failure":
+        def fail_encoder(*_args, **_kwargs):
+            raise piccoma_native_capture_module.NativeCaptureUnavailable("webp_codec_unavailable")
+        monkeypatch.setattr(piccoma_native_capture_module, "encode_lossless_webp", fail_encoder)
+    if fault and fault != "encoder_failure":
         with pytest.raises(UnknownPageStateError):
             await adapter.capture_page(browser_page)
         return
     captures = await adapter.capture_page(browser_page)
     assert captures is not None and len(captures) == 1
     captured = captures[0]
-    assert (captured.width, captured.height, captured.mime_type) == (1350, 1920, "image/png")
+    assert (captured.width, captured.height, captured.mime_type) == (1350, 1920, "image/png" if fault else "image/webp")
     metadata = (await adapter.collect_debug_metadata(browser_page))["piccoma_capture"]
     assert metadata["source_native"] is True
     assert metadata["source_backdrop"] == "canvas_alpha_preserved"
     assert metadata["fallback_reason"] is None
+    assert metadata["method"] == ("native_tile_replay_png" if fault else "native_tile_replay_lossless_webp")
+    assert metadata["encoding_fallback_reason"] == ("webp_codec_unavailable" if fault else None)
     with Image.open(BytesIO(captured.data)) as image:
-        assert image.mode == "RGBA"
+        assert image.mode in {"RGB", "RGBA"}
         native = image.convert("RGBA")
 
     # Independent browser rendering of the original tainted canvas at 1:1,

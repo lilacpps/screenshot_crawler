@@ -30,6 +30,79 @@ Phase 07 Stage B transports all six existing fresh native-trace snapshots as JSO
 Stage C used the reviewed object and JSON implementations with the same YAML `page_turn_delay_ms: 200` setting in four interleaved 12-page manual runs. All 48 corresponding source-native lossless WebP files were byte-identical with zero fallback. Mean normal cycle time was 3.601s (object) versus 2.743s (JSON), a measured 0.857s / 23.8% reduction in these runs; trace RPC time fell by 0.864s and JSON decoding added 0.034s. WebP method6, pacing, and page-change stability time were effectively unchanged. A dedicated 24-page Batch reached explicit END and passed ZIP CRC, lossless-member, Artifact hash/size, and Catalog checks. The fresh prepackage audit also verified all 24 per-page manifest entries, 144 native evaluations, and 144 JSON decodes, while retaining no URLs/titles/raw manifest. The final Stage C review passed with BLOCKING 0. Details and measurement limits are in the [Phase 07 profile](../../../../research/piccoma-performance/PHASE07_PROFILE.md) and [Tester report](../../../../research/piccoma-performance/PHASE07_TESTER.md).
 
 
+
+## RGBA lossless WebP output (2026-10-13)
+
+The 1350x1920 scaled profile now prefers lossless WebP while preserving every
+RGBA byte of the verified replay, including alpha and RGB beneath alpha zero.
+`encode_lossless_webp` and its PNG-fallback wrapper take site-local
+`preserve_alpha=True` for this profile. Pillow encodes RGBA with lossless method 6
+and `exact=True`, then the decoder's complete RGBA stream must equal the input.
+The container must still be one valid VP8L chunk with the expected dimensions,
+version and no additional chunks; alpha is admitted explicitly. The default
+RGB path retains its original no-alpha container check and exact RGB proof.
+Generic Piccoma result validation accepts both proven RGB and RGBA lossless
+VP8L payloads, continuing to reject lossy, animated, malformed or wrong-size data.
+
+Successful scaled output is `native_tile_replay_lossless_webp`, image/webp,
+lossless=true, source_native=true, source_mime=image/jpeg, and
+source_backdrop=canvas_alpha_preserved. No white matte, resizing or RGB-only
+conversion is applied. Codec failure or any RGBA round-trip mismatch retains
+the original byte-identical RGBA PNG and records the encoding-fallback reason.
+Unknown source/paint/generation states still fail closed under the existing gates.
+
+The first normal Batch attempt captured two WebPs, then stopped during the
+third page transition. A bounded follow-up observed active p7's otherwise
+correct scaled canvas at x=-322.5, outside the x=530.5 frame, before it settled
+to the supported position. A page can be marked current for three unchanged
+samples before its movement begins. During an already requested sequential
+scaled-page transition only, `_wait_for_body` now excludes out-of-frame canvases
+from readiness and waits within its existing deadline. It still requires three
+stable, in-frame samples and the full strict geometry proof. No extra clicks,
+timeout extension or dimension tolerance was introduced. A permanent off-frame
+canvas times out; capture never starts there. This is observed transition
+settlement, not an encoder or source mapping failure.
+
+Core, access eligibility, manual-grant semantics, pacing, output schema, CLI,
+max-pages and same-content guards remain unchanged. Shared `note/00_core.md`
+needs no synchronization. Evidence for this update is ignored under
+`work/piccoma/rgba-webp-20261013/`; original saved PNG archives and the user's
+normal Catalog remain intact. Existing completed Items are reset only in the
+dedicated test Catalog to exercise the exact target again.
+
+
+Final validation: 255 passed / 0 failed / 0 skipped (160.54s, six existing
+asyncio deprecation warnings): `tests/unit/test_piccoma_native_capture.py`,
+`tests/integration/test_piccoma_adapter_browser.py`, and
+`tests/unit/test_packaging.py`, using the short workspace-local basetemp
+`output/p13f`. Focused WebP/scaled cases passed 18. Tests cover partial alpha,
+RGB hidden under alpha zero, deliberate corruption of each RGBA channel,
+byte-preserved PNG fallback on codec/proof failure, the old RGB/native paths,
+exact independent browser RGBA comparison, bounded delayed/permanent off-frame
+transitions with exactly one click, and packaging. An initial fixture assumed
+WebP always decodes as mode RGBA; it was corrected to compare converted RGBA
+pixels, since an entirely opaque lossless WebP may decode as RGB. Full repository,
+Discovery/Policy and separate Research suites were not rerun because their
+contracts did not change; all capture/format/navigation/output boundaries ran.
+Global Ruff and diff checks passed. No tests were skipped.
+
+Normal CLI Batch in the dedicated Catalog completed 13565:664316, all 22 pages,
+END, CrawlRun 9465 and one all-WebP ZIP. All 22 decoded 1350x1920 RGBA streams
+exactly equal the prior validated PNG archive's RGBA streams, including alpha.
+Every member is a simple alpha-bearing VP8L image. CRC, ordered filenames,
+decoded dimensions, Artifact SHA-256/size and the original Item's unchanged
+Completed state/completion time passed. The ZIP decreased from 54,220,125 to
+25,194,328 bytes (53.53%); summed page payloads decreased from 54,385,410 to
+25,189,334 bytes. This is a measured comparison for this episode only.
+Metrics `068cc88861e349d49e3462e764519bc6` recorded one completion, zero failures,
+retry/403/429/5xx/challenge/CAPTCHA. Evidence: `final-affected-tests.log`,
+`final-targeted.log`, `capture-probe.json`, `final-batch.log` and `zip-audit.json`
+in the ignored directory above. The failed pre-settlement-fix run remains in
+the isolated Catalog. No retained final manifest or independent live raw-canvas
+RGBA readback is claimed; the reference is the previously validated PNG replay.
+Other high-resolution routes and external readers beyond Pillow/browser/ZIP
+validation were not tested.
+
 ## High-resolution scaled canvas maintenance (2026-10-13)
 
 Item/Source 25656 is `13565:664316`, LEVEL.323 最終話 ガッシュからの手紙.
@@ -68,23 +141,24 @@ Their exact four-node path is CANVAS, `PCM-viewer2_canvas_wrap`,
 first opaque white node. The ordinary covering-white proof correctly fails.
 Fresh replay alpha ranged 252..255 on every real page, so dropping transparency
 or guessing an edge matte would change pixels. This profile instead preserves
-the verified replay's entire native RGBA PNG. Its separate paint-path validator
+the verified replay's entire native RGBA pixels in lossless WebP. Its paint-path validator
 requires the exact roles, measured small width difference, matching offsets and
 height, unchanged strict styles/pseudo-elements, and no overlapping descendants.
 It explicitly does not claim covering white. Original covering-white gates and
 WebP/RGB round-trip behavior on 764/842/844x1200 remain intact.
 
-Output uses `native_tile_replay_png`, `source_native=true`,
+Output now uses `native_tile_replay_lossless_webp`, `source_native=true`,
 `source_mime=image/jpeg`, `source_backdrop=canvas_alpha_preserved`,
-`output_format=image/png`, `output_lossless=true`, and no fallback reason.
-PNG here preserves native canvas transparency by design, not because WebP
-encoding failed. A missing source/paint/generation proof still cannot silently
+`output_format=image/webp`, `output_lossless=true`, and no fallback reason.
+The lossless encoder preserves every RGBA byte; PNG is retained only on an
+encoding/proof failure, with an explicit reason. A missing source/paint/generation proof still cannot silently
 accept a smaller display screenshot: existing output-size and continuity checks
 fail closed. Reader ordering, resume cancellation, END, max-pages, same-content,
 access eligibility, pacing and shared Core/Batch/Catalog contracts are unchanged.
 No CLI/config/schema change or `note/00_core.md` update is needed.
 
-A bounded production-adapter probe captured p1..p22 and reached explicit END.
+Before the RGBA WebP change, a bounded production-adapter probe captured
+p1..p22 as PNG and reached explicit END.
 Normal CLI Batch `--limit 1` using an isolated online-backup Catalog then completed
 all 22 pages with END, CrawlRun 9446 and one ZIP Artifact. Every ordered member
 matched the fresh production source-replay PNG hash/length, decoded as
@@ -99,7 +173,7 @@ logs. JPEG bodies/signed URLs are not committed. Other high-resolution works,
 different geometry and an independent live RGBA readback remain unverified.
 
 
-Validation: the complete affected selection covered 313 Piccoma Unit/browser
+Initial scaled-PNG maintenance validation: the affected selection covered 313 Piccoma Unit/browser
 Integration cases and 26 packaging cases, all ultimately passing with zero
 skips. The final combined invocation had 338 passed and one Windows long-path
 failure in the packaging fixture (152.84s, 11 existing asyncio warnings); all

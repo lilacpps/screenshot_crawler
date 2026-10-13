@@ -551,27 +551,36 @@ def test_lossless_webp_round_trip_preserves_full_rgb_without_resizing() -> None:
         assert decoded.convert("RGB").tobytes() == source.tobytes()
 
 
-def test_lossless_webp_round_trip_preserves_white_composited_partial_alpha_rgb() -> None:
+@pytest.mark.parametrize("preserve_alpha", [False, True])
+def test_lossless_webp_round_trip_preserves_white_composited_partial_alpha_rgb(preserve_alpha: bool) -> None:
     source = Image.new("RGBA", (3, 2), (0, 0, 0, 0))
     source.putpixel((0, 0), (17, 189, 231, 64))
     source.putpixel((1, 0), (211, 23, 88, 128))
     source.putpixel((2, 1), (35, 167, 29, 255))
+    source.putpixel((2, 0), (71, 222, 33, 0))
+    source.putpixel((1, 1), (32, 51, 107, 252))
     png = BytesIO()
     source.save(png, format="PNG")
-    composite = composite_replay_png_on_white(png.getvalue(), width=3, height=2)
-    with Image.open(BytesIO(composite)) as expected:
-        expected_rgb = expected.convert("RGB").tobytes()
+    payload = png.getvalue() if preserve_alpha else composite_replay_png_on_white(png.getvalue(), width=3, height=2)
+    mode = "RGBA" if preserve_alpha else "RGB"
+    with Image.open(BytesIO(payload)) as expected:
+        expected_pixels = expected.convert(mode).tobytes()
 
-    result = encode_lossless_webp(composite, width=3, height=2)
+    result = encode_lossless_webp(payload, width=3, height=2, preserve_alpha=preserve_alpha)
 
     with Image.open(BytesIO(result.data)) as decoded:
-        assert decoded.convert("RGB").tobytes() == expected_rgb
+        assert decoded.convert(mode).tobytes() == expected_pixels
+    assert capture_result_format_is_valid(result, width=3, height=2)
+    if preserve_alpha:
+        assert (result.data[24] >> 4) & 1 == 1
+        assert not piccoma_native_capture_module._has_single_lossless_vp8l_chunk(result.data, width=3, height=2)
 
 
+@pytest.mark.parametrize("preserve_alpha", [False, True])
 def test_lossless_webp_encode_failure_retains_validated_native_png(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, preserve_alpha: bool,
 ) -> None:
-    source = Image.new("RGB", (4, 3), (29, 141, 237))
+    source = Image.new("RGBA", (4, 3), (29, 141, 237, 127)) if preserve_alpha else Image.new("RGB", (4, 3), (29, 141, 237))
     png = BytesIO()
     source.save(png, format="PNG")
 
@@ -582,7 +591,7 @@ def test_lossless_webp_encode_failure_retains_validated_native_png(
         piccoma_native_capture_module, "encode_lossless_webp", fail_encoder
     )
     result, reason = encode_lossless_webp_or_png(
-        png.getvalue(), width=4, height=3
+        png.getvalue(), width=4, height=3, preserve_alpha=preserve_alpha
     )
 
     assert reason == "webp_codec_unavailable"
@@ -590,6 +599,30 @@ def test_lossless_webp_encode_failure_retains_validated_native_png(
     assert result.mime_type == "image/png"
     assert result.file_extension == ".png"
     assert capture_result_format_is_valid(result, width=4, height=3)
+
+
+@pytest.mark.parametrize("channel", range(4))
+def test_lossless_webp_rejects_changed_rgba_channel_and_retains_original_png(
+    monkeypatch: pytest.MonkeyPatch, channel: int,
+) -> None:
+    source = Image.new("RGBA", (4, 3), (29, 141, 237, 127))
+    source.putpixel((0, 0), (83, 71, 219, 0))
+    png = BytesIO()
+    source.save(png, format="PNG")
+    save = Image.Image.save
+    def corrupt_encoder(image, fp, format=None, **params):
+        if format == "WEBP":
+            image = image.copy()
+            pixel = list(image.getpixel((0, 0)))
+            pixel[channel] = (pixel[channel] + 1) % 256
+            image.putpixel((0, 0), tuple(pixel))
+        return save(image, fp, format=format, **params)
+    monkeypatch.setattr(Image.Image, "save", corrupt_encoder)
+    with pytest.raises(NativeCaptureUnavailable, match="webp_rgba_round_trip_mismatch"):
+        encode_lossless_webp(png.getvalue(), width=4, height=3, preserve_alpha=True)
+    result, reason = encode_lossless_webp_or_png(png.getvalue(), width=4, height=3, preserve_alpha=True)
+    assert reason == "webp_rgba_round_trip_mismatch"
+    assert result.data == png.getvalue() and result.mime_type == "image/png"
 
 
 def test_capture_result_metadata_rejects_mime_extension_payload_and_dimension_mismatch() -> None:
