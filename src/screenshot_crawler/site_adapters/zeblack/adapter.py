@@ -129,6 +129,8 @@ _LAST_PAGE_SCRIPT = r"""
 """
 
 _TICKET_ENTRY_TEXT = "チケットを使って読む"
+_FREE_TICKET_ENTRY_TEXT = "無料チケットを使って読む"
+_TICKET_ENTRY_TEXTS = (_TICKET_ENTRY_TEXT, _FREE_TICKET_ENTRY_TEXT)
 _POINT_ENTRY_TEXT = "ポイントを使って読む"
 _COIN_ENTRY_TEXT = "コインを使って読む"
 _POINT_AND_COIN_ENTRY_TEXT = "アイテムを使って読む"
@@ -597,7 +599,7 @@ class ZeblackAdapter(SiteAdapter):
         """Return whether a known access gate proves viewer hydration."""
 
         for text in (
-            _TICKET_ENTRY_TEXT,
+            *_TICKET_ENTRY_TEXTS,
             _POINT_ENTRY_TEXT,
             _POINT_AND_COIN_ENTRY_TEXT,
             _COIN_ENTRY_TEXT,
@@ -672,10 +674,18 @@ class ZeblackAdapter(SiteAdapter):
                 matches.append(candidate)
         return matches
 
+    async def _visible_ticket_matches(self, scope: Page | Locator) -> list[Locator]:
+        matches: list[Locator] = []
+        for text in _TICKET_ENTRY_TEXTS:
+            matches.extend(await self._visible_exact_leaf_matches(scope, text))
+        return matches
+
     async def _validate_ticket_control(self, scope: Locator) -> Locator:
         """Validate one exact ticket control inside a bounded DOM scope."""
 
-        matches = await self._exact_leaf_text_matches(scope, _TICKET_ENTRY_TEXT)
+        matches: list[Locator] = []
+        for text in _TICKET_ENTRY_TEXTS:
+            matches.extend(await self._exact_leaf_text_matches(scope, text))
         if len(matches) != 1:
             raise UnsupportedAccessStrategyError(
                 "Zeblack ticket entry control is ambiguous"
@@ -689,6 +699,13 @@ class ZeblackAdapter(SiteAdapter):
         if tag_name not in {"button", "a", "div"}:
             raise UnsupportedAccessStrategyError(
                 f"Zeblack ticket entry control has unsupported tag: {tag_name}"
+            )
+        if (
+            (await ticket.text_content() or "").strip() == _FREE_TICKET_ENTRY_TEXT
+            and tag_name != "button"
+        ):
+            raise UnsupportedAccessStrategyError(
+                "Zeblack free ticket entry control is not a button"
             )
         return ticket
 
@@ -705,9 +722,7 @@ class ZeblackAdapter(SiteAdapter):
     ) -> Locator | None:
         """Find the smallest visible ticket-anchored modal scope."""
 
-        ticket_matches = await self._visible_exact_leaf_matches(
-            page, _TICKET_ENTRY_TEXT
-        )
+        ticket_matches = await self._visible_ticket_matches(page)
         if not ticket_matches:
             return None
         if len(ticket_matches) != 1:
@@ -716,6 +731,9 @@ class ZeblackAdapter(SiteAdapter):
             )
 
         ticket = ticket_matches[0]
+        free_ticket_ui = (
+            (await ticket.text_content() or "").strip() == _FREE_TICKET_ENTRY_TEXT
+        )
         scope = ticket.locator("xpath=..")
         for _ in range(MAX_MODAL_ANCESTOR_DEPTH):
             tag_name = (await scope.evaluate("element => element.tagName")).lower()
@@ -725,12 +743,20 @@ class ZeblackAdapter(SiteAdapter):
                 scoped_target = await self._visible_exact_leaf_matches(
                     scope, target_main_name
                 )
-                scoped_ticket = await self._visible_exact_leaf_matches(
-                    scope, _TICKET_ENTRY_TEXT
-                )
-                scoped_cancel = await self._visible_exact_leaf_matches(
-                    scope, _CANCEL_TEXT
-                )
+                scoped_ticket = await self._visible_ticket_matches(scope)
+                if free_ticket_ui:
+                    # Observed 2026-10-15: the free-ticket modal uses an icon
+                    # button rather than the legacy exact cancel text.
+                    close_buttons = scope.locator('button[aria-label="閉じる"]')
+                    scoped_cancel = [
+                        close_buttons.nth(index)
+                        for index in range(await close_buttons.count())
+                        if await close_buttons.nth(index).is_visible()
+                    ]
+                else:
+                    scoped_cancel = await self._visible_exact_leaf_matches(
+                        scope, _CANCEL_TEXT
+                    )
                 if (
                     len(scoped_target) == 1
                     and len(scoped_ticket) == 1
@@ -930,7 +956,7 @@ class ZeblackAdapter(SiteAdapter):
     ) -> None:
         # Selecting a TICKET_AVAILABLE chapter on chapter/list only reveals
         # the confirmation modal. It does not consume a Work Ticket. The
-        # consuming action is the exact "チケットを使って読む" control below;
+        # consuming action is one of the observed exact ticket controls below;
         # the distinct point action must remain rejected by the fail-closed
         # control-count checks.
         if self._quota_resource != "work_ticket":

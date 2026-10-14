@@ -64,13 +64,18 @@ def _prepared_catalog(tmp_path: Path):
     return catalog, executor, candidates
 
 
-async def _install_prepared_observation(page: Page, monkeypatch, *, paid: bool = False):
+async def _install_prepared_observation(
+    page: Page, monkeypatch, *, paid: bool = False, free_ticket_ui: bool = False,
+):
     navigations: list[str] = []
     observations: list[Page] = []
 
     async def fulfill(route):
         navigations.append(route.request.url)
-        html = _chapter_list_html(paid_control="ポイントを使って読む" if paid else None)
+        html = _chapter_list_html(
+            paid_control="ポイントを使って読む" if paid else None,
+            free_ticket_ui=free_ticket_ui,
+        )
         html = html.replace(
             "document.body.innerHTML = '<img alt=\"page_1\" src=\"data:image/gif;base64,"
             "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==\">';",
@@ -83,7 +88,8 @@ async def _install_prepared_observation(page: Page, monkeypatch, *, paid: bool =
             status=200, content_type="text/html; charset=utf-8",
             body=html
             + '<script>window.ticketClicks = 0; document.addEventListener("click", e => {'
-            + 'if (e.target.textContent === "チケットを使って読む") window.ticketClicks++;});</script>',
+            + 'if (["チケットを使って読む", "無料チケットを使って読む"].includes(e.target.textContent)) '
+            + 'window.ticketClicks++;});</script>',
         )
 
     await page.route("https://zebrack-comic.shueisha.co.jp/**", fulfill)
@@ -111,13 +117,17 @@ async def _install_prepared_observation(page: Page, monkeypatch, *, paid: bool =
 
 
 @pytest.mark.parametrize("finalization_fails", [False, True])
+@pytest.mark.parametrize("free_ticket_ui", [False, True], ids=["legacy", "free_ticket"])
 async def test_zeblack_cli_single_list_load_then_work_cooldown_without_site_access(
     browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     finalization_fails: bool,
+    free_ticket_ui: bool,
 ) -> None:
     catalog, _executor, candidates = _prepared_catalog(tmp_path)
-    navigations, observations = await _install_prepared_observation(browser_page, monkeypatch)
+    navigations, observations = await _install_prepared_observation(
+        browser_page, monkeypatch, free_ticket_ui=free_ticket_ui,
+    )
     watchlist_path = tmp_path / "watchlist.yaml"
     WatchlistService(watchlist_path).add(
         key="prepared-target", work_key="prepared-work", site="zeblack",
@@ -236,21 +246,34 @@ def _chapter_list_html(
     paid_control: str | None = None,
     modal_main_name: str = MAIN_NAME,
     include_cancel: bool = True,
+    free_ticket_ui: bool = False,
+    extra_ticket_text: str | None = None,
+    cancel_count: int = 1,
+    ticket_disabled: bool = False,
 ) -> str:
     unrelated_nodes = "".join(
         f'<div class="junk" data-index="{index}">unrelated-{index}</div>'
         for index in range(unrelated_node_count)
     )
+    ticket_text = "無料チケットを使って読む" if free_ticket_ui else "チケットを使って読む"
+    tag = "button" if free_ticket_ui else "div"
+    disabled = (
+        (' disabled' if free_ticket_ui else ' role="button" aria-disabled="true"')
+        if ticket_disabled else ""
+    )
     ticket_controls = "".join(
-        '<div class="ticket">チケットを使って読む</div>'
+        f'<{tag} class="ticket"{disabled}>{ticket_text}</{tag}>'
         for _ in range(ticket_count)
     )
+    if extra_ticket_text is not None:
+        ticket_controls += f'<button class="ticket">{extra_ticket_text}</button>'
     paid_markup = f'<div>{paid_control}</div>' if paid_control else ""
-    cancel_markup = (
-        '<button id="cancel" type="button">キャンセル</button>'
-        if include_cancel
-        else ""
+    cancel_control = (
+        '<button type="button" aria-label="閉じる"></button>'
+        if free_ticket_ui
+        else '<button type="button">キャンセル</button>'
     )
+    cancel_markup = cancel_control * cancel_count if include_cancel else ""
     return f"""
     {unrelated_nodes}
     <div id="chapter58493"><p>{MAIN_NAME}</p></div>
@@ -356,10 +379,12 @@ async def _hydration_adapter(
     [0, 2500],
     ids=["normal_dom", "large_dom"],
 )
+@pytest.mark.parametrize("free_ticket_ui", [False, True], ids=["legacy", "free_ticket"])
 async def test_zeblack_work_ticket_entry_uses_modal_then_target_viewer(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,
     unrelated_node_count: int,
+    free_ticket_ui: bool,
 ) -> None:
     page = browser_page
     navigation_urls: list[str] = []
@@ -369,7 +394,10 @@ async def test_zeblack_work_ticket_entry_uses_modal_then_target_viewer(
         await route.fulfill(
             status=200,
             content_type="text/html; charset=utf-8",
-            body=_chapter_list_html(unrelated_node_count=unrelated_node_count),
+            body=_chapter_list_html(
+                unrelated_node_count=unrelated_node_count,
+                free_ticket_ui=free_ticket_ui,
+            ),
         )
 
     await page.route("https://zebrack-comic.shueisha.co.jp/**", fulfill)
@@ -571,15 +599,27 @@ async def test_zeblack_target_chapter_ambiguous_main_name_fails_immediately(
 
 
 @pytest.mark.parametrize(
-    ("ticket_count", "paid_control"),
-    [(2, None), (1, "ポイントを使って読む")],
-    ids=["ambiguous_ticket", "paid_contamination"],
+    ("ticket_count", "paid_control", "mixed_labels", "ticket_disabled"),
+    [
+        (2, None, False, False),
+        (1, "ポイントを使って読む", False, False),
+        (1, "アイテムを使って読む", False, False),
+        (1, "コインを使って読む", False, False),
+        (1, "コインを購入する", False, False),
+        (1, None, True, False),
+        (1, None, False, True),
+    ],
+    ids=["ambiguous_ticket", "point", "item", "coin", "purchase", "mixed", "disabled"],
 )
+@pytest.mark.parametrize("free_ticket_ui", [False, True], ids=["legacy", "free_ticket"])
 async def test_zeblack_modal_identity_rejects_ambiguous_or_paid_controls(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,
     ticket_count: int,
     paid_control: str | None,
+    mixed_labels: bool,
+    ticket_disabled: bool,
+    free_ticket_ui: bool,
 ) -> None:
     page = browser_page
 
@@ -590,6 +630,12 @@ async def test_zeblack_modal_identity_rejects_ambiguous_or_paid_controls(
             body=_chapter_list_html(
                 ticket_count=ticket_count,
                 paid_control=paid_control,
+                free_ticket_ui=free_ticket_ui,
+                extra_ticket_text=(
+                    ("チケットを使って読む" if free_ticket_ui else "無料チケットを使って読む")
+                    if mixed_labels else None
+                ),
+                ticket_disabled=ticket_disabled,
             ),
         )
 
@@ -626,9 +672,19 @@ async def test_zeblack_modal_identity_rejects_ambiguous_or_paid_controls(
     assert adapter.get_access_consumption().consumed is False
 
 
+@pytest.mark.parametrize("free_ticket_ui", [False, True], ids=["legacy", "free_ticket"])
+@pytest.mark.parametrize(
+    ("modal_main_name", "include_cancel", "cancel_count"),
+    [("別の章", True, 1), (MAIN_NAME, False, 1), (MAIN_NAME, True, 2)],
+    ids=["wrong_target", "missing_dismiss", "ambiguous_dismiss"],
+)
 async def test_zeblack_modal_scope_requires_target_and_cancel_identity(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,
+    free_ticket_ui: bool,
+    modal_main_name: str,
+    include_cancel: bool,
+    cancel_count: int,
 ) -> None:
     page = browser_page
 
@@ -637,8 +693,10 @@ async def test_zeblack_modal_scope_requires_target_and_cancel_identity(
             status=200,
             content_type="text/html; charset=utf-8",
             body=_chapter_list_html(
-                modal_main_name="別の章",
-                include_cancel=False,
+                modal_main_name=modal_main_name,
+                include_cancel=include_cancel,
+                cancel_count=cancel_count,
+                free_ticket_ui=free_ticket_ui,
             ),
         )
 

@@ -1,6 +1,56 @@
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 
-## Current implementation snapshot (updated 2026-10-14)
+## Current implementation snapshot (updated 2026-10-15)
+
+### Work Ticket confirmation UI support (2026-10-15)
+
+The adapter accepts two explicitly observed confirmation UI variants:
+
+- Legacy: exact `チケットを使って読む` plus one visible exact `キャンセル` leaf.
+- Current: exact `無料チケットを使って読む` on a native `button`, plus one
+  visible `button[aria-label="閉じる"]` in the same bounded modal scope.
+
+Both variants require one exact target chapter mainName and exactly one visible
+ticket control across both supported labels. Mixed labels, duplicate ticket or
+dismiss controls, missing dismissal identity, wrong chapter, disabled ticket
+buttons, and visible point/item/coin/purchase actions fail closed. No partial
+text matching or page-global ticket fallback was added. Viewer access-gate
+hydration recognizes both exact ticket labels. The live `TICKET_AVAILABLE`
+preflight, same-document prepared entry, one consuming attempt, target-viewer
+confirmation and observed-consumption persistence remain unchanged. CLI and
+configuration are unchanged.
+
+The original failure on title `86`, chapter `15811` (`#15 向かい風 - ②`) was
+caused by requiring the legacy labels on the current UI. Read-only live checks
+confirmed `TICKET_AVAILABLE`, chapter selection, and the current button/close
+pair. After the fix, production `_click_target_chapter()` and
+`_validate_ticket_control()` successfully identified the exact modal and enabled
+native ticket button. No consuming control was clicked. Dedicated probe Pages
+were closed and existing browser tabs preserved. Compact evidence is local in
+`output/zeblack_modal_diagnosis_20261015/report.json` and
+`fix_verification.json`; no credentials, storage state, or content images were
+collected. The user subsequently confirmed the fix with a real grant-only run;
+local metrics file
+`output/metrics/20261015T060434827945+0900-zeblack-grant-only-0239e80bf2a84f5ab6a7dbb46a51c9da.jsonl`
+contains 21 completed consuming attempts, zero failed attempts, and a final
+batch summary with no stop reason. All 7,096 JSONL lines parse successfully.
+One separate resolver-only result reports `work_ticket_target_not_in_catalog`;
+this is not a consuming entry failure. This confirms real post-consumption
+entry on the observed run, without establishing support for every title/UI.
+The date when the site introduced this UI remains unknown.
+
+Synthetic browser tests cover both variants, including one-list-load CLI
+grant-only, exactly one ticket click, persisted grant/cooldown, no artifacts,
+pending Items, and finalization failure. Negative tests cover both variants'
+identity, ambiguity, disabled controls and paid actions. Validation:
+`tests/unit/test_zeblack_adapter.py` and
+`tests/integration/test_zeblack_access_entry_browser.py`: **87 passed,
+0 skipped**; `ruff check src tests` and `git diff --check`: PASS. Pytest's initial
+default temporary-directory permission errors were resolved by using an
+isolated workspace `--basetemp` under `output/`; the complete affected test
+selection then passed. Research tests and the
+full suite are unnecessary for this site-local selector fix; actual ticket
+consumption was intentionally not tested live.
 
 This section describes the current implementation after the Z6 Batch
 orchestration and the explicit grant-only sequencing changes. Older Z5 live-verification sections below remain
@@ -197,14 +247,15 @@ target unavailable + no ticket available     -> work_ticket_unavailable, stop pa
 unknown status                                -> fail closed
 ```
 
-For `TICKET_AVAILABLE`, only the bundle-observed exact text
-`チケットを使って読む` is eligible. The Adapter validates one visible target
+For `TICKET_AVAILABLE`, only the observed exact texts
+`チケットを使って読む` and `無料チケットを使って読む` are eligible. The Adapter validates one visible target
 row and one exact visible `mainName` descendant, clicks that chapter control
 only when the control itself and its ancestors contain no `a[href]` direct-link
 ancestor (relative hrefs are rejected too). After that click it requires the
 URL to remain the exact chapter-list URL, then finds a visible common DOM
-ancestor containing the exact target mainName, ticket control, and exact
-`キャンセル` control. CSS-module modal class fragments remain diagnostic only.
+ancestor containing the exact target mainName, ticket control, and the matching
+dismiss control (legacy exact `キャンセル`, or current
+`button[aria-label="閉じる"]`). CSS-module modal class fragments remain diagnostic only.
 Work Ticket entry accepts only that modal scope; the former page-global ticket
 control fallback is not supported. The ticket control must be the single
 visible/enabled exact control in that bounded scope, with no visible

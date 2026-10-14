@@ -504,6 +504,7 @@ async def test_viewer_ready_waits_for_stable_page_before_live_preflight(monkeypa
     "gate_text",
     [
         "チケットを使って読む",
+        "無料チケットを使って読む",
         "ポイントを使って読む",
         "アイテムを使って読む",
         "コインを使って読む",
