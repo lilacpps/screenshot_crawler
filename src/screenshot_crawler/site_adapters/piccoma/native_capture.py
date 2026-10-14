@@ -32,12 +32,19 @@ MAX_REPLAY_MS = 10_000
 RESPONSE_WAIT_SECONDS = 1.5
 _SOURCE_HOST = "pcm.kakaocdn.net"
 _SOURCE_PATH = re.compile(r"^/dna/[^/?#]+/[^/?#]+/[^/?#]+/i[^/?#]+\.jpg$")
-# Exact live-observed backing sizes and tile grids, never inferred from size.
-_OBSERVED_TILE_GRIDS = {(764, 1200): (16, 24), (842, 1200): (17, 24),
+# Exact live-observed profiles retain their existing geometry/paint contracts.
+_OBSERVED_TILE_GRIDS = {(763, 1200): (16, 24), (764, 1200): (16, 24),
+                        (773, 1200): (16, 24), (777, 1200): (16, 24), (842, 1200): (17, 24),
                         (844, 1200): (17, 24), (1350, 1920): (27, 39),
                         (1125, 1600): (23, 32)}
+# Ordinary 1200px pages use the same observed 50px tile protocol across this
+# live-measured width envelope. Size only selects the candidate grid; complete
+# trace/source/paint/generation proof still determines capture eligibility.
+_ORDINARY_NATIVE_WIDTH_BOUNDS = (757, 844)
 SCALED_NATIVE_SIZES = frozenset({(1350, 1920), (1125, 1600)})
 SCALED_DISPLAY_SIZE = (843.046875, 1199)
+OVERSCAN_NATIVE_SIZE = (763, 1200)
+OVERSCAN_DISPLAY_SIZE = (764.265625, 1202)
 _ALLOWED_CONTEXT_ATTRIBUTES = frozenset(
     {"alpha", "colorSpace", "colorType", "desynchronized", "toneMapping", "willReadFrequently"}
 )
@@ -921,10 +928,31 @@ async def _read_native_snapshot(page: Page, canvas: Any) -> dict[str, Any] | Non
     return _decode_native_snapshot_json(raw)
 
 
+def is_additional_ordinary_size(width: object, height: object) -> bool:
+    """Identify bounded widths that require complete native proof, with no screenshot fallback."""
+    return (
+        type(width) is int and type(height) is int
+        and height == 1200
+        and _ORDINARY_NATIVE_WIDTH_BOUNDS[0] <= width <= _ORDINARY_NATIVE_WIDTH_BOUNDS[1]
+        and (width, height) not in _OBSERVED_TILE_GRIDS
+    )
+
+
+def _native_tile_grid(width: int, height: int) -> tuple[int, int] | None:
+    if type(width) is not int or type(height) is not int:
+        return None
+    observed = _OBSERVED_TILE_GRIDS.get((width, height))
+    if observed is not None:
+        return observed
+    if is_additional_ordinary_size(width, height):
+        return (width + 49) // 50, 24
+    return None
+
+
 def validate_tile_trace(
     trace: dict[str, Any] | None, *, expected_width: int, expected_height: int
 ) -> ValidatedTrace:
-    """Accept only complete live-observed tile draw graphs."""
+    """Prove a complete observed tile protocol within bounded native profiles."""
 
     if (
         not isinstance(trace, dict)
@@ -935,17 +963,18 @@ def validate_tile_trace(
         or trace.get("unobservedAttributeMutation")
     ):
         raise NativeCaptureUnavailable("trace_missing_or_overflow")
+    grid = _native_tile_grid(expected_width, expected_height)
     if (
         trace.get("connected") is not True
         or trace.get("dimensions") != [expected_width, expected_height]
-        or (expected_width, expected_height) not in _OBSERVED_TILE_GRIDS
+        or grid is None
         or trace.get("retained") is not True
     ):
         raise NativeCaptureUnavailable("target_canvas_identity_or_dimensions")
     events = trace.get("events")
     if not isinstance(events, list) or not 1 <= len(events) <= MAX_TARGET_EVENTS:
         raise NativeCaptureUnavailable("target_trace_incomplete")
-    columns, rows = _OBSERVED_TILE_GRIDS[(expected_width, expected_height)]
+    columns, rows = grid
     expected_draw_count = columns * rows
     if len(events) != expected_draw_count + 3:
         raise NativeCaptureUnavailable("unsupported_target_operation_count")
@@ -1130,7 +1159,7 @@ def validate_scaled_alpha_paint_path(
 ) -> bool:
     """Validate the observed scaled path without claiming white covers its edge."""
 
-    if (width, height) not in SCALED_NATIVE_SIZES:
+    if (width, height) not in SCALED_NATIVE_SIZES and (width, height) != OVERSCAN_NATIVE_SIZE:
         return False
     return _validate_paint_path(snapshot, width=width, height=height, preserve_alpha=True)
 
@@ -1148,15 +1177,20 @@ def _validate_paint_path(
     overlapping_descendants = snapshot.get("overlappingDescendants")
     first_opaque = snapshot.get("firstOpaqueIndex")
     color = snapshot.get("firstOpaqueColor")
-    display_width, display_height = (
-        SCALED_DISPLAY_SIZE if (width, height) in SCALED_NATIVE_SIZES else (width, height)
-    )
+    overscan = (width, height) == OVERSCAN_NATIVE_SIZE and preserve_alpha
+    display_width, display_height = (OVERSCAN_DISPLAY_SIZE if overscan else
+        SCALED_DISPLAY_SIZE if (width, height) in SCALED_NATIVE_SIZES else (width, height))
+    # Additional ordinary widths must prove a 1:1 presentation. Preserve the
+    # existing discrete profiles' tolerances and alpha/overscan paint contracts.
+    new_ordinary_width = is_additional_ordinary_size(width, height)
+    display_tolerance = 0.01 if new_ordinary_width else 0.5
     if (
         snapshot.get("canvasId") is None
         or not isinstance(rect, list)
         or len(rect) != 4
-        or abs(rect[2] - display_width) > 0.5
-        or abs(rect[3] - display_height) > 0.5
+        or any(type(value) not in {int, float} or not math.isfinite(value) for value in rect)
+        or abs(rect[2] - display_width) > display_tolerance
+        or abs(rect[3] - display_height) > display_tolerance
         or not isinstance(rows, list)
         or not isinstance(first_opaque, int)
         or first_opaque < 1
@@ -1179,8 +1213,8 @@ def _validate_paint_path(
                 or row.get("tag") != ("CANVAS" if index == 0 else "DIV")
                 or (role and role not in row.get("classes", "").split())
                 or abs(box[0] - rect[0]) > 0.01 or abs(box[1] - rect[1]) > 0.01
-                or abs(box[2] - (SCALED_DISPLAY_SIZE[0] if index == 0 else 843)) > 0.01
-                or abs(box[3] - SCALED_DISPLAY_SIZE[1]) > 0.01
+                or abs(box[2] - (display_width if index == 0 else 764 if overscan else 843)) > 0.01
+                or abs(box[3] - display_height) > 0.01
             ):
                 return False
     for index, row in enumerate(rows[: first_opaque + 1]):
@@ -1226,7 +1260,9 @@ def _validate_paint_path(
         if (
             node_rect[0] > rect[0] + 0.01
             or node_rect[1] > rect[1] + 0.01
-            or node_rect[0] + node_rect[2] < rect[0] + rect[2] - (0.05 if preserve_alpha else 0.01)
+            or node_rect[0] + node_rect[2] < rect[0] + rect[2] - (
+                0.27 if overscan and preserve_alpha else 0.05 if preserve_alpha else 0.01
+            )
             or node_rect[1] + node_rect[3] < rect[1] + rect[3] - 0.01
         ):
             return False
@@ -1574,13 +1610,19 @@ async def capture_native_tile_replay(
     if response_registry_overflowed:
         raise NativeCaptureUnavailable("response_registry_overflow")
     preserve_alpha = (expected_width, expected_height) in SCALED_NATIVE_SIZES
-    paint_validator = validate_scaled_alpha_paint_path if preserve_alpha else validate_white_paint_path
     try:
         before = await _read_native_snapshot(page, canvas)
         trace = validate_tile_trace(
             before, expected_width=expected_width, expected_height=expected_height
         )
         paint_before = before.get("paint") if isinstance(before, dict) else None
+        # The same 763px backing size also has an ordinary 1:1 presentation.
+        # Select alpha preservation only from the complete overscan paint proof.
+        if (expected_width, expected_height) == OVERSCAN_NATIVE_SIZE:
+            preserve_alpha = validate_scaled_alpha_paint_path(
+                paint_before, width=expected_width, height=expected_height
+            )
+        paint_validator = validate_scaled_alpha_paint_path if preserve_alpha else validate_white_paint_path
         if (
             not isinstance(paint_before, dict)
             or paint_before.get("canvasId") != before.get("id")
@@ -1803,6 +1845,7 @@ __all__ = [
     "encode_lossless_webp",
     "encode_lossless_webp_or_png",
     "install_native_trace",
+    "is_additional_ordinary_size",
     "retire_native_trace",
     "snapshot_native_trace",
     "target_generation_signature",

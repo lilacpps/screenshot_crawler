@@ -6,6 +6,7 @@ import asyncio
 import math
 import re
 import time
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -34,12 +35,15 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
     piccoma_manual_grant_until,
 )
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
+    OVERSCAN_DISPLAY_SIZE,
+    OVERSCAN_NATIVE_SIZE,
     SCALED_DISPLAY_SIZE,
     SCALED_NATIVE_SIZES,
     NativeCaptureUnavailable,
     capture_native_tile_replay,
     capture_result_format_is_valid,
     install_native_trace,
+    is_additional_ordinary_size,
     retire_native_trace,
     snapshot_native_trace,
     target_generation_signature,
@@ -67,6 +71,7 @@ MAX_SCALED_NATIVE_EPISODE_BYTES = 128_000_000
 PAGE_CHANGE_TIMEOUT_MS = 10_000
 INITIALIZE_TIMEOUT_MS = 30_000
 RESUME_DIALOG_GRACE_MS = 1_500
+MAX_BODY_WAIT_DIAGNOSTIC_SAMPLES = 8
 _BODY_PAGE_ID = re.compile(r"p([1-9][0-9]*)\Z")
 _KNOWN_GUIDE_TREE = {
     "tag": "DIV",
@@ -277,6 +282,7 @@ class PiccomaAdapter(SiteAdapter):
         self._native_response_overflow = False
         self._native_response_event = asyncio.Event()
         self._native_bytes_read = 0
+        self._body_wait_failure: dict[str, Any] | None = None
 
     def get_access_profile(self) -> AccessProfile:
         return piccoma_access_profile()
@@ -591,6 +597,37 @@ class PiccomaAdapter(SiteAdapter):
         return current if isinstance(current, str) else ""
 
     async def _wait_for_body(self, page: Page, number: int) -> None:
+        started = time.monotonic()
+        samples: deque[dict[str, Any]] = deque(maxlen=MAX_BODY_WAIT_DIAGNOSTIC_SAMPLES)
+        diagnostics: dict[str, Any] = {
+            "requested_page_id": f"p{number}",
+            "expected_page_id_at_start": self._expected_page_id,
+            "advance_from": self._advance_from,
+            "sample_count": 0,
+        }
+        self._body_wait_failure = None
+        try:
+            await self._wait_for_body_ready(page, number, started, samples, diagnostics)
+        except Exception as exc:
+            # Keep the actual wait-time samples: a fresh diagnostics snapshot
+            # can already show settled geometry and hide a transient failure.
+            diagnostics.update(
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                elapsed_ms=round((time.monotonic() - started) * 1000, 3),
+                samples=list(samples),
+            )
+            self._body_wait_failure = diagnostics
+            raise
+
+    async def _wait_for_body_ready(
+        self,
+        page: Page,
+        number: int,
+        started: float,
+        samples: deque[dict[str, Any]],
+        diagnostics: dict[str, Any],
+    ) -> None:
         deadline = time.monotonic() + self.page_change_timeout_ms / 1000
         previous_signature: tuple[object, ...] | None = None
         stable_samples = 0
@@ -598,6 +635,26 @@ class PiccomaAdapter(SiteAdapter):
         last_snapshot: dict[str, Any] | None = None
         while time.monotonic() <= deadline:
             snapshot = await self._reader_snapshot(page)
+            active = snapshot.get("activeIds", [])
+            observed_ids = [f"p{number}", *(active if isinstance(active, list) else [])]
+            rows = snapshot.get("pages")
+            sample = {
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+                "stable_samples": 0,
+                "active_ids": active,
+                "viewport": snapshot.get("viewport"),
+                "frame_rect": snapshot.get("frameRect"),
+                "reader_mode": {key: snapshot.get(key) for key in (
+                    "rootCount", "pageListCount", "frameCount", "horizontal",
+                    "leftToRight", "dialogCount",
+                )},
+                "pages": [row for row in (rows if isinstance(rows, list) else [])
+                          if isinstance(row, dict) and row.get("id") in observed_ids],
+            }
+            diagnostics["sample_count"] += 1
+            if diagnostics["sample_count"] == 1:
+                diagnostics["first_sample"] = sample
+            samples.append(sample)
             self._validate_reader_mode(snapshot)
             if snapshot.get("activeIds") == [f"p{number}"]:
                 row = self._page_row(snapshot, f"p{number}")
@@ -614,8 +671,8 @@ class PiccomaAdapter(SiteAdapter):
                     and self._canvas_renderability_is_valid(row)
                     and not (
                         self._advance_from == number - 1
-                        and (canvas.get("width"), canvas.get("height")) in SCALED_NATIVE_SIZES
                         and canvas.get("inFrame") is not True
+                        and not self._overscan_geometry_is_valid(snapshot, row)
                     )
                 ):
                     renderability = canvas["renderability"]
@@ -631,6 +688,7 @@ class PiccomaAdapter(SiteAdapter):
                         ),
                     )
                     stable_samples = stable_samples + 1 if signature == previous_signature else 1
+                    sample["stable_samples"] = stable_samples
                     previous_signature = signature
                     last_row, last_snapshot = row, snapshot
                     if stable_samples >= 3:
@@ -710,7 +768,9 @@ class PiccomaAdapter(SiteAdapter):
             raise UnknownPageStateError("Piccoma active canvas is not visibly rendered")
         width, height = canvas.get("width"), canvas.get("height")
         scaled = (width, height) in SCALED_NATIVE_SIZES
-        display_width, display_height = SCALED_DISPLAY_SIZE if scaled else (width, height)
+        overscan = self._overscan_geometry_is_valid(snapshot, row)
+        display_width, display_height = (OVERSCAN_DISPLAY_SIZE if overscan else
+                                        SCALED_DISPLAY_SIZE if scaled else (width, height))
         if (
             not isinstance(width, int)
             or isinstance(width, bool)
@@ -721,13 +781,13 @@ class PiccomaAdapter(SiteAdapter):
             or any(type(value) not in {int, float} or not math.isfinite(value) for value in [*rect, *frame_rect])
             or abs(float(rect[2]) - display_width) > 0.5
             or abs(float(rect[3]) - display_height) > 0.5
-            or not canvas.get("inFrame")
+            or (not canvas.get("inFrame") and not overscan)
             or not self._viewport_is_supported(viewport)
             or float(rect[0]) < 0
-            or float(rect[1]) < 0
+            or (float(rect[1]) < 0 and not overscan)
             or float(rect[0]) + float(rect[2]) > viewport[0] + 0.5
-            or float(rect[1]) + float(rect[3]) > viewport[1] + 0.5
-            or abs(float(frame_rect[2]) - (843 if scaled else width)) > 0.5
+            or (float(rect[1]) + float(rect[3]) > viewport[1] + 0.5 and not overscan)
+            or abs(float(frame_rect[2]) - (764 if overscan else 843 if scaled else width)) > 0.5
             or abs(float(frame_rect[3]) - (1200 if scaled else height)) > 0.5
             or (scaled and (
                 abs(rect[2] - display_width) > 0.01 or abs(rect[3] - display_height) > 0.01
@@ -744,6 +804,28 @@ class PiccomaAdapter(SiteAdapter):
         ):
             raise UnknownPageStateError("Piccoma canvas does not match the supported viewport")
         return width, height
+
+    @staticmethod
+    def _overscan_geometry_is_valid(snapshot: dict[str, Any], row: dict[str, Any]) -> bool:
+        """Recognize the live-proven 763px presentation; native capture is mandatory."""
+        canvas = row.get("canvas")
+        if not isinstance(canvas, dict) or (canvas.get("width"), canvas.get("height")) != OVERSCAN_NATIVE_SIZE:
+            return False
+        rect, frame = canvas.get("rect"), snapshot.get("frameRect")
+        if (not isinstance(rect, list) or not isinstance(frame, list)
+                or len(rect) != 4 or len(frame) != 4
+                or any(type(v) not in {int, float} or not math.isfinite(v) for v in [*rect, *frame])):
+            return False
+        return (
+            canvas.get("inFrame") is False
+            and abs(rect[2] - OVERSCAN_DISPLAY_SIZE[0]) <= 0.01
+            and abs(rect[3] - OVERSCAN_DISPLAY_SIZE[1]) <= 0.01
+            and abs(frame[2] - 764) <= 0.01 and abs(frame[3] - 1200) <= 0.01
+            and abs(rect[0] - frame[0]) <= 0.01
+            and abs(rect[1] - frame[1] + 1) <= 0.01
+            and 0 <= frame[0] and frame[0] + frame[2] <= VIEWPORT_WIDTH + 0.01
+            and abs(frame[1]) <= 0.01
+        )
 
     @staticmethod
     def _viewport_is_supported(viewport: Any) -> bool:
@@ -875,6 +957,24 @@ class PiccomaAdapter(SiteAdapter):
             f"#react_PageListApp .PCM-viewer2_pageWrapper.current#{current} canvas"
         )
 
+    async def get_capture_targets(self, page: Page) -> tuple[Locator, ...]:
+        # Core may request fallback targets after an adapter timeout. Overscan
+        # and additional ordinary widths still require verified native capture.
+        snapshot = await self._reader_snapshot(page)
+        active = snapshot.get("activeIds")
+        if active != [self._expected_page_id] or self._expected_page_id is None:
+            raise UnknownPageStateError("Piccoma fallback target is not the expected body page")
+        row = self._page_row(snapshot, self._expected_page_id)
+        canvas = row.get("canvas")
+        if isinstance(canvas, dict) and (canvas.get("width"), canvas.get("height")) == OVERSCAN_NATIVE_SIZE:
+            self._validate_canvas_geometry(snapshot, row)
+            if self._overscan_geometry_is_valid(snapshot, row):
+                raise UnknownPageStateError("Piccoma overscan page requires verified native capture")
+        if isinstance(canvas, dict) and is_additional_ordinary_size(canvas.get("width"), canvas.get("height")):
+            self._validate_canvas_geometry(snapshot, row)
+            raise UnknownPageStateError("Piccoma ordinary-width page requires verified native capture")
+        return await super().get_capture_targets(page)
+
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
         self._capture_method = "not_captured"
         self._capture_source_native = False
@@ -899,6 +999,9 @@ class PiccomaAdapter(SiteAdapter):
         if not self._canvas_renderability_is_valid(row):
             raise UnknownPageStateError("Piccoma active canvas is not visibly rendered")
         expected_size = self._validate_canvas_geometry(before, row)
+        overscan = self._overscan_geometry_is_valid(before, row)
+        requires_native = overscan or is_additional_ordinary_size(*expected_size)
+        native_profile = "overscan" if overscan else "ordinary-width"
         if (
             row.get("canvasCount") != 1
             or row.get("loadedCount") != 1
@@ -961,6 +1064,12 @@ class PiccomaAdapter(SiteAdapter):
                     native_result.encoding_fallback_reason
                 )
             else:
+                if requires_native:
+                    raise UnknownPageStateError(
+                        f"Piccoma {native_profile} page requires verified native capture"
+                        f" (native_fallback={self._capture_fallback_reason}, "
+                        f"expected={expected_size[0]}x{expected_size[1]})"
+                    )
                 result = await capture_locator(target)
                 self._capture_method = "core_canvas_or_locator_png"
                 self._capture_source_native = False
@@ -990,6 +1099,12 @@ class PiccomaAdapter(SiteAdapter):
                     fallback_reason = "source_response_became_ambiguous"
                 if fallback_reason is not None:
                     self._capture_fallback_reason = fallback_reason
+                    if requires_native:
+                        raise UnknownPageStateError(
+                            f"Piccoma {native_profile} page requires verified native capture"
+                            f" (native_fallback={fallback_reason}, "
+                            f"expected={expected_size[0]}x{expected_size[1]})"
+                        )
                     self._capture_encoding_fallback_reason = None
                     self._capture_method = "core_canvas_or_locator_png"
                     self._capture_source_native = False
@@ -1227,7 +1342,7 @@ class PiccomaAdapter(SiteAdapter):
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, Any]:
         del page
-        return {
+        metadata = {
             "piccoma_capture": {
                 "method": self._capture_method,
                 "source_native": self._capture_source_native,
@@ -1242,6 +1357,9 @@ class PiccomaAdapter(SiteAdapter):
                 "viewport": [VIEWPORT_WIDTH, VIEWPORT_HEIGHT],
             }
         }
+        if self._body_wait_failure is not None:
+            metadata["piccoma_body_wait_failure"] = self._body_wait_failure
+        return metadata
 
     def get_output_metadata(self) -> dict[str, str | None]:
         return {"title": self._title}

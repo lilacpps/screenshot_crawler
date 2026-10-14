@@ -29,6 +29,7 @@ from screenshot_crawler.catalog import (
     WorkInput,
 )
 from screenshot_crawler.catalog.service import JST
+from screenshot_crawler.core.diagnostics import write_diagnostics
 from screenshot_crawler.core.errors import (
     AccessResourceUnavailableError,
     PageChangeTimeoutError,
@@ -279,14 +280,16 @@ def _native_viewer_html(
     height: int = NATIVE_HEIGHT,
     left_offset: float = 0,
     transition_delay_ms: int | None = None,
+    overscan: bool | None = None,
 ) -> str:
     columns = (width + 49) // 50
     draw_count = columns * ((height + 49) // 50)
     scaled = (width, height) in {(1350, 1920), (1125, 1600)}
-    frame_width, frame_height = (843, 1200) if scaled else (width, height)
-    display_width, display_height = (843.046875, 1199) if scaled else (width, height)
+    overscan = (width, height) == (763, 1200) if overscan is None else overscan
+    frame_width, frame_height = (764, 1200) if overscan else (843, 1200) if scaled else (width, height)
+    display_width, display_height = (764.265625, 1202) if overscan else (843.046875, 1199) if scaled else (width, height)
     canvas_markup = '<canvas width="300" height="150"></canvas>'
-    if scaled:
+    if scaled or overscan:
         canvas_markup = '<div class="PCM-viewer2_zoomPageContent"><div class="PCM-viewer2_canvas_wrap">' + canvas_markup + '</div></div>'
     transition_script = "" if transition_delay_ms is None else f"""
         const second=document.getElementById('p1').cloneNode(true);
@@ -295,7 +298,7 @@ def _native_viewer_html(
         document.getElementById('react_PageListApp').append(second);
         window.step=()=>{{
           document.getElementById('p1').classList.remove('current');
-          second.classList.add('current');second.style.transform='translateX(-853px)';
+          second.classList.add('current');second.style.transform='translateX(-{frame_width+10}px)';
           if ({transition_delay_ms} >= 0) setTimeout(()=>second.style.transform='none',{transition_delay_ms});
         }};
     """
@@ -308,7 +311,7 @@ def _native_viewer_html(
       .PCM-viewer2_pageWrapper {{ position:absolute; inset:0; display:none; }}
       .PCM-viewer2_pageWrapper.current {{ display:block; }}
       .PCM-viewer2_canvasWrapper {{ position:absolute; inset:0; width:{frame_width}px; height:{frame_height}px; }}
-      .PCM-viewer2_zoomPageWrap {{ position:absolute;left:0;top:{0.5 if scaled else 0}px; width:{frame_width}px; height:{display_height}px; background:rgb(255,255,255); }}
+      .PCM-viewer2_zoomPageWrap {{ position:absolute;left:0;top:{-1 if overscan else 0.5 if scaled else 0}px; width:{frame_width}px; height:{display_height}px; background:rgb(255,255,255); }}
       .PCM-viewer2_zoomPageContent,.PCM-viewer2_canvas_wrap {{ width:{frame_width}px;height:{display_height}px; }}
       .PCM-viewer2_canvasWrapper canvas {{ display:block; width:{display_width}px; height:{display_height}px; }}
       .fixtureOverlay {{ position:absolute; inset:0; z-index:2; background:rgb(255,0,0); }}
@@ -461,6 +464,7 @@ async def _start_native_fixture(
     height: int = NATIVE_HEIGHT,
     left_offset: float = 0,
     transition_delay_ms: int | None = None,
+    overscan: bool | None = None,
 ) -> None:
     body = _synthetic_tile_jpeg(width=width, height=height)
 
@@ -482,6 +486,7 @@ async def _start_native_fixture(
                     height=height,
                     left_offset=left_offset,
                     transition_delay_ms=transition_delay_ms,
+                    overscan=overscan,
                 ),
                 content_type="text/html; charset=utf-8",
             )  # type: ignore[attr-defined]
@@ -504,9 +509,9 @@ async def _override_device_pixel_ratio(page: Page, value: float) -> None:
 
 
 @pytest.mark.parametrize("delay", [700, -1])
-@pytest.mark.parametrize(("width", "height"), [(1350, 1920), (1125, 1600)])
-async def test_piccoma_scaled_transition_waits_for_in_frame_canvas_without_reclick(
-    browser_page: Page, delay: int, width: int, height: int
+@pytest.mark.parametrize(("width", "height"), [(763, 1200), (764, 1200), (842, 1200), (844, 1200), (1350, 1920), (1125, 1600)])
+async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnostics(
+    browser_page: Page, tmp_path: Path, delay: int, width: int, height: int
 ) -> None:
     adapter = PiccomaAdapter()
     await _start_native_fixture(adapter, browser_page, width=width, height=height, transition_delay_ms=delay)
@@ -514,22 +519,66 @@ async def test_piccoma_scaled_transition_waits_for_in_frame_canvas_without_recli
     previous = await adapter.get_content_identity(browser_page)
     await adapter.go_next(browser_page)
     if delay < 0:
-        with pytest.raises(PageChangeTimeoutError):
+        with pytest.raises(PageChangeTimeoutError) as error:
             await adapter.wait_for_change(browser_page, previous)
+        metadata = await adapter.collect_debug_metadata(browser_page)
+        failure = metadata["piccoma_body_wait_failure"]
+        assert failure["requested_page_id"] == "p2"
+        assert failure["expected_page_id_at_start"] == "p1"
+        assert failure["advance_from"] == 1
+        assert failure["error_type"] == "PageChangeTimeoutError"
+        assert failure["error_message"] == str(error.value)
+        assert failure["sample_count"] >= 3
+        assert len(failure["samples"]) == min(
+            failure["sample_count"], piccoma_adapter_module.MAX_BODY_WAIT_DIAGNOSTIC_SAMPLES
+        )
+        assert failure["sample_count"] > len(failure["samples"])
+        final = failure["samples"][-1]
+        assert final["stable_samples"] == 0
+        assert final["active_ids"] == ["p2"]
+        assert final["viewport"] == [1904, 1200, 1]
+        canvas = final["pages"][0]["canvas"]
+        assert (canvas["width"], canvas["height"]) == (width, height)
+        assert canvas["loaded"] is True and canvas["inFrame"] is False
+        assert canvas["rect"][0] < final["frame_rect"][0]
+        assert canvas["rect"][0] == final["frame_rect"][0] - final["frame_rect"][2] - 10
+
+        # A later diagnostics screenshot may see a settled page; the stored
+        # failure-time samples must remain unchanged and reach metadata.json.
+        await browser_page.locator("#p2").evaluate("node=>node.style.transform='none'")
+        settled = await adapter._reader_snapshot(browser_page)
+        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width != 763)
+        await write_diagnostics(
+            browser_page, tmp_path, metadata={"adapter_debug": metadata}, error=error.value
+        )
+        saved = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
+        assert saved["adapter_debug"]["piccoma_body_wait_failure"] == failure
+        await adapter.wait_for_change(browser_page, previous)
     else:
         await adapter.wait_for_change(browser_page, previous)
-        assert (await adapter.get_content_identity(browser_page)).page_id == "p2"
+        settled = await adapter._reader_snapshot(browser_page)
+        assert adapter._page_row(settled, "p2")["canvas"]["inFrame"] is (width != 763)
+    assert (await adapter.get_content_identity(browser_page)).page_id == "p2"
+    assert "piccoma_body_wait_failure" not in await adapter.collect_debug_metadata(browser_page)
     assert await browser_page.evaluate("window.forbiddenClicks") == 1
 
 
-@pytest.mark.parametrize("fault", [None, "observed_left_offset", "unknown_left_offset", "async_left_offset", "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change", "encoder_failure", "source_budget_exhausted"])
-@pytest.mark.parametrize(("width", "height"), [(1350, 1920), (1125, 1600)])
+@pytest.mark.parametrize(("width", "height", "fault"), [
+    (width, height, fault)
+    for width, height in ((1350, 1920), (1125, 1600), (763, 1200))
+    for fault in (None, "observed_left_offset", "unknown_left_offset", "async_left_offset", "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change", "encoder_failure", "source_budget_exhausted")
+    if width != 763 or fault not in {"observed_left_offset", "async_left_offset"}
+] + [(763, 1200, "missing_source"), (763, 1200, "late_source_ambiguity")])
 async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
     browser_page: Page, monkeypatch: pytest.MonkeyPatch, fault: str | None,
     width: int, height: int,
 ) -> None:
     adapter = PiccomaAdapter()
     await _start_native_fixture(adapter, browser_page, width=width, height=height)
+    if width == 763 and fault not in {None, "encoder_failure"}:
+        async def forbidden_screenshot(_target):
+            raise AssertionError("overscan pages must never use screenshot fallback")
+        monkeypatch.setattr(piccoma_adapter_module, "capture_locator", forbidden_screenshot)
     if fault in {"observed_left_offset", "unknown_left_offset", "async_left_offset"}:
         await browser_page.locator(".PCM-viewer2_zoomPageWrap").evaluate(
             "(node, offset) => node.style.left = offset + 'px'",
@@ -537,10 +586,12 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
         )
     # A long scaled episode must keep native output beyond the ordinary 64 MB
     # budget, but still stop at its own finite budget.
+    budget = (piccoma_adapter_module.MAX_NATIVE_EPISODE_BYTES if width == 763
+              else piccoma_adapter_module.MAX_SCALED_NATIVE_EPISODE_BYTES)
     adapter._native_bytes_read = (
-        piccoma_adapter_module.MAX_SCALED_NATIVE_EPISODE_BYTES
+        budget
         if fault == "source_budget_exhausted"
-        else piccoma_adapter_module.MAX_NATIVE_EPISODE_BYTES
+        else 0 if width == 763 else piccoma_adapter_module.MAX_NATIVE_EPISODE_BYTES
     )
     if fault == "unknown_paint_role":
         await browser_page.locator(".PCM-viewer2_canvas_wrap").evaluate("n=>n.className='unknown'")
@@ -563,6 +614,14 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
         def fail_encoder(*_args, **_kwargs):
             raise piccoma_native_capture_module.NativeCaptureUnavailable("webp_codec_unavailable")
         monkeypatch.setattr(piccoma_native_capture_module, "encode_lossless_webp", fail_encoder)
+    elif fault == "missing_source":
+        async def missing_source(_url):
+            return []
+        monkeypatch.setattr(adapter, "_responses_for_native_url", missing_source)
+    elif fault == "late_source_ambiguity":
+        async def ambiguous_source(*_args):
+            return "source_response_became_ambiguous"
+        monkeypatch.setattr(piccoma_adapter_module, "validate_native_capture_still_current", ambiguous_source)
     if fault not in {None, "encoder_failure", "observed_left_offset"}:
         with pytest.raises(UnknownPageStateError) as error:
             await adapter.capture_page(browser_page)
@@ -612,7 +671,37 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
         assert ImageChops.difference(native, rendered.convert("RGBA")).getbbox(alpha_only=False) is None
 
 
-@pytest.mark.parametrize(("width", "left_offset"), [(764, -1 / 3), (842, 0), (844, 0)])
+@pytest.mark.parametrize("timed_out", [False, True])
+@pytest.mark.parametrize("width", [763, 775])
+async def test_piccoma_native_only_core_fallback_never_saves_a_screenshot(
+    browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timed_out: bool, width: int
+) -> None:
+    import screenshot_crawler.core.runner as runner_module
+    from screenshot_crawler.core.models import RunConfig
+
+    await _start_native_fixture(PiccomaAdapter(), browser_page, width=width, height=1200)
+    adapter = PiccomaAdapter()
+    await adapter.configure_target_identity(f"{PRODUCT_ID}:{EPISODE_ID}", WORK_KEY)
+
+    async def unavailable_capture(_page):
+        if timed_out:
+            raise PageChangeTimeoutError("synthetic adapter capture timeout")
+
+    async def forbidden_screenshot(_target):
+        raise AssertionError("Core must not screenshot a page requiring native proof")
+
+    monkeypatch.setattr(adapter, "capture_page", unavailable_capture)
+    monkeypatch.setattr(runner_module, "capture_locator", forbidden_screenshot)
+    config = RunConfig(site="piccoma", source_url=SOURCE_URL,
+                       output_dir=tmp_path / "crawl", diagnostics_dir=tmp_path / "diagnostics")
+    with pytest.raises(UnknownPageStateError, match="requires verified native capture"):
+        await runner_module.CrawlerRunner(config).run(browser_page, adapter)
+    manifest = json.loads((config.output_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["pages"] == []
+    assert not list(config.output_dir.glob("page-*"))
+
+
+@pytest.mark.parametrize(("width", "left_offset"), [(757, 0), (763, 0), (764, -1 / 3), (773, 0), (775, 0), (777, 0), (800, 0), (801, 0), (842, 0), (844, 0)])
 async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,
@@ -620,8 +709,15 @@ async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
     left_offset: float,
 ) -> None:
     adapter = PiccomaAdapter()
-    await _start_native_fixture(adapter, browser_page, width=width, left_offset=left_offset)
+    await _start_native_fixture(adapter, browser_page, width=width, left_offset=left_offset,
+                                overscan=False)
     assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    if piccoma_native_capture_module.is_additional_ordinary_size(width, NATIVE_HEIGHT):
+        with pytest.raises(UnknownPageStateError, match="requires verified native capture"):
+            await adapter.get_capture_targets(browser_page)
+    else:
+        targets = await adapter.get_capture_targets(browser_page)
+        assert len(targets) == 1 and await targets[0].count() == 1
     canvas = browser_page.locator("#p1 canvas")
     real_bounded_evaluate = piccoma_native_capture_module._bounded_evaluate
     snapshot_json_results: list[object] = []
@@ -683,6 +779,13 @@ async def test_piccoma_native_tile_replay_matches_clean_rendered_canvas(
             with Image.open(BytesIO(fractional)) as image:
                 assert image.size == (width + 1, NATIVE_HEIGHT)
             await browser_page.locator("#js_frame").evaluate("node => node.style.left = '0px'")
+        if width % 2:
+            # Align only the post-capture QA reference, whose centered odd
+            # width otherwise expands fractional Locator bounds by one pixel.
+            fractional = await canvas.screenshot(animations="disabled")
+            with Image.open(BytesIO(fractional)) as image:
+                assert image.size == (width + 1, NATIVE_HEIGHT)
+            await browser_page.locator("#js_frame").evaluate("node => node.style.margin = '0 0 0 200px'")
         expected = await canvas.screenshot(animations="disabled")
     finally:
         await adapter._restore_reading_guide(browser_page, guide_style)
@@ -887,11 +990,12 @@ async def test_piccoma_capture_rejects_dpr_change_within_supported_band(
         await adapter.capture_page(browser_page)
 
 
+@pytest.mark.parametrize("width", [775, NATIVE_WIDTH])
 async def test_piccoma_native_capture_keeps_png_when_lossless_webp_encode_fails(
-    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, width: int
 ) -> None:
     adapter = PiccomaAdapter()
-    await _start_native_fixture(adapter, browser_page)
+    await _start_native_fixture(adapter, browser_page, width=width)
 
     def fail_encoder(*_args, **_kwargs):
         raise piccoma_native_capture_module.NativeCaptureUnavailable(
@@ -984,11 +1088,12 @@ async def test_piccoma_capture_metadata_resets_across_pages_and_failed_capture(
     assert failed_metadata["output_lossless"] is None
 
 
+@pytest.mark.parametrize("width", [775, NATIVE_WIDTH])
 async def test_piccoma_native_revalidation_fallback_clears_encoding_metadata(
-    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, width: int
 ) -> None:
     adapter = PiccomaAdapter()
-    await _start_native_fixture(adapter, browser_page)
+    await _start_native_fixture(adapter, browser_page, width=width)
 
     async def reject_native_result(*_args, **_kwargs):
         return "test_native_revalidation_failed"
@@ -998,18 +1103,21 @@ async def test_piccoma_native_revalidation_fallback_clears_encoding_metadata(
         "validate_native_capture_still_current",
         reject_native_result,
     )
-    captures = await adapter.capture_page(browser_page)
-
-    assert captures is not None and len(captures) == 1
-    assert captures[0].mime_type == "image/png"
-    assert captures[0].file_extension == ".png"
+    if width == 775:
+        with pytest.raises(UnknownPageStateError, match="requires verified native capture"):
+            await adapter.capture_page(browser_page)
+    else:
+        captures = await adapter.capture_page(browser_page)
+        assert captures is not None and len(captures) == 1
+        assert captures[0].mime_type == "image/png"
+        assert captures[0].file_extension == ".png"
     metadata = await adapter.collect_debug_metadata(browser_page)
     piccoma_capture = metadata["piccoma_capture"]
-    assert piccoma_capture["method"] == "core_canvas_or_locator_png"
-    assert piccoma_capture["source_native"] is False
+    assert piccoma_capture["method"] == ("native_tile_replay_lossless_webp" if width == 775 else "core_canvas_or_locator_png")
+    assert piccoma_capture["source_native"] is (width == 775)
     assert piccoma_capture["fallback_reason"] == "test_native_revalidation_failed"
     assert piccoma_capture["encoding_fallback_reason"] is None
-    assert piccoma_capture["output_format"] == "image/png"
+    assert piccoma_capture["output_format"] == (None if width == 775 else "image/png")
 
 
 async def test_piccoma_core_png_fallback_rejects_webp_result(
@@ -1055,18 +1163,24 @@ async def test_piccoma_native_capture_stops_if_target_changes_after_webp_materia
         await adapter.capture_page(browser_page)
 
 
+@pytest.mark.parametrize("width", [775, NATIVE_WIDTH])
 async def test_piccoma_native_tile_replay_uses_screenshot_when_target_has_extra_paint(
     browser_page: Page,
+    width: int,
 ) -> None:
     adapter = PiccomaAdapter()
-    await _start_native_fixture(adapter, browser_page, extra_paint=True)
+    await _start_native_fixture(adapter, browser_page, extra_paint=True, width=width)
 
-    captures = await adapter.capture_page(browser_page)
-
-    assert captures is not None and len(captures) == 1
-    assert (captures[0].width, captures[0].height) == (NATIVE_WIDTH, NATIVE_HEIGHT)
+    if width == 775:
+        # Width admission alone cannot authorize native capture or a screenshot.
+        with pytest.raises(UnknownPageStateError, match="requires verified native capture"):
+            await adapter.capture_page(browser_page)
+    else:
+        captures = await adapter.capture_page(browser_page)
+        assert captures is not None and len(captures) == 1
+        assert (captures[0].width, captures[0].height) == (width, NATIVE_HEIGHT)
     metadata = await adapter.collect_debug_metadata(browser_page)
-    assert metadata["piccoma_capture"]["method"] == "core_canvas_or_locator_png"
+    assert metadata["piccoma_capture"]["method"] == ("not_captured" if width == 775 else "core_canvas_or_locator_png")
     assert metadata["piccoma_capture"]["source_native"] is False
     assert metadata["piccoma_capture"]["fallback_reason"] == "unsupported_target_operation_count"
     assert await browser_page.evaluate("window.forbiddenClicks") == 0

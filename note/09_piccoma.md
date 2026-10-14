@@ -1,8 +1,519 @@
 # Piccoma current implementation snapshot
 
-Updated: 2026-10-14. Phases 01-05 remain accepted. Phase 06-B's source-derived PNG replay and Phase 06-C's bounded p1-only JPEG coefficient feasibility work are historical accepted checkpoints. For the 1200px-high profiles, Phase 06-D defaults verified replay pixels to lossless WebP, retaining native PNG if encoding/round-trip proof fails and Core PNG if native provenance is unavailable. Phase 06-D code review and independent live Tester both passed with BLOCKING 0. Local Piccoma tests passed 99, packaging tests 26, and Ruff/diff checks passed; the full suite was not rerun after final site-local adjustments. The current two-product live route verified all 39 WebP pages through ZIP and Catalog completion. Phase 07 Stage A/B passed independent review. Stage C's interleaved manual comparison, 24-page Batch END/ZIP/Catalog run, and fresh per-page manifest audit passed; final Stage C Reviewer review passed with BLOCKING 0. Evidence and limits are in the [Phase 07 live profile](../research/piccoma-performance/PHASE07_PROFILE.md) and [Tester report](../research/piccoma-performance/PHASE07_TESTER.md).
+Updated: 2026-10-14. Phases 01-05 remain accepted. Phase 06-B's source-derived PNG replay and Phase 06-C's bounded p1-only JPEG coefficient feasibility work are historical accepted checkpoints. For the 1:1 display profiles, Phase 06-D defaults verified replay pixels to lossless WebP, retaining native PNG if encoding/round-trip proof fails and Core PNG if native provenance is unavailable. Phase 06-D code review and independent live Tester both passed with BLOCKING 0. Local Piccoma tests passed 99, packaging tests 26, and Ruff/diff checks passed; the full suite was not rerun after final site-local adjustments. The current two-product live route verified all 39 WebP pages through ZIP and Catalog completion. Phase 07 Stage A/B passed independent review. Stage C's interleaved manual comparison, 24-page Batch END/ZIP/Catalog run, and fresh per-page manifest audit passed; final Stage C Reviewer review passed with BLOCKING 0. Evidence and limits are in the [Phase 07 live profile](../research/piccoma-performance/PHASE07_PROFILE.md) and [Tester report](../research/piccoma-performance/PHASE07_TESTER.md).
 
 
+
+## Bounded ordinary-width native capture (2026-10-14)
+
+Current ordinary native admission covers integer widths 757..844 at height
+1200, within the width envelope measured on live pages. Width selects a
+candidate 16x24 or 17x24 grid using 50px cells; it never proves source identity
+or authorizes output alone. Every page must still prove the complete unique
+source and destination grids, exactly three setup events plus 384/408 draws,
+fractional source-height arguments and exact partial-column dimensions, one
+source image object/URL/load generation, a unique matching baseline 4:4:4 JPEG
+response, covering-white paint, target/source continuity and unchanged raw
+geometry. Missing/ambiguous/reset/unobserved state remains rejected. The replay
+and lossless RGB WebP/native PNG encoding contracts are unchanged.
+
+This replaces the ordinary fixed-size admission restriction that repeatedly
+failed on new widths. The pre-existing discrete profiles retain their
+existing tolerances and paint contracts; the two high-resolution profiles and
+the special 763px overscan/alpha profile have not been generalized. Additional
+ordinary widths must prove display dimensions equal backing dimensions within
+0.01 CSS px, besides the existing in-frame/viewport/DPR/visibility checks.
+Non-finite paint rectangles are rejected. Native admission outside the ordinary
+757..844x1200 envelope or the existing discrete high-resolution profiles is
+still unavailable. This is a bounded protocol proof, not automatic registration
+or source attribution by dimensions. No resize/crop/resampling, looser output
+dimension check, retry, timeout, access, pacing, schema, CLI or configuration
+change was introduced. Source-read and trace/response bounds remain unchanged.
+Additional ordinary widths require verified native capture. Unavailable or
+late-invalidated source/paint proof stops before screenshot fallback, and the
+adapter's `get_capture_targets` refuses Core fallback after unavailability or
+timeout as well. Native PNG on WebP encoding failure remains allowed because
+those pixels retain complete native proof. Previously registered ordinary
+widths retain their guarded Core PNG fallback; the overscan exception remains
+native-only. Core is unchanged, so `note/00_core.md` needs no update.
+
+Item/Source 26806 (`13590:670208`, 第23話 (2)) saved no pages before failure.
+Metrics `e6411cdaedcd438eb700ac8fe4e05006` show fallback
+`target_canvas_identity_or_dimensions`, expected 757x1200, actual Core PNG
+758x1200, and zero retries/403/429/5xx/challenge/CAPTCHA. The former size table
+rejected 757px before native replay; screenshot bounds rounded fractional
+coordinates outward. A bounded live probe validated all 16 pages and END:
+each canvas/frame was [573.5, 0, 757, 1200], viewport [1904, 1200, 1],
+inFrame=true, with 384 draws plus three setup events, one validated JPEG/load
+generation and covering-white paint. The probe temporarily registered only
+the candidate 757px grid in its own process, preserving every other production
+validator, and changed no site DOM or bitmap. Real evidence establishes this
+episode and earlier measured widths, not live coverage of every integer width.
+All 88 ordinary integer widths are covered by synthetic complete-grid tests.
+
+The pre-fix Unit/browser cases for 757/775/800/801 all failed (8 failures).
+After the change, 342 focused Unit/browser cases passed (0 skipped, 37.71s).
+They cover all ordinary widths, both sides of the 800/801 column-count boundary,
+strict new-width 1:1 paint versus existing tolerances, non-finite rectangles,
+source/grid/generation rejection, native RGB/metadata/six fresh trace snapshots,
+and rejection of unproven paint. Before the final native-only fallback guard,
+889 affected Unit/browser Integration cases passed (0 skipped, 281.67s).
+After that guard, 20 targeted browser cases passed (0 skipped, 61.47s), covering
+Core unavailable/timeout rejection, late proof invalidation, native-only source
+failure, successful native RGB, and permitted verified native PNG encoding
+fallback. The final affected suite passed 893 Unit/browser Integration cases (0 failed,
+0 skipped, 290.51s; five existing asyncio deprecation warnings). Packaging
+Unit tests passed 26 (0 skipped, 0.51s). Full repository and separate Discovery,
+Policy and Research suites were not run because this change is confined to the
+site-local native profile, proof and fallback contracts. Global Ruff/scoped
+diff checks passed. No external-site CI dependency or real-site fixture was
+added. Synthetic coverage establishes the bounded protocol contract; real-site
+coverage remains the episodes and reader/account setup explicitly recorded.
+
+Final normal CLI Batch with the native-only guard passed all 16 pages and END
+in a fresh online-backup Catalog (CrawlRun 10352, ZIP 7,122,251 bytes). All
+members are ordered, unique, single-frame 757x1200 VP8L with verified-white
+native capture and zero native/encoding fallback. Full decode, CRC, manifest
+fingerprints, Artifact SHA-256/size and completion checks passed. Normal Catalog
+Item/Source/runs/artifacts remained unchanged. Metrics
+`efe9f8938da74cf682a9631e16fed4f9` record one completion and zero failures,
+retries, 403/429/5xx, challenge or CAPTCHA. Every page member is byte-identical
+to the successful pre-guard Batch, confirming unchanged successful output.
+
+Independent final p1 capture is byte-identical to ZIP p1. Only after production
+capture, the same original tainted canvas was aligned at integer coordinates
+against its proven white background on the owned QA Page. Canvas generation
+remained unchanged; all RGB pixels match the independent 757x1200 screenshot
+(zero different pixels/channel delta). Production does not use this QA DOM
+alignment or modify the canvas bitmap. Ignored evidence/scripts:
+`work/piccoma/26806-grid-family-20261014/` (final verification under `final/`).
+
+## 773px native grid support (2026-10-14)
+
+Item/Source 26770 (`13590:670280`, 第41話 (2)) failed before saving p1.
+Metrics `f079a2ebc32247609e5253f69ca6feec` and diagnostics show native fallback
+`target_canvas_identity_or_dimensions`, expected 773x1200, actual Core Locator
+PNG 774x1200, and no retries/403/429/5xx/challenge/CAPTCHA. This repeats the
+dimension-table coverage problem seen at 777px: 773x1200 was not registered,
+so native proof stopped before replay. Subsequent live evidence shows canvas
+and frame both [565.5, 0, 773, 1200]. The fallback screenshot rounds fractional
+Locator bounds outward, adding one pixel. The pre-fix artificial browser case
+reproduced this failure; no saved page or artifact was accepted.
+
+The earlier 773px checkpoint registered 773x1200 -> 16 columns x 24 rows,
+384 draws plus three setup events, alongside the existing observed dimensions.
+Ordinary 1:1 geometry and covering-white native RGB replay apply: validated
+lossless WebP by default and same-pixel native PNG on encoding/round-trip
+failure. Complete unique source/destination grids, the final 23px column,
+fractional source-height arguments, exact source JPEG/object/load generation,
+paint/style/overlap proof, continuity, raw geometry equality and output format
+checks remain mandatory. The ordinary 64,000,000-byte source-read budget is
+unchanged. The former rejection of neighboring widths 772/774 is superseded
+by the bounded ordinary-width proof above; height 1199 remains unsupported. No screenshot crop/resizing, dimension tolerance expansion,
+automatic size registration, new configuration, extra retry or timeout change
+was introduced. Core/Batch/CLI/access/pacing/max_pages/END and the overscan/scaled
+profiles are unchanged; `note/00_core.md` needs no update.
+
+A bounded live probe validated all 16 pages and END. All were ordinary
+773x1200 at [565.5, 0, 773, 1200], with matching frame, inFrame=true, viewport
+[1904, 1200, 1], complete 16x24 grid, one validated baseline JPEG/load generation,
+and covering-white paint. The probe registered only the candidate 773px grid
+in its own Python process, retaining all other production validators, and
+changed no viewer DOM, bitmap or production files.
+
+Corrected normal CLI Batch in an online-backup Catalog completed all 16 pages,
+explicit END and ZIP (CrawlRun 10314, 7,547,795 bytes). All 16 ordered unique
+members fully decode as single-frame 773x1200 VP8L, using verified-white native
+capture with no native/encoding fallback. CRC, manifest fingerprints, Artifact
+hash/size, completed status and normal Catalog Item/Source/runs/artifacts
+preservation passed. Metrics `8e9837d8eac44d30ae7c43745510ecc2` record one
+completion and zero failures/retries/403/429/5xx/challenge/CAPTCHA. Independent
+production p1 capture is byte-identical to ZIP p1. After capture only, the same
+original tainted canvas was aligned to integer coordinates against white for
+QA: its generation stayed unchanged and every RGB pixel matched the independent
+773x1200 screenshot. This alignment changes only the owned QA Page; production
+capture does not resize, crop or repaint the viewer. Ignored evidence/scripts:
+`work/piccoma/26770-773px-20261014/`.
+
+The two pre-fix Unit/browser regression cases failed. After the fix, 31 focused
+cases passed (0 skipped, 4.20s). All 688 affected Piccoma Unit/browser Integration
+cases passed (0 failed, 0 skipped, 265.56s; five existing asyncio deprecation
+warnings). Global Ruff and scoped diff checks passed. Existing grid/generation
+rejection and native
+browser RGB/metadata/fractional-coordinate cases were extended, without adding
+duplicate test functions. Full repository, separate Discovery/Policy/Research
+and packaging Unit suites are not required for this site-local table addition;
+their code/contracts are unchanged. Live evidence covers this episode only.
+The fixed-size limitation of this checkpoint is superseded by the current
+bounded ordinary-width contract above. Missing native proof still uses the
+existing guarded PNG fallback, which rejects a rounded dimension mismatch.
+
+## 777px native grid support (2026-10-14)
+
+Item/Source 26758 (`13590:670301`, 第47話 (2)) stopped before saving p1.
+Metrics `69cd0ed6234943d6ad9e84a8b96b3d7d` and diagnostics record native fallback
+`target_canvas_identity_or_dimensions`, expected 777x1200, actual Core Locator
+PNG 778x1200, and no retries/403/429/5xx/challenge/CAPTCHA. The exact 777px
+backing size was missing from the explicit observed tile-grid table, so native
+validation rejected it and the existing screenshot fallback ran. Subsequent
+live evidence shows canvas and frame [563.5, 0, 777, 1200]; fractional Locator
+bounds round the screenshot outward by one pixel. The artificial browser case
+reproduced both the original fallback failure and this 778px screenshot.
+
+The earlier 777px checkpoint registered 777x1200 -> 16 columns x 24 rows,
+384 draws plus three setup events. This is an ordinary 1:1 display using the
+existing verified covering-white native RGB replay and validated lossless
+WebP, with same-pixel native PNG on encoding/round-trip failure. Complete
+unique source/destination grids, partial final-column widths, fractional
+source-height arguments, one exact source JPEG/object/load generation,
+paint/style/overlap proof, target/source continuity and raw geometry equality
+remain mandatory. The ordinary source-read budget remains 64,000,000 bytes.
+No screenshot resize/crop, dimension-check relaxation, wider inferred size
+range, new setting, extra retry or timeout extension was introduced. If native
+proof is unavailable, the existing PNG fallback can still fail closed on
+fractional bounds. The former rejection of neighboring widths 776/778 is
+superseded by the bounded ordinary-width proof above; height 1199 is rejected. Overscan/scaled profiles,
+Core/Batch/CLI/config/schema/access/pacing/max_pages/END are unchanged;
+`note/00_core.md` needs no update.
+
+A bounded live probe validated all 16 pages and explicit END. Every page is
+777x1200 at [563.5, 0, 777, 1200], frame matches, inFrame=true, viewport
+[1904, 1200, 1], complete 16x24 grid, unique validated baseline JPEG, and
+covering-white paint path. The probe temporarily registered only the candidate
+777px grid in its own Python process and retained all other production proof
+checks; it did not change site DOM, rendering or production files.
+
+Corrected normal CLI Batch in an online-backup Catalog completed all 16 pages
+through END and ZIP (CrawlRun 10300, 6,490,189 bytes). All ordered unique members
+decode as single-frame 777x1200 VP8L, with verified-white native capture and
+zero native/encoding fallback. CRC, manifest fingerprints, Artifact hash/size,
+completed status and normal Catalog Item/Source/runs/artifacts preservation
+passed. Metrics `968e54fb7c5d47e6b284cacaa15c692d` record one completion and zero
+failures/retries/403/429/5xx/challenge/CAPTCHA. Production p1 was independently
+captured before QA-only alignment of the same original tainted canvas at
+integer coordinates against white; its canvas generation stayed unchanged and
+every RGB pixel matched the screenshot. Production p1 is byte-identical to
+ZIP p1. Evidence/scripts/output are ignored under
+`work/piccoma/26758-777px-20261014/` and contain no committed site fixtures.
+
+Validation: the pre-fix 777px Unit/browser cases both failed; after the fix,
+28 focused cases passed (0 skipped, 4.65s). All 667 affected Piccoma Unit/browser
+Integration cases passed (0 failed, 0 skipped, 271.43s; five existing asyncio
+deprecation warnings). Global Ruff and scoped diff checks passed.
+The existing grid rejection cases now include 777px, and native browser QA
+checks exact output RGB, six fresh trace snapshots, native metadata, fractional
+Locator rounding and unchanged guide/forbidden-click behavior. Full repository,
+separate Discovery/Policy/Research and packaging Unit suites are not required
+by this site-local table addition; their code/contracts are unchanged and the
+real standard packager was verified above. Live proof covers this episode;
+other unobserved backing/display variants remain unsupported/unverified.
+
+## 763px ordinary/overscan presentation selection (2026-10-14)
+
+Item/Source 26710 (`13590:670402`) failed before saving p1. Diagnostics for
+metrics `98387211023b4ad0ae0ba5c269e0aff6` contain three stable samples in
+246.627ms: backing 763x1200, canvas and frame both [570.5, 0, 763, 1200],
+loaded=true, inFrame=true, viewport [1904, 1200, 1]. The previous fix incorrectly
+classified every 763px backing canvas as the overscan presentation below,
+rejecting this ordinary 1:1 display. This is a deterministic classification
+bug, rather than evidence of slow loading or a transient off-frame transition.
+
+Current selection uses actual display/frame/paint proof, not backing width
+alone. An in-frame 1:1 763x1200 page uses the ordinary geometry contract and
+covering-white paint proof, with verified native RGB lossless WebP, same-pixel
+PNG on encoding failure, and the existing guarded Core fallback when native
+provenance is unavailable. Fractional Locator bounds can still add one pixel;
+fallback dimensions are not normalized or cropped. The overscan presentation
+still requires its exact geometry and four-node paint proof, retains native
+RGBA, and forbids screenshot fallback (including Core's timeout/unavailable
+capture route). Unknown overscan geometry and incomplete proof remain rejected.
+Source/JPEG/grid/generation/raw geometry/encoding checks, retry bounds, access,
+pacing, END and max_pages are unchanged. Core has no changes; `00_core.md` needs
+no update. No new setting or CLI option is required.
+
+A bounded diagnostic probe validated all 20 pages and END on this episode:
+every page is ordinary 763x1200, has 384 draws plus three setup events, one
+verified JPEG/load generation, and a white ancestor covering the canvas.
+The probe only substituted Python readiness observations to traverse the old
+gate; it did not modify the viewer DOM or bitmap. The corrected production
+adapter then passed normal CLI Batch in an online-backup Catalog through all
+20 pages, explicit END and ZIP (CrawlRun 10250, 8,027,687 bytes). All 20 ordered,
+unique members are fully decoded 763x1200 VP8L with verified white and zero
+native/encoding fallback; CRC, manifest fingerprints, Artifact hash/size and
+normal Catalog Item/Source/runs/artifacts preservation passed. Metrics
+`2a4fcd75d97f4b57ac9f7855dc39cc4c` record one completion, zero failures,
+retries, 403/429/5xx, challenge or CAPTCHA.
+
+Independent live p1 QA captured production output first, then placed the same
+original tainted canvas at integer coordinates against its verified white
+background on the owned probe Page. Canvas generation remained unchanged;
+every RGB pixel matches the independent 763x1200 screenshot, and the production
+WebP is byte-identical to ZIP p1. It was visually checked without missing
+tiles or viewer chrome. DOM alignment was confined to post-capture QA; no
+production resize, resampling or screenshot-bound changes were introduced.
+Ignored evidence/scripts: `work/piccoma/26710-763px-normal-20261014/`.
+
+Validation: all 646 affected Piccoma Unit/browser Integration cases passed.
+The initial combined selection passed 671 and failed one packaging case because
+the deeply nested workspace basetemp exceeded Windows path limits (259.90s).
+Rerunning all 26 unchanged packaging tests with a short workspace basetemp
+passed (0.27s). Thus all 672 distinct affected cases passed, zero skipped.
+The focused 9-case selection also passed. Existing cases now cover ordinary
+763px native RGB output and accepted fallback targets, exact white proof,
+while retaining overscan RGBA/PNG and Core timeout/unavailability rejection.
+Initial default temp/cache permission errors were avoided with a writable
+workspace basetemp and no pytest cache provider; no production packaging code
+was changed. Global Ruff and scoped diff checks passed. Full repository,
+separate Discovery/Policy and Research suites were not run because their
+contracts are unchanged by this site-local classification fix. Live proof
+covers this episode and the separately verified overscan presentation below;
+other unobserved display variants/browser/account states remain unverified.
+
+## 763px native-only capture support (2026-10-14)
+
+The Item 26631 failure below is now handled by an explicit native-only profile.
+A bounded live probe of `13590:670550` validated all 15 pages and END: p12
+alone has backing 763x1200; all other pages are 764x1200. Each page has a
+complete 16x24 grid, 384 draws and three setup events. The exact source image
+object/load generation, unique JPEG response and baseline JPEG dimensions
+passed the unchanged validators. The diagnostic probe changed only its Python
+readiness observations to traverse p12; no site DOM or canvas pixels changed.
+
+The overscan presentation accepts 763x1200 at display 764.265625x1202 within
+0.01 CSS px, frame 764x1200, aligned left edges and canvas top=frame top-1.
+Frame y must be zero within 0.01, its horizontal bounds remain inside the
+1904x1200 viewport, and `inFrame=false` must match this measured presentation.
+The ordinary finite DPR and all ancestor visibility checks still apply.
+During an approved advance, this exact settled geometry may accumulate the
+same three stable samples; an out-of-position 763px canvas still waits within
+the existing deadline. Other overflow profiles/sizes/offsets remain unsupported.
+No viewer resize, scroll, reflow, timeout extension or extra next click is used.
+
+This profile requires a complete native proof to capture the full page rather
+than the displayed crop. Its exact four-node paint path is CANVAS,
+`PCM-viewer2_canvas_wrap`, `PCM-viewer2_zoomPageContent`,
+`PCM-viewer2_zoomPageWrap`. All have matching position/1202px height; the canvas
+is 764.265625px wide and the three ancestors are 764px wide. The first opaque
+white node is index 3 and does not cover the canvas edge. The original strict
+style/pseudo-element/transform/overlap checks are retained, with this measured
+right-edge gap admitted only for this profile. The complete source-derived
+763x1200 RGBA replay is preserved in lossless WebP, including alpha; no guessed
+white matte, screenshot crop or resampling is applied. WebP encoding or RGBA
+round-trip failure retains byte-identical native RGBA PNG. Missing/changed
+source or paint proof stops before any screenshot fallback, including late
+source ambiguity. The adapter's `get_capture_targets` also rejects this profile
+if Core requests fallback after an adapter timeout or unavailable capture.
+The source-read budget remains the ordinary 64,000,000 bytes; trace/response
+bounds, generation continuity and post-capture raw geometry equality remain
+mandatory. Core/Batch/CLI/config/schema/access/pacing/max-pages/END are unchanged;
+`note/00_core.md` needs no update.
+
+Live production capture of p12 passed the same source/paint/generation checks.
+For independent QA after capture only, the same original tainted canvas was
+moved into an isolated transparent 1:1 presentation on the owned probe Page.
+No bitmap paint or resize occurred, and the native canvas generation stayed
+unchanged. Alpha 252..255 and every 8-bit premultiplied RGBA value matched the
+independent screenshot using round(channel*alpha/255). The screenshot's
+unpremultiplied RGB differs by one in twelve grayscale pixels at alpha 252;
+raw RGBA is not byte-identical, and production pixels were not normalized to
+fit the comparison. The first QA setup also retained the site's gray body and
+layout constraints; it was replaced by this isolated presentation. Synthetic
+browser QA, using the separate fixture canvas at 1:1, matches every RGBA byte.
+p12 was visually checked without missing tiles or viewer chrome.
+
+Normal CLI Batch in an online-backup Catalog completed all 15 pages and END
+(CrawlRun 10101). The 6,833,926-byte ZIP passed ordered unique membership,
+full VP8L decode, CRC, manifest fingerprints and Artifact SHA-256/size. p12 is
+763x1200 with preserved alpha, all others 764x1200 with verified white; all are
+native lossless WebP without fallback. The first eleven members are byte-equal
+to the original failed run; p12 equals the independently checked production
+probe output. Normal Item/Source, failed runs and artifacts were checked
+unchanged. Metrics `7a0ddca2cea04af1b9f5561df41d6ddc` record one completion
+and zero failures/retries/403/429/5xx/challenge/CAPTCHA. Evidence/scripts are
+ignored under `work/piccoma/26631-763px-20261014/`.
+
+At the 26631 checkpoint, 669 affected Unit/browser Integration/packaging tests passed,
+0 failed, 0 skipped (249.52s; five existing asyncio deprecation warnings).
+The focused selection passed 455. Extended existing cases cover exact grid
+and gap/source/generation rejection, neighboring unsupported sizes, strict
+paint paths, DPR/offset geometry, bounded transition settlement, full native
+RGBA WebP/PNG, no screenshot on unavailable or late-invalidated native proof,
+and unchanged original/high-resolution profiles. Global Ruff and scoped diff
+checks passed. Full repository, separate Discovery/Policy and Research suites
+were not run because the change is site-local and their contracts did not
+change. Live verification covers this episode/presentation only, not other
+unobserved 763px display variants or every browser/account/reader state.
+
+After that affected run, the final Core-fallback guard was added and verified
+with four targeted browser Integration cases (4 passed, 0 skipped, 21.50s):
+Core handling adapter unavailability/timeout saves no screenshot or page, and
+both existing free/manual-grant Batch success paths still pass. The 669-case
+selection and live success path were not repeated after this fallback-only
+guard; successful direct capture does not call `get_capture_targets`. Final
+Ruff and scoped diff checks passed.
+
+## 763px page display geometry failure (2026-10-14)
+
+Item/Source 26631 (`13590:670550`, 第109話 (1) of 暁のヨナ) saved
+p1..p11 at 764x1200, then failed while waiting for p12. Its retained
+`piccoma_body_wait_failure` records 85 observations over 10,016.920 ms,
+requested p12, expected cursor p11 and an approved advance from 11.
+The first observation at 15.003 ms has loaded/visible p12 with backing
+763x1200 and display rect [-204, -1, 764.265625, 1202]. The last eight
+observations, 9,080.945..9,916.499 ms, have rect
+[570, -1, 764.265625, 1202], frame [570, 0, 764, 1200], viewport
+[1904, 1200, 1], loaded=true, inFrame=false and stability count zero.
+Horizontal position returned to the frame; the displayed canvas still extended
+one CSS pixel above and below it. This violates the current in-frame gate and
+ordinary 1:1 backing/display/frame geometry contract. The new bounded wait
+therefore correctly exhausted its existing deadline; this is not the former
+242ms early rejection. The trace does not show every intermediate observation
+or establish what happened after the timeout.
+
+At the failure checkpoint, the 763x1200 backing/grid was absent from the
+native whitelist and an existing test explicitly rejected it. Adding a size
+entry alone would not address its display/frame mismatch. Subsequent live
+validation established the explicit native-only profile described above. The
+initial investigation changed documentation only; the current implementation
+retains all general geometry gates and makes no renderer/timeout changes.
+
+Metrics `30e0cad691eb471d8d71d7d45608c9ba` show 65 completions before this
+candidate failed. Its requests had no 5xx; the batch's single 504 belonged to
+Item 26605's `analytics.tiktok.com` ping, not this candidate. No 403/429,
+challenge, CAPTCHA or retries were recorded for the batch. Evidence is in
+`output/batch/piccoma/item-26631-source-26631-20261014T150909610686+0900-b1ff41ed72d049d893de902dff7d2129/diagnostics/metadata.json`
+and its retained manifest. This was recorded-evidence/code inspection only:
+README/note updated; no new tests, full suite, Research or live probe run.
+Core implementation is unchanged, so `note/00_core.md` needs no update.
+
+## Ordinary-size transition settlement (2026-10-14)
+
+The natural Item 26535 failure below established that an approved p1-to-p2
+transition counted a loaded 764x1200 canvas at x=-204 as stable three times
+while its frame began at x=570, then rejected it after 242.033 ms.
+Current `_wait_for_body_ready` excludes out-of-frame samples during every
+already requested sequential body-page advance, except the exact native-only
+763px presentation described above.
+The former scaled-only size predicate was removed; all other readiness gates
+and capture validation remain unchanged. An unsupported off-frame sample resets stability. Capture starts only after
+three consecutive unchanged, loaded, visible samples match supported frame
+geometry (the native-only 763px exception is defined above). A permanent off-frame
+page still stops at the existing 10-second page-change bound with retained
+failure diagnostics. No extra next click, reload, Batch retry, new resolution,
+timeout extension, tolerance relaxation or pacing change is introduced.
+Initial normalization, backward navigation and unrequested cursor guards retain
+their existing conditions. Core, source/paint/generation/output proof and
+max-pages/same-content/END behavior are unchanged; `note/00_core.md` needs no
+update. The failure-time diagnostic remains enabled.
+
+The existing browser transition test now covers 764/842/844x1200 and
+1350x1920/1125x1600, with the canvas initially one frame width plus 10px left
+of its final position (exactly x=-204 for the 764px fixture). A 700ms pause
+must settle successfully; a permanent pause must time out, preserve the
+original failure-time diagnostics after later settlement, and recover with
+one total next click. Before the production fix, six ordinary-size cases
+failed and four scaled cases passed. After the fix, all ten targeted cases
+passed (34.79s), preserving three valid stability samples before readiness.
+
+Normal CLI Batch `--limit 1 --max-pages 20` in an online-backup Catalog
+completed all 15 pages of `13590:670650` and explicit END (CrawlRun 10033).
+Only the isolated copy reset the already Completed Item to Pending; the normal
+Item, Source, failed/succeeded runs and artifacts were checked unchanged.
+The retained prepackage manifest records native lossless WebP, verified white
+backdrop and no fallback on every page. ZIP audit passed ordered membership,
+15 unique fingerprints, full 764x1200 single-frame VP8L decode, CRC, and
+Artifact SHA-256/size (6,737,679 bytes). All 15 members are byte-identical to
+the user's successful retry archive; p1 also matches the original failed run.
+This verifies unchanged output against a prior production capture, not an
+independent live source-pixel observer or the exact original pause duration.
+Metrics `78990a0401ab469ebd4108e0e917e8d9` recorded one completion and zero
+failures/retries/403/429/5xx/challenge/CAPTCHA. Evidence/scripts are ignored
+under `work/piccoma/26535-readiness-fix-20261014/`.
+
+Final validation: 495 affected native-capture Unit and adapter browser
+Integration tests passed, 0 failed, 0 skipped (221.95s; five existing asyncio
+deprecation warnings). The focused transition selection passed 10 cases.
+Global Ruff and scoped diff checks passed. Packaging, Discovery/Policy,
+separate Research and full-repository suites were not rerun because their
+contracts did not change; the isolated live Batch exercised normal packaging
+and its retained manifest/ZIP/Catalog outputs were audited as described above.
+Live verification covers this 15-page episode, not every timing condition or
+other work; the recorded off-frame position was reproduced synthetically.
+
+## Body-readiness failure diagnostics (2026-10-14)
+
+Item/Source 26357 (`13590:3873051`, 第244話 (1) of 暁のヨナ) failed
+after saving p1 as a 764x1200 native WebP. Metrics
+`56b91b55c9fd4308bd21c6e30033f3d4` recorded 46 completed candidates then
+this geometry error, without HTTP/challenge/retry failures. The failed run
+9819 is preserved; user retry run 9820 completed all 15 pages and END.
+The original diagnostics contain `detected_state=content`, which is the last
+Runner state passed to diagnostics, not a fresh reading of the failing wait.
+They did not retain the failing wait-time geometry, so its exact cause cannot
+be proven retrospectively.
+
+Three bounded, unmodified-adapter CDP probes captured p1/p2 and reached p3.
+All succeeded, while snapshots observed the 764x1200 canvas temporarily
+outside the [570, 0, 764, 1200] frame during p2/p3 transitions before settling.
+This supports a transient-position hypothesis, not reproduction of the exact
+reported failure. At the diagnostics-only checkpoint, the ordinary-size
+readiness path could reject an off-frame canvas after three unchanged samples;
+only the two enumerated scaled sizes excluded off-frame samples while waiting.
+That checkpoint added diagnostics only; the subsequent readiness repair is
+described above. Timeouts, retries, capture/source proof and pacing are unchanged.
+
+The subsequent natural failure on Item/Source 26535 (`13590:670650`,
+第156話 (1) of 暁のヨナ) supplied the missing wait-time evidence. Metrics
+`e0d1d5f9b15c49099c452c183f35db4c` show 41 completions then this failure,
+without 403/429/5xx/challenge/CAPTCHA/retry. After saving p1, the approved
+p1-to-p2 wait recorded three samples at 12.434, 132.279 and 241.975 ms.
+Each had active p2, loaded/visible 764x1200 canvas at [-204, 0, 764, 1200],
+frame [570, 0, 764, 1200], viewport [1904, 1200, 1], and `inFrame=false`.
+Stability counts were 1, 2 and 3; the geometry error propagated at 242.033 ms.
+The backing size, viewport/DPR and reader mode match supported conditions.
+The confirmed stopping mechanism is counting unchanged off-frame geometry as
+ready, then rejecting it, before the existing 10-second wait expires. These
+records do not prove when or whether this particular p2 later settled, and do
+not retrospectively establish the exact cause of Item 26357's older failure.
+The failure-time diagnostic is retained in
+`output/batch/piccoma/item-26535-source-26535-20261014T133029724521+0900-d58f4e1a070247819ddb64f113f4796b/diagnostics/metadata.json`.
+The initial investigation changed documentation only. The subsequent
+implementation extends bounded in-frame readiness to ordinary-size pages as
+described above; the geometry/capture gates have not been relaxed.
+
+On an exception from body readiness, `collect_debug_metadata()` now exposes
+`piccoma_body_wait_failure`, written through the existing Core diagnostics path
+to `diagnostics/metadata.json` under
+`adapter_debug.piccoma_body_wait_failure`. It records the requested page ID,
+expected cursor at wait entry, preceding advance, exception type/message,
+elapsed time, total sample count, the first sample and the last eight samples.
+Samples reuse the existing reader snapshot: elapsed time, current page IDs,
+viewport/DPR, frame rectangle, reader-mode counts and the requested/active
+page rows with backing/display dimensions, loaded/in-frame flags, ancestor
+visibility and consecutive stability count. No extra browser RPC, screenshot,
+source response read, raw JPEG, signed source URL or authentication field is
+added. A later settled diagnostics screenshot cannot replace these retained
+failure-time values. Successful waits expose no new debug field; a new wait
+clears the previous failure record. There is no new configuration or CLI flag.
+
+Current synthetic browser regressions cover bounded ordinary/scaled waits,
+settle the page after failure, verify the retained geometry reaches actual
+metadata.json unchanged, check bounded sample retention and record clearing,
+and verify exactly one next click. The diagnostic implementation captured the
+natural Item 26535 failure described above. Core implementation is unchanged,
+so `note/00_core.md` does not require synchronization. Local evidence is ignored
+under `work/piccoma/26357-readiness-20261014/`.
+
+Validation: the focused diagnostics/readiness selection passed 9 tests; the
+final affected native-capture Unit and adapter browser Integration selection
+passed 493 tests, 0 failed, 0 skipped (249.24s; five existing asyncio warnings).
+Global Ruff and scoped diff checks passed. Packaging, Discovery/Policy,
+separate Research and full-repository suites were not rerun because their
+contracts did not change. No additional live failure verification was run
+after this diagnostics-only change; synthetic tests exercise the retained
+failure record through the existing diagnostics writer.
+The initial Item 26535 investigation ran no new tests or live probes: it inspected
+the recorded failure and unchanged readiness code, and updated documentation.
 
 ## 1125x1600 scaled canvas support (2026-10-14)
 
@@ -208,8 +719,8 @@ The first normal Batch attempt captured two WebPs, then stopped during the
 third page transition. A bounded follow-up observed active p7's otherwise
 correct scaled canvas at x=-322.5, outside the x=530.5 frame, before it settled
 to the supported position. A page can be marked current for three unchanged
-samples before its movement begins. During an already requested sequential
-scaled-page transition only, `_wait_for_body` now excludes out-of-frame canvases
+samples before its movement begins. During any already requested sequential
+body-page transition, `_wait_for_body` now excludes out-of-frame canvases
 from readiness and waits within its existing deadline. It still requires three
 stable, in-frame samples and the full strict geometry proof. No extra clicks,
 timeout extension or dimension tolerance was introduced. A permanent off-frame
