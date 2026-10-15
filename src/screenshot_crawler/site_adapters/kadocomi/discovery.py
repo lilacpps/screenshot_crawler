@@ -351,7 +351,9 @@ async def _wait_for_settled_rows(
         valid_placeholder_count = (
             isinstance(placeholder_count, int)
             and not isinstance(placeholder_count, bool)
-            and placeholder_count in (0, 1)
+            # Each accepted marker separates two episode rows, so at most
+            # declared_count - 1 distinct ended-publication gaps can exist.
+            and 0 <= placeholder_count < declared_count
         )
         ready = (
             snapshot.get("ready") is True
@@ -388,6 +390,7 @@ async def _wait_for_settled_rows(
                     valid_key = False
                     break
                 key_values.append((list_index, href, label, row_text))
+            episode_labels = {index: label for index, _href, label, _text in key_values}
             placeholder_key: list[tuple[int, str, str, str]] = []
             if not isinstance(placeholders, list) or len(placeholders) != placeholder_count:
                 valid_key = False
@@ -410,6 +413,8 @@ async def _wait_for_settled_rows(
                         or not previous
                         or not isinstance(following, str)
                         or not following
+                        or episode_labels.get(index - 1) != previous
+                        or episode_labels.get(index + 1) != following
                     ):
                         valid_key = False
                         break

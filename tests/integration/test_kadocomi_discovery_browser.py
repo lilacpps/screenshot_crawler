@@ -66,8 +66,12 @@ def _page_html(
     deadlines: dict[int, datetime],
     non_episode_child: str | None = None,
     sibling_title_row: int | None = None,
+    ended_after: tuple[int, ...] = (0,),
 ) -> str:
     row_markup_parts = []
+    ended_marker = "<li><p>その他の話は公開終了しました</p></li>"
+    if non_episode_child == "ended_at_start":
+        row_markup_parts.append(ended_marker)
     for index, number in enumerate(rows):
         row_markup_parts.append(
             _row_html(
@@ -76,10 +80,21 @@ def _page_html(
                 sibling_title=number == sibling_title_row,
             )
         )
-        if index == 0 and non_episode_child == "ended":
-            row_markup_parts.append("<li><p>その他の話は公開終了しました</p></li>")
+        if non_episode_child == "ended" and index in ended_after:
+            row_markup_parts.append(ended_marker)
+        elif index == 0 and non_episode_child == "ended_adjacent":
+            row_markup_parts.extend([ended_marker, ended_marker])
+        elif non_episode_child == "ended_malformed":
+            if index == 0:
+                row_markup_parts.append(ended_marker)
+            elif index == 1:
+                row_markup_parts.append(
+                    '<li class="unknown"><p>その他の話は公開終了しました</p></li>'
+                )
         elif index == 0 and non_episode_child == "unknown":
             row_markup_parts.append("<li><p>Unclassified list message</p></li>")
+    if non_episode_child == "ended_at_end":
+        row_markup_parts.append(ended_marker)
     row_markup = "".join(row_markup_parts)
     title = "Fixture Work｜カドコミ (コミックウォーカー)"
     button = f'\u5168{declared_count}\u8A71\u3092\u8868\u793A'
@@ -132,14 +147,18 @@ async def _route_listing(page, listing_state: dict) -> None:
             deadlines=listing_state["deadlines"],
             non_episode_child=listing_state.get("non_episode_child"),
             sibling_title_row=listing_state.get("sibling_title_row"),
+            ended_after=listing_state.get("ended_after", (0,)),
         )
         await route.fulfill(status=200, body=body, content_type="text/html; charset=utf-8")
 
     await page.route("https://comic-walker.com/**", fulfill)
 
 
+@pytest.mark.parametrize(
+    "ended_after", [(), (0,), (0, 1)], ids=["zero_markers", "one_marker", "two_markers"]
+)
 async def test_kadocomi_full_history_republication_and_null_expiry_preserve_catalog_identity(
-    browser_page, tmp_path
+    browser_page, tmp_path, ended_after
 ) -> None:
     catalog, service = _services(tmp_path)
     target = _target()
@@ -149,6 +168,7 @@ async def test_kadocomi_full_history_republication_and_null_expiry_preserve_cata
         "declared": 3,
         "deadlines": {2: deadline},
         "non_episode_child": "ended",
+        "ended_after": ended_after,
     }
     await _route_listing(browser_page, state)
 
@@ -238,7 +258,7 @@ async def test_kadocomi_full_history_republication_and_null_expiry_preserve_cata
 
     # The listed source disappears while another is added. The same source IDs
     # and durable Completed/Artifact/CrawlRun data remain in Catalog.
-    state.update(rows=[2, 4], declared=2, deadlines={})
+    state.update(rows=[2, 4], declared=2, deadlines={}, ended_after=ended_after[:1])
     second = await service.discover(browser_page, target, "full")
     assert (second.complete, second.observed_count, second.new_count) == (True, 2, 1)
     refreshed2 = catalog.find_source("kadocomi", f"{WORK_ID}:{_episode_id(2)}")
@@ -265,7 +285,7 @@ async def test_kadocomi_full_history_republication_and_null_expiry_preserve_cata
 
     # Republishing the same external identities restores availability without
     # replacing their Sources or historical Item/Artifact identities.
-    state.update(rows=[1, 2, 3, 4], declared=4, deadlines={})
+    state.update(rows=[1, 2, 3, 4], declared=4, deadlines={}, ended_after=ended_after)
     third = await service.discover(browser_page, target, "full")
     assert (third.complete, third.observed_count, third.new_count) == (True, 4, 0)
     for number in (1, 2, 3, 4):
@@ -309,11 +329,20 @@ async def test_kadocomi_incomplete_full_does_not_mark_missing_sources_unavailabl
 
 @pytest.mark.parametrize(
     ("non_episode_child", "sibling_title_row"),
-    [("unknown", None), (None, 2)],
+    [
+        ("unknown", None),
+        (None, 2),
+        ("ended_adjacent", None),
+        ("ended_at_start", None),
+        ("ended_at_end", None),
+        ("ended_malformed", None),
+    ],
 )
 async def test_kadocomi_unknown_list_shapes_fail_closed(
-    browser_page, tmp_path, non_episode_child, sibling_title_row
+    browser_page, tmp_path, monkeypatch, non_episode_child, sibling_title_row
 ) -> None:
+    monkeypatch.setattr(kadocomi_discovery, "SETTLEMENT_TIMEOUT_SECONDS", 0.25)
+    monkeypatch.setattr(kadocomi_discovery, "SETTLEMENT_INTERVAL_MS", 10)
     catalog, service = _services(tmp_path)
     target = _target()
     state = {
@@ -336,7 +365,10 @@ async def test_kadocomi_unknown_list_shapes_fail_closed(
 async def test_kadocomi_incremental_does_not_change_unseen_sources(browser_page, tmp_path) -> None:
     catalog, service = _services(tmp_path)
     target = _target()
-    state = {"rows": [1, 2, 3, 4], "declared": 4, "deadlines": {}}
+    state = {
+        "rows": [1, 2, 3, 4], "declared": 4, "deadlines": {},
+        "non_episode_child": "ended", "ended_after": (0, 1),
+    }
     await _route_listing(browser_page, state)
     first = await service.discover(browser_page, target, "full")
     assert first.complete is True
