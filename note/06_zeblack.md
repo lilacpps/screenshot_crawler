@@ -1,6 +1,58 @@
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 
-## Current implementation snapshot (updated 2026-10-15)
+## Current implementation snapshot (updated 2026-10-16)
+
+### Final-chapter END card (2026-10-16)
+
+The viewer now recognizes the observed no-next-story final-chapter card as
+`PageState.END`. Item/source `15834`, title `37`, chapter `50213`
+(`最終話 挑戦者たち - ②`) previously saved 21 content pages through `page_20`,
+then timed out in `wait_for_change`. Its saved diagnostic HTML/screenshot showed
+the app promotion, comment/favorite controls and recommendations at `23 / 23`,
+with no next-story control and no active content. The failed Batch metrics
+reported zero 403/429/5xx/challenge/CAPTCHA events and no ticket consumption.
+
+The site-local signal requires exactly one visible/in-viewport
+`.-KWKsa_spread ._b9ZNa_embed` card with a decoded visible
+`/assets/app_appeal-*.png` banner, visible exact `コメントする` and `お気に入り`
+paragraph labels inside controls, and a visible exact leaf `あなたへのおすすめ`
+heading inside that same card. Any next-story control within the card, including
+hidden/offscreen controls, rejects END. Exactly one numeric `p` counter must
+have positive equal current/total values. The counter is supporting evidence
+only; it may be outside the viewport because the viewer toolbar slides away.
+Missing/duplicate counters or cards, missing labels, offscreen/hidden/transparent
+cards, failed DOM evaluation and unknown UI fail closed.
+
+This signal participates in the existing transition fingerprint. END additionally
+requires no active `page_N` content, the same target title/chapter viewer URL and
+a changed transition followed by the existing consecutive stable checks. State
+detection revalidates the card before returning END. Content retains precedence,
+no-change still times out, and visible next-story controls retain the existing
+`NEXT_CONTENT` behavior. END cards are neither captured nor advanced. Core,
+capture attribution, ticket entry, Catalog and Batch orchestration are unchanged;
+CLI/configuration are unchanged. The observed selectors and card layout are the
+supported scope; other no-next-story layouts remain unverified and stop safely.
+
+Validation: `tests/unit/test_zeblack_adapter.py`,
+`tests/integration/test_zeblack_viewer_browser.py` and
+`tests/integration/test_zeblack_access_entry_browser.py`: **110 passed, 0 skipped**.
+Synthetic DOM tests cover incomplete/ambiguous/offscreen/hidden cards, counters,
+hidden next controls, active content and wrong URL/chapter; the real Runner with
+an artificial Blob viewer covers content -> advertisement -> END/NEXT_CONTENT
+at the `max_pages` boundary without capturing the card or clicking next story.
+Fixtures use generated images and artificial text/DOM, not site content.
+`ruff check src tests` and `git diff --check` for the changed files passed.
+
+A production CLI direct crawl of the same title `37` / chapter `50213` through
+the shared Crawler Chrome/profile succeeded with **21 pages, stop_reason=end**,
+then packaged a ZIP under `output/zeblack_final_end_live_20261016/Books/`.
+The archive contains exactly 21 `.jpg` entries and passes ZIP integrity checking.
+Its dedicated output/library is separate from the normal Catalog/Batch and no
+ticket control was clicked. Existing tabs and remote Chrome were preserved.
+This verifies the observed final-chapter layout, not every title or access state.
+The user also confirmed that the original Batch error was resolved after this fix.
+Research/Probe tests and the full suite were not required for this site-local
+terminal fix; no research helper or shared contract changed.
 
 ### Work Ticket confirmation UI support (2026-10-15)
 
@@ -856,8 +908,11 @@ visible terminal signalをpollし、changed後の連続stable checksを要求す
 本文がactiveなら、同じDOM内に「次の話」候補があっても`CONTENT`を優先する。本文がなく、
 same chapter viewer URL、直前のArrowLeft transitionがchanged+stable、かつviewport内の
 visible button/controlに「次の話を読む」系の明示signalがある場合だけ`NEXT_CONTENT`とする。
-page counterだけではterminalにしない。Z2で独立したEND UIは確認していないため、未確認の
-END文言から`END`を生成しない。
+page counterだけではterminalにしない。次話がない最終話は、本note上部の2026-10-16契約に
+従い、同一viewerのchanged+stable遷移、本文不在、既知の終了cardと末尾counterの組み合わせを
+再確認して`END`とする。Z2では独立したEND UIは未確認だったが、現在はtitle `37` / chapter
+`50213`でproduction direct crawlの`END`正常終了を確認済みである。未確認のEND文言だけでは
+終了しない。
 
 ### Z3 historical access strategy status
 

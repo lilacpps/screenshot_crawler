@@ -127,6 +127,50 @@ _LAST_PAGE_SCRIPT = r"""
     text.includes("次の話を読む");
 })
 """
+_END_PAGE_SCRIPT = r"""
+(elements) => {
+  const text = element => (element.textContent || '').replace(/\s+/g, ' ').trim();
+  const visible = element => {
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0 || rect.right <= 0 ||
+        rect.left >= window.innerWidth || rect.bottom <= 0 ||
+        rect.top >= window.innerHeight) return false;
+    for (let node = element; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden' ||
+          style.visibility === 'collapse' || style.opacity === '0') return false;
+    }
+    return true;
+  };
+  // The counter supports the observed end card; it is never an END signal alone.
+  // Viewer controls can slide below the viewport, so do not require its visibility.
+  const counters = Array.from(document.querySelectorAll('p'))
+    .map(element => text(element).match(/^(\d+)\s*\/\s*(\d+)$/)).filter(Boolean);
+  if (counters.length !== 1 || Number(counters[0][1]) <= 0 ||
+      Number(counters[0][1]) !== Number(counters[0][2])) return false;
+  const cards = elements.filter(element => visible(element) &&
+    visible(element.closest('.-KWKsa_spread')));
+  if (cards.length !== 1) return false;
+  const card = cards[0];
+  const controls = Array.from(card.querySelectorAll('button, a, [role="button"]'));
+  // A hidden/offscreen next control can still be hydrating. Do not call it END.
+  if (controls.some(element => /次の話|next\s+(?:chapter|episode|content)/i.test(
+    [text(element), element.getAttribute('aria-label') || '',
+      element.getAttribute('title') || ''].join(' ')))) return false;
+  const hasLabel = label => controls.some(element => visible(element) &&
+    Array.from(element.querySelectorAll('p')).some(child =>
+      visible(child) && text(child) === label));
+  const banners = Array.from(card.querySelectorAll('img')).filter(element => {
+    const src = element.getAttribute('src') || '';
+    return /^\/assets\/app_appeal-[\w-]+\.png$/.test(src) &&
+      element.complete && element.naturalWidth > 0 && visible(element);
+  });
+  const recommendations = Array.from(card.querySelectorAll('div')).some(element =>
+    element.children.length === 0 && visible(element) && text(element) === 'あなたへのおすすめ');
+  return banners.length === 1 && hasLabel('コメントする') && hasLabel('お気に入り') &&
+    recommendations;
+}
+"""
 
 _TICKET_ENTRY_TEXT = "チケットを使って読む"
 _FREE_TICKET_ENTRY_TEXT = "無料チケットを使って読む"
@@ -529,6 +573,18 @@ class ZeblackAdapter(SiteAdapter):
             return False
         return result is True
 
+    async def _end_page_signal(self, page: Page) -> bool:
+        """Recognize the observed final-chapter card with no next-story control."""
+
+        try:
+            cards = page.locator(".-KWKsa_spread ._b9ZNa_embed")
+            result = await asyncio.wait_for(
+                cards.evaluate_all(_END_PAGE_SCRIPT), timeout=2
+            )
+        except Exception:  # noqa: BLE001 - missing end-card evidence must fail closed
+            return False
+        return result is True
+
     async def _snapshot(self, page: Page) -> dict[str, object]:
         current_url = str(page.url)
         viewer = parse_zeblack_viewer_url(current_url)
@@ -536,6 +592,7 @@ class ZeblackAdapter(SiteAdapter):
         terminal_signal = await self._visible_next_content_signal(page)
         advertisement_signal = await self._visible_advertisement_signal(page)
         last_page_signal = await self._last_page_signal(page)
+        end_signal = await self._end_page_signal(page)
         row_signature = self._row_signature(rows) if rows is not None else ()
         return {
             "url": current_url,
@@ -545,6 +602,7 @@ class ZeblackAdapter(SiteAdapter):
             "terminal_signal": terminal_signal,
             "advertisement_signal": advertisement_signal,
             "last_page_signal": last_page_signal,
+            "end_signal": end_signal,
             "fingerprint": (
                 current_url,
                 row_signature,
@@ -552,6 +610,7 @@ class ZeblackAdapter(SiteAdapter):
                 terminal_signal,
                 advertisement_signal,
                 last_page_signal,
+                end_signal,
                 self._last_detection_failure,
             ),
         }
@@ -1078,6 +1137,14 @@ class ZeblackAdapter(SiteAdapter):
             return PageState.CONTENT
         if (
             self._transition_stable
+            and self._transition_kind == "terminal_end"
+            and self._target_viewer is not None
+            and current.key == self._target_viewer.key
+            and await self._end_page_signal(page)
+        ):
+            return PageState.END
+        if (
+            self._transition_stable
             and self._transition_kind in {"advertisement", "last_page"}
             and self._target_viewer is not None
             and current.key == self._target_viewer.key
@@ -1217,7 +1284,7 @@ class ZeblackAdapter(SiteAdapter):
             or self._transition_pending
             or (
                 self._transition_stable
-                and self._transition_kind == "terminal_next_content"
+                and self._transition_kind in {"terminal_next_content", "terminal_end"}
             )
         ):
             raise PageChangeTimeoutError("Zeblack next-page guard rejected the current state")
@@ -1301,7 +1368,10 @@ class ZeblackAdapter(SiteAdapter):
             )
         return (
             viewer.key == (self._target_viewer.key if self._target_viewer else viewer.key)
-            and snapshot.get("terminal_signal") is True
+            and (
+                snapshot.get("terminal_signal") is True
+                or snapshot.get("end_signal") is True
+            )
         )
 
     def _transition_kind_for(
@@ -1319,6 +1389,8 @@ class ZeblackAdapter(SiteAdapter):
             return "content"
         if snapshot.get("terminal_signal") is True:
             return "terminal_next_content"
+        if snapshot.get("end_signal") is True:
+            return "terminal_end"
         if snapshot.get("advertisement_signal") is True:
             return "advertisement"
         if snapshot.get("last_page_signal") is True:

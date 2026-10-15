@@ -94,6 +94,8 @@ class _FakeLocator:
             return self.page.rows
         if "iframe" in self.selector:
             return self.page.ad_signal
+        if "_b9ZNa_embed" in self.selector:
+            return self.page.end_signal
         if "-KWKsa_spread" in self.selector:
             return self.page.last_page_signal and self.page.last_page_in_viewport
         return self.page.next_signal
@@ -120,6 +122,7 @@ class _FakePage:
         ad_signal: bool = False,
         last_page_signal: bool = False,
         last_page_in_viewport: bool = True,
+        end_signal: bool = False,
     ) -> None:
         self.url = TARGET
         self.rows = rows
@@ -127,6 +130,7 @@ class _FakePage:
         self.ad_signal = ad_signal
         self.last_page_signal = last_page_signal
         self.last_page_in_viewport = last_page_in_viewport
+        self.end_signal = end_signal
         self.nth_calls: list[int] = []
         self.keyboard = _FakeKeyboard()
         self.listeners: list[tuple[str, object]] = []
@@ -698,6 +702,7 @@ async def test_content_identity_context_and_state_priority(monkeypatch) -> None:
     assert context.work_id == "118286"
     assert context.chapter_id == "9265713"
     page.next_signal = True
+    page.end_signal = True
     assert await adapter.detect_state(page) == PageState.CONTENT  # type: ignore[arg-type]
 
 
@@ -717,16 +722,29 @@ async def test_content_identity_page_number_is_first_logical_page(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_terminal_requires_stable_transition_and_visible_control(monkeypatch) -> None:
-    page = _FakePage([], next_signal=True)
+@pytest.mark.parametrize(
+    ("signal", "kind", "state"),
+    [
+        ("next_signal", "terminal_next_content", PageState.NEXT_CONTENT),
+        ("end_signal", "terminal_end", PageState.END),
+    ],
+)
+async def test_terminal_requires_stable_transition_and_visible_control(
+    monkeypatch, signal: str, kind: str, state: PageState
+) -> None:
+    page = _FakePage([])
+    setattr(page, signal, True)
     adapter = ZeblackAdapter()
     adapter._target_viewer = parse_zeblack_viewer_url(TARGET)
     _patch_rows(monkeypatch, adapter, page)
     assert await adapter.detect_state(page) == PageState.UNKNOWN  # type: ignore[arg-type]
     adapter._transition_stable = True
-    adapter._transition_kind = "terminal_next_content"
-    assert await adapter.detect_state(page) == PageState.NEXT_CONTENT  # type: ignore[arg-type]
-    page.next_signal = False
+    adapter._transition_kind = kind
+    assert await adapter.detect_state(page) == state  # type: ignore[arg-type]
+    with pytest.raises(PageChangeTimeoutError):
+        await adapter.go_next(page)  # type: ignore[arg-type]
+    assert page.keyboard.presses == []
+    setattr(page, signal, False)
     assert await adapter.detect_state(page) == PageState.UNKNOWN  # type: ignore[arg-type]
 
 
@@ -811,7 +829,13 @@ async def test_wait_for_change_requires_changed_and_stable(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_wait_for_change_accepts_a_stable_advertisement_spread(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("signal", "kind"),
+    [("advertisement_signal", "advertisement"), ("end_signal", "terminal_end")],
+)
+async def test_wait_for_change_accepts_a_stable_non_content_spread(
+    monkeypatch, signal: str, kind: str
+) -> None:
     page = _FakePage([])
     adapter = ZeblackAdapter()
     adapter._transition_before_signature = ("before",)
@@ -822,7 +846,7 @@ async def test_wait_for_change_accepts_a_stable_advertisement_spread(monkeypatch
         "rows": [],
         "page_id": None,
         "terminal_signal": False,
-        "advertisement_signal": True,
+        signal: True,
     }
 
     async def ad_snapshot(_page: object) -> dict[str, object]:
@@ -831,11 +855,12 @@ async def test_wait_for_change_accepts_a_stable_advertisement_spread(monkeypatch
     monkeypatch.setattr(adapter, "_snapshot", ad_snapshot)
     await adapter.wait_for_change(page, previous)  # type: ignore[arg-type]
     assert adapter._transition_stable
-    assert adapter._transition_kind == "advertisement"
+    assert adapter._transition_kind == kind
 
 
 @pytest.mark.asyncio
-async def test_wait_for_change_no_change_times_out(monkeypatch) -> None:
+@pytest.mark.parametrize("end_signal", [False, True])
+async def test_wait_for_change_no_change_times_out(monkeypatch, end_signal: bool) -> None:
     page = _FakePage([])
     adapter = ZeblackAdapter()
     adapter.page_change_timeout_ms = 200
@@ -847,6 +872,7 @@ async def test_wait_for_change_no_change_times_out(monkeypatch) -> None:
         "rows": [],
         "page_id": None,
         "terminal_signal": False,
+        "end_signal": end_signal,
     }
     async def unchanged_snapshot(_page: object) -> dict[str, object]:
         return snapshot
