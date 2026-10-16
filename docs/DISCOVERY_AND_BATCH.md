@@ -106,7 +106,7 @@ Normal Zeblack Batch is one bounded cycle:
 
 ```text
 Phase A: direct FREE / active RENTAL crawl and package
-Phase B: one live resolver snapshot per Work/title, then grant-only Work Ticket
+Phase B: for each Work/title, one live resolver snapshot then same-Page grant-only Work Ticket
 Phase C: one Catalog replan and direct crawl of newly active RENTAL sources
 ```
 
@@ -121,9 +121,10 @@ The generic deferred Batch path derives its resource from the planned
 candidate `quota_resource`; it has no Zeblack or `work_ticket` resource branch.
 An incomplete candidate resource or a mixed deferred resource set fails closed.
 The resolver is site access for pacing purposes. When there was a previous
-site access, the sequence is `inter_candidate_delay_ms -> resolver ->
-inter_candidate_delay_ms -> selected grant`; a successful grant is followed
-by the same delay before Phase C. With no Phase A site access there is no
+site access, the sequence is `inter_candidate_delay_ms -> Work resolver ->
+same-Page selected grant -> close Page`; the next Work resolver and Phase C
+start after the same delay. No inter-candidate delay is inserted between
+a Work snapshot and its prepared entry. With no Phase A site access there is no
 leading delay before the resolver. A resolver that reaches the site but
 selects no candidate still establishes the pacing state for a subsequent
 explicit resource pass; local-only skips do not add a delay. The shared
@@ -149,10 +150,11 @@ immediately executable. Non-deferred sites retain their existing output and
 execution representation. No Catalog schema, migration, or version change is
 required.
 
-## Deferred grant-only work sequencing (2026-10-14)
+## Deferred grant work sequencing (updated 2026-10-17)
 
-Explicit deferred `batch run --grant-only <resource>` and `--grant-only all`
-process one planned Work at a time: resolve that Work's live target, execute
+Explicit deferred `batch run --grant-only <resource>`, `--grant-only all`, and
+the grant phase within normal deferred Batch process one planned Work at a time:
+resolve that Work's live target, execute
 its selected grant through the existing entry-only executor, report the result,
 then move to the next Work. They do not resolve all Works in advance. Work order
 is the order of first appearance in the Planner pool, not Watchlist file order.
@@ -161,7 +163,7 @@ Catalog identity and native chapter order. A missing Work identity, a selected
 source outside the current Work, or multiple selected targets for one Work
 fails closed before any grant click.
 
-For explicit deferred grant-only, one Work uses a single Page and adapter from
+For these deferred grant phases, one Work uses a single Page and adapter from
 snapshot through ticket entry and consumption confirmation. The existing
 entry-only executor receives a context-scoped, single-use prepared access handle.
 The adapter validates the same Page, observation document, canonical target and
@@ -183,7 +185,7 @@ Grant-only `--limit` counts selected grant attempts, including unavailable or
 failed entry attempts; read-only checks do not count. Once the limit is reached,
 later Works are not visited, and `all` shares the same limit across Policy passes.
 
-For these explicit deferred runs, print one `OK` / `NG` / local `SKIP` result per planned
+For these deferred grant phases, print one `OK` / `NG` / local `SKIP` result per planned
 Work/resource immediately and print the full result list on normal completion,
 failure or interruption. Resolver-only unavailable/missing-target outcomes are
 included; non-selected sibling chapters are not additional Work failures.
@@ -212,19 +214,33 @@ last confirmed consumption and `work_ticket_cooldown_hours` (site default 23) as
 a local negative gate. Within the half-open interval [consumed_at, retry_at),
 print `SKIP` with the Work label and next local check time. Equality permits live
 checking; elapsed time never proves ticket availability. Normal Batch also
-filters cooling Works before its whole-pool resolver; FREE/active RENTAL direct
+filters cooling Works before each Work resolver; FREE/active RENTAL direct
 reads remain eligible. Unavailable or unconfirmed entry creates no consumption
 record; confirmed consumption survives later failure. This applies to future
 confirmed consumption records; old Source grant/rental deadlines are not used to
 backfill work state, and manual account actions are not inferred.
 
-Normal Batch retains its existing direct -> whole-pool resolver/grant -> one
-post-grant direct replan cycle and its legacy selected-entry reloads.
+Normal Batch runs direct -> per-Work prepared resolver/grant -> one post-grant
+direct replan. It shares the explicit grant-only execution helper and Work-result
+reporting. Normal Batch prints `Grant results:`; explicit grant-only retains
+`Grant-only results:`. Prepare normal Work rows before Phase A, so a direct-phase
+limit, failure or interruption leaves later grants explicitly unattempted.
+Normal grant limits use the remaining Phase A crawl slots; post-grant capture
+failure does not change a confirmed grant from OK to NG. These are grant results,
+independent of final capture/package success. The remaining final crawl/package slots
+limit selected grant attempts; read-only snapshots and local skips do not use
+slots. Once that budget is reached, later Works are not visited. Only Sources
+with positive current-run consumption confirmation enter the post-grant replan;
+a historical quota timestamp or an unavailable entry is insufficient. Fatal
+errors stop before later Works and before the post-grant phase. Expected
+unavailability ends the current Work. Phase C captures/packages/completes only
+newly granted direct candidates; no additional grant loop runs.
 Non-deferred sites retain their existing resource pass behavior. Exact modal checks,
 single ticket click, same-chapter viewer confirmation, grant persistence and
 no-capture/no-package/no-completion semantics are unchanged. This change requires
 no Catalog migration. The single-list-load guarantee applies to explicit
-deferred grant-only, not the legacy normal Batch/manual quota path.
+deferred grant-only and the normal Batch grant phase. Manual quota entry retains
+its existing preflight.
 
 ## Z5-6 Zeblack production Work Ticket entry flow
 

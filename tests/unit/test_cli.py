@@ -1374,15 +1374,16 @@ def test_batch_run_limit_spans_initial_and_premium_phases(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("limit", "phase_a_has_direct"),
-    [(None, True), (1, True), (1, False)],
-    ids=["unlimited", "limit_one", "phase_a_empty_limit_one"],
+    ("limit", "phase_a_has_direct", "phase_a_fails"),
+    [(None, True, False), (1, True, False), (1, False, False), (3, True, False), (None, True, True)],
+    ids=["unlimited", "limit_one", "phase_a_empty_limit_one", "remaining_slot", "direct_failure"],
 )
 async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     limit: int | None,
     phase_a_has_direct: bool,
+    phase_a_fails: bool,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
@@ -1505,6 +1506,9 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         def record_access_event(self, _event: object) -> None:
             pass
 
+        def record_grant_result(self, **_kwargs: object) -> None:
+            pass
+
         def finish(self, **_kwargs: object) -> None:
             pass
 
@@ -1539,8 +1543,15 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
             resolver_resources.append(resource)
             return SimpleNamespace(selected_source_ids=(quota_source.id,), skipped_source_reasons=())
 
+        @asynccontextmanager
+        async def prepare_access_resource_candidates(self, page, candidates, resource):
+            resolution = await self.resolve_access_resource_candidates(page, candidates, resource)
+            yield SimpleNamespace(page=page, resolution=resolution)
+
         async def execute_candidate(self, _page: object, candidate: object, **_kwargs: object) -> object:
             events.append(f"crawl:{candidate.item_id}")
+            if phase_a_fails:
+                raise cli.CandidateExecutionError("synthetic direct failure")
             if candidate.item_id == quota_item.id:
                 run = catalog.create_crawl_run(
                     item_id=candidate.item_id,
@@ -1570,6 +1581,7 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         async def execute_grant_only_candidate(
             self, _page: object, candidate: object, **_kwargs: object
         ) -> object:
+            assert _kwargs["prepared_access"].page is _page
             events.append("grant")
             status_during_grant.append(catalog.get_item(candidate.item_id).status)
             catalog.record_quota_access(
@@ -1602,11 +1614,16 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         "zeblack",
         "--catalog",
         str(tmp_path / "catalog.sqlite"),
+        "--watchlist", str(tmp_path / "missing-watchlist.yaml"),
     ]
     if limit is not None:
         argv.extend(["--limit", str(limit)])
     args = _parser().parse_args(argv)
-    await cli._run_batch_run(args)
+    if phase_a_fails:
+        with pytest.raises(cli.CandidateExecutionError, match="synthetic direct failure"):
+            await cli._run_batch_run(args)
+    else:
+        await cli._run_batch_run(args)
     output = capsys.readouterr().out
     assert f"  planned: {len(direct_candidates) + 1}" in output
     expected_direct = len(direct_candidates)
@@ -1620,7 +1637,13 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     assert f"  executing direct: {expected_executing_direct}" in output
     assert "  executing: 2" not in output
 
-    if limit is None or not phase_a_has_direct:
+    if phase_a_fails:
+        assert "Grant results:" in output and "stopped" in output
+        assert "未実行" in output and "[Catalog" in output
+        assert events == [f"crawl:{direct_candidates[0].item_id}"]
+        assert catalog.get_item(quota_item.id).status == "pending"
+        return
+    if limit is None or limit > len(direct_candidates):
         expected_events: list[str] = []
         for index, candidate in enumerate(direct_candidates):
             expected_events.append(f"crawl:{candidate.item_id}")
@@ -1631,7 +1654,6 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         expected_events.extend(
             [
                 "resolve",
-                "sleep:0.017",
                 "grant",
                 "sleep:0.017",
                 f"crawl:{quota_item.id}",
@@ -1646,6 +1668,8 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         assert len(catalog.list_artifacts(item_id=quota_item.id)) == 1
         assert catalog.list_crawl_runs(item_id=quota_item.id)[0].status == "succeeded"
     else:
+        assert "Grant results:" in output and "limit_reached" in output
+        assert "[Catalog" in output
         assert events == [f"crawl:{direct_candidates[0].item_id}"]
         assert plans == [None]
         assert resolver_resources == []

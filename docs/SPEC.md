@@ -138,7 +138,7 @@ output metadata      # optional
 
 `item_id` / `source_id` 等のCatalog identityはBatch Runnerが保持し、CrawlerRunnerへ持ち込まない。
 
-明示的なgrant-onlyでは、Batchが同一Pageで取得した検証済みaccess snapshotを
+明示的なgrant-onlyと通常Batchのdeferred grantフェーズでは、Batchが同一Pageで取得した検証済みaccess snapshotを
 entryへ引き継いでよい。prepared entryは`entry_only`と有効なresolver AccessGuardを必須とし、
 Site Adapterの`adopt_prepared_access_entry()`が同一Page・document・targetの一致と
 一度限りの利用を検証した場合だけ、Runnerの初期gotoを省略する。

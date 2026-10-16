@@ -1,6 +1,6 @@
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 
-## Current implementation snapshot (updated 2026-10-16)
+## Current implementation snapshot (updated 2026-10-17)
 
 ### Final-chapter END card (2026-10-16)
 
@@ -141,8 +141,9 @@ preserves snapshot order and selects the first matching pending candidate.
 Completed or missing Catalog targets are never used as an implicit fallback;
 missing matches return `work_ticket_target_not_in_catalog`, while an empty
 ticket set returns `work_ticket_unavailable`. The selected candidate retains
-the bounded modal/direct-viewer guards. In explicit grant-only the observation
-is reused on that same Page; normal Batch/manual quota retain their old preflight.
+the bounded modal/direct-viewer guards. Explicit grant-only and the normal Batch
+grant phase reuse the observation on that same Page; manual quota retains its
+existing preflight.
 
 Normal Zeblack Batch runs `direct -> grant-access -> one replan direct`.
 Grant-access uses the existing grant-only executor and creates no capture,
@@ -155,8 +156,9 @@ kept active for resolver and production attempts. Generic Batch derives the
 deferred resolver resource from candidate `quota_resource`; the CLI does not
 hard-code `work_ticket`, and missing or mixed deferred resources fail closed.
 The resolver counts as site access for pacing: previous site access delays the
-resolver; in normal Batch the selected grant is delayed after the resolver, and post-grant
-direct is delayed after a confirmed grant. Phase A with zero site attempts has
+resolver; the selected grant immediately reuses the same Page/document/Guard.
+Cleanup and one delay separate Works, and post-grant direct is delayed after
+the grant-phase site access. Phase A with zero site attempts has
 no leading resolver delay, and a resolver-only pass still affects the next
 explicit resource pass. Local Catalog skips do not create pacing delays.
 
@@ -170,14 +172,15 @@ Generic Batch prints resolver snapshot start, completion, and failure messages;
 the read-only snapshot remains outside the grant attempt limit and does not
 consume a ticket.
 
-Explicit `batch run --site zeblack --grant-only work_ticket` and `--grant-only all`
-now pass one Catalog Work's candidate pool to the live resolver at a time, then
+Explicit `batch run --site zeblack --grant-only work_ticket`, `--grant-only all`,
+and the grant phase inside normal `batch run --site zeblack` pass one Catalog
+Work's candidate pool to the live resolver at a time, then
 immediately execute its selected grant on the same Page before resolving the next Work. There is
 no initial all-Work sweep. Work order remains Planner order. Target selection
 still intersects current native TICKET_AVAILABLE chapters with pending Catalog
 IDs in live list order. Missing Work identity, a foreign selected source, or
-multiple selected targets for one Work stops before grant entry. For this explicit
-path, chapter/list loads once. Resolver captures the original document handle
+multiple selected targets for one Work stops before grant entry. In both Batch
+grant paths, chapter/list loads once. Resolver captures the original document handle
 before protobuf body observation and validates it within the same deadline;
 the adapter later verifies the identical Page/document/target and one-time use
 before adopting that exact snapshot. Same-URL reloads invalidate it. Runner skips
@@ -193,9 +196,44 @@ later Work snapshots. Expected unavailability during entry ends only the current
 Work. Ambiguous entry, timeout, AccessGuard rejection and interruption still stop
 the whole run. Native modal/ticket/paid-control guards and consumption evidence,
 71-hour grant persistence, pending Item state and no-content-artifact behavior
-are unchanged. Normal Batch still resolves its whole deferred pool before entry.
+are unchanged. Normal Batch preserves direct -> per-Work grant -> one replan
+direct, and its --limit remains a final capture/package slot limit. The remaining
+slots bound selected grant attempts; later Works are not visited after the
+budget is reached. Only current-run confirmed consumption feeds post-grant
+capture, never an old quota_started_at or an unavailable entry. Capture/package
+and completion occur only in the direct phases, with no repeated grant loop.
+The usual command needs no new flag. Normal Batch also prints each Work result
+and a final `Grant results:` list, including on failure/interruption. Explicit
+grant-only retains `Grant-only results:`. Prepare rows before the initial direct
+phase so limit/failure before grant entry reports unattempted Works accurately.
+An OK grant stays OK if later direct capture fails; ZIP/completion is independent.
 
-The CLI prints one result per planned deferred Work/resource immediately and
+Normal Batch reporting is verified on 2026-10-17 with the same labels, OK/NG/SKIP
+and unattempted rows as explicit grant-only, plus normal `grant_result` metrics.
+Local CLI/deferred tests: 134 passed, 1 preexisting Younganimal registry failure,
+0 skipped. Synthetic browser entry tests: 48 passed, 0 skipped, including both
+observed modal variants and capture failures after confirmed consumption. A
+final focused 2-case rerun proves the normal final list retains OK after capture
+failure. Direct-phase failure/limit also leaves the deferred Works explicitly
+unattempted. Ruff and whitespace checks passed. This report-only change has no
+new real-site verification; no real ticket was spent. Full suite and Research
+were not required because reporting and its CLI wiring are the changed contracts.
+
+The 2026-10-17 normal Batch change is verified by multi-Work CLI regression
+tests and synthetic browser entry tests. Both observed modal variants perform
+one list load and one ticket click through real CLI/Executor/Runner, persist
+the grant/cooldown and dispatch only the confirmed Source to post-grant direct
+capture. That browser test substitutes capture at the Executor boundary;
+viewer/pixel/ZIP behavior is outside its scope and unchanged here. Fatal entry
+or finalization failure stops subsequent Work access and the post-grant phase.
+Affected local tests: 246 passed, 1 unrelated existing Younganimal registry
+failure reproduced with the HEAD CLI; browser entry Integration: 46 passed;
+0 skipped. Ruff and whitespace checks passed. Full suite/Research were not run
+because the change is confined to deferred Batch orchestration. Live verification
+of normal Batch's new sequencing was not run and no real ticket was consumed.
+
+For both normal Batch and explicit grant-only, the CLI prints one result per
+planned deferred Work/resource immediately and
 as a final list, including on interruption. Names come from `--watchlist PATH`
 (default `watchlist.yaml`) via discovery key/site/Work key; missing or mismatched
 entries use Catalog title marked `[Catalog名]`. This does not rewrite metadata,

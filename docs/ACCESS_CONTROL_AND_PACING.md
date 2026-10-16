@@ -185,14 +185,18 @@ It:
 - does not run solely because of a local-only skip,
 - is not multiplied by candidate-internal retries.
 
-Explicit deferred grant-only runs sequence their resolver and entry by Work,
+Explicit deferred grant-only runs and normal Batch deferred grant phases sequence
+their resolver and entry by Work,
 retaining the same Page/adapter/guard from snapshot through confirmed entry.
 This is one logical operation with no inter-candidate delay or reload between
 snapshot and entry. The delay runs after cleanup and before the next Work's
 resolver. No all-Work pre-scan runs. An unavailable read-only
 resolver still establishes site-access pacing state; a local-only skipped Work
 does not add another delay. See `docs/DISCOVERY_AND_BATCH.md` for the exact
-Work sequencing and attempt-limit contract. Normal Batch sequencing is unchanged.
+Work sequencing and attempt-limit contract. Normal Batch retains direct capture,
+then the per-Work grant phase, then one post-grant direct replan. A prior direct
+attempt delays the first Work resolver; the final grant-phase site access delays
+the first post-grant direct attempt.
 
 ## 7. Shared AccessGuard
 
@@ -316,13 +320,18 @@ retry_count
 
 For resource/grant-only runs, make successful grants observable by resource where practical.
 
-Explicit deferred grant-only runs also flush `grant_result` records for each
+Explicit deferred grant-only and normal deferred Batch also flush `grant_result`
+records for each
 planned Work/resource, with its current Watchlist display label, selected source,
 OK/NG/unattempted status, reason and confirmed/false/unknown consumption. Display
 results do not change candidate counts. Print the Work result immediately and
 print the final list even on interruption; consumption-confirmed later failure
 must retain its positive consumption evidence and a failure annotation. A
-missing confirmation must never be represented as proof of no debit.
+missing confirmation must never be represented as proof of no debit. Normal
+Batch uses the heading `Grant results:` and preserves a confirmed grant result
+even if the subsequent direct capture fails; the result describes consumption,
+not capture/package completion. Works not reached because Phase A used the
+limit or stopped are also unattempted in this report.
 
 ### 8.3 Candidate fields
 

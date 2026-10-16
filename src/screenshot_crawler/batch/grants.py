@@ -1,4 +1,4 @@
-"""Work-level grant-only reporting without changing execution or output metadata."""
+"""Work-level grant reporting without changing execution or output metadata."""
 
 from __future__ import annotations
 
@@ -42,13 +42,15 @@ class _WorkGrant:
 
 
 class GrantOnlyReport:
-    """Print and flush one result per planned work/resource, including unattempted work."""
+    """Report deferred grants in normal Batch and explicit grant-only runs."""
 
     def __init__(
-        self, catalog: CatalogService, watchlist: Path, metrics: BatchMetricsWriter
+        self, catalog: CatalogService, watchlist: Path, metrics: BatchMetricsWriter,
+        *, heading: str = "Grant-only results:",
     ) -> None:
         self.catalog = catalog
         self.metrics = metrics
+        self.heading = heading
         self.targets = {target.key: target for target in WatchlistService(watchlist).list_targets()}
         self.rows: dict[tuple[int, str], _WorkGrant] = {}
         self._finalized = False
@@ -125,7 +127,7 @@ class GrantOnlyReport:
         if self._finalized:
             return
         self._finalized = True
-        print("Grant-only results:", flush=True)
+        print(self.heading, flush=True)
         for row in self.rows.values():
             if row.status == "未実行":
                 row.reason = reason

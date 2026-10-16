@@ -121,6 +121,15 @@ Status: **IMPLEMENTED**.
 - grant-only produces no content artifact and does not complete Item,
 - existing normal Batch Work Ticket flow remains unchanged.
 
+Normal deferred Batch follow-up (2026-10-17): use the same per-Work prepared
+resolver/entry as explicit grant-only. Verify multi-Work ordering, one-list-load
+handoff, local cooldown and unavailable skips, fatal stop, remaining-slot limits
+without later Work visits, and one post-grant replan containing only grants
+confirmed during the current run. Preserve direct-phase and cross-phase pacing.
+Normal Batch also uses the Work-result report/metrics: check OK/NG/local SKIP,
+unattempted limits after Phase A, fatal stop/interruption, current Watchlist labels
+and confirmed grants remaining OK after a later capture failure.
+
 Deferred grant-only follow-up (2026-10-14): sequential Work resolution/entry,
 no all-Work pre-scan, pacing after unavailable snapshots, stop visiting later
 Works at the shared selected-attempt limit, current Watchlist label reporting,

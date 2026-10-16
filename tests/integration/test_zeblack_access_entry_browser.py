@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from playwright.async_api import Page
 
 from screenshot_crawler import cli
-from screenshot_crawler.batch import BatchExecutionError, BatchExecutor, BatchPlanner
+from screenshot_crawler.batch import (
+    BatchExecutionError,
+    BatchExecutor,
+    BatchPlanner,
+    CandidateExecutionError,
+)
 from screenshot_crawler.batch.metrics import BatchMetricsWriter
 from screenshot_crawler.catalog import (
     CatalogService,
@@ -116,13 +122,18 @@ async def _install_prepared_observation(
     return navigations, observations
 
 
-@pytest.mark.parametrize("finalization_fails", [False, True])
 @pytest.mark.parametrize("free_ticket_ui", [False, True], ids=["legacy", "free_ticket"])
+@pytest.mark.parametrize("normal_batch,finalization_fails,capture_fails", [
+    (False, False, False), (False, True, False),
+    (True, False, False), (True, True, False), (True, False, True),
+], ids=["grant_only", "grant_only_finalization", "normal_batch", "normal_finalization", "normal_capture"])
 async def test_zeblack_cli_single_list_load_then_work_cooldown_without_site_access(
     browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     finalization_fails: bool,
     free_ticket_ui: bool,
+    normal_batch: bool,
+    capture_fails: bool,
 ) -> None:
     catalog, _executor, candidates = _prepared_catalog(tmp_path)
     navigations, observations = await _install_prepared_observation(
@@ -142,12 +153,14 @@ async def test_zeblack_cli_single_list_load_then_work_cooldown_without_site_acce
             return cls()
 
         async def new_page(self):
-            pages.append(browser_page)
-            assert len(pages) == 1
-            return browser_page
+            page = browser_page if not pages else await browser_page.context.new_page()
+            pages.append(page)
+            assert len(pages) <= (2 if normal_batch else 1)
+            return page
 
         async def close_page(self, page):
-            ticket_clicks.append(await page.evaluate("window.ticketClicks"))
+            if page is browser_page:
+                ticket_clicks.append(await page.evaluate("window.ticketClicks"))
             await page.close()
 
         async def close(self):
@@ -157,23 +170,44 @@ async def test_zeblack_cli_single_list_load_then_work_cooldown_without_site_acce
     monkeypatch.setattr(cli, "BatchMetricsWriter", lambda *_args, **kwargs: BatchMetricsWriter(
         tmp_path / "metrics", **kwargs
     ))
+    async def capture_new_grant(self, page, candidate, **_kwargs):
+        # This test exercises the real resolver/entry handoff. Capture itself is
+        # covered by viewer integration tests; assert Phase C only sees the grant.
+        assert normal_batch and candidate.source_id == candidates[0].source_id
+        assert candidate.access_strategy == "direct" and page is not browser_page
+        if capture_fails:
+            raise CandidateExecutionError("synthetic capture failure")
+        catalog.mark_item_completed(candidate.item_id)
+        return SimpleNamespace(archive_path=Path("synthetic.zip"), stop_reason="end")
+
+    monkeypatch.setattr(BatchExecutor, "execute_candidate", capture_new_grant)
     args = cli._parser().parse_args([
         "batch", "run", "--site", "zeblack", "--grant-only", "work_ticket",
         "--catalog", str(tmp_path / "catalog.sqlite"), "--watchlist", str(watchlist_path),
         "--env-file", str(tmp_path / "missing.env"),
     ])
+    if normal_batch:
+        args.grant_only = None
     if finalization_fails:
         def fail_finalization(*_args, **_kwargs):
             raise OSError("synthetic finalization failure")
         monkeypatch.setattr(CatalogService, "mark_crawl_run_succeeded", fail_finalization)
         with pytest.raises(BatchExecutionError, match="synthetic finalization failure"):
             await cli._run_batch_run(args)
+    elif capture_fails:
+        with pytest.raises(BatchExecutionError, match="synthetic capture failure"):
+            await cli._run_batch_run(args)
     else:
         await cli._run_batch_run(args)
     first_output = capsys.readouterr().out
     assert "OK  最新label" in first_output
+    heading = "Grant results:" if normal_batch else "Grant-only results:"
+    assert first_output.count(heading) == 1
+    assert "OK  最新label" in first_output.split(heading)[1]
     if finalization_fails:
         assert "後処理失敗" in first_output
+    elif normal_batch:
+        assert "post-grant direct" in first_output
     assert navigations == [LIST_URL]
     assert observations == [browser_page]
     assert ticket_clicks == [1]
@@ -184,13 +218,20 @@ async def test_zeblack_cli_single_list_load_then_work_cooldown_without_site_acce
     consumed_at = datetime.fromisoformat(state.last_consumed_at)
     assert catalog.get_source(candidates[0].source_id).quota_started_at == state.last_consumed_at
     assert catalog.list_artifacts() == []
-    assert all(item.status == "pending" for item in catalog.list_items())
+    assert catalog.get_item(candidates[0].item_id).status == (
+        "completed" if normal_batch and not finalization_fails and not capture_fails else "pending"
+    )
+    assert catalog.get_item(candidates[1].item_id).status == "pending"
     assert _executor.grant_only_skip_reason(candidates[1], now=consumed_at + timedelta(hours=23)) is None
+    page_count = len(pages)
+    # Test consuming entry's local gate independently of normal Batch's direct
+    # retries after a finalization failure, which legitimately remain readable.
+    args.grant_only = "work_ticket"
     await cli._run_batch_run(args)
     output = capsys.readouterr().out
     assert "SKIP  最新label" in output
     assert "次回確認可能:" in output
-    assert navigations == [LIST_URL] and len(pages) == 1 and ticket_clicks == [1]
+    assert navigations == [LIST_URL] and len(pages) == page_count and ticket_clicks == [1]
 
 
 @pytest.mark.parametrize("fault", [

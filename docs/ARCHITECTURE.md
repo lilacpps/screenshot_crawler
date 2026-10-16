@@ -126,7 +126,7 @@ ProgressStore、CrawlRun、BatchCandidate、SourceTargetのidentityとして保�
 CrawlerRunnerは`configure_run`と`configure_quota_resource`の後、最初の`page.goto()`にだけこのhookの結果を使う。
 RunnerやGeneric Batch Coreにsite名・selector・URL分岐を追加しない。
 
-明示grant-onlyのprepared entryでは、Batch Executorの有界context managerが
+明示grant-onlyと通常Batchのdeferred grantフェーズのprepared entryでは、Batch Executorの有界context managerが
 resolverとentryに同一Page・Adapter・AccessGuardを渡し、context内で一度だけ利用できる。
 Runnerは`entry_only`と借用Guardを要求し、設定・target検証後にAdapterの
 `adopt_prepared_access_entry()`で既存document/snapshotを検証して初期gotoを省略する。

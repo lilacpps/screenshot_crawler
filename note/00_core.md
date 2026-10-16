@@ -1,16 +1,62 @@
 # 00. Core 現行実装ノート
 
-## Explicit deferred grant-only sequencing and results (2026-10-14)
+## Deferred grant sequencing and results (updated 2026-10-17)
 
-`batch run --grant-only RESOURCE` / `--grant-only all` on a Policy that defers
-quota entry now group the planned pool by stable Catalog Work ID. For each Work,
+`batch run --grant-only RESOURCE` / `--grant-only all` and the grant phase of
+normal Batch on a Policy that defers quota entry group the planned pool by
+stable Catalog Work ID. For each Work,
 the CLI resolves the live target and immediately executes that single selected
 grant through the existing Executor/entry-only Runner before contacting another
 Work, using the same Page and Adapter without closing/reopening or reloading the
 list. It preserves Planner Work order and site-owned target selection. Missing
 Work identity, foreign selected IDs and multiple selected targets for one Work
-fail closed. Normal Batch's direct/grant/post-grant cycle and non-deferred site
-passes retain their previous sequencing.
+fail closed. Normal Batch keeps its initial direct phase, per-Work grant phase
+and one post-grant direct replan; non-deferred site passes keep their sequencing.
+The normal grant phase uses the same prepared helper, with no all-Work sweep or
+selected-entry reload. Only positive current-run consumption confirmations feed
+Phase C; historical quota timestamps do not qualify. Remaining final capture
+slots limit selected attempts and prevent later Work snapshots after the limit.
+Prior direct access delays the first resolver; grant-phase site access delays
+post-grant capture. Expected unavailable entry ends one Work, while fatal errors
+stop before later Works and the replan. Normal output now prints the same
+Work results with the heading `Grant results:`; explicit grant-only retains
+`Grant-only results:`. Rows are prepared before Phase A, so a direct-phase limit
+or error reports the unvisited grants as unattempted. The report counts grants
+independently of capture/package completion: confirmed grants stay OK after a
+post-grant capture failure. Existing metrics now include normal `grant_result`
+records as well as entry attempts and observed consumption.
+
+The reporting follow-up on 2026-10-17 reuses `GrantOnlyReport` with a configurable
+heading; it does not change resolver/entry/capture order or consume additional
+resources. Normal reports cover only planned deferred Works, not all Watchlist
+entries or direct-only captures. Latest matching Watchlist labels and Catalog
+fallbacks are identical to explicit grant-only. Grant budgets use remaining
+Phase A slots when assigning `limit_reached` to unvisited rows. Validation:
+CLI/deferred reporting tests 134 passed, 1 known Younganimal registry failure
+(already reproduced with unchanged HEAD), 0 skipped; browser entry Integration
+48 passed, 0 skipped. A targeted 2-case capture-failure rerun also passed after
+strengthening the final-list assertion (46 unrelated cases deselected, not
+skipped). Tests cover unvisited rows after direct-phase failure/limit, per-Work
+outcomes/metrics, fatal entry and confirmed grants remaining OK after later
+capture/finalization failure. Ruff and whitespace checks passed. Full suite,
+Research and live verification were not run for this reporting-only follow-up;
+no real ticket was consumed.
+
+2026-10-17 validation: affected CLI/deferred-grant/Batch/Executor/Zeblack
+policy/resolver tests: 246 passed, 1 existing Younganimal registry failure,
+0 skipped. The failure (series entry expected, episode entry returned) also
+reproduces with the unchanged HEAD CLI loaded in an isolated process. Synthetic
+Zeblack browser entry Integration: 46 passed, 0 skipped, including normal Batch
+with both observed modal variants, one list load/click, grant persistence,
+post-grant direct dispatch, and consumption evidence after finalization failure.
+Multi-Work local tests cover order, remaining-slot limits, no later snapshots,
+cooldown/unavailable/missing-target handling, fatal interruption/access stops,
+and rejection of historical quota timestamps as current-run grant evidence.
+`ruff check src tests` and `git diff --check` passed. Full suite and Research
+were not run: this changes deferred CLI orchestration (currently Zeblack), with
+no Core/Runner/browser/schema/parser change. No real-site grant or capture was
+performed; the normal Batch sequencing change still needs live verification.
+CLI options, output locations and the shared CDP/profile contract are unchanged.
 
 The inter-candidate delay separates consecutive site-accessing Works after
 cleanup, even when the resolver selects nothing. There is no artificial delay
@@ -31,7 +77,7 @@ ends the current Work; ambiguous state, timeout, cancellation and access rejecti
 still stop the run. Only planned deferred Works are included, not every Watchlist
 entry or completed/active-grant Work with no deferred candidate.
 
-Results print immediately and as a final list on success, failure or interruption,
+Deferred grant results print immediately and as a final list on success, failure or interruption,
 and flush `grant_result` JSONL records without changing candidate counters. The
 grant-only Executor propagates validated positive current-attempt consumption
 in `BatchExecutionError.resource_consumed`; a later failure is OK with a failure
@@ -55,7 +101,7 @@ response metrics and rejects handles used after context exit.
 Zeblack's policy now uses the existing work resource-state table for confirmed
 consumption and a default 23-hour local negative gate; a site setting can override
 `work_ticket_cooldown_hours`. Explicit grant-only gates before Page creation,
-normal Batch filters cooling Works before its resolver, and other direct reads
+normal Batch filters cooling Works before each Work resolver, and other direct reads
 remain eligible. `grant_only_retry_at()` optionally exposes a policy-owned next
 check time for SKIP display. Expiry permits live checking but proves no ticket.
 Only confirmed consumption creates state, including after later finalization
@@ -247,9 +293,9 @@ The generic deferred path derives the resolver resource from the planned
 candidate `quota_resource`; missing or mixed deferred resources fail closed and
 no site-specific resource name is interpreted by the CLI. The resolver is a
 site access for `inter_candidate_delay_ms`: a previous site access is followed
-by a delay before resolution, resolution is followed by a delay before the
-selected grant, and a confirmed grant is followed by a delay before the
-post-grant direct phase. A resolver with no selected candidate still updates
+by a delay before resolution; the selected grant immediately reuses the same
+Page/document/Guard. Page cleanup and one delay separate Work operations and
+the post-grant direct phase. A resolver with no selected candidate still updates
 the explicit-pass pacing state, while local-only skips do not. Catalog
 schema/version and the shared browser/CDP session model are unchanged.
 Resolver navigation and protobuf body reads share one bounded observation

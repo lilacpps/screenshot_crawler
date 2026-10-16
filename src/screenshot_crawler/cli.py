@@ -1236,7 +1236,7 @@ def _apply_access_resolution(
             if candidate is not None:
                 metrics.record_local_skip(candidate, reason=reason)
     selected_ids = set(resolution.selected_source_ids)
-    if grant_report is not None and not selected_ids.issubset(
+    if not selected_ids.issubset(
         {candidate.source_id for candidate in candidates}
     ):
         raise BatchPlanningError("Deferred grant-only resolver selected a source outside its work")
@@ -1300,13 +1300,16 @@ async def _execute_deferred_grants(
     resource: str,
     inter_candidate_delay_ms: int,
     metrics: BatchMetricsWriter,
-    report: GrantOnlyReport,
+    report: GrantOnlyReport | None,
     attempt_limit: int | None,
     previous_site_access: bool = False,
+    confirmed_grants: list[BatchCandidate] | None = None,
+    phase: str | None = None,
 ) -> tuple[int, bool]:
     """Resolve and grant one work before contacting the next work."""
 
-    report.prepare(candidates, resource)
+    if report is not None:
+        report.prepare(candidates, resource)
     attempts = 0
     for group in group_grant_candidates(candidates):
         if attempt_limit is not None and attempts >= attempt_limit:
@@ -1345,17 +1348,22 @@ async def _execute_deferred_grants(
                 if not selected:
                     continue
                 processed, _continue = await _execute_batch_candidates(
-                    args, session, executor, selected, phase=f"grant-only:{resource}",
+                    args, session, executor, selected, phase=phase or f"grant-only:{resource}",
                     inter_candidate_delay_ms=inter_candidate_delay_ms,
                     metrics=metrics, grant_only=True, attempt_limit=1, grant_report=report,
                     prepared_access=prepared,
+                    confirmed_grants=confirmed_grants,
                 )
             attempts += processed
             # Expected resource unavailability ends only this work. Fatal access
             # errors and ambiguous entry still propagate and stop the whole run.
         except BaseException as exc:
             interrupted = isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError))
-            if not report.has_result(group[0]) and (site_operation_started or not interrupted):
+            if (
+                report is not None
+                and not report.has_result(group[0])
+                and (site_operation_started or not interrupted)
+            ):
                 report.failure(
                     selected[0] if len(selected) == 1 else group[0], exc,
                     selected=len(selected) == 1,
@@ -1494,11 +1502,19 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     primary_error: BaseException | None = None
     grant_report: GrantOnlyReport | None = None
     grant_attempts = 0
+    grant_attempt_limit = limit
     try:
         if defer_quota and grant_only is not None:
             grant_report = GrantOnlyReport(catalog, args.watchlist, metrics)
             if not grant_only_all:
                 grant_report.prepare(candidates, grant_only)
+        elif has_deferred_normal_work:
+            if deferred_resource is None:
+                raise BatchPlanningError("Deferred quota candidates have no access resource")
+            grant_report = GrantOnlyReport(
+                catalog, args.watchlist, metrics, heading="Grant results:"
+            )
+            grant_report.prepare(deferred_candidates, deferred_resource)
         values = read_env_file(args.env_file) if args.env_file.is_file() else {}
         endpoint = resolve_cdp_endpoint(
             site=args.site,
@@ -1616,74 +1632,55 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             remaining_limit = (
                 None if limit is None else max(0, limit - phase_a_completed)
             )
+            grant_attempt_limit = remaining_limit
             if should_continue and remaining_limit != 0 and deferred_candidates:
                 if deferred_resource is None:
                     raise BatchPlanningError(
                         "Deferred quota candidates have no access resource"
                     )
-                selected = await _resolve_access_resource_candidates(
-                    session,
-                    executor,
-                    deferred_candidates,
-                    resource=deferred_resource,
-                    delay_before_first_ms=(
-                        runtime_settings.inter_candidate_delay_ms
-                        if _phase_a_processed > 0
-                        else None
-                    ),
-                    metrics=metrics,
+                print(f"Batch phase: {args.site} grant-access; selection=one work at a time")
+                confirmed_grants: list[BatchCandidate] = []
+                _grant_processed, grant_had_site_access = await _execute_deferred_grants(
+                    args, session, executor, deferred_candidates, resource=deferred_resource,
+                    inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                    metrics=metrics, report=grant_report, attempt_limit=remaining_limit,
+                    previous_site_access=_phase_a_processed > 0,
+                    confirmed_grants=confirmed_grants, phase=f"{args.site} grant-access",
                 )
-                if selected:
-                    print(f"Batch phase: {args.site} grant-access")
-                    grant_processed, _grant_should_continue = await _execute_batch_candidates(
-                        args,
-                        session,
-                        executor,
-                        selected,
-                        phase=f"{args.site} grant-access",
-                        inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
-                        delay_before_first_ms=runtime_settings.inter_candidate_delay_ms,
-                        metrics=metrics,
-                        grant_only=True,
-                        attempt_limit=remaining_limit,
+                grant_attempts = _grant_processed
+                if confirmed_grants:
+                    granted_source_ids = {candidate.source_id for candidate in confirmed_grants}
+                    post_plan = planner.plan(site=args.site)
+                    post_candidates = [
+                        candidate
+                        for candidate in post_plan.candidates
+                        if candidate.access_strategy == "direct"
+                        and candidate.source_id in granted_source_ids
+                    ]
+                    post_completed = _completed_candidate_count(catalog, candidates)
+                    post_remaining_limit = (
+                        None
+                        if limit is None
+                        else max(0, limit - post_completed)
                     )
-                    granted_source_ids = {
-                        candidate.source_id
-                        for candidate in selected
-                        if catalog.get_source(candidate.source_id).quota_started_at is not None
-                    }
-                    if granted_source_ids:
-                        post_plan = planner.plan(site=args.site)
-                        post_candidates = [
-                            candidate
-                            for candidate in post_plan.candidates
-                            if candidate.access_strategy == "direct"
-                            and candidate.source_id in granted_source_ids
-                        ]
-                        post_completed = _completed_candidate_count(catalog, candidates)
-                        post_remaining_limit = (
-                            None
-                            if limit is None
-                            else max(0, limit - post_completed)
+                    if post_remaining_limit != 0 and post_candidates:
+                        if post_remaining_limit is not None:
+                            post_candidates = post_candidates[:post_remaining_limit]
+                        print(f"Batch phase: {args.site} post-grant direct")
+                        await _execute_batch_candidates(
+                            args,
+                            session,
+                            executor,
+                            post_candidates,
+                            phase=f"{args.site} post-grant direct",
+                            inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
+                            delay_before_first_ms=(
+                                runtime_settings.inter_candidate_delay_ms
+                                if grant_had_site_access
+                                else None
+                            ),
+                            metrics=metrics,
                         )
-                        if post_remaining_limit != 0 and post_candidates:
-                            if post_remaining_limit is not None:
-                                post_candidates = post_candidates[:post_remaining_limit]
-                            print(f"Batch phase: {args.site} post-grant direct")
-                            await _execute_batch_candidates(
-                                args,
-                                session,
-                                executor,
-                                post_candidates,
-                                phase=f"{args.site} post-grant direct",
-                                inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
-                                delay_before_first_ms=(
-                                    runtime_settings.inter_candidate_delay_ms
-                                    if grant_processed > 0
-                                    else None
-                                ),
-                                metrics=metrics,
-                            )
         else:
             initial_complete = len(candidates) == len(plan.candidates)
             processed, should_continue = await _execute_batch_candidates(
@@ -1771,7 +1768,9 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         if grant_report is not None:
             grant_report.finish(reason=(
                 "stopped" if primary_error is not None
-                else "limit_reached" if limit is not None and grant_attempts >= limit
+                else "limit_reached" if (
+                    grant_attempt_limit is not None and grant_attempts >= grant_attempt_limit
+                )
                 else "not_started"
             ))
         cleanup_interruption: BatchInterruptedError | None = None
@@ -1832,6 +1831,7 @@ async def _execute_batch_candidates(
     attempt_limit: int | None = None,
     grant_report: GrantOnlyReport | None = None,
     prepared_access: PreparedAccessResource | None = None,
+    confirmed_grants: list[BatchCandidate] | None = None,
 ) -> tuple[int, bool]:
     """Execute a sequential resource phase; return attempts and continue flag."""
 
@@ -1891,6 +1891,8 @@ async def _execute_batch_candidates(
                     **({"prepared_access": prepared_access} if prepared_access is not None else {}),
                 )
                 print(f"  grant confirmed: {result.resource}")
+                if confirmed_grants is not None and result.resource_consumed is True:
+                    confirmed_grants.append(candidate)
                 if grant_report is not None:
                     grant_report.record(
                         candidate, status="OK", reason="チケット使用確認済み", resource_consumed=True

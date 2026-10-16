@@ -39,7 +39,7 @@ from screenshot_crawler.site_policies import SitePolicyRegistry, ZeblackSitePoli
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
-@pytest.mark.parametrize("resource", ["work_ticket", "all"])
+@pytest.mark.parametrize("resource", ["work_ticket", "all", "normal"])
 @pytest.mark.parametrize("scenario", [
     "success", "limit", "unavailable", "missing", "local_skip", "entry_unavailable",
     "resolver_failure", "entry_failure", "consumed_failure", "interrupted", "access_stop",
@@ -58,6 +58,7 @@ async def test_deferred_grant_run_is_sequential_and_reports_each_work(
     watchlist_path = tmp_path / "watchlist.yaml"
     watchlist = WatchlistService(watchlist_path)
     events: list[str] = []
+    crawled: list[int] = []
     for work_index in range(1, 4):
         work = catalog.create_work(WorkInput(work_key=f"work-{work_index}", title=f"旧名{work_index}"))
         watchlist.add(
@@ -166,7 +167,19 @@ async def test_deferred_grant_run_is_sequential_and_reports_each_work(
                     raise BatchExecutionError("fatal access stop", access_stop=AccessStopError(
                         reason="http_429", site="zeblack", url=candidate.locator, status=429,
                     ))
+            if resource == "normal":
+                catalog.record_quota_access(
+                    candidate.source_id, quota_started_at=datetime.now(UTC),
+                    access_granted_until=datetime.now(UTC) + timedelta(hours=71),
+                )
             return SimpleNamespace(resource="work_ticket", resource_consumed=True, stop_reason="entry_confirmed")
+
+        async def execute_candidate(self, _page: object, candidate: object, **_kwargs: object):
+            assert candidate.access_strategy == "direct"
+            events.append(f"crawl:{candidate.work_id}")
+            crawled.append(candidate.work_id)
+            catalog.mark_item_completed(candidate.item_id)
+            return SimpleNamespace(archive_path=Path("fake.zip"), stop_reason="end")
 
     monkeypatch.setattr(cli, "BrowserSession", Session)
     monkeypatch.setattr(cli, "BatchExecutor", Executor)
@@ -181,9 +194,18 @@ async def test_deferred_grant_run_is_sequential_and_reports_each_work(
     monkeypatch.setattr(
         "screenshot_crawler.site_adapters.zeblack.access_resolver.observe_zeblack_chapter_list", observe
     )
-    argv = ["batch", "run", "--site", "zeblack", "--grant-only", resource,
+    argv = ["batch", "run", "--site", "zeblack",
             "--catalog", str(catalog_path), "--watchlist", str(watchlist_path),
             "--env-file", str(tmp_path / "missing.env")]
+    if resource != "normal":
+        argv.extend(["--grant-only", resource])
+    elif scenario == "entry_unavailable":
+        # A historical consumption timestamp must not trigger post-grant capture
+        # when this run did not confirm any consumption for that Work.
+        catalog.record_quota_access(
+            4, quota_started_at=datetime.now(UTC) - timedelta(days=5),
+            access_granted_until=datetime.now(UTC) - timedelta(days=2),
+        )
     if scenario == "limit":
         argv.extend(["--limit", "1"])
     args = cli._parser().parse_args(argv)
@@ -199,6 +221,59 @@ async def test_deferred_grant_run_is_sequential_and_reports_each_work(
         await cli._run_batch_run(args)
 
     output = capsys.readouterr().out
+    if resource == "normal":
+        assert "Grant-only results:" not in output
+        assert output.count("Grant results:") == 1
+        summary = output.split("Grant results:")[1]
+        assert "OK  最新作品1  第2話" in summary and "旧名" not in summary
+        records = [json.loads(line) for line in next((tmp_path / "metrics").glob("*.jsonl")).read_text(
+            encoding="utf-8"
+        ).splitlines()]
+        results = [record for record in records if record["type"] == "grant_result"]
+        assert len(results) == 3 and records[-1]["type"] == "batch_summary"
+        assert results[0]["label"] == "最新作品1" and results[0]["resource_consumed"] is True
+        first = ["new", "resolve:1", "grant:1", "close"]
+        assert events[:len(first)] == first
+        assert events[-1] == "disconnect"
+        if scenario == "limit":
+            assert "resolve:2" not in events and "resolve:3" not in events
+            assert crawled == [1]
+            assert all(row["status"] == "未実行" and row["reason"] == "limit_reached"
+                       and row["source_id"] is None for row in results[1:])
+        elif fatal:
+            assert "resolve:3" not in events
+            assert crawled == []
+            expected = (
+                "OK" if scenario == "consumed_failure"
+                else "未実行" if scenario == "interrupted_wait" else "NG"
+            )
+            assert results[1]["status"] == expected
+            assert results[1]["resource_consumed"] is (True if scenario == "consumed_failure" else None)
+            assert results[2]["status"] == "未実行" and results[2]["reason"] == "stopped"
+        else:
+            if scenario != "local_skip":
+                assert events.index("grant:1") < events.index("resolve:2")
+            assert events.index("grant:3") < events.index("crawl:1")
+            assert crawled == ([1, 2, 3] if scenario == "success" else [1, 3])
+            assert results[1]["status"] == (
+                "OK" if scenario == "success" else "SKIP" if scenario == "local_skip" else "NG"
+            )
+            assert results[2]["status"] == "OK"
+            if scenario in {"unavailable", "missing", "local_skip"}:
+                assert "grant:2" not in events
+                assert results[1]["source_id"] is None
+        # Each site-accessing Work closes its resolver Page before one pacing
+        # delay and the next resolver. Post-grant crawl also starts after a delay.
+        for index, event in enumerate(events):
+            if event.startswith("resolve:"):
+                assert events[index - 1] == "new"
+                if event != "resolve:1":
+                    assert events[index - 3:index] == ["close", "sleep", "new"]
+        if crawled:
+            start = events.index("crawl:1")
+            assert events[start - 3:start] == ["close", "sleep", "new"]
+        assert len([item for item in catalog.list_items() if item.status == "completed"]) == len(crawled)
+        return
     assert output.count("Grant-only results:") == 1
     summary = output.split("Grant-only results:")[1]
     assert "OK  最新作品1  第2話" in summary
