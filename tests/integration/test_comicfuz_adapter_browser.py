@@ -105,6 +105,10 @@ def _viewer_html(
     transition_overlap_new_count: int = 1,
     persistent_transition_overlap: bool = False,
     transition_overlap_variant: str = "valid",
+    extra_tail: bool = False,
+    latest_end: str = "none",
+    stuck_extra_tail: bool = False,
+    native_subtitle: str = "",
 ) -> str:
     encoded = base64.b64encode(jpeg).decode("ascii")
     next_data = {
@@ -115,12 +119,15 @@ def _viewer_html(
                 "data": {
                     "mangaId": "1970",
                     "chapterMainName": EPISODE_TITLE,
+                    "chapterSubName": native_subtitle,
                     "mangaName": "Verified ComicFUZ Work",
                 },
             }
         },
     }
     next_data_json = json.dumps(next_data, ensure_ascii=False).replace("</", "<\\/")
+    if native_subtitle and viewer_title == EPISODE_TITLE:
+        viewer_title = f"{EPISODE_TITLE}　{native_subtitle}"
     sign_in_link = '<a href="/account/signin">Sign in</a>' if sign_in else ""
     second_left = "1279" if clipped_second_page else "355"
     first_page_blank_js = (
@@ -149,8 +156,10 @@ def _viewer_html(
             image_groups[last_state].append(body_descriptor_count)
         if not first_pair_mode and missing_second_page:
             image_groups[1] = [1]
+        if extra_tail:
+            image_groups[max(image_groups) + 1] = [body_descriptor_count + 1, body_descriptor_count + 2]
     terminal_state = max(image_groups) + 1 if image_groups else 0
-    native_page_count = body_descriptor_count + 3
+    native_page_count = body_descriptor_count + (5 if extra_tail else 3)
     counter_values = [
         f"{group[0] + 1}/{native_page_count}" for _state, group in image_groups.items()
     ] + [f"{native_page_count}/{native_page_count}"]
@@ -182,6 +191,10 @@ def _viewer_html(
         pageDescriptors.push(
           {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=999'}}}},
           {{googleAds:{{}}}}, {{lastPage:{{}}}}
+        );
+        if ({str(extra_tail).lower()}) pageDescriptors.splice(pageDescriptors.length - 2, 0,
+          {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true}}}},
+          {{image:{{imageWidth:96,imageHeight:144,isExtraPage:true,urlScheme:'krr://manga?id=998'}}}}
         );
         const viewerData = {{pages:pageDescriptors}};
         if ({str(first_page_blank_inherited).lower()})
@@ -263,6 +276,23 @@ def _viewer_html(
             }});
           }} else if ({str(unknown_tail).lower()}) {{
             reader.innerHTML = `<h2 class="title_detail_viewer__detail__info__viewerTitle__GrN4D">{viewer_title}</h2>`;
+          }} else if ('{latest_end}' !== 'none') {{
+            reader.innerHTML = `<div class="ChapterLastPage_lastpage__iBifl" style="position:fixed;left:200px;top:30px;width:500px;height:650px">
+              <div class="ChapterLastPage_lastpage__actions__3actions__CLl36">
+                <a><p class="ChapterLastPage_action__text__HOiTZ">お気に入り</p></a>
+                <a><p class="ChapterLastPage_action__text__HOiTZ">いいね</p></a>
+                <a><p class="ChapterLastPage_action__text__HOiTZ">コメント</p></a>
+              </div>
+              <div class="ChapterLastPage_lastpagetitle__INDwU">この作品を読んだあなたにおすすめ</div>
+            </div><h2 class="title_detail_viewer__detail__info__viewerTitle__GrN4D" style="position:absolute;top:800px">{viewer_title}</h2>`;
+            if ('{latest_end}' === 'missing_actions')
+              reader.querySelector('[class*="3actions"]').remove();
+            if ('{latest_end}' === 'wrong_labels')
+              reader.querySelector('p').textContent = 'other';
+            if ('{latest_end}' === 'hidden_recommendations')
+              reader.querySelector('[class*="lastpagetitle"]').style.display = 'none';
+            if ('{latest_end}' === 'duplicate_title')
+              reader.append(reader.querySelector('h2').cloneNode(true));
           }} else {{
             reader.innerHTML = `<div class="ChapterLastPage_lastpage__iBifl" style="position:fixed;left:200px;top:30px;width:500px;height:650px">
               <div class="ChapterLastPage_lastpage__nextChapter__6t7yj" style="position:absolute;left:15px;top:260px;width:470px;height:260px">
@@ -286,7 +316,9 @@ def _viewer_html(
               history.replaceState(null, '', '/manga/viewer/999');
               return;
             }}
-            event.preventDefault(); state=Math.min({terminal_state},state+1);
+            window.leftTurns = (window.leftTurns || 0) + 1;
+            event.preventDefault(); state=Math.min(
+              {terminal_state - 1 if stuck_extra_tail else terminal_state},state+1);
             counter.textContent = counterValues[state];
             if (state === transitionOverlapState) {{
               showOverlap();
@@ -335,6 +367,10 @@ async def _route_comicfuz(
     transition_overlap_new_count: int = 1,
     persistent_transition_overlap: bool = False,
     transition_overlap_variant: str = "valid",
+    extra_tail: bool = False,
+    latest_end: str = "none",
+    stuck_extra_tail: bool = False,
+    native_subtitle: str = "",
 ):
     body = _work_html(free=free)
     image = _viewer_html(
@@ -359,6 +395,10 @@ async def _route_comicfuz(
         transition_overlap_new_count=transition_overlap_new_count,
         persistent_transition_overlap=persistent_transition_overlap,
         transition_overlap_variant=transition_overlap_variant,
+        extra_tail=extra_tail,
+        latest_end=latest_end,
+        stuck_extra_tail=stuck_extra_tail,
+        native_subtitle=native_subtitle,
     )
     seen: list[str] = []
 
@@ -433,8 +473,11 @@ async def _comicfuz_batch_fixture(
     return catalog, discovery, target, plan, candidate, executor, seen
 
 
+@pytest.mark.parametrize(("extra_tail", "latest_end"), [
+    (False, "none"), (True, "none"), (True, "valid"), (False, "valid"),
+])
 async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_artifact(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, extra_tail: bool, latest_end: str
 ) -> None:
     (
         catalog,
@@ -444,7 +487,10 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
         candidate,
         executor,
         _seen,
-    ) = await _comicfuz_batch_fixture(browser_page, tmp_path)
+    ) = await _comicfuz_batch_fixture(
+        browser_page, tmp_path, extra_tail=extra_tail, latest_end=latest_end,
+        native_subtitle="Fixture subtitle" if latest_end == "valid" else "",
+    )
 
     result = await executor.execute_candidate(
         browser_page,
@@ -478,7 +524,10 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     assert len(plan.candidates) == 1
 
 
-@pytest.mark.parametrize("failure", ["stale_free", "route_drift", "unknown_tail"])
+@pytest.mark.parametrize("failure", [
+    "stale_free", "route_drift", "unknown_tail", "stuck_extra_tail",
+    "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
+])
 async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
     browser_page, tmp_path: Path, failure: str
 ) -> None:
@@ -490,6 +539,12 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
             tmp_path,
             unknown_tail=unknown_tail,
             route_change_on_first_turn=route_change,
+            extra_tail=failure not in {"stale_free", "route_drift", "unknown_tail"},
+            stuck_extra_tail=failure == "stuck_extra_tail",
+            latest_end=failure if failure in {
+                "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
+            } else "none",
+            page_change_timeout_ms=700,
         )
     )
 
@@ -518,6 +573,8 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
     if failure == "stale_free":
         assert seen is not None
         assert f"{BASE}/manga/viewer/80641" not in seen
+    if failure == "stuck_extra_tail":
+        assert await browser_page.evaluate("window.leftTurns") == 3
 
 
 async def test_comicfuz_batch_packaging_failure_keeps_item_pending(
@@ -846,14 +903,18 @@ async def test_comicfuz_restore_at_spread_rewinds_to_page_zero(browser_page) -> 
     assert tuple(row["number"] for row in rows) == (0,)
 
 
+@pytest.mark.parametrize("extra_tail", [False, True])
 async def test_comicfuz_native_nonblank_first_page_captures_verified_pair_to_end(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, extra_tail: bool
 ) -> None:
     seen = await _route_comicfuz(
         browser_page,
         first_page_blank=False,
         first_page_blank_inherited=True,
         first_mode_body_page_count=15,
+        extra_tail=extra_tail,
+        latest_end="valid" if extra_tail else "none",
+        native_subtitle="Fixture subtitle" if extra_tail else "",
     )
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
     config = RunConfig(
@@ -1064,7 +1125,7 @@ async def test_comicfuz_established_manifest_disappearance_fails_closed(browser_
         await adapter.detect_state(browser_page)
 
 
-@pytest.mark.parametrize("drift", ["anonymous", "title"])
+@pytest.mark.parametrize("drift", ["anonymous", "title", "subtitle", "malformed_subtitle"])
 async def test_comicfuz_identity_drift_fails_closed(browser_page, drift: str) -> None:
     await _route_comicfuz(browser_page)
     adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
@@ -1080,13 +1141,46 @@ async def test_comicfuz_identity_drift_fails_closed(browser_page, drift: str) ->
             """() => document.body.insertAdjacentHTML('beforeend',
               '<a href="/account/signout">Sign out</a>')"""
         )
-    else:
+    elif drift == "title":
         await browser_page.locator(adapter.viewer_title_selector).evaluate(
             "element => element.textContent = 'different episode'"
+        )
+    else:
+        await browser_page.evaluate(
+            """value => {
+              const node = document.querySelector('#__NEXT_DATA__');
+              const data = JSON.parse(node.textContent);
+              data.props.pageProps.data.chapterSubName = value;
+              node.textContent = JSON.stringify(data);
+            }""",
+            1 if drift == "malformed_subtitle" else "different subtitle",
         )
 
     with pytest.raises(UnknownPageStateError):
         await adapter.detect_state(browser_page)
+
+
+async def test_comicfuz_extra_tail_cannot_skip_uncaptured_body_or_be_captured(browser_page) -> None:
+    await _route_comicfuz(browser_page, extra_tail=True)
+    adapter = ComicFuzAdapter(preflight_work_url=WORK_URL)
+    await browser_page.goto(WORK_URL, wait_until="commit")
+    await adapter.configure_target_identity("1970:80641", "comicfuz:1970")
+    adapter.resolve_initial_navigation_url(VIEWER_URL)
+    await adapter.initialize(browser_page)
+    await adapter.capture_page(browser_page)
+    # Skip the final body+extra spread, simulating unexpected viewer drift.
+    await browser_page.keyboard.press("ArrowLeft")
+    await browser_page.wait_for_function("document.querySelector('img').alt === 'page_1'")
+    await browser_page.keyboard.press("ArrowLeft")
+    await browser_page.wait_for_function("document.querySelector('img').alt === 'page_3'")
+    with pytest.raises(UnknownPageStateError, match="extra tail is out of sequence"):
+        await adapter.detect_state(browser_page)
+    with pytest.raises(UnknownPageStateError, match="no verified body"):
+        await adapter.capture_page(browser_page)
+    with pytest.raises(UnknownPageStateError):
+        await adapter.go_next(browser_page)
+    assert adapter._captured_indices == [0]
+    assert await browser_page.evaluate("window.leftTurns") == 2
 
 
 async def test_comicfuz_other_episode_route_fails_closed(browser_page) -> None:
