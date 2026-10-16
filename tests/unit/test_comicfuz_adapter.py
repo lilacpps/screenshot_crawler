@@ -46,6 +46,10 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
     pages = [image.copy(), image.copy(), extra, {"role": "google_ads"}, {"role": "last_page"}]
 
     assert _classify_viewer_pages(pages) == ((0, 1), 2)
+    unlinked_extra = {**extra, "has_link": False}
+    triple = [image.copy(), image.copy(), extra, unlinked_extra, extra.copy(),
+              {"role": "google_ads"}, {"role": "last_page"}]
+    assert _classify_viewer_pages(triple) == ((0, 1), 2)
 
     invalid = [
         [image.copy(), {**image, "has_link": True}, {"role": "google_ads"}, {"role": "last_page"}],
@@ -54,6 +58,11 @@ def test_comicfuz_page_roles_accept_only_observed_body_extra_tail_shape() -> Non
         [image.copy(), extra, {"role": "last_page"}, {"role": "google_ads"}],
         [image.copy(), {**extra, "link_metadata_valid": False}, {"role": "google_ads"}, {"role": "last_page"}],
         [image.copy(), extra, {"role": "unknown"}, {"role": "last_page"}],
+        [image.copy(), unlinked_extra, {"role": "google_ads"}, {"role": "last_page"}],
+        [image.copy(), extra, unlinked_extra, {"role": "google_ads"}, {"role": "last_page"}],
+        [image.copy(), extra, extra, extra, {"role": "google_ads"}, {"role": "last_page"}],
+        [image.copy(), extra, unlinked_extra, image.copy(),
+         {"role": "google_ads"}, {"role": "last_page"}],
     ]
     for candidate in invalid:
         with pytest.raises(UnknownPageStateError):

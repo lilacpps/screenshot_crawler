@@ -58,7 +58,7 @@ def _cleanup_observer_on_failure(
 
 
 def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int]:
-    """Accept only the live-verified body-prefix / linked-extra / reader-tail shape."""
+    """Accept only the live-verified body-prefix / extra / reader-tail shapes."""
 
     if not isinstance(pages, list) or len(pages) < 4:
         raise UnknownPageStateError("ComicFUZ viewer page-role manifest is incomplete")
@@ -83,6 +83,8 @@ def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int]:
                 raise UnknownPageStateError("ComicFUZ image-role metadata is unsupported")
             if extra is True and linked:
                 roles.append("linked_extra")
+            elif extra is True and not linked:
+                roles.append("unlinked_extra")
             elif extra in {None, False} and not linked:
                 roles.append("body_candidate")
             else:
@@ -93,12 +95,15 @@ def _classify_viewer_pages(pages: object) -> tuple[tuple[int, ...], int]:
             raise UnknownPageStateError("ComicFUZ viewer contains an unsupported page role")
 
     extra_positions = [index for index, role in enumerate(roles) if role == "linked_extra"]
-    if len(extra_positions) != 1:
-        raise UnknownPageStateError("ComicFUZ viewer must expose one linked extra-page marker")
+    if not extra_positions:
+        raise UnknownPageStateError("ComicFUZ viewer must expose a linked extra-page marker")
     extra_index = extra_positions[0]
     if extra_index < 1 or roles[:extra_index] != ["body_candidate"] * extra_index:
         raise UnknownPageStateError("ComicFUZ body pages are not a contiguous unlinked prefix")
-    if roles[extra_index + 1 :] != ["google_ads", "last_page"]:
+    if roles[extra_index:] not in (
+        ["linked_extra", "google_ads", "last_page"],
+        ["linked_extra", "unlinked_extra", "linked_extra", "google_ads", "last_page"],
+    ):
         raise UnknownPageStateError("ComicFUZ viewer tail differs from the verified layout")
     return tuple(range(extra_index)), extra_index
 
@@ -129,12 +134,14 @@ class ComicFuzAdapter(SiteAdapter):
         self._access_strategy: AccessStrategy = "auto"
         self._episode_title: str | None = None
         self._expected_episode_title: str | None = None
+        self._expected_viewer_title: str | None = None
         self._output_title: str | None = None
         self._viewer_pages: list[dict[str, Any]] | None = None
         self._body_page_indices: tuple[int, ...] = ()
         self._is_first_page_blank: bool | None = None
         self._initial_body_indices: tuple[int, ...] = ()
         self._extra_page_index: int | None = None
+        self._extra_tail_advanced = False
         self._source_responses: OrderedDict[str, object] = OrderedDict()
         self._source_response_tasks: OrderedDict[str, asyncio.Task[bytes | None]] = OrderedDict()
         self._bound_page: Page | None = None
@@ -311,10 +318,12 @@ class ComicFuzAdapter(SiteAdapter):
         self._last_captured_proofs = {}
         self._last_rendered_group = ()
         self._viewer_pages = None
+        self._expected_viewer_title = None
         self._body_page_indices = ()
         self._is_first_page_blank = None
         self._initial_body_indices = ()
         self._extra_page_index = None
+        self._extra_tail_advanced = False
         self._advance_pending = False
         self._ended = False
         self._initialized = False
@@ -368,7 +377,7 @@ class ComicFuzAdapter(SiteAdapter):
         self._episode_title = await self._read_episode_title(page)
         if not self._episode_title:
             raise UnknownPageStateError("ComicFUZ episode title is unavailable")
-        if self._episode_title != expected_episode_title:
+        if self._episode_title != self._expected_viewer_title:
             raise UnknownPageStateError(
                 "ComicFUZ reader title does not match its freshly verified listing row"
             )
@@ -401,6 +410,11 @@ class ComicFuzAdapter(SiteAdapter):
             actual_rendered = tuple(int(row["number"]) for row in rows)
             body_rows = self._body_rows(rows)
             actual_body = tuple(int(row["number"]) for row in body_rows)
+            if not body_rows:
+                self._require_extra_tail_sequence(rows)
+                if self._extra_tail_advanced:
+                    raise UnknownPageStateError("ComicFUZ extra tail repeated after advance")
+                return PageState.AD
             if (
                 self._captured_indices
                 and actual_rendered == self._last_rendered_group
@@ -483,8 +497,18 @@ class ComicFuzAdapter(SiteAdapter):
 
     async def go_next(self, page: Page) -> None:
         state = await self.detect_state(page)
-        if state is not PageState.CONTENT:
-            raise UnknownPageStateError("ComicFUZ next-page action requires a ready body spread")
+        if state not in {PageState.CONTENT, PageState.AD}:
+            raise UnknownPageStateError("ComicFUZ next-page action requires a verified spread")
+        if state is PageState.AD:
+            rows = await self._active_page_rows(page)
+            self._require_extra_tail_sequence(rows)
+            self._extra_tail_advanced = True
+            self._last_rendered_group = tuple(int(row["number"]) for row in rows)
+            self._last_captured_proofs = {
+                int(row["number"]): (
+                    str(row["src"]), int(row["naturalWidth"]), int(row["naturalHeight"])
+                ) for row in rows
+            }
         self._advance_pending = True
         await page.keyboard.press("ArrowLeft")
 
@@ -524,6 +548,20 @@ class ComicFuzAdapter(SiteAdapter):
                 if all(row["ready"] for row in rows):
                     signature = self._body_signature(rows)
                     body_rows = self._body_rows(rows)
+                    if not body_rows:
+                        self._require_extra_tail_sequence(rows)
+                        if not self._extra_tail_advanced:
+                            stable_checks = stable_checks + 1 if signature == previous_signature else 0
+                            if stable_checks >= self.render_stable_checks:
+                                self._advance_pending = False
+                                return
+                        else:
+                            # One extra-only spread is allowed, with one page turn.
+                            # A stale/repeated tail must time out, never turn again.
+                            stable_checks = 0
+                        previous_signature = signature
+                        await page.wait_for_timeout(self.render_poll_ms)
+                        continue
                     current = self._identity_for_rows(body_rows)
                     actual_body = tuple(int(row["number"]) for row in body_rows)
                     expected_body = tuple(
@@ -777,6 +815,14 @@ class ComicFuzAdapter(SiteAdapter):
             raise UnknownPageStateError(
                 "ComicFUZ first-party work or episode metadata differs from the free listing row"
             )
+        subtitle = snapshot.get("episode_subtitle")
+        if not isinstance(subtitle, str):
+            raise UnknownPageStateError("ComicFUZ first-party episode subtitle is malformed")
+        expected_viewer_title = " ".join(f"{self._expected_episode_title} {subtitle}".split())
+        if self._expected_viewer_title is None:
+            self._expected_viewer_title = expected_viewer_title
+        elif self._expected_viewer_title != expected_viewer_title:
+            raise UnknownPageStateError("ComicFUZ first-party episode subtitle changed")
         work_title = snapshot.get("work_title")
         if not isinstance(work_title, str) or not work_title.strip():
             raise UnknownPageStateError("ComicFUZ first-party work title is unavailable")
@@ -886,6 +932,8 @@ class ComicFuzAdapter(SiteAdapter):
                         chapter_id: String(props.chapterId ?? ''),
                         work_id: String(data.mangaId ?? ''),
                         episode_title: typeof data.chapterMainName === 'string' ? data.chapterMainName.trim() : '',
+                        episode_subtitle: data.chapterSubName == null ? '' : (
+                          typeof data.chapterSubName === 'string' ? data.chapterSubName.trim() : null),
                         work_title: typeof data.mangaName === 'string' ? data.mangaName.trim() : '',
                         viewer_chapter_id: viewerChapterId,
                         is_first_page_blank: isFirstPageBlank,
@@ -1070,8 +1118,12 @@ class ComicFuzAdapter(SiteAdapter):
             slot = self._viewer_pages[number]
             if number in self._body_page_indices:
                 row["role"] = "body"
-            elif number == self._extra_page_index:
-                row["role"] = "linked_extra"
+            elif (
+                self._extra_page_index is not None
+                and self._extra_page_index <= number < len(self._viewer_pages) - 2
+                and slot.get("is_extra") is True
+            ):
+                row["role"] = "linked_extra" if slot.get("has_link") else "unlinked_extra"
             else:
                 raise UnknownPageStateError("ComicFUZ non-image tail slot appeared as a page image")
             row["descriptorWidth"] = slot.get("width")
@@ -1095,6 +1147,23 @@ class ComicFuzAdapter(SiteAdapter):
     @staticmethod
     def _body_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [row for row in rows if row.get("role") == "body"]
+
+    def _require_extra_tail_sequence(self, rows: list[dict[str, Any]]) -> None:
+        """Bind the observed extra-only pair to an entirely captured body prefix."""
+        extra = self._extra_page_index
+        numbers = tuple(int(row["number"]) for row in rows)
+        if (
+            extra is None
+            or self._viewer_pages is None
+            or len(self._viewer_pages) != extra + 5
+            or numbers != (extra + 1, extra + 2)
+            or [row.get("role") for row in rows] != ["unlinked_extra", "linked_extra"]
+            or self._captured_indices != list(self._body_page_indices)
+            or self._last_rendered_group != (
+                numbers if self._extra_tail_advanced else (extra - 1, extra)
+            )
+        ):
+            raise UnknownPageStateError("ComicFUZ extra tail is out of sequence")
 
     def _is_pending_transition_overlap(self, rows: list[dict[str, Any]]) -> bool:
         if not self._advance_pending or len(rows) not in {3, 4}:
@@ -1213,7 +1282,7 @@ class ComicFuzAdapter(SiteAdapter):
         if len(rows) == 2 and numbers[1] != numbers[0] + 1:
             raise UnknownPageStateError("ComicFUZ spread page identities are not contiguous")
         roles = [row.get("role") for row in rows]
-        if roles not in (["body"], ["body", "body"]):
+        if roles not in (["body"], ["body", "body"], ["unlinked_extra", "linked_extra"]):
             if roles == ["body", "linked_extra"]:
                 if rows[1].get("number") != rows[0].get("number") + 1:
                     raise UnknownPageStateError(
@@ -1229,7 +1298,7 @@ class ComicFuzAdapter(SiteAdapter):
         if (
             not isinstance(row.get("number"), int)
             or not isinstance(row.get("alt"), str)
-            or row.get("role") not in {"body", "linked_extra"}
+            or row.get("role") not in {"body", "linked_extra", "unlinked_extra"}
             or float(row.get("width") or 0) <= 0
             or float(row.get("height") or 0) <= 0
         ):
@@ -1312,7 +1381,7 @@ class ComicFuzAdapter(SiteAdapter):
     async def _positive_end_panel(self, page: Page) -> dict[str, Any] | None:
         return await page.evaluate(
             """args => {
-              const visible = element => {
+              const visible = (element, inViewport = true) => {
                 if (!element || element.getClientRects().length === 0) return false;
                 for (let node = element; node; node = node.parentElement) {
                   const style = getComputedStyle(node);
@@ -1320,24 +1389,49 @@ class ComicFuzAdapter(SiteAdapter):
                       || style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
                 }
                 const r = element.getBoundingClientRect();
-                return r.width > 0 && r.height > 0 && r.right > 0 && r.left < innerWidth
-                  && r.bottom > 0 && r.top < innerHeight;
+                return r.width > 0 && r.height > 0 && (!inViewport || (
+                  r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight));
               };
               const links = [...document.querySelectorAll(args.nextSelector)]
                 .filter(a => (a.innerText || '').trim() === '次の話を読む' && visible(a));
+              if (links.length === 0) {
+                // Observed latest-episode panel: no next chapter, but a
+                // dedicated last-page root with three actions and recommendations.
+                if (document.querySelectorAll(args.nextSelector).length
+                    || document.querySelectorAll(args.panelSelector).length) return null;
+                const roots = [...document.querySelectorAll(args.rootSelector)].filter(root => {
+                  if (!visible(root)) return false;
+                  const actions = [...root.querySelectorAll(args.actionsSelector)]
+                    .filter(e => e.parentElement === root && visible(e));
+                  const recommendations = [...root.querySelectorAll(args.recommendationsSelector)]
+                    .filter(e => e.parentElement === root && visible(e));
+                  if (actions.length !== 1 || recommendations.length !== 1) return false;
+                  const labels = [...actions[0].querySelectorAll(args.actionTextSelector)]
+                    .filter(e => visible(e)).map(e => (e.innerText || '').trim());
+                  return JSON.stringify(labels) === JSON.stringify(['お気に入り','いいね','コメント'])
+                    && (recommendations[0].innerText || '').trim()
+                      .startsWith('この作品を読んだあなたにおすすめ');
+                });
+                const titles = [...document.querySelectorAll(args.titleSelector)]
+                  .filter(e => visible(e, false));
+                if (roots.length !== 1 || titles.length !== 1) return null;
+                const r = roots[0].getBoundingClientRect();
+                return {title:(titles[0].innerText || '').trim().replace(/\\s+/g, ' '),
+                  bounds:[Math.round(r.x),Math.round(r.y),Math.round(r.width),Math.round(r.height)]};
+              }
               if (links.length !== 1) return null;
               const link = links[0];
               const panel = link.parentElement;
               const root = panel?.parentElement;
               if (!panel || !panel.matches(args.panelSelector) || !root?.matches(args.rootSelector)
                   || !visible(panel) || !visible(root)) return null;
-              const titles = [...document.querySelectorAll(args.titleSelector)].filter(visible);
+              const titles = [...document.querySelectorAll(args.titleSelector)].filter(e => visible(e));
               if (titles.length !== 1) return null;
               const pr = root.getBoundingClientRect();
               const ar = link.getBoundingClientRect();
               const tr = titles[0].getBoundingClientRect();
               return {
-                title: (titles[0].innerText || '').trim(),
+                title: (titles[0].innerText || '').trim().replace(/\\s+/g, ' '),
                 bounds: [Math.round(pr.x), Math.round(pr.y), Math.round(pr.width), Math.round(pr.height),
                   Math.round(ar.x), Math.round(ar.y), Math.round(ar.width), Math.round(ar.height),
                   Math.round(tr.x), Math.round(tr.y), Math.round(tr.width), Math.round(tr.height)]
@@ -1348,6 +1442,9 @@ class ComicFuzAdapter(SiteAdapter):
                 "panelSelector": self.end_panel_selector,
                 "rootSelector": self.end_panel_root_selector,
                 "titleSelector": self.viewer_title_selector,
+                "actionsSelector": '[class*="ChapterLastPage_lastpage__actions__3actions__"]',
+                "actionTextSelector": 'p[class*="ChapterLastPage_action__text__"]',
+                "recommendationsSelector": 'div[class*="ChapterLastPage_lastpagetitle__"]',
             },
         )
 
