@@ -1724,7 +1724,11 @@ class HanayumeAdapter(SiteAdapter):
         if classes == ["mode-current", "mode-store-item-blank", "series-eplist-item"]:
             return "blank" if not rental_stats else "unknown"
         if (
-            classes == ["mode-current", "mode-read", "mode-store-item-start", "series-eplist-item"]
+            classes
+            in (
+                ["mode-current", "mode-read", "mode-store-item-start", "series-eplist-item"],
+                ["mode-current", "mode-read", "mode-store-item-blank", "series-eplist-item"],
+            )
             and len(rental_stats) == 1
             and isinstance(rental_stats[0], str)
             and "レンタル中" in rental_stats[0]
@@ -1732,6 +1736,41 @@ class HanayumeAdapter(SiteAdapter):
         ):
             return "read"
         return "unknown"
+
+    def _latest_series_ticket_target(
+        self, snapshots: tuple[object, ...], *, current_requested_at: datetime | None
+    ) -> tuple[HanayumeNativeEpisodeAccess | None, datetime | None, datetime | None]:
+        """Return the latest selected row, duplicate time, and foreign-work time."""
+
+        if self._episode_id is None or self._expected_work_id is None:
+            return None, None, None
+        target_rows: list[HanayumeNativeEpisodeAccess] = []
+        foreign_work_times: list[datetime] = []
+        for snapshot in snapshots:
+            work_id = getattr(snapshot, "work_id", None)
+            rows = getattr(snapshot, "rows", ())
+            for row in rows:
+                if getattr(row, "episode_id", None) != self._episode_id:
+                    continue
+                requested_at = getattr(row, "requested_at", None)
+                if not isinstance(requested_at, datetime):
+                    continue
+                if work_id != self._expected_work_id:
+                    foreign_work_times.append(requested_at)
+                else:
+                    target_rows.append(row)
+        latest_at = max((row.requested_at for row in target_rows), default=None)
+        latest_rows = [row for row in target_rows if row.requested_at == latest_at]
+        duplicate_at = latest_at if len(latest_rows) > 1 else None
+        latest = latest_rows[0] if len(latest_rows) == 1 else None
+        foreign_at = max(foreign_work_times, default=None)
+        if (
+            current_requested_at is not None
+            and foreign_at is not None
+            and foreign_at < current_requested_at
+        ):
+            foreign_at = None
+        return latest, duplicate_at, foreign_at
 
     def _classify_ticket_prestate(
         self,
@@ -1933,14 +1972,24 @@ class HanayumeAdapter(SiteAdapter):
                 current_observer = self._current_ticket_observer
                 if series_observer is None or current_observer is None:
                     raise UnknownPageStateError("Hanayume ticket observers are unavailable")
+                series_drained = True
+                current_drained = True
                 for observer in (series_observer, current_observer):
                     remaining = recovery_deadline - time.monotonic()
                     if remaining <= 0:
                         break
-                    await observer.wait_for_pending(min(0.05, remaining))
+                    drained = await observer.wait_for_pending(min(0.05, remaining))
+                    if observer is series_observer:
+                        series_drained = drained
+                    else:
+                        current_drained = drained
                 if time.monotonic() >= recovery_deadline:
                     break
-                if current_observer.has_pending_access(after=click_started_at):
+                if (
+                    not series_drained
+                    or not current_drained
+                    or current_observer.has_pending_access(after=click_started_at)
+                ):
                     await asyncio.sleep(
                         min(
                             TICKET_POLL_INTERVAL_SECONDS,
@@ -1949,12 +1998,24 @@ class HanayumeAdapter(SiteAdapter):
                     )
                     continue
                 current = current_observer.latest_access(after=click_started_at)
-                series_rows = _latest_native_access_by_episode(
-                    tuple(series_observer.snapshots), work_id=self._expected_work_id or ""
+                series_native, series_duplicate_at, foreign_series_at = (
+                    self._latest_series_ticket_target(
+                        tuple(series_observer.snapshots),
+                        current_requested_at=(
+                            current.native.requested_at if current is not None else None
+                        ),
+                    )
                 )
-                series_native = series_rows.get(self._episode_id or "")
                 if series_native is not None and series_native.requested_at <= click_started_at:
                     series_native = None
+                series_ambiguous_after_current = (
+                    series_duplicate_at is not None
+                    and (
+                        current is None
+                        or series_duplicate_at >= current.native.requested_at
+                    )
+                )
+                series_identity_conflict_after_current = foreign_series_at is not None
                 if current is not None and (
                     current.work_id != self._expected_work_id
                     or current.access_episode_id != self._episode_id
@@ -1977,15 +2038,7 @@ class HanayumeAdapter(SiteAdapter):
                     latest_native, latest_source = current.native, "current"
                 else:
                     latest_native, latest_source = series_native, "series"
-                remaining = recovery_deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                state = await asyncio.wait_for(
-                    self._read_ticket_entry_dom(page), timeout=remaining
-                )
-                self._validate_ticket_page_identity(state)
                 checkout_confirmed = current_observer.checkout_confirmed(after=click_started_at)
-                account_state = self._ticket_account_row_state(state)
                 current_native = current.native if current is not None else None
                 current_positive_state = (
                     current_native is not None
@@ -2011,14 +2064,45 @@ class HanayumeAdapter(SiteAdapter):
                 positive_current = (
                     before.has_access is False
                     and current_positive_state
+                    and not series_ambiguous_after_current
+                    and not series_identity_conflict_after_current
                     and (
                         (latest_source == "current" and latest_native is current_native)
-                        or (account_state == "absent" and newer_series_agrees)
+                        or newer_series_agrees
                     )
-                    and account_state in {"absent", "read"}
                 )
+                if checkout_confirmed and positive_current:
+                    assert current_native is not None
+                    expiry_candidates = [
+                        current_native.requested_at
+                        + timedelta(seconds=current_native.remaining_seconds - 1)
+                    ]
+                    if newer_series_agrees:
+                        assert series_native is not None and series_native.remaining_seconds is not None
+                        expiry_candidates.append(
+                            series_native.requested_at
+                            + timedelta(seconds=series_native.remaining_seconds - 1)
+                        )
+                    self._access_consumption = AccessConsumption(
+                        consumed=True,
+                        resource="work_ticket",
+                        consumed_at=datetime.now(UTC),
+                        access_granted_until=min(expiry_candidates),
+                    )
+                    return True
+
+                remaining = recovery_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                state = await asyncio.wait_for(
+                    self._read_ticket_entry_dom(page), timeout=remaining
+                )
+                self._validate_ticket_page_identity(state)
+                account_state = self._ticket_account_row_state(state)
                 positive_series = (
                     before.has_access is False
+                    and not series_ambiguous_after_current
+                    and not series_identity_conflict_after_current
                     and latest_source == "series"
                     and latest_native is series_native
                     and series_native is not None
@@ -2059,11 +2143,17 @@ class HanayumeAdapter(SiteAdapter):
                         or latest_native.has_access is False
                     )
                     and not (
-                        account_state == "absent"
-                        and current_positive_state
+                        current_positive_state
                         and current_native is not None
-                        and series_native is not None
-                        and series_native.requested_at > current_native.requested_at
+                        and (
+                            series_ambiguous_after_current
+                            or series_identity_conflict_after_current
+                            or (
+                                series_native is not None
+                                and series_native.requested_at > current_native.requested_at
+                                and not series_positive_state
+                            )
+                        )
                     )
                 ):
                     self._ticket_fallback_reads += 1

@@ -620,20 +620,24 @@ async def _ticket_adapter(page: Page, *, entry_only: bool) -> HanayumeAdapter:
 
 @pytest.mark.asyncio(loop_scope="module")
 @pytest.mark.parametrize("entry_only", [False, True], ids=("normal", "grant-only"))
-async def test_hanayume_ticket_entry_accepts_missing_preview_with_exact_current_api_proof(
-    browser_page: Page, entry_only: bool,
+@pytest.mark.parametrize("preview", ["absent", "present"], ids=("preview-absent", "present-blank"))
+async def test_hanayume_ticket_entry_latches_exact_current_api_proof_before_postclick_dom(
+    browser_page: Page, entry_only: bool, preview: str,
 ) -> None:
-    state = await _install_work_ticket_site(browser_page, preview="absent")
+    state = await _install_work_ticket_site(browser_page, preview=preview)
     adapter = await _ticket_adapter(browser_page, entry_only=entry_only)
 
     assert adapter.get_access_consumption().consumed is True
     assert adapter.get_access_consumption().resource == "work_ticket"
+    assert adapter.get_access_consumption().access_granted_until is not None
     assert await browser_page.evaluate("() => window.ticketClicks") == 1
     assert state["checkout_attempts"] == 1
     assert state["api_reads"] >= 2
     assert browser_page.url == EPISODE_URL
     assert "/series/" not in state["paths"]
     assert state["paths"].count(f"/episodes/{EPISODE_ID}") == 1
+    if not entry_only:
+        assert await adapter.detect_state(browser_page) is PageState.CONTENT
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -748,9 +752,8 @@ async def test_hanayume_ticket_rejects_ambiguous_or_other_current_preview_before
     [
         {"checkout_status": 500},
         {"grant_after_checkout": False},
-        {"preview": "present"},
     ],
-    ids=("checkout-failed", "no-positive-transition", "present-blank-conflict"),
+    ids=("checkout-failed", "no-positive-transition"),
 )
 async def test_hanayume_ticket_never_confirms_without_checkout_and_uncontradicted_native_grant(
     browser_page: Page,

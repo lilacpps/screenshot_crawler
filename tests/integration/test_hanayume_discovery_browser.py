@@ -980,6 +980,8 @@ def _batch_viewer_html(
             "preview-absent-post-series-agrees",
             "preview-absent-post-series-countdown",
             "preview-absent-post-series-denies",
+            "preview-absent-post-series-duplicate-identical",
+            "preview-absent-post-series-duplicate-conflict",
         }
         target_row = _ticket_public_row(
             TARGET_POSITION, target_badge, icons=not preview_absent
@@ -997,14 +999,18 @@ def _batch_viewer_html(
             target_account_row = _ticket_account_row(_episode_id(3)).replace(
                 " mode-current", ""
             )
-        if ticket_variant == "already-granted":
+        if ticket_variant in {"already-granted", "already-granted-start"}:
             target_account_row = _ticket_account_row(episode_id, icons=False).replace(
                 'class="series-eplist-item mode-current mode-store-item-blank"',
-                'class="series-eplist-item mode-read mode-current mode-store-item-start"',
+                'class="series-eplist-item mode-read mode-current mode-store-item-blank"',
             ).replace(
                 '</span>\n      </a>',
                 '</span><span data-e2e="eliRentStat">レンタル中 閲覧期限<br>2日+23時間</span>\n      </a>',
             )
+            if ticket_variant == "already-granted-start":
+                target_account_row = target_account_row.replace(
+                    "mode-store-item-blank", "mode-store-item-start"
+                )
         if ticket_variant == "wrong-row-episode":
             target_account_row = _ticket_account_row(_episode_id(3))
         if ticket_variant == "duplicate-account-row":
@@ -1058,7 +1064,7 @@ def _batch_viewer_html(
           <script>
             window.ticketClicks=0;
             window.ticketAccountRows={json.dumps(target_account_row)};
-            if ({json.dumps(ticket_variant in {'preview-absent-current-series-later', 'preview-absent-stale-current', 'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies'})}) {{
+            if ({json.dumps(ticket_variant in {'preview-absent-current-series-later', 'preview-absent-stale-current', 'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies', 'preview-absent-post-series-duplicate-identical', 'preview-absent-post-series-duplicate-conflict'})}) {{
               fetch('/api/episodes/{episode_id}');
               setTimeout(() => fetch('/api/series/access'), 30);
             }} else {{
@@ -1071,13 +1077,17 @@ def _batch_viewer_html(
               button.addEventListener('click', async () => {{
                 window.ticketClicks++;
                 const checkout = await fetch('/api/checkout/rental', {{method:'POST'}});
-                if (checkout.status === 200 && {json.dumps(ticket_variant not in {'unconfirmed', 'preview-absent-current', 'preview-absent-current-series-later', 'preview-absent-stale-current', 'preview-absent-series-only', 'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies'})}) {{
+                if (checkout.status === 200 && {json.dumps(ticket_variant not in {'unconfirmed', 'preview-absent-current', 'preview-absent-current-series-later', 'preview-absent-stale-current', 'preview-absent-series-only', 'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies', 'preview-absent-post-series-duplicate-identical', 'preview-absent-post-series-duplicate-conflict', 'post-account-unknown-current-grant'})}) {{
                   const row=document.querySelector('[data-e2e="epListUser"] .series-eplist-item[data-e2e="eli"]');
                   if (row) {{
                     row.className='series-eplist-item mode-read mode-current mode-store-item-start';
                     const link=row.querySelector('a.series-eplist-item-link');
                     link.insertAdjacentHTML('beforeend','<span data-e2e="eliRentStat">レンタル中 閲覧期限<br>2日+23時間</span>');
                   }}
+                }}
+                if ({json.dumps(ticket_variant == 'post-account-unknown-current-grant')}) {{
+                  document.querySelector('[data-e2e="epListUser"]').className =
+                    'series-eplist mode-user mode-unexpected';
                 }}
                 if ({json.dumps(ticket_variant == 'route-drift')}) {{
                   history.pushState({{}}, '', '/episodes/0000000000001');
@@ -1087,9 +1097,9 @@ def _batch_viewer_html(
                     '{BASE}/series/0000000000001';
                 }}
                 if (checkout.status === 200) {{
-                  if ({json.dumps(ticket_variant in {'preview-absent-current', 'preview-absent-current-series-later', 'preview-absent-stale-current', 'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies'})}) {{
+                  if ({json.dumps(ticket_variant in {'preview-absent-current', 'preview-absent-current-series-later', 'preview-absent-stale-current', 'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies', 'preview-absent-post-series-duplicate-identical', 'preview-absent-post-series-duplicate-conflict', 'post-account-unknown-current-grant', 'delayed-series-body'})}) {{
                     fetch('/api/episodes/{episode_id}');
-                    if ({json.dumps(ticket_variant in {'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies'})}) {{
+                    if ({json.dumps(ticket_variant in {'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies', 'preview-absent-post-series-duplicate-identical', 'preview-absent-post-series-duplicate-conflict', 'delayed-series-body'})}) {{
                       setTimeout(() => fetch('/api/series/access?after=1'), 30);
                     }}
                   }} else {{
@@ -1287,6 +1297,7 @@ async def _install_batch_routes(
                 (
                     ticket_variant in {
                         "already-granted",
+                        "already-granted-start",
                         "preview-absent-stale-current",
                     }
                     and ticket_state["checkout_count"] == 0
@@ -1311,6 +1322,8 @@ async def _install_batch_routes(
                     "preview-absent-post-series-agrees",
                     "preview-absent-post-series-countdown",
                     "preview-absent-post-series-denies",
+                    "preview-absent-post-series-duplicate-identical",
+                    "preview-absent-post-series-duplicate-conflict",
                 }
             ):
                 # Keep the current-episode response pending long enough for the
@@ -1335,7 +1348,7 @@ async def _install_batch_routes(
                 ticket_observation.setdefault("current_access", []).append(granted)
             return
         if path == "/api/series/access" and ticket_entry:
-            pre_granted = ticket_variant == "already-granted"
+            pre_granted = ticket_variant in {"already-granted", "already-granted-start"}
             post_click = (
                 (
                     "after=1" in parsed.query
@@ -1347,21 +1360,25 @@ async def _install_batch_routes(
             remaining_seconds = 259198 if (
                 ticket_variant == "preview-absent-post-series-countdown" and post_click
             ) else (259199 if post_click else 0)
+            episode_access = {
+                "episodeId": TARGET_EPISODE_ID,
+                "accessType": (
+                    "premium" if ticket_variant == "paid-native" else "waitAndFree"
+                ),
+                "hasAccess": post_click,
+                "timeRemainingInSeconds": remaining_seconds,
+            }
+            episode_accesses = [episode_access]
+            if post_click and ticket_variant == "preview-absent-post-series-duplicate-identical":
+                episode_accesses.append(dict(episode_access))
+            elif post_click and ticket_variant == "preview-absent-post-series-duplicate-conflict":
+                episode_accesses.append({**episode_access, "hasAccess": False, "timeRemainingInSeconds": 0})
             await route.fulfill(
                 status=200,
                 json={
                     "seriesAccess": {
                         "seriesId": native_work_id,
-                        "episodeAccesses": [
-                            {
-                                "episodeId": TARGET_EPISODE_ID,
-                                "accessType": (
-                                    "premium" if ticket_variant == "paid-native" else "waitAndFree"
-                                ),
-                                "hasAccess": post_click,
-                                "timeRemainingInSeconds": remaining_seconds,
-                            }
-                        ],
+                        "episodeAccesses": episode_accesses,
                     }
                 },
             )
@@ -2031,18 +2048,19 @@ async def test_hanayume_discovery_active_manual_grant_uses_direct_batch_without_
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("ticket_variant", ["already-granted", "already-granted-start"])
 async def test_hanayume_ticket_read_preview_without_account_icons_uses_existing_grant_directly(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, ticket_variant: str
 ) -> None:
     catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
-        browser_page, tmp_path, quota_candidate=True, ticket_variant="already-granted"
+        browser_page, tmp_path, quota_candidate=True, ticket_variant=ticket_variant
     )
     assert candidate.access_strategy == "quota" and candidate.consumes_quota
 
     result = await executor.execute_candidate(
         browser_page,
         candidate,
-        output_root=tmp_path / "read-preview-existing-grant-output",
+        output_root=tmp_path / f"read-preview-existing-grant-{ticket_variant}-output",
         library_dir=tmp_path / "library",
         max_pages=10,
         now=BATCH_NOW,
@@ -2058,6 +2076,88 @@ async def test_hanayume_ticket_read_preview_without_account_icons_uses_existing_
         resource="work_ticket",
     ) is None
     assert all(not path.startswith("/series/") for path in requested)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_current_native_grant_latches_before_postclick_account_failure(
+    browser_page, tmp_path: Path
+) -> None:
+    catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
+        browser_page,
+        tmp_path,
+        quota_candidate=True,
+        ticket_variant="post-account-unknown-current-grant",
+        mutation="unknown-after-advance",
+    )
+
+    with pytest.raises(CandidateExecutionError) as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "native-latch-before-ui-failure",
+            library_dir=tmp_path / "library",
+            max_pages=10,
+            now=BATCH_NOW,
+        )
+
+    assert raised.value.resource_consumed is True
+    assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert requested.count(f"/api/episodes/{TARGET_EPISODE_ID}") == 1
+    assert catalog.get_source(source.id).access_granted_until is not None
+    quota_state = catalog.get_quota_resource_state(
+        catalog.get_item(candidate.item_id).work_id,
+        site="hanayume",
+        resource="work_ticket",
+    )
+    assert quota_state is not None and quota_state.last_consumed_at is not None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+    assert not list((tmp_path / "library").rglob("*.zip"))
+    assert all(not path.startswith("/series/") for path in requested)
+
+
+@pytest.mark.parametrize(
+    "ticket_variant",
+    [
+        "preview-absent-post-series-duplicate-identical",
+        "preview-absent-post-series-duplicate-conflict",
+    ],
+)
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_duplicate_newer_series_target_blocks_native_current_latch(
+    browser_page, tmp_path: Path, ticket_variant: str
+) -> None:
+    catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
+        browser_page,
+        tmp_path,
+        quota_candidate=True,
+        ticket_variant=ticket_variant,
+    )
+
+    with pytest.raises(CandidateExecutionError) as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / f"{ticket_variant}-output",
+            library_dir=tmp_path / "library",
+            max_pages=10,
+            now=BATCH_NOW,
+        )
+
+    assert raised.value.resource_consumed is not True
+    assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert requested.count(f"/api/episodes/{TARGET_EPISODE_ID}") == 2
+    assert requested.count("/api/series/access") == 2
+    assert catalog.get_source(source.id).access_granted_until is None
+    assert catalog.get_quota_resource_state(
+        catalog.get_item(candidate.item_id).work_id,
+        site="hanayume",
+        resource="work_ticket",
+    ) is None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
 
 
 @pytest.mark.asyncio(loop_scope="module")

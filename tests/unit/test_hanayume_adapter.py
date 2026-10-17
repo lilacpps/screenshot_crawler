@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +16,7 @@ from screenshot_crawler.core.errors import (
 from screenshot_crawler.site_adapters.hanayume import adapter as hanayume_adapter
 from screenshot_crawler.site_adapters.hanayume.adapter import (
     HanayumeAdapter,
+    HanayumeNativeEpisodeAccess,
     _capture_output_format,
     _episode_row_signature,
     _expected_active_slots,
@@ -89,6 +90,59 @@ def _current_access_event(
         json=read_payload,
     )
     return request, response
+
+
+def _native_series_row(requested_at: datetime) -> HanayumeNativeEpisodeAccess:
+    return HanayumeNativeEpisodeAccess(
+        episode_id=EPISODE_ID,
+        access_type="waitAndFree",
+        has_access=True,
+        remaining_seconds=172800,
+        requested_at=requested_at,
+    )
+
+
+def test_hanayume_latest_series_target_keeps_target_across_later_omission() -> None:
+    adapter = HanayumeAdapter()
+    adapter._episode_id = EPISODE_ID
+    adapter._expected_work_id = WORK_ID
+    requested_at = datetime(2026, 10, 17, tzinfo=UTC)
+    target = _native_series_row(requested_at)
+    snapshots = (
+        SimpleNamespace(work_id=WORK_ID, rows=(target,)),
+        SimpleNamespace(work_id=WORK_ID, rows=()),
+    )
+
+    latest, duplicate_at, foreign_at = adapter._latest_series_ticket_target(
+        snapshots, current_requested_at=None
+    )
+
+    assert latest is target
+    assert duplicate_at is None
+    assert foreign_at is None
+
+
+def test_hanayume_latest_series_target_reports_newer_foreign_work_collision() -> None:
+    adapter = HanayumeAdapter()
+    adapter._episode_id = EPISODE_ID
+    adapter._expected_work_id = WORK_ID
+    requested_at = datetime(2026, 10, 17, tzinfo=UTC)
+    foreign_at = requested_at + timedelta(milliseconds=37)
+    target = _native_series_row(requested_at)
+    foreign_target = _native_series_row(foreign_at)
+    snapshots = (
+        SimpleNamespace(work_id=WORK_ID, rows=(target,)),
+        SimpleNamespace(work_id="0000000000001", rows=(foreign_target,)),
+    )
+
+    latest, duplicate_at, conflict_at = adapter._latest_series_ticket_target(
+        snapshots, current_requested_at=requested_at
+    )
+
+    assert latest is target
+    assert duplicate_at is None
+    assert conflict_at == foreign_at
+    assert conflict_at > requested_at
 
 
 async def _observe_current_access(

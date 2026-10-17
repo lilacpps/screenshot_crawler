@@ -1,6 +1,6 @@
 # 花とゆめ＋ Work Ticket 実装 Runbook
 
-**Status:** Phases 01-03 and prior material code reviews passed. The preview-icon correction passed focused synthetic tests and independent review. Live `9a2b14d706281` grant-only confirmed one ticket use; the later `06994043345b1` normal Batch confirmed checkout HTTP 200 and a fresh exact current-episode `false → true` transition, but the adapter raised `AccessConsumptionUnconfirmedError`, persisted no Catalog grant/work state, left the Item pending, and produced no artifact. Offline trace review is pending; do not retry or consume another ticket. Cumulative real ticket use is three. Current CLI retry-time display work does not change adapter confirmation behavior.
+**Status:** Phases 01-03 and the Phase 04 native-first latch passed independent review. The exact five-file affected Hanayume suite passed 342 tests with zero skips or deselections. The earlier live normal Batch on `06994043345b1` observed checkout HTTP 200 and matching current-episode `false -> true` access, but the then-current adapter did not persist the grant; the corrected path has not been live-reverified. No further ticket action is authorized. Cumulative real ticket use remains three.
 **Baseline:** 2026-10-17 の `main`。既存の [Hanayume free-only Runbook](../hanayume-free/README.md) R9 PASS を起点とする。  
 **実装ブランチ:** `main` から新しい `feat/hanayume-work-ticket` を作成し、main には自動マージしない。古い `feat/hanayume-adapter` を起点にしない。  
 **進捗記録:** [PROGRESS.md](PROGRESS.md)。旧 free-only Runbook は完了履歴として維持する。
