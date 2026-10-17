@@ -10,7 +10,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from PIL import Image, UnidentifiedImageError
 from playwright.async_api import ElementHandle, Locator, Page
@@ -818,6 +818,12 @@ class HanayumeAdapter(SiteAdapter):
         self._episode_id: str | None = None
         self._expected_work_id: str | None = None
         self._opaque_work_key: str | None = None
+        self._batch_route_guard_enabled = False
+        self._batch_route_blocked_rsc = 0
+        self._batch_route_blocked_unexpected = 0
+        self._batch_route_abort_failures = 0
+        self._batch_route_nonselected_responses = 0
+        self._batch_route_fatal_reason: str | None = None
         self._work_id: str | None = None
         self._body_total: int | None = None
         self._body_slots: tuple[int, ...] | None = None
@@ -844,7 +850,6 @@ class HanayumeAdapter(SiteAdapter):
         return max(default_ms, INITIALIZE_TIMEOUT_MS)
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
-        del page
         if access_strategy not in {"auto", "direct", "quota"}:
             raise UnsupportedAccessStrategyError(
                 f"Hanayume does not support access_strategy={access_strategy!r}"
@@ -856,6 +861,170 @@ class HanayumeAdapter(SiteAdapter):
         self._ticket_click_attempted = False
         self._ticket_entry_only = False
         self._ticket_click_started_at = None
+        self._reset_batch_route_guard()
+        if self._expected_work_id is not None and self._episode_id is not None:
+            await self._install_batch_route_guard(page)
+
+    def _reset_batch_route_guard(self) -> None:
+        self._batch_route_guard_enabled = False
+        self._batch_route_blocked_rsc = 0
+        self._batch_route_blocked_unexpected = 0
+        self._batch_route_abort_failures = 0
+        self._batch_route_nonselected_responses = 0
+        self._batch_route_fatal_reason = None
+
+    async def _install_batch_route_guard(self, page: Page) -> None:
+        """Guard identity-bound Batch route requests before the initial navigation."""
+
+        route = getattr(page, "route", None)
+        if not callable(route) or self._episode_id is None:
+            self._batch_route_fatal_reason = "route_guard_unavailable"
+            raise UnknownPageStateError("Hanayume Batch route guard could not be installed")
+        self._batch_route_guard_enabled = True
+        try:
+            page.on("response", self._observe_batch_route_response)
+            for route_family in ("episodes", "series"):
+                await route(
+                    f"**://*/{route_family}/**",
+                    self._handle_batch_navigation_route,
+                )
+        except Exception as exc:
+            self._batch_route_fatal_reason = "route_guard_setup_failed"
+            raise UnknownPageStateError(
+                "Hanayume Batch route guard could not be installed"
+            ) from exc
+
+    def _batch_route_signature(self, request: object) -> bool:
+        try:
+            parsed = urlsplit(str(getattr(request, "url", "")))
+            query = parse_qsl(parsed.query, keep_blank_values=True)
+            headers = {
+                str(key).casefold(): str(value)
+                for key, value in (getattr(request, "headers", {}) or {}).items()
+            }
+            return (
+                str(getattr(request, "method", "")).upper() == "GET"
+                and self._is_allowed_batch_route_url(parsed)
+                and self._is_observed_batch_route_path(parsed.path)
+                and len(query) == 1
+                and query[0][0] == "_rsc"
+                and bool(query[0][1])
+                and headers.get("rsc") == "1"
+                and headers.get("next-router-prefetch") in {None, "1"}
+                and str(getattr(request, "resource_type", "")) in {"fetch", "other"}
+            )
+        except Exception:  # noqa: BLE001 - malformed request metadata is never trusted
+            return False
+
+    @staticmethod
+    def _is_allowed_batch_route_url(parsed) -> bool:
+        try:
+            return (
+                parsed.scheme == "https"
+                and parsed.hostname in ALLOWED_HOSTS
+                and parsed.username is None
+                and parsed.password is None
+                and parsed.port in {None, 443}
+            )
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _is_observed_batch_route_path(path: str) -> bool:
+        parts = path.split("/")
+        if len(parts) not in {3, 4} or parts[0] != "" or parts[1] not in {
+            "episodes",
+            "series",
+        }:
+            return False
+        if re.fullmatch(r"[0-9a-f]{13}", parts[2]) is None:
+            return False
+        if len(parts) == 3:
+            return True
+        suffix = parts[3]
+        if parts[1] == "episodes":
+            return suffix == "old" or re.fullmatch(r"[1-9][0-9]*", suffix) is not None
+        return re.fullmatch(r"[1-9][0-9]*", suffix) is not None
+
+    def _observe_batch_route_response(self, response: object) -> None:
+        """Audit any off-target route response that escaped the pre-navigation guard."""
+
+        if not self._batch_route_guard_enabled or self._episode_id is None:
+            return
+        try:
+            parsed = urlsplit(str(getattr(response, "url", "")))
+            if (
+                self._is_allowed_batch_route_url(parsed)
+                and parsed.path.startswith(("/episodes/", "/series/"))
+                and parsed.path != f"/episodes/{self._episode_id}"
+            ):
+                self._batch_route_nonselected_responses += 1
+                self._batch_route_fatal_reason = "nonselected_route_response_observed"
+        except Exception:  # noqa: BLE001 - diagnostics must not interrupt Playwright
+            self._batch_route_fatal_reason = "route_response_observation_failed"
+
+    async def _handle_batch_navigation_route(self, route: object) -> None:
+        """Pass the selected document/RSC and abort every off-target page route."""
+
+        try:
+            request = getattr(route, "request", None)
+            parsed = urlsplit(str(getattr(request, "url", "")))
+            path = parsed.path
+            if parsed.hostname not in ALLOWED_HOSTS:
+                await route.fallback()
+                return
+            target_path = f"/episodes/{self._episode_id}"
+            headers = {
+                str(key).casefold(): str(value)
+                for key, value in (getattr(request, "headers", {}) or {}).items()
+            }
+            query = parse_qsl(parsed.query, keep_blank_values=True)
+            method = str(getattr(request, "method", "")).upper()
+            resource_type = str(getattr(request, "resource_type", ""))
+            canonical_document = (
+                path == target_path
+                and self._is_allowed_batch_route_url(parsed)
+                and method == "GET"
+                and resource_type == "document"
+                and not query
+                and "rsc" not in headers
+                and "next-router-prefetch" not in headers
+            )
+            selected_rsc = path == target_path and self._batch_route_signature(request)
+            if canonical_document or selected_rsc:
+                await route.fallback()
+                return
+
+            known_nonselected_rsc = (
+                path != target_path
+                and self._is_observed_batch_route_path(path)
+                and self._batch_route_signature(request)
+            )
+            if known_nonselected_rsc:
+                self._batch_route_blocked_rsc += 1
+            else:
+                self._batch_route_blocked_unexpected += 1
+                if self._batch_route_fatal_reason is None:
+                    self._batch_route_fatal_reason = "unrecognized_page_route_request"
+            try:
+                await route.abort()
+            except Exception:  # noqa: BLE001 - failed aborts are fatal and remain visible
+                self._batch_route_abort_failures += 1
+                self._batch_route_fatal_reason = "page_route_abort_failed"
+        except Exception:  # noqa: BLE001 - no routing callback exception may escape
+            self._batch_route_blocked_unexpected += 1
+            self._batch_route_fatal_reason = "page_route_handler_failed"
+            try:
+                await route.abort()
+            except Exception:  # noqa: BLE001 - no safe fallback for an unknown route
+                self._batch_route_abort_failures += 1
+                self._batch_route_fatal_reason = "page_route_abort_failed"
+
+    def _raise_if_batch_route_guard_failed(self) -> None:
+        if self._batch_route_fatal_reason is not None:
+            raise UnknownPageStateError(
+                "Hanayume Batch blocked an unrecognized episode/work navigation request"
+            )
 
     async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
         if quota_resource not in {None, "work_ticket"}:
@@ -898,6 +1067,7 @@ class HanayumeAdapter(SiteAdapter):
         return self._target_url
 
     async def initialize(self, page: Page) -> None:
+        self._raise_if_batch_route_guard_failed()
         if self._target_url is None or self._episode_id is None or page.url != self._target_url:
             raise UnknownPageStateError("Hanayume initial episode URL does not match its target")
         self._body_total = None
@@ -982,6 +1152,7 @@ class HanayumeAdapter(SiteAdapter):
     async def initialize_entry_only(self, page: Page) -> None:
         """Confirm one Work Ticket entry without starting capture or packaging."""
 
+        self._raise_if_batch_route_guard_failed()
         if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
             raise UnsupportedAccessStrategyError(
                 "Hanayume entry-only execution requires quota/work_ticket"
@@ -1028,6 +1199,7 @@ class HanayumeAdapter(SiteAdapter):
     async def _reject_central_work_ticket_gate(self, page: Page) -> None:
         """Reject only the observed, target-local charge action on direct entry."""
 
+        self._raise_if_batch_route_guard_failed()
         if page.url != self._target_url:
             raise UnknownPageStateError("Hanayume direct Batch left its exact episode route")
         try:
@@ -1337,6 +1509,7 @@ class HanayumeAdapter(SiteAdapter):
     async def _initialize_work_ticket_entry(self, page: Page, *, entry_only: bool) -> None:
         """Use one scoped native-confirmed action on the already-open episode Page."""
 
+        self._raise_if_batch_route_guard_failed()
         if (
             self._access_strategy != "quota"
             or self._quota_resource != "work_ticket"
@@ -1388,6 +1561,7 @@ class HanayumeAdapter(SiteAdapter):
                 raise AccessResourceUnavailableError(
                     "work_ticket_control_changed_before_action"
                 )
+            self._raise_if_batch_route_guard_failed()
             self._ticket_click_attempted = True
             click_started_at = datetime.now(UTC)
             self._ticket_click_started_at = click_started_at
@@ -1884,6 +2058,7 @@ class HanayumeAdapter(SiteAdapter):
         self, page: Page, *, include_png: bool = False,
         stability_slots: tuple[int, ...] = (),
     ) -> ViewerObservation:
+        self._raise_if_batch_route_guard_failed()
         try:
             raw = await asyncio.wait_for(
                 page.evaluate(
@@ -1894,6 +2069,7 @@ class HanayumeAdapter(SiteAdapter):
             )
         except (PlaywrightError, TimeoutError) as exc:
             raise UnknownPageStateError("Hanayume viewer observation exceeded its timeout") from exc
+        self._raise_if_batch_route_guard_failed()
         if not isinstance(raw, dict) or raw.get("url") != page.url:
             raise UnknownPageStateError("Hanayume viewer observation changed URL")
         expected_url = self._target_url
@@ -2028,6 +2204,7 @@ class HanayumeAdapter(SiteAdapter):
         )
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        self._raise_if_batch_route_guard_failed()
         self._capture_attempt = None
         try:
             return await asyncio.wait_for(
@@ -2043,6 +2220,7 @@ class HanayumeAdapter(SiteAdapter):
             await self._release_capture_attempt(page)
 
     async def _capture_page_within_budget(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        self._raise_if_batch_route_guard_failed()
         observation = await self._observe(page)
         expected = _expected_active_slots(observation.current, observation.body_slots)
         if not expected:
@@ -2063,6 +2241,7 @@ class HanayumeAdapter(SiteAdapter):
             "token": None,
         }
         try:
+            self._raise_if_batch_route_guard_failed()
             raw = await asyncio.wait_for(
                 page.evaluate(
                     COLLECT_CAPTURE_SCRIPT,
@@ -2378,6 +2557,14 @@ class HanayumeAdapter(SiteAdapter):
             "last_slots": list(self._last_capture_slots),
             "source_native": str(self._capture_diagnostics.get("mode", "")).startswith("source_canvas_"),
             "initial_canvas_settle": dict(self._initial_canvas_settle),
+            "batch_route_guard": {
+                "enabled": self._batch_route_guard_enabled,
+                "blocked_nonselected_rsc_attempts": self._batch_route_blocked_rsc,
+                "blocked_unexpected_attempts": self._batch_route_blocked_unexpected,
+                "abort_failures": self._batch_route_abort_failures,
+                "nonselected_route_responses": self._batch_route_nonselected_responses,
+                "fatal_reason": self._batch_route_fatal_reason,
+            },
         }
 
     async def _clear_native_cache(self, page: Page) -> None:

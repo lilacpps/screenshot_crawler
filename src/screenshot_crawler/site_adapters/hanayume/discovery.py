@@ -1037,7 +1037,19 @@ async def _read_series_authentication(page: Page, *, work_id: str) -> bool:
                 page.evaluate(SERIES_AUTH_SNAPSHOT_SCRIPT, work_id),
                 timeout=min(OBSERVATION_TIMEOUT_SECONDS, remaining),
             )
-        except (PlaywrightError, TimeoutError) as exc:
+        except TimeoutError as exc:
+            # An observation that runs out the overall hydration budget means
+            # authentication was not established, just like reaching the loop
+            # boundary between observations. Preserve the route check before
+            # accepting that negative result.
+            if page.url != expected_url:
+                raise ValueError("Hanayume authentication route identity changed") from exc
+            if time.monotonic() >= deadline:
+                return False
+            raise ValueError(
+                "Hanayume work-listing authentication markers could not be read"
+            ) from exc
+        except PlaywrightError as exc:
             raise ValueError(
                 "Hanayume work-listing authentication markers could not be read"
             ) from exc

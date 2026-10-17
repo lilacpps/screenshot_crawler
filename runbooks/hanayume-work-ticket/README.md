@@ -1,6 +1,6 @@
 # 花とゆめ＋ Work Ticket 実装 Runbook
 
-**Status:** Phase 03 PASS (independent Reviewer PASS / BLOCKING 0); Phase 04 full test suite running. Confirmed ticket use remains one.
+**Status:** Phases 01-03 PASS; Phase 04 implementation and affected tests PASS. Final independent Reviewer and isolated live Tester gates remain pending. Confirmed ticket use remains one.
 **Baseline:** 2026-10-17 の `main`。既存の [Hanayume free-only Runbook](../hanayume-free/README.md) R9 PASS を起点とする。  
 **実装ブランチ:** `main` から新しい `feat/hanayume-work-ticket` を作成し、main には自動マージしない。古い `feat/hanayume-adapter` を起点にしない。  
 **進捗記録:** [PROGRESS.md](PROGRESS.md)。旧 free-only Runbook は完了履歴として維持する。
@@ -100,7 +100,7 @@ ComicDAYS の作品単位 Resource / Batch / grant-only の扱いを**第一参�
 5. 必要な場合だけ複数作品を逐次実行し、作品Aの処理終了前に作品Bへの live request が0であること、同作品 ticket は1回、作品別cooldownが独立であることを確認。ユーザー提示の5件を上限目安とし、余分にticketを消費しない。
 6. Reporter に OK（消費確認）、SKIP（23h、利用不可）、NG（消費未確認）を区別して記録。click 後の中断・capture failure でも使用事実を失わない。秘密・画像・signed URLをコミットしない。
 
-**Acceptance:** Batch由来の作品ページ／全作品事前アクセス0件、作品ごとのticket消費最大1回/23h、ローカルskip時のsite request0件、72h grantは話単位、**手動消費を Discovery（full/incremental）で取り込み期限内は ticket 再消費なしに crawl 可**、通常Batchは同じPageからEND/ZIP、grant-onlyはZIP0/Item pending。Reviewer と独立 Tester の検証が完了し、`PROGRESS.md` にSHA・コマンド・根拠・残リスクを記録するまで DONE としない。
+**Acceptance:** Batch由来の作品ページ／全作品事前アクセス0件、作品ごとのticket消費最大1回/23h、ローカルskip時のsite request0件、72h grantは話単位、**手動消費を Discovery（full/incremental）で取り込み期限内は ticket 再消費なしに crawl 可**、通常Batchは同じPageからEND/ZIP、grant-onlyはZIP0/Item pending。Reviewer と独立 Tester の検証が完了し、`PROGRESS.md` にSHA・コマンド・根拠・残リスクを記録するまで DONE としない。 Identity-bound Batch also requires zero escaped `/episodes/*` or `/series/*` responses: the selected document/RSC is allowed, the narrowly observed nonselected route-data shape is aborted and counted, and unknown route signatures/paths/documents/methods abort fatally before ticket entry or capture.
 
 ## 5. 作業体制と更新先
 

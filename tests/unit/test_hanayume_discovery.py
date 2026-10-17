@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from screenshot_crawler.discovery import DiscoveryIncompleteError
+from screenshot_crawler.site_adapters.hanayume import discovery as hanayume_discovery
 from screenshot_crawler.site_adapters.hanayume.discovery import (
     HanayumeEpisodeIdentity,
     HanayumeListingRow,
@@ -488,3 +490,94 @@ def test_hanayume_native_inactive_clears_and_incomplete_or_unproven_grant_preser
         listing_authenticated=False,
     )[0]
     assert unauthenticated.access_granted_until_observed is False
+
+
+class _FakeMonotonic:
+    def __init__(self, *values: float) -> None:
+        self.values = list(values)
+        self.last = values[-1]
+
+    def monotonic(self) -> float:
+        if self.values:
+            self.last = self.values.pop(0)
+        return self.last
+
+
+class _FakeAuthPage:
+    def __init__(self, evaluate, *, url: str = f"{BASE}/series/{WORK_ID}") -> None:
+        self.url = url
+        self._evaluate = evaluate
+
+    async def evaluate(self, *_args):
+        return await self._evaluate()
+
+
+@pytest.mark.asyncio
+async def test_hanayume_auth_observation_timeout_at_total_deadline_returns_unknown_false(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(hanayume_discovery, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 0.04)
+    monkeypatch.setattr(hanayume_discovery, "OBSERVATION_TIMEOUT_SECONDS", 3.0)
+    monkeypatch.setattr(hanayume_discovery, "time", _FakeMonotonic(10.0, 10.0, 10.05))
+
+    async def delayed_evaluate():
+        await asyncio.sleep(0.2)
+
+    assert (
+        await hanayume_discovery._read_series_authentication(
+            _FakeAuthPage(delayed_evaluate), work_id=WORK_ID
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_hanayume_auth_observation_timeout_before_total_deadline_remains_incomplete(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(hanayume_discovery, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(hanayume_discovery, "OBSERVATION_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(hanayume_discovery, "time", _FakeMonotonic(10.0, 10.0, 10.03))
+
+    async def delayed_evaluate():
+        await asyncio.sleep(0.2)
+
+    with pytest.raises(ValueError, match="markers could not be read") as raised:
+        await hanayume_discovery._read_series_authentication(
+            _FakeAuthPage(delayed_evaluate), work_id=WORK_ID
+        )
+    assert isinstance(raised.value.__cause__, TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_hanayume_auth_route_drift_during_expired_observation_stays_incomplete(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(hanayume_discovery, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 0.04)
+    monkeypatch.setattr(hanayume_discovery, "OBSERVATION_TIMEOUT_SECONDS", 3.0)
+    monkeypatch.setattr(hanayume_discovery, "time", _FakeMonotonic(10.0, 10.0, 10.05))
+    page = _FakeAuthPage(None)
+
+    async def drift_then_delay():
+        page.url = f"{BASE}/series/{'f' * 13}"
+        await asyncio.sleep(0.2)
+
+    page._evaluate = drift_then_delay
+    with pytest.raises(ValueError, match="authentication route identity changed") as raised:
+        await hanayume_discovery._read_series_authentication(page, work_id=WORK_ID)
+    assert isinstance(raised.value.__cause__, TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_hanayume_auth_observation_cancellation_propagates(monkeypatch) -> None:
+    monkeypatch.setattr(hanayume_discovery, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(hanayume_discovery, "OBSERVATION_TIMEOUT_SECONDS", 3.0)
+    monkeypatch.setattr(hanayume_discovery, "time", _FakeMonotonic(10.0, 10.0))
+
+    async def cancel_evaluate():
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await hanayume_discovery._read_series_authentication(
+            _FakeAuthPage(cancel_evaluate), work_id=WORK_ID
+        )

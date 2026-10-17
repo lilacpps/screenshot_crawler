@@ -5,7 +5,7 @@ import json
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 from playwright.async_api import ElementHandle
@@ -943,6 +943,7 @@ def _batch_viewer_html(
     entry_gate: bool = False,
     ticket_entry: bool = False,
     ticket_variant: str = "normal",
+    batch_route_variant: str | None = None,
 ) -> str:
     target_row = _row(TARGET_POSITION, target_badge)
     if entry_gate:
@@ -1079,6 +1080,54 @@ def _batch_viewer_html(
           </div></div></div>
           </div>"""
         ticket_markup = ""
+    batch_route_script = ""
+    if batch_route_variant == "valid-rsc":
+        route_rows = [
+            (f"/series/{work_id}?_rsc=series", {"rsc": "1", "next-router-prefetch": "1"}, "GET"),
+            (f"/episodes/{episode_id}/1?_rsc=range", {"rsc": "1", "next-router-prefetch": "1"}, "GET"),
+            (f"/episodes/{episode_id}/old?_rsc=old", {"rsc": "1", "next-router-prefetch": "1"}, "GET"),
+            ("/episodes/45ab3f5dfcc67?_rsc=sibling", {"rsc": "1", "next-router-prefetch": "1"}, "GET"),
+            (f"/episodes/{episode_id}?_rsc=selected", {"rsc": "1"}, "GET"),
+        ]
+        encoded_rows = json.dumps(route_rows)
+        batch_route_script = f"""<script>
+          window.batchRouteResults = Promise.all({encoded_rows}.map(async ([url, headers, method]) => {{
+            try {{
+              const response = await fetch(url, {{headers, method, cache: 'no-store'}});
+              return {{path: new URL(url, location.href).pathname, status: response.status}};
+            }} catch (_error) {{
+              return {{path: new URL(url, location.href).pathname, status: 0}};
+            }}
+          }}));
+        </script>"""
+    elif batch_route_variant == "malformed-rsc":
+        batch_route_script = """<script>
+          window.batchRouteResults = fetch('/series/0000000000001?_rsc=unknown', {
+            headers: {'next-router-prefetch': '1'}, cache: 'no-store'
+          }).then(response => response.status).catch(() => 0);
+        </script>"""
+    elif batch_route_variant == "unknown-path-rsc":
+        batch_route_script = """<script>
+          window.batchRouteResults = fetch('/episodes/not-an-id?_rsc=unknown', {
+            headers: {'rsc': '1', 'next-router-prefetch': '1'}, cache: 'no-store'
+          }).then(response => response.status).catch(() => 0);
+        </script>"""
+    elif batch_route_variant == "nonget-rsc":
+        batch_route_script = """<script>
+          window.batchRouteResults = fetch('/series/0000000000001?_rsc=unknown', {
+            method: 'POST', headers: {'rsc': '1'}, body: 'fixture', cache: 'no-store'
+          }).then(response => response.status).catch(() => 0);
+        </script>"""
+    elif batch_route_variant == "off-target-document":
+        batch_route_script = """<script>
+          window.batchRouteResults = new Promise(resolve => setTimeout(() => {
+            const frame = document.createElement('iframe');
+            frame.src = '/series/0000000000001';
+            frame.onload = () => resolve(true);
+            frame.onerror = () => resolve(false);
+            document.body.append(frame);
+          }, 50));
+        </script>"""
     return f"""<!doctype html><html><head><style>
       body {{ margin:0 }} #comici-viewer {{ position:relative;width:200px;height:100px }}
       #xCVPages {{ position:absolute;inset:0 }} .-cv-page {{ position:absolute;top:0;width:100px;height:100px }}
@@ -1143,6 +1192,7 @@ def _batch_viewer_html(
           render(1);
         }})();
       </script>
+      {batch_route_script}
     </body></html>"""
 
 
@@ -1166,6 +1216,7 @@ async def _install_batch_routes(
     ticket_entry: bool = False,
     ticket_variant: str = "normal",
     native_work_id: str = WORK_ID,
+    batch_route_variant: str | None = None,
 ) -> list[str]:
     requested: list[str] = []
     target_path = f"/episodes/{TARGET_EPISODE_ID}"
@@ -1200,6 +1251,13 @@ async def _install_batch_routes(
             )
             return
         if path == target_path:
+            if "_rsc" in dict(parse_qsl(parsed.query, keep_blank_values=True)):
+                await route.fulfill(
+                    status=200,
+                    body="fixture-flight",
+                    content_type="text/x-component",
+                )
+                return
             body = _batch_viewer_html(
                 episode_id=TARGET_EPISODE_ID,
                 work_id=work_id,
@@ -1208,6 +1266,7 @@ async def _install_batch_routes(
                 entry_gate=entry_gate,
                 ticket_entry=ticket_entry,
                 ticket_variant=ticket_variant,
+                batch_route_variant=batch_route_variant,
             )
         elif path == f"/series/{WORK_ID}":
             body = _series_batch_html(
@@ -1256,6 +1315,7 @@ async def _batch_fixture(
     ticket_variant: str = "normal",
     native_work_id: str = WORK_ID,
     runtime_ticket_entry: bool = False,
+    batch_route_variant: str | None = None,
 ):
     discovery_native = None
     discovery_badge = discovery_target_badge
@@ -1314,6 +1374,7 @@ async def _batch_fixture(
         ticket_entry=quota_candidate or runtime_ticket_entry,
         ticket_variant=ticket_variant,
         native_work_id=native_work_id,
+        batch_route_variant=batch_route_variant,
     )
     executor = BatchExecutor(
         catalog,
@@ -1333,16 +1394,27 @@ async def _batch_fixture(
 async def test_hanayume_discovery_to_batch_zip_completes_only_eligible_candidate(
     browser_page,
     tmp_path: Path,
+    monkeypatch,
     target_badge: str,
     auth_state: str,
     expected_candidates: int,
 ) -> None:
+    route_audits: list[dict[str, object]] = []
+    original_metadata = HanayumeAdapter.collect_debug_metadata
+
+    async def collect_metadata(adapter, page):
+        metadata = await original_metadata(adapter, page)
+        route_audits.append(metadata["batch_route_guard"])
+        return metadata
+
+    monkeypatch.setattr(HanayumeAdapter, "collect_debug_metadata", collect_metadata)
     catalog, source, candidate, plan, executor, requested = await _batch_fixture(
         browser_page,
         tmp_path,
         target_badge=target_badge,
         discovery_target_badge=target_badge,
         discovery_auth_state=auth_state,
+        batch_route_variant="valid-rsc",
     )
     manifest_snapshots: list[dict[str, object]] = []
 
@@ -1396,6 +1468,59 @@ async def test_hanayume_discovery_to_batch_zip_completes_only_eligible_candidate
         for skipped in second_plan.skipped
     )
     assert f"/episodes/{TARGET_EPISODE_ID}" in requested
+    route_results = await browser_page.evaluate("() => window.batchRouteResults")
+    assert isinstance(route_results, list) and len(route_results) == 5
+    assert [row["status"] for row in route_results] == [0, 0, 0, 0, 200]
+    assert route_audits and all(
+        audit == {
+            "enabled": True,
+            "blocked_nonselected_rsc_attempts": 4,
+            "blocked_unexpected_attempts": 0,
+            "abort_failures": 0,
+            "nonselected_route_responses": 0,
+            "fatal_reason": None,
+        }
+        for audit in route_audits
+    )
+    assert requested.count(f"/episodes/{TARGET_EPISODE_ID}") == 2
+    assert not any(path.startswith("/series/") for path in requested)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ["malformed-rsc", "unknown-path-rsc", "nonget-rsc", "off-target-document"],
+)
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_batch_route_guard_fails_closed_before_ticket_or_capture(
+    browser_page, tmp_path: Path, variant: str
+) -> None:
+    catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
+        browser_page,
+        tmp_path,
+        quota_candidate=True,
+        batch_route_variant=variant,
+    )
+
+    with pytest.raises(CandidateExecutionError):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / f"route-guard-{variant}",
+            library_dir=tmp_path / "library",
+            max_pages=10,
+            now=BATCH_NOW,
+        )
+
+    if browser_page.url == f"{BASE}/episodes/{TARGET_EPISODE_ID}":
+        assert await browser_page.evaluate("() => window.ticketClicks") == 0
+    assert requested.count(f"/episodes/{TARGET_EPISODE_ID}") == 1
+    assert all(not path.startswith(("/series/", "/episodes/45ab3f5dfcc67")) for path in requested)
+    assert catalog.get_source(source.id).access_granted_until is None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+    output = tmp_path / f"route-guard-{variant}"
+    assert not list(output.rglob("*.zip"))
+    assert not list(output.rglob("page-*.png"))
 
 
 @pytest.mark.asyncio(loop_scope="module")

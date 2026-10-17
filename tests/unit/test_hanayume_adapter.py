@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from playwright.async_api import Error as PlaywrightError
@@ -24,6 +25,251 @@ from screenshot_crawler.site_adapters.hanayume.adapter import (
 )
 
 WORK_ID = "1f9f5b0d4cd52"
+
+
+@pytest.mark.parametrize("resource_type", ["fetch", "other"])
+@pytest.mark.parametrize("prefetch", [None, "1"])
+def test_hanayume_batch_route_signature_accepts_only_observed_next_rsc_shape(
+    resource_type: str, prefetch: str | None
+) -> None:
+    headers = {"rsc": "1"}
+    if prefetch is not None:
+        headers["next-router-prefetch"] = prefetch
+    request = SimpleNamespace(
+        url="https://hanayume.com/episodes/49b7e11049871?_rsc=flight",
+        method="GET",
+        headers=headers,
+        resource_type=resource_type,
+    )
+    assert HanayumeAdapter()._batch_route_signature(request) is True
+
+
+@pytest.mark.parametrize(
+    ("url", "method", "headers", "resource_type"),
+    [
+        ("https://hanayume.com/series/34bf61d51ebc3", "GET", {"rsc": "1"}, "fetch"),
+        (
+            "https://hanayume.com/series/34bf61d51ebc3?_rsc=flight",
+            "GET",
+            {"next-router-prefetch": "1"},
+            "fetch",
+        ),
+        (
+            "https://hanayume.com/series/34bf61d51ebc3?_rsc=flight&_rsc=other",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+        ),
+        (
+            "https://hanayume.com/series/34bf61d51ebc3?_rsc=flight",
+            "POST",
+            {"rsc": "1"},
+            "fetch",
+        ),
+        (
+            "https://hanayume.com/series/34bf61d51ebc3?_rsc=flight",
+            "GET",
+            {"rsc": "1", "next-router-prefetch": "0"},
+            "fetch",
+        ),
+        (
+            "http://hanayume.com/series/34bf61d51ebc3?_rsc=flight",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+        ),
+        (
+            "https://example.com/series/34bf61d51ebc3?_rsc=flight",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+        ),
+        (
+            "https://hanayume.com/series/34bf61d51ebc3?_rsc=flight",
+            "GET",
+            {"rsc": "1"},
+            "image",
+        ),
+        (
+            "https://hanayume.com/episodes/not-an-id?_rsc=flight",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+        ),
+        (
+            "https://hanayume.com/episodes/49b7e11049871/unknown?_rsc=flight",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+        ),
+        (
+            "https://user@hanayume.com/series/34bf61d51ebc3?_rsc=flight",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+        ),
+        (
+            "https://hanayume.com:444/series/34bf61d51ebc3?_rsc=flight",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+        ),
+    ],
+)
+def test_hanayume_batch_route_signature_rejects_unobserved_shape(
+    url: str, method: str, headers: dict[str, str], resource_type: str
+) -> None:
+    request = SimpleNamespace(
+        url=url, method=method, headers=headers, resource_type=resource_type
+    )
+    assert HanayumeAdapter()._batch_route_signature(request) is False
+
+
+@pytest.mark.parametrize(
+    ("url", "method", "headers", "resource_type", "expected_action", "fatal"),
+    [
+        (
+            "https://hanayume.com/episodes/49b7e11049871",
+            "GET",
+            {},
+            "document",
+            "fallback",
+            None,
+        ),
+        (
+            "https://hanayume.com/episodes/49b7e11049871?_rsc=selected",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+            "fallback",
+            None,
+        ),
+        (
+            "https://hanayume.com/series/34bf61d51ebc3/1?_rsc=range",
+            "GET",
+            {"rsc": "1", "next-router-prefetch": "1"},
+            "other",
+            "abort",
+            None,
+        ),
+        (
+            "https://hanayume.com/episodes/not-an-id?_rsc=unknown",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+            "abort",
+            "unrecognized_page_route_request",
+        ),
+        (
+            "https://hanayume.com/episodes/49b7e11049871/unknown?_rsc=unknown",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+            "abort",
+            "unrecognized_page_route_request",
+        ),
+        (
+            "https://user@hanayume.com/series/34bf61d51ebc3?_rsc=unknown",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+            "abort",
+            "unrecognized_page_route_request",
+        ),
+        (
+            "https://hanayume.com:444/series/34bf61d51ebc3?_rsc=unknown",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+            "abort",
+            "unrecognized_page_route_request",
+        ),
+        (
+            "http://hanayume.com/series/34bf61d51ebc3?_rsc=unknown",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+            "abort",
+            "unrecognized_page_route_request",
+        ),
+        (
+            "https://hanayume.com/series/34bf61d51ebc3?_rsc=unknown",
+            "POST",
+            {"rsc": "1"},
+            "fetch",
+            "abort",
+            "unrecognized_page_route_request",
+        ),
+        (
+            "https://outside.example/series/34bf61d51ebc3?_rsc=unknown",
+            "GET",
+            {"rsc": "1"},
+            "fetch",
+            "fallback",
+            None,
+        ),
+    ],
+)
+async def test_hanayume_batch_route_handler_passes_selected_and_blocks_unknown(
+    url: str,
+    method: str,
+    headers: dict[str, str],
+    resource_type: str,
+    expected_action: str,
+    fatal: str | None,
+) -> None:
+    class FakeRoute:
+        def __init__(self, request) -> None:
+            self.request = request
+            self.action: str | None = None
+
+        async def fallback(self) -> None:
+            self.action = "fallback"
+
+        async def abort(self) -> None:
+            self.action = "abort"
+
+    adapter = HanayumeAdapter()
+    adapter._episode_id = "49b7e11049871"
+    route = FakeRoute(
+        SimpleNamespace(
+            url=url,
+            method=method,
+            headers=headers,
+            resource_type=resource_type,
+        )
+    )
+    await adapter._handle_batch_navigation_route(route)
+
+    assert route.action == expected_action
+    assert adapter._batch_route_fatal_reason == fatal
+    assert adapter._batch_route_blocked_rsc == (1 if fatal is None and expected_action == "abort" else 0)
+    if fatal is not None:
+        assert adapter._batch_route_blocked_unexpected == 1
+
+
+async def test_hanayume_batch_route_guard_installs_before_batch_navigation() -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, str]] = []
+
+        def on(self, event: str, _callback) -> None:
+            self.events.append(("on", event))
+
+        async def route(self, pattern: str, _callback) -> None:
+            self.events.append(("route", pattern))
+
+    adapter = HanayumeAdapter()
+    adapter._episode_id = "49b7e11049871"
+    page = FakePage()
+    await adapter._install_batch_route_guard(page)
+
+    assert page.events == [
+        ("on", "response"),
+        ("route", "**://*/episodes/**"),
+        ("route", "**://*/series/**"),
+    ]
+    assert adapter._batch_route_guard_enabled is True
 
 
 async def test_hanayume_initial_canvas_deadline_bounds_a_stalled_observation(
