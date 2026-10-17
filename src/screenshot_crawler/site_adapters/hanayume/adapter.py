@@ -159,7 +159,7 @@ TICKET_ENTRY_SNAPSHOT_SCRIPT = r"""(episodeId) => {
     new Set(rows.map(row => row.hrefs.length === 1 ? row.hrefs[0] : null)).size === rows.length &&
     rows.every(row => row.hrefs.length === 1 &&
       /^https:\/\/hanayume\.com\/episodes\/[0-9a-f]{13}$/.test(row.hrefs[0]) &&
-      row.titleCount === 1 && row.wfIconCount === 1 && row.ifIconCount === 1);
+      row.titleCount === 1);
   const controls = all('button[data-e2e="wfRead"]');
   const control = controls.length === 1 ? controls[0] : null;
   const label = control ? (control.innerText || '').replace(/\s+/g, ' ').trim() : '';
@@ -1651,8 +1651,6 @@ class HanayumeAdapter(SiteAdapter):
             if (
                 not isinstance(row, dict)
                 or row.get("titleCount") != 1
-                or row.get("wfIconCount") != 1
-                or row.get("ifIconCount") != 1
                 or not isinstance(row.get("classes"), list)
                 or not all(isinstance(name, str) for name in row["classes"])
                 or not isinstance(row.get("rentalStats"), list)

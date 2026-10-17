@@ -95,8 +95,10 @@ def _row(position: int, label: str, *, manual_rental: bool = False) -> str:
     </div>"""
 
 
-def _ticket_public_row(position: int, label: str) -> str:
-    """Render the icon fields required by the target-local Batch row snapshot."""
+def _ticket_public_row(position: int, label: str, *, icons: bool = False) -> str:
+    """Render a public row, optionally with observed target-row markers."""
+    if not icons:
+        return _row(position, label)
     return _row(position, label).replace(
         '</a>\n    </div>',
         '<span data-e2e="eliWfIcon"></span><span data-e2e="eliIfIcon"></span>'
@@ -979,7 +981,9 @@ def _batch_viewer_html(
             "preview-absent-post-series-countdown",
             "preview-absent-post-series-denies",
         }
-        target_row = _ticket_public_row(TARGET_POSITION, target_badge)
+        target_row = _ticket_public_row(
+            TARGET_POSITION, target_badge, icons=not preview_absent
+        )
         if preview_absent:
             target_row = _ticket_public_row(3, "unclassified")
         account_class = {
@@ -988,13 +992,13 @@ def _batch_viewer_html(
             "delayed": "series-eplist mode-user mode-loading",
             "loading-timeout": "series-eplist mode-user mode-loading",
         }.get(ticket_variant, "series-eplist mode-user mode-has-eps")
-        target_account_row = _ticket_account_row(episode_id)
+        target_account_row = _ticket_account_row(episode_id, icons=True)
         if preview_absent:
             target_account_row = _ticket_account_row(_episode_id(3)).replace(
                 " mode-current", ""
             )
         if ticket_variant == "already-granted":
-            target_account_row = _ticket_account_row(episode_id).replace(
+            target_account_row = _ticket_account_row(episode_id, icons=False).replace(
                 'class="series-eplist-item mode-current mode-store-item-blank"',
                 'class="series-eplist-item mode-read mode-current mode-store-item-start"',
             ).replace(
@@ -1240,11 +1244,14 @@ def _batch_viewer_html(
     </body></html>"""
 
 
-def _ticket_account_row(episode_id: str) -> str:
+def _ticket_account_row(episode_id: str, *, icons: bool = False) -> str:
+    icon_markup = (
+        '<span data-e2e="eliWfIcon"></span><span data-e2e="eliIfIcon"></span>'
+        if icons else ""
+    )
     return f'''<div class="series-eplist-item mode-current mode-store-item-blank" data-e2e="eli">
       <a class="series-eplist-item-link" href="/episodes/{episode_id}">
-        <span data-e2e="eliTitle">Episode</span>
-        <span data-e2e="eliWfIcon"></span><span data-e2e="eliIfIcon"></span>
+        <span data-e2e="eliTitle">Episode</span>{icon_markup}
       </a>
     </div>'''
 
@@ -2015,6 +2022,36 @@ async def test_hanayume_discovery_active_manual_grant_uses_direct_batch_without_
     assert result.stop_reason == "end" and result.page_count == 4
     assert await browser_page.evaluate("() => window.ticketClicks || 0") == 0
     assert catalog.get_source(source.id).access_granted_until is not None
+    assert catalog.get_quota_resource_state(
+        catalog.get_item(candidate.item_id).work_id,
+        site="hanayume",
+        resource="work_ticket",
+    ) is None
+    assert all(not path.startswith("/series/") for path in requested)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_ticket_read_preview_without_account_icons_uses_existing_grant_directly(
+    browser_page, tmp_path: Path
+) -> None:
+    catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
+        browser_page, tmp_path, quota_candidate=True, ticket_variant="already-granted"
+    )
+    assert candidate.access_strategy == "quota" and candidate.consumes_quota
+
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "read-preview-existing-grant-output",
+        library_dir=tmp_path / "library",
+        max_pages=10,
+        now=BATCH_NOW,
+    )
+
+    assert result.stop_reason == "end" and result.page_count == 4
+    assert await browser_page.evaluate("() => window.ticketClicks || 0") == 0
+    assert requested.count("/api/checkout/rental") == 0
+    assert catalog.get_source(source.id).access_granted_until is None
     assert catalog.get_quota_resource_state(
         catalog.get_item(candidate.item_id).work_id,
         site="hanayume",

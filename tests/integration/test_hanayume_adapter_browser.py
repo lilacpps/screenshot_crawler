@@ -434,17 +434,27 @@ async def _initialized(page: Page, *, adapter: HanayumeAdapter | None = None) ->
 
 def _ticket_row(
     episode_id: str, *, account: bool, target: bool = False, duplicate_link: bool = False,
-    other_current: bool = False,
+    other_current: bool = False, icons: bool = False, read: bool = False,
 ) -> str:
     classes = "series-eplist-item"
-    if account and target:
+    if account and target and read:
+        classes = "mode-read mode-current mode-store-item-start series-eplist-item"
+    elif account and target:
         classes = "mode-current mode-store-item-blank series-eplist-item"
     elif account and other_current:
         classes = "mode-current mode-read mode-store-item-start series-eplist-item"
+    icon_markup = (
+        '<span data-e2e="eliWfIcon"></span><span data-e2e="eliIfIcon"></span>'
+        if icons else ""
+    )
+    rental_markup = (
+        '<span data-e2e="eliRentStat">\u30ec\u30f3\u30bf\u30eb\u4e2d \u95b2\u89a7\u671f\u9650<br>2\u65e5+23\u6642\u9593</span>'
+        if account and target and read else ""
+    )
     links = (
         f'<a class="series-eplist-item-link" href="/episodes/{episode_id}">'
         '<span data-e2e="eliTitle">episode</span>'
-        '<span data-e2e="eliWfIcon"></span><span data-e2e="eliIfIcon"></span></a>'
+        f'{icon_markup}{rental_markup}</a>'
     )
     if duplicate_link:
         links += f'<a class="series-eplist-item-link" href="/episodes/{episode_id}">duplicate</a>'
@@ -468,7 +478,7 @@ async def _install_work_ticket_site(
     if preview in {"absent", "other-current"}:
         public_ids = [other_id]
         account_ids = [other_id]
-    elif preview in {"present", "duplicate-link"}:
+    elif preview in {"present", "duplicate-link", "read"}:
         public_ids = [EPISODE_ID]
         account_ids = [EPISODE_ID]
     elif preview == "duplicate-row":
@@ -481,7 +491,14 @@ async def _install_work_ticket_site(
     )
     for episode_id in public_ids:
         simple = _row(episode_id, "")
-        base = base.replace(simple, _ticket_row(episode_id, account=False, target=episode_id == EPISODE_ID), 1)
+        base = base.replace(
+            simple,
+            _ticket_row(
+                episode_id, account=False, target=episode_id == EPISODE_ID,
+                icons=episode_id == EPISODE_ID,
+            ),
+            1,
+        )
     for episode_id in account_ids:
         simple = _row(episode_id, "")
         base = base.replace(
@@ -492,6 +509,8 @@ async def _install_work_ticket_site(
                 target=episode_id == EPISODE_ID,
                 duplicate_link=preview == "duplicate-link" and episode_id == EPISODE_ID,
                 other_current=preview == "other-current",
+                icons=episode_id == EPISODE_ID and preview != "read",
+                read=preview == "read" and episode_id == EPISODE_ID,
             ),
             1,
         )
@@ -638,6 +657,21 @@ async def test_hanayume_ticket_normal_direct_reuses_active_current_api_grant_wit
         browser_page, preview="absent", initial_has_access=True
     )
     adapter = await _ticket_adapter(browser_page, entry_only=False)
+    assert adapter.get_access_consumption().consumed is False
+    assert await browser_page.evaluate("() => window.ticketClicks") == 0
+    assert state["checkout_attempts"] == 0
+    assert browser_page.url == EPISODE_URL
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_ticket_normal_direct_accepts_observed_read_row_without_icons(
+    browser_page: Page,
+) -> None:
+    state = await _install_work_ticket_site(
+        browser_page, preview="read", initial_has_access=True
+    )
+    adapter = await _ticket_adapter(browser_page, entry_only=False)
+
     assert adapter.get_access_consumption().consumed is False
     assert await browser_page.evaluate("() => window.ticketClicks") == 0
     assert state["checkout_attempts"] == 0

@@ -1,6 +1,6 @@
 # 花とゆめ＋ Work Ticket 実装 Runbook
 
-**Status:** Phases 01-03 PASS; Phase 04 implementation and affected tests PASS. Final independent Reviewer and isolated live Tester gates remain pending. Confirmed ticket use remains one.
+**Status:** Phases 01-03 PASS. Phase 04 implementation and prior affected tests passed. The latest isolated 9a grant-only attempt stopped before click because preview validation incorrectly required decorative WF/IF icons on every row. The evidence-backed icon-predicate correction passed focused Unit and synthetic browser validation, including three supplementary absent-preview denial cases; independent review passed with zero blockers. Confirmed ticket use remains one.
 **Baseline:** 2026-10-17 の `main`。既存の [Hanayume free-only Runbook](../hanayume-free/README.md) R9 PASS を起点とする。  
 **実装ブランチ:** `main` から新しい `feat/hanayume-work-ticket` を作成し、main には自動マージしない。古い `feat/hanayume-adapter` を起点にしない。  
 **進捗記録:** [PROGRESS.md](PROGRESS.md)。旧 free-only Runbook は完了履歴として維持する。
