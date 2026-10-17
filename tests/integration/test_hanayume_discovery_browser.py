@@ -440,9 +440,19 @@ async def _install_pages(
 
 
 async def test_hanayume_full_incremental_and_bounded_discovery(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, monkeypatch
 ) -> None:
     requested = await _install_pages(browser_page)
+    pacing_waits: list[tuple[str, float]] = []
+    original_wait = browser_page.wait_for_timeout
+
+    async def record_wait(timeout: float) -> None:
+        if timeout == hanayume_discovery.RANGE_PACING_MS:
+            pacing_waits.append((browser_page.url, timeout))
+            return
+        await original_wait(timeout)
+
+    monkeypatch.setattr(browser_page, "wait_for_timeout", record_wait)
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     service = DiscoveryService(catalog, _registry())
 
@@ -450,6 +460,7 @@ async def test_hanayume_full_incremental_and_bounded_discovery(
 
     assert full.complete is True
     assert full.observed_count == TOTAL
+    assert pacing_waits == [(f"{BASE}/episodes/{SEED_ID}/1", 10)]
     sources = catalog.list_sources(site="hanayume")
     assert len(sources) == TOTAL
     assert {source.access_mode for source in sources} == {"free", "unknown"}
@@ -464,15 +475,18 @@ async def test_hanayume_full_incremental_and_bounded_discovery(
     catalog.mark_item_completed(seed_source.item_id)
 
     requested.clear()
+    pacing_waits.clear()
     incremental = await service.discover(browser_page, _target(), "incremental")
     assert incremental.complete is None
     assert incremental.stopped_reason == "exhausted"
     assert incremental.observed_count == TOTAL
+    assert pacing_waits == [(f"{BASE}/episodes/{SEED_ID}/1", 10)]
     assert requested.count(f"/episodes/{SEED_ID}/1") == 1
     assert requested.count(f"/episodes/{SEED_ID}/2") == 1
     assert catalog.get_item(seed_source.item_id).status == "completed"
 
     bounded_catalog = CatalogService(tmp_path / "bounded.sqlite")
+    pacing_waits.clear()
     bounded = await DiscoveryService(bounded_catalog, _registry()).discover(
         browser_page,
         _target(
@@ -487,6 +501,7 @@ async def test_hanayume_full_incremental_and_bounded_discovery(
     bounded_sources = bounded_catalog.list_sources(site="hanayume")
     assert bounded.complete is True
     assert bounded.observed_count == 3
+    assert pacing_waits == [(f"{BASE}/episodes/{SEED_ID}/1", 10)]
     assert [source.display_position for source in bounded_sources] == [30, 29, 28]
 
 
@@ -1983,34 +1998,81 @@ async def test_hanayume_direct_batch_rechecks_a_delayed_central_ticket_gate(
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("wrapper_fault", [False, True], ids=["ready", "wrapper-count-failure"])
+@pytest.mark.parametrize("short_top_empty", [False, True])
 async def test_hanayume_grant_only_work_ticket_confirms_without_capture_or_completion(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, monkeypatch, wrapper_fault: bool, short_top_empty: bool,
 ) -> None:
     catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
         browser_page, tmp_path, quota_candidate=True, ticket_variant="delayed"
     )
 
-    result = await executor.execute_grant_only_candidate(
-        browser_page,
-        candidate,
-        output_root=tmp_path / "grant-only-output",
-        max_pages=10,
-        now=BATCH_NOW,
-    )
+    if wrapper_fault or short_top_empty:
+        original_observe = HanayumeAdapter._observe
+
+        async def observe_incomplete_layout(self, page, **kwargs):
+            await page.evaluate("""options => {
+              const root = document.querySelector('#comici-viewer');
+              const pages = document.querySelector('#xCVPages');
+              if (options.shortTopEmpty) {
+                root.classList.add('mode-has-top-emptypage');
+                pages.children[1].className = '-cv-page mode-empty';
+                pages.children[1].replaceChildren();
+                pages.children[4].remove();
+              }
+              if (options.wrapperFault) {
+                pages.lastElementChild.remove();
+                if (!options.shortTopEmpty) pages.lastElementChild.remove();
+              }
+            }""", {"shortTopEmpty": short_top_empty, "wrapperFault": wrapper_fault})
+            return await original_observe(self, page, **kwargs)
+
+        monkeypatch.setattr(HanayumeAdapter, "_observe", observe_incomplete_layout)
+
+    async def execute():
+        return await executor.execute_grant_only_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "grant-only-output",
+            max_pages=10,
+            now=BATCH_NOW,
+        )
+
+    if wrapper_fault:
+        with pytest.raises(CandidateExecutionError, match="page-wrapper count is incomplete") as exc:
+            await execute()
+        assert exc.value.resource_consumed is True
+        run = catalog.list_crawl_runs()[0]
+        assert run.status == "failed" and run.page_count is None
+        metadata = json.loads(next(
+            (tmp_path / "grant-only-output").rglob("metadata.json")
+        ).read_text(encoding="utf-8"))
+        debug = metadata["adapter_debug"]
+        snapshot = debug["viewer"]["failure"]["observation"]
+        assert snapshot["wrapper_count"] == 8
+        assert snapshot["totalText"] == "9"
+        assert ("mode-has-top-emptypage" in snapshot["viewerClasses"]) is short_top_empty
+        assert debug["viewer"]["at_diagnostics"]["wrapper_count"] == 8
+        assert debug["ticket"]["entry_only"] is True
+        assert debug["ticket"]["click_attempted"] is True
+        assert debug["ticket"]["consumption_confirmed"] is True
+        assert metadata["saved_pages"] == 0
+    else:
+        result = await execute()
+        run = catalog.get_crawl_run(result.crawl_run_id)
+        assert result.resource_consumed is True and result.stop_reason == "entry_confirmed"
+        assert run.status == "succeeded" and run.page_count == 0
+        assert not any(
+            path.suffix.lower() in {".png", ".webp"}
+            for path in (tmp_path / "grant-only-output").rglob("*")
+            if path.is_file()
+        )
 
     item = catalog.get_item(candidate.item_id)
-    run = catalog.get_crawl_run(result.crawl_run_id)
     saved_source = catalog.get_source(source.id)
-    assert result.resource_consumed is True and result.stop_reason == "entry_confirmed"
     assert item.status == "pending"
-    assert run.status == "succeeded" and run.page_count == 0
     assert catalog.list_artifacts(item_id=item.id) == []
     assert saved_source.access_granted_until is not None
-    assert not any(
-        path.suffix.lower() in {".png", ".webp"}
-        for path in (tmp_path / "grant-only-output").rglob("*")
-        if path.is_file()
-    )
     assert await browser_page.evaluate("() => window.ticketClicks") == 1
     assert requested.count(f"/episodes/{TARGET_EPISODE_ID}") == 1
     assert all(not path.startswith("/series/") for path in requested)

@@ -119,6 +119,10 @@ def test_hanayume_now_free_requires_verified_series_auth_and_one_exact_badge() -
         ).access_mode == "unknown"
 
 
+def test_hanayume_discovery_range_pacing_default() -> None:
+    assert hanayume_discovery.RANGE_PACING_MS == 2_500
+
+
 def test_hanayume_range_links_validate_full_contiguous_coverage() -> None:
     ranges = _parse_range_links(_range_entries(), seed_id=SEED_ID)
 

@@ -1,6 +1,6 @@
 # Hanayume current implementation
 
-Updated: 2026-10-17. Phases 01-04 are complete at source/test checkpoint `467dc69a1ca093ac07e6024b5bddb6575d6cf24c`; implementation, tests, and live verification passed independent review; the focused Hanayume adapter Unit suite plus explicitly selected adapter-browser cases at this checkpoint passed 103 tests, 0 failed, 0 skipped/deselected (266 pytest-asyncio deprecation warnings; 7.36s). The two-class ungranted account-row correction passed independent review with 0 blockers. This result is a separate current snapshot; earlier 342-, 333-, 147-selected-plus-3, and 92-case results are not additive. The pre-guard full-repository snapshot at `1256d3b` remains 3718 passed and 2 failed (0 skipped/deselected; 4737 warnings; 1581.78s), predating later guard/adapter changes: Kadocomi's test-only redirect fixture repair passed its focused check, while the Younganimal cause remains unknown. No changed-source full-repository pass is claimed. Stage 5ca6372 live serial Batch validation passed on existing-grant `49b7e11049871` and free `8c6`; the route-guard error-code follow-up passed independent review. The 9a grant-only run confirmed a second ticket use. The first 0699 normal attempt confirmed checkout and a native grant but failed to persist it; its original reconciliation branch is unknown. A later native-first correction passed review. Full/incremental Discovery and normal direct Batch on existing-grant 0699 then preserved its future episode expiry, reached END with a 30-page PNG ZIP, and used no new checkout or work cooldown backfill. The prior `1d10701c05629` attempt is independently confirmed pre-click by source order: its exact current API was `waitAndFree/hasAccess=false` with null remaining time, a valid ungranted state; checkout/read POSTs were 0. Offline HTML plus a bounded read-only probe showed the exact target row as `mode-current mode-store-item-start` without rental markers. The narrow two-class recognition change passed the 103-case suite and independent review; exact button-label/actionability checks are unchanged. The fresh normal consuming Batch on 1d107 passed the Tester audit with one checkout, a fresh exact current-episode native grant, source/work persistence, END, and a verified 30-page PNG ZIP. Confirmed live ticket use is four on distinct works; the final independent live Reviewer gate passed with 0 blockers, completing Phase 04. Earlier direct Batch and R9 evidence remains historical below.
+Updated: 2026-10-18. Phases 01-04 are complete at source/test checkpoint `467dc69a1ca093ac07e6024b5bddb6575d6cf24c`; implementation, tests, and live verification passed independent review; the focused Hanayume adapter Unit suite plus explicitly selected adapter-browser cases at this checkpoint passed 103 tests, 0 failed, 0 skipped/deselected (266 pytest-asyncio deprecation warnings; 7.36s). The two-class ungranted account-row correction passed independent review with 0 blockers. This result is a separate current snapshot; earlier 342-, 333-, 147-selected-plus-3, and 92-case results are not additive. The pre-guard full-repository snapshot at `1256d3b` remains 3718 passed and 2 failed (0 skipped/deselected; 4737 warnings; 1581.78s), predating later guard/adapter changes: Kadocomi's test-only redirect fixture repair passed its focused check, while the Younganimal cause remains unknown. No changed-source full-repository pass is claimed. Stage 5ca6372 live serial Batch validation passed on existing-grant `49b7e11049871` and free `8c6`; the route-guard error-code follow-up passed independent review. The 9a grant-only run confirmed a second ticket use. The first 0699 normal attempt confirmed checkout and a native grant but failed to persist it; its original reconciliation branch is unknown. A later native-first correction passed review. Full/incremental Discovery and normal direct Batch on existing-grant 0699 then preserved its future episode expiry, reached END with a 30-page PNG ZIP, and used no new checkout or work cooldown backfill. The prior `1d10701c05629` attempt is independently confirmed pre-click by source order: its exact current API was `waitAndFree/hasAccess=false` with null remaining time, a valid ungranted state; checkout/read POSTs were 0. Offline HTML plus a bounded read-only probe showed the exact target row as `mode-current mode-store-item-start` without rental markers. The narrow two-class recognition change passed the 103-case suite and independent review; exact button-label/actionability checks are unchanged. The fresh normal consuming Batch on 1d107 passed the Tester audit with one checkout, a fresh exact current-episode native grant, source/work persistence, END, and a verified 30-page PNG ZIP. Confirmed live ticket use is four on distinct works; the final independent live Reviewer gate passed with 0 blockers, completing Phase 04. Earlier direct Batch and R9 evidence remains historical below.
 
 ## Registration and browser use
 
@@ -10,7 +10,9 @@ The strict Watchlist episode URL is `https://hanayume.com/episodes/<13-lowercase
 
 ## Enumeration and ordering
 
-The observed listing declares ten contiguous oldest-first ranges, from `1-30` through `271-296`. Discovery reads the whole declared range set, then navigates each numbered route once with finite navigation, DOM, and observation timeouts plus bounded 350 ms inter-range pacing. Every page must return HTTP 200 at the exact requested route, preserve its work identity and full range set, and expose one selected marker whose exact label matches the range. The actual page URL must equal the declared route. Live evidence showed the active selected anchor points to the seed episode path on all ten ranges; only that unique selected anchor may use this exact seed alias. All nonselected range links must retain their exact numbered paths.
+The observed listing declares ten contiguous oldest-first ranges, from `1-30` through `271-296`. Discovery reads the whole declared range set, then navigates each numbered route once with finite navigation, DOM, and observation timeouts plus fixed 2,500 ms inter-range pacing in full, incremental, and bounded Discovery. The wait runs after reading one numbered range and before navigating to the next; no pacing is added before the first numbered range. This site-local constant is independent of shared runtime pacing settings. Every page must return HTTP 200 at the exact requested route, preserve its work identity and full range set, and expose one selected marker whose exact label matches the range. The actual page URL must equal the declared route. Live evidence showed the active selected anchor points to the seed episode path on all ten ranges; only that unique selected anchor may use this exact seed alias. All nonselected range links must retain their exact numbered paths.
+
+The 2026-10-18 pacing correction passed all 43 Discovery Unit cases plus the browser-backed full/incremental/bounded case (44 passed, 0 skipped), and `ruff check src tests`. Unit coverage pins the 2,500 ms production default; the browser test substitutes a short delay and records the wait before the second numbered range in each mode. No wall-clock live-site timing verification was performed for this correction. Research/Probe and the full suite were not rerun because the change is limited to the site-local Discovery delay.
 
 Each range must contain its declared number of unique episode IDs. All ranges are buffered before the adapter yields any record, in both full and incremental modes. Global positions are assigned in oldest-first order before the complete records are reversed to latest-first output or sliced by inclusive bounded scope. Split episode labels remain separate as observed; display numbering is not used to derive identity or position. Missing/duplicate rows, foreign work context, route/range drift, invalid labels, or an AccessGuard stop make Discovery incomplete and prevent Catalog source updates.
 
@@ -42,13 +44,89 @@ Investigation on 2026-10-11 reproduced the normal Batch failure for Item/Source 
 
 There is no `mode-has-top-emptypage` flag: slot 1 is rendered body, slots 1–11 precede `mode-ci` at 12, PR placeholders at 13/14, `mode-good` at 15, and `mode-last` at 16. Every trailing role is one physical slot earlier than the former `total`-based contract. A normal public seek `Home` produced counter `17/17`, seek value 1, and `mode-last-page` with the same 17 wrappers. The probe rewound to counter 1 and closed only its own page. The metadata probe alone did not establish captured coverage; the subsequent standard Batch verification below did. The viewer's internal rounding/padding algorithm remains unproven and is not used as an implementation assumption.
 
-Current behavior accepts the existing `wrapper_count == total + 1` layout, and additionally the observed `wrapper_count == total` variant only for an odd total without the top-empty flag. Let `last_slot = wrapper_count - 1`. Both variants require the exact top PR and five-tail structure relative to `last_slot`; unknown/missing/shifted tail classes fail closed. Body slots are frozen from 1 (or 2 for the existing flagged leading blank) through `last_slot - 5`. The public counter/seek validation remains unchanged. For the affected target this yields exactly physical slots 1–11, rather than incorrectly treating slot 12 (`mode-ci`) as body.
+Current behavior accepts the existing `wrapper_count == total + 1` layout, and additionally the observed `wrapper_count == total` variant only for an odd total, with or without the top-empty flag. The flagged shorter variant was confirmed on episode `7c893d766d5ac` on 2026-10-18 as detailed below. Let `last_slot = wrapper_count - 1`. Both variants require the exact top PR and five-tail structure relative to `last_slot`; unknown/missing/shifted tail classes fail closed. Body slots are frozen from 1 (or 2 for the exactly validated flagged leading blank) through `last_slot - 5`. The public counter/seek validation remains unchanged. For the original unflagged target this yields exactly physical slots 1–11, rather than incorrectly treating slot 12 (`mode-ci`) as body; the newly confirmed flagged target uses slots 2–11.
 
-Native collect and post-encode verification independently validate this physical tail and exact body tuple. Proofs also retain the wrapper count; count/tail/flag drift rejects the capture, with no generic screenshot fallback. Existing leading-empty support is unchanged and does not admit the shorter wrapper variant. Synthetic tests cover the 17-counter/17-wrapper observation, complete native capture to END, rejected tail/count/flag changes, missing spread halves, and premature END alongside the prior layouts.
+Native collect and post-encode verification independently validate this physical tail and exact body tuple. Proofs also retain the wrapper count; count/tail/flag drift rejects the capture, with no generic screenshot fallback. Leading-empty validation remains exact and now also supports the confirmed shorter odd-counter variant. Synthetic tests cover both flagged and unflagged shorter layouts, complete native capture to END, rejected tail/count/flag changes, missing spread halves, and premature END alongside the prior layouts.
 
 Probe evidence: `output/hanayume-wrapper-investigation-20261011.json`; bounded metadata probe: `output/hanayume_wrapper_probe.py`. Post-fix standard CLI Batch evidence: `output/hanayume-wrapper-live-20261011-bc7bbdb0/verification.json`, prepared/audited by `output/hanayume_wrapper_live_verify.py`. The affected target completed 11 pages, ordinary control `90868f4de278f` completed 12, and leading-empty control `c8904d8e3f912` completed 11; all reached END, completed their isolated Items, and created present ZIP Artifacts. All 34 members decoded as 960x1540 VP8L WebP; ZIP CRC, sequential member names, whole-archive size/SHA-256, SQLite integrity, and crawl-status page counts passed. Packaging removed generated source directories as designed. The initial audit incorrectly expected retained manifests; its correction audited the existing completed target ZIP without repeating that crawl. No independent source-canvas RGBA comparison or visual review was performed for these 34 pages, and those historical 134-page proofs are not extended by this run.
 
 Each live case used a dedicated Catalog/output/library and working directory (including metrics). Exact available/free source, target, work, and item metadata were copied from the explicitly selected normal Catalog through a read-only connection; only the isolated retry Item was set pending. The normal Catalog, including the affected Item's existing skipped status, was not written. Access eligibility, pacing, CLI, and max-pages/same-content safeguards did not change. Adapter/native Unit + viewer browser Integration: 115 passed, 0 skipped; Discovery/policy Unit + Discovery browser Integration: 69 passed, 0 skipped (184 total). Ruff (`src tests`) and diff checks passed. All three live metrics summaries recorded zero HTTP 403/429/5xx and zero retries. Full suite was not run because this is confined to the Hanayume viewer/native layout contract; research-helper tests were not needed for production acceptance.
+
+## Viewer layout failure diagnostics (2026-10-18)
+
+User grant-only metrics run `ac9462d6318f488b9f2d00fd6a69e903` failed on Item/Source
+`28587`, episode `3eaecb5b69d55`, after 4.281 seconds, with
+`Hanayume viewer page-wrapper count is incomplete`. The candidate records
+`resource_consumed=true`; the summary has zero 403/429/5xx/challenge/CAPTCHA events and
+zero retries. The saved HTML is
+`output/batch/hanayume/item-28587-source-28587-20261018T073900955376+0900-855ce707dce04104917dd1eb791cb88c/diagnostics/page.html`.
+Offline inspection found a unique Viewer/pages/seek, counter 1/21, 21 direct page wrappers,
+and `mode-has-top-emptypage`: top PR at slot 0, empty slot 1, `mode-ci` at 16, PR at 17/18,
+good at 19, and last at 20. The pre-fix parser required 22 wrappers for that flagged
+21-counter layout; its shorter odd-counter variant excluded the top-empty flag. The old
+metadata did not preserve the exact rejected observation, so that report alone could not
+distinguish transient mounting from a stable unsupported layout.
+
+The subsequent user failure on Item/Source `28987`, episode `7c893d766d5ac`, metrics run
+`c4c2f18a10c946b99de4b886caed4215`, preserved the exact rejected observation: counter 1/17,
+17 wrappers, top-empty flag, exact empty slot 1, `mode-ci` at 12, PR at 13/14, good at 15,
+and last at 16. The diagnostic observation 5.754 ms later was identical. Its ticket metadata
+records entry-only, click-attempted, and confirmed consumption, with zero fallback reads.
+The candidate failed after 3.945 seconds; the batch summary has zero 403/429/5xx/challenge/
+CAPTCHA events and retries. A separate bounded same-episode metadata probe using the existing
+recorded grant observed that complete layout at 1, 2, 4, and 6 seconds after DOMContentLoaded.
+This establishes the flagged shorter layout as the cause for this failure, rather than a
+missing wrapper that merely needs more startup time. Evidence:
+`output/hanayume-viewer-layout-28987-20261018.json`. The probe used an owned new Page through
+shared CDP, blocked mutating requests, made no ticket clicks, and closed only its own Page.
+
+Python parsing and the native observer's shared collect/verify body-layout validation now
+accept an odd total with `wrapper_count == total` even with the top-empty flag. Exact empty
+slot 1 with zero canvases, physical top PR/five-tail roles, counter/seek agreement, frozen
+body slots, proof identity/count/flag stability, and complete body coverage before END remain
+required. Even-total shorter layouts and missing/changed structures still fail closed. This
+changes no ticket eligibility/confirmation, pacing, retries, or Catalog contracts.
+
+Post-fix direct initialization on the already-granted 28987 target passed at counter 3/17,
+17 wrappers, with body slots 2–11. A public metadata-only seek reached terminal UI 17/17 and
+rewound to 1/17 before cleanup. There were zero checkout attempts, zero captured body pages,
+and no new resource consumption or normal Catalog writes. Evidence:
+`output/hanayume-viewer-layout-fix-28987-20261018.json`. This verifies initialization and
+terminal metadata only; full real capture/packaging and a new consuming grant-only attempt
+were not run. Synthetic tests verify native output through END and the real grant-only
+Runner/Executor success/failure paths without spending another live ticket.
+
+The adapter now retains a bounded projection of each latest Viewer observation before parsing,
+including the rejected sample if parsing/identity/layout validation fails. The existing Runner
+failure writer saves it at `diagnostics/metadata.json` under
+`adapter_debug.viewer.failure.observation`, with the original error. The projection includes
+counts of Viewer/pages/seek roots, Viewer classes (including top-empty), current/total text,
+seek values, viewport, wrapper count, slot indices/classes, canvas count/dimensions/readiness,
+and a monotonic observation timestamp. It retains at most 128 slots (first/last 64 on larger
+episodes), at most 64 class names per node, and at most 160 characters per scalar string;
+`omitted_slots` records truncation. It never copies URLs, PNG/base64, canvas pixels, native/API
+payloads, credentials, cookies, or browser storage into these new metadata fields.
+
+After an observation failure, `collect_debug_metadata()` makes one read-only metadata snapshot
+with a one-second timeout, saved separately as `viewer.at_diagnostics`. A timeout/evaluation
+failure records only its exception type and preserves the original failed sample. This is
+diagnostic observation only, not a readiness retry. `adapter_debug.ticket` adds entry-only mode,
+click-attempted, confirmed-consumption, and fallback-read count. No CLI/config changes are
+required. The diagnostics do not change initialization waits, click/consumption rules, or retry
+behavior. The existing generic diagnostic writer still writes HTML/screenshot;
+its behavior and the shared Core contract are unchanged, so no Core note update is required.
+
+Unit tests cover rejected missing-wrapper observations, preservation when the later
+snapshot has 22 wrappers or evaluation fails, exclusion of URL/pixel/transport details, and
+bounded slot retention. Browser-backed grant-only tests exercise success and wrapper-count
+failure through the real Runner/Executor diagnostics path, preserving confirmed consumption
+and source grant, a pending Item, one ticket click, zero CONTENT captures, and no ZIP.
+The final affected run (Hanayume adapter/native Unit, complete adapter-browser Integration,
+grant-only success/failure for both layouts, and full/incremental/bounded Discovery) passed
+221 cases with zero failures or skips (288 existing deprecation warnings; 86.53 seconds);
+`ruff check src tests` passed. Research/Probe helper
+tests and the full repository suite are not required for this site-local layout correction;
+the live evidence and its verification limits are explicitly described above.
 
 ## Post-encoding verification diagnostics (2026-10-11)
 

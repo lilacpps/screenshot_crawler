@@ -4,6 +4,8 @@ Status at checkpoint `467dc69a1ca093ac07e6024b5bddb6575d6cf24c`: Phases 01-04 ar
 
 ## Discovery
 
+Full, incremental, and bounded Discovery wait a fixed 2,500 ms after reading each numbered range before navigating to the next numbered range. There is no added pacing before the first numbered range. This site-local delay is not controlled by the shared runtime pacing settings.
+
 Watchlist targets use the strict episode URL `https://hanayume.com/episodes/<13-lowercase-hex-id>`. Discovery reads rows only from the unique public `epList` under the route-specific observed ancestry. Episode pages use `div.ep-main.series-safe-filter-target[data-e2e="pageEpisode"] > div.series.mode-ep` (the child has no `data-e2e`) > `.series-eplist-wrap` > `.series-eplist-main`; canonical work pages use `div.series.mode-series-top.series-safe-filter-target[data-e2e="pageSeries"]` directly above the wrapper. The public root is direct under main; `eli` rows are descendants inside `.series-eplist-default.has-store-item.mode-last`. The observed direct `epListUser` history sibling is not enumerated; overlapping copies must agree on exact labels except when the exact episode has a fully proven authenticated active manual grant. Unknown/nested/duplicate roots and every other conflict fail closed. Full range/count/identity validation, global oldest-first positions, buffering, and latest-first/bounded output remain unchanged.
 
 Only exact row-scoped labels are classification evidence. One exact `無料` maps to `access_mode=free`. One exact `今なら無料` maps to `free` only when the current Discovery attempt verifies the observed account markers on the canonical `/series/<work-id>` route; otherwise it remains `unknown`. Missing/duplicate/other labels remain `unknown` unless an exact natural native `waitAndFree` row for the same work and episode promotes the row to a nominal `quota` candidate. This native type does not authorize entry. A conflicting public/account badge row is accepted only under the exact active-grant proof described below; other conflicts fail closed. Catalog stores only `access_mode`, not the raw label. Auth is attempt-local and never persisted. On an exact route/listing, a missing positive marker set is polled for at most five seconds at 150 ms intervals; deadline means no proof and keeps `今なら無料` unknown. Discovery follows the seed's observed work link, reads auth on the canonical series route, returns to the exact seed, and revalidates work/title/ranges before enumeration.
@@ -22,13 +24,37 @@ For the observed layout only, the viewer's `mode-has-top-emptypage` flag togethe
 
 ### Counter and physical-wrapper variant
 
-The adapter also supports the observed unflagged episode `e2a7ca7bd6dd7`, whose counter is 17 but whose physical wrapper count is 17. The existing `total + 1` wrapper contract remains supported; `total` wrappers are accepted only for odd totals without the leading-empty flag and with the complete exact top PR/five-tail structure. Body bounds use the last physical wrapper, so this episode captures slots 1–11 and excludes `mode-ci` at 12. Counter/seek validation is unchanged. Native collection and post-encode proof use the same physical bounds and reject tail/count/flag drift. Unknown layouts, missing spread halves, and END without full body coverage still fail closed.
+The adapter also supports the observed unflagged episode `e2a7ca7bd6dd7`, whose counter is 17 but whose physical wrapper count is 17. The existing `total + 1` wrapper contract remains supported; `total` wrappers are accepted only for odd totals and with the complete exact top PR/five-tail structure. This includes the live-confirmed top-empty variant on episode `7c893d766d5ac`: 17 counters/17 wrappers, an exact empty slot 1, and body slots 2–11. Body bounds use the last physical wrapper; the unflagged episode captures slots 1–11 and excludes `mode-ci` at 12. Counter/seek validation is unchanged. Native collection and post-encode proof use the same physical bounds and reject tail/count/flag drift. Unknown layouts, missing spread halves, and END without full body coverage still fail closed.
 
 Post-fix standard CLI Batch verification passed for this target (11 pages), an ordinary control (12), and a leading-empty control (11), all at END with verified ZIPs and completed isolated Catalog Items. All 34 members decoded as 960x1540 VP8L WebP; CRC, ordering, archive hashes/sizes, and Catalog/crawl-status checks passed. Independent source-canvas RGBA equality was not measured for these runs. Evidence: `output/hanayume-wrapper-live-20261011-bc7bbdb0/verification.json`; details and test scope are in the site note. No normal Catalog was changed by verification.
 
 ## Bounded readiness
 
 On a structurally valid canonical series listing, authentication proof is polled for up to five seconds at 150 ms intervals until the complete positive marker set appears. The route and listing must remain exact throughout; timeout leaves `今なら無料` unknown. Viewer initialization waits up to five seconds for the existing unique current/total counter nodes to contain text. Duplicate nodes fail immediately and malformed values still fail in the strict parser. Synthetic browser tests cover delayed and missing counter/auth states. The auth probe observed markers arriving at 150 ms; the counter-missing probe did not directly measure a delayed transition. The final E2E passed after these bounded readiness checks.
+
+### Viewer layout failure diagnostics
+
+Failed Viewer observations retain the exact rejected metadata under
+`adapter_debug.viewer.failure.observation` in the existing
+`output/batch/hanayume/<run>/diagnostics/metadata.json`. It includes the current/total
+counter, seek values, Viewer classes, wrapper count, and per-slot class/canvas readiness
+metadata. `viewer.at_diagnostics` is one later read-only observation, bounded to one second;
+it does not replace the failed sample. At most 128 slots (first/last 64 on larger episodes)
+are retained, with an omitted count and monotonic timestamps. No URLs, canvas pixels,
+API payloads, or browser storage are added to these fields. `adapter_debug.ticket` records
+entry-only mode, whether the click was attempted, confirmed consumption, and fallback-read count.
+No new CLI option is needed. These diagnostics do not change ticket actions, waits, or retries.
+
+The 2026-10-18 user grant-only failure for Item/Source 28587 saved a later HTML state
+with counter 1/21, 21 wrappers, and the top-empty flag. A subsequent failure on Item/Source
+28987 preserved the exact rejected 1/17 counter, 17 wrappers, and top-empty flag. A bounded
+read-only live probe confirmed the complete 17-wrapper layout persisted through six seconds.
+The parser and native proof now accept the observed odd-counter shorter layout with an exact
+empty slot 1 and complete physical tail. Missing wrappers, incorrect blank/tail classes, layout
+drift, and incomplete capture remain errors. Direct live initialization on the existing grant
+passed, recognizing body slots 2–11; metadata-only seek reached 17/17 and rewound to 1/17.
+No further checkout, ticket use, or body capture was performed in that live check. Actual
+consuming grant-only was not rerun; synthetic Runner/Executor tests cover that path.
 
 ## Capture fidelity
 

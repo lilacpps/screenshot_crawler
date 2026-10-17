@@ -1027,9 +1027,11 @@ def _parse_viewer_observation(raw: object) -> ViewerObservation:
         raise UnknownPageStateError("Hanayume viewer counter and public seek control disagree")
     slots = raw.get("slots")
     has_top_empty_page = "mode-has-top-emptypage" in raw["viewerClasses"]
+    # Live top-empty viewers can have an odd total equal to the wrapper count.
+    # Accept their physical count only with the exact blank and tail checks below.
     if not isinstance(slots, list) or not (
         len(slots) == total + 1
-        or (not has_top_empty_page and total % 2 == 1 and len(slots) == total)
+        or (total % 2 == 1 and len(slots) == total)
     ):
         raise UnknownPageStateError("Hanayume viewer page-wrapper count is incomplete")
     # The observed odd-body layout has an extra counter position, not a DOM page.
@@ -1086,6 +1088,52 @@ def _parse_viewer_observation(raw: object) -> ViewerObservation:
         terminal=terminal,
         raw=raw,
     )
+
+
+def _viewer_debug_snapshot(raw: object) -> dict[str, object]:
+    """Keep bounded layout metadata, never URLs or canvas pixel data."""
+
+    def scalar(value: object) -> object:
+        if isinstance(value, str):
+            return value[:160]
+        return value if value is None or isinstance(value, (bool, int, float)) else None
+
+    def fields(value: object, names: tuple[str, ...]) -> dict[str, object]:
+        if not isinstance(value, dict):
+            return {}
+        return {name: scalar(value.get(name)) for name in names}
+
+    def classes(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [entry[:160] for entry in value[:64] if isinstance(entry, str)]
+
+    result: dict[str, object] = {"observed_monotonic": round(time.monotonic(), 6)}
+    if not isinstance(raw, dict):
+        result["invalid_type"] = type(raw).__name__
+        return result
+    result.update(fields(raw, (
+        "viewerCount", "pagesCount", "seekCount", "currentText", "totalText",
+    )))
+    result["viewerClasses"] = classes(raw.get("viewerClasses"))
+    result["seek"] = fields(raw.get("seek"), ("type", "min", "max", "step", "value"))
+    result["viewport"] = fields(raw.get("viewport"), ("width", "height"))
+    slots = raw.get("slots")
+    result["wrapper_count"] = len(slots) if isinstance(slots, list) else None
+    if isinstance(slots, list):
+        # Preserve both ends, including the known PR/good/last tail, on large episodes.
+        selected = slots if len(slots) <= 128 else slots[:64] + slots[-64:]
+        result["omitted_slots"] = len(slots) - len(selected)
+        result["slots"] = [
+            {
+                **fields(slot, ("index", "canvasCount", "wrapperCenterInViewport")),
+                "classes": classes(slot.get("classes")),
+                "canvas": fields(slot.get("canvas"), ("width", "height", "ready", "visible")),
+            }
+            if isinstance(slot, dict) else {"invalid_type": type(slot).__name__}
+            for slot in selected
+        ]
+    return result
 
 
 def _decode_canvas_png(value: object, *, width: int, height: int) -> bytes:
@@ -1150,6 +1198,7 @@ class HanayumeAdapter(SiteAdapter):
         self._webp_encode_job: asyncio.Task[tuple[CaptureResult, ...]] | None = None
         self._capture_attempt: dict[str, object] | None = None
         self._initial_canvas_settle: dict[str, object] = {}
+        self._viewer_diagnostics: dict[str, object] = {}
 
     async def prepare_page(self, page: Page) -> None:
         try:
@@ -1179,6 +1228,7 @@ class HanayumeAdapter(SiteAdapter):
         self._ticket_click_started_monotonic = None
         self._ticket_recovery_deadline = None
         self._ticket_fallback_reads = 0
+        self._viewer_diagnostics = {}
         self._reset_batch_route_guard()
         if self._expected_work_id is not None and self._episode_id is not None:
             await self._install_batch_route_guard(page)
@@ -2755,20 +2805,29 @@ class HanayumeAdapter(SiteAdapter):
                 timeout=OBSERVATION_TIMEOUT_SECONDS,
             )
         except (PlaywrightError, TimeoutError) as exc:
+            self._viewer_diagnostics["failure"] = {"error_type": type(exc).__name__}
             raise UnknownPageStateError("Hanayume viewer observation exceeded its timeout") from exc
-        self._raise_if_batch_route_guard_failed()
-        if not isinstance(raw, dict) or raw.get("url") != page.url:
-            raise UnknownPageStateError("Hanayume viewer observation changed URL")
-        expected_url = self._target_url
-        if expected_url is not None and page.url != expected_url:
-            raise UnknownPageStateError("Hanayume viewer moved away from the selected episode")
-        observation = _parse_viewer_observation(raw)
-        if self._body_slots is not None and (
-            observation.body_slots != self._body_slots
-            or observation.body_total != self._body_total
-            or observation.has_top_empty_page != self._has_top_empty_page
-        ):
-            raise UnknownPageStateError("Hanayume viewer body layout changed during the attempt")
+        snapshot = _viewer_debug_snapshot(raw)
+        self._viewer_diagnostics["last_observation"] = snapshot
+        try:
+            self._raise_if_batch_route_guard_failed()
+            if not isinstance(raw, dict) or raw.get("url") != page.url:
+                raise UnknownPageStateError("Hanayume viewer observation changed URL")
+            expected_url = self._target_url
+            if expected_url is not None and page.url != expected_url:
+                raise UnknownPageStateError("Hanayume viewer moved away from the selected episode")
+            observation = _parse_viewer_observation(raw)
+            if self._body_slots is not None and (
+                observation.body_slots != self._body_slots
+                or observation.body_total != self._body_total
+                or observation.has_top_empty_page != self._has_top_empty_page
+            ):
+                raise UnknownPageStateError("Hanayume viewer body layout changed during the attempt")
+        except UnknownPageStateError as exc:
+            self._viewer_diagnostics["failure"] = {
+                "error": str(exc), "observation": snapshot,
+            }
+            raise
         return observation
 
     async def _wait_for_observation(
@@ -3234,7 +3293,15 @@ class HanayumeAdapter(SiteAdapter):
         self._pending = None
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, object]:
-        del page
+        viewer_debug = dict(self._viewer_diagnostics)
+        if "failure" in viewer_debug:
+            try:
+                raw = await asyncio.wait_for(
+                    page.evaluate(SNAPSHOT_SCRIPT, {"includePng": False}), timeout=1.0
+                )
+                viewer_debug["at_diagnostics"] = _viewer_debug_snapshot(raw)
+            except (PlaywrightError, TimeoutError) as exc:
+                viewer_debug["diagnostic_error_type"] = type(exc).__name__
         return {
             "capture_mode": self._capture_diagnostics.get("mode", "not_started"),
             "capture": dict(self._capture_diagnostics),
@@ -3244,6 +3311,13 @@ class HanayumeAdapter(SiteAdapter):
             "last_slots": list(self._last_capture_slots),
             "source_native": str(self._capture_diagnostics.get("mode", "")).startswith("source_canvas_"),
             "initial_canvas_settle": dict(self._initial_canvas_settle),
+            "viewer": viewer_debug,
+            "ticket": {
+                "entry_only": self._ticket_entry_only,
+                "click_attempted": self._ticket_click_attempted,
+                "consumption_confirmed": self._access_consumption.consumed,
+                "fallback_reads": self._ticket_fallback_reads,
+            },
             "batch_route_guard": {
                 "enabled": self._batch_route_guard_enabled,
                 "blocked_nonselected_rsc_attempts": self._batch_route_blocked_rsc,

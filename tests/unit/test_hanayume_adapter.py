@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -802,6 +803,62 @@ def _viewer_snapshot(
     }
 
 
+@pytest.mark.parametrize("diagnostic_unavailable", [False, True])
+async def test_hanayume_viewer_failure_keeps_exact_snapshot_before_later_diagnostics(
+    diagnostic_unavailable: bool,
+) -> None:
+    raw = _viewer_snapshot(total=21, top_empty=True, padded_counter=True)
+    raw["slots"].pop()
+    raw["url"] = f"https://hanayume.com/episodes/{EPISODE_ID}?private=do-not-log"
+    raw["slots"][2]["canvas"] = {"width": 5, "height": 7, "png": "do-not-log-pixels"}
+    later = _viewer_snapshot(total=21, top_empty=True)
+
+    class FakePage:
+        url = raw["url"]
+        calls = 0
+
+        async def evaluate(self, _script, options):
+            assert options.get("includePng") is False
+            self.calls += 1
+            if self.calls == 1:
+                return raw
+            if diagnostic_unavailable:
+                raise PlaywrightError("do-not-log-transport-details")
+            return later
+
+    adapter = HanayumeAdapter()
+    page = FakePage()
+    with pytest.raises(UnknownPageStateError, match="page-wrapper count is incomplete"):
+        await adapter._observe(page)
+    debug = await adapter.collect_debug_metadata(page)
+    assert page.calls == 2
+    failure = debug["viewer"]["failure"]
+    snapshot = failure["observation"]
+    assert failure["error"] == "Hanayume viewer page-wrapper count is incomplete"
+    assert snapshot["wrapper_count"] == 20
+    assert snapshot["totalText"] == "21"
+    assert snapshot["currentText"] == "1"
+    assert snapshot["seek"]["value"] == "21"
+    assert "mode-has-top-emptypage" in snapshot["viewerClasses"]
+    assert snapshot["slots"][-1]["classes"] == ["-cv-page", "mode-good"]
+    if diagnostic_unavailable:
+        assert debug["viewer"]["diagnostic_error_type"] == "Error"
+    else:
+        assert debug["viewer"]["at_diagnostics"]["wrapper_count"] == 22
+    assert "do-not-log" not in json.dumps(debug)
+    assert adapter.get_access_consumption().consumed is False
+    assert adapter._captured_slots == []
+
+
+def test_hanayume_viewer_diagnostics_bound_slots_and_keep_tail() -> None:
+    snapshot = hanayume_adapter._viewer_debug_snapshot(_viewer_snapshot(total=299))
+    assert snapshot["wrapper_count"] == 300
+    assert len(snapshot["slots"]) == 128
+    assert snapshot["omitted_slots"] == 172
+    assert snapshot["slots"][0]["index"] == 0
+    assert snapshot["slots"][-1]["index"] == 299
+
+
 def test_hanayume_series_ranges_accept_only_observed_active_alias() -> None:
     initial = _parse_series_ranges(_range_entries(), work_id=WORK_ID)
     selected = _parse_series_ranges(
@@ -962,20 +1019,31 @@ def test_hanayume_padded_counter_rejects_missing_or_changed_layout(mutate) -> No
         _parse_viewer_observation(snapshot)
 
 
-def test_hanayume_viewer_uses_physical_body_slots_for_observed_top_empty_layout() -> None:
-    intro = _parse_viewer_observation(_viewer_snapshot(top_empty=True))
+@pytest.mark.parametrize("padded_counter", [False, True])
+@pytest.mark.parametrize("total", [9, 17, 21])
+def test_hanayume_viewer_uses_physical_body_slots_for_observed_top_empty_layout(
+    padded_counter: bool, total: int,
+) -> None:
+    body_slots = tuple(range(2, total - int(padded_counter) - 4))
+    intro = _parse_viewer_observation(_viewer_snapshot(
+        top_empty=True, padded_counter=padded_counter, total=total,
+    ))
     assert intro.has_top_empty_page is True
-    assert intro.body_slots == (2, 3, 4)
-    assert intro.body_total == 3
+    assert intro.body_slots == body_slots
+    assert intro.body_total == len(body_slots)
     assert intro.active_slots == ()
     assert intro.ready_slots == ()
     assert intro.raw["slots"][1]["wrapperCenterInViewport"] is True
 
-    first_spread = _parse_viewer_observation(_viewer_snapshot(current=3, top_empty=True))
-    assert first_spread.body_slots == (2, 3, 4)
+    first_spread = _parse_viewer_observation(_viewer_snapshot(
+        current=3, top_empty=True, padded_counter=padded_counter, total=total,
+    ))
+    assert first_spread.body_slots == body_slots
     assert first_spread.active_slots == (2, 3)
     assert first_spread.ready_slots == (2, 3)
-    assert _expected_active_slots(5, first_spread.body_slots) == (4,)
+    assert _expected_active_slots(5, first_spread.body_slots) == tuple(
+        slot for slot in (4, 5) if slot in body_slots
+    )
 
 
 @pytest.mark.parametrize(
@@ -987,8 +1055,11 @@ def test_hanayume_viewer_uses_physical_body_slots_for_observed_top_empty_layout(
         lambda snapshot: snapshot["slots"][2].update(classes=["-cv-page", "mode-empty"]),
     ],
 )
-def test_hanayume_top_empty_layout_rejects_unobserved_or_interior_empty_state(mutate) -> None:
-    snapshot = _viewer_snapshot(top_empty=True)
+@pytest.mark.parametrize("padded_counter", [False, True])
+def test_hanayume_top_empty_layout_rejects_unobserved_or_interior_empty_state(
+    mutate, padded_counter: bool,
+) -> None:
+    snapshot = _viewer_snapshot(top_empty=True, padded_counter=padded_counter)
     mutate(snapshot)
     with pytest.raises(UnknownPageStateError):
         _parse_viewer_observation(snapshot)

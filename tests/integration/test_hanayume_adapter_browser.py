@@ -1095,17 +1095,21 @@ async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_sprea
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("padded_counter", [False, True])
 async def test_hanayume_top_empty_lead_in_captures_only_physical_body_slots_and_ends(
-    browser_page: Page,
+    browser_page: Page, padded_counter: bool,
 ) -> None:
-    await _install_mock_site(browser_page, resume_current=3, top_empty=True)
+    await _install_mock_site(
+        browser_page, resume_current=3, top_empty=True, padded_counter=padded_counter,
+    )
     adapter = await _initialized(browser_page)
 
     observation = await adapter._observe(browser_page)
     assert observation.current == 3
     assert observation.has_top_empty_page is True
-    assert observation.body_slots == (2, 3, 4)
-    assert observation.body_total == 3
+    body_slots = (2, 3) if padded_counter else (2, 3, 4)
+    assert observation.body_slots == body_slots
+    assert observation.body_total == len(body_slots)
     assert observation.active_slots == observation.ready_slots == (2, 3)
     assert adapter._captured_slots == []
 
@@ -1119,15 +1123,17 @@ async def test_hanayume_top_empty_lead_in_captures_only_physical_body_slots_and_
         (40, 40, 60), (60, 40, 60)
     ]
 
-    await adapter.go_next(browser_page)
-    await adapter.wait_for_change(browser_page, first_identity)
-    await _body_state(browser_page, adapter)
-    final_identity = await adapter.get_content_identity(browser_page)
-    assert final_identity.page_id == "4" and final_identity.page_number == 4
-    final = await adapter.capture_page(browser_page)
-    assert final is not None and len(final) == 1
-    assert Image.open(io.BytesIO(final[0].data)).convert("RGB").getpixel((0, 0)) == (80, 40, 60)
-    assert adapter._captured_slots == [2, 3, 4]
+    final_identity = first_identity
+    if not padded_counter:
+        await adapter.go_next(browser_page)
+        await adapter.wait_for_change(browser_page, first_identity)
+        await _body_state(browser_page, adapter)
+        final_identity = await adapter.get_content_identity(browser_page)
+        assert final_identity.page_id == "4" and final_identity.page_number == 4
+        final = await adapter.capture_page(browser_page)
+        assert final is not None and len(final) == 1
+        assert Image.open(io.BytesIO(final[0].data)).convert("RGB").getpixel((0, 0)) == (80, 40, 60)
+    assert adapter._captured_slots == list(body_slots)
 
     await adapter.go_next(browser_page)
     await adapter.wait_for_change(browser_page, final_identity)
@@ -1487,25 +1493,30 @@ async def test_hanayume_native_proof_is_single_outstanding_and_release_keeps_pre
     [
         "document.querySelector('#xCVPages').children[4].className = '-cv-page'",
         "document.querySelector('#xCVPages').lastElementChild.remove()",
-        "document.querySelector('#comici-viewer').classList.add('mode-has-top-emptypage')",
+        "document.querySelector('#comici-viewer').classList.toggle('mode-has-top-emptypage')",
     ],
     ids=["tail-class", "wrapper-count", "top-empty-flag"],
 )
+@pytest.mark.parametrize("top_empty", [False, True])
 async def test_hanayume_padded_native_capture_rejects_wrong_body_and_layout_drift(
-    browser_page: Page, mutation: str,
+    browser_page: Page, mutation: str, top_empty: bool,
 ) -> None:
-    await _install_mock_site(browser_page, padded_counter=True)
+    await _install_mock_site(browser_page, padded_counter=True, top_empty=top_empty)
     adapter = await _initialized(browser_page)
     args = {
-        "expectedSlots": [1], "expectedCurrent": 1, "expectedBodyTotal": 4,
-        "expectedBodySlots": [1, 2, 3, 4], "hasTopEmptyPage": False,
+        "expectedSlots": [2, 3] if top_empty else [1],
+        "expectedCurrent": 3 if top_empty else 1, "expectedBodyTotal": 4,
+        "expectedBodySlots": [1, 2, 3, 4], "hasTopEmptyPage": top_empty,
         "episodePath": f"/episodes/{EPISODE_ID}",
     }
     wrong = await browser_page.evaluate(
         "args => window.__hanayumeNativeCapture.collect(args)", args
     )
     assert wrong["ok"] is False and wrong["reason"] == "selected_page_changed"
-    args.update(expectedBodyTotal=3, expectedBodySlots=[1, 2, 3])
+    args.update(
+        expectedBodyTotal=2 if top_empty else 3,
+        expectedBodySlots=[2, 3] if top_empty else [1, 2, 3],
+    )
     valid = await browser_page.evaluate(
         "args => window.__hanayumeNativeCapture.collect(args)", args
     )

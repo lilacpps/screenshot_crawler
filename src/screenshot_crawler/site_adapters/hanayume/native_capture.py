@@ -431,9 +431,10 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const total = Number(observation.totalText);
     const slots = observation.slots;
     const topEmpty = observation.viewerClasses.includes('mode-has-top-emptypage');
+    // Match Python's observed shorter odd-total layout; exact blank/tail checks follow.
     if (!Number.isInteger(total) || total < 8 ||
         !(slots.length === total + 1 ||
-          (!topEmpty && total % 2 === 1 && slots.length === total))) return null;
+          (total % 2 === 1 && slots.length === total))) return null;
     const last = slots.length - 1;
     const exactClasses = (index, expected) => {
       const row = slots[index];
