@@ -672,7 +672,7 @@ async def _install_reader_routes(
     *,
     listed_episode_id: str = EPISODE_ID,
     deadline: str = "2099/10/14 11:00",
-    redirect_foreign_episode: bool = False,
+    client_navigate_foreign_episode: bool = False,
     include_end: bool = True,
     reverse_spread: bool = False,
     skip_to_end: bool = False,
@@ -717,10 +717,16 @@ async def _install_reader_routes(
         if path == f"/detail/{WORK_ID}":
             await route.fulfill(status=200, body=listing, content_type="text/html; charset=utf-8")
         elif path == f"/detail/{WORK_ID}/episodes/{EPISODE_ID}":
-            if redirect_foreign_episode:
+            if client_navigate_foreign_episode:
+                foreign_url = f"{WORK_URL}/episodes/KC_0049150000400012_E"
                 await route.fulfill(
-                    status=302,
-                    headers={"Location": f"/detail/{WORK_ID}/episodes/KC_0049150000400012_E"},
+                    status=200,
+                    body=(
+                        "<!doctype html><html><body><script>"
+                        f"location.replace({json.dumps(foreign_url)});"
+                        "</script></body></html>"
+                    ),
+                    content_type="text/html; charset=utf-8",
                 )
                 return
             if episode_status != 200 and not http_error_with_viewer:
@@ -751,6 +757,41 @@ async def _install_reader_routes(
             await route.fulfill(status=404, body="not found")
 
     await page.route("https://comic-walker.com/**", fulfill)
+
+
+def _wait_for_foreign_client_navigation(page: Page, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Synchronize the client-navigation fixture and return goto's original 200 response."""
+    original_goto = page.goto
+    initial_responses = []
+    foreign_url = f"{WORK_URL}/episodes/KC_0049150000400012_E"
+
+    def record_initial_response(response) -> None:
+        request = response.request
+        if (
+            request.is_navigation_request()
+            and request.resource_type == "document"
+            and request.frame == page.main_frame
+            and response.url == EPISODE_URL
+        ):
+            initial_responses.append(response)
+
+    page.on("response", record_initial_response)
+
+    async def goto_and_wait_for_foreign(url: str, *args, **kwargs):
+        response = await original_goto(url, *args, **kwargs)
+        if url == EPISODE_URL:
+            await page.wait_for_url(
+                foreign_url,
+                wait_until="domcontentloaded",
+                timeout=5_000,
+            )
+            await page.wait_for_load_state("domcontentloaded", timeout=5_000)
+            if not initial_responses:
+                raise AssertionError("the synthetic initial HTTP 200 response was not observed")
+            response = initial_responses[0]
+        return response
+
+    monkeypatch.setattr(page, "goto", goto_and_wait_for_foreign)
 
 
 def _watch_main_document_requests(page: Page) -> list[str]:
@@ -1132,7 +1173,7 @@ async def test_kadocomi_runner_waits_for_delayed_same_page_metadata(
         "missing_heading",
         "og_mismatch",
         "dialog",
-        "foreign_redirect",
+        "foreign_client_navigation",
         "missing_end",
         "reverse_spread",
         "skip_slide",
@@ -1261,8 +1302,8 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         options["nonrender"] = True
     elif scenario in {"missing_heading", "og_mismatch", "dialog"}:
         options["metadata_fault"] = scenario
-    elif scenario == "foreign_redirect":
-        options["redirect_foreign_episode"] = True
+    elif scenario == "foreign_client_navigation":
+        options["client_navigate_foreign_episode"] = True
     elif scenario == "missing_end":
         options["include_end"] = False
     elif scenario == "reverse_spread":
@@ -1398,6 +1439,8 @@ async def test_kadocomi_runner_fails_closed_without_claiming_a_complete_run(
         else:
             options["beginning_fault"] = scenario.removeprefix("beginning_")
     await _install_reader_routes(browser_page, images, **options)
+    if scenario == "foreign_client_navigation":
+        _wait_for_foreign_client_navigation(browser_page, monkeypatch)
     if scenario in {"missing_end", "nonrender"}:
         monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
     if scenario in {"missing_heading", "og_mismatch", "dialog"}:
@@ -1634,7 +1677,7 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
         "http_404",
         "http_500_with_viewer",
         "nonrender",
-        "foreign_redirect",
+        "foreign_client_navigation",
         "missing_end",
         "mixed_missing_marker",
         "mixed_final_no_arrow",
@@ -1781,8 +1824,8 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
     elif failure == "nonrender":
         options["nonrender"] = True
         monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
-    elif failure == "foreign_redirect":
-        options["redirect_foreign_episode"] = True
+    elif failure == "foreign_client_navigation":
+        options["client_navigate_foreign_episode"] = True
     elif failure == "missing_end":
         options["include_end"] = False
         monkeypatch.setattr(kadocomi_adapter, "VIEWER_READY_TIMEOUT_SECONDS", 0.2)
@@ -1808,6 +1851,8 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
         else:
             options["beginning_fault"] = failure.removeprefix("beginning_")
     await _install_reader_routes(browser_page, images, **options)
+    if failure == "foreign_client_navigation":
+        _wait_for_foreign_client_navigation(browser_page, monkeypatch)
     main_document_urls = _watch_main_document_requests(browser_page)
 
     with pytest.raises(CandidateExecutionError):
@@ -1830,7 +1875,7 @@ async def test_kadocomi_batch_runtime_failures_leave_item_pending_without_zip(
         assert await browser_page.evaluate("window.__finalPrKeyCount") == 1
     expected_navigation_paths = (
         [EPISODE_URL, f"{WORK_URL}/episodes/KC_0049150000400012_E"]
-        if failure == "foreign_redirect"
+        if failure == "foreign_client_navigation"
         else [EPISODE_URL]
     )
     assert main_document_urls == expected_navigation_paths
