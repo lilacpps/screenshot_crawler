@@ -19,13 +19,16 @@ Discovery 済みの Catalog に対し、各話の canonical URL (`https://hanayu
 | 開始点 | Discovery / Catalog 済みの episode URL。Batch が Discovery しない |
 | 通常 Batch | ticket のクリック後、遷移先の話の1ページ目からそのまま既存 Crawler を実行 |
 | Grant-only | ticket 使用・成功確認・記録まで。**画像保存0、ZIP0、Item は pending** |
-| 再実行 | **23時間未満は作品単位でサイトアクセス前にローカル SKIP**。次回確認可能時刻を出力 |
+| 手動消費の同期 | **Discovery がログイン中の使用済み話を判定**し、残り閲覧時間または絶対期限から `access_granted_until` を更新。通常 Batch は期限内を direct 処理 |
+| 再実行 | **自動消費後23時間未満は作品単位でサイトアクセス前にローカル SKIP**。手動消費は消費日時/回復時刻が確実に観測できた場合に限り、同じ work-scoped cooldown に同期。次回確認可能時刻を出力 |
 | 処理順 | **1作品ずつ逐次処理**。前作品を処理・終了してから次作品。先に全作品の live 状態を確認しない |
 | 禁止 | Batch 中の `/series/` 作品ページ・作品一覧・全話リストの巡回、有償購入・コイン操作、別作品の先読み |
 
 ComicDAYS の作品単位 Resource / Batch / grant-only の扱いを**第一参考**とする。必要に応じてゼブラックの候補グループ化部分を参考にしてよいが、ゼブラックの旧式「先に全作品の状態を巡回」は絶対に行わない。
 
-72時間の閲覧 grant は source（episode）単位 `access_granted_until` に保存し、チケット消費時刻は Catalog の既存 work-scoped quota-resource state (`site, work_id, resource`) に保存する。サイト由来の正確な有効期限が得られれば優先し、得られなければ**確認済みの消費時刻＋72h**を適用。23h はあくまで同作品で新しい ticket を使えない期間。使用済み話が72h中ならチケットを使わず direct で読む。
+72時間の閲覧 grant は source（episode）単位 `access_granted_until` に保存し、チケット消費時刻は Catalog の既存 work-scoped quota-resource state (`site, work_id, resource`) に保存する。**自動消費**なら正の消費確認日時＋72h（サイト由来の正確な期限が得られれば優先）、**手動消費を Discovery で観測**した場合はサイトの正確な有効期限、または観測した残時間の**下限**から安全側の期限を算出する。例えば UI の「2日＋23時間」が時間切り捨て表示なら「観測時点＋71時間」を下限とし、単純に `now + 72h` として閲覧期限を延長しない。表示の切り上げ/切り捨てルールは実サイト調査で検証する。期限算出できない場合は推測値を書かず、状態を `unknown` / 保守的な扱いにする。23h は同作品で新しい ticket を使えない期間。使用済み話が72h中ならチケットを使わず direct で読む。
+
+**Discovery で同期した手動消費と、Batch 自身が行った消費を区別する。** 手動消費の閲覧終了時刻だけから消費した正確な時刻をでっち上げて work-scoped cooldown に保存しない。サイトが回復残時間/消費日時を直接証明できる場合のみ work resource 状態に反映する。手動消費の正確な cooldown が判らない場合も、対象話の閲覧 grant の直接取得は実装し、別話への ticket click は site 側の使用可能状態を直前に確認して fail-closed にする。
 
 ## 2. 絶対に守る制約・安全条件
 
@@ -44,7 +47,7 @@ ComicDAYS の作品単位 Resource / Batch / grant-only の扱いを**第一参�
 - `src/screenshot_crawler/site_adapters/comicdays/adapter.py`: `quota/work_ticket` の entry と通常 Viewer を**同一ページ内**で連結、`initialize_entry_only`、一度だけ click、消費確認・ラッチ。
 - `src/screenshot_crawler/batch/executor.py`、`batch/grants.py`、`cli.py`: Catalog への work resource 状態保存、ローカル SKIP、grant-only 実行とレポートを再利用。
 - `src/screenshot_crawler/site_adapters/hanayume/adapter.py`: 現行 Viewer / native capture は原則変更しない。チケット入場処理だけ前段に追加。
-- `src/screenshot_crawler/site_adapters/hanayume/discovery.py`: 現行は `無料` と認証済み `今なら無料` を free、その他を unknown とする。調査で検証できたチケット系 badge を quota にする。ただし **既存 Catalog を使う要件**があるため、既存 unknown source の候補化方法は先に調べる。unknown を無条件に quota・使用可能と決めつけず、選んだ1話内の厳密な ticket control で安全を証明する。Batch から Discovery を再実行しない。
+- `src/screenshot_crawler/site_adapters/hanayume/discovery.py`: 現行は `無料` と認証済み `今なら無料` を free、その他を unknown とする。**ログイン済みDiscoveryで「待つと無料」の未消費話だけでなく、手動で既に使った話の「レンタル中／閲覧期限／残時間」等の state も識別し、`access_mode=quota` と `access_granted_until` を同時に設定する**。使用済み話を `paid` に誤分類しない。既存の `epListUser` history/account rows に使用済み状態が現れる可能性がある。public 行と history 行のラベルが異なる場合でも、安全に認識した同一話の grant 差分だけを例外として許容し、work/episode identity・重複検証・読書順の authority は維持する。既存 unknown source の候補化は安全な対象話検証の下で行い、全 unknown を無条件に quota としない。Batch から Discovery を再実行しない。
 
 **設計選択:** 通常 Batch では ComicDAYS 型の**non-deferred quota execution**を第一候補にする。現行の deferred 付与→post-grant direct 再ナビゲーションは「クリック後そのページをそのままcrawl」と食い違うため、そのまま使わない。一方、同作品に複数 pending candidate がある時の「1作品1候補」を現行 Planner/CLI が保証するかを検証する。不十分なら、work 単位で最初の Catalog 候補だけを選ぶ薄い site-owned 層、または最小限の site-neutral grouping を追加し、Core の site 固有分岐や大きな抽象化を避ける。候補選定や cooldown SKIP にサイト通信を伴わせない。
 
@@ -60,7 +63,7 @@ ComicDAYS の作品単位 Resource / Batch / grant-only の扱いを**第一参�
 - https://hanayume.com/episodes/06994043345b1
 - https://hanayume.com/episodes/1d10701c05629
 
-各話へ直接アクセスし、対象 work/episode ID、button 固有属性・親スコープ・数・表示状態、paid control との差、UI hydration、チケット回復の表示、72h閲覧 grant の表示/絶対期限を**read-only** で観測。作品ページ・一覧ページには行かない。5話が異なる作品であるとは仮定しない。1話の安全性を確定した後、必要な**最少の ticket（まず1枚）**だけ使用して click 後の target、Viewer first-page readiness、サイトにおける消費の正の証拠を確認。click が不確実なら二度押し禁止。安全な control / identity / success 判定が立証できなければ実際の消費に進まない。
+各話へ直接アクセスし、対象 work/episode ID、button 固有属性・親スコープ・数・表示状態、paid control との差、UI hydration、チケット回復の表示、72h閲覧 grant の表示/絶対期限を**read-only** で観測。**Discovery 自体は既存の列挙仕様の範囲で作品ページを使えるが、通常Batch / grant-only / ticket 直前の preflight では作品ページ・一覧ページに行かない。** manual ticket の active 状態について public 行と `epListUser` の相違、残時間の表示精度と丸め方法、期限切れ後の表示を調べる。5話が異なる作品であるとは仮定しない。1話の安全性を確定した後、必要な**最少の ticket（まず1枚）**だけ使用して click 後の target、Viewer first-page readiness、サイトにおける消費の正の証拠を確認。click が不確実なら二度押し禁止。安全な control / identity / success 判定が立証できなければ実際の消費に進まない。
 
 **Gate:** DOM/API の観測証拠、Catalog identity の一致、72h の有効期間と23hの回復表示の区別、消費確認方法を `PROGRESS.md` に記録。Explorer → Reviewer の安全確認。
 
@@ -70,10 +73,12 @@ ComicDAYS の作品単位 Resource / Batch / grant-only の扱いを**第一参�
 
 - SitePolicyに `supported_access_resources()`、`ordered_access_resource_passes()`、`grant_only_supported_access_resources()`、`resource_state_scope("work_ticket")=="work"`、`grant_only_skip_reason()`、`grant_only_retry_at()`、`access_grant_until()` を追加。
 - `quota` 候補は `quota_scope="work"`、`quota_resource="work_ticket"`、`quota_commit_mode="after_observed_consumption"`。`free` は direct、当該話の未期限切れの grant も direct。`paid` は不許可。
-- 観測済みの ticket バッジを適切に quota 判定。現行の無料ラベル判定は変更しない。古い unknown の扱いは明示的・限定的な候補 selection とクリック直前の厳格判定で対応する。未確認の候補を無差別に大量リクエストしない。
+- 観測済みの ticket バッジを適切に quota 判定。**手動消費済み**は `access_mode=quota` + 未来の `access_granted_until` + `access_granted_until_observed=True` として Discovery から Catalog に upsert し、通常 Batch で direct 判定されることを確認する。読める話だけに付与し、別話へ伝播させない。現行の無料ラベル判定は変更しない。古い unknown の扱いは明示的・限定的な候補 selection とクリック直前の厳格判定で対応する。未確認の候補を無差別に大量リクエストしない。
+- active の絶対期限がない場合はサイト表示の残り時間の下限を使用し、上限を過大評価しない。**active -> expired / no grant 変化で stale `access_granted_until` を消す**。既存 `DiscoveryService` / `CatalogService.refresh_discovered_source()` の `access_granted_until_observed` 意味論を使い、観測できない状態を `observed=True, until=None` にしない。旧 Catalog の確かな grant を不明な観測で消去しない。
+- `hanayume` の Discovery は現在、全 range を列挙してから結果を返す一方、`incremental` では汎用 known-streak により Catalog upsert が途中で止まり得る。**既知の古い話の手動 grant を取りこぼさない**ため、既に検証済みの full list のうち account access/grant 状態を増分更新する仕組み（例: Hanayume 固有の `incremental_stop_decision=CONTINUE`）を採用し、余計な site page access を増やさない。既存の order / bounded scope / full の完全性 / 他 Adapter の incremental への回帰を避ける。
 - Catalog上で work ごとに**1話だけ**選定し、選定済みの work ごとの順序で処理。正の ticket 適格証拠がない場合は当該 work を SKIP（次の話への連続探索は禁止）。
 - 過去に消費を確定した work は **now < last_consumed_at+23h** で必ずローカルSKIP。直近の source grant は72hを超えて direct にしない。時間は tz-aware、境界・別 work・再起動をテスト。
-- **Gate:** 単体テストで23h境界（22:59:59 SKIP / 23:00:00 pass）、72h期限（71:59:59 direct / 72:00:00期限切れ）、同作品の複数話、旧 Catalog unknown、Catalog-only skip の site network 0件。
+- **Gate:** 単体テストで23h境界（22:59:59 SKIP / 23:00:00 pass）、72h期限（71:59:59 direct / 72:00:00期限切れ）、同作品の複数話、旧 Catalog unknown、Catalog-only skip の site network 0件。**手動ticketを使用済みの古い話について `full`・`incremental` の両方で active grant を保存・更新・失効時にクリアし、既存の `public` / `epListUser` の合法な差分を安全に解決する**テストを必須とする。手動消費後の23h work cooldown は native evidence がある場合にだけ同期する。
 
 ### Phase 03 — Ticket entry / Viewer continuation / grant-only
 
@@ -88,13 +93,14 @@ ComicDAYS の作品単位 Resource / Batch / grant-only の扱いを**第一参�
 
 ### Phase 04 — Integration / real site / independent verification
 
-1. `ruff check src tests`、`pytest`、`git diff --check`。Hanayumeの既存 direct/free、ComicDAYS・Zeblack の quota 関連に回帰がないこと。共通Batchを触れた場合は全 site policy の既存テスト。
+1. `ruff check src tests`、`pytest`、`git diff --check`。Hanayumeの既存 direct/free、ComicDAYS・Zeblack の quota 関連に回帰がないこと。共通Batchを触れた場合は全 site policy の既存テスト。**ログイン済みの手動ticket利用 -> discover full/incremental -> source grant 保存 -> batch normal で ticket 再消費0・Viewer crawl成功**の一連の経路を独立に検証する。
 2. **隔離DB/Watchlist/output/library**、共有ログイン済みChromeで `batch run --site hanayume --grant-only work_ticket --limit 1`。消費確定、sourceの72h grant、workの23h state、画像0・ZIP0・Item pending を監査。同作品で再実行し、**ページアクセス0件で SKIP** になること。既存 Catalog は破壊しない。
 3. 別の未消費作品で通常 `batch run --site hanayume --limit 1`。**ticket click 後の同一Page**で本文先頭・中間・最後・ENDまで確認し、ZIP CRC、ページ順、lossless WebPの品質と Catalog completed を独立チェック。無料話の direct control を別途検証。
-4. 必要な場合だけ複数作品を逐次実行し、作品Aの処理終了前に作品Bへの live request が0であること、同作品 ticket は1回、作品別cooldownが独立であることを確認。ユーザー提示の5件を上限目安とし、余分にticketを消費しない。
-5. Reporter に OK（消費確認）、SKIP（23h、利用不可）、NG（消費未確認）を区別して記録。click 後の中断・capture failure でも使用事実を失わない。秘密・画像・signed URLをコミットしない。
+4. **手動で使用済みの話**を read-only Discovery で拾う試験を実施する。期限内の `access_granted_until` が保存され、通常 Batch で直接 Viewer を取得（click 0件）、期限切れなら不正に direct としないことを確認する。可能なら自然に存在する既使用状態を使い、試験のために余分な消費をしない。
+5. 必要な場合だけ複数作品を逐次実行し、作品Aの処理終了前に作品Bへの live request が0であること、同作品 ticket は1回、作品別cooldownが独立であることを確認。ユーザー提示の5件を上限目安とし、余分にticketを消費しない。
+6. Reporter に OK（消費確認）、SKIP（23h、利用不可）、NG（消費未確認）を区別して記録。click 後の中断・capture failure でも使用事実を失わない。秘密・画像・signed URLをコミットしない。
 
-**Acceptance:** Batch由来の作品ページ／全作品事前アクセス0件、作品ごとのticket消費最大1回/23h、ローカルskip時のsite request0件、72h grantは話単位、通常Batchは同じPageからEND/ZIP、grant-onlyはZIP0/Item pending。Reviewer と独立 Tester の検証が完了し、`PROGRESS.md` にSHA・コマンド・根拠・残リスクを記録するまで DONE としない。
+**Acceptance:** Batch由来の作品ページ／全作品事前アクセス0件、作品ごとのticket消費最大1回/23h、ローカルskip時のsite request0件、72h grantは話単位、**手動消費を Discovery（full/incremental）で取り込み期限内は ticket 再消費なしに crawl 可**、通常Batchは同じPageからEND/ZIP、grant-onlyはZIP0/Item pending。Reviewer と独立 Tester の検証が完了し、`PROGRESS.md` にSHA・コマンド・根拠・残リスクを記録するまで DONE としない。
 
 ## 5. 作業体制と更新先
 
