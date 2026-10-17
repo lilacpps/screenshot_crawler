@@ -1,6 +1,6 @@
 # 花とゆめ＋ Work Ticket 実装 Runbook
 
-**Status:** Phases 01-03 PASS. Phase 04 implementation and prior affected tests passed. The latest isolated 9a grant-only attempt stopped before click because preview validation incorrectly required decorative WF/IF icons on every row. The evidence-backed icon-predicate correction passed focused Unit and synthetic browser validation, including three supplementary absent-preview denial cases; independent review passed with zero blockers. Confirmed ticket use remains one.
+**Status:** Phases 01-03 and prior material code reviews passed. The preview-icon correction passed focused synthetic tests and independent review. Live `9a2b14d706281` grant-only confirmed one ticket use; the later `06994043345b1` normal Batch confirmed checkout HTTP 200 and a fresh exact current-episode `false → true` transition, but the adapter raised `AccessConsumptionUnconfirmedError`, persisted no Catalog grant/work state, left the Item pending, and produced no artifact. Offline trace review is pending; do not retry or consume another ticket. Cumulative real ticket use is three. Current CLI retry-time display work does not change adapter confirmation behavior.
 **Baseline:** 2026-10-17 の `main`。既存の [Hanayume free-only Runbook](../hanayume-free/README.md) R9 PASS を起点とする。  
 **実装ブランチ:** `main` から新しい `feat/hanayume-work-ticket` を作成し、main には自動マージしない。古い `feat/hanayume-adapter` を起点にしない。  
 **進捗記録:** [PROGRESS.md](PROGRESS.md)。旧 free-only Runbook は完了履歴として維持する。
@@ -23,6 +23,8 @@ Discovery 済みの Catalog に対し、各話の canonical URL (`https://hanayu
 | 再実行 | **自動消費後23時間未満は作品単位でサイトアクセス前にローカル SKIP**。手動消費は消費日時/回復時刻が確実に観測できた場合に限り、同じ work-scoped cooldown に同期。次回確認可能時刻を出力 |
 | 処理順 | **1作品ずつ逐次処理**。前作品を処理・終了してから次作品。先に全作品の live 状態を確認しない |
 | 禁止 | Batch 中の `/series/` 作品ページ・作品一覧・全話リストの巡回、有償購入・コイン操作、別作品の先読み |
+
+通常 Batch と grant-only の作品 cooldown によるローカル SKIP は、Policy が次回確認時刻を返す場合にその時刻を表示する。hook が未実装または `None` の場合は理由のみ表示する。どちらも Catalog-only 判定であり、SKIP した候補では Page を開かず待機もしない。
 
 ComicDAYS の作品単位 Resource / Batch / grant-only の扱いを**第一参考**とする。必要に応じてゼブラックの候補グループ化部分を参考にしてよいが、ゼブラックの旧式「先に全作品の状態を巡回」は絶対に行わない。
 

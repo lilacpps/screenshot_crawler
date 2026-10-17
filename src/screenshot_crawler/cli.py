@@ -1251,21 +1251,28 @@ def _apply_access_resolution(
     return [candidate for candidate in candidates if candidate.source_id in selected_ids]
 
 
+def _local_resource_skip_detail(
+    executor: BatchExecutor, candidate: BatchCandidate, reason: str,
+) -> str:
+    retry = getattr(executor, "grant_only_retry_at", None)
+    retry_at = retry(candidate) if callable(retry) else None
+    if retry_at is None:
+        return reason
+    return f"{reason}／次回確認可能: {retry_at:%Y-%m-%d %H:%M %Z}"
+
+
 def _record_local_grant_skip(
     executor: BatchExecutor, candidate: BatchCandidate, reason: str,
     report: GrantOnlyReport | None = None,
-) -> None:
-    retry = getattr(executor, "grant_only_retry_at", None)
-    retry_at = retry(candidate) if callable(retry) else None
-    detail = reason
-    if retry_at is not None:
-        detail += f"／次回確認可能: {retry_at:%Y-%m-%d %H:%M %Z}"
+) -> str:
+    detail = _local_resource_skip_detail(executor, candidate, reason)
     if report is not None:
         report.record(
             candidate, status="SKIP", reason=detail, resource_consumed=False, selected=False
         )
     else:
         print(f"  SKIP  {candidate.metadata.get('title', candidate.item_id)}  {detail}")
+    return detail
 
 
 def _filter_local_grant_candidates(
@@ -1853,10 +1860,16 @@ async def _execute_batch_candidates(
             local_skip_reason = executor.grant_only_skip_reason(candidate)
             if local_skip_reason is not None:
                 if grant_report is not None:
-                    _record_local_grant_skip(executor, candidate, local_skip_reason, grant_report)
+                    skip_detail = _record_local_grant_skip(
+                        executor, candidate, local_skip_reason, grant_report
+                    )
+                else:
+                    skip_detail = _local_resource_skip_detail(
+                        executor, candidate, local_skip_reason
+                    )
                 print(
                     f"[{phase} {index}/{len(candidates)}] item={candidate.item_id} "
-                    f"SKIPPED {local_skip_reason}"
+                    f"SKIPPED {skip_detail}"
                 )
                 if metrics is not None:
                     metrics.record_local_skip(candidate, reason=local_skip_reason)
@@ -1866,9 +1879,12 @@ async def _execute_batch_candidates(
             if callable(resource_state_check):
                 local_skip_reason = resource_state_check(candidate)
                 if local_skip_reason is not None:
+                    skip_detail = _local_resource_skip_detail(
+                        executor, candidate, local_skip_reason
+                    )
                     print(
                         f"[{phase} {index}/{len(candidates)}] item={candidate.item_id} "
-                        f"SKIPPED {local_skip_reason}"
+                        f"SKIPPED {skip_detail}"
                     )
                     if metrics is not None:
                         metrics.record_local_skip(candidate, reason=local_skip_reason)

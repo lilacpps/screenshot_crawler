@@ -2407,8 +2407,15 @@ async def test_batch_empty_candidate_list_has_no_candidate_delay(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_at",
+    [None, datetime(2026, 10, 17, 12, 34, tzinfo=JST)],
+    ids=["no-retry-time", "retry-time"],
+)
 async def test_grant_only_local_skip_does_not_open_page_or_delay(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    retry_at: datetime | None,
 ) -> None:
     events: list[str] = []
 
@@ -2423,6 +2430,9 @@ async def test_grant_only_local_skip_does_not_open_page_or_delay(
     class FakeExecutor:
         def grant_only_skip_reason(self, candidate: object, **_kwargs: object) -> str | None:
             return "work_ticket_cooldown" if candidate.item_id == 1 else None
+
+        def grant_only_retry_at(self, _candidate: object) -> datetime | None:
+            return retry_at
 
         async def execute_grant_only_candidate(
             self, _page: object, candidate: object, **_kwargs: object
@@ -2460,6 +2470,12 @@ async def test_grant_only_local_skip_does_not_open_page_or_delay(
 
     assert (processed, should_continue) == (1, True)
     assert events == ["new", "execute:2", "close"]
+    output = capsys.readouterr().out
+    assert "SKIPPED work_ticket_cooldown" in output
+    if retry_at is None:
+        assert "次回確認可能" not in output
+    else:
+        assert "次回確認可能: 2026-10-17 12:34 JST" in output
 
 
 @pytest.mark.asyncio
@@ -2533,8 +2549,15 @@ async def test_grant_only_candidate_local_resource_skip_continues_to_later_candi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_at",
+    [None, datetime(2026, 10, 17, 12, 34, tzinfo=JST)],
+    ids=["no-retry-time", "retry-time"],
+)
 async def test_normal_work_cooldown_skip_does_not_open_page_or_delay(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    retry_at: datetime | None,
 ) -> None:
     events: list[str] = []
 
@@ -2549,6 +2572,9 @@ async def test_normal_work_cooldown_skip_does_not_open_page_or_delay(
     class FakeExecutor:
         def resource_state_skip_reason(self, candidate: object, **_kwargs: object) -> str | None:
             return "work_ticket_cooldown" if candidate.item_id == 1 else None
+
+        def grant_only_retry_at(self, _candidate: object) -> datetime | None:
+            return retry_at
 
         async def execute_candidate(
             self, _page: object, candidate: object, **_kwargs: object
@@ -2589,6 +2615,12 @@ async def test_normal_work_cooldown_skip_does_not_open_page_or_delay(
 
     assert (processed, should_continue) == (1, True)
     assert events == ["new", "execute:2", "close"]
+    output = capsys.readouterr().out
+    assert "SKIPPED work_ticket_cooldown" in output
+    if retry_at is None:
+        assert "次回確認可能" not in output
+    else:
+        assert "次回確認可能: 2026-10-17 12:34 JST" in output
 
 
 class FakeLoginAdapter:

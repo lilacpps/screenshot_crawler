@@ -126,7 +126,12 @@ consumption and a default 23-hour local negative gate; a site setting can overri
 `work_ticket_cooldown_hours`. Explicit grant-only gates before Page creation,
 normal Batch filters cooling Works before each Work resolver, and other direct reads
 remain eligible. `grant_only_retry_at()` optionally exposes a policy-owned next
-check time for SKIP display. Expiry permits live checking but proves no ticket.
+check time. Normal consuming-resource and grant-only local cooldown SKIPs use
+the same CLI formatter: when this hook returns a time, stdout and any
+grant-only report show the next check time; when the hook is absent or returns
+`None`, they retain the reason-only output. Metrics continue to record the skip
+reason without a retry timestamp. Expiry permits live checking but proves no
+ticket.
 Only confirmed consumption creates state, including after later finalization
 failure. Old rental deadlines and manual usage do not backfill work state.
 
