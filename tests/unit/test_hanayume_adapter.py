@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,191 @@ from screenshot_crawler.site_adapters.hanayume.adapter import (
 )
 
 WORK_ID = "1f9f5b0d4cd52"
+EPISODE_ID = "0000000000002"
+
+
+class _CurrentObserverPage:
+    def __init__(self) -> None:
+        self.main_frame = object()
+
+    def on(self, _event: str, _callback) -> None:
+        return None
+
+    def remove_listener(self, _event: str, _callback) -> None:
+        return None
+
+
+def _current_access_event(
+    page: _CurrentObserverPage,
+    *,
+    has_access: bool,
+    url: str | None = None,
+    frame: object | None = None,
+    redirected_from: object | None = None,
+    status: int = 200,
+    body_gate: asyncio.Event | None = None,
+    body_error: bool = False,
+):
+    request_url = url or f"https://hanayume.com/api/episodes/{EPISODE_ID}"
+    request_frame = page.main_frame if frame is None else frame
+    request = SimpleNamespace(
+        url=request_url,
+        method="GET",
+        resource_type="fetch",
+        frame=request_frame,
+        is_navigation_request=lambda: False,
+        redirected_from=redirected_from,
+    )
+    payload = {
+        "episode": {
+            "id": EPISODE_ID,
+            "series": {"id": WORK_ID},
+            "access": {
+                "episodeId": EPISODE_ID,
+                "accessType": "waitAndFree",
+                "hasAccess": has_access,
+                "timeRemainingInSeconds": 172800 if has_access else 0,
+            },
+        }
+    }
+
+    async def read_payload():
+        if body_gate is not None:
+            await body_gate.wait()
+        if body_error:
+            raise ValueError("synthetic malformed current access response")
+        return payload
+
+    response = SimpleNamespace(
+        request=request,
+        url=request_url,
+        frame=request_frame,
+        status=status,
+        json=read_payload,
+    )
+    return request, response
+
+
+async def _observe_current_access(
+    observer, page: _CurrentObserverPage, *, has_access: bool, **kwargs
+):
+    request, response = _current_access_event(
+        page, has_access=has_access, **kwargs
+    )
+    observer._on_request(request)
+    observer._on_response(response)
+    await observer.wait_for_pending(0.1)
+    return request, response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "status"),
+    [
+        ({"frame": object()}, 200),
+        ({"redirected_from": object()}, 200),
+        ({"url": f"https://hanayume.com/api/episodes/{EPISODE_ID}?stale=1"}, 200),
+        ({}, 503),
+    ],
+    ids=("foreign-frame", "redirect", "query", "non-200"),
+)
+async def test_hanayume_current_episode_observer_rejects_untrusted_transport(
+    kwargs: dict[str, object], status: int,
+) -> None:
+    page = _CurrentObserverPage()
+    observer = hanayume_adapter._CurrentEpisodeAccessObserver(EPISODE_ID, WORK_ID)
+    observer.attach(page)  # type: ignore[arg-type]
+    await _observe_current_access(observer, page, has_access=True, status=status, **kwargs)
+
+    with pytest.raises(UnknownPageStateError):
+        observer.latest_access()
+    await observer.close()
+
+
+@pytest.mark.asyncio
+async def test_hanayume_current_episode_observer_rejects_duplicate_response_event() -> None:
+    page = _CurrentObserverPage()
+    observer = hanayume_adapter._CurrentEpisodeAccessObserver(EPISODE_ID, WORK_ID)
+    observer.attach(page)  # type: ignore[arg-type]
+    _request, response = await _observe_current_access(observer, page, has_access=True)
+    observer._on_response(response)
+
+    with pytest.raises(UnknownPageStateError):
+        observer.latest_access()
+    await observer.close()
+
+
+@pytest.mark.asyncio
+async def test_hanayume_current_episode_observer_excludes_old_snapshot_after_attempt() -> None:
+    page = _CurrentObserverPage()
+    observer = hanayume_adapter._CurrentEpisodeAccessObserver(EPISODE_ID, WORK_ID)
+    observer.attach(page)  # type: ignore[arg-type]
+    _request, _response = await _observe_current_access(observer, page, has_access=True)
+    snapshot = observer.latest_access()
+    assert snapshot is not None
+
+    assert observer.latest_access(
+        after=snapshot.native.requested_at + timedelta(seconds=1)
+    ) is None
+    await observer.close()
+
+
+@pytest.mark.asyncio
+async def test_hanayume_current_episode_observer_prefers_newest_denial() -> None:
+    page = _CurrentObserverPage()
+    observer = hanayume_adapter._CurrentEpisodeAccessObserver(EPISODE_ID, WORK_ID)
+    observer.attach(page)  # type: ignore[arg-type]
+    await _observe_current_access(observer, page, has_access=True)
+    await asyncio.sleep(0.002)
+    await _observe_current_access(observer, page, has_access=False)
+
+    latest = observer.latest_access()
+    assert latest is not None and latest.native.has_access is False
+    await observer.close()
+
+
+@pytest.mark.asyncio
+async def test_hanayume_current_episode_observer_does_not_use_old_snapshot_while_newer_body_is_pending() -> None:
+    page = _CurrentObserverPage()
+    observer = hanayume_adapter._CurrentEpisodeAccessObserver(EPISODE_ID, WORK_ID)
+    observer.attach(page)  # type: ignore[arg-type]
+    await _observe_current_access(observer, page, has_access=True)
+    old = observer.latest_access()
+    assert old is not None
+
+    await asyncio.sleep(0.002)
+    body_gate = asyncio.Event()
+    request, response = _current_access_event(
+        page, has_access=False, body_gate=body_gate
+    )
+    observer._on_request(request)
+    observer._on_response(response)
+    assert observer.has_pending_access(after=old.native.requested_at) is True
+
+    body_gate.set()
+    await observer.wait_for_pending(0.1)
+    latest = observer.latest_access()
+    assert latest is not None and latest.native.has_access is False
+    await observer.close()
+
+
+@pytest.mark.asyncio
+async def test_hanayume_current_episode_observer_newer_invalid_response_blocks_old_snapshot() -> None:
+    page = _CurrentObserverPage()
+    observer = hanayume_adapter._CurrentEpisodeAccessObserver(EPISODE_ID, WORK_ID)
+    observer.attach(page)  # type: ignore[arg-type]
+    await _observe_current_access(observer, page, has_access=True)
+    await asyncio.sleep(0.002)
+    request, response = _current_access_event(
+        page, has_access=False, body_error=True
+    )
+    observer._on_request(request)
+    observer._on_response(response)
+    await observer.wait_for_pending(0.1)
+
+    with pytest.raises(UnknownPageStateError):
+        observer.latest_access()
+    await observer.close()
 
 
 @pytest.mark.parametrize("resource_type", ["fetch", "other"])

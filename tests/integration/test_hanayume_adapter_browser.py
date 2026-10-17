@@ -8,9 +8,15 @@ from urllib.parse import urlsplit
 
 import pytest
 from PIL import Image
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
-from screenshot_crawler.core.errors import PageChangeTimeoutError, UnknownPageStateError
+from screenshot_crawler.core.errors import (
+    AccessConsumptionUnconfirmedError,
+    AccessResourceUnavailableError,
+    PageChangeTimeoutError,
+    UnknownPageStateError,
+)
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
@@ -424,6 +430,454 @@ async def _initialized(page: Page, *, adapter: HanayumeAdapter | None = None) ->
     assert response is not None and response.status == 200
     await instance.initialize(page)
     return instance
+
+
+def _ticket_row(
+    episode_id: str, *, account: bool, target: bool = False, duplicate_link: bool = False,
+    other_current: bool = False,
+) -> str:
+    classes = "series-eplist-item"
+    if account and target:
+        classes = "mode-current mode-store-item-blank series-eplist-item"
+    elif account and other_current:
+        classes = "mode-current mode-read mode-store-item-start series-eplist-item"
+    links = (
+        f'<a class="series-eplist-item-link" href="/episodes/{episode_id}">'
+        '<span data-e2e="eliTitle">episode</span>'
+        '<span data-e2e="eliWfIcon"></span><span data-e2e="eliIfIcon"></span></a>'
+    )
+    if duplicate_link:
+        links += f'<a class="series-eplist-item-link" href="/episodes/{episode_id}">duplicate</a>'
+    return f'<div class="{classes}" data-e2e="eli">{links}</div>'
+
+
+async def _install_work_ticket_site(
+    page: Page,
+    *,
+    preview: str = "absent",
+    checkout_status: int = 200,
+    initial_has_access: bool = False,
+    grant_after_checkout: bool = True,
+    api_mismatch: str | None = None,
+    post_api_mismatch: str | None = None,
+    suppress_post_api: bool = False,
+) -> dict[str, object]:
+    other_id = "00000000002bc"
+    public_ids: list[str] = []
+    account_ids: list[str] = []
+    if preview in {"absent", "other-current"}:
+        public_ids = [other_id]
+        account_ids = [other_id]
+    elif preview in {"present", "duplicate-link"}:
+        public_ids = [EPISODE_ID]
+        account_ids = [EPISODE_ID]
+    elif preview == "duplicate-row":
+        public_ids = [EPISODE_ID, EPISODE_ID]
+        account_ids = [EPISODE_ID, EPISODE_ID]
+    base = _episode_html(
+        episode_rows=[(episode_id, "") for episode_id in public_ids],
+        episode_history_rows=[(episode_id, "") for episode_id in account_ids],
+        current=1,
+    )
+    for episode_id in public_ids:
+        simple = _row(episode_id, "")
+        base = base.replace(simple, _ticket_row(episode_id, account=False, target=episode_id == EPISODE_ID), 1)
+    for episode_id in account_ids:
+        simple = _row(episode_id, "")
+        base = base.replace(
+            simple,
+            _ticket_row(
+                episode_id,
+                account=True,
+                target=episode_id == EPISODE_ID,
+                duplicate_link=preview == "duplicate-link" and episode_id == EPISODE_ID,
+                other_current=preview == "other-current",
+            ),
+            1,
+        )
+    base = base.replace('<header id="xHeader">', '<header id="xHeader" class="ep-h">')
+    base = base.replace(
+        '<div class="series-eplist" data-e2e="epList">',
+        '<div class="series-eplist mode-has-eps" data-e2e="epList">',
+    )
+    base = base.replace(
+        '<div class="series-eplist mode-user" data-e2e="epListUser">',
+        '<div class="series-eplist mode-has-eps mode-user" data-e2e="epListUser">',
+    )
+    charge = (
+        '<style>.ep-main-content.mode-charge{position:fixed;left:8px;top:8px;z-index:1000}</style>'
+        '<div class="ep-main-content mode-charge"><div class="ep-charge">'
+        '<div class="ep-charge-act"><button type="button" data-e2e="wfRead" '
+        'class="ep-charge-act-btn mode-waitfree">'
+        f'{hanayume_adapter_module.TICKET_CONTROL_LABEL}</button></div></div></div>'
+    )
+    click_script = f"""<script>
+      window.ticketClicks = 0;
+      fetch('/api/episodes/{EPISODE_ID}', {{cache: 'no-store'}});
+      document.querySelector('button[data-e2e="wfRead"]').addEventListener('click', async () => {{
+        window.ticketClicks++;
+        const checkout = await fetch('/api/checkout/rental', {{method: 'POST'}});
+        if (checkout.status === 200 && !{json.dumps(suppress_post_api)}) {{
+          await fetch('/api/episodes/{EPISODE_ID}', {{cache: 'no-store'}});
+        }}
+      }});
+    </script>"""
+    base = base.replace('<div id="comici-viewer"', charge + '<div id="comici-viewer"')
+    base = base.replace('</body></html>', click_script + '</body></html>')
+    state: dict[str, object] = {
+        "paths": [], "api_reads": 0, "checkout_attempts": 0,
+        "has_access": initial_has_access, "checkout_status": checkout_status,
+        "grant_after_checkout": grant_after_checkout, "mismatch": api_mismatch,
+        "post_mismatch": post_api_mismatch,
+    }
+
+    async def route_handler(route) -> None:
+        parsed = urlsplit(route.request.url)
+        state["paths"].append(parsed.path)  # type: ignore[union-attr]
+        if parsed.path == f"/episodes/{EPISODE_ID}":
+            await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=base)
+            return
+        if parsed.path == f"/api/episodes/{EPISODE_ID}":
+            state["api_reads"] = int(state["api_reads"]) + 1
+            episode_id = EPISODE_ID
+            work_id = WORK_ID
+            access_episode_id = EPISODE_ID
+            mismatch = (
+                state["post_mismatch"]
+                if state["has_access"] and state["post_mismatch"] is not None
+                else state["mismatch"]
+            )
+            if mismatch == "episode":
+                episode_id = NOW_ID
+            elif mismatch == "work":
+                work_id = NOW_ID
+            elif mismatch == "access_episode":
+                access_episode_id = NOW_ID
+            has_access = bool(state["has_access"])
+            access_type = "purchase" if mismatch == "paid" else "waitAndFree"
+            payload = {
+                "episode": {
+                    "id": episode_id,
+                    "series": {"id": work_id},
+                    "access": {
+                        "episodeId": access_episode_id,
+                        "accessType": access_type,
+                        "hasAccess": has_access,
+                        "timeRemainingInSeconds": (250000 if has_access else 0),
+                    },
+                }
+            }
+            if mismatch == "remaining-bool":
+                payload["episode"]["access"]["timeRemainingInSeconds"] = True
+            await route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+            return
+        if parsed.path == "/api/checkout/rental":
+            state["checkout_attempts"] = int(state["checkout_attempts"]) + 1
+            if state["checkout_status"] == 200 and state["grant_after_checkout"]:
+                state["has_access"] = True
+            await route.fulfill(status=int(state["checkout_status"]), body="{}")
+            return
+        await route.fulfill(status=404, body="")
+
+    await page.route("https://hanayume.com/**", route_handler)
+    return state
+
+
+async def _ticket_adapter(page: Page, *, entry_only: bool) -> HanayumeAdapter:
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(page)
+    await adapter.configure_run(page, "quota")
+    await adapter.configure_quota_resource(page, "work_ticket")
+    response = await page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    if entry_only:
+        await adapter.initialize_entry_only(page)
+    else:
+        await adapter.initialize(page)
+    return adapter
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("entry_only", [False, True], ids=("normal", "grant-only"))
+async def test_hanayume_ticket_entry_accepts_missing_preview_with_exact_current_api_proof(
+    browser_page: Page, entry_only: bool,
+) -> None:
+    state = await _install_work_ticket_site(browser_page, preview="absent")
+    adapter = await _ticket_adapter(browser_page, entry_only=entry_only)
+
+    assert adapter.get_access_consumption().consumed is True
+    assert adapter.get_access_consumption().resource == "work_ticket"
+    assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert state["checkout_attempts"] == 1
+    assert state["api_reads"] >= 2
+    assert browser_page.url == EPISODE_URL
+    assert "/series/" not in state["paths"]
+    assert state["paths"].count(f"/episodes/{EPISODE_ID}") == 1
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_ticket_normal_initialization_keeps_same_page_after_preview_absence(
+    browser_page: Page,
+) -> None:
+    state = await _install_work_ticket_site(browser_page, preview="absent")
+    adapter = await _ticket_adapter(browser_page, entry_only=False)
+    assert browser_page.url == EPISODE_URL
+    assert adapter.get_access_consumption().consumed is True
+    assert await adapter.detect_state(browser_page) is PageState.CONTENT
+    assert state["checkout_attempts"] == 1
+    assert "/series/" not in state["paths"]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_ticket_normal_direct_reuses_active_current_api_grant_without_click(
+    browser_page: Page,
+) -> None:
+    state = await _install_work_ticket_site(
+        browser_page, preview="absent", initial_has_access=True
+    )
+    adapter = await _ticket_adapter(browser_page, entry_only=False)
+    assert adapter.get_access_consumption().consumed is False
+    assert await browser_page.evaluate("() => window.ticketClicks") == 0
+    assert state["checkout_attempts"] == 0
+    assert browser_page.url == EPISODE_URL
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_ticket_grant_only_rejects_active_current_api_grant_without_click(
+    browser_page: Page,
+) -> None:
+    state = await _install_work_ticket_site(
+        browser_page, preview="absent", initial_has_access=True
+    )
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    with pytest.raises(AccessResourceUnavailableError, match="already_granted"):
+        await adapter.initialize_entry_only(browser_page)
+    assert await browser_page.evaluate("() => window.ticketClicks") == 0
+    assert state["checkout_attempts"] == 0
+    assert adapter.get_access_consumption().consumed is False
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    "mismatch", ["episode", "work", "access_episode", "remaining-bool", "paid"]
+)
+async def test_hanayume_ticket_current_api_identity_and_types_fail_closed_before_click(
+    browser_page: Page, mismatch: str,
+) -> None:
+    await _install_work_ticket_site(browser_page, preview="absent", api_mismatch=mismatch)
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    with pytest.raises((UnknownPageStateError, AccessResourceUnavailableError)):
+        await adapter.initialize_entry_only(browser_page)
+    assert await browser_page.evaluate("() => window.ticketClicks") == 0
+    assert adapter.get_access_consumption().consumed is False
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("preview", ["duplicate-link", "duplicate-row", "other-current"])
+async def test_hanayume_ticket_rejects_ambiguous_or_other_current_preview_before_click(
+    browser_page: Page, preview: str,
+) -> None:
+    await _install_work_ticket_site(browser_page, preview=preview)
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    with pytest.raises(UnknownPageStateError):
+        await adapter.initialize_entry_only(browser_page)
+    assert await browser_page.evaluate("() => window.ticketClicks") == 0
+    assert adapter.get_access_consumption().consumed is False
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    "site_kwargs",
+    [
+        {"checkout_status": 500},
+        {"grant_after_checkout": False},
+        {"preview": "present"},
+    ],
+    ids=("checkout-failed", "no-positive-transition", "present-blank-conflict"),
+)
+async def test_hanayume_ticket_never_confirms_without_checkout_and_uncontradicted_native_grant(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    site_kwargs: dict[str, object],
+) -> None:
+    monkeypatch.setattr(hanayume_adapter_module, "TICKET_RECOVERY_WINDOW_SECONDS", 0.75)
+    await _install_work_ticket_site(browser_page, **site_kwargs)
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    with pytest.raises(AccessConsumptionUnconfirmedError):
+        await adapter.initialize_entry_only(browser_page)
+    assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert adapter.get_access_consumption().consumed is False
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_ticket_refreshes_missing_post_checkout_api_on_same_page_at_most_twice(
+    browser_page: Page,
+) -> None:
+    state = await _install_work_ticket_site(browser_page, preview="absent", suppress_post_api=True)
+    adapter = await _ticket_adapter(browser_page, entry_only=True)
+    assert adapter.get_access_consumption().consumed is True
+    assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert state["checkout_attempts"] == 1
+    # One natural pre-state read and at most two bounded same-Page reconciliations.
+    assert 2 <= state["api_reads"] <= 3
+    assert browser_page.url == EPISODE_URL
+    assert "/series/" not in state["paths"]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_ticket_post_checkout_work_drift_never_confirms_consumption(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(hanayume_adapter_module, "TICKET_RECOVERY_WINDOW_SECONDS", 0.75)
+    state = await _install_work_ticket_site(
+        browser_page, preview="absent", post_api_mismatch="work"
+    )
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+
+    with pytest.raises(AccessConsumptionUnconfirmedError):
+        await adapter.initialize_entry_only(browser_page)
+
+    assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert state["checkout_attempts"] == 1
+    assert adapter.get_access_consumption().consumed is False
+    assert browser_page.url == EPISODE_URL
+    assert "/series/" not in state["paths"]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_ticket_fallback_read_budget_survives_reconciliation_reentry(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(hanayume_adapter_module, "TICKET_RECOVERY_WINDOW_SECONDS", 2.0)
+    state = await _install_work_ticket_site(
+        browser_page,
+        preview="absent",
+        grant_after_checkout=False,
+        suppress_post_api=True,
+    )
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+
+    reconcile = adapter._reconcile_work_ticket_consumption
+    invocations = 0
+
+    async def expire_short_then_reenter(page, *, before, click_started_at, deadline):
+        nonlocal invocations
+        invocations += 1
+        if invocations == 1:
+            await reconcile(
+                page,
+                before=before,
+                click_started_at=click_started_at,
+                deadline=min(deadline, hanayume_adapter_module.time.monotonic() + 0.75),
+            )
+            raise hanayume_adapter_module.AccessResourceUnavailableError(
+                "synthetic reconciliation handoff"
+            )
+        return await reconcile(
+            page,
+            before=before,
+            click_started_at=click_started_at,
+            deadline=deadline,
+        )
+
+    monkeypatch.setattr(adapter, "_reconcile_work_ticket_consumption", expire_short_then_reenter)
+    with pytest.raises(AccessConsumptionUnconfirmedError):
+        await adapter.initialize_entry_only(browser_page)
+
+    assert invocations == 2
+    assert adapter._ticket_fallback_reads == 2
+    # The first pass used exactly two of the two attempt-scoped GETs. Reentry
+    # must not reset that budget or issue two more endpoint reads.
+    assert state["api_reads"] == 3
+    assert state["checkout_attempts"] == 1
+    assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert adapter.get_access_consumption().consumed is False
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("cancel_after_dispatch", [False, True], ids=("before", "after"))
+async def test_hanayume_ticket_click_error_reconciles_once_and_never_retries(
+    browser_page: Page,
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_after_dispatch: bool,
+) -> None:
+    monkeypatch.setattr(hanayume_adapter_module, "TICKET_RECOVERY_WINDOW_SECONDS", 0.75)
+    state = await _install_work_ticket_site(browser_page, preview="absent")
+    original_click = hanayume_adapter_module.ElementHandle.click
+
+    async def failing_click(handle, *args, **kwargs):
+        if cancel_after_dispatch:
+            await original_click(handle, *args, **kwargs)
+            raise asyncio.CancelledError
+        raise PlaywrightError("synthetic click did not dispatch")
+
+    monkeypatch.setattr(hanayume_adapter_module.ElementHandle, "click", failing_click)
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+    if cancel_after_dispatch:
+        with pytest.raises(asyncio.CancelledError):
+            await adapter.initialize_entry_only(browser_page)
+        assert await browser_page.evaluate("() => window.ticketClicks") == 1
+        assert adapter.get_access_consumption().consumed is True
+        assert adapter.get_access_consumption().access_granted_until is not None
+    else:
+        with pytest.raises(AccessConsumptionUnconfirmedError):
+            await adapter.initialize_entry_only(browser_page)
+        assert await browser_page.evaluate("() => window.ticketClicks") == 0
+        assert adapter.get_access_consumption().consumed is False
+    assert "/series/" not in state["paths"]
 
 
 async def _body_state(page: Page, adapter: HanayumeAdapter) -> None:

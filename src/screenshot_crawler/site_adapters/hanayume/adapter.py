@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl, urlsplit
 
 from PIL import Image, UnidentifiedImageError
-from playwright.async_api import ElementHandle, Locator, Page
+from playwright.async_api import ElementHandle, Locator, Page, Request, Response
 from playwright.async_api import Error as PlaywrightError
 
 from screenshot_crawler.core.access_guard import AccessProfile
@@ -83,6 +83,7 @@ POLL_INTERVAL_SECONDS = 0.15
 TICKET_AUTH_READY_TIMEOUT_SECONDS = 8.0
 TICKET_RECOVERY_WINDOW_SECONDS = 5.0
 TICKET_POLL_INTERVAL_SECONDS = 0.1
+TICKET_API_BODY_TIMEOUT_SECONDS = 2.0
 TICKET_CONTROL_SELECTOR = (
     'div.ep-main-content.mode-charge > div.ep-charge > div.ep-charge-act '
     '> button[data-e2e="wfRead"]'
@@ -127,9 +128,13 @@ TICKET_ENTRY_SNAPSHOT_SCRIPT = r"""(episodeId) => {
     return /login|signin|sign-in/i.test(href) || /ログイン|サインイン|login/i.test(label);
   });
   const overlays = all('dialog,[role="dialog"],.modal,.modal-backdrop').filter(visible);
+  const publicRoots = page ? [...page.querySelectorAll('.series-eplist[data-e2e="epList"]')] : [];
+  const publicRoot = publicRoots.length === 1 ? publicRoots[0] : null;
   const rowList = userRoot ? [...userRoot.querySelectorAll(
     '.series-eplist-item[data-e2e="eli"]')] : [];
-  const rows = rowList.map(row => {
+  const publicRowList = publicRoot ? [...publicRoot.querySelectorAll(
+    '.series-eplist-item[data-e2e="eli"]')] : [];
+  const readRows = rows => rows.map(row => {
     const links = [...row.querySelectorAll('a.series-eplist-item-link')];
     const titles = [...row.querySelectorAll('[data-e2e="eliTitle"]')];
     const wfIcons = [...row.querySelectorAll('[data-e2e="eliWfIcon"]')];
@@ -145,7 +150,16 @@ TICKET_ENTRY_SNAPSHOT_SCRIPT = r"""(episodeId) => {
         (node.innerText || '').replace(/\s+/g, ' ').trim())
     };
   });
-  const targetRows = rows.filter(row => row.hrefs.length === 1 && row.hrefs[0] === targetHref);
+  const rows = readRows(rowList);
+  const publicRows = readRows(publicRowList);
+  const targetRows = rows.filter(row => row.hrefs.includes(targetHref));
+  const publicTargetRows = publicRows.filter(row => row.hrefs.includes(targetHref));
+  const currentRows = rows.filter(row => row.classes.includes('mode-current'));
+  const rowsAreWellFormed = rows => rows.length > 0 &&
+    new Set(rows.map(row => row.hrefs.length === 1 ? row.hrefs[0] : null)).size === rows.length &&
+    rows.every(row => row.hrefs.length === 1 &&
+      /^https:\/\/hanayume\.com\/episodes\/[0-9a-f]{13}$/.test(row.hrefs[0]) &&
+      row.titleCount === 1 && row.wfIconCount === 1 && row.ifIconCount === 1);
   const controls = all('button[data-e2e="wfRead"]');
   const control = controls.length === 1 ? controls[0] : null;
   const label = control ? (control.innerText || '').replace(/\s+/g, ' ').trim() : '';
@@ -178,14 +192,22 @@ TICKET_ENTRY_SNAPSHOT_SCRIPT = r"""(episodeId) => {
       wrappers.length === 1 && wrapper?.parentElement === episodeMode && listMains.length === 1 &&
       listMain?.parentElement === wrapper && roots.length === 1 &&
       userRoot?.parentElement === listMain,
+    previewRootsExact: roots.length === 1 && publicRoots.length === 1 &&
+      userRoot?.parentElement === listMain && publicRoot?.parentElement === listMain,
+    publicRowsValid: rowsAreWellFormed(publicRows),
+    accountRowsValid: rowsAreWellFormed(rows),
+    publicRowCount: publicRows.length,
+    accountRowCount: rows.length,
     rootState, rootClasses,
     loginVisible: loginAnchors.some(visible),
     overlayVisible: overlays.length > 0,
     targetRows,
-    publicTargetRows: all('div.ep-main.series-safe-filter-target[data-e2e="pageEpisode"] '
-      + '.series-eplist[data-e2e="epList"] '
-      + '.series-eplist-item[data-e2e="eli"] a.series-eplist-item-link')
-      .filter(node => node.href === targetHref).length,
+    publicTargetRows,
+    publicTargetLinkCount: publicTargetRows.reduce((sum, row) =>
+      sum + row.hrefs.filter(href => href === targetHref).length, 0),
+    accountTargetLinkCount: targetRows.reduce((sum, row) =>
+      sum + row.hrefs.filter(href => href === targetHref).length, 0),
+    accountOtherCurrentRowCount: currentRows.filter(row => !row.hrefs.includes(targetHref)).length,
     controlCount: controls.length,
     controlText: label,
     controlClasses: control ? [...control.classList].sort() : [],
@@ -342,6 +364,294 @@ class ViewerObservation:
     ready_slots: tuple[int, ...]
     terminal: bool
     raw: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _CurrentEpisodeAccess:
+    work_id: str
+    access_episode_id: str
+    native: HanayumeNativeEpisodeAccess
+
+
+@dataclass(frozen=True, slots=True)
+class _TicketRequestStart:
+    request: object
+    kind: str
+    requested_at: datetime
+    exact_url: bool
+    main_frame: bool
+    non_navigation: bool
+    no_redirect: bool
+    used: bool = False
+
+
+class _CurrentEpisodeAccessObserver:
+    """Reduce only same-Page current-episode access and checkout responses."""
+
+    MAX_RESPONSES = 24
+
+    def __init__(self, episode_id: str, work_id: str) -> None:
+        self._episode_id = episode_id
+        self._work_id = work_id
+        self._episode_path = f"/api/episodes/{episode_id}"
+        self._page: Page | None = None
+        self._starts: list[_TicketRequestStart] = []
+        self._tasks: list[asyncio.Task[None]] = []
+        self._access_tasks: list[tuple[datetime, asyncio.Task[None]]] = []
+        self.access: list[_CurrentEpisodeAccess] = []
+        self.invalid_access: list[tuple[datetime, str]] = []
+        self.checkout_responses: list[tuple[datetime, int | None]] = []
+        self.overflow = False
+        self._request_listener = self._on_request
+        self._response_listener = self._on_response
+
+    def attach(self, page: Page) -> None:
+        self._page = page
+        page.on("request", self._request_listener)
+        page.on("response", self._response_listener)
+
+    def _on_request(self, request: Request) -> None:
+        try:
+            parsed = urlsplit(request.url)
+            port = parsed.port
+            path = parsed.path
+            method = request.method.upper()
+            if (
+                parsed.scheme.lower() != "https"
+                or (parsed.hostname or "").lower() != "hanayume.com"
+                or parsed.username is not None
+                or parsed.password is not None
+                or port not in (None, 443)
+            ):
+                return
+            if path == self._episode_path:
+                kind, expected_method = "episode", "GET"
+                exact_url = not parsed.query and not parsed.fragment
+            elif path == "/api/checkout/rental":
+                kind, expected_method = "checkout", "POST"
+                exact_url = not parsed.query and not parsed.fragment
+            else:
+                return
+            page = self._page
+            frame_ok = page is not None and request.frame == page.main_frame
+            non_navigation = not request.is_navigation_request()
+            no_redirect = request.redirected_from is None
+            exact_url = exact_url and method == expected_method and request.resource_type in {"fetch", "xhr"}
+        except (AttributeError, PlaywrightError, ValueError):
+            return
+        if len(self._starts) >= self.MAX_RESPONSES:
+            self.overflow = True
+            return
+        self._starts.append(
+            _TicketRequestStart(
+                request=request,
+                kind=kind,
+                requested_at=datetime.now(UTC),
+                exact_url=exact_url,
+                main_frame=frame_ok,
+                non_navigation=non_navigation,
+                no_redirect=no_redirect,
+            )
+        )
+
+    def _on_response(self, response: Response) -> None:
+        try:
+            request = response.request
+        except (AttributeError, PlaywrightError):
+            return
+        index = next(
+            (
+                i for i in range(len(self._starts) - 1, -1, -1)
+                if self._starts[i].request is request and not self._starts[i].used
+            ),
+            None,
+        )
+        if index is None:
+            duplicate = next(
+                (
+                    item for item in reversed(self._starts)
+                    if item.request is request and item.used and item.kind == "episode"
+                ),
+                None,
+            )
+            if duplicate is not None:
+                self.invalid_access.append(
+                    (duplicate.requested_at, "duplicate_response_event")
+                )
+            return
+        start = self._starts[index]
+        self._starts[index] = _TicketRequestStart(
+            request=start.request,
+            kind=start.kind,
+            requested_at=start.requested_at,
+            exact_url=start.exact_url,
+            main_frame=start.main_frame,
+            non_navigation=start.non_navigation,
+            no_redirect=start.no_redirect,
+            used=True,
+        )
+        task = asyncio.create_task(self._capture(response, start=start))
+        self._tasks.append(task)
+        if start.kind == "episode":
+            self._access_tasks.append((start.requested_at, task))
+
+    async def _capture(self, response: Response, *, start: _TicketRequestStart) -> None:
+        try:
+            page = self._page
+            if page is None or response.frame != page.main_frame:
+                valid_frame = False
+            else:
+                valid_frame = True
+            response_url = response.url
+            parsed = urlsplit(response_url)
+            exact_response_url = (
+                parsed.scheme.lower() == "https"
+                and (parsed.hostname or "").lower() == "hanayume.com"
+                and parsed.username is None
+                and parsed.password is None
+                and parsed.port in (None, 443)
+                and parsed.path == (
+                    self._episode_path if start.kind == "episode" else "/api/checkout/rental"
+                )
+                and not parsed.query
+                and not parsed.fragment
+            )
+            status = response.status
+            if start.kind == "checkout":
+                accepted = (
+                    status == 200
+                    and start.exact_url
+                    and start.main_frame
+                    and valid_frame
+                    and start.non_navigation
+                    and start.no_redirect
+                    and exact_response_url
+                )
+                self.checkout_responses.append(
+                    (start.requested_at, 200 if accepted else None)
+                )
+                return
+            if not (
+                status == 200
+                and start.exact_url
+                and start.main_frame
+                and valid_frame
+                and start.non_navigation
+                and start.no_redirect
+                and exact_response_url
+            ):
+                self.invalid_access.append((start.requested_at, "transport_or_identity"))
+                return
+            payload = await asyncio.wait_for(
+                response.json(), timeout=TICKET_API_BODY_TIMEOUT_SECONDS
+            )
+            episode = payload.get("episode") if isinstance(payload, dict) else None
+            series = episode.get("series") if isinstance(episode, dict) else None
+            access = episode.get("access") if isinstance(episode, dict) else None
+            episode_id = episode.get("id") if isinstance(episode, dict) else None
+            work_id = series.get("id") if isinstance(series, dict) else None
+            access_episode_id = access.get("episodeId") if isinstance(access, dict) else None
+            access_type = access.get("accessType") if isinstance(access, dict) else None
+            has_access = access.get("hasAccess") if isinstance(access, dict) else None
+            remaining = access.get("timeRemainingInSeconds") if isinstance(access, dict) else None
+            valid_ids = (
+                episode_id == self._episode_id
+                and access_episode_id == self._episode_id
+                and work_id == self._work_id
+                and isinstance(work_id, str)
+                and WORK_ID_PATTERN.fullmatch(work_id) is not None
+            )
+            valid_state = (
+                isinstance(access_type, str)
+                and type(has_access) is bool
+                and (
+                    remaining is None
+                    or type(remaining) is int
+                    and 0 <= remaining <= MAX_EPISODE_ACCESS_SECONDS
+                )
+            )
+            if not valid_ids or not valid_state:
+                self.invalid_access.append((start.requested_at, "payload_identity_or_type"))
+                return
+            self.access.append(
+                _CurrentEpisodeAccess(
+                    work_id=work_id,
+                    access_episode_id=access_episode_id,
+                    native=HanayumeNativeEpisodeAccess(
+                        episode_id=self._episode_id,
+                        access_type=access_type,
+                        has_access=has_access,
+                        remaining_seconds=remaining,
+                        requested_at=start.requested_at,
+                    ),
+                )
+            )
+        except (AttributeError, PlaywrightError, TimeoutError, TypeError, ValueError):
+            if start.kind == "episode":
+                self.invalid_access.append((start.requested_at, "response_body_unavailable"))
+
+    def latest_access(self, *, after: datetime | None = None) -> _CurrentEpisodeAccess | None:
+        if self.overflow:
+            raise UnknownPageStateError("Hanayume current episode access observation overflowed")
+        snapshots = [
+            item for item in self.access
+            if after is None or item.native.requested_at > after
+        ]
+        invalid = [
+            at for at, _reason in self.invalid_access
+            if after is None or at > after
+        ]
+        latest_at = max((item.native.requested_at for item in snapshots), default=None)
+        if latest_at is not None and any(at >= latest_at for at in invalid):
+            raise UnknownPageStateError("Hanayume current episode access response is ambiguous")
+        if invalid and not snapshots:
+            raise UnknownPageStateError("Hanayume current episode access response is invalid")
+        if latest_at is None:
+            return None
+        latest = [item for item in snapshots if item.native.requested_at == latest_at]
+        if len(latest) != 1:
+            raise UnknownPageStateError("Hanayume current episode access response is duplicated")
+        return latest[0]
+
+    def has_pending_access(self, *, after: datetime | None = None) -> bool:
+        return any(
+            not start.used
+            and start.kind == "episode"
+            and (after is None or start.requested_at > after)
+            for start in self._starts
+        ) or any(
+            not task.done() and (after is None or requested_at > after)
+            for requested_at, task in self._access_tasks
+        )
+
+    def checkout_confirmed(self, *, after: datetime) -> bool:
+        observed = [item for item in self.checkout_responses if item[0] > after]
+        return len(observed) == 1 and observed[0][1] == 200
+
+    async def wait_for_pending(self, timeout_seconds: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while True:
+            pending = [task for task in self._tasks if not task.done()]
+            if not pending:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            await asyncio.wait(pending, timeout=remaining)
+
+    async def close(self) -> None:
+        page, self._page = self._page, None
+        if page is not None:
+            try:
+                page.remove_listener("request", self._request_listener)
+                page.remove_listener("response", self._response_listener)
+            except PlaywrightError:
+                pass
+        pending = [task for task in self._tasks if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 def _strict_first_party_url(url: str) -> bool:
@@ -811,9 +1121,13 @@ class HanayumeAdapter(SiteAdapter):
         self._quota_resource: str | None = None
         self._access_consumption = AccessConsumption()
         self._ticket_observer: _SeriesAccessObserver | None = None
+        self._current_ticket_observer: _CurrentEpisodeAccessObserver | None = None
         self._ticket_click_attempted = False
         self._ticket_entry_only = False
         self._ticket_click_started_at: datetime | None = None
+        self._ticket_click_started_monotonic: float | None = None
+        self._ticket_recovery_deadline: float | None = None
+        self._ticket_fallback_reads = 0
         self._target_url: str | None = None
         self._episode_id: str | None = None
         self._expected_work_id: str | None = None
@@ -855,12 +1169,16 @@ class HanayumeAdapter(SiteAdapter):
                 f"Hanayume does not support access_strategy={access_strategy!r}"
             )
         await self._close_ticket_observer()
+        await self._close_current_ticket_observer()
         self._access_strategy = access_strategy
         self._quota_resource = None
         self._access_consumption = AccessConsumption()
         self._ticket_click_attempted = False
         self._ticket_entry_only = False
         self._ticket_click_started_at = None
+        self._ticket_click_started_monotonic = None
+        self._ticket_recovery_deadline = None
+        self._ticket_fallback_reads = 0
         self._reset_batch_route_guard()
         if self._expected_work_id is not None and self._episode_id is not None:
             await self._install_batch_route_guard(page)
@@ -1041,9 +1359,18 @@ class HanayumeAdapter(SiteAdapter):
             )
         self._quota_resource = quota_resource
         if self._access_strategy == "quota":
+            if self._episode_id is None or self._expected_work_id is None:
+                raise UnsupportedAccessStrategyError(
+                    "Hanayume Work Ticket observation requires configured work and episode identities"
+                )
             observer = _SeriesAccessObserver()
             observer.attach(page)
             self._ticket_observer = observer
+            current_observer = _CurrentEpisodeAccessObserver(
+                self._episode_id, self._expected_work_id
+            )
+            current_observer.attach(page)
+            self._current_ticket_observer = current_observer
 
     def get_access_consumption(self) -> AccessConsumption:
         return self._access_consumption
@@ -1182,6 +1509,11 @@ class HanayumeAdapter(SiteAdapter):
         if observer is not None:
             await observer.close()
 
+    async def _close_current_ticket_observer(self) -> None:
+        observer, self._current_ticket_observer = self._current_ticket_observer, None
+        if observer is not None:
+            await observer.close()
+
     async def _read_ticket_entry_dom(self, page: Page) -> dict[str, object]:
         if self._episode_id is None or self._target_url is None or page.url != self._target_url:
             raise AccessResourceUnavailableError("hanayume_discovery_refresh_required")
@@ -1288,23 +1620,45 @@ class HanayumeAdapter(SiteAdapter):
             or parse_hanayume_work_url(work_href) != self._expected_work_id
         ):
             raise AccessResourceUnavailableError("hanayume_discovery_refresh_required")
-        if state.get("publicTargetRows") != 1:
-            raise UnknownPageStateError("Hanayume public episode identity is missing or ambiguous")
-        target_rows = state.get("targetRows")
-        if not isinstance(target_rows, list) or len(target_rows) != 1:
-            raise UnknownPageStateError("Hanayume account episode identity is missing or ambiguous")
-        row = target_rows[0]
         if (
-            not isinstance(row, dict)
-            or row.get("titleCount") != 1
-            or row.get("wfIconCount") != 1
-            or row.get("ifIconCount") != 1
-            or not isinstance(row.get("classes"), list)
-            or not all(isinstance(name, str) for name in row["classes"])
-            or not isinstance(row.get("rentalStats"), list)
-            or not all(isinstance(text, str) for text in row["rentalStats"])
+            state.get("previewRootsExact") is not True
+            or state.get("publicRowsValid") is not True
+            or state.get("accountRowsValid") is not True
+            or not isinstance(state.get("publicRowCount"), int)
+            or state.get("publicRowCount", 0) < 1
+            or not isinstance(state.get("accountRowCount"), int)
+            or state.get("accountRowCount", 0) < 1
         ):
-            raise UnknownPageStateError("Hanayume account episode row is incomplete")
+            raise UnknownPageStateError("Hanayume public or account preview is malformed")
+        public_target_rows = state.get("publicTargetRows")
+        target_rows = state.get("targetRows")
+        public_target_links = state.get("publicTargetLinkCount")
+        account_target_links = state.get("accountTargetLinkCount")
+        if (
+            not isinstance(public_target_rows, list)
+            or not isinstance(target_rows, list)
+            or not isinstance(public_target_links, int)
+            or not isinstance(account_target_links, int)
+            or public_target_links not in {0, 1}
+            or account_target_links not in {0, 1}
+            or len(public_target_rows) != public_target_links
+            or len(target_rows) != account_target_links
+            or (public_target_links == 1) != (account_target_links == 1)
+            or state.get("accountOtherCurrentRowCount") != 0
+        ):
+            raise UnknownPageStateError("Hanayume public/account target preview is ambiguous")
+        for row in [*public_target_rows, *target_rows]:
+            if (
+                not isinstance(row, dict)
+                or row.get("titleCount") != 1
+                or row.get("wfIconCount") != 1
+                or row.get("ifIconCount") != 1
+                or not isinstance(row.get("classes"), list)
+                or not all(isinstance(name, str) for name in row["classes"])
+                or not isinstance(row.get("rentalStats"), list)
+                or not all(isinstance(text, str) for text in row["rentalStats"])
+            ):
+                raise UnknownPageStateError("Hanayume target preview row is incomplete")
 
     async def _wait_for_native_ticket_state(
         self,
@@ -1315,6 +1669,7 @@ class HanayumeAdapter(SiteAdapter):
     ) -> HanayumeNativeEpisodeAccess:
         if (
             self._ticket_observer is None
+            or self._current_ticket_observer is None
             or self._expected_work_id is None
             or self._episode_id is None
         ):
@@ -1323,16 +1678,35 @@ class HanayumeAdapter(SiteAdapter):
             if page.url != self._target_url:
                 raise AccessResourceUnavailableError("hanayume_discovery_refresh_required")
             observer = self._ticket_observer
-            if observer.overflow:
+            current_observer = self._current_ticket_observer
+            if observer.overflow or current_observer.overflow:
                 raise UnknownPageStateError("Hanayume native access response observation overflowed")
             await observer.wait_for_pending(0.1)
+            await current_observer.wait_for_pending(0.1)
+            if current_observer.has_pending_access(after=requested_after):
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    await asyncio.sleep(min(TICKET_POLL_INTERVAL_SECONDS, remaining))
+                continue
+            current = current_observer.latest_access(after=requested_after)
             rows = _latest_native_access_by_episode(
                 tuple(observer.snapshots), work_id=self._expected_work_id
             )
             row = rows.get(self._episode_id)
-            if row is not None and (
-                requested_after is None or row.requested_at > requested_after
-            ):
+            if row is not None and requested_after is not None and row.requested_at <= requested_after:
+                row = None
+            if current is not None:
+                if current.work_id != self._expected_work_id or current.access_episode_id != self._episode_id:
+                    raise UnknownPageStateError("Hanayume current episode access identity changed")
+                if (
+                    row is not None
+                    and current.native.requested_at == row.requested_at
+                    and current.native != row
+                ):
+                    raise UnknownPageStateError("Hanayume native access responses conflict")
+                if row is None or current.native.requested_at >= row.requested_at:
+                    return current.native
+            if row is not None:
                 return row
             await asyncio.sleep(TICKET_POLL_INTERVAL_SECONDS)
         raise PageChangeTimeoutError("Hanayume exact native access state did not arrive within its bound")
@@ -1340,6 +1714,8 @@ class HanayumeAdapter(SiteAdapter):
     @staticmethod
     def _ticket_account_row_state(state: dict[str, object]) -> str:
         rows = state.get("targetRows")
+        if isinstance(rows, list) and not rows and state.get("publicTargetRows") == []:
+            return "absent"
         if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
             return "unknown"
         row = rows[0]
@@ -1368,17 +1744,47 @@ class HanayumeAdapter(SiteAdapter):
         if native.access_type != WAIT_AND_FREE_ACCESS_TYPE or native.has_access is None:
             return "unavailable"
         account_state = self._ticket_account_row_state(state)
+        if account_state == "absent":
+            # A series-level false row identifies a nominal candidate, but it
+            # cannot prove the selected episode's current entitlement when both
+            # episode previews omit the target. Require the exact current API
+            # response that carries all three Catalog-bound identities.
+            observer = self._current_ticket_observer
+            current = observer.latest_access() if observer is not None else None
+            if (
+                current is None
+                or current.work_id != self._expected_work_id
+                or current.access_episode_id != self._episode_id
+            ):
+                return "unknown"
+            current_state = (
+                current.native.access_type,
+                current.native.has_access,
+                current.native.remaining_seconds,
+            )
+            selected_state = (
+                native.access_type,
+                native.has_access,
+                native.remaining_seconds,
+            )
+            if current_state != selected_state:
+                return "unknown"
+            # A newer series snapshot may be the selected native row even when
+            # the exact current-episode API observed the same entitlement a
+            # little earlier. Request-start timing alone is not a conflict;
+            # retain the exact endpoint as the authority for absent previews.
+            native = current.native
         if native.has_access is True:
             if (
                 native.remaining_seconds is not None
                 and 0 < native.remaining_seconds <= MAX_EPISODE_ACCESS_SECONDS
-                and account_state == "read"
+                and account_state in {"read", "absent"}
             ):
                 return "active"
             return "unknown"
         if native.remaining_seconds not in {None, 0}:
             return "unknown"
-        if account_state == "blank":
+        if account_state in {"blank", "absent"}:
             return "ungranted"
         return "unknown"
 
@@ -1403,7 +1809,7 @@ class HanayumeAdapter(SiteAdapter):
     async def _exact_work_ticket_control(self, page: Page) -> tuple[ElementHandle, list[str]]:
         state = await self._wait_for_ticket_account(page)
         self._validate_ticket_page_identity(state)
-        if self._ticket_account_row_state(state) != "blank":
+        if self._ticket_account_row_state(state) not in {"blank", "absent"}:
             raise UnknownPageStateError("Hanayume account row does not show the observed ungranted state")
         control_classes = self._validate_work_ticket_control_snapshot(state)
         control = page.locator(TICKET_CONTROL_SELECTOR)
@@ -1460,6 +1866,52 @@ class HanayumeAdapter(SiteAdapter):
         except (PlaywrightError, TypeError):
             return False
 
+    async def _fetch_current_ticket_access(self, page: Page, *, deadline: float) -> bool:
+        """Issue one bounded same-Page read-only refresh after a confirmed checkout."""
+
+        if (
+            self._current_ticket_observer is None
+            or self._episode_id is None
+            or self._target_url is None
+            or page.url != self._target_url
+        ):
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        endpoint = f"{BASE_URL}/api/episodes/{self._episode_id}"
+        try:
+            result = await asyncio.wait_for(
+                page.evaluate(
+                    """async url => {
+                      try {
+                        const response = await fetch(url, {
+                          method: 'GET', credentials: 'same-origin', cache: 'no-store',
+                          redirect: 'error'
+                        });
+                        return {
+                          status: response.status,
+                          url: response.url,
+                          redirected: response.redirected
+                        };
+                      } catch (_) {
+                        return {status: null, url: null, redirected: null};
+                      }
+                    }""",
+                    endpoint,
+                ),
+                timeout=min(TICKET_API_BODY_TIMEOUT_SECONDS, remaining),
+            )
+        except (PlaywrightError, TimeoutError):
+            return False
+        if page.url != self._target_url or not isinstance(result, dict):
+            return False
+        return (
+            result.get("status") == 200
+            and result.get("url") == endpoint
+            and result.get("redirected") is False
+        )
+
     async def _reconcile_work_ticket_consumption(
         self,
         page: Page,
@@ -1468,40 +1920,171 @@ class HanayumeAdapter(SiteAdapter):
         click_started_at: datetime,
         deadline: float,
     ) -> bool:
-        while time.monotonic() < deadline:
+        if self._ticket_recovery_deadline is None:
+            self._ticket_recovery_deadline = deadline
+        recovery_deadline = min(deadline, self._ticket_recovery_deadline)
+        click_started_monotonic = self._ticket_click_started_monotonic
+        if click_started_monotonic is None:
+            click_started_monotonic = time.monotonic()
+            self._ticket_click_started_monotonic = click_started_monotonic
+        while time.monotonic() < recovery_deadline:
             try:
-                native = await self._wait_for_native_ticket_state(
-                    page, requested_after=click_started_at, deadline=deadline
+                if page.url != self._target_url:
+                    raise AccessResourceUnavailableError("hanayume_discovery_refresh_required")
+                series_observer = self._ticket_observer
+                current_observer = self._current_ticket_observer
+                if series_observer is None or current_observer is None:
+                    raise UnknownPageStateError("Hanayume ticket observers are unavailable")
+                for observer in (series_observer, current_observer):
+                    remaining = recovery_deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    await observer.wait_for_pending(min(0.05, remaining))
+                if time.monotonic() >= recovery_deadline:
+                    break
+                if current_observer.has_pending_access(after=click_started_at):
+                    await asyncio.sleep(
+                        min(
+                            TICKET_POLL_INTERVAL_SECONDS,
+                            recovery_deadline - time.monotonic(),
+                        )
+                    )
+                    continue
+                current = current_observer.latest_access(after=click_started_at)
+                series_rows = _latest_native_access_by_episode(
+                    tuple(series_observer.snapshots), work_id=self._expected_work_id or ""
                 )
-                state = await self._read_ticket_entry_dom(page)
-                self._validate_ticket_page_identity(state)
-                if (
-                    before.has_access is False
-                    and native.access_type == WAIT_AND_FREE_ACCESS_TYPE
-                    and native.has_access is True
-                    and native.remaining_seconds is not None
-                    and 0 < native.remaining_seconds <= MAX_EPISODE_ACCESS_SECONDS
-                    and self._ticket_account_row_state(state) == "read"
+                series_native = series_rows.get(self._episode_id or "")
+                if series_native is not None and series_native.requested_at <= click_started_at:
+                    series_native = None
+                if current is not None and (
+                    current.work_id != self._expected_work_id
+                    or current.access_episode_id != self._episode_id
                 ):
+                    raise UnknownPageStateError("Hanayume current episode access identity changed")
+                if (
+                    current is not None
+                    and series_native is not None
+                    and current.native.requested_at == series_native.requested_at
+                    and current.native != series_native
+                ):
+                    raise UnknownPageStateError("Hanayume native access responses conflict")
+                # Reconcile both natural authorities in request-start order. A newer
+                # denial must not be hidden by an older positive response.
+                latest_native: HanayumeNativeEpisodeAccess | None
+                latest_source: str | None
+                if current is None:
+                    latest_native, latest_source = series_native, "series" if series_native else None
+                elif series_native is None or current.native.requested_at >= series_native.requested_at:
+                    latest_native, latest_source = current.native, "current"
+                else:
+                    latest_native, latest_source = series_native, "series"
+                remaining = recovery_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                state = await asyncio.wait_for(
+                    self._read_ticket_entry_dom(page), timeout=remaining
+                )
+                self._validate_ticket_page_identity(state)
+                checkout_confirmed = current_observer.checkout_confirmed(after=click_started_at)
+                account_state = self._ticket_account_row_state(state)
+                current_native = current.native if current is not None else None
+                current_positive_state = (
+                    current_native is not None
+                    and current_native.access_type == WAIT_AND_FREE_ACCESS_TYPE
+                    and current_native.has_access is True
+                    and current_native.remaining_seconds is not None
+                    and 0 < current_native.remaining_seconds <= MAX_EPISODE_ACCESS_SECONDS
+                )
+                series_positive_state = (
+                    series_native is not None
+                    and series_native.access_type == WAIT_AND_FREE_ACCESS_TYPE
+                    and series_native.has_access is True
+                    and series_native.remaining_seconds is not None
+                    and 0 < series_native.remaining_seconds <= MAX_EPISODE_ACCESS_SECONDS
+                )
+                newer_series_agrees = (
+                    current_native is not None
+                    and series_native is not None
+                    and series_native.requested_at > current_native.requested_at
+                    and current_positive_state
+                    and series_positive_state
+                )
+                positive_current = (
+                    before.has_access is False
+                    and current_positive_state
+                    and (
+                        (latest_source == "current" and latest_native is current_native)
+                        or (account_state == "absent" and newer_series_agrees)
+                    )
+                    and account_state in {"absent", "read"}
+                )
+                positive_series = (
+                    before.has_access is False
+                    and latest_source == "series"
+                    and latest_native is series_native
+                    and series_native is not None
+                    and series_native.access_type == WAIT_AND_FREE_ACCESS_TYPE
+                    and series_native.has_access is True
+                    and series_native.remaining_seconds is not None
+                    and 0 < series_native.remaining_seconds <= MAX_EPISODE_ACCESS_SECONDS
+                    and account_state == "read"
+                )
+                confirmed_native = current_native if positive_current else (
+                    series_native if positive_series else None
+                )
+                if checkout_confirmed and confirmed_native is not None:
+                    expiry_candidates = [
+                        confirmed_native.requested_at
+                        + timedelta(seconds=confirmed_native.remaining_seconds - 1)
+                    ]
+                    if positive_current and newer_series_agrees:
+                        assert series_native is not None and series_native.remaining_seconds is not None
+                        expiry_candidates.append(
+                            series_native.requested_at
+                            + timedelta(seconds=series_native.remaining_seconds - 1)
+                        )
                     self._access_consumption = AccessConsumption(
                         consumed=True,
                         resource="work_ticket",
                         consumed_at=datetime.now(UTC),
-                        access_granted_until=native.requested_at
-                        + timedelta(seconds=native.remaining_seconds - 1),
+                        access_granted_until=min(expiry_candidates),
                     )
                     return True
+                if (
+                    checkout_confirmed
+                    and self._ticket_fallback_reads < 2
+                    and time.monotonic() - click_started_monotonic
+                    >= 0.25 + 0.35 * self._ticket_fallback_reads
+                    and (
+                        latest_native is None
+                        or latest_native.has_access is False
+                    )
+                    and not (
+                        account_state == "absent"
+                        and current_positive_state
+                        and current_native is not None
+                        and series_native is not None
+                        and series_native.requested_at > current_native.requested_at
+                    )
+                ):
+                    self._ticket_fallback_reads += 1
+                    await self._fetch_current_ticket_access(
+                        page, deadline=recovery_deadline
+                    )
             except AccessResourceUnavailableError:
                 # Once a click has been attempted, route/work drift is never a
                 # safe skip. Keep only the bounded native-response observer alive.
-                observer = self._ticket_observer
-                if observer is not None:
-                    await observer.wait_for_pending(
-                        min(0.1, max(0.0, deadline - time.monotonic()))
-                    )
-            except (PageChangeTimeoutError, PlaywrightError, UnknownPageStateError):
+                remaining = max(0.0, recovery_deadline - time.monotonic())
+                for observer in (
+                    self._ticket_observer,
+                    self._current_ticket_observer,
+                ):
+                    if observer is not None and remaining > 0:
+                        await observer.wait_for_pending(min(0.1, remaining))
+            except (PageChangeTimeoutError, PlaywrightError, UnknownPageStateError, TimeoutError):
                 pass
-            remaining = deadline - time.monotonic()
+            remaining = recovery_deadline - time.monotonic()
             if remaining > 0:
                 await asyncio.sleep(min(TICKET_POLL_INTERVAL_SECONDS, remaining))
         return self._access_consumption.consumed
@@ -1516,6 +2099,7 @@ class HanayumeAdapter(SiteAdapter):
             or self._expected_work_id is None
             or self._episode_id is None
             or self._ticket_observer is None
+            or self._current_ticket_observer is None
         ):
             raise UnsupportedAccessStrategyError("Hanayume Work Ticket entry is not configured")
         if self._ticket_click_attempted:
@@ -1565,19 +2149,26 @@ class HanayumeAdapter(SiteAdapter):
             self._ticket_click_attempted = True
             click_started_at = datetime.now(UTC)
             self._ticket_click_started_at = click_started_at
+            self._ticket_click_started_monotonic = time.monotonic()
             click_error: BaseException | None = None
             try:
                 await control.click(timeout=2_000, no_wait_after=True)
             except BaseException as exc:  # noqa: BLE001 - reconcile one click even on cancellation
                 click_error = exc
-            recovery_deadline = time.monotonic() + TICKET_RECOVERY_WINDOW_SECONDS
+            self._ticket_recovery_deadline = (
+                time.monotonic() + TICKET_RECOVERY_WINDOW_SECONDS
+            )
             confirmed = await self._reconcile_work_ticket_consumption(
                 page,
                 before=native_before_click,
                 click_started_at=click_started_at,
-                deadline=recovery_deadline,
+                deadline=self._ticket_recovery_deadline,
             )
             if click_error is not None:
+                if not isinstance(click_error, asyncio.CancelledError) and not confirmed:
+                    raise AccessConsumptionUnconfirmedError(
+                        "Hanayume Work Ticket action failed without confirmed consumption; automatic retry is forbidden"
+                    ) from click_error
                 raise click_error
             if page.url != self._target_url:
                 raise AccessConsumptionUnconfirmedError(
@@ -1600,7 +2191,11 @@ class HanayumeAdapter(SiteAdapter):
                         page,
                         before=native_before_click,
                         click_started_at=self._ticket_click_started_at,
-                        deadline=time.monotonic() + TICKET_RECOVERY_WINDOW_SECONDS,
+                        deadline=(
+                            self._ticket_recovery_deadline
+                            if self._ticket_recovery_deadline is not None
+                            else time.monotonic()
+                        ),
                     )
                 except (AccessResourceUnavailableError, PageChangeTimeoutError, PlaywrightError):
                     pass
@@ -1609,6 +2204,7 @@ class HanayumeAdapter(SiteAdapter):
             ) from exc
         finally:
             await self._close_ticket_observer()
+            await self._close_current_ticket_observer()
 
     @staticmethod
     def _is_top_empty_intro(observation: ViewerObservation) -> bool:

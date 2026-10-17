@@ -95,6 +95,16 @@ def _row(position: int, label: str, *, manual_rental: bool = False) -> str:
     </div>"""
 
 
+def _ticket_public_row(position: int, label: str) -> str:
+    """Render the icon fields required by the target-local Batch row snapshot."""
+    return _row(position, label).replace(
+        '</a>\n    </div>',
+        '<span data-e2e="eliWfIcon"></span><span data-e2e="eliIfIcon"></span>'
+        '</a>\n    </div>',
+        1,
+    )
+
+
 def _series_auth_header(state: str) -> str:
     if state == "authenticated":
         login_anchor = ""
@@ -960,6 +970,18 @@ def _batch_viewer_html(
           <script>window.entryGateClicks=0;document.querySelector('#entry-gate').addEventListener('click',()=>window.entryGateClicks++);</script>
         </body></html>"""
     if ticket_entry:
+        preview_absent = ticket_variant in {
+            "preview-absent-series-only",
+            "preview-absent-current",
+            "preview-absent-current-series-later",
+            "preview-absent-stale-current",
+            "preview-absent-post-series-agrees",
+            "preview-absent-post-series-countdown",
+            "preview-absent-post-series-denies",
+        }
+        target_row = _ticket_public_row(TARGET_POSITION, target_badge)
+        if preview_absent:
+            target_row = _ticket_public_row(3, "unclassified")
         account_class = {
             "login": "series-eplist mode-user mode-no-user",
             "unknown-root": "series-eplist mode-user mode-unexpected",
@@ -967,6 +989,10 @@ def _batch_viewer_html(
             "loading-timeout": "series-eplist mode-user mode-loading",
         }.get(ticket_variant, "series-eplist mode-user mode-has-eps")
         target_account_row = _ticket_account_row(episode_id)
+        if preview_absent:
+            target_account_row = _ticket_account_row(_episode_id(3)).replace(
+                " mode-current", ""
+            )
         if ticket_variant == "already-granted":
             target_account_row = _ticket_account_row(episode_id).replace(
                 'class="series-eplist-item mode-current mode-store-item-blank"',
@@ -1028,11 +1054,20 @@ def _batch_viewer_html(
           <script>
             window.ticketClicks=0;
             window.ticketAccountRows={json.dumps(target_account_row)};
-            fetch('/api/series/access');
+            if ({json.dumps(ticket_variant in {'preview-absent-current-series-later', 'preview-absent-stale-current', 'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies'})}) {{
+              fetch('/api/episodes/{episode_id}');
+              setTimeout(() => fetch('/api/series/access'), 30);
+            }} else {{
+              fetch('/api/series/access');
+            }}
+            if ({json.dumps(ticket_variant == 'preview-absent-current')}) {{
+              fetch('/api/episodes/{episode_id}');
+            }}
             document.querySelectorAll('button[data-e2e="wfRead"]').forEach(button =>
-              button.addEventListener('click', () => {{
+              button.addEventListener('click', async () => {{
                 window.ticketClicks++;
-                if ({json.dumps(ticket_variant != 'unconfirmed')}) {{
+                const checkout = await fetch('/api/checkout/rental', {{method:'POST'}});
+                if (checkout.status === 200 && {json.dumps(ticket_variant not in {'unconfirmed', 'preview-absent-current', 'preview-absent-current-series-later', 'preview-absent-stale-current', 'preview-absent-series-only', 'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies'})}) {{
                   const row=document.querySelector('[data-e2e="epListUser"] .series-eplist-item[data-e2e="eli"]');
                   if (row) {{
                     row.className='series-eplist-item mode-read mode-current mode-store-item-start';
@@ -1047,7 +1082,16 @@ def _batch_viewer_html(
                   document.querySelector('#xHeader a.ep-h-main-h-series').href=
                     '{BASE}/series/0000000000001';
                 }}
-                fetch('/api/series/access?after=1');
+                if (checkout.status === 200) {{
+                  if ({json.dumps(ticket_variant in {'preview-absent-current', 'preview-absent-current-series-later', 'preview-absent-stale-current', 'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies'})}) {{
+                    fetch('/api/episodes/{episode_id}');
+                    if ({json.dumps(ticket_variant in {'preview-absent-post-series-agrees', 'preview-absent-post-series-countdown', 'preview-absent-post-series-denies'})}) {{
+                      setTimeout(() => fetch('/api/series/access?after=1'), 30);
+                    }}
+                  }} else {{
+                    fetch('/api/series/access?after=1');
+                  }}
+                }}
               }}));
             {delayed_script}
           </script>"""
@@ -1217,20 +1261,85 @@ async def _install_batch_routes(
     ticket_variant: str = "normal",
     native_work_id: str = WORK_ID,
     batch_route_variant: str | None = None,
+    ticket_observation: dict | None = None,
 ) -> list[str]:
     requested: list[str] = []
     target_path = f"/episodes/{TARGET_EPISODE_ID}"
+    ticket_state = {"checkout_count": 0}
 
     async def fulfill(route) -> None:
         path = urlsplit(route.request.url).path
         requested.append(path)
         parsed = urlsplit(route.request.url)
+        if path == "/api/checkout/rental" and ticket_entry:
+            ticket_state["checkout_count"] += 1
+            await route.fulfill(status=200, body="ticket checkout fixture")
+            return
+        if path == f"/api/episodes/{TARGET_EPISODE_ID}" and ticket_entry:
+            granted = (
+                (
+                    ticket_variant in {
+                        "already-granted",
+                        "preview-absent-stale-current",
+                    }
+                    and ticket_state["checkout_count"] == 0
+                )
+                or (
+                    ticket_variant != "unconfirmed"
+                    and ticket_state["checkout_count"] > 0
+                )
+            )
+            if (
+                granted
+                and ticket_variant == "delayed-series-body"
+                and ticket_state["checkout_count"] > 0
+            ):
+                # Keep the truthful post-checkout current state pending just
+                # beyond the deliberately delayed series body in this one test.
+                await asyncio.sleep(0.4)
+            if (
+                ticket_state["checkout_count"] > 0
+                and ticket_variant
+                in {
+                    "preview-absent-post-series-agrees",
+                    "preview-absent-post-series-countdown",
+                    "preview-absent-post-series-denies",
+                }
+            ):
+                # Keep the current-episode response pending long enough for the
+                # later-started series response to be observed first.
+                await asyncio.sleep(0.1)
+            await route.fulfill(
+                status=200,
+                json={
+                    "episode": {
+                        "id": TARGET_EPISODE_ID,
+                        "series": {"id": native_work_id},
+                        "access": {
+                            "episodeId": TARGET_EPISODE_ID,
+                            "accessType": "waitAndFree",
+                            "hasAccess": granted,
+                            "timeRemainingInSeconds": 259199 if granted else 0,
+                        },
+                    }
+                },
+            )
+            if ticket_observation is not None:
+                ticket_observation.setdefault("current_access", []).append(granted)
+            return
         if path == "/api/series/access" and ticket_entry:
             pre_granted = ticket_variant == "already-granted"
             post_click = (
-                ("after=1" in parsed.query and ticket_variant != "unconfirmed")
+                (
+                    "after=1" in parsed.query
+                    and ticket_variant
+                    not in {"unconfirmed", "preview-absent-post-series-denies"}
+                )
                 or pre_granted
             )
+            remaining_seconds = 259198 if (
+                ticket_variant == "preview-absent-post-series-countdown" and post_click
+            ) else (259199 if post_click else 0)
             await route.fulfill(
                 status=200,
                 json={
@@ -1243,7 +1352,7 @@ async def _install_batch_routes(
                                     "premium" if ticket_variant == "paid-native" else "waitAndFree"
                                 ),
                                 "hasAccess": post_click,
-                                "timeRemainingInSeconds": 259199 if post_click else 0,
+                                "timeRemainingInSeconds": remaining_seconds,
                             }
                         ],
                     }
@@ -1316,6 +1425,7 @@ async def _batch_fixture(
     native_work_id: str = WORK_ID,
     runtime_ticket_entry: bool = False,
     batch_route_variant: str | None = None,
+    ticket_observation: dict | None = None,
 ):
     discovery_native = None
     discovery_badge = discovery_target_badge
@@ -1375,6 +1485,7 @@ async def _batch_fixture(
         ticket_variant=ticket_variant,
         native_work_id=native_work_id,
         batch_route_variant=batch_route_variant,
+        ticket_observation=ticket_observation,
     )
     executor = BatchExecutor(
         catalog,
@@ -1604,8 +1715,13 @@ async def test_hanayume_quota_batch_uses_one_ticket_on_same_page_then_crawls_to_
 async def test_hanayume_delayed_native_grant_body_survives_multiple_reconciliation_polls(
     browser_page, tmp_path: Path, monkeypatch
 ) -> None:
+    ticket_observation: dict = {}
     catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
-        browser_page, tmp_path, quota_candidate=True
+        browser_page,
+        tmp_path,
+        quota_candidate=True,
+        ticket_variant="delayed-series-body",
+        ticket_observation=ticket_observation,
     )
     original_capture = hanayume_discovery._SeriesAccessObserver._capture
     original_wait = hanayume_discovery._SeriesAccessObserver.wait_for_pending
@@ -1655,7 +1771,12 @@ async def test_hanayume_delayed_native_grant_body_survives_multiple_reconciliati
     assert result.stop_reason == "end" and result.page_count == 4
     assert body_started.is_set() and body_finished.is_set()
     assert polls_during_body >= 2
+    assert ticket_observation["current_access"] == [True]
     assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert requested.count(f"/api/episodes/{TARGET_EPISODE_ID}") == 1
+    assert requested.count("/api/series/access") == 2
+    assert catalog.get_item(candidate.item_id).status == "completed"
     assert state is not None and state.last_consumed_at is not None
     assert saved_source.access_granted_until is not None
     confirmation = datetime.fromisoformat(state.last_consumed_at)
@@ -1903,11 +2024,50 @@ async def test_hanayume_discovery_active_manual_grant_uses_direct_batch_without_
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    "ticket_variant",
+    [
+        "preview-absent-post-series-agrees",
+        "preview-absent-post-series-countdown",
+    ],
+)
 async def test_hanayume_ticket_consumption_survives_packaging_failure(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, monkeypatch, ticket_variant: str
 ) -> None:
     catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
-        browser_page, tmp_path, quota_candidate=True
+        browser_page,
+        tmp_path,
+        quota_candidate=True,
+        ticket_variant=ticket_variant,
+    )
+    confirmed_expiries: list[tuple[datetime, datetime, datetime]] = []
+    original_reconcile = HanayumeAdapter._reconcile_work_ticket_consumption
+
+    async def capture_native_expiries(adapter, page, **kwargs):
+        confirmed = await original_reconcile(adapter, page, **kwargs)
+        if confirmed:
+            click_started_at = kwargs["click_started_at"]
+            current = adapter._current_ticket_observer.latest_access(after=click_started_at)
+            series_rows = hanayume_discovery._latest_native_access_by_episode(
+                tuple(adapter._ticket_observer.snapshots), work_id=WORK_ID
+            )
+            series = series_rows[TARGET_EPISODE_ID]
+            assert current is not None
+            current_expiry = current.native.requested_at + timedelta(
+                seconds=current.native.remaining_seconds - 1
+            )
+            series_expiry = series.requested_at + timedelta(
+                seconds=series.remaining_seconds - 1
+            )
+            confirmed_expiries.append(
+                (min(current_expiry, series_expiry), current_expiry, series_expiry)
+            )
+        return confirmed
+
+    monkeypatch.setattr(
+        HanayumeAdapter,
+        "_reconcile_work_ticket_consumption",
+        capture_native_expiries,
     )
 
     def fail_package(*_args, **_kwargs):
@@ -1926,10 +2086,123 @@ async def test_hanayume_ticket_consumption_survives_packaging_failure(
 
     assert raised.value.resource_consumed is True
     assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert requested.count(f"/api/episodes/{TARGET_EPISODE_ID}") == 2
+    assert requested.count("/api/series/access") == 2
     assert catalog.get_source(source.id).access_granted_until is not None
+    quota_state = catalog.get_quota_resource_state(
+        catalog.get_item(candidate.item_id).work_id,
+        site="hanayume",
+        resource="work_ticket",
+    )
+    assert quota_state is not None and quota_state.last_consumed_at is not None
+    confirmation = datetime.fromisoformat(quota_state.last_consumed_at)
+    expiry = datetime.fromisoformat(catalog.get_source(source.id).access_granted_until)
+    assert timedelta(hours=71, minutes=59) < expiry - confirmation <= timedelta(hours=72)
+    assert len(confirmed_expiries) == 1
+    expected_expiry, current_expiry, series_expiry = confirmed_expiries[0]
+    assert expiry == expected_expiry
+    if ticket_variant.endswith("countdown"):
+        assert series_expiry < current_expiry
+    else:
+        assert current_expiry < series_expiry
     assert catalog.get_item(candidate.item_id).status == "pending"
     assert catalog.list_artifacts(item_id=candidate.item_id) == []
     assert all(not path.startswith("/series/") for path in requested)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_absent_preview_newer_series_denial_after_checkout_stays_unconfirmed(
+    browser_page, tmp_path: Path
+) -> None:
+    catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
+        browser_page,
+        tmp_path,
+        quota_candidate=True,
+        ticket_variant="preview-absent-post-series-denies",
+    )
+
+    with pytest.raises(CandidateExecutionError) as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "post-checkout-series-denial-output",
+            library_dir=tmp_path / "library",
+            max_pages=10,
+            now=BATCH_NOW,
+        )
+
+    assert raised.value.resource_consumed is not True
+    assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert requested.count(f"/api/episodes/{TARGET_EPISODE_ID}") == 2
+    assert requested.count("/api/series/access") == 2
+    assert catalog.get_source(source.id).access_granted_until is None
+    assert catalog.get_quota_resource_state(
+        catalog.get_item(candidate.item_id).work_id,
+        site="hanayume",
+        resource="work_ticket",
+    ) is None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_absent_previews_and_series_only_false_state_cannot_click(
+    browser_page, tmp_path: Path
+) -> None:
+    catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
+        browser_page,
+        tmp_path,
+        quota_candidate=True,
+        ticket_variant="preview-absent-series-only",
+    )
+
+    with pytest.raises(CandidateExecutionError):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "series-only-no-click-output",
+            library_dir=tmp_path / "library",
+            max_pages=10,
+            now=BATCH_NOW,
+        )
+
+    assert await browser_page.evaluate("() => window.ticketClicks") == 0
+    assert requested.count("/api/checkout/rental") == 0
+    assert requested.count(f"/api/episodes/{TARGET_EPISODE_ID}") == 0
+    assert catalog.get_source(source.id).access_granted_until is None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_absent_preview_newer_series_denial_cannot_click(
+    browser_page, tmp_path: Path
+) -> None:
+    catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
+        browser_page,
+        tmp_path,
+        quota_candidate=True,
+        ticket_variant="preview-absent-stale-current",
+    )
+
+    with pytest.raises(CandidateExecutionError):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "newer-series-denial-output",
+            library_dir=tmp_path / "library",
+            max_pages=10,
+            now=BATCH_NOW,
+        )
+
+    assert await browser_page.evaluate("() => window.ticketClicks") == 0
+    assert requested.count("/api/checkout/rental") == 0
+    assert requested.count(f"/api/episodes/{TARGET_EPISODE_ID}") == 1
+    assert catalog.get_source(source.id).access_granted_until is None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
 
 
 @pytest.mark.parametrize(
