@@ -1,6 +1,6 @@
 # 花とゆめ＋ Work Ticket 実装 Runbook
 
-**Status:** PLANNED（計画のみ。コード変更・実サイトでのチケット使用は未実施）  
+**Status:** Phase 03 PASS (independent Reviewer PASS / BLOCKING 0); Phase 04 full test suite running. Confirmed ticket use remains one.
 **Baseline:** 2026-10-17 の `main`。既存の [Hanayume free-only Runbook](../hanayume-free/README.md) R9 PASS を起点とする。  
 **実装ブランチ:** `main` から新しい `feat/hanayume-work-ticket` を作成し、main には自動マージしない。古い `feat/hanayume-adapter` を起点にしない。  
 **進捗記録:** [PROGRESS.md](PROGRESS.md)。旧 free-only Runbook は完了履歴として維持する。
@@ -47,7 +47,7 @@ ComicDAYS の作品単位 Resource / Batch / grant-only の扱いを**第一参�
 - `src/screenshot_crawler/site_adapters/comicdays/adapter.py`: `quota/work_ticket` の entry と通常 Viewer を**同一ページ内**で連結、`initialize_entry_only`、一度だけ click、消費確認・ラッチ。
 - `src/screenshot_crawler/batch/executor.py`、`batch/grants.py`、`cli.py`: Catalog への work resource 状態保存、ローカル SKIP、grant-only 実行とレポートを再利用。
 - `src/screenshot_crawler/site_adapters/hanayume/adapter.py`: 現行 Viewer / native capture は原則変更しない。チケット入場処理だけ前段に追加。
-- `src/screenshot_crawler/site_adapters/hanayume/discovery.py`: 現行は `無料` と認証済み `今なら無料` を free、その他を unknown とする。**ログイン済みDiscoveryで「待つと無料」の未消費話だけでなく、手動で既に使った話の「レンタル中／閲覧期限／残時間」等の state も識別し、`access_mode=quota` と `access_granted_until` を同時に設定する**。使用済み話を `paid` に誤分類しない。既存の `epListUser` history/account rows に使用済み状態が現れる可能性がある。public 行と history 行のラベルが異なる場合でも、安全に認識した同一話の grant 差分だけを例外として許容し、work/episode identity・重複検証・読書順の authority は維持する。既存 unknown source の候補化は安全な対象話検証の下で行い、全 unknown を無条件に quota としない。Batch から Discovery を再実行しない。
+- `src/screenshot_crawler/site_adapters/hanayume/discovery.py`: Discovery waits for the exact episode-local account history root to settle before each range snapshot. A fresh authenticated range plus an exact work/episode native `waitAndFree`, `hasAccess=true`, and positive bounded `timeRemainingInSeconds` can establish a manual episode grant. If the exact episode is present in the account preview, that row must show the observed rental/read markers; a present row without them is contradictory and cannot mint a grant. If the episode is absent from the short preview, absence is not negative evidence: the exact native row may establish the grant. Unknown/loading/no-user account state, ambiguous IDs, malformed remaining time, and unrelated public/history label differences fail closed. Full and incremental refresh already-buffered ranges only; no extra range/API request is added. Exact active grants are the only permitted public/history label-difference exception; public enumeration order and identity checks remain authoritative.
 
 **設計選択:** 通常 Batch では ComicDAYS 型の**non-deferred quota execution**を第一候補にする。現行の deferred 付与→post-grant direct 再ナビゲーションは「クリック後そのページをそのままcrawl」と食い違うため、そのまま使わない。一方、同作品に複数 pending candidate がある時の「1作品1候補」を現行 Planner/CLI が保証するかを検証する。不十分なら、work 単位で最初の Catalog 候補だけを選ぶ薄い site-owned 層、または最小限の site-neutral grouping を追加し、Core の site 固有分岐や大きな抽象化を避ける。候補選定や cooldown SKIP にサイト通信を伴わせない。
 
@@ -86,10 +86,10 @@ ComicDAYS の作品単位 Resource / Batch / grant-only の扱いを**第一参�
 
 - `configure_run`、`configure_quota_resource`、`get_access_consumption`、`initialize_entry_only` を実装。quota entry を今の `initialize` の Viewer 初期化に最小限接続。
 - 選んだ話の URL と Catalog work/episode を再照合。対象話内の唯一の ticket control を検証。Click 直前にフラグを立てて1回のみ操作。
-- クリック後は site が開いた**同じページ**で 1ページ目の Viewer ready を待つ。閲覧解放と ticket 消費を**正の証拠**で確認して `AccessConsumption(consumed=True,resource="work_ticket",consumed_at=...)` を確定。曖昧ならクリック再試行しない。
+- クリック後は site が開いた**同じページ**で 1ページ目の Viewer ready を待つ。閲覧解放と ticket 消費を**正の証拠**で確認して `AccessConsumption` を確定する。work cooldown は確認時刻、話の `access_granted_until` は native `requested_at + remainingSeconds - 1s` とし、generic Site Policy の72h fallbackを上限とする。曖昧ならクリック再試行しない。
 - 通常 Batch はそのまま現行 Hanayume の初期化 → Native/PNG Capture → END → ZIP。`grant-only` は entry 確認だけで終了し、画像・ZIPを作らず Item pending。
 - 通常 Batch / grant-only とも過去のローカル23h記録で**ブラウザアクセス前 SKIP**。消費確定後に Viewer または ZIP が失敗しても消費記録を保持。
-- **Gate:** Fixture で unique, missing, duplicate, hidden, disabled, paid, identity mismatch, delayed hydrate, click timeout, click succeeded but post-processing failed, interruption の全分岐。paid click 0回、再クリック0回、`/series/` request 0件。
+- **Gate:** Fixture で unique, missing, duplicate, hidden, disabled, paid, identity mismatch, delayed hydrate, click timeout, click succeeded but post-processing failed, interruption の全分岐。Click trial 後の同一 control replacement/paid attribute drift と click 後の route/work drift は、click 0回/一回のまま fatal で、Batch が再 navigation しないこと。configured direct も観測済み central charge/login gate では capture せず、通常 free/anonymous entry は維持する。paid click 0回、再クリック0回、`/series/` request 0件。
 
 ### Phase 04 — Integration / real site / independent verification
 

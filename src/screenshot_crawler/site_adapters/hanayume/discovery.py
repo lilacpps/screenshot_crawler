@@ -37,6 +37,7 @@ RANGE_PATH = re.compile(
 RANGE_LABEL = re.compile(r"^(?P<start>[1-9][0-9]*)-(?P<end>[1-9][0-9]*)$")
 SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS = 5.0
 SERIES_AUTH_POLL_INTERVAL_MS = 150
+SERIES_HISTORY_HYDRATION_TIMEOUT_SECONDS = 5.0
 
 WORK_LINK_SELECTOR = "#xHeader a.ep-h-main-h-series"
 LISTING_SELECTOR = ".series-eplist-wrap"
@@ -224,6 +225,7 @@ class HanayumeListingRow:
     access: HanayumeAccessObservation
     global_position: int
     manual_rental_history: bool = False
+    manual_rental_history_present: bool = False
     history_label_conflict: bool = False
     access_granted_until: datetime | None = None
     access_granted_until_observed: bool = False
@@ -399,20 +401,31 @@ class _SeriesAccessObserver:
         except (PlaywrightError, TimeoutError, TypeError, ValueError):
             return
 
-    async def finish(self) -> tuple[HanayumeSeriesAccessSnapshot, ...]:
-        self._detach()
-        deadline = time.monotonic() + NATIVE_ACCESS_OBSERVATION_TIMEOUT_SECONDS
+    async def wait_for_pending(self, timeout_seconds: float) -> bool:
+        """Wait only for already-observed native responses; never create requests."""
+
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
         while True:
             pending = [task for task in self._tasks if not task.done()]
             if not pending:
-                break
+                return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                for task in pending:
-                    task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-                break
+                # A poll timeout is non-terminal: keep the response-body task
+                # alive for a later poll until finish()/close() owns cleanup.
+                return False
             await asyncio.wait(pending, timeout=remaining)
+        return True
+
+    async def finish(self) -> tuple[HanayumeSeriesAccessSnapshot, ...]:
+        self._detach()
+        drained = await self.wait_for_pending(NATIVE_ACCESS_OBSERVATION_TIMEOUT_SECONDS)
+        if not drained:
+            pending = [task for task in self._tasks if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         return tuple(self.snapshots)
 
     async def close(self) -> None:
@@ -483,7 +496,10 @@ def _apply_native_access(
             and native.has_access is True
             and native.remaining_seconds is not None
             and 0 < native.remaining_seconds <= MAX_EPISODE_ACCESS_SECONDS
-            and row.manual_rental_history is True
+            and (
+                row.manual_rental_history is True
+                or row.manual_rental_history_present is False
+            )
         )
         if row.history_label_conflict and not native_manual_grant:
             raise DiscoveryIncompleteError(
@@ -503,7 +519,10 @@ def _apply_native_access(
             elif (
                 native.has_access is True
                 and native.remaining_seconds > 0
-                and row.manual_rental_history is True
+                and (
+                    row.manual_rental_history is True
+                    or row.manual_rental_history_present is False
+                )
             ):
                 grant_until = native.requested_at + timedelta(
                     seconds=max(0, native.remaining_seconds - ACCESS_EXPIRY_SAFETY_SECONDS)
@@ -820,6 +839,74 @@ async def _wait_for_listing(page: Page, guard: AccessGuard) -> None:
     await _guard_checkpoint(guard, page)
 
 
+async def _wait_for_authenticated_episode_history(page: Page, guard: AccessGuard) -> None:
+    """Wait for the observed account-history root before reading authenticated ranges."""
+
+    deadline = time.monotonic() + SERIES_HISTORY_HYDRATION_TIMEOUT_SECONDS
+    while True:
+        try:
+            state = await asyncio.wait_for(
+                page.evaluate(
+                    r"""() => {
+                      const wrappers = [...document.querySelectorAll('.series-eplist-wrap')];
+                      const wrapper = wrappers.length === 1 ? wrappers[0] : null;
+                      const mains = wrapper ? [...wrapper.children].filter(node =>
+                        node.classList.contains('series-eplist-main')) : [];
+                      const main = mains.length === 1 ? mains[0] : null;
+                      const roots = wrapper ? [...wrapper.querySelectorAll('.series-eplist')] : [];
+                      const allRoots = [...document.querySelectorAll('.series-eplist')];
+                      const users = roots.filter(root => root.dataset.e2e === 'epListUser');
+                      const publicRoots = roots.filter(root => root.dataset.e2e === 'epList');
+                      if (wrappers.length !== 1 || mains.length !== 1 ||
+                          roots.length !== 2 || allRoots.length !== 2 || users.length !== 1 ||
+                          publicRoots.length !== 1 ||
+                          users[0].parentElement !== main || !users[0].classList.contains('mode-user')) {
+                        return 'unknown';
+                      }
+                      const root = users[0];
+                      const classes = [...root.classList].sort().join(' ');
+                      if (classes === 'mode-loading mode-user series-eplist') return 'loading';
+                      if (classes === 'mode-no-user mode-user series-eplist') return 'no-user';
+                      if (classes !== 'mode-has-eps mode-user series-eplist') return 'unknown';
+                      const defaults = [...root.children].filter(node =>
+                        node.classList.contains('series-eplist-default'));
+                      const rows = [...root.querySelectorAll(
+                        '.series-eplist-item[data-e2e="eli"]')];
+                      return defaults.length === 1 && defaults[0].parentElement === root &&
+                        rows.length > 0 && publicRoots.length === 1 &&
+                        [...document.querySelectorAll('.series-eplist-item[data-e2e="eli"]')]
+                          .every(row => publicRoots[0].contains(row) || root.contains(row))
+                        ? 'ready' : 'unknown';
+                    }"""
+                ),
+                timeout=OBSERVATION_TIMEOUT_SECONDS,
+            )
+        except (PlaywrightError, TimeoutError) as exc:
+            raise DiscoveryIncompleteError(
+                "Hanayume authenticated account history could not be observed"
+            ) from exc
+        if state == "ready":
+            await _guard_checkpoint(guard, page)
+            return
+        if state in {"no-user", "unknown"}:
+            raise DiscoveryIncompleteError(
+                "Hanayume authenticated account history has an unrecognized state"
+            )
+        if state != "loading":
+            raise DiscoveryIncompleteError(
+                "Hanayume authenticated account history state is malformed"
+            )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise DiscoveryIncompleteError(
+                "Hanayume authenticated account history did not finish loading"
+            )
+        await page.wait_for_timeout(
+            min(SERIES_AUTH_POLL_INTERVAL_MS, max(1, int(remaining * 1000)))
+        )
+        await _guard_checkpoint(guard, page)
+
+
 async def _wait_for_series_listing(page: Page, guard: AccessGuard) -> None:
     try:
         await page.locator(LISTING_SELECTOR).wait_for(
@@ -1118,6 +1205,7 @@ async def _read_range_rows(
         replace(
             row,
             manual_rental_history=row.identity.episode_id in manual_rental_history_ids,
+            manual_rental_history_present=row.identity.episode_id in history_ids,
             history_label_conflict=row.identity.episode_id in history_label_conflict_ids,
         )
         for row in parsed_rows
@@ -1309,6 +1397,8 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
                     raise DiscoveryIncompleteError(
                         "Hanayume range page belongs to a different work context"
                     )
+                if listing_authenticated:
+                    await _wait_for_authenticated_episode_history(page, guard)
                 entries = await _read_range_links(page)
                 _validate_range_navigation(
                     entries,

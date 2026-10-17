@@ -20,6 +20,7 @@ class AccessConsumption:
     consumed: bool = False
     resource: str | None = None
     consumed_at: datetime | None = None
+    access_granted_until: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

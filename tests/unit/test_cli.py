@@ -826,8 +826,13 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
         "zeblack",
     )
     policy = cli._batch_policy_registry().create("hanayume")
-    assert policy.supported_access_resources() == ()
-    assert policy.grant_only_supported_access_resources() == ()
+    assert policy.supported_access_resources() == ("work_ticket",)
+    assert policy.grant_only_supported_access_resources() == ("work_ticket",)
+    grant_only = _parser().parse_args(
+        ["batch", "run", "--site", "hanayume", "--grant-only", "work_ticket"]
+    )
+    assert grant_only.grant_only == "work_ticket"
+    assert cli._grant_only_resource_passes(policy) == ("work_ticket",)
     kadocomi_policy = cli._batch_policy_registry().create("kadocomi")
     assert kadocomi_policy.supported_access_resources() == ()
     assert kadocomi_policy.grant_only_supported_access_resources() == ()
@@ -937,7 +942,7 @@ def test_discovery_and_batch_registries_contain_supported_sites() -> None:
     ) == "https://comic-fuz.com/manga/1970?position=thumbnail"
 
 
-def test_younganimal_crawl_registry_uses_configured_work_entry_before_navigation(
+def test_younganimal_crawl_registry_keeps_canonical_episode_entry_with_configured_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("YOUNGANIMAL_WORK_URL", raising=False)
@@ -946,7 +951,7 @@ def test_younganimal_crawl_registry_uses_configured_work_entry_before_navigation
 
     assert adapter.resolve_initial_navigation_url(
         "https://younganimal.com/episodes/55889b8a851cb"
-    ) == "https://younganimal.com/series/aee4fa742b0fe"
+    ) == "https://younganimal.com/episodes/55889b8a851cb"
 
     with pytest.raises(UnknownPageStateError, match="canonical episode URL"):
         cli._registry({}).create("younganimal").resolve_initial_navigation_url(
@@ -2199,7 +2204,18 @@ async def test_batch_candidate_delay_runs_after_close_only_between_site_candidat
     ]
 
 
-async def test_candidate_failure_is_recorded_and_batch_stops() -> None:
+@pytest.mark.parametrize(
+    ("resource_consumed", "expected_note"),
+    [
+        (True, "リソース消費確認済み（後続処理に失敗）"),
+        (None, "リソース消費未確認（自動再試行なし）"),
+    ],
+)
+async def test_candidate_failure_is_recorded_and_batch_stops(
+    capsys: pytest.CaptureFixture[str],
+    resource_consumed: bool | None,
+    expected_note: str,
+) -> None:
     events: list[str] = []
 
     class FakeSession:
@@ -2217,7 +2233,9 @@ async def test_candidate_failure_is_recorded_and_batch_stops() -> None:
         ) -> object:
             events.append(f"execute:{candidate.item_id}")
             if candidate.item_id == 1:
-                raise cli.CandidateExecutionError("viewer timeout")
+                raise cli.CandidateExecutionError(
+                    "viewer timeout", resource_consumed=resource_consumed
+                )
             return SimpleNamespace(archive_path=Path("item-2.zip"))
 
     args = SimpleNamespace(
@@ -2228,8 +2246,14 @@ async def test_candidate_failure_is_recorded_and_batch_stops() -> None:
         keep_open=False,
     )
     candidates = [
-        SimpleNamespace(item_id=1, source_id=11, metadata={}, access_strategy="direct", quota_resource=None),
-        SimpleNamespace(item_id=2, source_id=22, metadata={}, access_strategy="direct", quota_resource=None),
+        SimpleNamespace(
+            item_id=1, source_id=11, metadata={}, access_strategy="quota",
+            quota_resource="work_ticket", quota_commit_mode="after_observed_consumption",
+        ),
+        SimpleNamespace(
+            item_id=2, source_id=22, metadata={}, access_strategy="quota",
+            quota_resource="work_ticket", quota_commit_mode="after_observed_consumption",
+        ),
     ]
 
     with pytest.raises(cli.CandidateExecutionError, match="viewer timeout"):
@@ -2243,9 +2267,12 @@ async def test_candidate_failure_is_recorded_and_batch_stops() -> None:
         )
 
     assert events == ["new", "execute:1", "close"]
+    assert expected_note in capsys.readouterr().err
 
 
-async def test_cleanup_cancellation_does_not_replace_candidate_failure() -> None:
+async def test_cleanup_cancellation_does_not_replace_candidate_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     class FakeSession:
         async def new_page(self) -> object:
             return object()
@@ -2279,9 +2306,24 @@ async def test_cleanup_cancellation_does_not_replace_candidate_failure() -> None
             phase="test",
             inter_candidate_delay_ms=0,
         )
+    assert "リソース消費" not in capsys.readouterr().err
 
 
-async def test_batch_interruption_does_not_start_next_candidate() -> None:
+@pytest.mark.parametrize(
+    ("resource_consumed", "raw_cancel", "expected_note"),
+    [
+        (True, False, "リソース消費確認済み（後続処理に失敗）"),
+        (None, False, "リソース消費未確認（自動再試行なし）"),
+        (None, True, "リソース消費未確認（自動再試行なし）"),
+    ],
+    ids=("confirmed-wrapper", "unconfirmed-wrapper", "raw-cancellation"),
+)
+async def test_batch_interruption_does_not_start_next_candidate(
+    capsys: pytest.CaptureFixture[str],
+    resource_consumed: bool | None,
+    raw_cancel: bool,
+    expected_note: str,
+) -> None:
     events: list[str] = []
 
     class FakeSession:
@@ -2297,7 +2339,11 @@ async def test_batch_interruption_does_not_start_next_candidate() -> None:
             self, _page: object, candidate: object, **_kwargs: object
         ) -> object:
             events.append(f"execute:{candidate.item_id}")
-            raise cli.BatchInterruptedError("interrupted")
+            if raw_cancel:
+                raise asyncio.CancelledError()
+            raise cli.BatchInterruptedError(
+                "interrupted", resource_consumed=resource_consumed
+            )
 
     args = SimpleNamespace(
         output_root=Path("output/batch"),
@@ -2307,8 +2353,14 @@ async def test_batch_interruption_does_not_start_next_candidate() -> None:
         keep_open=False,
     )
     candidates = [
-        SimpleNamespace(item_id=1, source_id=11, metadata={}, access_strategy="direct", quota_resource=None),
-        SimpleNamespace(item_id=2, source_id=22, metadata={}, access_strategy="direct", quota_resource=None),
+        SimpleNamespace(
+            item_id=1, source_id=11, metadata={}, access_strategy="quota",
+            quota_resource="work_ticket", quota_commit_mode="after_observed_consumption",
+        ),
+        SimpleNamespace(
+            item_id=2, source_id=22, metadata={}, access_strategy="quota",
+            quota_resource="work_ticket", quota_commit_mode="after_observed_consumption",
+        ),
     ]
 
     with pytest.raises(cli.BatchInterruptedError):
@@ -2322,6 +2374,7 @@ async def test_batch_interruption_does_not_start_next_candidate() -> None:
         )
 
     assert events == ["new", "execute:1", "close"]
+    assert expected_note in capsys.readouterr().err
 
 
 async def test_batch_empty_candidate_list_has_no_candidate_delay(

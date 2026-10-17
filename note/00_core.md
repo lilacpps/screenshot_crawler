@@ -1,5 +1,25 @@
 # 00. Core 現行実装ノート
 
+## Optional native expiry on observed resource consumption (2026-10-17)
+
+`AccessConsumption` retains its existing `consumed`, `resource`, and aware
+`consumed_at` fields and adds optional generic `access_granted_until`. The
+Executor accepts only an aware datetime when supplied. It persists the earlier
+of that native expiry and the Site Policy fallback; if native metadata is
+malformed, it persists the confirmed debit with the valid policy fallback (when
+available) and then raises a clear metadata error. Legacy adapters that provide
+only the original fields keep their policy-derived behavior. This affects no
+Runner ordering, Catalog schema, or site/resource selection. Hanayume supplies
+the field from its exact target native remaining-time evidence; see
+`note/10_hanayume.md`.
+
+The Younganimal CLI registry assertion was stale: current Discovery/Batch
+authority requires direct canonical episode entry, and the adapter already
+resolved the configured-work case to that episode. The test now expects the
+episode URL while retaining malformed-URL and missing-work-configuration
+guards. This is a test correction only; no Younganimal production behavior
+changed.
+
 ## Deferred grant sequencing and results (updated 2026-10-17)
 
 `batch run --grant-only RESOURCE` / `--grant-only all` and the grant phase of
@@ -78,13 +98,16 @@ still stop the run. Only planned deferred Works are included, not every Watchlis
 entry or completed/active-grant Work with no deferred candidate.
 
 Deferred grant results print immediately and as a final list on success, failure or interruption,
-and flush `grant_result` JSONL records without changing candidate counters. The
-grant-only Executor propagates validated positive current-attempt consumption
-in `BatchExecutionError.resource_consumed`; a later failure is OK with a failure
-annotation, while missing confirmation is NG/consumption unconfirmed. Old Catalog
+and flush `grant_result` JSONL records without changing candidate counters. Both
+normal Batch and grant-only Executor paths propagate validated positive
+current-attempt consumption in `BatchExecutionError.resource_consumed`; a later
+failure keeps that evidence independently of packaging or interruption. For a
+consuming candidate, CLI failure output distinguishes confirmed resource use
+with failed follow-up work from unconfirmed use and warns against automatic
+retry. Old Catalog
 timestamps are never used as current-attempt consumption evidence. Shared
-AccessGuard and no-capture/no-package/no-completion semantics remain intact.
-No schema or site-specific Core branch was added.
+AccessGuard and grant-only no-capture/no-package/no-completion semantics remain
+intact. No schema or site-specific Core branch was added.
 
 `BatchExecutor.prepare_access_resource_candidates()` is an async context manager
 owning the resolver Page's active Guard. It yields a single-use, context-scoped
@@ -235,11 +258,11 @@ Only available Catalog sources with `access_mode=free` are Batch eligible. No
 Core branch or Catalog schema field was added. Site-local routes, entry checks,
 capture contract, and live-verification status are in note/11_younganimal.md.
 
-## Hanayume Discovery, Viewer, and direct-only Batch registration (updated 2026-10-11)
+## Hanayume Discovery, Viewer, and Work Ticket Batch (updated 2026-10-17)
 
-`HanayumeDiscoveryAdapter` is registered in the Discovery registry. `HanayumeAdapter` is registered in the manual crawl and Batch adapter registries, and `HanayumeSitePolicy` is registered in the Batch policy registry. All paths use the shared CDP BrowserSession/Page and existing DiscoveryService/Planner/Executor/Runner/Packager; no Hanayume-specific Core branch or Catalog schema field was added. Discovery authentication reads the canonical series route under `series.mode-series-top[data-e2e=pageSeries]`; episode row identity uses `div.ep-main.series-safe-filter-target[data-e2e=pageEpisode] > div.series.mode-ep` (the inner `.series.mode-ep` has no `data-e2e`). Both enumerate only a unique direct public `epList`; known history siblings are checked for overlapping badge conflicts, never merged into Discovery results.
+`HanayumeDiscoveryAdapter` is registered in the Discovery registry. `HanayumeAdapter` is registered in the manual crawl and Batch adapter registries, and `HanayumeSitePolicy` is registered in the Batch policy registry. All paths use the shared CDP BrowserSession/Page and existing DiscoveryService/Planner/Executor/Runner/Packager; no Hanayume-specific Core branch or Catalog schema field was added. Discovery authentication reads the canonical series route under `series.mode-series-top[data-e2e=pageSeries]`; episode row identity uses `div.ep-main.series-safe-filter-target[data-e2e=pageEpisode] > div.series.mode-ep` (the inner `.series.mode-ep` has no `data-e2e`). Both enumerate only a unique direct public `epList`; known history siblings are checked for overlapping badge conflicts, never merged into Discovery results. Authenticated Hanayume range snapshots wait boundedly for the observed episode-local account root to settle; exact native active grants can cover public-enumerated episodes outside the short account preview, while a present account row still requires its rental marker. This remains Hanayume-local behavior.
 
-Exact row-local `無料` maps to `access_mode=free`. Exact `今なら無料` maps to free only when a fresh current-attempt check on the canonical same-work `/series/<id>` page proves the observed account markers (`#xHeader.h`, `hUserMenu`, `hUserIcon`, `signoutBtn` under `.h-usermenu`, and no login anchor). Missing/ambiguous auth structure leaves that label unknown; other ambiguous row labels remain unknown. The auth result is not persisted or reused across attempts, and Catalog still stores only `access_mode`. Final logged-in E2E verified four scoped candidates including exact `今なら無料`; full-list Discovery observed 296 unique rows (3 exact `無料`, 293 exact `今なら無料`) and the current verified attempt classified all as free. Page-wide purchase/resource copy is not used to infer access.
+Discovery consumes only the natural exact work/episode `/api/series/access` observation: native `accessType=waitAndFree` promotes an otherwise unknown row to a nominal `quota` candidate, while exact free labels retain their established precedence. This classification never authorizes an entry click. Full and incremental Discovery refresh the already-buffered validated ranges without extra range/API requests and wait up to five seconds for each authenticated episode-local account root to settle. A manual episode grant requires fresh authenticated series markers plus an exact native `waitAndFree` row with `hasAccess=true` and strict positive remaining seconds (1..259200). When that episode appears in the short account preview, its row must show the observed read/rental markers; a present row without them is contradictory. Absence from the preview is not negative evidence when the exact active native row is present. Unknown/loading/no-user/malformed states preserve prior grants; exact zero remaining clears a stale grant. Only this exact active grant permits a public/history label difference. Catalog stores normalized `access_mode` and source-level `access_granted_until` provenance, not raw labels or native response payloads. Batch selects from Catalog and opens only the chosen canonical episode URL; `work_ticket` uses a work-scoped minimum 23-hour cooldown and one candidate per work, while each episode grant lasts up to 72 hours. Direct access during a recorded active grant does not consume another ticket. No site-specific Core branch or Catalog schema migration was added; shared `AccessConsumption` has an optional generic native expiry. Current site behavior, tests, evidence, and limits are in `note/10_hanayume.md` and `runbooks/hanayume-work-ticket/README.md`.
 
 The site-local manual Viewer path freshly checks the same-work row before capture and its label again after episode entry. Login/paid entry dialogs or unavailable viewer structure fail closed without CTA actions. The document-start source observer snapshots an observed opaque sRGB/unorm8 960x1540 full-frame canvas at draw time and requires exact selected-canvas RGBA replay. Verified pixels use strict lossless VP8L WebP method 4 with full RGBA round-trip validation; encoder failure keeps the same verified PNG. Missing/unsafe native proof uses clean rendered body-canvas PNG for the whole spread at actual dimensions. This does not claim original JPEG bytes or tile reconstruction. Final live E2E verified 134/134 original 960x1540 source-canvas pages as single-chunk VP8L lossless WebP with exact independent RGBA equality and zero rendered fallbacks. Four candidates reached END and produced four verified ZIPs without quota or entitlement mutation. The prior 122-page Phase 05 rendered-PNG run is historical baseline evidence. Details and limits are in `note/10_hanayume.md` and the Hanayume runbook.
 

@@ -1261,24 +1261,148 @@ async def test_successful_premium_ticket_candidate_completes_item(
     assert service.get_crawl_run(result.crawl_run_id).status == "succeeded"
 
 
-async def test_consumption_is_recorded_when_crawl_fails_after_entry(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("native_expiry", "expected_expiry"),
+    [
+        (
+            datetime(2026, 9, 19, 14, 59, tzinfo=JST),
+            datetime(2026, 9, 19, 14, 59, tzinfo=JST),
+        ),
+        (
+            datetime(2026, 9, 21, 15, 0, tzinfo=JST),
+            datetime(2026, 9, 20, 15, 12, tzinfo=JST),
+        ),
+    ],
+    ids=("native-expiry-before-policy", "policy-expiry-caps-native"),
+)
+async def test_observed_native_grant_expiry_is_capped_by_policy_fallback(
+    tmp_path: Path, native_expiry: datetime, expected_expiry: datetime
+) -> None:
+    service = CatalogService(tmp_path / "native-grant-expiry.sqlite")
+    candidate = _add_magapoke_candidate(service, site="hanayume")
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "work_ticket", consumed_at, native_expiry),
+        site="hanayume",
+        policy=HanayumeSitePolicy,
+    )
+
+    await executor.execute_candidate(
+        object(), candidate, output_root=tmp_path / "batch", now=NOW
+    )
+
+    source = service.get_source(candidate.source_id)
+    assert source.access_granted_until == expected_expiry.isoformat()
+    state = service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="hanayume",
+        resource="work_ticket",
+    )
+    assert state is not None and state.last_consumed_at == consumed_at.isoformat()
+
+
+@pytest.mark.parametrize(
+    "invalid_expiry",
+    [datetime(2026, 9, 19, 14, 59), "not-a-datetime"],  # noqa: DTZ001 - exercise naive metadata rejection
+    ids=("naive", "wrong-type"),
+)
+async def test_invalid_native_grant_expiry_keeps_confirmed_debit_with_policy_fallback(
+    tmp_path: Path, invalid_expiry: object
+) -> None:
+    service = CatalogService(tmp_path / "invalid-native-expiry.sqlite")
+    candidate = _add_magapoke_candidate(service, site="hanayume")
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "work_ticket", consumed_at, invalid_expiry),  # type: ignore[arg-type]
+        site="hanayume",
+        policy=HanayumeSitePolicy,
+    )
+
+    with pytest.raises(BatchExecutionError, match="access-grant expiry") as raised:
+        await executor.execute_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+
+    source = service.get_source(candidate.source_id)
+    assert raised.value.resource_consumed is True
+    assert source.quota_started_at == consumed_at.isoformat()
+    assert source.access_granted_until == "2026-09-20T15:12:00+09:00"
+    state = service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="hanayume",
+        resource="work_ticket",
+    )
+    assert state is not None and state.last_consumed_at == consumed_at.isoformat()
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+
+
+@pytest.mark.parametrize(
+    ("consumed", "failure", "expected_consumed"),
+    [
+        (True, RuntimeError("crawl failed after entry"), True),
+        (False, RuntimeError("crawl failed before confirmation"), None),
+        (True, asyncio.CancelledError(), True),
+        (False, asyncio.CancelledError(), None),
+    ],
+)
+async def test_consumption_is_recorded_when_crawl_fails_after_entry(
+    tmp_path: Path,
+    consumed: bool,
+    failure: BaseException,
+    expected_consumed: bool | None,
+) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = _add_magapoke_candidate(service)
     consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
     executor = _make_magapoke_executor(
-        service, AccessConsumption(True, "work_ticket", consumed_at),
-        failure=RuntimeError("crawl failed after entry"),
+        service,
+        AccessConsumption(consumed, "work_ticket", consumed_at if consumed else None),
+        failure=failure,
     )
-    with pytest.raises(BatchExecutionError, match="crawl failed after entry"):
+
+    expected_error = BatchInterruptedError if isinstance(
+        failure, asyncio.CancelledError
+    ) else BatchExecutionError
+    with pytest.raises(expected_error) as raised:
         await executor.execute_candidate(object(), candidate, now=NOW)
-    assert service.get_source(candidate.source_id).quota_started_at == consumed_at.isoformat()
+    assert raised.value.resource_consumed is expected_consumed
+    assert service.get_source(candidate.source_id).quota_started_at == (
+        consumed_at.isoformat() if consumed else None
+    )
     state = service.get_quota_resource_state(
         service.get_item(candidate.item_id).work_id,
         site="magapoke",
         resource="work_ticket",
     )
-    assert state is not None
-    assert state.last_consumed_at == consumed_at.isoformat()
+    assert (state is not None) is consumed
+    if state is not None:
+        assert state.last_consumed_at == consumed_at.isoformat()
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+
+
+async def test_normal_packaging_failure_preserves_confirmed_consumption(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "packaging-failure.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service, AccessConsumption(True, "work_ticket", consumed_at)
+    )
+
+    def fail_package(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("package failed after entry")
+
+    executor.package_function = fail_package
+    with pytest.raises(BatchExecutionError, match="package failed after entry") as raised:
+        await executor.execute_candidate(object(), candidate, now=NOW)
+
+    assert raised.value.resource_consumed is True
+    assert service.get_source(candidate.source_id).quota_started_at == consumed_at.isoformat()
     assert service.get_item(candidate.item_id).status == "pending"
     assert service.list_artifacts() == []
 

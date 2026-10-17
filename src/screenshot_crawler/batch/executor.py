@@ -310,10 +310,12 @@ class BatchExecutor:
                 stop_reason=crawl_result.stop_reason,
             )
         except BaseException as exc:
+            resource_consumed = _confirmed_grant_consumption(candidate, adapter)
             if isinstance(exc, (KeyboardInterrupt, asyncio.CancelledError)):
                 interrupted = BatchInterruptedError(
                     f"Batch interrupted while executing item={candidate.item_id}, "
-                    f"source={candidate.source_id}"
+                    f"source={candidate.source_id}",
+                    resource_consumed=resource_consumed,
                 )
                 if not consumption_checked and adapter is not None and policy is not None:
                     try:
@@ -341,14 +343,17 @@ class BatchExecutor:
                     f"Fatal access stop for item={candidate.item_id}, "
                     f"source={candidate.source_id}: {exc.reason}",
                     access_stop=exc,
+                    resource_consumed=resource_consumed,
                 ) from exc
             if isinstance(exc, BatchExecutionError):
+                exc.resource_consumed = resource_consumed
                 raise
             if isinstance(exc, AccessResourceUnavailableError):
                 raise
             raise CandidateExecutionError(
                 f"Batch candidate failed (item={candidate.item_id}, "
-                f"source={candidate.source_id}): {exc}"
+                f"source={candidate.source_id}): {exc}",
+                resource_consumed=resource_consumed,
             ) from exc
 
     def grant_only_skip_reason(
@@ -886,7 +891,28 @@ def _record_observed_resource_consumption(
         raise BatchExecutionError("adapter reported resource consumption without a timestamp")
     if consumption.consumed_at.tzinfo is None or consumption.consumed_at.utcoffset() is None:
         raise BatchExecutionError("adapter consumption timestamp must be timezone-aware")
-    access_granted_until = policy.access_grant_until(consumption.consumed_at)
+    policy_grant_until = policy.access_grant_until(consumption.consumed_at)
+    native_grant_until = consumption.access_granted_until
+    metadata_error: str | None = None
+    if native_grant_until is not None and (
+        not isinstance(native_grant_until, datetime)
+        or native_grant_until.tzinfo is None
+        or native_grant_until.utcoffset() is None
+    ):
+        metadata_error = "adapter access-grant expiry must be a timezone-aware datetime"
+        native_grant_until = None
+    if policy_grant_until is not None and (
+        not isinstance(policy_grant_until, datetime)
+        or policy_grant_until.tzinfo is None
+        or policy_grant_until.utcoffset() is None
+    ):
+        metadata_error = "policy access-grant expiry must be a timezone-aware datetime"
+        policy_grant_until = None
+    access_granted_until = (
+        min(native_grant_until, policy_grant_until)
+        if native_grant_until is not None and policy_grant_until is not None
+        else native_grant_until or policy_grant_until
+    )
     if policy.resource_state_scope(candidate.quota_resource) == "work":
         item = catalog.get_item(candidate.item_id)
         catalog.record_quota_access_with_resource_state(
@@ -903,6 +929,8 @@ def _record_observed_resource_consumption(
             quota_started_at=consumption.consumed_at,
             access_granted_until=access_granted_until,
         )
+    if metadata_error is not None:
+        raise BatchExecutionError(metadata_error)
     return True
 
 

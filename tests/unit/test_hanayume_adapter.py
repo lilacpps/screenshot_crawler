@@ -6,7 +6,11 @@ import pytest
 from playwright.async_api import Error as PlaywrightError
 
 from screenshot_crawler.core.capture import CaptureResult
-from screenshot_crawler.core.errors import PageChangeTimeoutError, UnknownPageStateError
+from screenshot_crawler.core.errors import (
+    PageChangeTimeoutError,
+    UnknownPageStateError,
+    UnsupportedAccessStrategyError,
+)
 from screenshot_crawler.site_adapters.hanayume import adapter as hanayume_adapter
 from screenshot_crawler.site_adapters.hanayume.adapter import (
     HanayumeAdapter,
@@ -136,13 +140,14 @@ def test_capture_output_format_reports_mixed_native_and_rendered_captures() -> N
 
 
 @pytest.mark.asyncio
-async def test_batch_direct_strategy_uses_the_observed_free_viewer_path() -> None:
+async def test_batch_adapter_accepts_direct_and_work_ticket_strategies() -> None:
     adapter = HanayumeAdapter()
 
     await adapter.configure_run(None, "direct")
+    await adapter.configure_run(None, "quota")
 
-    with pytest.raises(UnknownPageStateError):
-        await adapter.configure_run(None, "quota")
+    with pytest.raises(UnsupportedAccessStrategyError):
+        await adapter.configure_run(None, "premium")
 
 
 @pytest.mark.asyncio

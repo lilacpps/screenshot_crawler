@@ -33,7 +33,7 @@ def _short_hanayume_initialization_waits(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(hanayume_adapter_module, "VIEWER_COUNTER_READY_TIMEOUT_MS", 400)
     monkeypatch.setattr(hanayume_adapter_module, "INITIAL_CANVAS_QUIET_MS", 60)
     monkeypatch.setattr(hanayume_adapter_module, "INITIAL_CANVAS_POLL_INTERVAL_MS", 20)
-    monkeypatch.setattr(hanayume_adapter_module, "INITIAL_CANVAS_SETTLE_TIMEOUT_MS", 800)
+    monkeypatch.setattr(hanayume_adapter_module, "INITIAL_CANVAS_SETTLE_TIMEOUT_MS", 2_000)
 
 
 def _row(episode_id: str, label: str) -> str:

@@ -1291,6 +1291,16 @@ def _filter_local_grant_candidates(
     return eligible
 
 
+def _resource_consumption_failure_note(candidate: BatchCandidate, error: BaseException) -> str | None:
+    """Describe observed resource consumption after a consuming candidate fails."""
+
+    if getattr(candidate, "quota_commit_mode", None) != "after_observed_consumption":
+        return None
+    if getattr(error, "resource_consumed", None) is True:
+        return "  リソース消費確認済み（後続処理に失敗）"
+    return "  リソース消費未確認（自動再試行なし）"
+
+
 async def _execute_deferred_grants(
     args: argparse.Namespace,
     session: BrowserSession,
@@ -1930,6 +1940,9 @@ async def _execute_batch_candidates(
                     error_message="Batch interrupted by user",
                 )
             print("  Batch interrupted by user.", file=sys.stderr)
+            consumption_note = _resource_consumption_failure_note(candidate, exc)
+            if consumption_note is not None:
+                print(consumption_note, file=sys.stderr)
             raise
         except (KeyboardInterrupt, asyncio.CancelledError) as exc:
             interruption = BatchInterruptedError(
@@ -1947,6 +1960,9 @@ async def _execute_batch_candidates(
                     error_message=str(interruption),
                 )
             print("  Batch interrupted by user.", file=sys.stderr)
+            consumption_note = _resource_consumption_failure_note(candidate, interruption)
+            if consumption_note is not None:
+                print(consumption_note, file=sys.stderr)
             raise interruption from exc
         except AccessResourceUnavailableError as exc:
             reason = exc.reason
@@ -1978,6 +1994,9 @@ async def _execute_batch_candidates(
             print(f"  item={candidate.item_id}", file=sys.stderr)
             print(f"  source={candidate.source_id}", file=sys.stderr)
             print(f"  error={exc}", file=sys.stderr)
+            consumption_note = _resource_consumption_failure_note(candidate, exc)
+            if consumption_note is not None:
+                print(consumption_note, file=sys.stderr)
             raise
         except BaseException as exc:
             primary_error = exc
@@ -2001,6 +2020,9 @@ async def _execute_batch_candidates(
             print(f"  source={candidate.source_id}", file=sys.stderr)
             print(f"  strategy={candidate.access_strategy}", file=sys.stderr)
             print(f"  error={exc}", file=sys.stderr)
+            consumption_note = _resource_consumption_failure_note(candidate, exc)
+            if consumption_note is not None:
+                print(consumption_note, file=sys.stderr)
             if args.keep_open:
                 print("Browser is open. Press Enter here to disconnect.")
                 await asyncio.to_thread(input)
