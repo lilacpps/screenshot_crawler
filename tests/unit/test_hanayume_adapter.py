@@ -145,6 +145,35 @@ def test_hanayume_latest_series_target_reports_newer_foreign_work_collision() ->
     assert conflict_at > requested_at
 
 
+@pytest.mark.parametrize(
+    ("classes", "rental_stats", "expected"),
+    [
+        (["mode-current", "mode-store-item-blank", "series-eplist-item"], [], "blank"),
+        (["mode-current", "mode-store-item-start", "series-eplist-item"], [], "blank"),
+        (
+            ["mode-current", "mode-store-item-start", "series-eplist-item", "extra"],
+            [],
+            "unknown",
+        ),
+        (
+            ["mode-current", "mode-store-item-start", "series-eplist-item"],
+            ["rental marker"],
+            "unknown",
+        ),
+    ],
+    ids=("blank", "unrented-store-start", "extra-class", "store-start-rental"),
+)
+def test_hanayume_ticket_account_row_accepts_only_observed_unrented_blank_shapes(
+    classes: list[str], rental_stats: list[str], expected: str,
+) -> None:
+    state = {
+        "targetRows": [{"classes": classes, "rentalStats": rental_stats}],
+        "publicTargetRows": [{"classes": classes, "rentalStats": rental_stats}],
+    }
+
+    assert HanayumeAdapter._ticket_account_row_state(state) == expected
+
+
 async def _observe_current_access(
     observer, page: _CurrentObserverPage, *, has_access: bool, **kwargs
 ):

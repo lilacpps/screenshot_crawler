@@ -1721,7 +1721,10 @@ class HanayumeAdapter(SiteAdapter):
         rental_stats = row.get("rentalStats")
         if not isinstance(classes, list) or not isinstance(rental_stats, list):
             return "unknown"
-        if classes == ["mode-current", "mode-store-item-blank", "series-eplist-item"]:
+        if classes in (
+            ["mode-current", "mode-store-item-blank", "series-eplist-item"],
+            ["mode-current", "mode-store-item-start", "series-eplist-item"],
+        ):
             return "blank" if not rental_stats else "unknown"
         if (
             classes

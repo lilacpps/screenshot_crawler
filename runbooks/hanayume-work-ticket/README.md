@@ -1,9 +1,14 @@
 # 花とゆめ＋ Work Ticket 実装 Runbook
 
-**Status:** Phases 01-03 and the Phase 04 native-first latch passed independent review. The exact five-file affected Hanayume suite passed 342 tests with zero skips or deselections. The earlier live normal Batch on `06994043345b1` observed checkout HTTP 200 and matching current-episode `false -> true` access, but the then-current adapter did not persist the grant; the corrected path has not been live-reverified. No further ticket action is authorized. Cumulative real ticket use remains three.
+**Status:** Phases 01-03 and the Phase 04 native-first latch passed independent review; the last five-file affected Hanayume suite passed 342 tests before the current narrow account-row follow-up. On already-granted `06994043345b1`, full/incremental Discovery preserved the future source grant and normal direct Batch reached END with a verified 30-page PNG ZIP, checkout 0, and no work-consumption state fabricated. The `1d10701c05629` quota attempt is confirmed pre-click by independent source-order review: the exact current native state was `waitAndFree/hasAccess=false` with null remaining time (valid for ungranted), but the previous predicate rejected the hydrated target row with the exact ungranted `mode-store-item-start` shape. A read-only probe confirmed it; the current two-class predicate recognizes that shape while the exact control-label and actionability gates remain unchanged. The focused two-class follow-up passed 103 unit/browser tests (0 skipped/deselected) and awaits independent review. Cumulative confirmed real ticket use remains three; no post-fix ticket action is authorized pending review.
 **Baseline:** 2026-10-17 の `main`。既存の [Hanayume free-only Runbook](../hanayume-free/README.md) R9 PASS を起点とする。  
 **実装ブランチ:** `main` から新しい `feat/hanayume-work-ticket` を作成し、main には自動マージしない。古い `feat/hanayume-adapter` を起点にしない。  
 **進捗記録:** [PROGRESS.md](PROGRESS.md)。旧 free-only Runbook は完了履歴として維持する。
+
+## Current Phase 04 status
+
+The 1d107 quota attempt is confirmed pre-click by independent source-order review. The exact target row used `mode-current mode-store-item-start` without a rental marker; its exact current API reported `waitAndFree/hasAccess=false` and null remaining seconds, which is valid ungranted state. A bounded read-only probe confirmed the hydrated target rows and exact visible free-control ancestry. The narrow recognition change and focused tests await independent review; the exact production button-label/actionability gate remains unchanged. Cumulative confirmed ticket use remains 3. Phase 04 and post-fix consuming live verification remain incomplete. See [PROGRESS.md](PROGRESS.md) for sanitized evidence and test details.
+
 
 ## 1. 目的と確定仕様
 

@@ -435,10 +435,13 @@ async def _initialized(page: Page, *, adapter: HanayumeAdapter | None = None) ->
 def _ticket_row(
     episode_id: str, *, account: bool, target: bool = False, duplicate_link: bool = False,
     other_current: bool = False, icons: bool = False, read: bool = False,
+    store_start: bool = False,
 ) -> str:
     classes = "series-eplist-item"
     if account and target and read:
         classes = "mode-read mode-current mode-store-item-start series-eplist-item"
+    elif target and store_start:
+        classes = "mode-current mode-store-item-start series-eplist-item"
     elif account and target:
         classes = "mode-current mode-store-item-blank series-eplist-item"
     elif account and other_current:
@@ -478,7 +481,7 @@ async def _install_work_ticket_site(
     if preview in {"absent", "other-current"}:
         public_ids = [other_id]
         account_ids = [other_id]
-    elif preview in {"present", "duplicate-link", "read"}:
+    elif preview in {"present", "duplicate-link", "read", "start"}:
         public_ids = [EPISODE_ID]
         account_ids = [EPISODE_ID]
     elif preview == "duplicate-row":
@@ -496,6 +499,7 @@ async def _install_work_ticket_site(
             _ticket_row(
                 episode_id, account=False, target=episode_id == EPISODE_ID,
                 icons=episode_id == EPISODE_ID,
+                store_start=preview == "start" and episode_id == EPISODE_ID,
             ),
             1,
         )
@@ -511,6 +515,7 @@ async def _install_work_ticket_site(
                 other_current=preview == "other-current",
                 icons=episode_id == EPISODE_ID and preview != "read",
                 read=preview == "read" and episode_id == EPISODE_ID,
+                store_start=preview == "start" and episode_id == EPISODE_ID,
             ),
             1,
         )
@@ -638,6 +643,45 @@ async def test_hanayume_ticket_entry_latches_exact_current_api_proof_before_post
     assert state["paths"].count(f"/episodes/{EPISODE_ID}") == 1
     if not entry_only:
         assert await adapter.detect_state(browser_page) is PageState.CONTENT
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("entry_only", [False, True], ids=("normal", "grant-only"))
+async def test_hanayume_ticket_entry_accepts_observed_unrented_store_start_row(
+    browser_page: Page, entry_only: bool,
+) -> None:
+    state = await _install_work_ticket_site(browser_page, preview="start")
+    adapter = await _ticket_adapter(browser_page, entry_only=entry_only)
+
+    assert adapter.get_access_consumption().consumed is True
+    assert await browser_page.evaluate("() => window.ticketClicks") == 1
+    assert state["checkout_attempts"] == 1
+    assert state["api_reads"] >= 2
+    assert browser_page.url == EPISODE_URL
+    if not entry_only:
+        assert await adapter.detect_state(browser_page) is PageState.CONTENT
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_ticket_does_not_treat_store_start_row_as_granted_without_rental_proof(
+    browser_page: Page,
+) -> None:
+    await _install_work_ticket_site(
+        browser_page, preview="start", initial_has_access=True
+    )
+    adapter = HanayumeAdapter()
+    await adapter.configure_target_identity(f"{WORK_ID}:{EPISODE_ID}", WORK_ID)
+    adapter.resolve_initial_navigation_url(EPISODE_URL)
+    await adapter.prepare_page(browser_page)
+    await adapter.configure_run(browser_page, "quota")
+    await adapter.configure_quota_resource(browser_page, "work_ticket")
+    response = await browser_page.goto(EPISODE_URL, wait_until="domcontentloaded")
+    assert response is not None and response.status == 200
+
+    with pytest.raises(UnknownPageStateError):
+        await adapter.initialize_entry_only(browser_page)
+    assert await browser_page.evaluate("() => window.ticketClicks") == 0
+    assert adapter.get_access_consumption().consumed is False
 
 
 @pytest.mark.asyncio(loop_scope="module")
