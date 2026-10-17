@@ -1416,6 +1416,34 @@ async def test_hanayume_discovery_to_batch_zip_completes_only_eligible_candidate
         discovery_auth_state=auth_state,
         batch_route_variant="valid-rsc",
     )
+    selected_path = f"/episodes/{TARGET_EPISODE_ID}"
+    blocked_route_failures: list[dict[str, str | None]] = []
+    off_target_route_responses: list[dict[str, str | int]] = []
+
+    def observe_request_failure(request) -> None:
+        parsed = urlsplit(request.url)
+        if (
+            parsed.hostname == "hanayume.com"
+            and parsed.path.startswith(("/episodes/", "/series/"))
+            and parsed.path != selected_path
+        ):
+            blocked_route_failures.append(
+                {"path": parsed.path, "failure": request.failure}
+            )
+
+    def observe_route_response(response) -> None:
+        parsed = urlsplit(response.url)
+        if (
+            parsed.hostname == "hanayume.com"
+            and parsed.path.startswith(("/episodes/", "/series/"))
+            and parsed.path != selected_path
+        ):
+            off_target_route_responses.append(
+                {"path": parsed.path, "status": response.status}
+            )
+
+    browser_page.on("requestfailed", observe_request_failure)
+    browser_page.on("response", observe_route_response)
     manifest_snapshots: list[dict[str, object]] = []
 
     def package_with_manifest_copy(output_dir, metadata, **kwargs):
@@ -1471,6 +1499,16 @@ async def test_hanayume_discovery_to_batch_zip_completes_only_eligible_candidate
     route_results = await browser_page.evaluate("() => window.batchRouteResults")
     assert isinstance(route_results, list) and len(route_results) == 5
     assert [row["status"] for row in route_results] == [0, 0, 0, 0, 200]
+    assert len(blocked_route_failures) == 4
+    assert all(
+        entry["failure"] == "net::ERR_BLOCKED_BY_CLIENT"
+        or (
+            isinstance(entry["failure"], str)
+            and entry["failure"].startswith("net::ERR_BLOCKED_BY_CLIENT.")
+        )
+        for entry in blocked_route_failures
+    ), repr(blocked_route_failures)
+    assert off_target_route_responses == []
     assert route_audits and all(
         audit == {
             "enabled": True,

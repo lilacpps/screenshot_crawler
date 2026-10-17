@@ -222,12 +222,14 @@ async def test_hanayume_batch_route_handler_passes_selected_and_blocks_unknown(
         def __init__(self, request) -> None:
             self.request = request
             self.action: str | None = None
+            self.error_code: str | None = None
 
         async def fallback(self) -> None:
             self.action = "fallback"
 
-        async def abort(self) -> None:
+        async def abort(self, error_code: str | None = None) -> None:
             self.action = "abort"
+            self.error_code = error_code
 
     adapter = HanayumeAdapter()
     adapter._episode_id = "49b7e11049871"
@@ -242,6 +244,7 @@ async def test_hanayume_batch_route_handler_passes_selected_and_blocks_unknown(
     await adapter._handle_batch_navigation_route(route)
 
     assert route.action == expected_action
+    assert route.error_code == ("blockedbyclient" if expected_action == "abort" else None)
     assert adapter._batch_route_fatal_reason == fatal
     assert adapter._batch_route_blocked_rsc == (1 if fatal is None and expected_action == "abort" else 0)
     if fatal is not None:

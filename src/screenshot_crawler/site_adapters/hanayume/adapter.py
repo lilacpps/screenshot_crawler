@@ -1007,7 +1007,7 @@ class HanayumeAdapter(SiteAdapter):
                 if self._batch_route_fatal_reason is None:
                     self._batch_route_fatal_reason = "unrecognized_page_route_request"
             try:
-                await route.abort()
+                await route.abort(error_code="blockedbyclient")
             except Exception:  # noqa: BLE001 - failed aborts are fatal and remain visible
                 self._batch_route_abort_failures += 1
                 self._batch_route_fatal_reason = "page_route_abort_failed"
@@ -1015,7 +1015,7 @@ class HanayumeAdapter(SiteAdapter):
             self._batch_route_blocked_unexpected += 1
             self._batch_route_fatal_reason = "page_route_handler_failed"
             try:
-                await route.abort()
+                await route.abort(error_code="blockedbyclient")
             except Exception:  # noqa: BLE001 - no safe fallback for an unknown route
                 self._batch_route_abort_failures += 1
                 self._batch_route_fatal_reason = "page_route_abort_failed"
