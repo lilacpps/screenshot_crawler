@@ -1,6 +1,11 @@
 # 花とゆめ Work Ticket — PROGRESS
 
 **Current status (source/test checkpoint `467dc69a1ca093ac07e6024b5bddb6575d6cf24c`): Phases 01-04 are complete; implementation and live verification passed independent review. The focused Hanayume adapter Unit suite plus explicitly selected adapter-browser cases passed 103 tests, 0 failed, 0 skipped/deselected (266 pytest-asyncio deprecation warnings; 7.36s); the two-class row-state correction has independent Reviewer PASS / BLOCKING 0. The earlier 342-test result is a separate pre-correction snapshot. Existing-grant `06994043345b1` full/incremental Discovery plus normal direct Batch passed with a future episode grant, END, and a 30-page ZIP without another checkout. The final normal consuming Batch audit for `1d10701c05629` passed the independent Tester audit: one correlated checkout HTTP 200, exact current-episode native `false → true` grant, Catalog quota/source persistence, END, and a validated 30-page PNG ZIP. Final independent live Reviewer gate: PASS / BLOCKING 0. Phase 04 is complete. Confirmed real ticket actions are 4 on distinct works: `49b7e11049871`, `9a2b14d706281`, `06994043345b1`, and `1d10701c05629`. The earlier 1d107 attempt is independently confirmed pre-click (checkout/read POST 0) and is not counted. The exact production control-label/actionability gates remain unchanged.**
+
+## User-reported manual check (2026-10-18 JST)
+
+- The user reported that the manual test appeared to go well after the suggested isolated-Catalog command flow. No independent run artifacts or precise tested scope accompanied this report. This does not alter the previously confirmed ledger of 4 actions on 4 distinct works.
+
 Baseline: branch `feat/hanayume-work-ticket`, Phase 02 checkpoint `03f049f478c7a7e08ef1d0617da23446d187dca9` / Hanayume free-only R9 PASS。作業開始時のユーザー変更 `crawler.yaml`, `watchlist.yaml`, `debug.log` は保持。
 
 ## 2026-10-17 — Phase 01 bounded read-only probe
