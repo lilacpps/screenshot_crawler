@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from screenshot_crawler.discovery import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.hanayume.discovery import (
     HanayumeEpisodeIdentity,
     HanayumeListingRow,
+    HanayumeNativeEpisodeAccess,
+    HanayumeSeriesAccessSnapshot,
     _apply_discovery_scope,
+    _apply_native_access,
+    _latest_native_access_by_episode,
     _parse_range_links,
+    _parse_series_access_snapshot,
     _records_from_rows,
     _validate_range_navigation,
     canonical_hanayume_episode_url,
@@ -316,3 +323,168 @@ def test_hanayume_bounded_scope_is_inclusive_without_renumbering() -> None:
             scope=DiscoveryScope(from_url=f"{BASE}/episodes/8cf6f15923caa0"),
             work_id=WORK_ID,
         )
+
+
+def test_hanayume_native_access_requires_exact_work_and_episode_and_sets_conservative_expiry() -> None:
+    requested_at = datetime(2026, 10, 17, 1, 2, 3, tzinfo=UTC)
+    snapshot = _parse_series_access_snapshot(
+        {
+            "seriesAccess": {
+                "seriesId": WORK_ID,
+                "episodeAccesses": [
+                    {
+                        "episodeId": SEED_ID,
+                        "accessType": "waitAndFree",
+                        "hasAccess": True,
+                        "timeRemainingInSeconds": 259200,
+                    },
+                    {
+                        "episodeId": "9202b052ad237",
+                        "accessType": "waitAndFree",
+                        "hasAccess": True,
+                        "timeRemainingInSeconds": 3600,
+                    },
+                ],
+            }
+        },
+        requested_at=requested_at,
+    )
+    assert snapshot is not None
+    native = _latest_native_access_by_episode([snapshot], work_id=WORK_ID)
+    row = HanayumeListingRow(
+        identity=HanayumeEpisodeIdentity(WORK_ID, SEED_ID),
+        title="Episode",
+        access=classify_hanayume_access(("購入",)),
+        global_position=1,
+        manual_rental_history=True,
+    )
+
+    updated = _apply_native_access([row], native_access=native, listing_authenticated=True)[0]
+
+    assert updated.access.access_mode == "quota"
+    assert updated.access_granted_until == requested_at + timedelta(seconds=259199)
+    assert updated.access_granted_until_observed is True
+    assert _latest_native_access_by_episode([snapshot], work_id="9000000000001") == {}
+
+
+@pytest.mark.parametrize("conflicting_duplicate", [False, True])
+def test_hanayume_native_duplicate_episode_rows_are_ambiguous_even_when_identical(
+    conflicting_duplicate: bool,
+) -> None:
+    requested_at = datetime(2026, 10, 17, 1, 2, 3, tzinfo=UTC)
+    first = HanayumeNativeEpisodeAccess(
+        SEED_ID, "waitAndFree", True, 3600, requested_at
+    )
+    second = (
+        HanayumeNativeEpisodeAccess(
+            SEED_ID, "waitAndFree", True, 1800, requested_at
+        )
+        if conflicting_duplicate
+        else first
+    )
+    duplicate_snapshot = HanayumeSeriesAccessSnapshot(
+        WORK_ID, (first, second)
+    )
+
+    assert _latest_native_access_by_episode(
+        [duplicate_snapshot], work_id=WORK_ID
+    ) == {}
+
+    # A later clean, naturally observed response is allowed to supersede the
+    # duplicate row set; the duplicate response itself cannot mint quota/grant.
+    clean = HanayumeNativeEpisodeAccess(
+        SEED_ID, "waitAndFree", True, 7200, requested_at + timedelta(seconds=1)
+    )
+    clean_snapshot = HanayumeSeriesAccessSnapshot(WORK_ID, (clean,))
+    assert _latest_native_access_by_episode(
+        [duplicate_snapshot, clean_snapshot], work_id=WORK_ID
+    ) == {SEED_ID: clean}
+
+    stale_grant = datetime(2026, 10, 18, tzinfo=UTC)
+    row = HanayumeListingRow(
+        identity=HanayumeEpisodeIdentity(WORK_ID, SEED_ID),
+        title="Episode",
+        access=classify_hanayume_access(("unknown",)),
+        global_position=1,
+        manual_rental_history=True,
+        access_granted_until=stale_grant,
+        access_granted_until_observed=True,
+    )
+    unchanged = _apply_native_access(
+        [row],
+        native_access=_latest_native_access_by_episode(
+            [duplicate_snapshot], work_id=WORK_ID
+        ),
+        listing_authenticated=True,
+    )[0]
+    assert unchanged.access.access_mode == "unknown"
+    assert unchanged.access_granted_until is None
+    assert unchanged.access_granted_until_observed is False
+
+
+@pytest.mark.parametrize(
+    "remaining",
+    [True, -1, 259201, "259200", None],
+)
+def test_hanayume_native_remaining_seconds_must_be_a_bounded_strict_integer(remaining) -> None:
+    snapshot = _parse_series_access_snapshot(
+        {
+            "seriesAccess": {
+                "seriesId": WORK_ID,
+                "episodeAccesses": [
+                    {
+                        "episodeId": SEED_ID,
+                        "accessType": "waitAndFree",
+                        "hasAccess": True,
+                        "timeRemainingInSeconds": remaining,
+                    }
+                ],
+            }
+        },
+        requested_at=datetime(2026, 10, 17, tzinfo=UTC),
+    )
+    assert snapshot is not None
+    assert snapshot.rows[0].remaining_seconds is None
+
+
+def test_hanayume_native_inactive_clears_and_incomplete_or_unproven_grant_preserves() -> None:
+    requested_at = datetime(2026, 10, 17, tzinfo=UTC)
+    row = HanayumeListingRow(
+        identity=HanayumeEpisodeIdentity(WORK_ID, SEED_ID),
+        title="Episode",
+        access=classify_hanayume_access(("購入",)),
+        global_position=1,
+    )
+    inactive = HanayumeNativeEpisodeAccess(
+        SEED_ID, "waitAndFree", False, 0, requested_at
+    )
+    cleared = _apply_native_access(
+        [row],
+        native_access={SEED_ID: inactive},
+        listing_authenticated=True,
+    )[0]
+    assert cleared.access_granted_until is None
+    assert cleared.access_granted_until_observed is True
+
+    malformed = HanayumeNativeEpisodeAccess(
+        SEED_ID, "waitAndFree", True, None, requested_at
+    )
+    preserved = _apply_native_access(
+        [row],
+        native_access={SEED_ID: malformed},
+        listing_authenticated=True,
+    )[0]
+    assert preserved.access.access_mode == "quota"
+    assert preserved.access_granted_until is None
+    assert preserved.access_granted_until_observed is False
+
+    unauthenticated = _apply_native_access(
+        [row],
+        native_access={
+            SEED_ID: HanayumeNativeEpisodeAccess(
+                SEED_ID, "waitAndFree", True, 3600, requested_at
+            )
+        },
+        listing_authenticated=False,
+    )[0]
+    assert unauthenticated.access_granted_until_observed is False

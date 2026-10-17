@@ -6,11 +6,12 @@ import asyncio
 import re
 import time
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page
+from playwright.async_api import Page, Request, Response
 
 from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.core.errors import AccessStopError
@@ -20,6 +21,8 @@ from screenshot_crawler.discovery.models import (
     DiscoveredRecord,
     DiscoveredSource,
     DiscoveryMode,
+    DiscoverySourceSnapshot,
+    IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
 from screenshot_crawler.site_adapters.hanayume.access import hanayume_access_profile
@@ -125,11 +128,16 @@ RANGE_ROWS_SNAPSHOT_SCRIPT = r"""() => {
       const links = [...row.querySelectorAll('a.series-eplist-item-link')];
       const titles = [...row.querySelectorAll('.series-eplist-item-h-text')];
       const badges = [...row.querySelectorAll('.series-eplist-item-access-text')];
+      const rentalStats = [...row.querySelectorAll('[data-e2e="eliRentStat"]')];
       return {
         linkCount: links.length,
         href: links.length === 1 ? links[0].href : null,
         titleCount: titles.length,
         title: titles.length === 1 ? (titles[0].innerText || '').trim() : null,
+        classNames: [...row.classList],
+        rentalStatCount: rentalStats.length,
+        rentalStatText: rentalStats.map(node =>
+          (node.innerText || '').replace(/\s+/g, ' ').trim()),
         labels: badges.map(node => (node.innerText || '').replace(/\s+/g, ' ').trim())
       };
     });
@@ -156,8 +164,15 @@ RANGE_PAGE_SIZE = 30
 MAX_RANGE_PAGES = 100
 MAX_LISTING_ROWS = RANGE_PAGE_SIZE * MAX_RANGE_PAGES
 OBSERVATION_TIMEOUT_SECONDS = 8
+NATIVE_ACCESS_OBSERVATION_TIMEOUT_SECONDS = 2.0
+MAX_NATIVE_ACCESS_REQUESTS = MAX_RANGE_PAGES * 2 + 8
+MAX_EPISODE_ACCESS_SECONDS = 72 * 60 * 60
+ACCESS_EXPIRY_SAFETY_SECONDS = 1
+SERIES_ACCESS_PATH = "/api/series/access"
 FREE_LABEL = "\u7121\u6599"
 NOW_FREE_LABEL = "\u4eca\u306a\u3089\u7121\u6599"
+WAIT_AND_FREE_ACCESS_TYPE = "waitAndFree"
+RENTAL_HISTORY_PREFIX = "レンタル中 閲覧期限 "
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +223,301 @@ class HanayumeListingRow:
     title: str
     access: HanayumeAccessObservation
     global_position: int
+    manual_rental_history: bool = False
+    history_label_conflict: bool = False
+    access_granted_until: datetime | None = None
+    access_granted_until_observed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class HanayumeNativeEpisodeAccess:
+    """Reduced exact-identity access state from a naturally loaded response."""
+
+    episode_id: str
+    access_type: str | None
+    has_access: bool | None
+    remaining_seconds: int | None
+    requested_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class HanayumeSeriesAccessSnapshot:
+    work_id: str
+    rows: tuple[HanayumeNativeEpisodeAccess, ...]
+
+
+def _parse_series_access_snapshot(
+    payload: object, *, requested_at: datetime
+) -> HanayumeSeriesAccessSnapshot | None:
+    if not isinstance(payload, dict):
+        return None
+    access = payload.get("seriesAccess")
+    if not isinstance(access, dict):
+        return None
+    work_id = access.get("seriesId")
+    raw_rows = access.get("episodeAccesses")
+    if (
+        not isinstance(work_id, str)
+        or re.fullmatch(r"[0-9a-f]{13}", work_id) is None
+        or not isinstance(raw_rows, list)
+    ):
+        return None
+    rows: list[HanayumeNativeEpisodeAccess] = []
+    for raw in raw_rows:
+        if not isinstance(raw, dict):
+            continue
+        episode_id = raw.get("episodeId")
+        if (
+            not isinstance(episode_id, str)
+            or re.fullmatch(r"[0-9a-f]{13}", episode_id) is None
+        ):
+            continue
+        access_type = raw.get("accessType")
+        has_access = raw.get("hasAccess")
+        remaining = raw.get("timeRemainingInSeconds")
+        rows.append(
+            HanayumeNativeEpisodeAccess(
+                episode_id=episode_id,
+                access_type=access_type if isinstance(access_type, str) else None,
+                has_access=has_access if type(has_access) is bool else None,
+                remaining_seconds=(
+                    remaining
+                    if type(remaining) is int
+                    and 0 <= remaining <= MAX_EPISODE_ACCESS_SECONDS
+                    else None
+                ),
+                requested_at=requested_at,
+            )
+        )
+    return HanayumeSeriesAccessSnapshot(work_id=work_id, rows=tuple(rows))
+
+
+def _is_series_access_url(url: str) -> bool:
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.lower() == "https"
+        and (parsed.hostname or "").lower() in ALLOWED_HOSTS
+        and parsed.username is None
+        and parsed.password is None
+        and port in (None, 443)
+        and parsed.path == SERIES_ACCESS_PATH
+    )
+
+
+class _SeriesAccessObserver:
+    """Observe only natural series-access requests on the current Page."""
+
+    def __init__(self) -> None:
+        self._page: Page | None = None
+        self._request_starts: list[tuple[object, str, str, datetime, bool]] = []
+        self._tasks: list[asyncio.Task[None]] = []
+        self.snapshots: list[HanayumeSeriesAccessSnapshot] = []
+        self.overflow = False
+        self._request_listener = self._on_request
+        self._response_listener = self._on_response
+
+    def attach(self, page: Page) -> None:
+        self._page = page
+        page.on("request", self._request_listener)
+        page.on("response", self._response_listener)
+
+    def _on_request(self, request: Request) -> None:
+        try:
+            url = request.url
+            method = request.method
+        except (AttributeError, PlaywrightError):
+            return
+        if method != "GET" or not _is_series_access_url(url):
+            return
+        if len(self._request_starts) >= MAX_NATIVE_ACCESS_REQUESTS:
+            self.overflow = True
+            return
+        self._request_starts.append(
+            (request, url, method, datetime.now(UTC), False)
+        )
+
+    def _on_response(self, response: Response) -> None:
+        try:
+            url = response.url
+            request = response.request
+            method = request.method
+        except (AttributeError, PlaywrightError):
+            return
+        if method != "GET" or not _is_series_access_url(url):
+            return
+        matching_index = next(
+            (
+                index
+                for index in range(len(self._request_starts) - 1, -1, -1)
+                if not self._request_starts[index][4]
+                and self._request_starts[index][0] is request
+            ),
+            None,
+        )
+        if matching_index is None:
+            matching_index = next(
+                (
+                    index
+                    for index, (_request, request_url, request_method, _at, used)
+                    in enumerate(self._request_starts)
+                    if not used and request_url == url and request_method == method
+                ),
+                None,
+            )
+        if matching_index is None:
+            return
+        original, request_url, request_method, requested_at, _used = self._request_starts[
+            matching_index
+        ]
+        self._request_starts[matching_index] = (
+            original,
+            request_url,
+            request_method,
+            requested_at,
+            True,
+        )
+        self._tasks.append(
+            asyncio.create_task(self._capture(response, requested_at=requested_at))
+        )
+
+    async def _capture(self, response: Response, *, requested_at: datetime) -> None:
+        try:
+            status = response.status
+            if status != 200:
+                return
+            payload = await asyncio.wait_for(
+                response.json(),
+                timeout=NATIVE_ACCESS_OBSERVATION_TIMEOUT_SECONDS,
+            )
+            snapshot = _parse_series_access_snapshot(payload, requested_at=requested_at)
+            if snapshot is not None:
+                self.snapshots.append(snapshot)
+        except (PlaywrightError, TimeoutError, TypeError, ValueError):
+            return
+
+    async def finish(self) -> tuple[HanayumeSeriesAccessSnapshot, ...]:
+        self._detach()
+        deadline = time.monotonic() + NATIVE_ACCESS_OBSERVATION_TIMEOUT_SECONDS
+        while True:
+            pending = [task for task in self._tasks if not task.done()]
+            if not pending:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                break
+            await asyncio.wait(pending, timeout=remaining)
+        return tuple(self.snapshots)
+
+    async def close(self) -> None:
+        self._detach()
+        pending = [task for task in self._tasks if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    def _detach(self) -> None:
+        if self._page is None:
+            return
+        try:
+            self._page.remove_listener("request", self._request_listener)
+            self._page.remove_listener("response", self._response_listener)
+        except PlaywrightError:
+            pass
+        self._page = None
+
+
+def _latest_native_access_by_episode(
+    snapshots: Sequence[HanayumeSeriesAccessSnapshot], *, work_id: str
+) -> dict[str, HanayumeNativeEpisodeAccess]:
+    latest: dict[str, tuple[datetime, HanayumeNativeEpisodeAccess | None]] = {}
+    for snapshot in snapshots:
+        if snapshot.work_id != work_id:
+            continue
+        rows_by_episode: dict[str, list[HanayumeNativeEpisodeAccess]] = {}
+        for row in snapshot.rows:
+            rows_by_episode.setdefault(row.episode_id, []).append(row)
+        for episode_id, rows in rows_by_episode.items():
+            candidate = rows[0] if len(rows) == 1 else None
+            previous = latest.get(episode_id)
+            if previous is None or rows[0].requested_at > previous[0]:
+                latest[episode_id] = (rows[0].requested_at, candidate)
+            elif rows[0].requested_at == previous[0]:
+                previous_row = previous[1]
+                if candidate is None or previous_row != candidate:
+                    latest[episode_id] = (rows[0].requested_at, None)
+    return {
+        episode_id: row
+        for episode_id, (_requested_at, row) in latest.items()
+        if row is not None
+    }
+
+
+def _apply_native_access(
+    rows: Sequence[HanayumeListingRow],
+    *,
+    native_access: dict[str, HanayumeNativeEpisodeAccess],
+    listing_authenticated: bool,
+) -> list[HanayumeListingRow]:
+    updated: list[HanayumeListingRow] = []
+    for row in rows:
+        native = native_access.get(row.identity.episode_id)
+        access_mode = row.access.access_mode
+        if (
+            access_mode == "unknown"
+            and native is not None
+            and native.access_type == WAIT_AND_FREE_ACCESS_TYPE
+        ):
+            access_mode = "quota"
+        native_manual_grant = (
+            listing_authenticated is True
+            and native is not None
+            and native.access_type == WAIT_AND_FREE_ACCESS_TYPE
+            and native.has_access is True
+            and native.remaining_seconds is not None
+            and 0 < native.remaining_seconds <= MAX_EPISODE_ACCESS_SECONDS
+            and row.manual_rental_history is True
+        )
+        if row.history_label_conflict and not native_manual_grant:
+            raise DiscoveryIncompleteError(
+                "Hanayume public/history access-label conflict lacks an exact active grant"
+            )
+        grant_until: datetime | None = None
+        grant_observed = False
+        if (
+            listing_authenticated is True
+            and native is not None
+            and native.access_type == WAIT_AND_FREE_ACCESS_TYPE
+            and native.has_access is not None
+            and native.remaining_seconds is not None
+        ):
+            if native.remaining_seconds == 0:
+                grant_observed = True
+            elif (
+                native.has_access is True
+                and native.remaining_seconds > 0
+                and row.manual_rental_history is True
+            ):
+                grant_until = native.requested_at + timedelta(
+                    seconds=max(0, native.remaining_seconds - ACCESS_EXPIRY_SAFETY_SECONDS)
+                )
+                grant_observed = True
+        updated.append(
+            replace(
+                row,
+                access=HanayumeAccessObservation(row.access.raw_labels, access_mode),
+                access_granted_until=grant_until,
+                access_granted_until_observed=grant_observed,
+            )
+        )
+    return updated
 
 
 def _parse_https_site_url(url: str, pattern: re.Pattern[str]) -> re.Match[str] | None:
@@ -742,6 +1052,11 @@ async def _read_range_rows(
             or not raw["title"].strip()
             or not isinstance(raw.get("labels"), list)
             or not all(isinstance(label, str) for label in raw["labels"])
+            or not isinstance(raw.get("classNames"), list)
+            or not all(isinstance(name, str) for name in raw["classNames"])
+            or type(raw.get("rentalStatCount")) is not int
+            or not isinstance(raw.get("rentalStatText"), list)
+            or not all(isinstance(text, str) for text in raw["rentalStatText"])
         ):
             raise DiscoveryIncompleteError(
                 "Hanayume episode row is incomplete or has ambiguous identity/badges"
@@ -767,6 +1082,8 @@ async def _read_range_rows(
         row.identity.episode_id: row.access.raw_labels for row in parsed_rows
     }
     history_ids: set[str] = set()
+    manual_rental_history_ids: set[str] = set()
+    history_label_conflict_ids: set[str] = set()
     for raw in history_rows:
         if (
             not isinstance(raw, dict)
@@ -774,6 +1091,11 @@ async def _read_range_rows(
             or not isinstance(raw.get("href"), str)
             or not isinstance(raw.get("labels"), list)
             or not all(isinstance(label, str) for label in raw["labels"])
+            or not isinstance(raw.get("classNames"), list)
+            or not all(isinstance(name, str) for name in raw["classNames"])
+            or type(raw.get("rentalStatCount")) is not int
+            or not isinstance(raw.get("rentalStatText"), list)
+            or not all(isinstance(text, str) for text in raw["rentalStatText"])
         ):
             raise DiscoveryIncompleteError("Hanayume history copy is incomplete or ambiguous")
         identity = parse_hanayume_episode_url(raw["href"])
@@ -782,9 +1104,24 @@ async def _read_range_rows(
         history_ids.add(identity.episode_id)
         public_labels_for_copy = public_labels.get(identity.episode_id)
         if public_labels_for_copy is not None and tuple(raw["labels"]) != public_labels_for_copy:
-            raise DiscoveryIncompleteError(
-                "Hanayume public and history episode copies disagree on access labels"
-            )
+            history_label_conflict_ids.add(identity.episode_id)
+        rental_texts = raw["rentalStatText"]
+        if (
+            "mode-read" in raw["classNames"]
+            and raw["rentalStatCount"] == 1
+            and len(rental_texts) == 1
+            and rental_texts[0].startswith(RENTAL_HISTORY_PREFIX)
+            and re.fullmatch(r"[0-9]+日\+[0-9]+時間", rental_texts[0][len(RENTAL_HISTORY_PREFIX) :])
+        ):
+            manual_rental_history_ids.add(identity.episode_id)
+    parsed_rows = [
+        replace(
+            row,
+            manual_rental_history=row.identity.episode_id in manual_rental_history_ids,
+            history_label_conflict=row.identity.episode_id in history_label_conflict_ids,
+        )
+        for row in parsed_rows
+    ]
     return parsed_rows
 
 
@@ -815,6 +1152,8 @@ def _records_from_rows(
                 url=f"https://hanayume.com/episodes/{row.identity.episode_id}",
                 access_mode=row.access.access_mode,
                 available=True,
+                access_granted_until=row.access_granted_until,
+                access_granted_until_observed=row.access_granted_until_observed,
                 global_display_position=row.global_position,
             ),
         )
@@ -869,6 +1208,17 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
 
     supports_bounded_discovery = True
 
+    def incremental_stop_decision(
+        self,
+        record: DiscoveredRecord,
+        previous: DiscoverySourceSnapshot | None,
+        target: WatchlistTarget,
+    ) -> IncrementalStopDecision:
+        del record, previous, target
+        # Hanayume's complete episode range is already buffered before yielding;
+        # old account grants must be refreshed even after known Catalog rows.
+        return IncrementalStopDecision.CONTINUE
+
     async def iter_records(
         self,
         page: Page,
@@ -891,6 +1241,8 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
             stop_on_captcha=True,
         )
         guard.start(page)
+        access_observer = _SeriesAccessObserver()
+        access_observer.attach(page)
         try:
             await _navigation_response(page, canonical_url, guard)
             if page.url != canonical_url:
@@ -989,6 +1341,18 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
                 raise DiscoveryIncompleteError(
                     "Hanayume range set did not cover its declared total"
                 )
+            native_snapshots = await access_observer.finish()
+            if access_observer.overflow:
+                raise DiscoveryIncompleteError(
+                    "Hanayume native access observation exceeded its bounded response limit"
+                )
+            rows_oldest_first = _apply_native_access(
+                rows_oldest_first,
+                native_access=_latest_native_access_by_episode(
+                    native_snapshots, work_id=work_id
+                ),
+                listing_authenticated=listing_authenticated,
+            )
             records = _records_from_rows(
                 rows_oldest_first=rows_oldest_first,
                 work_title=work_title,
@@ -1009,6 +1373,7 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
             await _guard_checkpoint(guard, page)
             raise DiscoveryIncompleteError("Hanayume episode listing did not complete") from exc
         finally:
+            await access_observer.close()
             await guard.close()
 
         for record in records:

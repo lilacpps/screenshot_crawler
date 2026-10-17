@@ -40,6 +40,7 @@ from screenshot_crawler.site_adapters.comicdays.adapter import ComicDaysAdapter
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     ComicDaysSitePolicy,
+    HanayumeSitePolicy,
     MagapokeSitePolicy,
     MangaOneSitePolicy,
     PiccomaSitePolicy,
@@ -846,16 +847,24 @@ async def test_work_ticket_consumption_is_recorded_at_observed_time(tmp_path: Pa
     ) == "work_ticket_cooldown"
 
 
+@pytest.mark.parametrize(
+    ("site", "policy"),
+    [
+        ("comicdays", ComicDaysSitePolicy),
+        ("hanayume", HanayumeSitePolicy),
+    ],
+)
 @pytest.mark.parametrize("grant_only", [True, False])
 async def test_comicdays_work_cooldown_blocks_both_executor_entrypoints(
-    tmp_path: Path, grant_only: bool
+    tmp_path: Path, grant_only: bool, site: str, policy
 ) -> None:
-    service = CatalogService(tmp_path / f"comicdays-cooldown-{grant_only}.sqlite")
-    candidate = _add_magapoke_candidate(service, site="comicdays")
+    database_path = tmp_path / f"{site}-cooldown-{grant_only}.sqlite"
+    service = CatalogService(database_path)
+    candidate = _add_magapoke_candidate(service, site=site)
     work = service.get_item(candidate.item_id).work_id
     second_item = service.create_item(ItemInput(order_label="Episode 2"), work_id=work)
     second_source = service.create_source(
-        SourceInput(site="comicdays", external_id="comicdays-2", access_mode="quota"),
+        SourceInput(site=site, external_id=f"{site}-2", access_mode="quota"),
         item_id=second_item.id,
     )
     second_target = service.create_source_target(
@@ -873,16 +882,25 @@ async def test_comicdays_work_cooldown_blocks_both_executor_entrypoints(
     service.record_quota_access_with_resource_state(
         candidate.source_id,
         work_id=work,
-        site="comicdays",
+        site=site,
         resource="work_ticket",
         consumed_at=consumed_at,
         access_granted_until=consumed_at + timedelta(hours=71),
     )
+    # Reopen the Catalog between recording the ticket and constructing the
+    # Executor to verify the work cooldown survives a process restart.
+    del service
+    service = CatalogService(database_path)
+    resource_state = service.get_quota_resource_state(
+        work, site=site, resource="work_ticket"
+    )
+    assert resource_state is not None
+    assert resource_state.last_consumed_at == consumed_at.isoformat()
     executor = _make_magapoke_executor(
         service,
         AccessConsumption(True, "work_ticket", consumed_at),
-        site="comicdays",
-        policy=ComicDaysSitePolicy,
+        site=site,
+        policy=policy,
     )
     runner_calls: list[RunConfig] = []
     original_factory = executor.runner_factory
@@ -892,7 +910,7 @@ async def test_comicdays_work_cooldown_blocks_both_executor_entrypoints(
         return original_factory(config)
 
     executor.runner_factory = recording_factory
-    blocked_now = consumed_at + timedelta(hours=22, minutes=59)
+    blocked_now = consumed_at + timedelta(hours=22, minutes=59, seconds=59)
     # The consumed source has a local active grant, while the second episode
     # remains a quota candidate in the same work. The work-scoped state must
     # block that second candidate before either Executor entrypoint reaches a
@@ -912,9 +930,9 @@ async def test_comicdays_work_cooldown_blocks_both_executor_entrypoints(
     assert service.list_artifacts() == []
     boundary_now = consumed_at + timedelta(hours=23)
     assert executor.resource_state_skip_reason(
-        candidate, now=boundary_now
+        second_candidate, now=boundary_now
     ) is None
-    assert executor.grant_only_skip_reason(candidate, now=boundary_now) is None
+    assert executor.grant_only_skip_reason(second_candidate, now=boundary_now) is None
 
 
 async def test_mismatched_observed_resource_fails_closed_without_persistence(

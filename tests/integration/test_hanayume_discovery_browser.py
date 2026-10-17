@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import zipfile
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -39,6 +39,7 @@ def _short_hanayume_test_timeouts(monkeypatch) -> None:
     monkeypatch.setattr(hanayume_adapter, "DOM_TIMEOUT_MS", 3_000)
     monkeypatch.setattr(hanayume_adapter, "RANGE_PACING_MS", 0)
     monkeypatch.setattr(hanayume_discovery, "SERIES_AUTH_HYDRATION_TIMEOUT_SECONDS", 0.45)
+    monkeypatch.setattr(hanayume_discovery, "NATIVE_ACCESS_OBSERVATION_TIMEOUT_SECONDS", 0.25)
     monkeypatch.setattr(hanayume_adapter, "VIEWER_COUNTER_READY_TIMEOUT_MS", 400)
     monkeypatch.setattr(HanayumeAdapter, "page_change_timeout_ms", 1_000)
 
@@ -60,14 +61,27 @@ def _title(position: int) -> str:
     return f"第{position}話"
 
 
-def _row(position: int, label: str) -> str:
+def _row(position: int, label: str, *, manual_rental: bool = False) -> str:
     episode_id = _episode_id(position)
-    return f"""<div class="series-eplist-item" data-e2e="eli">
+    row_class = (
+        "series-eplist-item mode-read mode-current mode-store-item-start"
+        if manual_rental
+        else "series-eplist-item"
+    )
+    rental_stat = (
+        '<span data-e2e="eliRentStat">'
+        '\u30ec\u30f3\u30bf\u30eb\u4e2d \u95b2\u89a7\u671f\u9650'
+        '<br>2\u65e5+23\u6642\u9593</span>'
+        if manual_rental
+        else ""
+    )
+    return f"""<div class="{row_class}" data-e2e="eli">
       <a class="series-eplist-item-link" href="/episodes/{episode_id}">
         <h2 class="series-eplist-item-h">
           <span class="series-eplist-item-h-text" data-e2e="eliTitle">{_title(position)}</span>
         </h2>
         <span class="series-eplist-item-access-text" data-e2e="eliFreeBadge">{label}</span>
+        {rental_stat}
       </a>
     </div>"""
 
@@ -112,6 +126,9 @@ def _page_html(
     duplicate_boundary_row: bool = False,
     omit_last_row: bool = False,
     target_badge: str | None = None,
+    all_badge: str | None = None,
+    manual_rental_ids: set[str] | None = None,
+    manual_history_label_diff: bool = False,
     series_auth_state: str | None = None,
     work_id_override: str | None = None,
     history_conflict: bool = False,
@@ -150,9 +167,12 @@ def _page_html(
     if page_number == 2 and omit_last_row:
         positions = range(31, TOTAL)
     rows = []
+    row_details: list[tuple[int, str]] = []
     for position in positions:
         row_position = 30 if page_number == 2 and duplicate_boundary_row and position == 31 else position
-        if position == 1:
+        if all_badge is not None:
+            label = all_badge
+        elif position == 1:
             label = first_badge
         elif position == TARGET_POSITION and target_badge is not None:
             label = target_badge
@@ -161,6 +181,7 @@ def _page_html(
         else:
             label = "今なら無料"
         rows.append(_row(row_position, label))
+        row_details.append((row_position, label))
     work_id = work_id_override or (
         f"{901:013x}" if foreign_work and page_number == 2 else WORK_ID
     )
@@ -169,7 +190,20 @@ def _page_html(
         if series_auth_state is not None
         else f'<header id="xHeader"><a class="ep-h-main-h-series" href="/series/{work_id}">Fixture Work</a></header>'
     )
-    history_rows = list(rows)
+    manual_rental_ids = manual_rental_ids or set()
+    history_rows = [
+        _row(
+            position,
+            (
+                "\u30ec\u30f3\u30bf\u30eb\u4e2d"
+                if manual_history_label_diff
+                and _episode_id(position) in manual_rental_ids
+                else label
+            ),
+            manual_rental=_episode_id(position) in manual_rental_ids,
+        )
+        for position, label in row_details
+    ]
     if history_conflict and page_number == 1 and history_rows:
         history_rows[0] = _row(1, NOW_FREE_LABEL)
     user_markup = (
@@ -224,7 +258,7 @@ def _page_html(
               </div>
             </div>
           {route_close}
-      </div></body></html>"""
+      </div><script>fetch('/api/series/access');</script></body></html>"""
 
 
 def _target(
@@ -259,6 +293,10 @@ async def _install_pages(
     duplicate_boundary_row: bool = False,
     omit_last_row: bool = False,
     target_badge: str | None = None,
+    all_badge: str | None = None,
+    manual_rental_ids: set[str] | None = None,
+    manual_history_label_diff: bool = False,
+    native_access_response: dict[str, object] | None = None,
     series_auth_state: str = "logged-out",
     history_conflict: bool = False,
     unknown_root: bool = False,
@@ -276,7 +314,15 @@ async def _install_pages(
     async def fulfill(route) -> None:
         nonlocal seed_requests
         parsed = urlsplit(route.request.url)
-        requested_paths.append(parsed.path)
+        if parsed.path != "/api/series/access":
+            requested_paths.append(parsed.path)
+        if parsed.path == "/api/series/access":
+            await route.fulfill(
+                status=200,
+                json=native_access_response
+                or {"seriesAccess": {"seriesId": WORK_ID, "episodeAccesses": []}},
+            )
+            return
         if parsed.path == f"/series/{WORK_ID}":
             await route.fulfill(
                 status=200,
@@ -284,6 +330,9 @@ async def _install_pages(
                     page_number=None,
                     series_route=True,
                     target_badge=target_badge,
+                    all_badge=all_badge,
+                    manual_rental_ids=manual_rental_ids,
+                    manual_history_label_diff=manual_history_label_diff,
                     series_auth_state=series_auth_state,
                     wrong_outer=wrong_series_outer,
                 ),
@@ -326,6 +375,9 @@ async def _install_pages(
                 duplicate_boundary_row=duplicate_boundary_row,
                 omit_last_row=omit_last_row,
                 target_badge=target_badge,
+                all_badge=all_badge,
+                manual_rental_ids=manual_rental_ids,
+                manual_history_label_diff=manual_history_label_diff,
                 history_conflict=history_conflict,
                 unknown_root=unknown_root,
                 nested_user_root=nested_user_root,
@@ -372,8 +424,8 @@ async def test_hanayume_full_incremental_and_bounded_discovery(
     requested.clear()
     incremental = await service.discover(browser_page, _target(), "incremental")
     assert incremental.complete is None
-    assert incremental.stopped_reason == "known_streak"
-    assert incremental.observed_count == 5
+    assert incremental.stopped_reason == "exhausted"
+    assert incremental.observed_count == TOTAL
     assert requested.count(f"/episodes/{SEED_ID}/1") == 1
     assert requested.count(f"/episodes/{SEED_ID}/2") == 1
     assert catalog.get_item(seed_source.item_id).status == "completed"
@@ -394,6 +446,170 @@ async def test_hanayume_full_incremental_and_bounded_discovery(
     assert bounded.complete is True
     assert bounded.observed_count == 3
     assert [source.display_position for source in bounded_sources] == [30, 29, 28]
+
+
+@pytest.mark.parametrize("refresh_mode", ["full", "incremental"])
+async def test_hanayume_manual_ticket_grants_refresh_in_full_and_incremental_discovery(
+    browser_page, tmp_path: Path, refresh_mode: str
+) -> None:
+    episode_id = _episode_id(TARGET_POSITION)
+    native_payload: dict[str, object] = {
+        "seriesAccess": {
+            "seriesId": WORK_ID,
+            "episodeAccesses": [
+                {
+                    "episodeId": episode_id,
+                    "accessType": "waitAndFree",
+                    "hasAccess": True,
+                    "timeRemainingInSeconds": 172800,
+                },
+                {
+                    "episodeId": _episode_id(3),
+                    "accessType": "waitAndFree",
+                    "hasAccess": True,
+                    "timeRemainingInSeconds": 86400,
+                },
+            ],
+        }
+    }
+    await _install_pages(
+        browser_page,
+        all_badge="unknown",
+        manual_rental_ids={episode_id},
+        native_access_response=native_payload,
+        series_auth_state="authenticated",
+    )
+    catalog = CatalogService(tmp_path / "manual-grant.sqlite")
+    service = DiscoveryService(catalog, _registry())
+
+    full_started = datetime.now(UTC)
+    full = await service.discover(browser_page, _target(), "full")
+    full_finished = datetime.now(UTC)
+    source = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
+    assert full.complete is True and full.observed_count == TOTAL
+    assert source is not None and source.access_mode == "quota"
+    first_expiry = datetime.fromisoformat(source.access_granted_until)
+    assert full_started + timedelta(seconds=172799) <= first_expiry
+    assert first_expiry <= full_finished + timedelta(seconds=172799)
+    catalog.mark_item_completed(source.item_id)
+    sibling = catalog.find_source("hanayume", f"{WORK_ID}:{_episode_id(3)}")
+    unknown = catalog.find_source("hanayume", f"{WORK_ID}:{_episode_id(4)}")
+    assert sibling is not None and sibling.access_mode == "quota"
+    assert sibling.access_granted_until is None
+    assert unknown is not None and unknown.access_mode == "unknown"
+
+    native_row = native_payload["seriesAccess"]["episodeAccesses"][0]
+    native_row["timeRemainingInSeconds"] = 3600
+    update_started = datetime.now(UTC)
+    updated = await service.discover(browser_page, _target(), refresh_mode)
+    update_finished = datetime.now(UTC)
+    source = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
+    assert updated.observed_count == TOTAL
+    assert updated.complete is (True if refresh_mode == "full" else None)
+    assert updated.stopped_reason == "exhausted"
+    assert source is not None and source.access_mode == "quota"
+    updated_expiry = datetime.fromisoformat(source.access_granted_until)
+    assert update_started + timedelta(seconds=3599) <= updated_expiry
+    assert updated_expiry <= update_finished + timedelta(seconds=3599)
+    assert updated_expiry < first_expiry
+
+    native_row["timeRemainingInSeconds"] = "3600"
+    incremental_malformed = await service.discover(browser_page, _target(), refresh_mode)
+    preserved = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
+    assert incremental_malformed.observed_count == TOTAL
+    assert catalog.get_item(source.item_id).status == "completed"
+    assert preserved is not None
+    assert preserved.access_granted_until == source.access_granted_until
+
+    native_row["hasAccess"] = False
+    native_row["timeRemainingInSeconds"] = 0
+    cleared_result = await service.discover(browser_page, _target(), refresh_mode)
+    cleared = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
+    assert cleared_result.observed_count == TOTAL
+    assert cleared_result.complete is (True if refresh_mode == "full" else None)
+    assert cleared is not None and cleared.access_granted_until is None
+    assert catalog.get_item(cleared.item_id).status == "completed"
+
+
+@pytest.mark.parametrize("refresh_mode", ["full", "incremental"])
+async def test_hanayume_active_manual_grant_allows_exact_history_label_difference(
+    browser_page, tmp_path: Path, refresh_mode: str
+) -> None:
+    episode_id = _episode_id(TARGET_POSITION)
+    native_payload: dict[str, object] = {
+        "seriesAccess": {
+            "seriesId": WORK_ID,
+            "episodeAccesses": [
+                {
+                    "episodeId": episode_id,
+                    "accessType": "waitAndFree",
+                    "hasAccess": True,
+                    "timeRemainingInSeconds": 172800,
+                }
+            ],
+        }
+    }
+    await _install_pages(
+        browser_page,
+        all_badge="",
+        manual_rental_ids={episode_id},
+        manual_history_label_diff=True,
+        native_access_response=native_payload,
+        series_auth_state="authenticated",
+    )
+    catalog = CatalogService(tmp_path / "history-label-difference.sqlite")
+    result = await DiscoveryService(catalog, _registry()).discover(
+        browser_page, _target(), refresh_mode
+    )
+
+    source = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
+    assert result.observed_count == TOTAL
+    assert result.complete is (True if refresh_mode == "full" else None)
+    assert source is not None and source.access_mode == "quota"
+    assert source.access_granted_until is not None
+
+
+@pytest.mark.parametrize("conflicting_duplicate", [False, True])
+async def test_hanayume_duplicate_native_episode_rows_do_not_mint_or_clear_grants(
+    browser_page, tmp_path: Path, conflicting_duplicate: bool
+) -> None:
+    episode_id = _episode_id(TARGET_POSITION)
+    native_row: dict[str, object] = {
+        "episodeId": episode_id,
+        "accessType": "waitAndFree",
+        "hasAccess": True,
+        "timeRemainingInSeconds": 172800,
+    }
+    accesses = [native_row]
+    native_payload: dict[str, object] = {
+        "seriesAccess": {"seriesId": WORK_ID, "episodeAccesses": accesses}
+    }
+    await _install_pages(
+        browser_page,
+        all_badge="unknown",
+        manual_rental_ids={episode_id},
+        native_access_response=native_payload,
+        series_auth_state="authenticated",
+    )
+    catalog = CatalogService(tmp_path / "duplicate-native.sqlite")
+    service = DiscoveryService(catalog, _registry())
+    initial = await service.discover(browser_page, _target(), "full")
+    source = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
+    assert initial.complete is True
+    assert source is not None and source.access_granted_until is not None
+    original_expiry = source.access_granted_until
+
+    duplicate = dict(native_row)
+    if conflicting_duplicate:
+        duplicate["timeRemainingInSeconds"] = 3600
+    accesses.extend([dict(native_row), duplicate])
+    refreshed = await service.discover(browser_page, _target(), "incremental")
+
+    preserved = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
+    assert refreshed.observed_count == TOTAL
+    assert refreshed.stopped_reason == "exhausted"
+    assert preserved is not None
+    assert preserved.access_granted_until == original_expiry
 
 
 @pytest.mark.parametrize(
