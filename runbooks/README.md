@@ -57,3 +57,5 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 - [ComicFUZ anonymous free-only Site Adapter](comicfuz-free/README.md) —
   logged-out public-free Discovery → Catalog → direct Batch → verified ZIP/E2E;
   charge/ticket/medal research and consumption deliberately deferred to a later phase.
+
+- [花とゆめ＋ Work Ticket](hanayume-work-ticket/README.md) — 作品単位の23h回復、話単位の72h閲覧、direct episode entry、同一ページBatch、grant-only と安全な実サイト検証（planned）。
