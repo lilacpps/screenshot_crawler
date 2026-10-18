@@ -435,6 +435,9 @@ class YounganimalAdapter(SiteAdapter):
         self._target_position: int | None = None
         self._body_slots: tuple[int, ...] | None = None
         self._ci_slot: int | None = None
+        self._pr_slots: tuple[int, ...] | None = None
+        self._good_slot: int | None = None
+        self._last_slot: int | None = None
         self._frozen_viewer_mapping: tuple[object, ...] | None = None
         self._rendered_dimensions: tuple[int, int] | None = None
         self._captured_slots: list[int] = []
@@ -593,6 +596,9 @@ class YounganimalAdapter(SiteAdapter):
         self._target_position = None
         self._body_slots = None
         self._ci_slot = None
+        self._pr_slots = None
+        self._good_slot = None
+        self._last_slot = None
         self._frozen_viewer_mapping = None
         self._rendered_dimensions = None
         self._captured_slots = []
@@ -610,6 +616,9 @@ class YounganimalAdapter(SiteAdapter):
         self._frozen_viewer_mapping = self._viewer_mapping(observation)
         self._body_slots = observation.body_slots
         self._ci_slot = observation.ci_slot
+        self._pr_slots = observation.pr_slots
+        self._good_slot = observation.good_slot
+        self._last_slot = observation.last_slot
         if observation.seek_value != observation.seek_max:
             observation = await self._rewind_to_first_body(page, observation)
         if observation.initial_blank:
@@ -1246,6 +1255,9 @@ class YounganimalAdapter(SiteAdapter):
         return (
             observation.body_slots,
             observation.ci_slot,
+            observation.pr_slots,
+            observation.good_slot,
+            observation.last_slot,
             observation.layout_variant,
             observation.seek_min,
             observation.seek_max,
@@ -1271,6 +1283,9 @@ class YounganimalAdapter(SiteAdapter):
             observation.seek_step,
             observation.body_slots,
             observation.ci_slot,
+            observation.pr_slots,
+            observation.good_slot,
+            observation.last_slot,
             observation.layout_variant,
             tuple(slot.get("wrapperNode") for slot in raw["slots"]),
         )
@@ -1316,6 +1331,9 @@ class YounganimalAdapter(SiteAdapter):
             raw.get("seekNode"),
             observation.body_slots,
             observation.ci_slot,
+            observation.pr_slots,
+            observation.good_slot,
+            observation.last_slot,
             tuple(
                 (
                     raw["slots"][index].get("wrapperNode"),
@@ -1391,6 +1409,9 @@ class YounganimalAdapter(SiteAdapter):
             self._body_slots is None
             or observation.body_slots != self._body_slots
             or observation.ci_slot != self._ci_slot
+            or observation.pr_slots != self._pr_slots
+            or observation.good_slot != self._good_slot
+            or observation.last_slot != self._last_slot
         ):
             raise UnknownPageStateError("Younganimal viewer body or tail role mapping changed")
         if observation.page_state == "end":
@@ -1401,7 +1422,7 @@ class YounganimalAdapter(SiteAdapter):
             self._ended = True
             self._capture_diagnostics["end"] = {
                 "seek_value": observation.seek_value,
-                "last_slot": (self._ci_slot + 4) if self._ci_slot is not None else None,
+                "last_slot": observation.last_slot,
                 "captured_body_slots": list(self._captured_slots),
             }
             await self._close_ticket_route_guard()
@@ -1745,7 +1766,7 @@ class YounganimalAdapter(SiteAdapter):
             self._pending = None
             self._capture_diagnostics["end"] = {
                 "seek_value": observation.seek_value,
-                "last_slot": observation.ci_slot + 4,
+                "last_slot": observation.last_slot,
                 "captured_body_slots": list(self._captured_slots),
             }
             return
@@ -1771,6 +1792,10 @@ class YounganimalAdapter(SiteAdapter):
             "work_id": self._work_id,
             "target_position": self._target_position,
             "body_slots": list(self._body_slots or ()),
+            "ci_slot": self._ci_slot,
+            "pr_slots": list(self._pr_slots or ()),
+            "good_slot": self._good_slot,
+            "last_slot": self._last_slot,
             "captured_body_slots": list(self._captured_slots),
             "capture_mode": self._capture_diagnostics.get("mode", "not_started"),
         }

@@ -10,9 +10,10 @@ it does not click or consume tickets.
 The current verified fresh-quota path is a normal Batch run on episode
 `849948508c8bc` / work `71460b2b6686f`: one exact wait-free click and a bound
 checkout were followed on the same Page through the standard Viewer, END, ZIP,
-and Catalog completion. The seven-use ledger comprises all five original
-allowances plus DD9 and 849; two of three separately authorized additional uses
-were consumed. `4ba85f4c9e538` remains unopened and unused.
+and Catalog completion. Eight ticket uses are recorded: all five original
+uses, DD9 and 849 from the separately authorized candidates, and a later
+user-triggered use on 8d92. Two of three separately authorized additional
+candidates were consumed; `4ba85f4c9e538` remains unopened and unused.
 
 The 849 run recorded consumption at `2026-10-19T00:06:51.538338+09:00`, grant
 expiry `2026-10-22T00:05:58.369033+09:00`, and local 23-hour cooldown end
@@ -398,6 +399,40 @@ canvas state fail closed. A second exact-free live work exposed a distinct top-e
 
 The top-empty profile's slot 1 is recognized only at max seek with the exact root flag, exact blank classes, no canvas, centered wrapper, and first/top-PR markers. The adapter makes one ordinary public seek step to `max - step` and requires both first body canvases ready before capture; it never skips a page by subtracting a wrapper count. Known initial body-loading classes remain unready and cannot produce a capture. Unknown wrapper variants fail closed.
 
+A separate horizontal no-CI profile was observed on already-granted episode
+`8d92e88ab93ec`. Its metadata had 15 wrappers and seek `min=1`, `max=15`,
+`step=2`; the root was horizontal/spread/RTL with top-empty, PR, and Good
+capabilities, and without comic-info, vertical, or single-page flags. Slot 0
+was the empty lead-in, body slots 1-10 were contiguous, and the four-slot tail
+was PR 11-12, Good 13, Last 14. The selected wrappers were 0+1 at seek 15,
+2+3 at 13, 4+5 at 11, 6+7 at 9, 8+9 at 7, body 10 plus PR 11 at 5, PR 12
+plus Good 13 at 3, and Last 14 at 1. All ten body canvases were observed
+ready when selected. Production recognizes the structural `top_empty_no_ci`
+family only with an even derived body count `B = wrapper_count - 5` of at least
+four, exact roles/range/root flags, and the observed phase markers and centers;
+it does not accept a count based on parity alone. Synthetic B=6 and B=10 full
+Runner fixtures verify ordered body capture, pixel equality, END, and ZIP. END
+also requires the unique `#xCVLastPage` marker itself to be visible and
+centered within the unchanged final Last wrapper. Marker identity, parent,
+visibility, viewport, role, and fake-CI mutation cases fail closed; this profile
+has no CI mutation exception, and the native identity, generation/write,
+replay-pixel, frozen-role, readiness, and post-encode proofs remain in force.
+An existing-grant direct Batch on 8d later completed 10 pages through END/ZIP
+with this profile (`top_empty_no_ci`, B=10, N=15, `ci_slot=None`, seek=1).
+The archive contains 10 ordered PNGs at 925x1329; CRC, decode, manifest order
+and metadata, Catalog completion, and Catalog/archive SHA checks passed. Its
+SHA-256 is `c21eabe0f0c67459bf95fb789c5175b3d865d79d30621f4a177465e532d04772`
+(11,643,064 bytes); no source-native format or per-image-hash claim is made.
+The earlier quota-use Run still records the failure before Capture; the later
+direct run used the active grant without another ticket and preserved the
+Source grant/quota and Work consumption timestamps. Audit: one owned Page, one
+adapter `goto`, zero reloads, one main-document request, and two frame
+navigation events with unknown cause. No commerce click or checkout POST was
+recorded. Natural read-completion, mission/reward, and pixel/analytics traffic
+also occurred; their site-side effects are not inferred. See the direct-8d
+postflight and audit artifacts under
+`output/younganimal_work_ticket_tester/direct-8d-fix/`.
+
 The adapter rewinds a resumed viewer with the public seek control. Before the
 first capture it requires read-only observer metadata to show `mode-nav-open`
 absent and zero `.-cv-splash` nodes, then requires the existing first-canvas and
@@ -520,19 +555,25 @@ reconcile unseen sources as unavailable.
 
 ## Verification status (2026-10-19)
 
-Phase 04 passed independent review. The final seven-file Younganimal selection
-passed 322 tests, 0 skipped, with 207 existing pytest-asyncio deprecation
-warnings (`output/ya-all7-final.log`; basetemp `output/ya-all7-final`).
-`ruff check src tests` and `git diff --check` passed on the reviewed checkpoint.
-The full repository suite was not run for this site-local change.
+Phase 04 passed independent review. The current seven-file Younganimal
+selection covers 379 tests, 0 skipped: 95 capture-unit tests, 133
+adapter-browser tests, and 151 tests across the other five files. After the
+final no-CI marker and fake-widget test corrections, its 10 affected
+adapter-browser cases were rerun as an overlapping subset, not counted twice.
+`ruff check src tests` and scoped `git diff --check` passed. The full repository
+suite was not run for this site-local change.
 
 The fresh-quota normal Batch acceptance on 849 completed Capture -> END -> ZIP
 on the same Page and passed the independent artifact/Catalog audit. Exact
 consumption, grant, cooldown, archive, and navigation evidence is in the current
 verification section above and `runbooks/younganimal-work-ticket/PROGRESS.md`.
-The original five uses plus DD9 and 849 total seven uses; `4ba85f4c9e538` was
-not inspected or used. No further ticket was needed. No source-native format,
-balance-delta, or per-image hash claim is made.
+At the 849 acceptance checkpoint, the original five uses plus DD9 and 849
+totaled seven; `4ba85f4c9e538` was not inspected or used. A later
+user-triggered use on `8d92e88ab93ec` / work `cded52d3dfcd3` is the eighth
+recorded use. Its earlier quota-use attempt failed before Capture on the no-CI
+layout; a later existing-grant direct run completed the updated profile through
+END/ZIP without another ticket. No further ticket was used for this implementation. No
+source-native format, balance-delta, or per-image hash claim is made.
 
 Older work-ticket attempts remain distinct from the passing 849 run. Normal
 attempts using tickets three through six on 0634, C781, 78, and DD9 persisted

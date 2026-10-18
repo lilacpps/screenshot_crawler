@@ -120,6 +120,87 @@ def _snapshot(
     }
 
 
+def _top_empty_no_ci_snapshot(seek_value: int, *, body_count: int = 10) -> dict[str, object]:
+    if body_count < 4 or body_count % 2:
+        raise ValueError("fixture body_count must be an even value of at least four")
+    seek_max = body_count + 5
+    viewer_classes = {
+        "-cv", "mode-h", "mode-spread", "mode-dir-rtl", "mode-nav-dir-rtl",
+        "mode-has-top-emptypage", "mode-has-pr", "mode-has-good-page",
+    }
+    if seek_value == seek_max:
+        viewer_classes.add("mode-first-page")
+    elif seek_value in {5, 3}:
+        viewer_classes.add("mode-pr-page")
+    elif seek_value == 1:
+        viewer_classes.add("mode-last-page")
+    focus = seek_max - seek_value + 1
+    wrapper_count = seek_max
+    slots: list[dict[str, object]] = []
+    for index in range(wrapper_count):
+        if index == 0:
+            classes = {"-cv-page", "mode-empty"}
+        elif index <= body_count:
+            classes = {"-cv-page", "mode-loaded", "mode-rendered"}
+        elif index <= body_count + 2:
+            classes = {"-cv-page", "mode-empty", "mode-pr"}
+        elif index == body_count + 3:
+            classes = {"-cv-page", "mode-good"}
+        else:
+            classes = {"-cv-page", "mode-last"}
+        rect_x = 945 + ((focus - index - 1) * 946)
+        canvas = None
+        canvas_count = 0
+        if 1 <= index <= body_count:
+            canvas_count = 1
+            canvas = {
+                "node": index + 100,
+                "width": 925,
+                "height": 1329,
+                "rect": [rect_x + 120, 0, 685, 886],
+                "parentNode": index + 200,
+                "parentClasses": ["-cv-page-canvas"],
+                "ready": True,
+                "visible": True,
+                "generation": 0,
+                "writes": 3,
+                "pixels": f"body:{index}",
+                "pixelError": None,
+            }
+        slots.append({
+            "index": index,
+            "wrapperNode": index + 1,
+            "classes": sorted(classes),
+            "wrapperRect": [rect_x, 0, 946, 886],
+            "wrapperCenterInViewport": 0 <= rect_x + 473 <= 1906,
+            "canvasCount": canvas_count,
+            "canvas": canvas,
+        })
+    return {
+        "url": EPISODE_URL,
+        "viewerCount": 1,
+        "pagesCount": 1,
+        "seekCount": 1,
+        "viewerNode": 1,
+        "pagesNode": 2,
+        "seekNode": 3,
+        "viewerClasses": sorted(viewer_classes),
+        "seek": {
+            "type": "range", "value": str(seek_value), "min": "1",
+            "max": str(seek_max), "step": "2", "disabled": False,
+        },
+        "pages": {"className": "-cv-pages", "childCount": wrapper_count},
+        "viewport": {"width": 1906, "height": 986, "dpr": 1.5},
+        "domGeneration": 0,
+        "captureDomGeneration": 0,
+        "slots": slots,
+        "terminalMarkerCount": 1,
+        "terminalMarkerParentIndex": wrapper_count - 1,
+        "terminalMarkerVisible": seek_value == 1,
+        "terminalMarkerCenterInViewport": seek_value == 1,
+    }
+
+
 def _top_empty_snapshot(seek_value: int) -> dict[str, object]:
     raw = _snapshot(21)
     base = raw["slots"]
@@ -432,6 +513,142 @@ def test_younganimal_standard_odd_body_rejects_unsupported_shape_or_center(mutat
     else:
         raw = _snapshot(11, odd_body_count=7)
         raw["slots"][3]["wrapperCenterInViewport"] = False
+
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
+@pytest.mark.parametrize("body_count", [6, 10])
+def test_younganimal_top_empty_no_ci_profile_maps_all_observed_roles_and_seek_states(
+    body_count: int,
+) -> None:
+    maximum = body_count + 5
+    pr_slots = (body_count + 1, body_count + 2)
+    good_slot = body_count + 3
+    last_slot = body_count + 4
+    for value in range(maximum, 0, -2):
+        raw = _top_empty_no_ci_snapshot(value, body_count=body_count)
+        observation = _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+        focus = maximum - value + 1
+        centers = tuple(index for index in (focus - 1, focus) if 0 <= index < maximum)
+        body_centers = tuple(index for index in centers if 1 <= index <= body_count)
+        expected_state = "end" if value == 1 else "ad" if value == 3 else "content"
+        expected_active = (last_slot,) if value == 1 else () if value == 3 else body_centers
+
+        assert observation.layout_variant == "top_empty_no_ci"
+        assert observation.body_slots == tuple(range(1, body_count + 1))
+        assert observation.ci_slot is None
+        assert observation.pr_slots == pr_slots
+        assert observation.good_slot == good_slot
+        assert observation.last_slot == last_slot
+        assert observation.initial_blank is False
+        assert observation.page_state == expected_state
+        assert observation.active_slots == expected_active
+        assert tuple(
+            slot["index"]
+            for slot in raw["slots"]
+            if slot["wrapperCenterInViewport"] is True
+        ) == centers
+        if expected_state == "content":
+            assert observation.ready_slots == expected_active
+
+
+@pytest.mark.parametrize(
+    ("mutation", "seek_value"),
+    [
+        ("missing_horizontal", 15),
+        ("missing_spread", 15),
+        ("missing_rtl", 15),
+        ("missing_nav_rtl", 15),
+        ("missing_top_empty", 15),
+        ("missing_pr_capability", 15),
+        ("missing_good_capability", 15),
+        ("comic_info_flag", 15),
+        ("vertical_flag", 15),
+        ("single_page_flag", 15),
+        ("top_pr_marker", 15),
+        ("top_pr_lead_role", 15),
+        ("missing_first_marker", 15),
+        ("ci_marker", 5),
+        ("missing_pr_marker", 3),
+        ("early_last_marker", 5),
+        ("wrong_seek_max", 15),
+        ("odd_body_role", 13),
+        ("extra_ci_role", 15),
+        ("tail_role", 15),
+        ("extra_center", 13),
+        ("missing_center", 11),
+        ("last_marker_parent", 1),
+        ("last_marker_missing", 1),
+        ("last_marker_duplicate", 1),
+        ("last_marker_hidden", 1),
+        ("last_marker_offscreen", 1),
+        ("last_wrapper_center", 1),
+    ],
+)
+def test_younganimal_top_empty_no_ci_profile_rejects_unobserved_markers_roles_and_geometry(
+    mutation: str, seek_value: int
+) -> None:
+    raw = _top_empty_no_ci_snapshot(seek_value)
+    classes = raw["viewerClasses"]
+    if mutation == "missing_horizontal":
+        classes.remove("mode-h")
+    elif mutation == "missing_spread":
+        classes.remove("mode-spread")
+    elif mutation == "missing_rtl":
+        classes.remove("mode-dir-rtl")
+    elif mutation == "missing_nav_rtl":
+        classes.remove("mode-nav-dir-rtl")
+    elif mutation == "missing_top_empty":
+        classes.remove("mode-has-top-emptypage")
+    elif mutation == "missing_pr_capability":
+        classes.remove("mode-has-pr")
+    elif mutation == "missing_good_capability":
+        classes.remove("mode-has-good-page")
+    elif mutation in {"comic_info_flag", "vertical_flag", "single_page_flag"}:
+        classes.append({
+            "comic_info_flag": "mode-has-comic-info",
+            "vertical_flag": "mode-v",
+            "single_page_flag": "mode-single",
+        }[mutation])
+    elif mutation == "top_pr_marker":
+        classes.append("mode-top-pr-page")
+    elif mutation == "top_pr_lead_role":
+        raw["slots"][0]["classes"] = ["-cv-page", "mode-empty", "mode-pr", "mode-top-pr"]
+    elif mutation == "missing_first_marker":
+        classes.remove("mode-first-page")
+    elif mutation == "ci_marker":
+        classes.append("mode-ci-page")
+    elif mutation == "missing_pr_marker":
+        classes.remove("mode-pr-page")
+    elif mutation == "early_last_marker":
+        classes.append("mode-last-page")
+    elif mutation == "wrong_seek_max":
+        raw["seek"]["max"] = "14"
+    elif mutation == "odd_body_role":
+        raw["slots"][4]["classes"] = ["-cv-page", "mode-empty", "mode-pr"]
+        raw["slots"][4]["canvasCount"] = 0
+        raw["slots"][4]["canvas"] = None
+    elif mutation == "extra_ci_role":
+        raw["slots"][10]["classes"] = ["-cv-page", "mode-ci"]
+    elif mutation == "tail_role":
+        raw["slots"][11]["classes"] = ["-cv-page", "mode-good"]
+    elif mutation == "extra_center":
+        raw["slots"][4]["wrapperCenterInViewport"] = True
+    elif mutation == "missing_center":
+        raw["slots"][4]["wrapperCenterInViewport"] = False
+    elif mutation == "last_marker_parent":
+        raw["terminalMarkerParentIndex"] -= 1
+    elif mutation == "last_marker_missing":
+        raw["terminalMarkerCount"] = 0
+    elif mutation == "last_marker_duplicate":
+        raw["terminalMarkerCount"] = 2
+    elif mutation == "last_marker_hidden":
+        raw["terminalMarkerVisible"] = False
+    elif mutation == "last_marker_offscreen":
+        raw["terminalMarkerCenterInViewport"] = False
+    else:
+        raw["slots"][14]["wrapperCenterInViewport"] = False
 
     with pytest.raises(UnknownPageStateError):
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)

@@ -58,9 +58,23 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
     return x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight;
   };
+  const visibleCenterInViewport = node => {
+    if (!node || !wrapperCenterInViewport(node)) return false;
+    for (let current = node; current && current instanceof Element; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' ||
+          Number(style.opacity) <= 0) return false;
+    }
+    if (typeof node.checkVisibility === 'function') {
+      try { return node.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}); }
+      catch (_) { return false; }
+    }
+    return true;
+  };
   const oddBodyCandidate = (viewer, children, seek) => {
     const bodyCount = children.length - 6;
     return viewer instanceof Element && !viewer.classList.contains('mode-has-top-emptypage') &&
+      viewer.classList.contains('mode-has-comic-info') &&
       bodyCount >= 3 && bodyCount % 2 === 1 && seek?.type === 'range' && !seek.disabled &&
       Number(seek.min) === 1 && Number(seek.max) === children.length && Number(seek.step) === 2;
   };
@@ -114,6 +128,74 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       const lastWrapper = markers.length === 1 ? markers[0].closest('.-cv-page') : null;
       if (!lastWrapper || lastWrapper !== children.at(-1) || lastWrapper.parentElement !== pages ||
           !wrapperCenterInViewport(children.at(-1))) return false;
+    }
+    return true;
+  };
+  const noCiPageMarkersMatch = (viewer, value, max) => {
+    let expected;
+    if (value === max) expected = ['mode-first-page'];
+    else if (value === 5 || value === 3) expected = ['mode-pr-page'];
+    else if (value === 1) expected = ['mode-last-page'];
+    else if (value >= 7 && value < max && value % 2 === 1) expected = [];
+    else return false;
+    const names = [
+      'mode-first-page', 'mode-top-pr-page', 'mode-pr-page', 'mode-ci-page', 'mode-last-page',
+    ].filter(name => viewer.classList.contains(name));
+    return sameArray(names, expected);
+  };
+  const noCiCandidate = (viewer, children, seek) => {
+    const bodyCount = children.length - 5;
+    return viewer instanceof Element && viewer.classList.contains('mode-h') &&
+      viewer.classList.contains('mode-spread') && viewer.classList.contains('mode-dir-rtl') &&
+      viewer.classList.contains('mode-nav-dir-rtl') &&
+      viewer.classList.contains('mode-has-top-emptypage') &&
+      viewer.classList.contains('mode-has-pr') && viewer.classList.contains('mode-has-good-page') &&
+      !viewer.classList.contains('mode-has-comic-info') &&
+      !viewer.classList.contains('mode-v') && !viewer.classList.contains('mode-single') &&
+      bodyCount >= 4 && bodyCount % 2 === 0 && seek?.type === 'range' && !seek.disabled &&
+      Number(seek.min) === 1 && Number(seek.max) === children.length && Number(seek.step) === 2;
+  };
+  const exactTopEmptyNoCi = (viewer, pages, children, seek) => {
+    const bodyCount = children.length - 5;
+    if (!(pages instanceof Element) || !noCiCandidate(viewer, children, seek) ||
+        !exactClasses(children[0], ['-cv-page', 'mode-empty']) ||
+        children[0].querySelectorAll('canvas').length !== 0) return false;
+    const allowedBody = [
+      ['-cv-page'], ['-cv-page', 'mode-loading'],
+      ['-cv-page', 'mode-loading', 'mode-req-render'],
+      ['-cv-page', 'mode-loaded'], ['-cv-page', 'mode-loaded', 'mode-rendered'],
+    ];
+    for (let slot = 1; slot <= bodyCount; slot += 1) {
+      const wrapper = children[slot];
+      if (!wrapper || wrapper.parentElement !== pages ||
+          !allowedBody.some(expected => exactClasses(wrapper, expected))) return false;
+    }
+    const tailStart = bodyCount + 1;
+    const tail = [
+      ['-cv-page', 'mode-empty', 'mode-pr'], ['-cv-page', 'mode-empty', 'mode-pr'],
+      ['-cv-page', 'mode-good'], ['-cv-page', 'mode-last'],
+    ];
+    for (let offset = 0; offset < tail.length; offset += 1) {
+      const wrapper = children[tailStart + offset];
+      if (!wrapper || wrapper.parentElement !== pages || !exactClasses(wrapper, tail[offset]) ||
+          wrapper.querySelectorAll('canvas').length !== 0) return false;
+    }
+    const value = Number(seek.value);
+    if (!noCiPageMarkersMatch(viewer, value, children.length)) return false;
+    const focus = children.length - value + 1;
+    const expectedCenters = [focus - 1, focus].filter(slot => slot >= 0 && slot < children.length);
+    const actualCenters = [];
+    for (let slot = 0; slot < children.length; slot += 1) {
+      if (wrapperCenterInViewport(children[slot])) actualCenters.push(slot);
+    }
+    if (!sameArray(actualCenters, expectedCenters)) return false;
+    if (value === children.length && expectedCenters[0] !== 0) return false;
+    if (value === 1) {
+      const markers = [...document.querySelectorAll('#xCVLastPage')];
+      const lastWrapper = markers.length === 1 ? markers[0].closest('.-cv-page') : null;
+      if (!lastWrapper || lastWrapper !== children.at(-1) || lastWrapper.parentElement !== pages ||
+          !wrapperCenterInViewport(lastWrapper)) return false;
+      if (!visibleCenterInViewport(markers[0])) return false;
     }
     return true;
   };
@@ -172,12 +254,17 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         document.querySelectorAll('#xCVSeekBar').length !== 1 || !viewer || !pages || !seek ||
         pages.children.length < 9 || seek.type !== 'range' || seek.disabled) return null;
     const children = [...pages.children];
-    const ci = children.length - 5;
+    const topEmptyNoCi = noCiCandidate(viewer, children, seek);
+    const ci = topEmptyNoCi ? null : children.length - 5;
     const noTopPr = viewer.classList.contains('mode-has-top-emptypage') &&
       exactClasses(children[0], ['-cv-page', 'mode-empty']);
     const hasTopEmptyPage = viewer.classList.contains('mode-has-top-emptypage') && !noTopPr;
-    const bodyStart = hasTopEmptyPage ? 2 : 1;
-    if (children.length < 9 || ci <= bodyStart ||
+    const bodyStart = topEmptyNoCi ? 1 : hasTopEmptyPage ? 2 : 1;
+    const bodyEnd = topEmptyNoCi ? children.length - 4 : ci;
+    if (children.length < 9 || bodyEnd <= bodyStart) return null;
+    if (topEmptyNoCi) {
+      if (!exactTopEmptyNoCi(viewer, pages, children, seek)) return null;
+    } else if (
         !exactClasses(children[0], noTopPr ? ['-cv-page', 'mode-empty'] : ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']) ||
         (hasTopEmptyPage && !exactClasses(children[1], ['-cv-page', 'mode-empty'])) ||
         !exactClasses(children[ci], ['-cv-page', 'mode-ci']) ||
@@ -186,29 +273,33 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         !exactClasses(children[ci + 3], ['-cv-page', 'mode-good']) ||
         !exactClasses(children[ci + 4], ['-cv-page', 'mode-last'])) return null;
     const min = Number(seek.min), max = Number(seek.max), step = Number(seek.step), value = Number(seek.value);
-    const standardOddBody = !hasTopEmptyPage && !noTopPr && oddBodyCandidate(viewer, children, seek);
+    const standardOddBody = !topEmptyNoCi && !hasTopEmptyPage && !noTopPr && oddBodyCandidate(viewer, children, seek);
     if (min !== 1 || step !== 2 ||
-        max !== (hasTopEmptyPage ? children.length : standardOddBody ? children.length : children.length - 1) ||
+        max !== (topEmptyNoCi || hasTopEmptyPage ? children.length : standardOddBody ? children.length : children.length - 1) ||
         (standardOddBody && !exactStandardOddBody(viewer, pages, children, seek)) ||
         !Number.isInteger(value) || value < min || value > max || (max - value) % step !== 0) return null;
-    if (viewer.classList.contains('mode-last-page') && !standardOddBody) return null;
+    if (viewer.classList.contains('mode-last-page') && !standardOddBody && !topEmptyNoCi) return null;
     const focus = max - value + 1;
-    const active = [focus - 1, focus].filter(slot => slot >= bodyStart && slot < ci);
-    if (!active.length && !(standardOddBody && (value === min || value === 5 || value === 3))) return null;
+    const active = [focus - 1, focus].filter(slot => slot >= bodyStart && slot < bodyEnd);
+    if (!active.length && !(standardOddBody && (value === min || value === 5 || value === 3)) &&
+        !(topEmptyNoCi && (value === min || value === 3))) return null;
     const allowedBodyClasses = [
       ['-cv-page'], ['-cv-page', 'mode-loading'],
       ['-cv-page', 'mode-loading', 'mode-req-render'],
       ['-cv-page', 'mode-loaded'], ['-cv-page', 'mode-loaded', 'mode-rendered'],
     ];
-    for (let slot = bodyStart; slot < ci; slot += 1) {
+    for (let slot = bodyStart; slot < bodyEnd; slot += 1) {
       const names = classes(children[slot]);
       if (!allowedBodyClasses.some(expected => sameArray(names, expected.slice().sort()))) return null;
     }
     const mutationState = capture.inspect([]);
     if (!mutationState || !Number.isSafeInteger(mutationState.domGeneration) || mutationState.domGeneration < 0 ||
         !Number.isSafeInteger(mutationState.captureDomGeneration) || mutationState.captureDomGeneration < 0) return null;
-    return {viewer, pages, seek, children, ci, bodyStart,
-      variant: standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
+    const roles = topEmptyNoCi
+      ? [null, bodyEnd, bodyEnd + 1, bodyEnd + 2, bodyEnd + 3]
+      : [ci, ci + 1, ci + 2, ci + 3, ci + 4];
+    return {viewer, pages, seek, children, ci, bodyStart, bodyEnd, roles,
+      variant: topEmptyNoCi ? 'top_empty_no_ci' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
       path: location.pathname, dom: mutationState.domGeneration,
       captureDom: mutationState.captureDomGeneration,
       viewport: {width: innerWidth, height: innerHeight, dpr: devicePixelRatio}};
@@ -324,6 +415,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         target, wrapper: locationRow.wrapper, holder: locationRow.holder,
         pages: layout.pages, viewer: layout.viewer, seek: layout.seek, slot: locationRow.slot,
         episodePath: layout.path, layoutVariant: layout.variant,
+        roles: layout.roles.slice(),
         seekValue: layout.value, activeSlots: layout.active.slice(),
         domGeneration: layout.dom, captureDomGeneration: layout.captureDom,
         viewport: layout.viewport,
@@ -525,6 +617,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
               candidate.pages !== layout.pages || candidate.viewer !== layout.viewer ||
               candidate.seek !== layout.seek || candidate.episodePath !== episodePath ||
               candidate.layoutVariant !== layout.variant ||
+              !sameArray(candidate.roles, layout.roles) ||
               candidate.seekValue !== layout.value || !sameArray(candidate.activeSlots, expectedSlots) ||
               candidate.targetWidth !== target.width ||
               candidate.targetHeight !== target.height || clipUnsafe.has(target) ||
@@ -566,6 +659,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       const token = `ya${nextProof++}`;
       const proof = {token, episodePath, expectedSeek, expectedSlots: expectedSlots.slice(),
         layoutVariant: layout.variant,
+        roles: layout.roles.slice(),
         pages: layout.pages, viewer: layout.viewer, seek: layout.seek,
         domGeneration: layout.dom, captureDomGeneration: layout.captureDom,
         viewport: layout.viewport, wrapperCount: layout.children.length,
@@ -608,6 +702,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         const layout = normalizedLayout();
         if (!layout || layout.path !== proof.episodePath || layout.value !== proof.expectedSeek ||
             layout.variant !== proof.layoutVariant ||
+            !sameArray(layout.roles, proof.roles) ||
             layout.captureDom !== proof.captureDomGeneration || layout.pages !== proof.pages || layout.viewer !== proof.viewer ||
             layout.seek !== proof.seek || layout.children.length !== proof.wrapperCount ||
             !sameArray(layout.active, proof.expectedSlots) ||

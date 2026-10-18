@@ -1,6 +1,6 @@
 # Young Animal `work_ticket` 実装 Runbook
 
-**Status:** COMPLETE (2026-10-19). Phases 01-04 passed independent review. The normal quota path was verified on `849948508c8bc` / work `71460b2b6686f`: one ticket entry continued on the same Page through Capture, END, ZIP, and Catalog completion. Seven ticket uses are recorded (five original plus two of three additional authorizations); `4ba85f4c9e538` remains unopened and unused. The full repository test suite was not run. See [PROGRESS.md](PROGRESS.md) for evidence, failures, and constraints.
+**Status:** COMPLETE (2026-10-19). Phases 01-04 passed independent review. Fresh-ticket same-Page Capture -> END -> ZIP passed on `849948508c8bc` / work `71460b2b6686f`; an existing-grant direct run later passed the `top_empty_no_ci` profile on `8d92e88ab93ec` / work `cded52d3dfcd3` through END/ZIP without another ticket. Eight ticket uses are recorded: the five original uses, two of three separately authorized candidate uses, and the later user-triggered use on 8d; `4ba85f4c9e538` remains unopened and unused. The full repository test suite was not run. See [PROGRESS.md](PROGRESS.md) for evidence, failures, and constraints.
 **Baseline:** 着手時の `main` HEADを確認して記録する。`runbooks/younganimal-adapter/` の free/direct E2E完了実装、および `runbooks/hanayume-work-ticket/` の完了済み実装を参考にする。
 **実装ブランチ:** `main` から新規 `feat/younganimal-work-ticket` を作り、既存 `feat/younganimal-adapter` / `feat/hanayume-work-ticket` を起点にしない。`main` へ自動マージしない。
 **進捗・実測・消費数:** [PROGRESS.md](PROGRESS.md)。既存の Young Animal Adapter Runbook は歴史的記録として維持し、本機能の authority はこの新Runbookと上位仕様。
@@ -135,4 +135,4 @@ Follow-up authorization (2026-10-18; final state 2026-10-19): the original five-
 - [x] 既存free/rental/描画品質、Hanayume/ComicDAYS、共通Batchの回帰確認あり（検証範囲は下記）
 - [x] 実サイトでチケット総消費数・証拠・観測時刻・独立レビュー結果を `PROGRESS.md` に記録
 
-Regression-check scope: an earlier broad affected selection recorded 871 passes and 2 diagnostic-path failures. Both exact shortened-path reruns passed, suggesting path length as the cause (inference). The current seven-file Younganimal selection also passed 322 tests. This bounded evidence does not claim that the original broad run was all-green or that the full repository suite ran.
+Regression-check scope: an earlier broad affected selection recorded 871 passes and 2 diagnostic-path failures. Both exact shortened-path reruns passed, suggesting path length as the cause (inference). The current seven-file Younganimal selection covers 379 tests, 0 skipped; after the final no-CI test-only corrections, its 10 affected adapter-browser cases were rerun as an overlapping subset. This bounded evidence does not claim that the original broad run was all-green or that the full repository suite ran.
