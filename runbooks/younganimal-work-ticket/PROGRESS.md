@@ -4,7 +4,7 @@
 **Branch / baseline:** `feat/younganimal-work-ticket` from `origin/main` `fd10a2ee2b1876bbd79dae85e898cf0a8de4cd4c`.
 **Protected pre-existing files:** `crawler.yaml`, `watchlist.yaml`, and `debug.log` are user-owned changes and are not part of this work.
 **Ticket ledger:** 1 observed `work_ticket` use of the authorized maximum 5. The only used ticket was on episode `856137d88753b` / work `8246f8b8b2e6c`; no account balance delta was recorded. The minimum same-work cooldown ends at `2026-10-19T05:05:50.550591Z` (`2026-10-19 14:05:50.550591 JST`). No additional ticket may be used for that work before then.
-**Current checkpoint:** Phase 01 evidence passed review. Phase 02 implementation and its late-AccessGuard ordering fix passed independent review. Phase 03 is waiting for the Lead's formal contract; Phase 04 remains unstarted.
+**Current checkpoint:** Phases 01-03 passed independent review. Phase 04 live verification is pending.
 
 ## Phase status
 
@@ -12,8 +12,8 @@
 | --- | --- | --- |
 | 01 — repository and live evidence | PASS | One exact wait-free action was independently adjudicated as one observed resource use. The same-work Viewer became ready on the same Page. No balance-delta claim. |
 | 02 — Discovery and SitePolicy | PASS | Independent review passed. The delayed final-response regression verifies late AccessGuard stops prevent result publication and preserve Catalog state. |
-| 03 — Batch entry and grant-only | NOT STARTED | Waiting for formal Lead Phase 03 contract. |
-| 04 — end-to-end tests and live verification | NOT STARTED | Waits for Phase 03 review and ticket/work-specific cooldown-safe live plan. |
+| 03 - Batch entry and grant-only | PASS | Independent review passed; site-local adapter and synthetic tests are complete. No Phase 03 live action was used. |
+| 04 — end-to-end tests and live verification | PENDING | Requires a ticket/work-specific cooldown-safe live plan and exclusive browser allocation. |
 
 ## Phase 01 — reviewed observations
 
@@ -49,14 +49,27 @@ Phase 02 validation:
 - Discovery hydration attempted first-party mutations in the live probe; non-GET requests were blocked. Their meaning remains unknown, and they are not treated as ticket consumption.
 - Phase 03 must retain the approved one-work-at-a-time sequence: use the Catalog candidate URL directly, never preflight all works or visit a series page from Batch, and process one work completely before the next.
 
-## Phase 03 — pending
+## Phase 03 - Batch entry and grant-only (review passed)
 
-- Adapter entry, final retained-control checks, single-click latch, observed-consumption persistence, same-Page Viewer handoff, and `--grant-only work_ticket` remain unimplemented until Phase 02 is independently approved.
-- The existing direct free/rental and Capture paths must remain unchanged.
+The site-local adapter installs its exact-target route guard and bounded auth/current/work/checkout observer before the direct episode navigation. It requires the configured Catalog work/episode identity, canonical route, a unique matching episode header, positive session authentication, exact current native `waitAndFree` state and no conflicting settled same-work observation. It accepts only the unique visible, enabled, uncovered free control in the observed charge scope, distinguishes the known paid sibling, retains one element handle, runs a Playwright trial, repeats the fresh same-Page checks and latches before its only click. Unknown, paid, foreign, duplicate, missing, hidden, disabled, or changed states fail closed. Missing controls fail closed in production logic; the synthetic suite covers hidden/disabled controls and duplicate controls, not a separate absent-control fixture. The guard blocks off-target main documents, unexpected subframe navigation, unknown RSC routes, all other series routes, and other episode routes. A recognized same-work read-only RSC GET prefetch is recorded and aborted without treating it as a page visit or failing the selected episode operation. Immediately before the action latch, the adapter rechecks both route state and recorded 403/429 stops.
+
+Consumption proof requires a post-click target-bound successful `POST /api/checkout/rental` and a post-click exact current episode state transition from `hasAccess=false` to `hasAccess=true`, still `accessType=waitAndFree`, with no conflicting same-work series state. The research report records a complete bounded JSON scan with the exact target identifier in the checkout body, but does not preserve a field path; implementation intentionally uses the already-reviewed bounded exact-ID binding predicate. A valid positive native countdown yields request-start plus seconds minus one second; absent/invalid expiry is `None`, with no fixed duration fallback. The adapter stores `AccessConsumption` before Viewer initialization so later Viewer/Capture failure or cancellation still persists the observed use.
+
+Normal Batch retains the same Page and continues through the existing Viewer readiness, rewind, Capture, END, and ZIP code. `--grant-only work_ticket` uses the same entry flow, captures/packages no pages, and leaves the Item pending. Existing free and rental paths remain direct and non-consuming. No shared production file or capture proof gate was changed.
+
+Phase 03 validation:
+
+- `tests/integration/test_younganimal_adapter_browser.py`: 81 passed, 0 skipped. New synthetic cases cover delayed initial hydration, wrong/missing current episode identity, replacement of the retained free control before action, late recorded 403/429 before the latch, timeout after real click dispatch, post-proof route drift with consumption persistence, and blocked/recorded same-work RSC prefetch while normal same-Page capture completes.
+- Affected unit selection (`test_younganimal_live_access.py`, `test_younganimal_batch.py`, `test_younganimal_capture.py`, the existing work-cooldown executor boundary, and CLI registration/parser): 73 passed, 0 skipped. This includes the shared `tests/unit/test_batch_executor.py::test_normal_packaging_failure_preserves_confirmed_consumption` boundary for archive/package failure after quota use; no duplicate site-local package-failure case was added.
+- The independent Phase 03 Reviewer also ran `tests/unit/test_younganimal_live_access.py`: 16 passed, 0 skipped. Generic AccessGuard integration covers the CAPTCHA detector; ticket entry has a pre-latch 403/429 stop regression.
+- Targeted Ruff, compileall, and `git diff --check` passed after the focused fixes. Pytest reported only existing `pytest-asyncio` deprecation warnings.
+- No Phase 03 live CLI command was run and no Phase 03 ticket was consumed. The only real ticket use remains the Phase 01 research action listed above.
+
+Independent Phase 03 review passed with no blocking findings. Phase 04 must still verify the active manual grant path without spending a ticket, then verify normal Batch and `--grant-only work_ticket` on separate cooldown-safe allowlisted works, check same-work cooldown before Browser/Page setup, and audit the isolated Catalog/output. Continue one work at a time and stop at the five-ticket cap.
 
 ## Phase 04 — pending
 
-- Production Unit / Integration / E2E and independent review after Phase 03.
+- Phase 03 Unit/Integration/E2E and independent review are complete.
 - Live `--grant-only work_ticket` and normal Batch verification on separate cooldown-safe authorized episode URLs, only after confirming each selected work ID. Track exact consumption count; stop at five total.
 - Same-work cooldown rerun must prove zero site requests and no Page creation. Normal Batch must prove one exact ticket action followed by existing Viewer/Capture on the same Page. Manual ticket Discovery must be observed without a second action.
 - Record any remaining risk and test categories not run before marking this runbook complete. Do not merge `main` automatically.

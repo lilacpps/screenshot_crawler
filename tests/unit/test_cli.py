@@ -833,6 +833,14 @@ def test_batch_policy_registry_contains_supported_sites() -> None:
     )
     assert grant_only.grant_only == "work_ticket"
     assert cli._grant_only_resource_passes(policy) == ("work_ticket",)
+    younganimal_policy = cli._batch_policy_registry().create("younganimal")
+    assert younganimal_policy.supported_access_resources() == ("work_ticket",)
+    assert younganimal_policy.grant_only_supported_access_resources() == ("work_ticket",)
+    younganimal_grant_only = _parser().parse_args(
+        ["batch", "run", "--site", "younganimal", "--grant-only", "work_ticket"]
+    )
+    assert younganimal_grant_only.grant_only == "work_ticket"
+    assert cli._grant_only_resource_passes(younganimal_policy) == ("work_ticket",)
     kadocomi_policy = cli._batch_policy_registry().create("kadocomi")
     assert kadocomi_policy.supported_access_resources() == ()
     assert kadocomi_policy.grant_only_supported_access_resources() == ()

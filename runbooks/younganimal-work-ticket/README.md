@@ -1,6 +1,6 @@
 # Young Animal `work_ticket` 実装 Runbook
 
-**Status:** PLANNED / NOT IMPLEMENTED（2026-10-18）。本Runbookの作成は設計作業のみ。実サイトのチケットは未消費。
+**Status:** IN PROGRESS (2026-10-18). Phases 01-03 passed independent review; Phase 04 live verification remains.
 **Baseline:** 着手時の `main` HEADを確認して記録する。`runbooks/younganimal-adapter/` の free/direct E2E完了実装、および `runbooks/hanayume-work-ticket/` の完了済み実装を参考にする。
 **実装ブランチ:** `main` から新規 `feat/younganimal-work-ticket` を作り、既存 `feat/younganimal-adapter` / `feat/hanayume-work-ticket` を起点にしない。`main` へ自動マージしない。
 **進捗・実測・消費数:** [PROGRESS.md](PROGRESS.md)。既存の Young Animal Adapter Runbook は歴史的記録として維持し、本機能の authority はこの新Runbookと上位仕様。

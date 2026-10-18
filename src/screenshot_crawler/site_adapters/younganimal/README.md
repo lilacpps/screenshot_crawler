@@ -3,12 +3,13 @@
 The Younganimal adapter provides Discovery, direct manual episode Crawl, and a
 direct Batch path for free sources and active rentals. Discovery also records
 authenticated, work-bound wait-free candidates and active manual ticket grants
-from natural listing responses. The shared CDP BrowserSession / Playwright Page,
-AccessGuard, Runner, manifest, and packager remain in use. The separate Batch
-ticket-entry flow is not implemented yet; no work-ticket action is inferred
-from an icon or performed during Discovery.
+from natural listing responses. The shared CDP BrowserSession / Playwright Page, AccessGuard, Runner,
+manifest, and packager remain in use. Batch supports the existing direct
+free/rental path and the explicit `quota + work_ticket` path. Discovery itself
+never clicks or consumes a ticket. Synthetic Batch coverage is in place; the
+Phase 03 independent review passed; Phase 04 live CLI checks remain pending.
 
-## Current live verification (2026-10-12)
+## Current live verification (2026-10-18)
 
 The supplied rental episode `37d94ac0d8242` passed full work Discovery (six
 positions, three active rentals) and a production Batch run through END with
@@ -50,6 +51,46 @@ selected-page and post-encode proofs, frozen mapping, pixels, atomic spread
 handling, and cleanup remain strict. The final code passed the affected local
 suite and both live profiles described above.
 
+## Batch `work_ticket` entry
+
+The `work_ticket` resource is attempted only for a planned Younganimal quota
+candidate with its exact Catalog work/episode identity. Batch installs a
+same-Page route guard and bounded natural-response observer before the initial
+navigation, then goes directly to the Catalog episode URL; it does not previsit
+a series page or another episode. Before any action it requires the canonical
+route, one matching work header, positive session authentication, and an exact
+current episode access record bound to that work. Only `accessType=waitAndFree`
+with `hasAccess=false` and a missing or exact-zero timer can reach the control.
+An already-active exact ticket grant is reused as non-consuming direct access in
+normal Batch; grant-only skips an existing grant.
+
+The adapter requires the unique visible, enabled, uncovered
+`button[data-e2e=wfRead]` with the exact observed free label and charge scope,
+known paid sibling controls, and stable retained-element identity. It performs
+one trial click, repeats the same-Page native/auth and UI checks, latches before
+one click, and never retries. Consumption is confirmed only by a post-click
+successful target-bound `POST /api/checkout/rental` together with the same
+work/episode's exact native `waitAndFree` false-to-true transition. The observed
+request body is checked with a bounded exact-target-ID scan; its key path was
+not retained by the research artifact. The adapter records this proof before
+Viewer initialization, so later Viewer/Capture failure or cancellation does not
+lose the observed quota use. The observed timer supplies an expiry only when it
+is a valid positive integer; there is no fixed-duration fallback.
+
+The route guard aborts and records a recognized same-work read-only RSC GET
+prefetch without treating it as a series-page visit or failing the selected
+episode run. Other series routes, off-target navigations, unexpected subframe
+navigations, and unrecognized RSC routes remain fatal. The adapter checks both
+this route guard and recorded 403/429 stops again immediately before latching
+the single action.
+
+Normal Batch stays on the same Page and continues through the existing Viewer,
+Capture, END, and ZIP checks. `batch run --site younganimal --grant-only
+work_ticket` confirms the same entry and consumption without Viewer image
+capture or packaging, leaving the Item pending. The local work-scoped policy
+skips the same-work resource before Browser/Page setup for at least 23 hours
+since recorded consumption; a longer configured cooldown is preserved.
+
 ## Manual crawl entry
 
 Pass a canonical episode URL to the crawl command for site younganimal and set
@@ -66,13 +107,11 @@ viewer/body parser must positively establish readable content before capture.
 No login, ticket, coin, point, purchase, rental activation or next-episode action
 is performed.
 
-The manual crawl supports only `access_strategy=auto`.
-Configured Batch requires `access_strategy=direct`, a
-strict `{13-hex-work-id}:{13-hex-episode-id}` external identity, and a nonempty
-opaque `work_key`. It navigates once to the canonical Catalog episode URL, then
-validates the work header and live reader access before viewer
-initialization. It does not visit the series listing or consume/update quota or
-grant state. A mismatch stops before capture and leaves the Batch item pending.
+The manual crawl supports only `access_strategy=auto`. Configured Batch
+requires a strict `{13-hex-work-id}:{13-hex-episode-id}` external identity and a
+nonempty opaque `work_key`. `access_strategy=direct` retains the existing
+free/rental behavior and does not consume a ticket. `access_strategy=quota`
+accepts only `quota_resource=work_ticket` and uses the entry contract above.
 
 ## Viewer and rendered PNG contract
 
@@ -221,8 +260,9 @@ Discovery's 925-row live run is complete. The Phase 02 work-ticket Discovery
 contract has been observed on the live listing: two natural series-access GETs
 returned work-bound `episodeAccesses`, and the auth session returned a positive
 integer user. No ticket was used during that listing observation. Its targeted
-unit tests and browser-backed fixture tests pass; Phase 02 independent review is
-pending. The separate ticket-entry Policy/Batch path is not yet implemented.
+unit tests and browser-backed fixture tests pass, and Phase 02 independent review
+passed. The Phase 03 ticket-entry Policy/Batch path also passed independent review;
+synthetic browser verification is complete, with live CLI checks reserved for Phase 04.
 The previous free/rental direct path has passed independent review and synthetic
 BatchExecutor-to-Runner-to-ZIP tests.
 Attempt 9 verifies the final capture code on both live profiles. The 44-page

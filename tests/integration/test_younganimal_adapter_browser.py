@@ -11,8 +11,15 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from playwright.async_api import ElementHandle
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from screenshot_crawler.batch import BatchExecutor, BatchPlanner, CandidateExecutionError
+from screenshot_crawler.batch import (
+    BatchExecutor,
+    BatchInterruptedError,
+    BatchPlanner,
+    CandidateExecutionError,
+)
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -21,7 +28,11 @@ from screenshot_crawler.catalog import (
     WorkInput,
 )
 from screenshot_crawler.catalog.service import JST
-from screenshot_crawler.core.errors import UnknownPageStateError
+from screenshot_crawler.core.errors import (
+    AccessResourceUnavailableError,
+    PageChangeTimeoutError,
+    UnknownPageStateError,
+)
 from screenshot_crawler.core.models import RunConfig
 from screenshot_crawler.core.packaging import package_crawl_output
 from screenshot_crawler.core.runner import CrawlerRunner
@@ -200,19 +211,33 @@ def _viewer_html(
 
 
 def _episode_html(
-    *, native_source_slots: tuple[int, ...] = (), clip_slots: tuple[int, ...] = (),
+    *,
+    native_source_slots: tuple[int, ...] = (),
+    clip_slots: tuple[int, ...] = (),
     target_label: str = "無料",
     rental: bool = False,
     no_top_pr: bool = False,
+    ticket_gate: bool = False,
 ) -> str:
-    gate = (
-        f'<div class="ep-main-content mode-charge"><div class="ep-charge"><button>{target_label}</button></div></div>'
-        if target_label != "無料" and not rental else ""
-    )
+    gate = ""
+    if ticket_gate:
+        gate = """<div id="ticket-gate" class="ep-main-content mode-charge">
+          <div class="ep-charge">
+            <div class="ep-charge-act"><button class="ep-charge-act-btn mode-waitfree"
+              data-e2e="wfRead">待つと無料で読む</button></div>
+            <div class="ep-charge-act"><button class="ep-charge-act-btn mode-alt"
+              data-e2e="epBulkRentTrig">この話をレンタル</button></div>
+          </div>
+        </div>"""
+    elif target_label != "無料" and not rental:
+        gate = (
+            f'<div class="ep-main-content mode-charge"><div class="ep-charge">'
+            f"<button>{target_label}</button></div></div>"
+        )
     return f'''<!doctype html><html><head><meta charset="utf-8"><title>Fixture viewer</title></head>
       <body><div id="xHeader"><a class="ep-h-main-h-series" href="{WORK_URL}">Fixture Work</a></div>
       {gate}
-      {'' if no_top_pr else _listing(selected_range=True, target_label=target_label, rental=rental)}
+      {"" if no_top_pr else _listing(selected_range=True, target_label=target_label, rental=rental)}
       {_viewer_html(native_source_slots=native_source_slots, clip_slots=clip_slots, no_top_pr=no_top_pr)}</body></html>'''
 
 
@@ -333,25 +358,114 @@ def _top_empty_episode_html(
 
 
 async def _install_fixture(
-    page, *, initial_seek: int = 11, native_source_slots: tuple[int, ...] = (),
-    clip_slots: tuple[int, ...] = (), top_empty: bool = False,
-    top_empty_initial_nav_open: bool = False, top_empty_initial_splash_count: int = 0,
+    page,
+    *,
+    initial_seek: int = 11,
+    native_source_slots: tuple[int, ...] = (),
+    clip_slots: tuple[int, ...] = (),
+    top_empty: bool = False,
+    top_empty_initial_nav_open: bool = False,
+    top_empty_initial_splash_count: int = 0,
     episode_target_label: str = "無料",
     rental: bool = False,
     no_top_pr: bool = False,
+    ticket_gate: bool = False,
+    ticket_initial_access: bool = False,
+    ticket_access_type: str = "waitAndFree",
+    ticket_auth_user: int | None = 101,
+    ticket_work_id: str = WORK_ID,
+    ticket_episode_payload_id: str | None = EPISODE_ID,
+    ticket_control_variant: str = "normal",
+    ticket_checkout_status: int = 200,
+    ticket_grant_after_checkout: bool = True,
+    ticket_checkout_target_id: str = EPISODE_ID,
+    ticket_post_series_delay_ms: int = 0,
+    ticket_series_conflict_after_checkout: bool = False,
+    ticket_hydration_delay_ms: int = 0,
+    ticket_prefetch_series: bool = False,
+    ticket_route_drift_after_checkout: bool = False,
 ) -> list[str]:
     requested: list[str] = []
+    ticket_state = {"consumed": ticket_initial_access, "clicks": 0}
+
+    def ticket_access_payload() -> dict[str, object]:
+        access = {
+            "hasAccess": ticket_state["consumed"],
+            "accessType": ticket_access_type,
+        }
+        if ticket_episode_payload_id is not None:
+            access["episodeId"] = ticket_episode_payload_id
+        access["timeRemainingInSeconds"] = 25_900 if ticket_state["consumed"] else 0
+        return {"episode": {"access": access, "series": {"id": ticket_work_id}}}
+
+    def series_access_payload() -> dict[str, object]:
+        has_access = ticket_state["consumed"] and not ticket_series_conflict_after_checkout
+        access = {
+            "episodeId": EPISODE_ID,
+            "hasAccess": has_access,
+            "accessType": ticket_access_type,
+        }
+        access["timeRemainingInSeconds"] = 25_900 if has_access else 0
+        return {"seriesAccess": {"seriesId": ticket_work_id, "episodeAccesses": [access]}}
+
+    ticket_button_attrs = {
+        "hidden": 'style="display:none"',
+        "disabled": "disabled",
+    }.get(ticket_control_variant, "")
+    ticket_button_label = (
+        "有料で読む" if ticket_control_variant == "paid_label" else "待つと無料で読む"
+    )
+    ticket_duplicate_button = (
+        '<button data-e2e="wfRead">待つと無料で読む</button>'
+        if ticket_control_variant == "duplicate"
+        else ""
+    )
+
+    initial_hydration = (
+        f"setTimeout(() => {{ void hydrateTicketState().catch(() => {{}}); }}, {ticket_hydration_delay_ms});"
+        if ticket_hydration_delay_ms > 0
+        else "void hydrateTicketState();"
+    )
+    ticket_prefetch_script = (
+        f"fetch('/series/{WORK_ID}/1?_rsc=fixture').catch(() => {{}});"
+        if ticket_prefetch_series
+        else ""
+    )
+    ticket_drift_script = (
+        f"setTimeout(() => window.location.assign('/series/{WORK_ID}'), 300);"
+        if ticket_route_drift_after_checkout
+        else ""
+    )
+    ticket_hydration_script = f"""<script>
+      window.__ticketClicks = 0;
+      const hydrateTicketState = () => Promise.all([
+        fetch('/api/auth/session').then(response => response.json()),
+        fetch('/api/episodes/{EPISODE_ID}').then(response => response.json()),
+        fetch('/api/series/access').then(response => response.json())
+      ]);
+      {initial_hydration}
+      {ticket_prefetch_script}
+      document.querySelector('[data-e2e="wfRead"]')?.addEventListener('click', async () => {{
+        window.__ticketClicks += 1;
+        await fetch('/api/checkout/rental', {{method:'POST',
+          headers:{{'content-type':'application/json'}},
+          body:JSON.stringify({{episodeId:'{ticket_checkout_target_id}'}})}});
+        document.querySelector('#ticket-gate')?.remove();
+        await hydrateTicketState();
+        {ticket_drift_script}
+      }});
+    </script>"""
 
     async def fulfill(route) -> None:
         path = route.request.url.split("?", 1)[0].removeprefix(BASE)
         requested.append(path)
         if path == f"/series/{WORK_ID}":
-            body = f'''<!doctype html><html><head><meta charset="utf-8"></head><body>
-              <h1>Fixture Work</h1>{_listing(selected_range=False)}</body></html>'''
+            body = f"""<!doctype html><html><head><meta charset="utf-8"></head><body>
+              <h1>Fixture Work</h1>{_listing(selected_range=False)}</body></html>"""
             await route.fulfill(status=200, body=body, content_type="text/html")
         elif path == f"/series/{WORK_ID}/1":
-            body = f'''<!doctype html><html><head><meta charset="utf-8"></head><body>
-              <h1>Fixture Work</h1>{_listing(selected_range=True)}</body></html>'''
+            body = f"""<!doctype html><html><head><meta charset="utf-8"></head><body>
+              <h1>Fixture Work</h1>{_listing(selected_range=True)}</body></html>"""
             await route.fulfill(status=200, body=body, content_type="text/html")
         elif path == f"/episodes/{EPISODE_ID}":
             if top_empty:
@@ -367,8 +481,36 @@ async def _install_fixture(
                     target_label=episode_target_label,
                     rental=rental,
                     no_top_pr=no_top_pr,
+                    ticket_gate=ticket_gate and not ticket_initial_access,
                 ).replace('value="11"', f'value="{initial_seek}"')
+                if ticket_gate:
+                    body = body.replace(
+                        'data-e2e="wfRead">待つと無料で読む',
+                        f'data-e2e="wfRead" {ticket_button_attrs}>{ticket_button_label}',
+                        1,
+                    )
+                    body = body.replace(
+                        "</body>",
+                        f"{ticket_hydration_script}{ticket_duplicate_button}</body>",
+                    )
             await route.fulfill(status=200, body=body, content_type="text/html")
+        elif ticket_gate and path == "/api/auth/session" and route.request.method == "GET":
+            await route.fulfill(status=200, json={"user": ticket_auth_user})
+        elif (
+            ticket_gate and path == f"/api/episodes/{EPISODE_ID}" and route.request.method == "GET"
+        ):
+            await route.fulfill(status=200, json=ticket_access_payload())
+        elif ticket_gate and path == "/api/series/access" and route.request.method == "GET":
+            if ticket_state["consumed"] and ticket_post_series_delay_ms:
+                await asyncio.sleep(ticket_post_series_delay_ms / 1000)
+            await route.fulfill(status=200, json=series_access_payload())
+        elif ticket_gate and path == "/api/checkout/rental" and route.request.method == "POST":
+            if ticket_checkout_status == 200 and ticket_grant_after_checkout:
+                ticket_state["consumed"] = True
+            ticket_state["clicks"] += 1
+            await route.fulfill(
+                status=ticket_checkout_status, body="ok", content_type="text/plain"
+            )
         else:
             await route.fulfill(status=404, body="")
 
@@ -416,6 +558,7 @@ def _make_younganimal_batch(
     manifest_observations: list[dict[str, object]] | None = None,
     external_work_id: str = WORK_ID,
     rental: bool = False,
+    quota: bool = False,
 ) -> tuple[CatalogService, BatchExecutor, object]:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     work = catalog.create_work(
@@ -430,7 +573,7 @@ def _make_younganimal_batch(
             site="younganimal",
             external_id=f"{external_work_id}:{EPISODE_ID}",
             discovery_key="fixture-discovery",
-            access_mode="paid" if rental else "free",
+            access_mode="quota" if quota else ("paid" if rental else "free"),
             access_granted_until="2099-10-11T12:00:00+09:00" if rental else None,
             available=True,
             display_position=1,
@@ -444,11 +587,16 @@ def _make_younganimal_batch(
     policies.register("younganimal", YounganimalSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("younganimal", YounganimalAdapter)
-    plan = BatchPlanner(catalog, policies).plan(site="younganimal", now=NOW)
+    plan = BatchPlanner(catalog, policies).plan(
+        site="younganimal",
+        now=NOW,
+        quota_resource="work_ticket" if quota else None,
+    )
     assert len(plan.candidates) == 1
 
     package_function = package_crawl_output
     if manifest_observations is not None:
+
         def observe_manifest(output_dir, metadata, **kwargs):
             manifest_observations.append(
                 json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -604,6 +752,524 @@ async def test_younganimal_direct_batch_completes_from_one_canonical_episode_nav
     assert "Catalog Work" in result.archive_path.name
     with zipfile.ZipFile(result.archive_path) as archive:
         assert len(archive.namelist()) == 16
+
+
+async def test_younganimal_work_ticket_batch_clicks_once_then_uses_same_page_capture(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page,
+        ticket_gate=True,
+        native_source_slots=tuple(range(1, 17)),
+    )
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 50)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch",
+        library_dir=tmp_path / "library",
+        max_pages=20,
+        now=NOW,
+    )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert _content_document_paths(requested) == [f"/episodes/{EPISODE_ID}"]
+    assert result.stop_reason == "end"
+    assert result.page_count == 16
+    assert catalog.get_item(candidate.item_id).status == "completed"
+    source = catalog.get_source(candidate.source_id)
+    assert source.quota_started_at is not None
+    assert source.access_granted_until is not None
+    assert source.quota_started_at <= source.access_granted_until
+    assert len(catalog.list_artifacts(item_id=candidate.item_id, state="present")) == 1
+    assert result.archive_path.exists()
+
+
+async def test_younganimal_work_ticket_grant_only_records_use_without_viewer_capture(
+    browser_page, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, ticket_gate=True)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    result = await executor.execute_grant_only_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch",
+        max_pages=20,
+        now=NOW,
+    )
+
+    assert result.resource_consumed is True
+    assert await browser_page.evaluate("window.__ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert _content_document_paths(requested) == [f"/episodes/{EPISODE_ID}"]
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+    source = catalog.get_source(candidate.source_id)
+    assert source.quota_started_at is not None
+    assert source.access_granted_until is not None
+    assert list((tmp_path / "batch").rglob("page-*.*")) == []
+
+
+async def test_younganimal_work_ticket_waits_for_delayed_initial_hydration(
+    browser_page, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page, ticket_gate=True, ticket_hydration_delay_ms=150
+    )
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    result = await executor.execute_grant_only_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch",
+        max_pages=20,
+        now=NOW,
+    )
+
+    assert result.resource_consumed is True
+    assert await browser_page.evaluate("window.__ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert catalog.get_source(candidate.source_id).quota_started_at is not None
+
+
+async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefetch(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page,
+        ticket_gate=True,
+        ticket_prefetch_series=True,
+        native_source_slots=tuple(range(1, 17)),
+    )
+    guards = []
+    original_guard = younganimal_adapter_module.YounganimalEpisodeRouteGuard
+
+    class RecordingRouteGuard(original_guard):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            guards.append(self)
+
+    monkeypatch.setattr(
+        younganimal_adapter_module, "YounganimalEpisodeRouteGuard", RecordingRouteGuard
+    )
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 50)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch",
+        library_dir=tmp_path / "library",
+        max_pages=20,
+        now=NOW,
+    )
+
+    assert result.stop_reason == "end"
+    assert result.page_count == 16
+    assert await browser_page.evaluate("window.__ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert not any(path.startswith("/series/") for path in requested)
+    assert guards[0].same_work_prefetch_count == 1
+    assert guards[0].same_work_prefetch_paths == [f"/series/{WORK_ID}/1"]
+    assert catalog.get_source(candidate.source_id).quota_started_at is not None
+
+
+@pytest.mark.parametrize(
+    "fixture_options",
+    [
+        {"ticket_access_type": "paidContent"},
+        {"ticket_work_id": "0000000000001"},
+        {"ticket_episode_payload_id": "0000000000001"},
+        {"ticket_episode_payload_id": None},
+        {"ticket_auth_user": None},
+        {"ticket_control_variant": "hidden"},
+        {"ticket_control_variant": "disabled"},
+        {"ticket_control_variant": "paid_label"},
+        {"ticket_control_variant": "duplicate"},
+    ],
+    ids=[
+        "paid-native-state",
+        "foreign-work",
+        "wrong-native-episode",
+        "missing-native-episode",
+        "logged-out",
+        "hidden",
+        "disabled",
+        "paid-label",
+        "duplicate",
+    ],
+)
+async def test_younganimal_work_ticket_unsafe_prestate_never_clicks(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixture_options: dict[str, object]
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, ticket_gate=True, **fixture_options)
+    monkeypatch.setattr(younganimal_adapter_module, "TICKET_AUTH_READY_SECONDS", 0.2)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    with pytest.raises((CandidateExecutionError, AccessResourceUnavailableError, UnknownPageStateError)):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 0
+    assert requested.count("/api/checkout/rental") == 0
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.get_source(candidate.source_id).quota_started_at is None
+
+
+async def test_younganimal_work_ticket_unconfirmed_checkout_is_never_retried(
+    browser_page, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page, ticket_gate=True, ticket_grant_after_checkout=False
+    )
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    with pytest.raises(CandidateExecutionError, match="consumption was not confirmed"):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.get_source(candidate.source_id).quota_started_at is None
+
+
+async def test_younganimal_work_ticket_waits_for_newer_conflicting_series_response(
+    browser_page, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page,
+        ticket_gate=True,
+        ticket_post_series_delay_ms=250,
+        ticket_series_conflict_after_checkout=True,
+    )
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    with pytest.raises(CandidateExecutionError, match="consumption was not confirmed"):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert catalog.get_source(candidate.source_id).quota_started_at is None
+
+
+async def test_younganimal_work_ticket_requires_checkout_target_binding(
+    browser_page, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page,
+        ticket_gate=True,
+        ticket_checkout_target_id="0000000000001",
+    )
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    with pytest.raises(CandidateExecutionError, match="consumption was not confirmed"):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert catalog.get_source(candidate.source_id).quota_started_at is None
+
+
+async def test_younganimal_work_ticket_rejects_replaced_retained_control_before_click(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, ticket_gate=True)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+    original_match = YounganimalAdapter._retained_ticket_control_matches
+
+    async def replace_before_identity_check(adapter, handle, *, expected_classes):
+        await browser_page.evaluate("""() => {
+          const button = document.querySelector('div.ep-main-content.mode-charge > div.ep-charge > div.ep-charge-act > button[data-e2e="wfRead"]');
+          button.replaceWith(button.cloneNode(true));
+        }""")
+        return await original_match(
+            adapter, handle, expected_classes=expected_classes
+        )
+
+    monkeypatch.setattr(
+        YounganimalAdapter,
+        "_retained_ticket_control_matches",
+        replace_before_identity_check,
+    )
+    with pytest.raises(AccessResourceUnavailableError, match="work_ticket_control_changed_before_action"):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 0
+    assert requested.count("/api/checkout/rental") == 0
+    assert catalog.get_source(candidate.source_id).quota_started_at is None
+
+
+@pytest.mark.parametrize("status", [403, 429])
+async def test_younganimal_work_ticket_rechecks_access_stop_before_latch(
+    browser_page,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    status: int,
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, ticket_gate=True)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+    original_match = YounganimalAdapter._retained_ticket_control_matches
+
+    async def record_late_access_stop(adapter, handle, *, expected_classes):
+        matched = await original_match(
+            adapter, handle, expected_classes=expected_classes
+        )
+        if matched:
+            adapter._access_stop = {
+                "host": "younganimal.com",
+                "path": "/api/episodes/" + EPISODE_ID,
+                "status": status,
+            }
+        return matched
+
+    monkeypatch.setattr(
+        YounganimalAdapter,
+        "_retained_ticket_control_matches",
+        record_late_access_stop,
+    )
+    with pytest.raises(CandidateExecutionError, match=f"status={status}"):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert await browser_page.evaluate("window.__ticketClicks") == 0
+    assert requested.count("/api/checkout/rental") == 0
+    assert catalog.get_source(candidate.source_id).quota_started_at is None
+
+
+async def test_younganimal_work_ticket_click_timeout_after_dispatch_is_reconciled_once(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, ticket_gate=True)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+    original_click = ElementHandle.click
+
+    async def click_then_timeout(handle, *args, **kwargs):
+        await original_click(handle, *args, **kwargs)
+        raise PlaywrightTimeoutError("synthetic click timeout after checkout dispatch")
+
+    monkeypatch.setattr(ElementHandle, "click", click_then_timeout)
+    result = await executor.execute_grant_only_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch",
+        max_pages=20,
+        now=NOW,
+    )
+
+    assert result.resource_consumed is True
+    assert await browser_page.evaluate("window.__ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert catalog.get_source(candidate.source_id).quota_started_at is not None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+
+
+async def test_younganimal_work_ticket_route_drift_after_proof_keeps_consumption_pending(
+    browser_page, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page, ticket_gate=True, ticket_route_drift_after_checkout=True
+    )
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    with pytest.raises(CandidateExecutionError, match="off-target route|left the target route") as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert raised.value.resource_consumed is True
+    assert requested.count("/api/checkout/rental") == 1
+    assert not any(path.startswith("/series/") for path in requested)
+    assert catalog.get_source(candidate.source_id).quota_started_at is not None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+
+
+async def test_younganimal_confirmed_ticket_is_persisted_when_viewer_initialization_fails(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, ticket_gate=True)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    async def fail_viewer(_adapter, _page):
+        raise PageChangeTimeoutError("synthetic viewer failure after the ticket grant")
+
+    monkeypatch.setattr(YounganimalAdapter, "_wait_for_viewer_ready", fail_viewer)
+    with pytest.raises(CandidateExecutionError, match="synthetic viewer failure"):
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert requested.count("/api/checkout/rental") == 1
+    assert catalog.get_source(candidate.source_id).quota_started_at is not None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+    assert catalog.list_artifacts(item_id=candidate.item_id) == []
+
+
+async def test_younganimal_confirmed_ticket_is_persisted_when_batch_is_cancelled(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, ticket_gate=True)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    async def cancel_viewer(_adapter, _page):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(YounganimalAdapter, "_wait_for_viewer_ready", cancel_viewer)
+    with pytest.raises(BatchInterruptedError) as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert raised.value.resource_consumed is True
+    assert requested.count("/api/checkout/rental") == 1
+    assert catalog.get_source(candidate.source_id).quota_started_at is not None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+
+
+async def test_younganimal_confirmed_ticket_is_persisted_when_click_is_cancelled_after_action(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(browser_page, ticket_gate=True)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+    original_click = ElementHandle.click
+
+    async def click_then_cancel(handle, *args, **kwargs):
+        await original_click(handle, *args, **kwargs)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(ElementHandle, "click", click_then_cancel)
+    with pytest.raises(BatchInterruptedError) as raised:
+        await executor.execute_candidate(
+            browser_page,
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library",
+            max_pages=20,
+            now=NOW,
+        )
+
+    assert raised.value.resource_consumed is True
+    assert await browser_page.evaluate("window.__ticketClicks") == 1
+    assert requested.count("/api/checkout/rental") == 1
+    assert catalog.get_source(candidate.source_id).quota_started_at is not None
+    assert catalog.get_item(candidate.item_id).status == "pending"
+
+
+async def test_younganimal_existing_ticket_grant_is_nonconsuming_for_normal_batch(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    requested = await _install_fixture(
+        browser_page,
+        ticket_gate=True,
+        ticket_initial_access=True,
+        native_source_slots=tuple(range(1, 17)),
+    )
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 50)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
+    monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_POLL_MS", 20)
+    monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+
+    result = await executor.execute_candidate(
+        browser_page,
+        candidate,
+        output_root=tmp_path / "batch",
+        library_dir=tmp_path / "library",
+        max_pages=20,
+        now=NOW,
+    )
+
+    assert result.page_count == 16
+    assert await browser_page.evaluate("window.__ticketClicks") == 0
+    assert requested.count("/api/checkout/rental") == 0
+    assert catalog.get_item(candidate.item_id).status == "completed"
+    source = catalog.get_source(candidate.source_id)
+    assert source.quota_started_at is None
 
 
 async def test_younganimal_direct_batch_rejects_stale_free_row_before_capture_or_artifact(
@@ -2166,7 +2832,6 @@ async def test_younganimal_manual_entry_checks_reader_gate_without_listing_navig
     with pytest.raises(UnknownPageStateError, match="direct access is blocked"):
         await adapter.initialize(browser_page)
     assert _content_document_paths(requested) == [f"/episodes/{EPISODE_ID}"]
-
 
 
 async def test_younganimal_canvas_mutation_fails_without_runner_fallback_or_saved_page(

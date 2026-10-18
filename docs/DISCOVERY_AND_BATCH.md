@@ -36,9 +36,17 @@ an incomplete listing appear complete.
 `YounganimalSitePolicy` exposes one `work_ticket` pass with work scope and a
 limit of one ticket per work. A consumed ticket starts a local minimum 23-hour
 same-work cooldown; a longer configured interval is honored. Free and active
-rental sources remain non-consuming `direct`. The new source classification is
-implemented in Discovery and SitePolicy; the separate Younganimal Batch entry
-click and same-Page Viewer handoff remain gated on the later adapter phase.
+rental sources remain non-consuming `direct`. The source classification is
+implemented in Discovery and SitePolicy.
+The Younganimal adapter now implements the explicit `quota + work_ticket`
+entry and grant-only path locally: it uses the exact Catalog episode URL,
+requires fresh authenticated work/episode state and one trusted wait-free
+control, and confirms use with the observed target-bound checkout plus native
+false-to-true state. Normal Batch then keeps the same Page for the existing
+Viewer/Capture path; grant-only records the use and leaves the Item pending.
+This Phase 03 synthetic implementation awaits independent review and Phase 04
+live CLI verification. No shared Core, Catalog schema, or resource orchestration
+change was made.
 
 Incremental refreshes every row in the validated requested scope so old access
 changes are not hidden by a newest-known streak. This uses the existing stop

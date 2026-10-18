@@ -1,6 +1,6 @@
 # 11. Younganimal current implementation
 
-## Current verification snapshot (2026-10-12)
+## Current verification snapshot (2026-10-18)
 
 Rental Discovery and direct reader entry are supported. Full live Discovery of
 the supplied work enumerated six public positions and selected three current
@@ -17,9 +17,9 @@ episode `856137d88753b` / work `8246f8b8b2e6c`. The exact wait-free control,
 same-row `waitAndFree` false-to-true transition, target-bound successful
 checkout response, and same-Page ready Viewer were independently adjudicated
 as one observed resource use. No balance-delta claim was made. The work remains
-under its local 23-hour cooldown until `2026-10-19T05:05:50.550591Z`. The
-current Phase 02 listing observer recognizes authenticated native ticket state;
-the Batch ticket entry path is not yet implemented.
+under its local 23-hour cooldown until `2026-10-19T05:05:50.550591Z`. The Phase 02 listing observer recognizes authenticated native ticket state,
+and the site-local Phase 03 adapter now implements `quota + work_ticket` Batch
+entry and grant-only without a shared Core change. Synthetic tests pass and Phases 02-03 passed independent review; Phase 04 live CLI verification remains pending.
 
 This target proved the additional `top_empty_no_pr` layout: the positive
 `mode-has-top-emptypage` root flag, one exact empty/no-canvas leading wrapper at
@@ -177,9 +177,22 @@ Discovery.
 
 The Younganimal Policy exposes one `work_ticket` resource pass scoped to a work,
 with quota limit one and a local minimum 23-hour cooldown after observed
-consumption. A longer configured cooldown is honored. Batch ticket entry and
-grant-only execution remain pending Phase 03; no source-specific ticket click is
-yet wired to the adapter.
+consumption. A longer configured cooldown is honored. The adapter supports only
+explicit quota/work_ticket entry: it verifies the canonical target, exact work
+header, positive auth and current native `waitAndFree` state before considering
+one exact free control. Already-active grants are non-consuming direct access
+in normal Batch and skip grant-only. A single retained control is clicked once
+after a trial and final same-Page checks; repeated attempts are forbidden.
+Consumption is exposed immediately after a post-click target-bound successful
+checkout plus the exact same-work/episode native false-to-true transition. A
+valid positive native timer supplies a conservative expiry; otherwise expiry is
+unknown. Normal Batch hands that same Page to the unchanged Viewer/Capture/END/ZIP
+flow; grant-only creates no capture/package and leaves the Item pending. The
+route guard aborts and records recognized same-work read-only RSC GET prefetches
+without failing the episode run; other series routes, off-target navigation,
+unexpected subframe navigation, and unknown RSC routes remain fatal. Immediately
+before the action latch, both route evidence and recorded 403/429 access stops
+are checked again. Phase 03 independent review passed; live CLI checks are reserved for Phase 04.
 Full Discovery buffers before yielding, so an incomplete
 traversal cannot mark unseen sources unavailable. Maximums are 100 ranges and
 3,000 rows.
@@ -332,11 +345,7 @@ layout, pixel, cleanup, and whole-spread gates remain intact.
 The preceding free-only status was accurate on 2026-10-12. On 2026-10-18, one
 bounded authorized research action confirmed the exact wait-free control,
 work-bound access transition, target-bound successful checkout response, and
-same-Page Viewer readiness; one ticket use is recorded above. This did not wire
-ticket entry into Batch. The production wait-free adapter path and grant-only
-flow remain pending the current Younganimal work-ticket Phase 03/04 gates. The
-full repository suite was not run for the current site-local Discovery/Policy
-change.
+same-Page Viewer readiness; one ticket use is recorded above. The production work-ticket entry now uses this observed control/API/state contract; it has not consumed a second ticket. Phase 03's synthetic same-Page and grant-only paths passed independent review. Phase 04 live CLI verification remains pending. The full repository suite was not run.
 
 ## Historical native geometry diagnostic (2026-10-11)
 

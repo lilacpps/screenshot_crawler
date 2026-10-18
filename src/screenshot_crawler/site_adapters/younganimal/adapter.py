@@ -9,19 +9,21 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
+from playwright.async_api import ElementHandle, Locator, Page
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Locator, Page
 
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.capture import CaptureResult
 from screenshot_crawler.core.errors import (
+    AccessConsumptionUnconfirmedError,
+    AccessResourceUnavailableError,
     PageChangeTimeoutError,
     UnknownPageStateError,
     UnsupportedAccessStrategyError,
 )
 from screenshot_crawler.core.models import AccessStrategy, ContentContext, ContentIdentity
 from screenshot_crawler.core.state import PageState
-from screenshot_crawler.site_adapters.base import SiteAdapter
+from screenshot_crawler.site_adapters.base import AccessConsumption, SiteAdapter
 from screenshot_crawler.site_adapters.younganimal.access import (
     YOUNGANIMAL_RELEVANT_HOSTS,
     younganimal_access_profile,
@@ -39,6 +41,11 @@ from screenshot_crawler.site_adapters.younganimal.discovery import (
     canonical_younganimal_episode_url,
     parse_younganimal_episode_url,
     parse_younganimal_work_url,
+)
+from screenshot_crawler.site_adapters.younganimal.live_access import (
+    NativeAccessState,
+    YounganimalEpisodeRouteGuard,
+    YounganimalLiveAccessObserver,
 )
 from screenshot_crawler.site_adapters.younganimal.native_capture import (
     COLLECT_CAPTURE_SCRIPT as COLLECT_NATIVE_CAPTURE_SCRIPT,
@@ -67,15 +74,20 @@ OBSERVATION_TIMEOUT_SECONDS = 4.0
 INITIALIZE_TIMEOUT_MS = 240_000
 VIEWER_READY_TIMEOUT_MS = 20_000
 VIEWER_READY_POLL_MS = 250
+TICKET_AUTH_READY_SECONDS = 8.0
+TICKET_RECONCILIATION_SECONDS = 5.0
+TICKET_CONTROL_SELECTOR = (
+    "div.ep-main-content.mode-charge > div.ep-charge > div.ep-charge-act "
+    '> button[data-e2e="wfRead"]'
+)
+TICKET_CONTROL_LABEL = "\u5f85\u3064\u3068\u7121\u6599\u3067\u8aad\u3080"
 INITIAL_QUIET_MS = 1_000
 INITIAL_QUIET_DEADLINE_MS = 5_000
 INITIAL_QUIET_POLL_MS = 100
 PAGE_CHANGE_TIMEOUT_MS = 12_000
 PAGE_CHANGE_POLL_MS = 100
 MAX_CAPTURE_TOTAL_BYTES = 16_000_000
-EXTERNAL_ID_PATTERN = re.compile(
-    r"^(?P<work>[0-9a-f]{13}):(?P<episode>[0-9a-f]{13})$"
-)
+EXTERNAL_ID_PATTERN = re.compile(r"^(?P<work>[0-9a-f]{13}):(?P<episode>[0-9a-f]{13})$")
 _NATIVE_VERIFY_REASONS = frozenset(
     {
         "native_proof_missing",
@@ -94,11 +106,34 @@ _NATIVE_VERIFY_REASONS = frozenset(
 )
 _NATIVE_SAFE_CLASS_FLAGS = frozenset(
     {
-        "-cv", "-cv-page", "-cv-page-canvas", "-cv-splash", "mode-ci-page", "mode-dir-rtl",
-        "mode-empty", "mode-first-page", "mode-good", "mode-h", "mode-has-top-emptypage",
-        "mode-hide", "mode-last", "mode-last-page", "mode-lang-ja", "mode-loaded",
-        "mode-loading", "mode-nav-dir-rtl", "mode-nav-open", "mode-pr", "mode-req-render",
-        "mode-pr-page", "mode-rendered", "mode-scroll-bottom", "mode-spread", "mode-top-pr", "mode-top-pr-page", "mode-ci",
+        "-cv",
+        "-cv-page",
+        "-cv-page-canvas",
+        "-cv-splash",
+        "mode-ci-page",
+        "mode-dir-rtl",
+        "mode-empty",
+        "mode-first-page",
+        "mode-good",
+        "mode-h",
+        "mode-has-top-emptypage",
+        "mode-hide",
+        "mode-last",
+        "mode-last-page",
+        "mode-lang-ja",
+        "mode-loaded",
+        "mode-loading",
+        "mode-nav-dir-rtl",
+        "mode-nav-open",
+        "mode-pr",
+        "mode-req-render",
+        "mode-pr-page",
+        "mode-rendered",
+        "mode-scroll-bottom",
+        "mode-spread",
+        "mode-top-pr",
+        "mode-top-pr-page",
+        "mode-ci",
     }
 )
 
@@ -290,6 +325,7 @@ def _native_failure_details(value: object) -> dict[str, object]:
         "mutations": mutations,
     }
 
+
 EPISODE_SCOPE_SCRIPT = r"""() => {
   const headers = [...document.querySelectorAll('#xHeader a.ep-h-main-h-series')];
   const headings = [...document.querySelectorAll('#xHeader h1')];
@@ -314,6 +350,62 @@ ENTRY_BLOCK_SCRIPT = r"""() => {
   const controls = [...document.querySelectorAll('.ep-main-content button, .ep-main-content a, #comici-viewer button, #comici-viewer a')];
   return charge.some(visible) || controls.some(node => visible(node) &&
     /すぐ.*無料.*読む|待つと.*無料.*読む|この話.*レンタル/.test((node.innerText || '').replace(/\s+/g, ' ').trim()));
+}"""
+
+TICKET_CONTROL_SNAPSHOT_SCRIPT = r"""({episodeId, workId}) => {
+  const all = selector => [...document.querySelectorAll(selector)];
+  const visible = node => {
+    if (!node) return false;
+    const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' &&
+      Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0 &&
+      node.checkVisibility({checkVisibilityCSS: true, checkOpacity: true});
+  };
+  const buttons = all('button[data-e2e="wfRead"]');
+  const button = buttons.length === 1 ? buttons[0] : null;
+  const mains = all('div.ep-main-content.mode-charge');
+  const charges = mains.length === 1 ? [...mains[0].children].filter(node =>
+    node.classList.contains('ep-charge')) : [];
+  const charge = charges.length === 1 ? charges[0] : null;
+  const acts = charge ? [...charge.children].filter(node =>
+    node.classList.contains('ep-charge-act')) : [];
+  const action = button?.closest('.ep-charge-act') ?? null;
+  const actionControls = charge ? [...charge.querySelectorAll('button,a')].filter(visible) : [];
+  const otherActionsKnown = actionControls.filter(node => node !== button).every(node =>
+    node.matches('button[data-e2e="epBulkRentTrig"].mode-alt'));
+  const rect = button?.getBoundingClientRect();
+  const center = rect ? document.elementFromPoint(rect.left + rect.width / 2,
+    rect.top + rect.height / 2) : null;
+  const workLinks = all('#xHeader a.ep-h-main-h-series');
+  const logins = all('a[href]').filter(node => {
+    const href = node.getAttribute('href') || '';
+    return visible(node) && /login|signin|sign-in/i.test(href);
+  });
+  const actionClasses = button ? [...button.classList].sort() : [];
+  return {
+    routeExact: location.href === `https://younganimal.com/episodes/${episodeId}`,
+    workLinkCount: workLinks.length,
+    workHref: workLinks.length === 1 ? workLinks[0].href : null,
+    chargeCount: mains.length,
+    chargeContainerCount: charges.length,
+    actionCount: acts.length,
+    buttonCount: buttons.length,
+    buttonScoped: !!button && button.matches(
+      'div.ep-main-content.mode-charge > div.ep-charge > div.ep-charge-act > button[data-e2e="wfRead"]') &&
+      !!action && acts.includes(action) && action.parentElement === charge,
+    label: button ? (button.innerText || '').replace(/\s+/g, ' ').trim() : null,
+    classes: actionClasses,
+    visible: visible(button),
+    enabled: !!button && !button.disabled && button.getAttribute('aria-disabled') !== 'true',
+    covered: !!button && visible(button) && !(center && (center === button || button.contains(center))),
+    visibleOtherActionCount: actionControls.filter(node => node !== button).length,
+    otherActionsKnown,
+    loginCount: logins.length,
+    hasCost: !!button && ['data-price','data-cost','data-buy-price'].some(name => button.hasAttribute(name)),
+    hasInlineHandler: !!button && button.hasAttribute('onclick'),
+    workMatches: workLinks.length === 1 && workLinks[0].href ===
+      `https://younganimal.com/series/${workId}`
+  };
 }"""
 
 
@@ -354,12 +446,22 @@ class YounganimalAdapter(SiteAdapter):
         self._initial_canvas_quiet: dict[str, object] | None = None
         self._access_stop: dict[str, object] | None = None
         self._response_listener = None
+        self._access_strategy: AccessStrategy = "auto"
+        self._quota_resource: str | None = None
+        self._ticket_observer: YounganimalLiveAccessObserver | None = None
+        self._ticket_route_guard: YounganimalEpisodeRouteGuard | None = None
+        self._ticket_action_attempted = False
+        self._ticket_entry_only = False
+        self._access_consumption = AccessConsumption()
 
     def get_access_profile(self) -> AccessProfile:
         return younganimal_access_profile()
 
     def get_initialize_timeout_ms(self, default_ms: int) -> int:
         return max(default_ms, INITIALIZE_TIMEOUT_MS)
+
+    def get_access_consumption(self) -> AccessConsumption:
+        return self._access_consumption
 
     async def prepare_page(self, page: Page) -> None:
         try:
@@ -387,16 +489,58 @@ class YounganimalAdapter(SiteAdapter):
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
         del page
+        self._access_strategy = access_strategy
         if self._batch_expected_work_id is not None:
-            if access_strategy != "direct":
+            if access_strategy not in {"direct", "quota"}:
                 raise UnsupportedAccessStrategyError(
-                    "Younganimal configured Batch currently supports access_strategy='direct' only"
+                    "Younganimal configured Batch supports direct or quota access only"
                 )
             return
         if access_strategy != "auto":
             raise UnsupportedAccessStrategyError(
                 "Younganimal manual crawl currently supports access_strategy='auto' only"
             )
+
+    async def configure_quota_resource(self, page: Page, quota_resource: str | None) -> None:
+        if self._access_strategy != "quota":
+            if quota_resource is not None:
+                raise UnsupportedAccessStrategyError(
+                    "Younganimal work_ticket requires access_strategy='quota'"
+                )
+            return
+        if quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "Younganimal quota access requires quota_resource='work_ticket'"
+            )
+        if (
+            self._batch_expected_work_id is None
+            or self._batch_expected_episode_id is None
+            or self._opaque_work_key is None
+        ):
+            raise UnknownPageStateError(
+                "Younganimal work_ticket requires a configured Catalog target identity"
+            )
+        if self._ticket_observer is not None or self._ticket_route_guard is not None:
+            raise UnknownPageStateError("Younganimal work_ticket entry is already configured")
+        self._quota_resource = quota_resource
+        self._access_consumption = AccessConsumption()
+        self._ticket_action_attempted = False
+        observer = YounganimalLiveAccessObserver(
+            work_id=self._batch_expected_work_id,
+            episode_id=self._batch_expected_episode_id,
+        )
+        observer.attach(page)
+        route_guard = YounganimalEpisodeRouteGuard(
+            work_id=self._batch_expected_work_id,
+            episode_id=self._batch_expected_episode_id,
+        )
+        try:
+            await route_guard.attach(page)
+        except BaseException:
+            await observer.close()
+            raise
+        self._ticket_observer = observer
+        self._ticket_route_guard = route_guard
 
     async def configure_target_identity(self, external_id: str, work_key: str) -> None:
         match = EXTERNAL_ID_PATTERN.fullmatch(external_id)
@@ -435,10 +579,14 @@ class YounganimalAdapter(SiteAdapter):
 
     async def initialize(self, page: Page) -> None:
         if self._work_id is None or self._target_url is None or self._episode_id is None:
-            raise UnknownPageStateError("Younganimal crawl target was not validated before navigation")
+            raise UnknownPageStateError(
+                "Younganimal crawl target was not validated before navigation"
+            )
         expected_initial_url = self._target_url
         if page.url != expected_initial_url:
-            raise UnknownPageStateError("Younganimal initial navigation left its configured entry route")
+            raise UnknownPageStateError(
+                "Younganimal initial navigation left its configured entry route"
+            )
         self._work_title = None
         self._episode_title = None
         self._target_position = None
@@ -454,6 +602,8 @@ class YounganimalAdapter(SiteAdapter):
         self._native_cleanup_token = None
         self._capture_diagnostics = {"mode": "not_started"}
         self._initial_canvas_quiet = None
+        if self._access_strategy == "quota":
+            await self._initialize_work_ticket_entry(page, entry_only=False)
         await self._verify_episode_entry(page)
         observation = await self._wait_for_viewer_ready(page)
         self._frozen_viewer_mapping = self._viewer_mapping(observation)
@@ -467,11 +617,13 @@ class YounganimalAdapter(SiteAdapter):
             first_slots = tuple(self._body_slots[:2])
             first = await self._wait_for_observation(
                 page,
-                lambda row: row.layout_variant == observation.layout_variant
-                and row.page_state == "content"
-                and row.seek_value == first_seek
-                and row.active_slots == first_slots
-                and row.ready_slots == first_slots,
+                lambda row: (
+                    row.layout_variant == observation.layout_variant
+                    and row.page_state == "content"
+                    and row.seek_value == first_seek
+                    and row.active_slots == first_slots
+                    and row.ready_slots == first_slots
+                ),
                 reason="Younganimal top-empty initial blank did not advance to its first body spread",
                 timeout_ms=PAGE_CHANGE_TIMEOUT_MS,
                 include_pixels=True,
@@ -480,10 +632,12 @@ class YounganimalAdapter(SiteAdapter):
             first_slots = (self._body_slots[0],)
             first = await self._wait_for_observation(
                 page,
-                lambda row: row.page_state == "content"
-                and row.seek_value == row.seek_max
-                and row.active_slots == first_slots
-                and row.ready_slots == row.active_slots,
+                lambda row: (
+                    row.page_state == "content"
+                    and row.seek_value == row.seek_max
+                    and row.active_slots == first_slots
+                    and row.ready_slots == row.active_slots
+                ),
                 reason="Younganimal viewer did not return to its first rendered body canvas",
                 timeout_ms=PAGE_CHANGE_TIMEOUT_MS,
                 include_pixels=True,
@@ -491,10 +645,378 @@ class YounganimalAdapter(SiteAdapter):
         await self._wait_for_initial_quiet(page, first)
         first_canvas = first.raw["slots"][first.active_slots[0]]["canvas"]
         if not isinstance(first_canvas, dict):
-            raise UnknownPageStateError("Younganimal first body canvas disappeared after quiet wait")
+            raise UnknownPageStateError(
+                "Younganimal first body canvas disappeared after quiet wait"
+            )
         self._rendered_dimensions = (first_canvas["width"], first_canvas["height"])
 
+    async def initialize_entry_only(self, page: Page) -> None:
+        """Confirm a work-ticket grant without initializing or capturing the Viewer."""
+
+        if self._access_strategy != "quota" or self._quota_resource != "work_ticket":
+            raise UnsupportedAccessStrategyError(
+                "Younganimal entry-only execution requires quota/work_ticket"
+            )
+        if (
+            self._work_id is None
+            or self._target_url is None
+            or self._episode_id is None
+            or page.url != self._target_url
+        ):
+            raise AccessResourceUnavailableError("younganimal_discovery_refresh_required")
+        self._ticket_entry_only = True
+        await self._initialize_work_ticket_entry(page, entry_only=True)
+        await self._verify_episode_header(page)
+        self._raise_if_ticket_route_failed(after_action=True)
+        await self._close_ticket_observer()
+        await self._close_ticket_route_guard()
+
+    async def _close_ticket_observer(self) -> None:
+        observer, self._ticket_observer = self._ticket_observer, None
+        if observer is not None:
+            await observer.close()
+
+    async def _close_ticket_route_guard(self) -> None:
+        guard, self._ticket_route_guard = self._ticket_route_guard, None
+        if guard is not None:
+            await guard.close()
+
+    def _raise_if_ticket_route_failed(self, *, after_action: bool) -> None:
+        guard = self._ticket_route_guard
+        if guard is None:
+            return
+        try:
+            guard.raise_if_failed()
+        except RuntimeError as exc:
+            if after_action or self._ticket_action_attempted:
+                raise AccessConsumptionUnconfirmedError(
+                    "Younganimal ticket entry blocked an off-target route; no retry is allowed"
+                ) from exc
+            raise UnknownPageStateError(
+                "Younganimal ticket entry blocked an off-target route"
+            ) from exc
+
+    async def _verify_episode_header(self, page: Page) -> None:
+        target_url, work_id = self._target_url, self._work_id
+        if target_url is None or work_id is None or page.url != target_url:
+            raise UnknownPageStateError(
+                "Younganimal entry route differs from its exact target episode"
+            )
+        try:
+            await page.wait_for_function(
+                "() => document.querySelectorAll('#xHeader a.ep-h-main-h-series').length === 1",
+                timeout=VIEWER_READY_TIMEOUT_MS,
+            )
+            raw = await asyncio.wait_for(
+                page.evaluate(EPISODE_SCOPE_SCRIPT), timeout=OBSERVATION_TIMEOUT_SECONDS
+            )
+        except (PlaywrightError, TimeoutError) as exc:
+            self._raise_if_access_stopped()
+            self._raise_if_ticket_route_failed(after_action=self._ticket_action_attempted)
+            raise UnknownPageStateError("Younganimal episode header did not become ready") from exc
+        self._raise_if_access_stopped()
+        self._raise_if_ticket_route_failed(after_action=self._ticket_action_attempted)
+        if (
+            not isinstance(raw, dict)
+            or raw.get("route") != target_url
+            or raw.get("workLinkCount") != 1
+            or raw.get("workHref") != f"{BASE_URL}/series/{work_id}"
+            or not isinstance(raw.get("workTitle"), str)
+            or not raw["workTitle"].strip()
+        ):
+            raise UnknownPageStateError(
+                "Younganimal episode header does not prove the configured work"
+            )
+        self._work_title = raw["workTitle"]
+        self._episode_title = raw.get("episodeTitle") or None
+
+    async def _read_ticket_control_snapshot(self, page: Page) -> dict[str, object]:
+        if self._episode_id is None or self._work_id is None:
+            raise UnknownPageStateError("Younganimal ticket target identity is incomplete")
+        try:
+            snapshot = await asyncio.wait_for(
+                page.evaluate(
+                    TICKET_CONTROL_SNAPSHOT_SCRIPT,
+                    {"episodeId": self._episode_id, "workId": self._work_id},
+                ),
+                timeout=OBSERVATION_TIMEOUT_SECONDS,
+            )
+        except (PlaywrightError, TimeoutError) as exc:
+            raise UnknownPageStateError(
+                "Younganimal work-ticket control could not be inspected"
+            ) from exc
+        if not isinstance(snapshot, dict):
+            raise UnknownPageStateError("Younganimal work-ticket control snapshot is malformed")
+        if (
+            snapshot.get("routeExact") is not True
+            or snapshot.get("workLinkCount") != 1
+            or snapshot.get("workMatches") is not True
+        ):
+            raise AccessResourceUnavailableError("younganimal_discovery_refresh_required")
+        return snapshot
+
+    @staticmethod
+    def _validate_ticket_control_snapshot(snapshot: dict[str, object]) -> list[str]:
+        classes = snapshot.get("classes")
+        if (
+            snapshot.get("chargeCount") != 1
+            or snapshot.get("chargeContainerCount") != 1
+            or snapshot.get("actionCount", 0) < 1
+            or snapshot.get("buttonCount") != 1
+            or snapshot.get("buttonScoped") is not True
+            or snapshot.get("label") != TICKET_CONTROL_LABEL
+            or snapshot.get("visible") is not True
+            or snapshot.get("enabled") is not True
+            or snapshot.get("covered") is not False
+            or snapshot.get("loginCount") != 0
+            or snapshot.get("otherActionsKnown") is not True
+            or snapshot.get("hasCost") is not False
+            or snapshot.get("hasInlineHandler") is not False
+            or not isinstance(classes, list)
+            or "mode-waitfree" not in classes
+            or not all(isinstance(item, str) for item in classes)
+        ):
+            raise AccessResourceUnavailableError("work_ticket_unavailable")
+        return list(classes)
+
+    async def _retained_ticket_control_matches(
+        self, handle: ElementHandle, *, expected_classes: list[str]
+    ) -> bool:
+        try:
+            return await handle.evaluate(
+                """(node, args) => {
+                  const {episodeId, workId, expectedClasses} = args;
+                  const all = [...document.querySelectorAll('button[data-e2e="wfRead"]')];
+                  const visible = element => {
+                    if (!element) return false;
+                    const style = getComputedStyle(element), rect = element.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' &&
+                      Number(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0 &&
+                      element.checkVisibility({checkVisibilityCSS: true, checkOpacity: true});
+                  };
+                  const workLinks = [...document.querySelectorAll('#xHeader a.ep-h-main-h-series')];
+                  const action = node.closest('.ep-charge-act');
+                  const charge = action?.parentElement ?? null;
+                  const main = charge?.parentElement ?? null;
+                  const rect = node.getBoundingClientRect();
+                  const center = document.elementFromPoint(rect.left + rect.width / 2,
+                    rect.top + rect.height / 2);
+                  return location.href === `https://younganimal.com/episodes/${episodeId}` &&
+                    workLinks.length === 1 && workLinks[0].href ===
+                      `https://younganimal.com/series/${workId}` &&
+                    node.isConnected && all.length === 1 && all[0] === node &&
+                    node.matches('div.ep-main-content.mode-charge > div.ep-charge > ' +
+                      'div.ep-charge-act > button[data-e2e="wfRead"]') &&
+                    (node.innerText || '').replace(/\\s+/g, ' ').trim() ===
+                      '待つと無料で読む' &&
+                    visible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true' &&
+                    !(center && center !== node && !node.contains(center)) &&
+                    !!action && action.parentElement === charge &&
+                    charge.classList.contains('ep-charge') && !!main &&
+                    main.classList.contains('ep-main-content') &&
+                    main.classList.contains('mode-charge') &&
+                    !['data-price','data-cost','data-buy-price'].some(name => node.hasAttribute(name)) &&
+                    !node.hasAttribute('onclick') &&
+                    JSON.stringify([...node.classList].sort()) ===
+                      JSON.stringify([...expectedClasses].sort());
+                }""",
+                {
+                    "episodeId": self._episode_id,
+                    "workId": self._work_id,
+                    "expectedClasses": expected_classes,
+                },
+            )
+        except (PlaywrightError, TypeError):
+            return False
+
+    async def _initialize_work_ticket_entry(self, page: Page, *, entry_only: bool) -> None:
+        """Use one retained exact control and one observed resource transition."""
+
+        observer = self._ticket_observer
+        if (
+            self._access_strategy != "quota"
+            or self._quota_resource != "work_ticket"
+            or self._work_id is None
+            or self._episode_id is None
+            or self._target_url is None
+            or observer is None
+            or self._ticket_route_guard is None
+        ):
+            raise UnsupportedAccessStrategyError("Younganimal work_ticket entry is not configured")
+        if self._ticket_action_attempted:
+            raise AccessConsumptionUnconfirmedError(
+                "Younganimal work-ticket action was already attempted; retry is forbidden"
+            )
+        try:
+            self._raise_if_ticket_route_failed(after_action=False)
+            if page.url != self._target_url:
+                raise AccessResourceUnavailableError("younganimal_discovery_refresh_required")
+            await self._verify_episode_header(page)
+            if not await observer.wait_until_current_observed(timeout=TICKET_AUTH_READY_SECONDS):
+                raise UnknownPageStateError(
+                    "Younganimal positive authentication and current episode state were not observed"
+                )
+            if not await observer.wait_for_series_observations(
+                post_click=False, timeout=TICKET_AUTH_READY_SECONDS
+            ):
+                raise UnknownPageStateError(
+                    "Younganimal work access observation is incomplete or conflicting"
+                )
+            before = observer.pre_click_state()
+            self._classify_work_ticket_prestate(before, entry_only=entry_only)
+            assert before is not None
+            if before.has_access is True:
+                # Active manual grants remain ordinary non-consuming access.
+                return
+
+            snapshot = await self._read_ticket_control_snapshot(page)
+            classes = self._validate_ticket_control_snapshot(snapshot)
+            locator = page.locator(TICKET_CONTROL_SELECTOR)
+            if (
+                await locator.count() != 1
+                or not await locator.is_visible()
+                or not await locator.is_enabled()
+            ):
+                raise AccessResourceUnavailableError("work_ticket_unavailable")
+            handle = await locator.element_handle()
+            if handle is None:
+                raise AccessResourceUnavailableError("work_ticket_unavailable")
+            try:
+                await locator.click(trial=True, timeout=1_000)
+            except PlaywrightError as exc:
+                raise AccessResourceUnavailableError("work_ticket_unavailable") from exc
+
+            if not await observer.request_fresh_readonly_state(
+                page, timeout=TICKET_AUTH_READY_SECONDS
+            ):
+                raise UnknownPageStateError(
+                    "Younganimal fresh authentication/current state did not settle"
+                )
+            if not await observer.wait_for_series_observations(
+                post_click=False, timeout=TICKET_AUTH_READY_SECONDS
+            ):
+                raise UnknownPageStateError(
+                    "Younganimal latest work-access response did not settle before action"
+                )
+            await self._verify_episode_header(page)
+            final_snapshot = await self._read_ticket_control_snapshot(page)
+            final_classes = self._validate_ticket_control_snapshot(final_snapshot)
+            latest_before = observer.pre_click_state()
+            if (
+                latest_before is None
+                or latest_before != before
+                or final_classes != classes
+                or not await self._retained_ticket_control_matches(handle, expected_classes=classes)
+            ):
+                raise AccessResourceUnavailableError("work_ticket_control_changed_before_action")
+            # The response listener may have observed a 403/429 after the
+            # retained control was checked. Recheck both route and access-stop
+            # evidence synchronously at the final pre-latch boundary.
+            self._raise_if_access_stopped()
+            # Set both one-shot latches immediately before the only click.
+            self._ticket_action_attempted = True
+            observer.mark_click_started()
+            click_error: BaseException | None = None
+            try:
+                await handle.click(timeout=2_000, no_wait_after=True)
+            except asyncio.CancelledError as exc:
+                click_error = exc
+            except KeyboardInterrupt as exc:
+                click_error = exc
+            except Exception as exc:  # noqa: BLE001 - post-action outcome must be reconciled
+                click_error = exc
+
+            reconcile_task = asyncio.create_task(
+                observer.reconcile_consumption(before=before, timeout=TICKET_RECONCILIATION_SECONDS)
+            )
+            cancellation: asyncio.CancelledError | None = None
+            while not reconcile_task.done():
+                try:
+                    await asyncio.shield(reconcile_task)
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                    current_task = asyncio.current_task()
+                    if current_task is not None:
+                        current_task.uncancel()
+            try:
+                proof = reconcile_task.result()
+            except Exception:  # noqa: BLE001 - proof failures remain unconfirmed
+                proof = None
+            if proof is not None:
+                # Retain this synchronously before Viewer initialization can fail.
+                self._access_consumption = AccessConsumption(
+                    consumed=True,
+                    resource="work_ticket",
+                    consumed_at=proof.consumed_at,
+                    access_granted_until=proof.access_granted_until,
+                )
+            if cancellation is not None:
+                raise cancellation
+            if click_error is not None:
+                if isinstance(click_error, (asyncio.CancelledError, KeyboardInterrupt)):
+                    raise click_error
+                if proof is None:
+                    raise AccessConsumptionUnconfirmedError(
+                        "Younganimal work-ticket action outcome is unknown; retry is forbidden"
+                    ) from click_error
+            if proof is None:
+                raise AccessConsumptionUnconfirmedError(
+                    "Younganimal work-ticket consumption was not confirmed; retry is forbidden"
+                )
+            if page.url != self._target_url:
+                raise AccessConsumptionUnconfirmedError(
+                    "Younganimal work-ticket action left the target route; retry is forbidden"
+                )
+            self._raise_if_ticket_route_failed(after_action=True)
+            if entry_only:
+                await self._verify_episode_header(page)
+                try:
+                    await page.wait_for_function(
+                        """() => ![...document.querySelectorAll(
+                          '.ep-main-content.mode-charge, .ep-main-content .ep-charge')].some(node => {
+                            const rect = node.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0 &&
+                              node.checkVisibility({checkVisibilityCSS: true, checkOpacity: true});
+                          })""",
+                        timeout=VIEWER_READY_TIMEOUT_MS,
+                    )
+                except (PlaywrightError, TimeoutError) as exc:
+                    raise AccessConsumptionUnconfirmedError(
+                        "Younganimal ticket was observed but the access gate did not clear"
+                    ) from exc
+                self._raise_if_ticket_route_failed(after_action=True)
+        finally:
+            await self._close_ticket_observer()
+
+    @staticmethod
+    def _classify_work_ticket_prestate(
+        state: NativeAccessState | None, *, entry_only: bool
+    ) -> None:
+        if state is None:
+            raise UnknownPageStateError("Younganimal exact current ticket state is unknown")
+        if state.access_type != "waitAndFree":
+            raise AccessResourceUnavailableError("work_ticket_unavailable")
+        if state.has_access is True:
+            if (
+                state.remaining_state != "valid"
+                or not isinstance(state.remaining_seconds, int)
+                or state.remaining_seconds <= 0
+            ):
+                raise UnknownPageStateError(
+                    "Younganimal active ticket state has no valid positive timer"
+                )
+            if entry_only:
+                raise AccessResourceUnavailableError("work_ticket_already_granted")
+            return
+        if state.has_access is False and (
+            state.remaining_state == "missing"
+            or (state.remaining_state == "valid" and state.remaining_seconds == 0)
+        ):
+            return
+        raise UnknownPageStateError("Younganimal ungranted ticket state has a contradictory timer")
+
     def _raise_if_access_stopped(self) -> None:
+        self._raise_if_ticket_route_failed(after_action=self._ticket_action_attempted)
         if self._access_stop is not None:
             stop = self._access_stop
             raise UnknownPageStateError(
@@ -860,30 +1382,47 @@ class YounganimalAdapter(SiteAdapter):
         raise PageChangeTimeoutError(reason + detail)
 
     async def detect_state(self, page: Page) -> PageState:
+        self._raise_if_ticket_route_failed(after_action=self._ticket_action_attempted)
         if self._ended:
             return PageState.END
         observation = await self._observe(page)
-        if self._body_slots is None or observation.body_slots != self._body_slots or observation.ci_slot != self._ci_slot:
+        if (
+            self._body_slots is None
+            or observation.body_slots != self._body_slots
+            or observation.ci_slot != self._ci_slot
+        ):
             raise UnknownPageStateError("Younganimal viewer body or tail role mapping changed")
         if observation.page_state == "end":
             if self._captured_slots != list(self._body_slots):
-                raise UnknownPageStateError("Younganimal reached Last before every body slot was captured")
+                raise UnknownPageStateError(
+                    "Younganimal reached Last before every body slot was captured"
+                )
             self._ended = True
             self._capture_diagnostics["end"] = {
                 "seek_value": observation.seek_value,
                 "last_slot": (self._ci_slot + 4) if self._ci_slot is not None else None,
                 "captured_body_slots": list(self._captured_slots),
             }
+            await self._close_ticket_route_guard()
             return PageState.END
         if observation.page_state == "ad":
             if self._captured_slots != list(self._body_slots):
-                raise UnknownPageStateError("Younganimal CI/PR interstitial appeared before full body coverage")
+                raise UnknownPageStateError(
+                    "Younganimal CI/PR interstitial appeared before full body coverage"
+                )
             return PageState.AD
         if observation.ready_slots != observation.active_slots:
             return PageState.LOADING
-        expected = tuple(self._body_slots[len(self._captured_slots):len(self._captured_slots) + len(observation.active_slots)])
+        expected = tuple(
+            self._body_slots[
+                len(self._captured_slots) : len(self._captured_slots)
+                + len(observation.active_slots)
+            ]
+        )
         if observation.active_slots != expected:
-            raise UnknownPageStateError("Younganimal body pages have a gap, repeat, or unexpected spread")
+            raise UnknownPageStateError(
+                "Younganimal body pages have a gap, repeat, or unexpected spread"
+            )
         return PageState.CONTENT
 
     async def get_capture_target(self, page: Page) -> Locator:
