@@ -1,6 +1,6 @@
 # Young Animal `work_ticket` 実装 Runbook
 
-**Status:** IN PROGRESS (2026-10-18). Phases 01-03 passed independent review. Phase 04 remains partial: DD9 single-work Discovery passed, but its normal Batch attempt timed out during CDP attach before Page creation; fresh quota-to-END/ZIP is still unverified.
+**Status:** COMPLETE (2026-10-19). Phases 01-04 passed independent review. The normal quota path was verified on `849948508c8bc` / work `71460b2b6686f`: one ticket entry continued on the same Page through Capture, END, ZIP, and Catalog completion. Seven ticket uses are recorded (five original plus two of three additional authorizations); `4ba85f4c9e538` remains unopened and unused. The full repository test suite was not run. See [PROGRESS.md](PROGRESS.md) for evidence, failures, and constraints.
 **Baseline:** 着手時の `main` HEADを確認して記録する。`runbooks/younganimal-adapter/` の free/direct E2E完了実装、および `runbooks/hanayume-work-ticket/` の完了済み実装を参考にする。
 **実装ブランチ:** `main` から新規 `feat/younganimal-work-ticket` を作り、既存 `feat/younganimal-adapter` / `feat/hanayume-work-ticket` を起点にしない。`main` へ自動マージしない。
 **進捗・実測・消費数:** [PROGRESS.md](PROGRESS.md)。既存の Young Animal Adapter Runbook は歴史的記録として維持し、本機能の authority はこの新Runbookと上位仕様。
@@ -20,38 +20,33 @@
 | 消費後 | サイトが開いた同一Playwright `Page` から1ページ目→既存Younganimal Capture/END/ZIPを継続。自前の再`goto`や別Pageでの再読込は禁止 |
 | Grant-only | 同じ入場処理で使用確認・状態記録のみ。画像0、ZIP0、Item `pending` |
 | 手動消費 | Discoveryが対象話の有効な閲覧権限を観測した場合、話単位の `access_granted_until` に同期。期限内は通常Batchが `direct` |
-| 閲覧有効期間 | **Young Animalでは未実測**。花とゆめの72時間を無検証に流用しない。サイトが提示する確かな期限を優先 |
+| 閲覧有効期間 | **チケット利用後の native `timeRemainingInSeconds` を実サイトで観測済み**。観測した request start と countdown から 1 秒を差し引いた保守的 expiry を記録する。正確な server recovery 仕様は未確定。固定 72h fallback は使わない。 |
 | 候補の探索 | Catalogのみで選定。対象1話で不適格ならSKIP。作品内の別話を連続して探さない |
 | 権限外 | 課金/ポイント/コイン/別のチケット/ログイン処理へフォールバックしない |
 
 ユーザーは検証用のチケット数枚の使用を許可している。ただし必要最少枚数で段階的に検証し、何枚・どの作品/話・何時に使用したかを必ず記録する。未知の課金やログイン操作にはこの許可を拡張しない。
 
-### 現行リポジトリで確認済みの土台（2026-10-18）
+### Repository baseline at Phase 01 start (2026-10-18; historical)
 
-- `src/screenshot_crawler/site_adapters/younganimal/`: freeと閲覧中レンタルのdirect Batch、Viewer Capture/END/ZIPは実装・検証済み。`adapter.py` のconfigured Batchは現在 `direct` 限定、中央の有償/待つと無料ゲートは拒否する。
-- `site_adapters/younganimal/discovery.py`: 作品のページ一覧を全rangeで列挙し、`epListUser` と公開行を突き合わせる。`無料` と `レンタル中 閲覧期限 D日+H時間` は分類でき、`incremental_stop_decision=CONTINUE` がある。一方、待つと無料の厳密な判定は未実装。以前の大規模調査で 925話中3話のみfree、他922話はunknownだった（unknown全部をticket対象としてはならない）。
-- `site_policies/younganimal.py`: `quota` を `quota_not_supported` として除外。既存のfreeとactive-rental direct判定を壊さない。
+The following describes the pre-implementation state, not the current adapter.
+See the completion status and `PROGRESS.md` for the current implementation.
+
+- At the start, Younganimal direct Batch for free and active-rental sources plus Viewer Capture/END/ZIP were implemented. The configured Batch adapter was direct-only and the central ticket gate rejected entry.
+- At the start, Discovery traversed work listing ranges and joined `epListUser` rows with public rows. It classified exact free and active-rental labels but had no strict wait-free candidate classifier. An earlier survey found only 3 free rows among 925; unknown rows must not be treated as ticket candidates.
+- At the start, the Younganimal policy excluded `quota` as `quota_not_supported`; it already preserved free and active-rental direct classification.
 - `site_policies/hanayume.py`、`site_adapters/hanayume/adapter.py` / `discovery.py`、`runbooks/hanayume-work-ticket/`: 1作品1枚、23h cooldown、消費後同一Pageで続行、grant-only、手動使用済み話同期、安全な1回クリックの実装・検証例。
 - `batch/planner.py`: `quota_scope="work"` + `quota_limit=1` の候補抑制あり。`batch/executor.py`: local cooldown SKIP、`after_observed_consumption` 記録、grant-only entry、失敗時の消費記録あり。`cli.py`: site resource pass / `--grant-only` / 逐次実行あり。まず既存フローに載せ、Core改修は必要性を証明した場合に限る。
 
 ## 2. 禁止事項と不変条件
 
-Follow-up authorization (2026-10-18): the original five-use allowance has
-been exhausted. The user separately authorized up to one additional use on
-each exact episode URL `dd9facaba1704`, `849948508c8bc`, and
-`4ba85f4c9e538`. DD9 was inspected sequentially and its one-work Discovery
-produced one pending quota candidate; its single normal Batch attempt timed
-out during CDP attach before Page creation and used no ticket. The other two
-URLs remain uninspected. Additional resource use remains 0/3; each target still
-requires its own sequential eligibility check and independent Review/Lead
-action gate. No blanket preflight or automatic retry is allowed.
+Follow-up authorization (2026-10-18; final state 2026-10-19): the original five-use allowance was exhausted. The user separately authorized up to one additional use on each exact episode URL `dd9facaba1704`, `849948508c8bc`, and `4ba85f4c9e538`. DD9 and 849 were each handled as separate one-work Discovery/Batch candidates; both additional ticket uses were consumed, while `4ba85f4c9e538` remained unopened and unused. The fresh-quota 849 normal run passed same-Page Capture -> END -> ZIP and independent postflight. No blanket preflight or automatic retry is allowed; see `PROGRESS.md` for the per-attempt evidence.
 
 1. **Batch/Grant-onlyで作品ページ (`/series/`)、作品一覧、別話を事前crawlしない。** Discoveryコマンドでの正規の作品一覧列挙は既存仕様のまま許すが、Batchの preflight/消費直前/作品選定に流用しない。
 2. **1作品ずつ逐次完了。** work AのCatalog候補選択→ローカル判定→episode直行→クリックまたはSKIP→通常Capture/ZIPまたはgrant-only確認→close、の後に初めてwork Bへ。先に全作品のlive状態を集めるResolver、作品内全話の試行は禁止。
 3. **消費対象を正確に拘束。** `work_id:episode_id`、canonical episode URL、画面内のwork link・見出し、controlのscope/唯一性・有効性・無料条件を照合。unknown / paid / login / duplicate / hidden / disabled / ID不一致 / DOM変化はfail closed。
 4. **クリック最大1回。** `click` timeout、通信切断、キャンセルの後に自動再クリックしない。成否を確認するときは回数と時間を制限したread-only観測のみ。
 5. **「消費確認」と「取得成功」は独立。** 正の消費証拠があれば `AccessConsumption` を確定し、Viewer/ZIP/ENDで失敗してもwork resource / source grantを可能な限り保存。未確認時は未確認として終了し、成功扱いも自動再試行もしない。
-6. **観測できない期限を作らない。** Young Animalの閲覧期間が確定するまで72h fallbackは実装しない。絶対期限または残時間の安全側下限が読める場合だけ記録する。手動ticketの消費時刻は、閲覧期限だけから逆算して記録しない。
+6. **期限は観測値から保守的に算出する。** Active ticket grant の有効期限は観測済みの native countdown に基づく。正確な server recovery 時刻と別の work countdown との関係は未確定。固定 72h fallback を使わず、手動 ticket の消費時刻を expiry のみから逆算しない。
 7. **回帰防止。** free、active rental、初回空白、見開き、巻き戻し、native VP8L/PNG fallback、END/ZIP、既存Catalog状態を維持。サイト間resource/セッションは完全に分離。
 8. 共有CDP Chromeを操作するエージェントは同時に1名。既存AccessGuard、有限timeout、サイト間pacing、403/429/CAPTCHA stopに従う。Cookie/画像/認証トークン/署名付きURLをコミットしない。実サイトの過度な反復アクセスは禁止。
 
@@ -135,7 +130,7 @@ action gate. No blanket preflight or automatic retry is allowed.
 - [x] 有効期限内の手動・自動grantは同じ話のみdirect。再消費0、期限の捏造0
 - [x] 対象不一致/paid/login/unknown/DOM driftでクリック0、自動二重クリック0
 - [x] 消費確定後にCapture/ZIPが失敗してもwork/sourceの記録と失敗区別が残る
-- [ ] 通常Batch: 1クリック→同じPageで1ページ目→END→有効なZIP→Item completed
+- [x] Normal Batch: one click -> same Page -> END -> valid ZIP -> Item completed (episode 849; independent review passed)
 - [x] `--grant-only work_ticket`: 1クリック→消費確認・記録、pages=0、ZIP=0、Item pending
 - [x] 既存free/rental/描画品質、Hanayume/ComicDAYS、共通Batchの回帰確認あり（検証範囲は下記）
 - [x] 実サイトでチケット総消費数・証拠・観測時刻・独立レビュー結果を `PROGRESS.md` に記録

@@ -7,33 +7,42 @@ manifest, and packager. Discovery recognizes authenticated work-bound wait-free
 candidates and active manual grants from naturally emitted listing responses;
 it does not click or consume tickets.
 
-The original five-ticket allowance is exhausted. Normal quota attempts using
-tickets three, four, and five confirmed resource use but failed before Capture
-artifacts. Existing-grant direct captures on 856 (28 pages), 0634 (15 pages
-under the earlier count-specific fix), C781 (7 pages), and 78 (12 pages under
-the current code) passed through END/ZIP without another use. The conditional
-`standard_odd_body` profile is strict across Python parsing, JS geometry, and
-native proof; live B=7 and B=15 metadata and synthetic B=9 Runner coverage
-support the observed structural family, not arbitrary odd layouts.
+The current verified fresh-quota path is a normal Batch run on episode
+`849948508c8bc` / work `71460b2b6686f`: one exact wait-free click and a bound
+checkout were followed on the same Page through the standard Viewer, END, ZIP,
+and Catalog completion. The seven-use ledger comprises all five original
+allowances plus DD9 and 849; two of three separately authorized additional uses
+were consumed. `4ba85f4c9e538` remains unopened and unused.
 
-A bounded zero-resource probe on active grant 78 observed only the exact CI
-widget base-to-overflow and overflow-noop class pairs with unchanged strict
-geometry and identity. The reviewed capture exception accepts only those pairs
-under existing geometry and active-body proof; other, extra, reverse,
-foreign, namespaced, overlapping, or ambiguous changes remain fatal. The normal
-quota attempt that used the fifth ticket failed closed at native post-encoding
-verification for a 12-body Viewer and saved no pages; its missing action
-sentinel makes click and
-checkout counts UNKNOWN. A later direct run on that existing grant completed
-12 ordered WEBP pages (848x1200) through END; ZIP CRC/decode/order/manifest and
-Catalog/archive SHA checks passed, with no new resource use. Fresh quota
-consumption followed by same-Page Capture -> END -> ZIP remains unverified.
-Of the three separately authorized additional candidates, DD9 has been
-inspected and discovered but its normal Batch attempt failed before Page
-creation; 0/3 additional resources were used. The other two URLs remain
-uninspected and require their own gate.
+The 849 run recorded consumption at `2026-10-19T00:06:51.538338+09:00`, grant
+expiry `2026-10-22T00:05:58.369033+09:00`, and local 23-hour cooldown end
+`2026-10-19T23:06:51.538338+09:00`. The same Page produced 12 ordered 934x1329
+PNG pages through END. ZIP CRC/decode/order/MIME/dimensions, manifest, Catalog
+completion, and Catalog/archive SHA checks passed. Archive SHA-256 was
+`cf4a3f5d897f762dc042d770f3ad04ebb192ad2855255d8cb7711dca321de0c1`
+(11,388,813 bytes). No source-native format, balance-delta, or per-image hash
+claim is made. Sanitized evidence:
+`output/younganimal_work_ticket_tester/normal-849-attempt1-postflight.json`.
 
-## Current live verification (2026-10-18)
+The run used one owned Page, one Python `Page.goto`, and zero reloads. Two
+same-target main-document requests and four same-target navigation/frame events
+were recorded; their cause is UNKNOWN. Seven off-target episode RSC GETs were
+aborted and no series/off-target main-frame navigation occurred. Natural
+mission, read-completion, pixel/analytics, notification, and points traffic was
+also observed, so this is not a zero-total-traffic or request-initiator claim.
+
+Existing-grant direct captures on 856 (28 pages), 0634 (15), C781 (7), and 78
+(12 WEBP) passed through END/ZIP without another resource use. Normal attempts
+using tickets three through six on 0634, C781, 78, and DD9 each confirmed a use
+but failed before Capture artifacts. DD9 remains fail-closed for its observed
+`mode-v`/`mode-single` no-seek/no-CI layout. The 78 action sentinel is absent,
+so click/checkout counts are UNKNOWN. The conditional `standard_odd_body`
+profile is strict across Python parsing, JS geometry, and native proof; live B=7
+and B=15 evidence and synthetic B=9 coverage do not authorize arbitrary odd
+layouts. The narrow CI exception applies only to observed class pairs with the
+existing geometry, identity, and active-body proof.
+
+## Earlier live verification (2026-10-18; historical)
 
 The supplied rental episode `37d94ac0d8242` passed full work Discovery (six
 positions, three active rentals) and a production Batch run through END with
@@ -124,23 +133,17 @@ fetches for `/` and `/store_items/series/<positive-id>/<positive-id>`, plus
 Stripe controller/m-outer and Facebook `/tr/` third-party subframe requests.
 The adapter recognizes only those observed route families with their reviewed
 origin, method, resource, navigation, and query constraints, then aborts them
-before any downstream handler. Stripe route matching ignores the fragment;
-Facebook requires an empty fragment, but the live request summary did not retain
-fragment presence, so whether its observed request meets that condition remains
-unverified. These classifications store only a bounded count and sanitized
-path in the live guard object.
+before any downstream handler. Stripe matching ignores URL fragments. The
+original zero-dispatch trace omitted request-fragment presence; the later 849
+production audit classified an observed subframe as
+`facebook_known_subframe_navigation`. The audit records that bounded
+classification, not a fragment value. These route classifications retain only a
+bounded count and sanitized path in the live guard object.
 
-The previous seven-file Younganimal regression selection passed 313
-tests with 0 skipped: capture+adapter passed 162 (5 existing warnings), and the
-remaining policy/live-access/discovery/batch-unit plus Discovery-browser files
-passed 151 (203 existing warnings). It includes the route-classifier and
-browser-backed adapter tests; the route-drift regression
-waits for confirmed consumption before attempting the blocked main-frame
-navigation. Live grant-only verification and
-the same-work cooldown-before-Page/site check in both modes have passed. The
-first normal Batch run on 0634 confirmed its grant but failed Viewer readiness;
-a subsequent direct Batch run on that already-active grant passed END/ZIP. A
-fresh quota-consuming run through Capture→END→ZIP remains pending.
+At that historical checkpoint, the seven-file regression selection passed 313
+tests with 0 skipped. The current final selection and fresh-quota result are
+recorded below; the 849 run subsequently completed same-Page Capture -> END ->
+ZIP.
 
 Normal Batch stays on the same Page and continues through the existing Viewer,
 Capture, END, and ZIP checks. `batch run --site younganimal --grant-only
@@ -152,7 +155,7 @@ grant-only modes: each allowed one transparent CDP attach, then skipped before
 Page creation, navigation, or site requests. An earlier probe that blocked the
 connect call was overstrict and inconclusive.
 
-## Work-ticket live status (2026-10-18)
+## Earlier work-ticket live status (2026-10-18; historical)
 
 The standard full and incremental Discovery runs on episode 856137d88753b / work
 8246f8b8b2e6c retained its active manual grant. A disposable stale-cache copy
@@ -210,8 +213,9 @@ seek 21, read no pixels, performed no capture/click/checkout, and closed its
 Page. The focused synthetic Runner reached END and validated ordered ZIP CRC
 and decoded RGBA against fixture source pixels; the independent Reviewer passed
 the profile and focused regressions. A later direct Batch run on the existing
-grant verified the profile through END/ZIP; fresh quota-consuming verification
-remains pending. Evidence:
+grant verified the profile through END/ZIP. At that historical checkpoint,
+fresh quota-consuming verification remained pending; the 849 result is in the
+current checkpoint above. Evidence:
 `output/younganimal_work_ticket_tester/readonly_viewer_diag_0634.json`,
 `public_seek_metadata_0634_attempt3.json`, and `saved_viewer_structure_0634.json`.
 
@@ -297,7 +301,8 @@ cooldown ends at `2026-10-19T19:03:38.150057+09:00`. The CLI failed closed at
 native post-encoding verification (`native_reader_layout_changed`) for a
 12-body / 18-wrapper Viewer before saving any page or artifact. The action
 sentinel was not written, so click and checkout event counts are UNKNOWN, not
-zero. The Item remains pending; there was no retry. Evidence:
+zero. The Item remained pending; no quota-consuming retry followed. A later direct
+capture on the existing grant is recorded below. Evidence:
 `output/younganimal_work_ticket_tester/normal-postflight-failed-78.json` and
 `output/ydr-78/runDB/precli-baseline.json`.
 
@@ -334,31 +339,24 @@ The earlier isolated cooldown probe prohibited the CDP connect call and was
 inconclusive; the corrected audit above supersedes it and verifies the local
 skip before Page creation or site access in both CLI modes.
 
-## Additional-candidate status (2026-10-18)
+## Additional-candidate chronology (updated 2026-10-19)
 
-The exact DD9 episode `dd9facaba1704` belongs to work `06e1b9373ea6e`. A
-single-work standard Discovery pass, restricted to this episode in a dedicated
-Catalog/Watchlist, completed and recorded one pending quota source. One normal
-Batch invocation against that isolated copy exited 1 because
-`BrowserSession.connect -> connect_browser -> Playwright connect_over_cdp`
-timed out before Page creation. Its postflight recorded zero Page/goto/reload,
-click, checkout, native/viewer, and package events; the Catalog item remained
-pending, grant/quota timestamps remained null, resource states/Runs/Artifacts
-remained zero, and source/copy Catalog hashes matched. No retry was made. This
-was a zero-resource failed attempt, not a successful normal capture. Evidence:
-`output/younganimal_work_ticket_tester/discovery-dd9facaba1704/` and
-`output/ydr-dd9/runDB/normal-dd9-one-shot-postflight.json`.
+DD9 (`dd9facaba1704` / work `06e1b9373ea6e`) passed isolated one-work
+Discovery. Its first normal invocation failed at Core/Playwright CDP attach
+before Page creation and used no resource. The second failed closed as
+`work_ticket_unavailable` with zero click/checkout/resource use. The third
+confirmed use six but failed before Capture because the saved Viewer had an
+unsupported `mode-v`/`mode-single` shape without the supported seek/CI layout.
+The quota grant and Work timestamp were persisted; the production capture gates
+were not weakened.
 
-Afterward `/json/version` returned HTTP 200. A bounded read-only Browser
-WebSocket diagnostic completed `Browser.getVersion` and `Target.getTargets`,
-observing six page and two browser-ui targets without creating a Page. The
-official Core/Playwright attach still timed out after 15 seconds;
-initialization replies remained pending for four of six existing page targets. The cause is
-UNKNOWN; no shared Chrome restart or second browser was performed. The remaining
-authorized candidate URLs `849948508c8bc` and `4ba85f4c9e538` remain unopened.
-This does not resolve the fresh-normal Batch verification blocker. Sanitized
-evidence is under `output/younganimal_work_ticket_tester/` and
-`output/ydr-dd9/runDB/`.
+849 (`849948508c8bc` / work `71460b2b6686f`) passed its own isolated one-work
+Discovery and one normal Batch invocation, consuming use seven and completing
+same-Page Capture through END/ZIP as described above. Two of the three
+separately authorized additional uses were consumed. `4ba85f4c9e538` remains
+unopened and unused; it was unnecessary for acceptance. These were sequential
+single-work operations, not a multi-work preflight. Evidence for 849 is
+`output/younganimal_work_ticket_tester/normal-849-attempt1-postflight.json`.
 
 ## Manual crawl entry
 
@@ -505,7 +503,7 @@ attribution remains UNKNOWN; this does not generalize to every page.
   passed. A normal Batch ticket grant was confirmed, but its first Viewer
   attempt failed before Capture. Direct Batch on that already-active grant
   later completed 15 pages through END and passed the ZIP/Catalog audit without
-  another resource use. Fresh quota-consuming END/ZIP remains pending.
+  another resource use. Fresh quota-consuming END/ZIP was later verified on 849; see the current checkpoint above.
 
 The Discovery adapter uses a 3-second delay before every numeric range route,
 a finite retry budget that requires matching current-attempt HTTP 200 document
@@ -520,40 +518,35 @@ rights can change on old episodes beyond a newest-known boundary. The listing
 is already buffered, so this adds no browser requests. Incremental does not
 reconcile unseen sources as unavailable.
 
-## Verification status
+## Verification status (2026-10-19)
 
-The latest complete seven-file Younganimal selection passed 322 tests with 0
-skipped and 207 existing pytest-asyncio deprecation warnings. It covered the
-policy, live access, Discovery, capture parser, Batch adapter, Discovery browser,
-and full adapter browser test files. The saved verbose run is
-`output/ya-all7-final.log`; its isolated basetemp is `output/ya-all7-final`.
-`ruff check src tests` and `git diff --check` are recorded in the final checkpoint.
-The full repository suite was not run because this is a site-local change.
+Phase 04 passed independent review. The final seven-file Younganimal selection
+passed 322 tests, 0 skipped, with 207 existing pytest-asyncio deprecation
+warnings (`output/ya-all7-final.log`; basetemp `output/ya-all7-final`).
+`ruff check src tests` and `git diff --check` passed on the reviewed checkpoint.
+The full repository suite was not run for this site-local change.
 
-Phase 04 remains partial. Live manual-grant Discovery, grant-only entry,
-normal/grant-only same-work cooldown skips, and existing-grant direct captures
-passed. Existing grants on 856, 0634, C781, and 78 reached END/ZIP (28, 15,
-7, and 12 pages respectively); the 0634 run used the earlier count-specific
-fix, while C781 used `standard_odd_body`. The 78 ZIP contained ordered
-WEBP images at 848x1200 and passed CRC, decode, manifest, and Catalog/archive
-SHA checks; no per-image hashes were declared. Normal quota attempts using
-tickets three, four, and five confirmed resource use but failed before page
-artifacts. The first 78 attempt stopped at native post-encoding verification
-for 12 body slots and 18 wrappers. Its one-shot action sentinel is absent, so
-click and checkout event counts are UNKNOWN, not zero; a later direct run used
-the existing grant without changing the failed Run or quota timestamps. No
-resource-consuming retry occurred.
+The fresh-quota normal Batch acceptance on 849 completed Capture -> END -> ZIP
+on the same Page and passed the independent artifact/Catalog audit. Exact
+consumption, grant, cooldown, archive, and navigation evidence is in the current
+verification section above and `runbooks/younganimal-work-ticket/PROGRESS.md`.
+The original five uses plus DD9 and 849 total seven uses; `4ba85f4c9e538` was
+not inspected or used. No further ticket was needed. No source-native format,
+balance-delta, or per-image hash claim is made.
 
-The read-only 78 probe observed exact `-cv-ci-content` ->
-`-cv-ci-content mode-overflow` and overflow-to-same-overflow pairs with stable
-strict widget/parent/CI/body geometry. The narrow, independently reviewed
-capture rule accepts only these pairs and preserves all existing capture proof,
-identity, epoch, native-source, and END gates. The final read-only 77 recheck
-found no current target access row or free-ticket control, so eligibility is
-UNKNOWN. DD9 (`dd9facaba1704` / work `06e1b9373ea6e`) passed isolated one-work
-Discovery and yielded one pending quota source, but its only normal attempt
-timed out during Core/Playwright CDP attach before Page creation; it used no
-resource and left the Catalog/hash baseline unchanged. The other two additional
-candidate URLs remain unopened; additional resource use is 0/3. Fresh quota
-consumption followed by same-Page Capture -> END -> ZIP remains unverified. No
-balance delta, per-image hash, or source-native format claim is made.
+Older work-ticket attempts remain distinct from the passing 849 run. Normal
+attempts using tickets three through six on 0634, C781, 78, and DD9 persisted
+resource use but did not produce Capture artifacts. The 78 action sentinel is
+missing, so its click/checkout counts are UNKNOWN, not zero. Existing-grant
+direct captures on 856, 0634, C781, and 78 passed through END/ZIP; 849 was the
+separate fresh-quota normal run. DD9's unsupported `mode-v`/`mode-single`
+Viewer remains fail-closed. The narrow 78 CI-widget exception does not relax
+identity, geometry, native source, END, or other Capture proofs.
+
+The final 849 audit recorded one owned Page, one Python `Page.goto`, and zero
+reloads. It saw two same-target main-document requests and four same-target
+navigation/frame events; their cause is UNKNOWN. Seven off-target episode RSC
+GETs were aborted and no series/off-target main-frame navigation occurred.
+Natural site-generated traffic was also observed; the audit does not claim zero
+total site traffic or known initiators for every request. Full details and
+limitations are in `runbooks/younganimal-work-ticket/PROGRESS.md`.
