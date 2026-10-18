@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from urllib.parse import urlsplit
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qsl, urlsplit
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Request, Response
@@ -49,6 +50,9 @@ MAX_WORK_NAVIGATION_RETRIES = 2
 MAX_NAVIGATION_EVIDENCE_REQUESTS = 8
 DOM_TIMEOUT_MS = 12_000
 OBSERVATION_TIMEOUT_SECONDS = 15
+MAX_NATIVE_ACCESS_REQUESTS = 512
+NATIVE_ACCESS_OBSERVATION_TIMEOUT_SECONDS = 8.0
+MAX_NATIVE_RESPONSE_BYTES = 1_048_576
 RANGE_PACING_MS = 3_000
 GUARD_CLEANUP_TIMEOUT_SECONDS = 5
 FREE_LABEL = "無料"
@@ -79,6 +83,7 @@ class YounganimalAccessObservation:
     raw_labels: tuple[str, ...]
     access_mode: str
     access_granted_until: datetime | None = None
+    access_granted_until_observed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +105,24 @@ class YounganimalListingRow:
     title: str
     access: YounganimalAccessObservation
     global_position: int
+
+
+@dataclass(frozen=True, slots=True)
+class YounganimalNativeEpisodeAccess:
+    """Reduced exact-identity access state from a natural series response."""
+
+    episode_id: str
+    access_type: str | None
+    has_access: bool | None
+    remaining_seconds: int | None
+    requested_at: datetime
+    remaining_seconds_state: str = "missing"
+
+
+@dataclass(frozen=True, slots=True)
+class YounganimalSeriesAccessSnapshot:
+    work_id: str
+    rows: tuple[YounganimalNativeEpisodeAccess, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +179,7 @@ def classify_younganimal_access(
 
     labels = tuple(raw_labels)
     if labels == (FREE_LABEL,):
-        return YounganimalAccessObservation(labels, "free")
+        return YounganimalAccessObservation(labels, "free", access_granted_until_observed=True)
     match = RENTAL_LABEL.fullmatch(labels[0]) if len(labels) == 1 else None
     if match is not None:
         days, hours = int(match["days"]), int(match["hours"])
@@ -165,8 +188,393 @@ def classify_younganimal_access(
             current = observed_at if observed_at is not None else datetime.now(JST)
             if current.tzinfo is None or current.utcoffset() is None:
                 raise ValueError("Younganimal rental observation requires an aware timestamp")
-            return YounganimalAccessObservation(labels, "paid", current + remaining)
+            return YounganimalAccessObservation(
+                labels, "paid", current + remaining, access_granted_until_observed=True
+            )
     return YounganimalAccessObservation(labels, "unknown")
+
+
+def _parse_series_access_snapshot(
+    payload: object, *, requested_at: datetime
+) -> YounganimalSeriesAccessSnapshot | None:
+    """Parse only the live-observed work-bound aggregate access shape."""
+
+    if requested_at.tzinfo is None or requested_at.utcoffset() is None:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    access = payload.get("seriesAccess")
+    if not isinstance(access, dict):
+        return None
+    work_id = access.get("seriesId")
+    raw_rows = access.get("episodeAccesses")
+    if (
+        not isinstance(work_id, str)
+        or re.fullmatch(r"[0-9a-f]{13}", work_id) is None
+        or not isinstance(raw_rows, list)
+        or len(raw_rows) > MAX_LISTING_ROWS
+    ):
+        return None
+
+    rows: list[YounganimalNativeEpisodeAccess] = []
+    for raw in raw_rows:
+        if not isinstance(raw, dict):
+            continue
+        episode_id = raw.get("episodeId")
+        if not isinstance(episode_id, str) or re.fullmatch(r"[0-9a-f]{13}", episode_id) is None:
+            continue
+        access_type = raw.get("accessType")
+        if not isinstance(access_type, str) or not access_type or len(access_type) > 64:
+            access_type = None
+        has_access = raw.get("hasAccess")
+        if type(has_access) is not bool:
+            has_access = None
+        has_remaining = "timeRemainingInSeconds" in raw
+        raw_remaining = raw.get("timeRemainingInSeconds")
+        remaining_malformed = has_remaining and raw_remaining is not None and (
+            type(raw_remaining) is not int
+            or raw_remaining < 0
+            or raw_remaining > 9_007_199_254_740_991
+        )
+        remaining = raw_remaining if type(raw_remaining) is int and not remaining_malformed else None
+        if not has_remaining:
+            remaining_state = "missing"
+            remaining = None
+        elif raw_remaining is None:
+            remaining_state = "null"
+            remaining = None
+        elif remaining_malformed:
+            remaining_state = "malformed"
+            remaining = None
+        else:
+            remaining_state = "valid"
+        if remaining_malformed:
+            remaining = None
+        rows.append(
+            YounganimalNativeEpisodeAccess(
+                episode_id=episode_id,
+                access_type=access_type,
+                has_access=has_access,
+                remaining_seconds=remaining,
+                remaining_seconds_state=remaining_state,
+                requested_at=requested_at,
+            )
+        )
+    return YounganimalSeriesAccessSnapshot(work_id=work_id, rows=tuple(rows))
+
+
+def _native_endpoint_url(url: str, *, path: str) -> bool:
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.lower() == "https"
+        and (parsed.hostname or "").lower() == "younganimal.com"
+        and parsed.username is None
+        and parsed.password is None
+        and port in (None, 443)
+        and parsed.path == path
+    )
+
+
+def _native_request_matches_work(url: str, *, work_id: str) -> bool:
+    try:
+        query = parse_qsl(urlsplit(url).query, keep_blank_values=True)
+    except ValueError:
+        return False
+    work_keys = {"seriesid", "workid"}
+    explicit_ids = [
+        value
+        for key, value in query
+        if key.casefold().replace("_", "") in work_keys
+    ]
+    return all(value == work_id for value in explicit_ids)
+
+
+class _YounganimalNativeAccessObserver:
+    """Observe natural listing GETs without issuing any site request."""
+
+    def __init__(self, *, expected_work_id: str) -> None:
+        self._expected_work_id = expected_work_id
+        self._page: Page | None = None
+        self._request_starts: list[tuple[Request, str, datetime, bool]] = []
+        self._tasks: list[asyncio.Task[None]] = []
+        self.snapshots: list[YounganimalSeriesAccessSnapshot] = []
+        self.auth_results: list[bool] = []
+        self.complete = True
+        self.overflow = False
+        self._request_listener = self._on_request
+        self._response_listener = self._on_response
+
+    @property
+    def listing_authenticated(self) -> bool:
+        return bool(self.auth_results) and self.complete and all(self.auth_results)
+
+    def attach(self, page: Page) -> None:
+        self._page = page
+        page.on("request", self._request_listener)
+        page.on("response", self._response_listener)
+
+    def _on_request(self, request: Request) -> None:
+        try:
+            url = request.url
+            method = request.method
+        except (AttributeError, PlaywrightError):
+            return
+        relevant = method == "GET" and (
+            _native_endpoint_url(url, path="/api/series/access")
+            or _native_endpoint_url(url, path="/api/auth/session")
+        )
+        if not relevant:
+            return
+        if len(self._request_starts) >= MAX_NATIVE_ACCESS_REQUESTS:
+            self.overflow = True
+            self.complete = False
+            return
+        self._request_starts.append((request, url, datetime.now(UTC), False))
+
+    def _on_response(self, response: Response) -> None:
+        try:
+            url = response.url
+            request = response.request
+            method = request.method
+        except (AttributeError, PlaywrightError):
+            return
+        if method != "GET" or not (
+            _native_endpoint_url(url, path="/api/series/access")
+            or _native_endpoint_url(url, path="/api/auth/session")
+        ):
+            return
+        matching_index = next(
+            (
+                index
+                for index in range(len(self._request_starts) - 1, -1, -1)
+                if not self._request_starts[index][3]
+                and self._request_starts[index][0] is request
+            ),
+            None,
+        )
+        if matching_index is None:
+            self.complete = False
+            return
+        original, request_url, requested_at, _used = self._request_starts[matching_index]
+        self._request_starts[matching_index] = (original, request_url, requested_at, True)
+        if urlsplit(url).path == "/api/series/access" and not _native_request_matches_work(
+            request_url, work_id=self._expected_work_id
+        ):
+            self.complete = False
+            return
+        self._tasks.append(
+            asyncio.create_task(
+                self._capture(response, requested_at=requested_at, path=urlsplit(url).path)
+            )
+        )
+
+    async def _capture(self, response: Response, *, requested_at: datetime, path: str) -> None:
+        try:
+            if response.status != 200:
+                self.complete = False
+                return
+            body = await asyncio.wait_for(
+                response.body(), timeout=NATIVE_ACCESS_OBSERVATION_TIMEOUT_SECONDS
+            )
+            if len(body) > MAX_NATIVE_RESPONSE_BYTES:
+                self.complete = False
+                return
+            payload = json.loads(body)
+        except (PlaywrightError, TimeoutError, TypeError, ValueError):
+            self.complete = False
+            return
+        if path == "/api/auth/session":
+            if not isinstance(payload, dict):
+                self.complete = False
+                return
+            user = payload.get("user")
+            self.auth_results.append(type(user) is int and user > 0)
+            return
+        snapshot = _parse_series_access_snapshot(payload, requested_at=requested_at)
+        if snapshot is None:
+            self.complete = False
+            return
+        self.snapshots.append(snapshot)
+
+    async def finish(self) -> tuple[YounganimalSeriesAccessSnapshot, ...]:
+        self._detach()
+        pending = [task for task in self._tasks if not task.done()]
+        if pending:
+            done, pending = await asyncio.wait(
+                pending, timeout=NATIVE_ACCESS_OBSERVATION_TIMEOUT_SECONDS
+            )
+            if pending:
+                self.complete = False
+                for task in pending:
+                    task.cancel()
+                done_after_cancel, _still_pending = await asyncio.wait(pending, timeout=1.0)
+                for task in done_after_cancel:
+                    if not task.cancelled() and task.exception() is not None:
+                        self.complete = False
+                for task in _still_pending:
+                    task.add_done_callback(_consume_task_result)
+            for task in done:
+                if task.exception() is not None:
+                    self.complete = False
+        for task in self._tasks:
+            if task.cancelled():
+                self.complete = False
+            elif not task.done():
+                self.complete = False
+                task.add_done_callback(_consume_task_result)
+            elif task.exception() is not None:
+                self.complete = False
+        if self.overflow or any(not used for _request, _url, _at, used in self._request_starts):
+            self.complete = False
+        return tuple(self.snapshots)
+
+    async def close(self) -> None:
+        self._detach()
+        pending = [task for task in self._tasks if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            done, _still_pending = await asyncio.wait(pending, timeout=1.0)
+            for task in done:
+                if not task.cancelled() and task.exception() is not None:
+                    self.complete = False
+            for task in _still_pending:
+                task.add_done_callback(_consume_task_result)
+
+    def _detach(self) -> None:
+        if self._page is None:
+            return
+        try:
+            self._page.remove_listener("request", self._request_listener)
+            self._page.remove_listener("response", self._response_listener)
+        except PlaywrightError:
+            pass
+        self._page = None
+
+
+def _consume_task_result(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    task.exception()
+
+
+def _latest_native_access_by_episode(
+    snapshots: Sequence[YounganimalSeriesAccessSnapshot], *, work_id: str
+) -> dict[str, YounganimalNativeEpisodeAccess | None]:
+    latest: dict[str, tuple[datetime, YounganimalNativeEpisodeAccess | None]] = {}
+    for snapshot in snapshots:
+        if snapshot.work_id != work_id:
+            continue
+        rows_by_episode: dict[str, list[YounganimalNativeEpisodeAccess]] = {}
+        for row in snapshot.rows:
+            rows_by_episode.setdefault(row.episode_id, []).append(row)
+        for episode_id, rows in rows_by_episode.items():
+            requested_at = rows[0].requested_at
+            candidate = rows[0] if len(rows) == 1 else None
+            previous = latest.get(episode_id)
+            if previous is None or requested_at > previous[0]:
+                latest[episode_id] = (requested_at, candidate)
+            elif requested_at == previous[0] and candidate != previous[1]:
+                latest[episode_id] = (requested_at, None)
+    return {episode_id: row for episode_id, (_at, row) in latest.items()}
+
+
+def _native_grant_until(
+    native: YounganimalNativeEpisodeAccess, *, now: datetime
+) -> datetime | None:
+    seconds = native.remaining_seconds
+    if type(seconds) is not int or seconds <= 0:
+        return None
+    try:
+        expires_at = native.requested_at + timedelta(seconds=seconds - 1)
+    except (OverflowError, ValueError):
+        return None
+    return expires_at if expires_at > now else None
+
+
+def _apply_native_access(
+    rows: Sequence[YounganimalListingRow],
+    *,
+    native_access: dict[str, YounganimalNativeEpisodeAccess | None],
+    listing_authenticated: bool,
+    now: datetime | None = None,
+) -> list[YounganimalListingRow]:
+    """Join exact work-bound native rows; unknown/ambiguous rows preserve grants."""
+
+    current = now if now is not None else datetime.now(UTC)
+    if current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError("Younganimal native access join requires an aware timestamp")
+    updated: list[YounganimalListingRow] = []
+    for row in rows:
+        native = native_access.get(row.identity.episode_id)
+        access = row.access
+        if (
+            listing_authenticated is not True
+            or native is None
+            or native.access_type != "waitAndFree"
+            or native.has_access is None
+        ):
+            updated.append(row)
+            continue
+
+        if native.remaining_seconds_state == "malformed":
+            updated.append(row)
+            continue
+
+        # Exact free and current rental labels keep their existing precedence.
+        if access.access_mode == "free":
+            if native.has_access is False:
+                access = replace(access, access_granted_until=None, access_granted_until_observed=True)
+            updated.append(replace(row, access=access))
+            continue
+        if access.access_mode == "paid" and access.access_granted_until is not None:
+            if native.has_access is True:
+                native_until = _native_grant_until(native, now=current)
+                if native_until is not None:
+                    access = replace(
+                        access,
+                        access_granted_until=min(access.access_granted_until, native_until),
+                        access_granted_until_observed=True,
+                    )
+            updated.append(replace(row, access=access))
+            continue
+
+        if native.has_access is False:
+            if native.remaining_seconds_state == "missing" or (
+                native.remaining_seconds_state == "valid"
+                and native.remaining_seconds == 0
+            ):
+                access = replace(
+                    access,
+                    access_mode="quota",
+                    access_granted_until=None,
+                    access_granted_until_observed=True,
+                )
+            else:
+                access = replace(access, access_mode="unknown")
+        elif native.remaining_seconds_state != "valid" or native.remaining_seconds == 0:
+            # A true access flag with a zero timer is contradictory; preserve
+            # prior grant metadata and do not treat it as a new ticket.
+            access = replace(access, access_mode="unknown")
+        else:
+            native_until = _native_grant_until(native, now=current)
+            if native_until is not None:
+                access = replace(
+                    access,
+                    access_mode="quota",
+                    access_granted_until=native_until,
+                    access_granted_until_observed=True,
+                )
+            else:
+                # Active access without a valid timer is not a spend candidate,
+                # and does not clear an older observed grant timestamp.
+                access = replace(access, access_mode="unknown")
+        updated.append(replace(row, access=access))
+    return updated
 
 
 def _parse_range_route(url: str, *, expected_work_id: str) -> tuple[int, str] | None:
@@ -693,7 +1101,7 @@ def _records_from_rows(
                 url=f"https://younganimal.com/episodes/{row.identity.episode_id}",
                 access_mode=row.access.access_mode,
                 access_granted_until=row.access.access_granted_until,
-                access_granted_until_observed=True,
+                access_granted_until_observed=row.access.access_granted_until_observed,
                 available=True,
                 global_display_position=row.global_position,
             ),
@@ -767,6 +1175,8 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
             stop_on_captcha=True,
         )
         guard.start(page)
+        native_observer = _YounganimalNativeAccessObserver(expected_work_id=work_id)
+        native_observer.attach(page)
         try:
             retry_budget_remaining = MAX_WORK_NAVIGATION_RETRIES
             retries_used = await _navigate(
@@ -822,6 +1232,21 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
 
             if len(rows_oldest_first) != ranges[-1].end_position:
                 raise DiscoveryIncompleteError("Younganimal ranges do not cover their declared total")
+            native_snapshots = await native_observer.finish()
+            # Native response bodies may settle after the last range checkpoint.
+            # Check the guard again before treating the buffered listing as complete.
+            await _guard_checkpoint(guard, page)
+            if native_observer.complete and all(
+                snapshot.work_id == work_id for snapshot in native_snapshots
+            ):
+                native_access = _latest_native_access_by_episode(
+                    native_snapshots, work_id=work_id
+                )
+                rows_oldest_first = _apply_native_access(
+                    rows_oldest_first,
+                    native_access=native_access,
+                    listing_authenticated=native_observer.listing_authenticated,
+                )
             records = _records_from_rows(
                 rows_oldest_first=rows_oldest_first,
                 work_title=work_title,
@@ -837,6 +1262,7 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
             await _guard_checkpoint(guard, page)
             raise DiscoveryIncompleteError("Younganimal full work listing did not complete") from exc
         finally:
+            await native_observer.close()
             await _close_guard_bounded(guard)
 
         for record in records:

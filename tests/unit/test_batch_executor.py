@@ -45,6 +45,7 @@ from screenshot_crawler.site_policies import (
     MangaOneSitePolicy,
     PiccomaSitePolicy,
     SitePolicyRegistry,
+    YounganimalSitePolicy,
 )
 
 NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
@@ -852,6 +853,7 @@ async def test_work_ticket_consumption_is_recorded_at_observed_time(tmp_path: Pa
     [
         ("comicdays", ComicDaysSitePolicy),
         ("hanayume", HanayumeSitePolicy),
+        ("younganimal", YounganimalSitePolicy),
     ],
 )
 @pytest.mark.parametrize("grant_only", [True, False])

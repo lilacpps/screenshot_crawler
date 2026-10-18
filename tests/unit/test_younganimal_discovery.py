@@ -16,11 +16,15 @@ from screenshot_crawler.site_adapters.younganimal.access import (
 from screenshot_crawler.site_adapters.younganimal.discovery import (
     YounganimalEpisodeIdentity,
     YounganimalListingRow,
+    YounganimalNativeEpisodeAccess,
     _apply_discovery_scope,
+    _apply_native_access,
     _guard_checkpoint,
+    _latest_native_access_by_episode,
     _navigate,
     _pace_before_range_navigation,
     _parse_range_links,
+    _parse_series_access_snapshot,
     _records_from_rows,
     _validate_page_ranges,
     canonical_younganimal_episode_url,
@@ -106,6 +110,223 @@ def test_younganimal_rental_countdown_is_a_conservative_timed_grant() -> None:
     assert observed.access_granted_until == now + timedelta(days=14, hours=22)
     with pytest.raises(ValueError, match="aware timestamp"):
         classify_younganimal_access(("レンタル中 閲覧期限 2日+23時間",), observed_at=now.replace(tzinfo=None))
+
+
+NATIVE_NOW = datetime(2026, 10, 18, 6, 0, tzinfo=UTC)
+_OMIT = object()
+
+
+def _native_payload(rows, *, work_id: str = WORK_ID):
+    return {"seriesAccess": {"seriesId": work_id, "episodeAccesses": rows}}
+
+
+def _native_row(
+    episode_id: str = SEED_ID,
+    *,
+    has_access: object = False,
+    access_type: object = "waitAndFree",
+    remaining: object = _OMIT,
+):
+    row = {"episodeId": episode_id, "hasAccess": has_access, "accessType": access_type}
+    if remaining is not _OMIT:
+        row["timeRemainingInSeconds"] = remaining
+    return row
+
+
+def _listing_row(
+    *,
+    episode_id: str = SEED_ID,
+    labels: tuple[str, ...] = (),
+    position: int = 1,
+) -> YounganimalListingRow:
+    return YounganimalListingRow(
+        identity=YounganimalEpisodeIdentity(WORK_ID, episode_id),
+        title=f"PART.{position}",
+        access=classify_younganimal_access(labels, observed_at=NATIVE_NOW),
+        global_position=position,
+    )
+
+
+def _snapshot(payload, *, at: datetime = NATIVE_NOW):
+    return _parse_series_access_snapshot(payload, requested_at=at)
+
+
+def test_younganimal_native_access_parser_requires_exact_series_schema_and_typed_rows() -> None:
+    snapshot = _snapshot(
+        _native_payload(
+            [
+                _native_row(has_access=False),
+                _native_row("528a05e37879f", has_access=1, remaining=True),
+                {"episodeId": "not-an-id", "hasAccess": False, "accessType": "waitAndFree"},
+            ]
+        )
+    )
+    assert snapshot is not None
+    assert snapshot.work_id == WORK_ID
+    assert len(snapshot.rows) == 2
+    assert snapshot.rows[0].has_access is False
+    assert snapshot.rows[0].remaining_seconds is None
+    assert snapshot.rows[1].has_access is None
+    assert snapshot.rows[1].remaining_seconds is None
+    assert snapshot.rows[1].remaining_seconds_state == "malformed"
+    null_timer = _snapshot(_native_payload([_native_row(has_access=False, remaining=None)]))
+    assert null_timer is not None
+    assert null_timer.rows[0].remaining_seconds_state == "null"
+    assert _snapshot({"episodes": []}) is None
+    assert _snapshot(_native_payload([], work_id="foreign-work-id")) is None
+
+
+@pytest.mark.parametrize("remaining", [True, "3600", -1, 9_007_199_254_740_992])
+def test_younganimal_native_timer_rejects_bool_string_negative_and_oversize(
+    remaining: object,
+) -> None:
+    snapshot = _snapshot(
+        _native_payload([_native_row(has_access=False, remaining=remaining)])
+    )
+
+    assert snapshot is not None
+    assert snapshot.rows[0].remaining_seconds is None
+    assert snapshot.rows[0].remaining_seconds_state == "malformed"
+
+
+def test_younganimal_latest_native_rows_are_work_bound_and_duplicates_become_unknown() -> None:
+    later = NATIVE_NOW + timedelta(seconds=1)
+    valid_old = _snapshot(_native_payload([_native_row(has_access=False)]))
+    duplicate_new = _snapshot(
+        _native_payload([_native_row(has_access=False), _native_row(has_access=True)]),
+        at=later,
+    )
+    foreign = _snapshot(
+        _native_payload([_native_row(has_access=True)], work_id="123456789abcd"),
+        at=later + timedelta(seconds=1),
+    )
+    assert valid_old is not None and duplicate_new is not None and foreign is not None
+
+    latest = _latest_native_access_by_episode(
+        [valid_old, duplicate_new, foreign], work_id=WORK_ID
+    )
+
+    assert latest == {SEED_ID: None}
+
+
+def test_younganimal_native_exact_denial_selects_quota_but_free_label_wins() -> None:
+    denied = YounganimalNativeEpisodeAccess(
+        SEED_ID, "waitAndFree", False, None, NATIVE_NOW
+    )
+    applied = _apply_native_access(
+        [_listing_row()],
+        native_access={SEED_ID: denied},
+        listing_authenticated=True,
+        now=NATIVE_NOW,
+    )[0]
+    assert applied.access.access_mode == "quota"
+    assert applied.access.access_granted_until is None
+    assert applied.access.access_granted_until_observed is True
+
+    free = _apply_native_access(
+        [_listing_row(labels=("無料",))],
+        native_access={SEED_ID: denied},
+        listing_authenticated=True,
+        now=NATIVE_NOW,
+    )[0]
+    assert free.access.access_mode == "free"
+    assert free.access.access_granted_until_observed is True
+
+
+def test_younganimal_active_manual_ticket_grant_uses_native_timer_and_rental_lower_bound() -> None:
+    requested = NATIVE_NOW - timedelta(seconds=10)
+    native = YounganimalNativeEpisodeAccess(
+        SEED_ID, "waitAndFree", True, 3600, requested, "valid"
+    )
+    active = _apply_native_access(
+        [_listing_row()],
+        native_access={SEED_ID: native},
+        listing_authenticated=True,
+        now=NATIVE_NOW,
+    )[0]
+    assert active.access.access_mode == "quota"
+    assert active.access.access_granted_until == requested + timedelta(seconds=3599)
+    assert active.access.access_granted_until_observed is True
+
+    rental = _listing_row(labels=("レンタル中 閲覧期限 2日+23時間",))
+    longer_native = YounganimalNativeEpisodeAccess(
+        SEED_ID, "waitAndFree", True, 864_000, requested, "valid"
+    )
+    conservative = _apply_native_access(
+        [rental],
+        native_access={SEED_ID: longer_native},
+        listing_authenticated=True,
+        now=NATIVE_NOW,
+    )[0]
+    assert conservative.access.access_mode == "paid"
+    assert conservative.access.access_granted_until == NATIVE_NOW + timedelta(days=2, hours=22)
+
+
+@pytest.mark.parametrize(
+    ("native", "authenticated", "mode", "observed"),
+    [
+        (YounganimalNativeEpisodeAccess(SEED_ID, "trial", True, 500, NATIVE_NOW, "valid"), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", False, None, NATIVE_NOW), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", False, None, NATIVE_NOW), False, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", True, None, NATIVE_NOW), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", True, 0, NATIVE_NOW, "valid"), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", False, 300, NATIVE_NOW, "valid"), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", False, None, NATIVE_NOW, "null"), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", False, None, NATIVE_NOW, "malformed"), True, "unknown", False),
+    ],
+)
+def test_younganimal_unverified_native_access_never_becomes_a_ticket_candidate(
+    native, authenticated, mode, observed
+) -> None:
+    row = _apply_native_access(
+        [_listing_row()],
+        native_access={SEED_ID: native},
+        listing_authenticated=authenticated,
+        now=NATIVE_NOW,
+    )[0]
+    assert row.access.access_mode == mode
+    assert row.access.access_granted_until_observed is observed
+
+
+def test_younganimal_contradictory_native_state_does_not_clear_an_existing_grant() -> None:
+    previous_until = NATIVE_NOW + timedelta(hours=4)
+    row = _listing_row()
+    row = YounganimalListingRow(
+        identity=row.identity,
+        title=row.title,
+        access=type(row.access)(
+            raw_labels=(),
+            access_mode="quota",
+            access_granted_until=previous_until,
+            access_granted_until_observed=False,
+        ),
+        global_position=row.global_position,
+    )
+    contradictory = YounganimalNativeEpisodeAccess(
+        SEED_ID, "waitAndFree", True, 0, NATIVE_NOW, "valid"
+    )
+
+    result = _apply_native_access(
+        [row],
+        native_access={SEED_ID: contradictory},
+        listing_authenticated=True,
+        now=NATIVE_NOW,
+    )[0]
+
+    assert result.access.access_mode == "unknown"
+    assert result.access.access_granted_until == previous_until
+    assert result.access.access_granted_until_observed is False
+
+
+def test_younganimal_missing_or_ambiguous_native_row_preserves_unknown_grant_state() -> None:
+    row = _apply_native_access(
+        [_listing_row()],
+        native_access={SEED_ID: None},
+        listing_authenticated=True,
+        now=NATIVE_NOW,
+    )[0]
+    assert row.access.access_mode == "unknown"
+    assert row.access.access_granted_until_observed is False
 
 
 def test_younganimal_access_profile_uses_observed_content_hosts_only() -> None:

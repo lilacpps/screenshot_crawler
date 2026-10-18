@@ -1,11 +1,12 @@
 # Younganimal adapter
 
 The Younganimal adapter provides Discovery, direct manual episode Crawl, and a
-direct-only Batch path for free sources and active rentals. It uses the shared CDP BrowserSession / Playwright Page,
-the shared AccessGuard, and the normal Runner, manifest, and packager.
-It does not launch Chrome or select a profile. Batch selects only currently
-available free sources or paid sources with an unexpired observed rental grant; new wait-free and resource flows
-are not implemented.
+direct Batch path for free sources and active rentals. Discovery also records
+authenticated, work-bound wait-free candidates and active manual ticket grants
+from natural listing responses. The shared CDP BrowserSession / Playwright Page,
+AccessGuard, Runner, manifest, and packager remain in use. The separate Batch
+ticket-entry flow is not implemented yet; no work-ticket action is inferred
+from an icon or performed during Discovery.
 
 ## Current live verification (2026-10-12)
 
@@ -174,15 +175,33 @@ attribution remains UNKNOWN; this does not generalize to every page.
   `レンタル中 閲覧期限 D日+H時間` maps to paid with the conservative grant
   `observation start + D days + H hours - 1 hour` (days 0..14, hours 0..23,
   positive remaining bound). Free takes precedence; malformed/near-expiry or
-  unobserved formats stay unknown. Every observation refreshes or clears the
-  old grant. Policy admits only available, unexpired rentals as non-consuming
-  `direct`. New waiting/ticket/coin/purchase access remains unsupported.
+  unobserved formats stay unknown.
+- During the existing listing traversal, the adapter observes only natural
+  `GET /api/series/access` and `GET /api/auth/session` responses. It makes no
+  additional request. A positive integer session user and an exact
+  `seriesAccess.seriesId` matching the canonical work are required before
+  joining `episodeAccesses` by canonical episode ID. Only `waitAndFree` is
+  interpreted: exact `hasAccess=false` with a missing or zero timer is a
+  work-ticket candidate; null, positive, or malformed timers stay unknown.
+  Exact `hasAccess=true` with a valid positive timer is a manually active ticket
+  grant. Its conservative expiry uses request start plus timer seconds minus one;
+  a recognized rental-label lower bound can shorten it. Other access types,
+  contradictory timer states, duplicate or absent rows, foreign work, and
+  unavailable authentication stay unknown and preserve a stored grant. Native
+  observations do not override an exact free label or active rental.
+- `YounganimalSitePolicy` exposes one `work_ticket` pass, scoped to a work with
+  limit one and a local minimum 23-hour post-consumption cooldown. Free and
+  unexpired rental sources remain non-consuming `direct`. The Batch ticket
+  click, grant-only executor verification, and same-Page Viewer handoff are a
+  later phase and remain unimplemented.
 
 The Discovery adapter uses a 3-second delay before every numeric range route,
 a finite retry budget that requires matching current-attempt HTTP 200 document
-evidence, and bounded AccessGuard cleanup. Its exact retry contract and the
-completed 925-row live pass are documented in note/11_younganimal.md and the
-runbook progress.
+evidence, and bounded AccessGuard cleanup. After native response draining, it
+checks AccessGuard once more before constructing or yielding records so a late
+fatal response cannot publish a seemingly complete listing. Its exact retry
+contract and the completed 925-row live pass are documented in
+note/11_younganimal.md and the runbook progress.
 
 Incremental refreshes every validated row in the requested scope because rental
 rights can change on old episodes beyond a newest-known boundary. The listing
@@ -198,12 +217,18 @@ The final incremental refresh change also passed a targeted Discovery rerun:
 `ruff check src tests` and `git diff --check` passed. The global full suite and
 Research tests were not run for this site-local change.
 
-Discovery's 925-row live run is complete. The direct-only Policy/Batch path has
-passed independent review and synthetic BatchExecutor-to-Runner-to-ZIP tests.
+Discovery's 925-row live run is complete. The Phase 02 work-ticket Discovery
+contract has been observed on the live listing: two natural series-access GETs
+returned work-bound `episodeAccesses`, and the auth session returned a positive
+integer user. No ticket was used during that listing observation. Its targeted
+unit tests and browser-backed fixture tests pass; Phase 02 independent review is
+pending. The separate ticket-entry Policy/Batch path is not yet implemented.
+The previous free/rental direct path has passed independent review and synthetic
+BatchExecutor-to-Runner-to-ZIP tests.
 Attempt 9 verifies the final capture code on both live profiles. The 44-page
 synthetic Runner also verifies all native outputs against independent
-fixture-source RGBA through END/ZIP. Phase 05 remains
-unimplemented for new access acquisition: both SVG icons on blank rows were measured
-visible at 24x24 with visible parents, but active icon, wait/access/resource
-semantics, and positive authentication state remain UNKNOWN. No wait, CTA,
-episode, or resource action occurred.
+fixture-source RGBA through END/ZIP. A bounded work-ticket research action was
+later observed on the authorized episode `856137d88753b`; one resource use is
+recorded in the work-ticket Runbook. This evidence does not implement Batch
+entry. The remaining adapter work must verify the same safe control and hand
+the same Page to the production Viewer/Capture path.

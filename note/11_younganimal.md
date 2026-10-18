@@ -12,6 +12,15 @@ URL; no listing route was visited during Crawl and no quota consumption was
 recorded. The report is
 `output/younganimal_rental/crawl_20261012_065928/report.json`.
 
+On 2026-10-18, one authorized work-ticket research action was observed on
+episode `856137d88753b` / work `8246f8b8b2e6c`. The exact wait-free control,
+same-row `waitAndFree` false-to-true transition, target-bound successful
+checkout response, and same-Page ready Viewer were independently adjudicated
+as one observed resource use. No balance-delta claim was made. The work remains
+under its local 23-hour cooldown until `2026-10-19T05:05:50.550591Z`. The
+current Phase 02 listing observer recognizes authenticated native ticket state;
+the Batch ticket entry path is not yet implemented.
+
 This target proved the additional `top_empty_no_pr` layout: the positive
 `mode-has-top-emptypage` root flag, one exact empty/no-canvas leading wrapper at
 slot 0, body slots 1–28, and CI/PR/PR/Good/Last slots 29–33. Seek is 1..33 by 2.
@@ -145,10 +154,32 @@ This is a conservative lower bound, not exact expiry; days 0..14, hours 0..23
 and a positive lower-bound duration are required. Other countdown formats,
 near-expiry durations, 今なら無料, 待つと無料, blank, repeated and unrecognized
 labels remain unknown. Free takes precedence over rental on the same identity.
-Every observed row explicitly refreshes or clears its old grant. Policy selects
-only a strictly future, timezone-aware paid grant as `direct` / `active_rental`,
-without quota/resource consumption; unavailable, expired and malformed grants
-are excluded. Authentication is not otherwise inferred.
+Unknown observations preserve a stored grant; a positively observed exact
+denial or valid grant refreshes it. Policy selects only a strictly future,
+timezone-aware paid grant as non-consuming `direct` / `active_rental`;
+unavailable, expired and malformed grants are excluded.
+
+During the existing canonical work-listing traversal, Discovery observes the
+site's natural `GET /api/series/access` and `GET /api/auth/session` responses;
+it issues no additional request. A positive integer session user and an exact
+response `seriesAccess.seriesId` matching the canonical work are required
+before joining episode rows by ID. Only `accessType=waitAndFree` is classified:
+`hasAccess=false` with a missing or exact zero timer is a `quota` candidate;
+null, positive, or malformed timers remain unknown. An exact active row with a
+valid positive `timeRemainingInSeconds` is a manually used ticket grant; its
+conservative expiry is request-start plus timer seconds minus one, shortened
+when the account rental label provides an earlier lower bound. Other access
+types, contradictory timer states, foreign/duplicate or missing rows, and
+unavailable authentication remain unknown. Native observations do not
+override an exact free label or active rental. The live listing
+observation confirmed this schema and positive auth; no ticket was used during
+Discovery.
+
+The Younganimal Policy exposes one `work_ticket` resource pass scoped to a work,
+with quota limit one and a local minimum 23-hour cooldown after observed
+consumption. A longer configured cooldown is honored. Batch ticket entry and
+grant-only execution remain pending Phase 03; no source-specific ticket click is
+yet wired to the adapter.
 Full Discovery buffers before yielding, so an incomplete
 traversal cannot mark unseen sources unavailable. Maximums are 100 ranges and
 3,000 rows.
@@ -168,7 +199,10 @@ retries per work. Unknown response evidence, non-200, redirect/drift, other
 Playwright errors, and access stops are not retried. Request/response listeners
 are removed on every path, and no response body or retry header is read. The
 earlier /3 timeout cause remains unknown; this recovery does not assign a cause.
-AccessGuard cleanup is bounded.
+AccessGuard cleanup is bounded. After the native access observer drains its
+bounded response tasks, Discovery checks AccessGuard again before constructing
+or yielding any records. A fatal response arriving during the final body drain
+therefore leaves the full listing uncommitted.
 
 ## Viewer layout and capture
 
@@ -295,12 +329,14 @@ wrappers/canvases. Ambiguous/missing geometry and overlap fail closed. Attempt
 Global mutation accounting and all candidate, selected-page, post-encode, mapping,
 layout, pixel, cleanup, and whole-spread gates remain intact.
 
-Phase 02 full live Discovery and Phase 04 direct-only Batch are complete. Phase
-06 free E2E is verified on both live profiles under the final code. Phase 05
-remains unimplemented for new access acquisition: both SVG icons on blank rows were
-visible, but active-icon, wait/access, resource, and positive authentication
-semantics were not established. Therefore the wait-free request is not
-complete. No full-suite run was made; the final affected suite skipped 0.
+The preceding free-only status was accurate on 2026-10-12. On 2026-10-18, one
+bounded authorized research action confirmed the exact wait-free control,
+work-bound access transition, target-bound successful checkout response, and
+same-Page Viewer readiness; one ticket use is recorded above. This did not wire
+ticket entry into Batch. The production wait-free adapter path and grant-only
+flow remain pending the current Younganimal work-ticket Phase 03/04 gates. The
+full repository suite was not run for the current site-local Discovery/Policy
+change.
 
 ## Historical native geometry diagnostic (2026-10-11)
 

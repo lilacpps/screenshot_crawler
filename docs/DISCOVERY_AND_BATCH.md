@@ -1,6 +1,6 @@
 # Discovery / Catalog / Batch Design
 
-## Younganimal active rentals and direct reader entry (2026-10-12)
+## Younganimal active rentals, manual ticket grants, and direct reader entry (2026-10-18)
 
 Younganimal Discovery joins settled `epListUser` account rows to canonical
 public episode identities using exact normalized titles. Account rows never add
@@ -8,21 +8,45 @@ Items or display positions; duplicate IDs and title conflicts fail closed.
 Exact normalized `レンタル中 閲覧期限 D日+H時間` observations map to `paid`
 with `access_granted_until = observation start + D days + H hours - 1 hour`.
 This conservative lower bound requires days 0..14, hours 0..23 and a positive
-duration. Other countdown forms remain unknown. Each observed source explicitly
-refreshes or clears the grant. Exact free remains free and takes precedence.
-The site Policy selects only available free or unexpired rental sources, using
-non-consuming `direct`; expired/unknown access never initiates rental acquisition.
-Incremental refreshes every row in the validated requested scope so old rental
-changes are not hidden by a newest-known streak. This uses the existing stop
-hook and adds no browser requests to the already-buffered listing traversal;
-incremental never reconciles unseen sources as unavailable.
+duration. Exact free remains free and takes precedence. Unrecognized or
+ambiguous observations preserve a previously stored grant; a positively
+observed denial or valid grant may refresh it.
 
-Both manual and Batch Crawl navigate directly to the exact episode URL and
-validate the same-work header and live readable viewer. They do not traverse or
-read episode listings. Visible central charge/read/rental UI stops without
-clicking; the existing strict body, identity, capture and END proof remains
-required. Discovery retains its canonical series scope and bounded range pacing.
-No shared Catalog schema, Core access strategy, or resource rules change.
+During ordinary canonical work-listing traversal, the adapter may observe the
+site's natural `GET /api/series/access` and `GET /api/auth/session` responses.
+It issues no additional API requests. Only an authenticated, exact work-bound
+`seriesAccess.episodeAccesses` row with `accessType=waitAndFree` is classified:
+`hasAccess=false` with a missing or exact zero timer is a `quota` candidate;
+null, positive, or malformed timers leave that state unknown. `hasAccess=true`
+with a valid positive `timeRemainingInSeconds` is a quota access grant using
+the conservative request-start-plus-seconds-minus-one bound. An exact
+rental-label bound may shorten that grant. Other access types, contradictory
+timers, missing or duplicate rows, foreign work IDs, and unavailable
+authentication remain unknown. These native observations do not override an
+exact free label or an active rental classification. Manual grants therefore
+become non-consuming `direct` when an
+active native timer is observed; unknown native state preserves existing grant
+metadata.
+
+The natural-response observer drains its bounded pending bodies after the
+listing traversal. Discovery checks AccessGuard again after that drain and
+before constructing or yielding records, so a late fatal response cannot make
+an incomplete listing appear complete.
+
+`YounganimalSitePolicy` exposes one `work_ticket` pass with work scope and a
+limit of one ticket per work. A consumed ticket starts a local minimum 23-hour
+same-work cooldown; a longer configured interval is honored. Free and active
+rental sources remain non-consuming `direct`. The new source classification is
+implemented in Discovery and SitePolicy; the separate Younganimal Batch entry
+click and same-Page Viewer handoff remain gated on the later adapter phase.
+
+Incremental refreshes every row in the validated requested scope so old access
+changes are not hidden by a newest-known streak. This uses the existing stop
+hook and adds no requests beyond the natural responses from the already-buffered
+listing traversal; incremental never reconciles unseen sources as unavailable.
+The existing direct-entry route and strict body, identity, capture, and END proof
+remain required. No shared Catalog schema, Core access strategy, or resource
+rules change.
 
 ## Piccoma observed manual unlocks (2026-10-10)
 

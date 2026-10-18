@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
 
 from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, WorkInput
+from screenshot_crawler.core.access_guard import AccessGuard
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
 from screenshot_crawler.site_adapters.younganimal import YounganimalDiscoveryAdapter
 from screenshot_crawler.site_adapters.younganimal import discovery as younganimal_discovery
@@ -73,9 +76,15 @@ def _listing_html(
     selected_page: int | None,
     title: bool,
     user_rows: str = "",
+    labels_by_position: dict[int, str] | None = None,
+    native_access: list[dict[str, object]] | None = None,
+    late_guard_trigger: bool = False,
 ) -> str:
     heading = '<h1>Fixture Work</h1>' if title else ""
-    rows = "".join(_row(position) for position in positions)
+    labels = labels_by_position or {}
+    rows = "".join(
+        _row(position, label=labels.get(position)) for position in positions
+    )
     account_script = ""
     if user_rows:
         account_script = f'''<script>
@@ -84,12 +93,21 @@ def _listing_html(
           setTimeout(() => {{root.innerHTML = {json.dumps(user_rows)};
             root.classList.remove('mode-loading');}}, 50);
         </script>'''
+    native_script = ""
+    if native_access is not None:
+        native_script = '''<script>
+          fetch('/api/auth/session');
+          fetch('/api/series/access?context=series');
+        </script>'''
+    late_guard_script = (
+        "<script>fetch('/api/late-guard-trigger');</script>" if late_guard_trigger else ""
+    )
     return f'''<!doctype html><html><head><meta charset="utf-8"></head><body>{heading}
       <div class="series-eplist-main">
         <div class="series-eplist" data-e2e="epList">{rows}</div>
         <div class="series-eplist mode-user" data-e2e="epListUser"></div>
         <div class="series-sort">{_range_links(selected_page=selected_page)}</div>
-      </div>{account_script}</body></html>'''
+      </div>{account_script}{native_script}{late_guard_script}</body></html>'''
 
 
 def _target(
@@ -119,6 +137,10 @@ async def _install_pages(
     omit_last: bool = False,
     history_conflict: str | None = None,
     rental_label: str | None = None,
+    labels_by_position: dict[int, str] | None = None,
+    native_access: list[dict[str, object]] | None = None,
+    native_auth_user: int | None = 42,
+    late_guard_response_gate: asyncio.Event | None = None,
 ) -> list[str]:
     requested: list[str] = []
     root_requests = 0
@@ -136,6 +158,31 @@ async def _install_pages(
         nonlocal root_requests
         parsed = urlsplit(route.request.url)
         requested.append(parsed.path)
+        if parsed.path == "/api/auth/session" and native_access is not None:
+            await route.fulfill(
+                status=200,
+                body=json.dumps({"user": native_auth_user}),
+                content_type="application/json",
+            )
+            return
+        if parsed.path == "/api/series/access" and native_access is not None:
+            await route.fulfill(
+                status=200,
+                body=json.dumps(
+                    {
+                        "seriesAccess": {
+                            "seriesId": WORK_ID,
+                            "episodeAccesses": native_access,
+                        }
+                    }
+                ),
+                content_type="application/json",
+            )
+            return
+        if parsed.path == "/api/late-guard-trigger" and late_guard_response_gate is not None:
+            await late_guard_response_gate.wait()
+            await route.fulfill(status=429, body="", content_type="text/plain")
+            return
         if parsed.path == f"/episodes/{SEED_ID}":
             body = f'''<!doctype html><html><body>
               <a class="ep-h-main-h-series" href="/series/{WORK_ID}">Fixture Work</a>
@@ -149,6 +196,8 @@ async def _install_pages(
                 body=_listing_html(
                     positions=list(range(1, 31)), selected_page=None, title=True,
                     user_rows=history_rows,
+                    labels_by_position=labels_by_position,
+                    native_access=native_access,
                 ),
                 content_type="text/html",
             )
@@ -161,6 +210,8 @@ async def _install_pages(
                 body=_listing_html(
                     positions=positions, selected_page=None, title=True,
                     user_rows=history_rows,
+                    labels_by_position=labels_by_position,
+                    native_access=native_access,
                 ),
                 content_type="text/html",
             )
@@ -172,6 +223,9 @@ async def _install_pages(
                 body=_listing_html(
                     positions=positions, selected_page=2, title=True,
                     user_rows=history_rows,
+                    labels_by_position=labels_by_position,
+                    native_access=native_access,
+                    late_guard_trigger=late_guard_response_gate is not None,
                 ),
                 content_type="text/html",
             )
@@ -185,12 +239,41 @@ async def _install_pages(
 async def test_younganimal_full_incremental_and_bounded_discovery(
     browser_page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    requested = await _install_pages(browser_page)
+    native_access = [
+        {
+            "episodeId": _episode_id(3),
+            "accessType": "waitAndFree",
+            "hasAccess": False,
+        },
+        {
+            "episodeId": _episode_id(4),
+            "accessType": "paidContent",
+            "hasAccess": False,
+        },
+        {
+            "episodeId": _episode_id(5),
+            "accessType": "trial",
+            "hasAccess": True,
+        },
+        {
+            "episodeId": _episode_id(6),
+            "accessType": "waitAndFree",
+            "hasAccess": True,
+            "timeRemainingInSeconds": 3600,
+        },
+    ]
+    requested = await _install_pages(
+        browser_page,
+        native_access=native_access,
+        labels_by_position={4: "購入", 5: "試読", 6: "作品チケット"},
+    )
     pacing_navigation_counts: list[int] = []
     original_pacing = younganimal_discovery._pace_before_range_navigation
 
     async def record_pacing(page, guard) -> None:
-        pacing_navigation_counts.append(len(requested))
+        pacing_navigation_counts.append(
+            sum(path.startswith(f"/series/{WORK_ID}") for path in requested)
+        )
         await original_pacing(page, guard)
 
     monkeypatch.setattr(younganimal_discovery, "RANGE_PACING_MS", 0)
@@ -212,20 +295,16 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
     assert catalog.find_source("younganimal", f"{WORK_ID}:{SEED_ID}").display_position == 1
     assert catalog.find_source("younganimal", f"{WORK_ID}:{SEED_ID}").access_mode == "free"
     assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(2)}").access_mode == "unknown"
-    assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(3)}").access_mode == "unknown"
+    assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(3)}").access_mode == "quota"
+    assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(4)}").access_mode == "unknown"
+    assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(5)}").access_mode == "unknown"
+    manual_grant = catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(6)}")
+    assert manual_grant.access_mode == "quota"
+    assert manual_grant.access_granted_until is not None
     assert requested.count(f"/series/{WORK_ID}/1") == 1
     assert requested.count(f"/series/{WORK_ID}/2") == 1
     assert pacing_navigation_counts == [1, 2]
-
-    requested.clear()
-    pacing_navigation_counts.clear()
-    incremental = await service.discover(browser_page, _target(), "incremental")
-    assert incremental.complete is None
-    assert incremental.stopped_reason == "exhausted"
-    assert incremental.observed_count == TOTAL
-    assert requested.count(f"/series/{WORK_ID}/1") == 1
-    assert requested.count(f"/series/{WORK_ID}/2") == 1
-    assert pacing_navigation_counts == [1, 2]
+    assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(3)}").access_mode == "quota"
 
     bounded_catalog = CatalogService(tmp_path / "bounded.sqlite")
     requested.clear()
@@ -248,6 +327,43 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
         28,
     ]
     assert pacing_navigation_counts == [1, 2]
+    assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(3)}").access_mode == "quota"
+
+    requested.clear()
+    pacing_navigation_counts.clear()
+    incremental = await service.discover(browser_page, _target(), "incremental")
+    assert incremental.complete is None
+    assert incremental.stopped_reason == "exhausted"
+    assert incremental.observed_count == TOTAL
+    assert requested.count(f"/series/{WORK_ID}/1") == 1
+    assert requested.count(f"/series/{WORK_ID}/2") == 1
+    assert pacing_navigation_counts == [1, 2]
+
+
+async def test_younganimal_native_ticket_access_requires_positive_authentication(
+    browser_page, tmp_path: Path
+) -> None:
+    requested = await _install_pages(
+        browser_page,
+        native_access=[
+            {
+                "episodeId": _episode_id(3),
+                "accessType": "waitAndFree",
+                "hasAccess": False,
+            }
+        ],
+        native_auth_user=None,
+        labels_by_position={3: "待つと無料"},
+    )
+    service = DiscoveryService(CatalogService(tmp_path / "unauthenticated.sqlite"), _registry())
+
+    result = await service.discover(browser_page, _target(), "full")
+
+    assert result.complete is True
+    assert "/api/auth/session" in requested
+    assert service.catalog.find_source(
+        "younganimal", f"{WORK_ID}:{_episode_id(3)}"
+    ).access_mode == "unknown"
 
 
 async def test_younganimal_rental_history_joins_public_identity_and_clears_stale_grant(
@@ -283,7 +399,7 @@ async def test_younganimal_rental_history_joins_public_identity_and_clears_stale
     assert refreshed.stopped_reason == "exhausted"
     source = catalog.get_source(source.id)
     assert source.access_mode == "unknown"
-    assert source.access_granted_until is None
+    assert source.access_granted_until is not None
 
 
 async def test_younganimal_navigation_retry_budget_is_shared_across_work(
@@ -360,6 +476,114 @@ async def test_younganimal_incomplete_range_yields_nothing_and_preserves_catalog
     assert catalog.list_sources(site="younganimal") == [catalog.get_source(existing.id)]
     assert catalog.get_source(existing.id).available is True
     assert unavailable_calls == []
+
+
+async def test_younganimal_late_429_during_native_drain_yields_nothing_and_cleans_up(
+    browser_page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    late_response_gate = asyncio.Event()
+    native_body_gate = asyncio.Event()
+    native_body_started = asyncio.Event()
+    late_response_seen = asyncio.Event()
+    native_access = [
+        {
+            "episodeId": _episode_id(3),
+            "accessType": "waitAndFree",
+            "hasAccess": False,
+        }
+    ]
+    requested = await _install_pages(
+        browser_page,
+        native_access=native_access,
+        late_guard_response_gate=late_response_gate,
+    )
+    response_callback = lambda response: (
+        late_response_seen.set()
+        if urlsplit(response.url).path == "/api/late-guard-trigger" and response.status == 429
+        else None
+    )
+    browser_page.on("response", response_callback)
+
+    observer_type = younganimal_discovery._YounganimalNativeAccessObserver
+    original_capture = observer_type._capture
+    original_finish = observer_type.finish
+    original_attach = observer_type.attach
+    observers = []
+    guards = []
+
+    async def delayed_capture(self, response, *, requested_at, path) -> None:
+        if path == "/api/series/access" and not native_body_started.is_set():
+            native_body_started.set()
+            await native_body_gate.wait()
+        await original_capture(self, response, requested_at=requested_at, path=path)
+
+    async def finish_while_late_response_arrives(self):
+        await asyncio.wait_for(native_body_started.wait(), timeout=2)
+        drain = asyncio.create_task(original_finish(self))
+        await asyncio.sleep(0)
+        late_response_gate.set()
+        await asyncio.wait_for(late_response_seen.wait(), timeout=2)
+        native_body_gate.set()
+        return await drain
+
+    def track_observer(self, page) -> None:
+        original_attach(self, page)
+        observers.append(self)
+
+    original_guard_factory = AccessGuard.from_profile
+
+    def track_guard(cls, **kwargs):
+        guard = original_guard_factory(**kwargs)
+        guards.append(guard)
+        return guard
+
+    monkeypatch.setattr(observer_type, "_capture", delayed_capture)
+    monkeypatch.setattr(observer_type, "finish", finish_while_late_response_arrives)
+    monkeypatch.setattr(observer_type, "attach", track_observer)
+    monkeypatch.setattr(AccessGuard, "from_profile", classmethod(track_guard))
+
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    target = _target()
+    work = catalog.create_work(WorkInput(work_key=target.work_key, title="Fixture Work"))
+    item = catalog.create_item(ItemInput(kind="episode"), work_id=work.id)
+    grant_until = datetime(2026, 10, 20, tzinfo=UTC)
+    existing = catalog.create_source(
+        SourceInput(
+            site="younganimal",
+            external_id=f"{WORK_ID}:{_episode_id(3)}",
+            discovery_key=target.key,
+            access_mode="quota",
+            quota_started_at=datetime(2026, 10, 17, tzinfo=UTC),
+            access_granted_until=grant_until,
+            available=True,
+        ),
+        item_id=item.id,
+    )
+    source_before = catalog.get_source(existing.id)
+    unavailable_calls: list[dict[str, object]] = []
+    original_mark_unavailable = catalog.mark_sources_unavailable_except
+
+    def spy_mark_sources_unavailable_except(**kwargs: object) -> None:
+        unavailable_calls.append(kwargs)
+        original_mark_unavailable(**kwargs)
+
+    catalog.mark_sources_unavailable_except = spy_mark_sources_unavailable_except  # type: ignore[method-assign]
+    try:
+        result = await DiscoveryService(catalog, _registry()).discover(
+            browser_page, target, "full"
+        )
+    finally:
+        late_response_gate.set()
+        native_body_gate.set()
+        browser_page.remove_listener("response", response_callback)
+
+    assert "/api/late-guard-trigger" in requested
+    assert result.complete is False
+    assert result.observed_count == 0
+    assert catalog.get_source(existing.id) == source_before
+    assert unavailable_calls == []
+    assert observers and all(observer._page is None for observer in observers)
+    assert guards and all(guard._page is None for guard in guards)
 
 
 async def test_younganimal_episode_seed_is_rejected_before_any_navigation(
