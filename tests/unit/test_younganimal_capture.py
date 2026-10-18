@@ -28,9 +28,15 @@ def _snapshot(
     *,
     missing_canvas: int | None = None,
     standard15_body: bool = False,
+    odd_body_count: int | None = None,
 ) -> dict[str, object]:
     viewer_classes = {"-cv", "mode-spread", "mode-dir-rtl", "mode-nav-dir-rtl"}
-    if seek_value == 21:
+    odd_body_profile = standard15_body or odd_body_count is not None
+    body_count = odd_body_count if odd_body_count is not None else 15 if standard15_body else 16
+    seek_max = body_count + 6 if odd_body_profile else 21
+    if odd_body_profile:
+        viewer_classes.update({"mode-has-pr", "mode-has-comic-info", "mode-has-good-page"})
+    if seek_value == seek_max:
         viewer_classes.update({"mode-first-page", "mode-top-pr-page"})
     elif seek_value == 5:
         viewer_classes.update({"mode-pr-page", "mode-ci-page"})
@@ -38,10 +44,10 @@ def _snapshot(
         viewer_classes.add("mode-pr-page")
     elif seek_value == 1:
         viewer_classes.update({"mode-pr-page", "mode-last-page"})
-    body_slots = STANDARD15_BODY_SLOTS if standard15_body else BODY_SLOTS
+    body_slots = tuple(range(1, body_count + 1))
     ci_slot = body_slots[-1] + 1
     wrapper_count = ci_slot + 5
-    if standard15_body and seek_value == 1:
+    if odd_body_profile and seek_value == 1:
         viewer_classes.discard("mode-pr-page")
     slots: list[dict[str, object]] = []
     for index in range(wrapper_count):
@@ -57,7 +63,7 @@ def _snapshot(
             classes = {"-cv-page", "mode-good"}
         else:
             classes = {"-cv-page", "mode-last"}
-        rect_x = 945 + ((21 - seek_value) - index) * 946
+        rect_x = 945 + ((seek_max - seek_value + 1 - index - 1) * 946)
         canvas = None
         canvas_count = 0
         if index in body_slots and index != missing_canvas:
@@ -100,7 +106,7 @@ def _snapshot(
             "type": "range",
             "value": str(seek_value),
             "min": "1",
-            "max": "21",
+            "max": str(seek_max),
             "step": "2",
             "disabled": False,
         },
@@ -341,39 +347,34 @@ def test_younganimal_top_empty_variant_rejects_unknown_blank_or_wrapper_contract
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
 
-@pytest.mark.parametrize(
-    ("seek_value", "state", "active", "centers"),
-    [
-        (21, "content", (1,), (0, 1)),
-        (19, "content", (2, 3), (2, 3)),
-        (7, "content", (14, 15), (14, 15)),
-        (5, "ad", (16, 17), (16, 17)),
-        (3, "ad", (18, 19), (18, 19)),
-        (1, "end", (18, 19, 20), (20,)),
-    ],
-)
-def test_younganimal_standard15_body_profile_matches_observed_seek_geometry(
-    seek_value: int,
-    state: str,
-    active: tuple[int, ...],
-    centers: tuple[int, ...],
-) -> None:
-    raw = _snapshot(seek_value, standard15_body=True)
+@pytest.mark.parametrize("body_count", [7, 9, 15])
+def test_younganimal_standard_odd_body_profile_maps_markers_and_selected_centers(body_count: int) -> None:
+    maximum = body_count + 6
+    ci_slot = body_count + 1
+    states = (
+        (maximum, "content", (1,), (0, 1)),
+        (maximum - 2, "content", (2, 3), (2, 3)),
+        (7, "content", (body_count - 1, body_count), (body_count - 1, body_count)),
+        (5, "ad", (ci_slot, ci_slot + 1), (ci_slot, ci_slot + 1)),
+        (3, "ad", (ci_slot + 2, ci_slot + 3), (ci_slot + 2, ci_slot + 3)),
+        (1, "end", (ci_slot + 2, ci_slot + 3, ci_slot + 4), (ci_slot + 4,)),
+    )
+    for seek_value, state, active, centers in states:
+        raw = _snapshot(seek_value, odd_body_count=body_count)
+        observation = _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
-    observation = _parse_viewer_observation(raw, expected_url=EPISODE_URL)
-
-    assert observation.layout_variant == "standard15_body"
-    assert observation.body_slots == STANDARD15_BODY_SLOTS
-    assert observation.ci_slot == 16
-    assert observation.page_state == state
-    assert observation.active_slots == active
-    assert tuple(
-        slot["index"]
-        for slot in raw["slots"]
-        if slot["wrapperCenterInViewport"] is True
-    ) == centers
-    if state == "content":
-        assert observation.ready_slots == active
+        assert observation.layout_variant == "standard_odd_body"
+        assert observation.body_slots == tuple(range(1, body_count + 1))
+        assert observation.ci_slot == ci_slot
+        assert observation.page_state == state
+        assert observation.active_slots == active
+        assert tuple(
+            slot["index"]
+            for slot in raw["slots"]
+            if slot["wrapperCenterInViewport"] is True
+        ) == centers
+        if state == "content":
+            assert observation.ready_slots == active
 
 
 @pytest.mark.parametrize(
@@ -410,6 +411,30 @@ def test_younganimal_standard15_body_profile_rejects_wrong_interstitial_marker_o
     for raw in (marker_drift, center_drift):
         with pytest.raises(UnknownPageStateError):
             _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
+@pytest.mark.parametrize("marker", ["mode-has-pr", "mode-has-comic-info", "mode-has-good-page"])
+def test_younganimal_standard_odd_body_requires_each_capability_marker(marker: str) -> None:
+    raw = _snapshot(13, odd_body_count=7)
+    raw["viewerClasses"].remove(marker)
+
+    with pytest.raises(UnknownPageStateError, match="capability markers"):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
+@pytest.mark.parametrize("mutation", ["even_body_count", "other_body_center", "body_pair_missing_center"])
+def test_younganimal_standard_odd_body_rejects_unsupported_shape_or_center(mutation: str) -> None:
+    if mutation == "even_body_count":
+        raw = _snapshot(13, odd_body_count=8)
+    elif mutation == "other_body_center":
+        raw = _snapshot(13, odd_body_count=7)
+        raw["slots"][4]["wrapperCenterInViewport"] = True
+    else:
+        raw = _snapshot(11, odd_body_count=7)
+        raw["slots"][3]["wrapperCenterInViewport"] = False
+
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
 
 @pytest.mark.parametrize(

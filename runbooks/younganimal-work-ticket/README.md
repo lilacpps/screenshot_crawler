@@ -118,13 +118,14 @@
 
 ## 5. 最終受け入れチェックリスト
 
-- [ ] Discovery済み canonical episode URL以外にBatchの事前探索がない。作品ページnavigation、別作品先読み **0件**
-- [ ] 1作品1候補・最大1回ticket click、作品ごとの逐次完了
-- [ ] `work_ticket` のローカル23h SKIPがページ作成前に働き、再実行時site request **0件**
-- [ ] 有効期限内の手動・自動grantは同じ話のみdirect。再消費0、期限の捏造0
-- [ ] 対象不一致/paid/login/unknown/DOM driftでクリック0、自動二重クリック0
-- [ ] 消費確定後にCapture/ZIPが失敗してもwork/sourceの記録と失敗区別が残る
+- [x] Discovery済み canonical episode URL以外にBatchの事前探索がない。作品ページnavigation、別作品先読み **0件**
+  This check covers Batch's explicit candidate preflight/navigation only; it does not assert that every naturally generated non-main RSC request is absent. Incidental RSC observations and abort handling are recorded in `PROGRESS.md`; initiators and work identity are not established for all such requests.
+- [x] 1作品1候補・最大1回ticket click、作品ごとの逐次完了
+- [x] `work_ticket` のローカル23h SKIPがページ作成前に働き、再実行時site request **0件**
+- [x] 有効期限内の手動・自動grantは同じ話のみdirect。再消費0、期限の捏造0
+- [x] 対象不一致/paid/login/unknown/DOM driftでクリック0、自動二重クリック0
+- [x] 消費確定後にCapture/ZIPが失敗してもwork/sourceの記録と失敗区別が残る
 - [ ] 通常Batch: 1クリック→同じPageで1ページ目→END→有効なZIP→Item completed
-- [ ] `--grant-only work_ticket`: 1クリック→消費確認・記録、pages=0、ZIP=0、Item pending
+- [x] `--grant-only work_ticket`: 1クリック→消費確認・記録、pages=0、ZIP=0、Item pending
 - [ ] 既存free/rental/描画品質、Hanayume/ComicDAYS、共通Batchの回帰なし
-- [ ] 実サイトでチケット総消費数・証拠・観測時刻・独立レビュー結果を `PROGRESS.md` に記録
+- [x] 実サイトでチケット総消費数・証拠・観測時刻・独立レビュー結果を `PROGRESS.md` に記録

@@ -41,7 +41,9 @@ resource use; the isolated Source recorded grant expiry
 `2026-10-21T17:31:58.911149+09:00`. The CLI then failed Viewer readiness with
 `PageChangeTimeoutError`: no stable known layout within 20 seconds, Capture
 `not_started`, zero pages, pending Item, and no artifact. The 23-hour minimum
-cooldown ends `2026-10-19T16:32:39.739556+09:00`. No retry occurred. Evidence:
+cooldown ends `2026-10-19T16:32:39.739556+09:00`. No quota-consuming retry
+occurred. A later direct run used the already-active grant without consuming a
+resource; details are recorded below. Evidence:
 `output/younganimal_work_ticket_tester/NORMAL_BATCH_0634_REPORT.md` and
 `output/yanc-0634/younganimal/`.
 
@@ -61,15 +63,23 @@ Last marker was at slot 20 and the tail roles were CI/PR/PR/Good/Last at
 parser expected `seek_max=len(slots)-1` (20 for these 21 wrappers). A later
 bounded public-seek probe on the exact active grant observed values 21, 19, 7,
 5, 3, and 1 mapping to body slot 1; body 2-3; body 14-15; CI/PR 16-17;
-PR/Good 18-19; and Last 20. The implemented `standard15_body` profile requires
-exactly 21 wrappers, no top-empty flag, lead slot 0, body slots 1-15, and
-CI/PR/PR/Good/Last tail slots 16-20 with seek 1..21 by 2. Its exact viewer
-marker sets are first+top-PR at max, no marker on body values 19..7, CI+PR at 5,
-PR at 3, and Last only at 1. The Python parser, JS capture geometry, and native
-proof enforce this profile; other unknown layouts remain fail-closed.
-Unit/browser synthetic checks and independent review passed. No production
-ticketed recrawl has yet validated it. The public-seek probe restored value 21,
-read metadata only, and made no capture, click, or checkout. Evidence:
+PR/Good 18-19; and Last 20. The `standard_odd_body` profile recognizes a
+conditional structural family: no top-empty flag; positive
+`mode-has-pr`, `mode-has-comic-info`, and `mode-has-good-page`; exact lead,
+contiguous odd body B>=3, and CI/PR/PR/Good/Last tail roles; and seek min=1,
+max=wrapper_count, step=2. Every accepted member also requires exact marker
+sets and selected wrapper centers at maximum, body, CI/PR, PR/Good, and minimum.
+Live B=15 metadata (21 wrappers, body 1-15, tail 16-20) establishes the
+observed structure. Its separate existing-grant direct Capture through END/ZIP
+ran under the earlier count-specific `standard15_body` fix, before the current
+parametric generalization. Live B=7 metadata (13 wrappers, body 1-7, tail
+8-12) confirms its marker/center mapping but does not establish Viewer readiness
+or successful Capture. Synthetic B=9 full Runner coverage passed. Python
+parsing, JS capture geometry, and native proof apply the same contract;
+unsupported shapes remain fail-closed. A fresh quota-consuming run through
+END/ZIP has not yet validated that full path. The public-seek
+probe restored value 21, read metadata only, and made no capture, click, or
+checkout. Evidence:
 `output/younganimal_work_ticket_tester/readonly_viewer_diag_0634.json`,
 `public_seek_metadata_0634_attempt3.json`, and
 `saved_viewer_structure_0634.json`.
@@ -81,7 +91,40 @@ use. It validates the existing-grant direct path only. Evidence:
 `output/younganimal_work_ticket_tester/direct-one-shot-856.json` and
 `direct-postflight-856.json`.
 
-The ticket ledger is 3/5. Stage A full and incremental Discovery on the first
+After the earlier count-specific `standard15_body` fix, direct Batch on the already-granted episode
+`0634e2ac53df6` / work `145fe0e303563` also exited 0 and completed a new Run
+with 15 pages through END. The Page audit recorded one owned Page, one goto,
+and one main-document request, with zero reloads, off-target/series navigation,
+commerce clicks, or checkout POSTs. The prior failed Run, Source grant/quota
+timestamps, and Work last-consumed time were unchanged. The ZIP contained 15
+ordered 925×1329 PNGs; CRC, decode, manifest order, Catalog completion, and
+archive SHA validation passed. No per-image hash or source-native format claim
+is made. Independent review passed. Evidence:
+`output/younganimal_work_ticket_tester/direct-postflight-0634.json` and
+`direct-preflight-0634-provenance.json`. This verifies direct capture with an
+existing grant; fresh quota consumption through same-Page END/ZIP remains
+pending.
+
+A fourth authorized normal Batch work-ticket use occurred on episode
+`c7819ded99f66` / work `5d1e949cd0b52` at `2026-10-18T18:33:53.283098+09:00`.
+One exact wait-free click, target-bound checkout HTTP 200, and authenticated
+native `waitAndFree` false-to-true transition confirmed resource use. The Source
+grant expires at `2026-10-21T18:32:56.842671+09:00`; the same-work 23-hour
+cooldown ends at `2026-10-19T17:33:53.283098+09:00`. The CLI then failed before
+Capture with `PageChangeTimeoutError`; the Item remains pending with no pages,
+END, ZIP, or Artifact. A bounded read-only follow-up on the active grant
+verified exact work/auth/native state and a 13-wrapper profile. Public seek
+values 13, 11, 7, 5, 3, 1 mapped to body slot 1, body 2-3, body 6-7, CI8+PR9,
+PR10+Good11, and Last12. Marker flags matched. The current parser recognizes
+this as a B=7 member of `standard_odd_body` only when its positive capability
+flags, exact wrapper roles, marker phases, and selected centers validate. The
+diagnostic observed nav-open and one splash
+marker throughout, so it does not establish Viewer readiness. It made no click,
+checkout, image read, or Capture call. Evidence: `output/younganimal_work_ticket_tester/normal-postflight-c781.json` and
+`output/younganimal_work_ticket_tester/public_seek_metadata_c781_attempt1.json`.
+No balance-delta claim is made. Ticket use is now 4/5.
+
+The ticket ledger is 4/5. Stage A full and incremental Discovery on the first
 used work retained the manual grant; a disposable stale-grant cache copy then
 skipped grant-only as already granted with no click or checkout. The first local
 cooldown audit was **INCONCLUSIVE** because its hard sentinel stopped before
@@ -93,9 +136,11 @@ gate is verified before Page/site access. Evidence:
 `output/younganimal_work_ticket_tester/LOCAL_COOLDOWN_E15_REPORT.md`. Phase 02
 listing Discovery recognizes authenticated native ticket state, and the
 site-local adapter implements `quota + work_ticket` without a shared Core
-change. Phases 02-03 passed independent review. The latest affected Younganimal
-unit/browser regression selection passed 302 tests, 0 skipped, with 207 existing
-pytest-asyncio deprecation warnings; the full repository suite was not run.
+change. Phases 02-03 passed independent review. The latest complete
+seven-file Younganimal regression selection passed 313 tests with 0 skipped:
+capture+adapter passed 162 (5 existing warnings), and the remaining
+policy/live-access/discovery/batch-unit plus Discovery-browser files passed 151
+(203 existing warnings). The full repository suite was not run.
 
 This target proved the additional `top_empty_no_pr` layout: the positive
 `mode-has-top-emptypage` root flag, one exact empty/no-canvas leading wrapper at
@@ -287,17 +332,22 @@ Stripe matching ignores URL fragments. Facebook requires an empty fragment,
 but the trace omitted request-fragment presence, so its production match remains
 unverified until the next sanitized audit records that Boolean. No ticket was
 used during that audit.
-The latest affected Younganimal unit/browser regression selection passed 302
-tests, 0 skipped, with 207 existing pytest-asyncio deprecation warnings. The
-route-drift fixture triggers the exact series main-frame navigation only after
-positive consumption proof and asserts the guard's observed rejection. Phase 04
+The latest complete seven-file Younganimal regression selection passed 313
+tests with 0 skipped: capture+adapter passed 162 (5 existing warnings), and the
+remaining policy/live-access/discovery/batch-unit plus Discovery-browser files
+passed 151 (203 existing warnings). The route-drift fixture triggers the exact
+series main-frame navigation only after positive consumption proof and asserts the guard's observed rejection. Phase 04
 grant-only and both-mode before-Page/site cooldown verification passed. One
-normal Batch ticket grant was also confirmed, but that run failed before
-Capture. The exact `standard15_body` profile observed on that run is now
-implemented consistently in Python parsing, JS geometry, and native proof, and
-passed independent review plus synthetic regressions. A successful normal
-ticketed END/ZIP run after the profile fix remains pending. The full repository
-suite was not run.
+normal Batch ticket grant was confirmed; its first Viewer attempt failed before
+Capture. Direct Batch on that episode's already-active grant later completed 15
+pages through END and passed ZIP/Catalog validation with no further resource
+use. The conditional `standard_odd_body` signature is implemented consistently
+in Python parsing, JS geometry, and native proof, and passed independent review
+plus focused synthetic checks. Live B=7 metadata is mapped but has not been
+through Capture; the B=15 existing-grant direct capture ran under the earlier
+count-specific `standard15_body` fix, before the current parametric generalization.
+Synthetic B=9 Runner coverage passed. Fresh quota-consuming normal END/ZIP
+remains pending. The full repository suite was not run.
 Full Discovery buffers before yielding, so an incomplete
 traversal cannot mark unseen sources unavailable. Maximums are 100 ranges and
 3,000 rows.
@@ -448,11 +498,15 @@ Global mutation accounting and all candidate, selected-page, post-encode, mappin
 layout, pixel, cleanup, and whole-spread gates remain intact.
 
 The preceding free-only status was accurate on 2026-10-12. Work-ticket live
-evidence and the three-use ledger are summarized in the current verification
-snapshot above. A successful normal quota/capture/END/ZIP run remains pending
-after the 0634 ticketed run failed in Viewer readiness. The observed 21-wrapper
-profile is now supported only under the strict `standard15_body` contract and
-its synthetic tests; no live normal ticketed recrawl has yet verified the fix.
+evidence and the four-use ledger are summarized in the current verification
+snapshot above. The 0634 ticketed attempt failed in Viewer readiness; a direct
+run on its existing grant later captured 15 pages through END and passed
+ZIP/Catalog validation without another resource use. A fresh normal
+quota/capture/END/ZIP run remains pending. Live B=15 metadata describes the structure; its separate existing-grant direct
+run passed under the earlier count-specific `standard15_body` fix, before the
+current parametric implementation. The current `standard_odd_body` rule passed
+synthetic B=9 full Runner tests and independent review. B=7 metadata remains
+capture-unverified. No universal odd-count claim is made.
 The first cooldown audit was inconclusive; the corrected normal and grant-only
 audits passed before Page/site access. The full repository suite was not run.
 
