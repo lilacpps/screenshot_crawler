@@ -85,6 +85,70 @@ def _site_url(url: str) -> tuple[str | None, str, str, bool]:
     return host or None, parsed.path, parsed.query, valid
 
 
+def _known_external_subframe_reason(
+    *,
+    url: str,
+    method: str,
+    resource_type: str,
+    is_navigation: bool,
+    is_main_frame: bool,
+) -> str | None:
+    """Match only the two observed third-party subframe route families."""
+
+    try:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").casefold()
+        path = parsed.path
+        try:
+            port = parsed.port
+            valid_port = port in (None, 443)
+        except ValueError:
+            valid_port = False
+    except ValueError:
+        return None
+
+    stripe_path = re.fullmatch(
+        r"/v3/(?:controller-with-preconnect|m-outer)-[0-9a-f]{32}\.html",
+        path,
+    )
+    facebook_path = host == "www.facebook.com" and path == "/tr/"
+    if host == "js.stripe.com" and stripe_path is not None:
+        exact_route = (
+            parsed.scheme.casefold() == "https"
+            and parsed.username is None
+            and parsed.password is None
+            and valid_port
+            and parsed.query == ""
+            and method == "GET"
+            and resource_type == "document"
+            and is_navigation
+            and not is_main_frame
+        )
+        # The live request summary did not retain fragment state. Stripe's
+        # observed route family deliberately ignores fragments and never stores
+        # or logs them.
+        return "stripe_known_subframe_navigation" if exact_route else "unexpected_stripe_subframe_route"
+    if facebook_path:
+        exact_route = (
+            parsed.scheme.casefold() == "https"
+            and parsed.username is None
+            and parsed.password is None
+            and valid_port
+            and parsed.query == ""
+            and parsed.fragment == ""
+            and method == "POST"
+            and resource_type == "document"
+            and is_navigation
+            and not is_main_frame
+        )
+        return (
+            "facebook_known_subframe_navigation"
+            if exact_route
+            else "unexpected_facebook_subframe_route"
+        )
+    return None
+
+
 def _query_work_ids(query: str) -> tuple[str, ...]:
     try:
         pairs = parse_qsl(query, keep_blank_values=True, max_num_fields=128)
@@ -255,7 +319,23 @@ def guarded_route_reason(
 ) -> str | None:
     """Classify target routes, including harmless same-work RSC prefetches."""
 
+    external_subframe_reason = _known_external_subframe_reason(
+        url=url,
+        method=method,
+        resource_type=resource_type,
+        is_navigation=is_navigation,
+        is_main_frame=is_main_frame,
+    )
+    if external_subframe_reason is not None:
+        return external_subframe_reason
     _host, path, query, valid = _site_url(url)
+    try:
+        has_rsc_query = any(
+            key == "_rsc"
+            for key, _ in parse_qsl(query, keep_blank_values=True, max_num_fields=128)
+        )
+    except ValueError:
+        has_rsc_query = False
     if is_navigation:
         if not valid:
             return "non_target_navigation"
@@ -264,6 +344,11 @@ def guarded_route_reason(
         if not is_main_frame:
             return "unexpected_subframe_navigation"
     if not valid:
+        if has_rsc_query and (
+            path == "/"
+            or re.fullmatch(r"/store_items/series/[1-9][0-9]*/[1-9][0-9]*", path)
+        ):
+            return "unknown_rsc_page_route"
         return None
     if path.startswith("/api/"):
         episode = re.fullmatch(r"/api/episodes/([0-9a-f]{13})(?:/.*)?", path)
@@ -274,13 +359,6 @@ def guarded_route_reason(
             return "other_work_api_route"
         return None
     expected_path = urlsplit(expected_episode_url).path
-    try:
-        has_rsc_query = any(
-            key == "_rsc"
-            for key, _ in parse_qsl(query, keep_blank_values=True, max_num_fields=128)
-        )
-    except ValueError:
-        has_rsc_query = False
     episode_route = re.fullmatch(r"/episodes/([0-9a-f]{13})/?", path)
     if (
         episode_route is not None
@@ -300,6 +378,23 @@ def guarded_route_reason(
             # does not invalidate the selected episode's current-page operation.
             return "other_episode_rsc_prefetch"
         return "other_episode_page_route"
+    known_page_rsc_path = path == "/" or re.fullmatch(
+        r"/store_items/series/[1-9][0-9]*/[1-9][0-9]*", path
+    ) is not None
+    if known_page_rsc_path:
+        if (
+            not is_navigation
+            and is_main_frame
+            and resource_type == "fetch"
+            and method == "GET"
+            and has_rsc_query
+            and has_rsc_header
+        ):
+            # These exact same-site RSC prefetch routes were observed during
+            # the bounded guard trace. They are aborted before the network and
+            # are not treated as page navigations.
+            return "known_page_rsc_prefetch"
+        return "unknown_rsc_page_route"
     if resource_type in STATIC_RESOURCE_TYPES:
         return None
     if path == expected_path:
@@ -861,6 +956,12 @@ class YounganimalEpisodeRouteGuard:
         self.same_work_prefetch_paths: list[str] = []
         self.other_episode_prefetch_count = 0
         self.other_episode_prefetch_paths: list[str] = []
+        self.known_page_rsc_prefetch_count = 0
+        self.known_page_rsc_prefetch_paths: list[str] = []
+        self.stripe_subframe_count = 0
+        self.stripe_subframe_paths: list[str] = []
+        self.facebook_subframe_count = 0
+        self.facebook_subframe_paths: list[str] = []
 
     async def attach(self, page: Page) -> None:
         self._page = page
@@ -884,19 +985,51 @@ class YounganimalEpisodeRouteGuard:
                     name.casefold() == "rsc" for name in request.headers
                 ),
             )
-            if reason in {"same_work_rsc_prefetch", "other_episode_rsc_prefetch"}:
+            if reason in {
+                "same_work_rsc_prefetch",
+                "other_episode_rsc_prefetch",
+                "known_page_rsc_prefetch",
+                "stripe_known_subframe_navigation",
+                "facebook_known_subframe_navigation",
+            }:
                 self.blocked_count += 1
                 if reason == "same_work_rsc_prefetch":
                     self.same_work_prefetch_count += 1
                     if len(self.same_work_prefetch_paths) < MAX_RECORDED_ROUTE_PREFETCHES:
                         self.same_work_prefetch_paths.append(urlsplit(request.url).path)
-                else:
+                elif reason == "other_episode_rsc_prefetch":
                     self.other_episode_prefetch_count = min(
                         self.other_episode_prefetch_count + 1,
                         MAX_RECORDED_ROUTE_PREFETCHES,
                     )
                     if len(self.other_episode_prefetch_paths) < MAX_RECORDED_ROUTE_PREFETCHES:
                         self.other_episode_prefetch_paths.append(urlsplit(request.url).path)
+                else:
+                    path = urlsplit(request.url).path
+                    if reason == "known_page_rsc_prefetch":
+                        self.known_page_rsc_prefetch_count = min(
+                            self.known_page_rsc_prefetch_count + 1,
+                            MAX_RECORDED_ROUTE_PREFETCHES,
+                        )
+                        if (
+                            len(self.known_page_rsc_prefetch_paths)
+                            < MAX_RECORDED_ROUTE_PREFETCHES
+                        ):
+                            self.known_page_rsc_prefetch_paths.append(path)
+                    elif reason == "stripe_known_subframe_navigation":
+                        self.stripe_subframe_count = min(
+                            self.stripe_subframe_count + 1,
+                            MAX_RECORDED_ROUTE_PREFETCHES,
+                        )
+                        if len(self.stripe_subframe_paths) < MAX_RECORDED_ROUTE_PREFETCHES:
+                            self.stripe_subframe_paths.append(path)
+                    else:
+                        self.facebook_subframe_count = min(
+                            self.facebook_subframe_count + 1,
+                            MAX_RECORDED_ROUTE_PREFETCHES,
+                        )
+                        if len(self.facebook_subframe_paths) < MAX_RECORDED_ROUTE_PREFETCHES:
+                            self.facebook_subframe_paths.append(path)
                 await route.abort()
                 return
             if reason is not None:

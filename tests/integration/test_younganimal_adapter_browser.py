@@ -9,6 +9,7 @@ import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from PIL import Image
@@ -394,7 +395,8 @@ async def _install_fixture(
     ticket_hydration_delay_ms: int = 0,
     ticket_prefetch_series: bool = False,
     ticket_prefetch_other_episode_rsc: bool = False,
-    ticket_route_drift_after_checkout: bool = False,
+    ticket_prefetch_known_pages: bool = False,
+    ticket_prefetch_external_subframes: bool = False,
 ) -> list[str]:
     requested: list[str] = []
     ticket_state = {"consumed": ticket_initial_access, "clicks": 0}
@@ -448,9 +450,28 @@ async def _install_fixture(
         if ticket_prefetch_other_episode_rsc
         else ""
     )
-    ticket_drift_script = (
-        f"setTimeout(() => window.location.assign('/series/{WORK_ID}'), 300);"
-        if ticket_route_drift_after_checkout
+    ticket_known_page_prefetch_script = (
+        "for (const path of ['/', '/store_items/series/1708/1']) "
+        "fetch(path + '?_rsc=fixture', {headers:{rsc:'fixture'}}).catch(() => {});"
+        if ticket_prefetch_known_pages
+        else ""
+    )
+    ticket_external_subframe_script = (
+        "(() => {"
+        "const stripe=document.createElement('iframe');"
+        "stripe.style.display='none';"
+        "stripe.src='https://js.stripe.com/v3/controller-with-preconnect-"
+        "837b3ba280ce77b8f4416a2f4686fd3f.html#fixture-fragment';"
+        "document.body.append(stripe);"
+        "const fb=document.createElement('iframe');fb.name='ya-fb-tracker';"
+        "fb.style.display='none';"
+        "document.body.append(fb);"
+        "const form=document.createElement('form');form.method='POST';"
+        "form.style.display='none';"
+        "form.action='https://www.facebook.com/tr/';form.target=fb.name;"
+        "document.body.append(form);form.submit();form.remove();"
+        "})();"
+        if ticket_prefetch_external_subframes
         else ""
     )
     ticket_hydration_script = f"""<script>
@@ -463,6 +484,8 @@ async def _install_fixture(
       {initial_hydration}
       {ticket_prefetch_script}
       {ticket_other_episode_prefetch_script}
+      {ticket_known_page_prefetch_script}
+      {ticket_external_subframe_script}
       document.querySelector('[data-e2e="wfRead"]')?.addEventListener('click', async () => {{
         window.__ticketClicks += 1;
         await fetch('/api/checkout/rental', {{method:'POST',
@@ -470,7 +493,6 @@ async def _install_fixture(
           body:JSON.stringify({{episodeId:'{ticket_checkout_target_id}'}})}});
         document.querySelector('#ticket-gate')?.remove();
         await hydrateTicketState();
-        {ticket_drift_script}
       }});
     </script>"""
 
@@ -534,6 +556,13 @@ async def _install_fixture(
             await route.fulfill(status=404, body="")
 
     await page.route("https://younganimal.com/**", fulfill)
+    if ticket_prefetch_external_subframes:
+        async def fulfill_external(route) -> None:
+            requested.append(f"third-party:{urlsplit(route.request.url).path}")
+            await route.fulfill(status=200, body="")
+
+        await page.route("https://js.stripe.com/**", fulfill_external)
+        await page.route("https://www.facebook.com/**", fulfill_external)
     return requested
 
 
@@ -871,6 +900,8 @@ async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefet
         ticket_gate=True,
         ticket_prefetch_series=True,
         ticket_prefetch_other_episode_rsc=True,
+        ticket_prefetch_known_pages=True,
+        ticket_prefetch_external_subframes=True,
         native_source_slots=tuple(range(1, 17)),
     )
     guards = []
@@ -910,6 +941,20 @@ async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefet
     assert guards[0].other_episode_prefetch_count == 1
     assert guards[0].other_episode_prefetch_paths == ["/episodes/d19dd3fa4563f"]
     assert "/episodes/d19dd3fa4563f" not in requested
+    assert guards[0].known_page_rsc_prefetch_count == 2
+    assert guards[0].known_page_rsc_prefetch_paths == [
+        "/",
+        "/store_items/series/1708/1",
+    ]
+    assert "/" not in requested
+    assert "/store_items/series/1708/1" not in requested
+    assert guards[0].stripe_subframe_count == 1
+    assert guards[0].stripe_subframe_paths == [
+        "/v3/controller-with-preconnect-837b3ba280ce77b8f4416a2f4686fd3f.html"
+    ]
+    assert guards[0].facebook_subframe_count == 1
+    assert guards[0].facebook_subframe_paths == ["/tr/"]
+    assert not any(path.startswith("third-party:") for path in requested)
     assert catalog.get_source(candidate.source_id).quota_started_at is not None
 
 
@@ -1153,15 +1198,39 @@ async def test_younganimal_work_ticket_click_timeout_after_dispatch_is_reconcile
 
 
 async def test_younganimal_work_ticket_route_drift_after_proof_keeps_consumption_pending(
-    browser_page, tmp_path: Path
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
-    requested = await _install_fixture(
-        browser_page, ticket_gate=True, ticket_route_drift_after_checkout=True
-    )
+    requested = await _install_fixture(browser_page, ticket_gate=True)
     catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+    original_wait_for_viewer = YounganimalAdapter._wait_for_viewer_ready
+    route_guards = []
 
-    with pytest.raises(CandidateExecutionError, match="off-target route|left the target route") as raised:
+    async def drift_after_confirmed_grant(adapter, page):
+        observation = await original_wait_for_viewer(adapter, page)
+        assert adapter.get_access_consumption().consumed is True
+        guard = adapter._ticket_route_guard
+        assert guard is not None
+        route_guards.append(guard)
+        request_failed = asyncio.create_task(
+            page.wait_for_event(
+                "requestfailed",
+                predicate=lambda request: request.url == f"{BASE}/series/{WORK_ID}",
+                timeout=2_000,
+            )
+        )
+        await page.evaluate(
+            "url => setTimeout(() => window.location.assign(url), 0)",
+            f"{BASE}/series/{WORK_ID}",
+        )
+        await request_failed
+        return observation
+
+    monkeypatch.setattr(
+        YounganimalAdapter, "_wait_for_viewer_ready", drift_after_confirmed_grant
+    )
+
+    with pytest.raises(CandidateExecutionError) as raised:
         await executor.execute_candidate(
             browser_page,
             candidate,
@@ -1172,6 +1241,8 @@ async def test_younganimal_work_ticket_route_drift_after_proof_keeps_consumption
         )
 
     assert raised.value.resource_consumed is True
+    assert len(route_guards) == 1
+    assert route_guards[0].failure_reason == "non_target_main_document"
     assert requested.count("/api/checkout/rental") == 1
     assert not any(path.startswith("/series/") for path in requested)
     assert catalog.get_source(candidate.source_id).quota_started_at is not None

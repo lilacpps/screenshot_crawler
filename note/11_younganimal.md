@@ -202,6 +202,22 @@ recorded 403/429 access stops are checked again. This Phase 04 guard regression
 is synthetic; live CLI verification remains pending. Exact other-episode page
 paths are classified before the generic static-resource pass-through; asset
 suffix paths keep their previous handling.
+The later zero-dispatch guard trace also observed same-origin RSC GET fetches
+for `/` and `/store_items/series/<positive-id>/<positive-id>`, plus Stripe
+controller/m-outer and Facebook `/tr/` third-party subframe navigations. These
+route families now have narrow abort-only predicates; requests never reach the
+downstream test/application handler, and bounded diagnostics store paths only.
+Stripe matching ignores URL fragments. Facebook requires an empty fragment,
+but the trace omitted request-fragment presence, so its production match remains
+unverified until the next sanitized audit records that Boolean. No ticket was
+used during that audit.
+The latest affected local checks pass: `tests/unit/test_younganimal_live_access.py`
+has 57 passing tests, and `tests/integration/test_younganimal_adapter_browser.py`
+has 82 passing tests with no skips and five existing pytest-asyncio deprecation
+warnings. The route-drift fixture now triggers the exact series main-frame
+navigation only after a positive consumption proof and asserts the guard's
+observed rejection. Phase 04 live CLI checks remain pending; the full repository
+suite was not run.
 Full Discovery buffers before yielding, so an incomplete
 traversal cannot mark unseen sources unavailable. Maximums are 100 ranges and
 3,000 rows.

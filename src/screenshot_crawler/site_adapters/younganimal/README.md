@@ -92,6 +92,24 @@ navigations, and unrecognized RSC routes remain fatal. The adapter checks both
 this route guard and recorded 403/429 stops again immediately before latching
 the single action.
 
+The Phase 04 zero-dispatch guard trace also observed exact same-site RSC `GET`
+fetches for `/` and `/store_items/series/<positive-id>/<positive-id>`, plus
+Stripe controller/m-outer and Facebook `/tr/` third-party subframe requests.
+The adapter recognizes only those observed route families with their reviewed
+origin, method, resource, navigation, and query constraints, then aborts them
+before any downstream handler. Stripe route matching ignores the fragment;
+Facebook requires an empty fragment, but the live request summary did not retain
+fragment presence, so whether its observed request meets that condition remains
+unverified. These classifications store only a bounded count and sanitized
+path in the live guard object.
+
+The latest affected local checks pass: the route-classifier unit file has 57
+passing tests, and the browser-backed Younganimal adapter integration file has
+82 passing tests, no skips, and five existing pytest-asyncio deprecation
+warnings. The route-drift regression waits for a confirmed grant before
+attempting the blocked main-frame navigation. Live Phase 04 CLI verification is
+still pending.
+
 Normal Batch stays on the same Page and continues through the existing Viewer,
 Capture, END, and ZIP checks. `batch run --site younganimal --grant-only
 work_ticket` confirms the same entry and consumption without Viewer image
