@@ -11,9 +11,11 @@ independent review are complete. Phase 04 verified manual-grant Discovery,
 grant-only entry, and local cooldown skips in both modes. The conditional
 `standard_odd_body` profile is implemented with strict Python, JS geometry,
 native-proof, marker, and selected-center checks. Live B=7 and B=15 metadata
-support the observed structure. The B=15 direct capture ran after the earlier
-count-specific `standard15_body` fix, before this parametric generalization.
-Synthetic B=9 Runner coverage and independent review passed. It does not accept arbitrary odd layouts. The
+support the observed structure. Existing-grant B=15 direct capture on 0634 ran
+after the earlier count-specific `standard15_body` fix, before this parametric
+generalization. Existing-grant B=7 direct capture on C781 passed on the current
+parametric implementation. Synthetic B=9 Runner coverage and independent
+review passed. The profile does not accept arbitrary odd layouts. The
 first normal ticketed run on `0634e2ac53df6`
 failed Viewer readiness before Capture. After the earlier count-specific
 `standard15_body` fix, direct Batch on its already-active grant captured 15 pages
@@ -26,9 +28,12 @@ inconclusive; a corrected isolated audit proved both modes skip before Page
 creation or site access.
 Four of the five allowed tickets have now been used. The fourth, on
 `c7819ded99f66`, confirmed access but failed Viewer readiness before Capture.
-Its active grant can support authorized non-consuming direct operations; the
-work cooldown separately blocks another quota-consuming attempt until it
-expires.
+Its active grant later supported an authorized non-consuming 7-page direct
+capture through END/ZIP on the current implementation. The work cooldown still
+blocks another quota-consuming attempt until it expires. The final read-only
+recheck of `77d27c1572ac7` found no target native access row or ticket control,
+so fresh eligibility remains unknown and the fifth ticket is unused. A fresh
+quota-consuming run through same-Page Capture -> END -> ZIP remains pending.
 
 ## Current live verification (2026-10-18)
 
@@ -250,12 +255,38 @@ flags matched each observation. The previous exact-profile parser rejected
 this layout with `UnknownPageStateError`. The current `standard_odd_body`
 implementation recognizes the observed B=7 structural member only when the
 positive capability flags, exact wrapper roles, range, marker phases, and
-selected centers all validate. This metadata does not establish Viewer
-readiness or a successful live capture.
+selected centers all validate. This metadata-only probe did not establish
+Viewer readiness or a successful live capture; the later direct Batch result
+is recorded below.
 Viewer navigation remained open and a splash marker remained present, so this
 metadata does not establish Viewer readiness. The probe made no click,
 checkout, image read, or Capture call. Evidence:
 `output/younganimal_work_ticket_tester/public_seek_metadata_c781_attempt1.json`.
+
+On frozen commit `f2d7ad8`, a later direct Batch run on C781's existing grant
+exited 0 and completed 7 pages through END. The ZIP contained 7 ordered
+925x1329 PNGs; CRC, decode, manifest, Catalog completion, and archive SHA
+checks passed. The previous failed Run, Source grant/quota timestamps, and Work
+last-consumed time were unchanged. It used one Page, one initial goto, and one
+main-document request; two same-target frame events were recorded, with cause
+unknown. No commerce click or checkout occurred. No per-image hash or
+source-native format claim is made. Evidence:
+`output/younganimal_work_ticket_tester/direct-postflight-c781.json` and
+`output/ydr-c781/runDB/precli-baseline.json`. This validates existing-grant capture,
+not a fresh quota-consuming entry.
+
+The final bounded read-only recheck of episode `77d27c1572ac7` used one exact
+canonical goto and observed the expected work header and positive auth, but no
+current episode native record, no target row in the natural series-access
+responses, and zero free-ticket/charge controls. Its eligibility is UNKNOWN.
+No click or checkout occurred. The page naturally generated first-party
+read/mission POSTs that were aborted before network, off-target RSC reads that
+were also aborted, one other-episode-like GET API path, and same-target reader
+subpath GETs. There was one Python goto and one main-document request, while the
+observer recorded two same-target frame navigation events with cause unknown.
+These were site-generated incidental requests, not explicit probe
+API/navigation calls. No retry followed. Evidence:
+`output/younganimal_work_ticket_tester/readonly-77-final.json`.
 
 The corrected local cooldown audit used a fresh copy of the e15 Catalog,
 cleared only its source grant, and preserved the actual work timestamp. Normal
@@ -444,15 +475,15 @@ integer user. No ticket was used during that listing observation. Its targeted
 unit tests and browser-backed fixture tests pass, and Phase 02 independent review
 passed. The Phase 03 ticket-entry Policy/Batch path also passed independent review;
 synthetic browser verification is complete. Phase 04 verified live grant-only,
-the normal/grant-only local cooldown gate, and a normal Batch resource grant.
-That first normal run failed before Capture; a later direct Batch on its active
-grant completed 15 pages through END and passed ZIP/Catalog verification with
-zero additional resource use. A fourth authorized ticket use on C781 confirmed
-access but also failed Viewer readiness before Capture. Its bounded read-only
-probe mapped a 13-wrapper B=7 member of the implemented conditional
-`standard_odd_body` family; metadata mapping does not establish Viewer readiness
-or live Capture. The ticket ledger is 4/5. A
-fresh quota-consuming normal END/ZIP run remains pending.
+the normal/grant-only local cooldown gate, and three existing-grant direct
+captures. The normal ticketed runs on 0634 and C781 each confirmed resource use
+but failed Viewer readiness before Capture. Direct Batch on 0634's active grant
+completed 15 pages through END/ZIP under the earlier count-specific
+`standard15_body` fix. Direct Batch on C781's active grant completed 7 pages
+through END/ZIP on the current parametric `standard_odd_body` implementation.
+The ticket ledger is 4/5. The final read-only 77 recheck found no target native
+access row or ticket control, so fresh eligibility is UNKNOWN and the fifth
+ticket is unused. A fresh quota-consuming normal END/ZIP run remains pending.
 The previous free/rental direct path has passed independent review and synthetic
 BatchExecutor-to-Runner-to-ZIP tests.
 Attempt 9 verifies the final capture code on both live profiles. The 44-page
@@ -469,10 +500,11 @@ already-active grant later completed 15 pages through END and passed the
 ZIP/Catalog audit without another resource use. The conditional
 `standard_odd_body` signature is implemented consistently in Python parsing,
 JS geometry, and native proof, and passed independent review plus focused
-synthetic regression checks. Live B=7 metadata is mapped but has not been
-through Capture; the B=15 existing-grant direct capture ran under the earlier
-count-specific `standard15_body` fix, before this parametric generalization.
-Synthetic B=9 Runner coverage passed. A fresh quota-consuming normal END/ZIP run
+synthetic regression checks. The live B=7 existing-grant direct capture passed
+on the current parametric implementation. The B=15 existing-grant direct
+capture ran under the earlier count-specific `standard15_body` fix, before this
+parametric generalization. Synthetic B=9 Runner coverage passed. A fresh
+quota-consuming normal END/ZIP run
 remains pending. The latest complete seven-file Younganimal regression selection
 passed 313 tests with 0 skipped (208 existing pytest-asyncio warnings across two
 invocations); the full repository suite was not run.
