@@ -20,9 +20,15 @@ from screenshot_crawler.site_adapters.younganimal.capture import (
 
 EPISODE_URL = "https://younganimal.com/episodes/55889b8a851cb"
 BODY_SLOTS = tuple(range(1, 17))
+STANDARD15_BODY_SLOTS = tuple(range(1, 16))
 
 
-def _snapshot(seek_value: int, *, missing_canvas: int | None = None) -> dict[str, object]:
+def _snapshot(
+    seek_value: int,
+    *,
+    missing_canvas: int | None = None,
+    standard15_body: bool = False,
+) -> dict[str, object]:
     viewer_classes = {"-cv", "mode-spread", "mode-dir-rtl", "mode-nav-dir-rtl"}
     if seek_value == 21:
         viewer_classes.update({"mode-first-page", "mode-top-pr-page"})
@@ -32,24 +38,29 @@ def _snapshot(seek_value: int, *, missing_canvas: int | None = None) -> dict[str
         viewer_classes.add("mode-pr-page")
     elif seek_value == 1:
         viewer_classes.update({"mode-pr-page", "mode-last-page"})
+    body_slots = STANDARD15_BODY_SLOTS if standard15_body else BODY_SLOTS
+    ci_slot = body_slots[-1] + 1
+    wrapper_count = ci_slot + 5
+    if standard15_body and seek_value == 1:
+        viewer_classes.discard("mode-pr-page")
     slots: list[dict[str, object]] = []
-    for index in range(22):
+    for index in range(wrapper_count):
         if index == 0:
             classes = {"-cv-page", "mode-empty", "mode-pr", "mode-top-pr"}
-        elif 1 <= index <= 16:
+        elif index in body_slots:
             classes = {"-cv-page", "mode-loaded", "mode-rendered"}
-        elif index == 17:
+        elif index == ci_slot:
             classes = {"-cv-page", "mode-ci"}
-        elif index in {18, 19}:
+        elif index in {ci_slot + 1, ci_slot + 2}:
             classes = {"-cv-page", "mode-empty", "mode-pr"}
-        elif index == 20:
+        elif index == ci_slot + 3:
             classes = {"-cv-page", "mode-good"}
         else:
             classes = {"-cv-page", "mode-last"}
         rect_x = 945 + ((21 - seek_value) - index) * 946
         canvas = None
         canvas_count = 0
-        if index in BODY_SLOTS and index != missing_canvas:
+        if index in body_slots and index != missing_canvas:
             canvas_count = 1
             canvas = {
                 "node": index + 100,
@@ -93,13 +104,13 @@ def _snapshot(seek_value: int, *, missing_canvas: int | None = None) -> dict[str
             "step": "2",
             "disabled": False,
         },
-        "pages": {"className": "-cv-pages", "childCount": 22},
+        "pages": {"className": "-cv-pages", "childCount": wrapper_count},
         "viewport": {"width": 1906, "height": 986, "dpr": 1.5},
         "domGeneration": 0,
         "captureDomGeneration": 0,
         "slots": slots,
         "terminalMarkerCount": 1 if seek_value == 1 else 0,
-        "terminalMarkerParentIndex": 21 if seek_value == 1 else None,
+        "terminalMarkerParentIndex": wrapper_count - 1 if seek_value == 1 else None,
     }
 
 
@@ -327,6 +338,101 @@ def test_younganimal_top_empty_variant_rejects_unknown_blank_or_wrapper_contract
         raw["seek"]["max"] = "50"
 
     with pytest.raises(UnknownPageStateError, match=expected_error):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
+@pytest.mark.parametrize(
+    ("seek_value", "state", "active", "centers"),
+    [
+        (21, "content", (1,), (0, 1)),
+        (19, "content", (2, 3), (2, 3)),
+        (7, "content", (14, 15), (14, 15)),
+        (5, "ad", (16, 17), (16, 17)),
+        (3, "ad", (18, 19), (18, 19)),
+        (1, "end", (18, 19, 20), (20,)),
+    ],
+)
+def test_younganimal_standard15_body_profile_matches_observed_seek_geometry(
+    seek_value: int,
+    state: str,
+    active: tuple[int, ...],
+    centers: tuple[int, ...],
+) -> None:
+    raw = _snapshot(seek_value, standard15_body=True)
+
+    observation = _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+    assert observation.layout_variant == "standard15_body"
+    assert observation.body_slots == STANDARD15_BODY_SLOTS
+    assert observation.ci_slot == 16
+    assert observation.page_state == state
+    assert observation.active_slots == active
+    assert tuple(
+        slot["index"]
+        for slot in raw["slots"]
+        if slot["wrapperCenterInViewport"] is True
+    ) == centers
+    if state == "content":
+        assert observation.ready_slots == active
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["wrapper_count", "seek_max", "lead_role", "tail_role", "body_role", "last_marker"],
+)
+def test_younganimal_standard15_body_profile_rejects_nearby_layouts(mutation: str) -> None:
+    raw = _snapshot(21, standard15_body=True)
+    if mutation == "wrapper_count":
+        raw["slots"].pop()
+        raw["pages"]["childCount"] = 20
+    elif mutation == "seek_max":
+        raw["seek"]["max"] = "23"
+    elif mutation == "lead_role":
+        raw["slots"][0]["classes"] = ["-cv-page", "mode-empty", "mode-pr"]
+    elif mutation == "tail_role":
+        raw["slots"][16]["classes"] = ["-cv-page", "mode-empty", "mode-pr"]
+    elif mutation == "body_role":
+        raw["slots"][8]["classes"] = ["-cv-page", "mode-empty", "mode-pr"]
+    else:
+        raw = _snapshot(1, standard15_body=True)
+        raw["terminalMarkerParentIndex"] = 19
+
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
+def test_younganimal_standard15_body_profile_rejects_wrong_interstitial_marker_or_center() -> None:
+    marker_drift = _snapshot(5, standard15_body=True)
+    marker_drift["viewerClasses"].remove("mode-ci-page")
+    center_drift = _snapshot(3, standard15_body=True)
+    center_drift["slots"][19]["wrapperCenterInViewport"] = False
+
+    for raw in (marker_drift, center_drift):
+        with pytest.raises(UnknownPageStateError):
+            _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
+@pytest.mark.parametrize(
+    ("seek_value", "marker", "remove"),
+    [
+        (21, "mode-top-pr-page", True),
+        (21, "mode-pr-page", False),
+        (19, "mode-ci-page", False),
+        (5, "mode-first-page", False),
+        (3, "mode-ci-page", False),
+        (1, "mode-top-pr-page", False),
+    ],
+)
+def test_younganimal_standard15_body_rejects_noncanonical_viewer_marker_sets(
+    seek_value: int, marker: str, remove: bool
+) -> None:
+    raw = _snapshot(seek_value, standard15_body=True)
+    if remove:
+        raw["viewerClasses"].remove(marker)
+    else:
+        raw["viewerClasses"].append(marker)
+
+    with pytest.raises(UnknownPageStateError, match="page markers changed"):
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
 

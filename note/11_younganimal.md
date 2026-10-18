@@ -12,14 +12,90 @@ URL; no listing route was visited during Crawl and no quota consumption was
 recorded. The report is
 `output/younganimal_rental/crawl_20261012_065928/report.json`.
 
-On 2026-10-18, one authorized work-ticket research action was observed on
-episode `856137d88753b` / work `8246f8b8b2e6c`. The exact wait-free control,
-same-row `waitAndFree` false-to-true transition, target-bound successful
-checkout response, and same-Page ready Viewer were independently adjudicated
-as one observed resource use. No balance-delta claim was made. The work remains
-under its local 23-hour cooldown until `2026-10-19T05:05:50.550591Z`. The Phase 02 listing observer recognizes authenticated native ticket state,
-and the site-local Phase 03 adapter now implements `quota + work_ticket` Batch
-entry and grant-only without a shared Core change. Synthetic tests pass and Phases 02-03 passed independent review; Phase 04 live CLI verification remains pending.
+On 2026-10-18, one authorized research action was observed on episode
+`856137d88753b` / work `8246f8b8b2e6c`. The exact wait-free control, same-row
+`waitAndFree` false-to-true transition, target-bound successful checkout, and
+same-Page ready Viewer were adjudicated as one resource use. Its 23-hour
+minimum same-work cooldown ends at `2026-10-19T05:05:50.550591Z`.
+
+A second authorized use occurred through live `--grant-only work_ticket` on
+episode `e15e15c6ec11a` / work `128888a1fb162`. The CLI returned
+`entry_confirmed` with `resource_consumed=true`, and the isolated Catalog
+recorded `quota_started_at=2026-10-18T17:14:10.767250+09:00` and
+`access_granted_until=2026-10-21T17:13:58.168443+09:00`. Pre/post native state
+changed from authenticated `waitAndFree` without access to authenticated
+`waitAndFree` with access and a positive 259187-second timer. One retained free
+control click was delegated, and one target-bound checkout returned HTTP 200;
+no balance-delta claim is made. The Item stayed pending with zero captured pages
+and no artifact/ZIP. The trusted DOM event list was empty, so trusted-event proof
+is NOT VERIFIED. The same-Page audit recorded two selected-episode main-document
+requests and zero series/off-target main-document requests; source contains no
+post-click goto/new-Page call, but the second request's initiator is unknown.
+Do not repeat the action to repair telemetry. Its local 23-hour cooldown ends at
+`2026-10-19T07:14:10.767250Z`.
+
+One normal Batch work-ticket use occurred on episode `0634e2ac53df6` / work
+`145fe0e303563` at `2026-10-18T17:32:39.739556+09:00`. The target-bound
+checkout and authenticated native `waitAndFree` transition confirmed the third
+resource use; the isolated Source recorded grant expiry
+`2026-10-21T17:31:58.911149+09:00`. The CLI then failed Viewer readiness with
+`PageChangeTimeoutError`: no stable known layout within 20 seconds, Capture
+`not_started`, zero pages, pending Item, and no artifact. The 23-hour minimum
+cooldown ends `2026-10-19T16:32:39.739556+09:00`. No retry occurred. Evidence:
+`output/younganimal_work_ticket_tester/NORMAL_BATCH_0634_REPORT.md` and
+`output/yanc-0634/younganimal/`.
+
+A bounded read-only diagnostic on this already-granted exact episode confirmed
+the canonical route/work header, positive authentication, and current native
+`hasAccess=true`, `accessType=waitAndFree` state with a positive timer. It made
+one direct load, blocked 25 non-GET/HEAD requests before dispatch, had zero
+checkout mutations and zero click events, and closed its Page. Two existing
+`SNAPSHOT_SCRIPT(pixelSlots=[])` observations 5.03 seconds apart were fully
+sanitized to structural metadata. The first snapshot had one Viewer root but no
+`#xCVPages` or seek control and failed parser root-selector validation. The
+second had 21 wrappers and live seek value 21, min 1, max 21, step 2; the unique
+Last marker was at slot 20 and the tail roles were CI/PR/PR/Good/Last at
+16-20. Slots 1-15 were body-class candidates; only 1-3 had loaded/rendered
+925×1329 canvases, 4-5 were loaded without canvases, and 6-15 had only
+`-cv-page`. The earlier read-only snapshot was rejected because the standard
+parser expected `seek_max=len(slots)-1` (20 for these 21 wrappers). A later
+bounded public-seek probe on the exact active grant observed values 21, 19, 7,
+5, 3, and 1 mapping to body slot 1; body 2-3; body 14-15; CI/PR 16-17;
+PR/Good 18-19; and Last 20. The implemented `standard15_body` profile requires
+exactly 21 wrappers, no top-empty flag, lead slot 0, body slots 1-15, and
+CI/PR/PR/Good/Last tail slots 16-20 with seek 1..21 by 2. Its exact viewer
+marker sets are first+top-PR at max, no marker on body values 19..7, CI+PR at 5,
+PR at 3, and Last only at 1. The Python parser, JS capture geometry, and native
+proof enforce this profile; other unknown layouts remain fail-closed.
+Unit/browser synthetic checks and independent review passed. No production
+ticketed recrawl has yet validated it. The public-seek probe restored value 21,
+read metadata only, and made no capture, click, or checkout. Evidence:
+`output/younganimal_work_ticket_tester/readonly_viewer_diag_0634.json`,
+`public_seek_metadata_0634_attempt3.json`, and
+`saved_viewer_structure_0634.json`.
+
+An independent direct Batch capture on the already-active grant for episode
+`856137d88753b` / work `8246f8b8b2e6c` completed 28 pages through END and
+produced a 28-member CRC-valid ZIP with zero click/checkout and no new ticket
+use. It validates the existing-grant direct path only. Evidence:
+`output/younganimal_work_ticket_tester/direct-one-shot-856.json` and
+`direct-postflight-856.json`.
+
+The ticket ledger is 3/5. Stage A full and incremental Discovery on the first
+used work retained the manual grant; a disposable stale-grant cache copy then
+skipped grant-only as already granted with no click or checkout. The first local
+cooldown audit was **INCONCLUSIVE** because its hard sentinel stopped before
+CDP. A corrected isolated audit allowed one transparent CDP attach while
+blocking Page creation/navigation and site requests. Both normal and grant-only
+CLI runs exited 0 with `work_ticket_cooldown`, one skipped candidate, zero Page
+or site activity, and no Catalog/artifact mutation. The local same-work cooldown
+gate is verified before Page/site access. Evidence:
+`output/younganimal_work_ticket_tester/LOCAL_COOLDOWN_E15_REPORT.md`. Phase 02
+listing Discovery recognizes authenticated native ticket state, and the
+site-local adapter implements `quota + work_ticket` without a shared Core
+change. Phases 02-03 passed independent review. The latest affected Younganimal
+unit/browser regression selection passed 302 tests, 0 skipped, with 207 existing
+pytest-asyncio deprecation warnings; the full repository suite was not run.
 
 This target proved the additional `top_empty_no_pr` layout: the positive
 `mode-has-top-emptypage` root flag, one exact empty/no-canvas leading wrapper at
@@ -211,12 +287,16 @@ Stripe matching ignores URL fragments. Facebook requires an empty fragment,
 but the trace omitted request-fragment presence, so its production match remains
 unverified until the next sanitized audit records that Boolean. No ticket was
 used during that audit.
-The latest affected local checks pass: `tests/unit/test_younganimal_live_access.py`
-has 57 passing tests, and `tests/integration/test_younganimal_adapter_browser.py`
-has 82 passing tests with no skips and five existing pytest-asyncio deprecation
-warnings. The route-drift fixture now triggers the exact series main-frame
-navigation only after a positive consumption proof and asserts the guard's
-observed rejection. Phase 04 live CLI checks remain pending; the full repository
+The latest affected Younganimal unit/browser regression selection passed 302
+tests, 0 skipped, with 207 existing pytest-asyncio deprecation warnings. The
+route-drift fixture triggers the exact series main-frame navigation only after
+positive consumption proof and asserts the guard's observed rejection. Phase 04
+grant-only and both-mode before-Page/site cooldown verification passed. One
+normal Batch ticket grant was also confirmed, but that run failed before
+Capture. The exact `standard15_body` profile observed on that run is now
+implemented consistently in Python parsing, JS geometry, and native proof, and
+passed independent review plus synthetic regressions. A successful normal
+ticketed END/ZIP run after the profile fix remains pending. The full repository
 suite was not run.
 Full Discovery buffers before yielding, so an incomplete
 traversal cannot mark unseen sources unavailable. Maximums are 100 ranges and
@@ -367,10 +447,14 @@ wrappers/canvases. Ambiguous/missing geometry and overlap fail closed. Attempt
 Global mutation accounting and all candidate, selected-page, post-encode, mapping,
 layout, pixel, cleanup, and whole-spread gates remain intact.
 
-The preceding free-only status was accurate on 2026-10-12. On 2026-10-18, one
-bounded authorized research action confirmed the exact wait-free control,
-work-bound access transition, target-bound successful checkout response, and
-same-Page Viewer readiness; one ticket use is recorded above. The production work-ticket entry now uses this observed control/API/state contract; it has not consumed a second ticket. Phase 03's synthetic same-Page and grant-only paths passed independent review. Phase 04 live CLI verification remains pending. The full repository suite was not run.
+The preceding free-only status was accurate on 2026-10-12. Work-ticket live
+evidence and the three-use ledger are summarized in the current verification
+snapshot above. A successful normal quota/capture/END/ZIP run remains pending
+after the 0634 ticketed run failed in Viewer readiness. The observed 21-wrapper
+profile is now supported only under the strict `standard15_body` contract and
+its synthetic tests; no live normal ticketed recrawl has yet verified the fix.
+The first cooldown audit was inconclusive; the corrected normal and grant-only
+audits passed before Page/site access. The full repository suite was not run.
 
 ## Historical native geometry diagnostic (2026-10-11)
 

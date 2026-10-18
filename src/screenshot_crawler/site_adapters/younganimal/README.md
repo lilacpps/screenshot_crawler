@@ -6,8 +6,17 @@ authenticated, work-bound wait-free candidates and active manual ticket grants
 from natural listing responses. The shared CDP BrowserSession / Playwright Page, AccessGuard, Runner,
 manifest, and packager remain in use. Batch supports the existing direct
 free/rental path and the explicit `quota + work_ticket` path. Discovery itself
-never clicks or consumes a ticket. Synthetic Batch coverage is in place; the
-Phase 03 independent review passed; Phase 04 live CLI checks remain pending.
+never clicks or consumes a ticket. Synthetic Batch coverage and the Phase 03
+independent review are complete. Phase 04 verified manual-grant Discovery,
+grant-only entry, and local cooldown skips in both modes. The observed
+21-wrapper `standard15_body` profile is implemented with strict Python, JS
+geometry, and native-proof marker checks; focused synthetic Runner and
+independent review passed. The normal ticketed run on `0634e2ac53df6` still
+failed Viewer readiness before Capture, so a successful live quota→Capture→END/
+ZIP run remains pending. A separate direct capture on already-granted episode
+`856137d88753b` reached END with a CRC-valid 28-page ZIP and no checkout or new
+ticket use. The first overstrict cooldown probe was inconclusive; a corrected
+isolated audit proved both modes skip before Page creation or site access.
 
 ## Current live verification (2026-10-18)
 
@@ -103,19 +112,103 @@ fragment presence, so whether its observed request meets that condition remains
 unverified. These classifications store only a bounded count and sanitized
 path in the live guard object.
 
-The latest affected local checks pass: the route-classifier unit file has 57
-passing tests, and the browser-backed Younganimal adapter integration file has
-82 passing tests, no skips, and five existing pytest-asyncio deprecation
-warnings. The route-drift regression waits for a confirmed grant before
-attempting the blocked main-frame navigation. Live Phase 04 CLI verification is
-still pending.
+The latest affected Younganimal regression selection passed 302 tests, with no
+skips and 207 existing pytest-asyncio deprecation warnings. It includes the
+route-classifier and browser-backed adapter tests; the route-drift regression
+waits for confirmed consumption before attempting the blocked main-frame
+navigation. Live grant-only verification and
+the same-work cooldown-before-Page/site check in both modes have passed. A live
+normal Batch grant succeeded, but Viewer readiness failed before Capture; a
+successful normal END/ZIP run remains pending.
 
 Normal Batch stays on the same Page and continues through the existing Viewer,
 Capture, END, and ZIP checks. `batch run --site younganimal --grant-only
 work_ticket` confirms the same entry and consumption without Viewer image
 capture or packaging, leaving the Item pending. The local work-scoped policy
-skips the same-work resource before Browser/Page setup for at least 23 hours
-since recorded consumption; a longer configured cooldown is preserved.
+requires at least 23 hours after recorded same-work consumption and preserves
+a longer configured cooldown. A corrected isolated test passed both normal and
+grant-only modes: each allowed one transparent CDP attach, then skipped before
+Page creation, navigation, or site requests. An earlier probe that blocked the
+connect call was overstrict and inconclusive.
+
+## Work-ticket live status (2026-10-18)
+
+The standard full and incremental Discovery runs on episode 856137d88753b / work
+8246f8b8b2e6c retained its active manual grant. A disposable stale-cache copy
+cleared the local grant and `--grant-only work_ticket` skipped as
+`work_ticket_already_granted` with zero click or checkout. This did not verify
+the local cooldown-before-Page gate or normal capture. Each Discovery run also
+observed 34 off-target episode GET/HEAD requests that were not main-document
+navigations; their initiators were not established. Evidence:
+`output/younganimal_work_ticket_tester/stageA-856137d88753b/STAGEA_REPORT.md`.
+
+One authorized `--grant-only work_ticket` run then succeeded for episode
+e15e15c6ec11a / work 128888a1fb162. The CLI exited 0 with
+`entry_confirmed`/`resource_consumed=true`, one delegated click, a target-bound
+checkout POST returning HTTP 200, and a positive-auth native transition from
+ungranted `waitAndFree` to active `waitAndFree`. The isolated Catalog records
+the use at 2026-10-18 17:14:10.767250 JST; the minimum same-work cooldown ends
+2026-10-19 16:14:10.767250 JST. The Item remains pending with zero pages and no
+images or artifacts. No balance delta is claimed. The trusted DOM event list
+was empty, so trusted-event proof is not verified; a derived sentinel counter
+was stale and must not be repaired by repeating the action. The same Page audit
+recorded two selected-episode main-document requests and no series/off-target
+main-document request. The adapter source has no post-click goto/new-Page call,
+but the cause of the second request is unknown. Evidence:
+`output/younganimal_work_ticket_tester/GRANT_ONLY_E15_REPORT.md`.
+
+One normal Batch run on episode `0634e2ac53df6` / work `145fe0e303563`
+consumed the third authorized ticket at 2026-10-18 17:32:39.739556 JST. The
+target-bound checkout and native state confirmed access, and the isolated
+Catalog recorded a grant expiry of 2026-10-21 17:31:58.911149 JST. The CLI
+then failed with `PageChangeTimeoutError`: the Viewer did not expose a stable
+known layout within 20 seconds, Capture never started, the Item stayed pending,
+and no page or archive was produced. No retry was made. Its minimum same-work
+cooldown ends at 2026-10-19 16:32:39.739556 JST. Evidence:
+`output/younganimal_work_ticket_tester/NORMAL_BATCH_0634_REPORT.md` and
+`output/yanc-0634/younganimal/diagnostics/`.
+
+A bounded read-only diagnostic on that already-granted episode verified the
+canonical route/work header, positive auth, and exact active `waitAndFree`
+native state. Its two Viewer metadata samples were 5.03 seconds apart and used
+the production `SNAPSHOT_SCRIPT` with no pixel slots. The first snapshot had a
+viewer root but no pages/seek; the second showed 21 wrappers with live seek
+range 1..21 by 2, Last at slot 20, and CI/PR/PR/Good/Last at slots 16..20. The
+Slots 1-3 were initially loaded/rendered at 925×1329, slots 4-5 were loaded
+without canvases, and 6-15 were not loaded. A later bounded public-seek probe
+on the exact active grant observed values 21, 19, 7, 5, 3, and 1 mapping to
+body slot 1; body 2-3; body 14-15; CI/PR 16-17; PR/Good 18-19; and Last 20.
+The implemented exact `standard15_body` profile requires 21 wrappers, no
+top-empty flag, lead slot 0, body slots 1-15, CI/PR/PR/Good/Last at 16-20, and
+seek 1..21 step 2. It validates exact viewer marker sets at max, body, CI/PR,
+PR/Good, and min; unsupported layouts remain fail-closed. The probe restored
+seek 21, read no pixels, performed no capture/click/checkout, and closed its
+Page. The focused synthetic Runner reached END and validated ordered ZIP CRC
+and decoded RGBA against fixture source pixels; the independent Reviewer passed
+the profile and focused regressions. A fresh normal ticketed live run has not
+yet verified this profile. Evidence:
+`output/younganimal_work_ticket_tester/readonly_viewer_diag_0634.json`,
+`public_seek_metadata_0634_attempt3.json`, and `saved_viewer_structure_0634.json`.
+
+An independent direct Batch run on the already-active grant for episode
+`856137d88753b` / work `8246f8b8b2e6c` completed through END with 28 pages and
+a 28-member CRC-valid ZIP. It used the exact Catalog URL on one Page with zero
+click/checkout events and no new ticket use. This confirms existing-grant direct
+capture only, not a fresh quota-consumption run. Evidence:
+`output/younganimal_work_ticket_tester/direct-one-shot-856.json` and
+`direct-postflight-856.json`.
+
+The corrected local cooldown audit used a fresh copy of the e15 Catalog,
+cleared only its source grant, and preserved the actual work timestamp. Normal
+and grant-only CLI runs both exited 0 with `work_ticket_cooldown`, one skipped
+candidate, one CDP attach, zero Page/goto/reload calls, zero requests/access
+events, and no Catalog/artifact change. The initial no-connect attempt remains
+inconclusive and is superseded. Evidence:
+`output/younganimal_work_ticket_tester/LOCAL_COOLDOWN_E15_REPORT.md`.
+
+The earlier isolated cooldown probe prohibited the CDP connect call and was
+inconclusive; the corrected audit above supersedes it and verifies the local
+skip before Page creation or site access in both CLI modes.
 
 ## Manual crawl entry
 
@@ -257,8 +350,10 @@ attribution remains UNKNOWN; this does not generalize to every page.
 - `YounganimalSitePolicy` exposes one `work_ticket` pass, scoped to a work with
   limit one and a local minimum 23-hour post-consumption cooldown. Free and
   unexpired rental sources remain non-consuming `direct`. The Batch ticket
-  click, grant-only executor verification, and same-Page Viewer handoff are a
-  later phase and remain unimplemented.
+  click and grant-only entry are implemented and independently reviewed.
+  Live grant-only and both-mode local cooldown-before-Page/site verification
+  passed. A normal Batch ticket grant was confirmed, but its Viewer failed
+  readiness before Capture; successful normal END/ZIP remains pending.
 
 The Discovery adapter uses a 3-second delay before every numeric range route,
 a finite retry budget that requires matching current-attempt HTTP 200 document
@@ -275,12 +370,10 @@ reconcile unseen sources as unavailable.
 
 ## Verification status
 
-The rental/direct-entry iteration passed all six Younganimal unit/browser files:
-171 passed, 0 skipped, with existing pytest-asyncio deprecation warnings.
-The final incremental refresh change also passed a targeted Discovery rerun:
-51 passed, 0 skipped.
-`ruff check src tests` and `git diff --check` passed. The global full suite and
-Research tests were not run for this site-local change.
+The latest affected Younganimal unit/browser selection passed 302 tests, 0
+skipped, with 207 existing pytest-asyncio deprecation warnings. Targeted Ruff
+checks passed. The global full repository suite and Research tests were not run
+for this site-local change.
 
 Discovery's 925-row live run is complete. The Phase 02 work-ticket Discovery
 contract has been observed on the live listing: two natural series-access GETs
@@ -288,13 +381,23 @@ returned work-bound `episodeAccesses`, and the auth session returned a positive
 integer user. No ticket was used during that listing observation. Its targeted
 unit tests and browser-backed fixture tests pass, and Phase 02 independent review
 passed. The Phase 03 ticket-entry Policy/Batch path also passed independent review;
-synthetic browser verification is complete, with live CLI checks reserved for Phase 04.
+synthetic browser verification is complete. Phase 04 verified live grant-only,
+the normal/grant-only local cooldown gate, and a normal Batch resource grant.
+That normal run failed before Capture, so a successful END/ZIP live run remains
+pending.
 The previous free/rental direct path has passed independent review and synthetic
 BatchExecutor-to-Runner-to-ZIP tests.
 Attempt 9 verifies the final capture code on both live profiles. The 44-page
 synthetic Runner also verifies all native outputs against independent
 fixture-source RGBA through END/ZIP. A bounded work-ticket research action was
-later observed on the authorized episode `856137d88753b`; one resource use is
-recorded in the work-ticket Runbook. This evidence does not implement Batch
-entry. The remaining adapter work must verify the same safe control and hand
-the same Page to the production Viewer/Capture path.
+later observed on the authorized episode `856137d88753b`; it used one resource
+and is recorded in the work-ticket Runbook. The adapter was subsequently
+implemented and independently reviewed; current grant-only live verification
+is summarized above. The first local cooldown audit was inconclusive because a
+hard sentinel stopped before CDP; a corrected audit later passed both modes
+with zero Page creation and site requests. The normal Batch grant is confirmed,
+but successful Capture/END/ZIP remains pending after Viewer readiness failed.
+The exact observed `standard15_body` profile is implemented consistently in
+Python parsing, JS geometry, and native proof, and passed independent review
+plus the latest affected regression selection. A successful live normal
+ticketed END/ZIP run after this fix is still pending.

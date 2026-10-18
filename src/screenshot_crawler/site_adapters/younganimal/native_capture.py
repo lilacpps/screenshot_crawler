@@ -37,6 +37,19 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
 
   const sameArray = (left, right) => left.length === right.length &&
     left.every((value, index) => value === right[index]);
+  const standard15PageMarkersMatch = (viewer, value) => {
+    let expected;
+    if (value === 21) expected = ['mode-first-page', 'mode-top-pr-page'];
+    else if (value === 5) expected = ['mode-ci-page', 'mode-pr-page'];
+    else if (value === 3) expected = ['mode-pr-page'];
+    else if (value === 1) expected = ['mode-last-page'];
+    else if (value >= 7 && value <= 19 && value % 2 === 1) expected = [];
+    else return false;
+    const names = [
+      'mode-first-page', 'mode-top-pr-page', 'mode-pr-page', 'mode-ci-page', 'mode-last-page',
+    ].filter(name => viewer.classList.contains(name));
+    return names.length === expected.length && expected.every(name => names.includes(name));
+  };
   const classes = node => node ? [...node.classList].sort() : [];
   const exactClasses = (node, expected) => sameArray(classes(node), expected.slice().sort());
   const attr = context => {
@@ -108,12 +121,26 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         !exactClasses(children[ci + 3], ['-cv-page', 'mode-good']) ||
         !exactClasses(children[ci + 4], ['-cv-page', 'mode-last'])) return null;
     const min = Number(seek.min), max = Number(seek.max), step = Number(seek.step), value = Number(seek.value);
-    if (min !== 1 || step !== 2 || max !== (hasTopEmptyPage ? children.length : children.length - 1) ||
-        !Number.isInteger(value) || value < min || value > max || (max - value) % step !== 0 ||
-        viewer.classList.contains('mode-last-page')) return null;
+    const standard15Body = !viewer.classList.contains('mode-has-top-emptypage') &&
+      children.length === 21 && max === 21;
+    if (min !== 1 || step !== 2 ||
+        max !== (hasTopEmptyPage ? children.length : standard15Body ? 21 : children.length - 1) ||
+        (standard15Body && (bodyStart !== 1 || ci !== 16 ||
+          !exactClasses(children[0], ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']) ||
+          children[0].querySelectorAll('canvas').length !== 0 ||
+          children.slice(16).some(child => child.querySelectorAll('canvas').length !== 0) ||
+          !Array.from({length: 15}, (_, offset) => children[offset + 1]).every(child =>
+            child && child.parentElement === pages && [
+              ['-cv-page'], ['-cv-page', 'mode-loading'],
+              ['-cv-page', 'mode-loading', 'mode-req-render'],
+              ['-cv-page', 'mode-loaded'], ['-cv-page', 'mode-loaded', 'mode-rendered'],
+            ].some(expected => exactClasses(child, expected))))) ||
+        !Number.isInteger(value) || value < min || value > max || (max - value) % step !== 0) return null;
+    if (viewer.classList.contains('mode-last-page') && !standard15Body) return null;
+    if (standard15Body && !standard15PageMarkersMatch(viewer, value)) return null;
     const focus = max - value + 1;
     const active = [focus - 1, focus].filter(slot => slot >= bodyStart && slot < ci);
-    if (!active.length) return null;
+    if (!active.length && !(standard15Body && value === min && viewer.classList.contains('mode-last-page'))) return null;
     const allowedBodyClasses = [
       ['-cv-page'], ['-cv-page', 'mode-loading'],
       ['-cv-page', 'mode-loading', 'mode-req-render'],
@@ -127,7 +154,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     if (!mutationState || !Number.isSafeInteger(mutationState.domGeneration) || mutationState.domGeneration < 0 ||
         !Number.isSafeInteger(mutationState.captureDomGeneration) || mutationState.captureDomGeneration < 0) return null;
     return {viewer, pages, seek, children, ci, bodyStart,
-      variant: noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
+      variant: standard15Body ? 'standard15_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
       path: location.pathname, dom: mutationState.domGeneration,
       captureDom: mutationState.captureDomGeneration,
       viewport: {width: innerWidth, height: innerHeight, dpr: devicePixelRatio}};
@@ -166,7 +193,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     Reflect.apply(raw.drawImage, context, [source, 0, 0]);
     return {canvas: snapshot, attributes: attr(context)};
   };
-  const spreadKey = layout => `${layout.path}|${layout.value}|${layout.active.join(',')}`;
+  const spreadKey = layout => `${layout.path}|${layout.variant}|${layout.value}|${layout.active.join(',')}`;
 
   const onDraw = event => {
     const {phase, method, target} = event;
@@ -242,7 +269,8 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       pending.set(target, {
         target, wrapper: locationRow.wrapper, holder: locationRow.holder,
         pages: layout.pages, viewer: layout.viewer, seek: layout.seek, slot: locationRow.slot,
-        episodePath: layout.path, seekValue: layout.value, activeSlots: layout.active.slice(),
+        episodePath: layout.path, layoutVariant: layout.variant,
+        seekValue: layout.value, activeSlots: layout.active.slice(),
         domGeneration: layout.dom, captureDomGeneration: layout.captureDom,
         viewport: layout.viewport,
         targetBefore, targetWidth: target.width, targetHeight: target.height,
@@ -393,13 +421,13 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     })();
     return {
       expected: {
-        path: safePath(proof.episodePath), seekValue: proof.expectedSeek,
+        path: safePath(proof.episodePath), layoutVariant: proof.layoutVariant, seekValue: proof.expectedSeek,
         domGeneration: proof.domGeneration, captureDomGeneration: proof.captureDomGeneration,
         wrapperCount: proof.wrapperCount,
         activeSlots: proof.expectedSlots.slice(0, 2), viewport: proof.viewport,
       },
       observed: {
-        path: safePath(location.pathname), seekValue: value,
+        path: safePath(location.pathname), layoutVariant: layout?.variant ?? null, seekValue: value,
         queryPresent: !!location.search, hashPresent: !!location.hash,
         layoutAvailable: !!layout,
         domGeneration: Number.isSafeInteger(current?.domGeneration) ? current.domGeneration : null,
@@ -442,6 +470,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
               candidate.wrapper !== wrapper || candidate.holder !== target.parentElement ||
               candidate.pages !== layout.pages || candidate.viewer !== layout.viewer ||
               candidate.seek !== layout.seek || candidate.episodePath !== episodePath ||
+              candidate.layoutVariant !== layout.variant ||
               candidate.seekValue !== layout.value || !sameArray(candidate.activeSlots, expectedSlots) ||
               candidate.targetWidth !== target.width ||
               candidate.targetHeight !== target.height || clipUnsafe.has(target) ||
@@ -482,6 +511,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       proofs.clear();
       const token = `ya${nextProof++}`;
       const proof = {token, episodePath, expectedSeek, expectedSlots: expectedSlots.slice(),
+        layoutVariant: layout.variant,
         pages: layout.pages, viewer: layout.viewer, seek: layout.seek,
         domGeneration: layout.dom, captureDomGeneration: layout.captureDom,
         viewport: layout.viewport, wrapperCount: layout.children.length,
@@ -523,6 +553,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
             document.querySelector('#xCVSeekBar') !== proof.seek) return fail('native_reader_identity_changed');
         const layout = normalizedLayout();
         if (!layout || layout.path !== proof.episodePath || layout.value !== proof.expectedSeek ||
+            layout.variant !== proof.layoutVariant ||
             layout.captureDom !== proof.captureDomGeneration || layout.pages !== proof.pages || layout.viewer !== proof.viewer ||
             layout.seek !== proof.seek || layout.children.length !== proof.wrapperCount ||
             !sameArray(layout.active, proof.expectedSlots) ||
