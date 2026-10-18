@@ -1,5 +1,11 @@
 # Hanayume current implementation
 
+Current capture correction (2026-10-19): finite fractional destination dimensions are supported
+only when truncation yields the exact target bitmap size. Source rectangles remain complete,
+origins zero, and exact observed-rectangle pixel replay plus post-encoding proof remain required.
+The failing Item/Source 27945 now reaches END with nine independently verified native pages;
+details and validation are in the fractional-destination section below.
+
 Updated: 2026-10-18. Phases 01-04 are complete at source/test checkpoint `467dc69a1ca093ac07e6024b5bddb6575d6cf24c`; implementation, tests, and live verification passed independent review; the focused Hanayume adapter Unit suite plus explicitly selected adapter-browser cases at this checkpoint passed 103 tests, 0 failed, 0 skipped/deselected (266 pytest-asyncio deprecation warnings; 7.36s). The two-class ungranted account-row correction passed independent review with 0 blockers. This result is a separate current snapshot; earlier 342-, 333-, 147-selected-plus-3, and 92-case results are not additive. The pre-guard full-repository snapshot at `1256d3b` remains 3718 passed and 2 failed (0 skipped/deselected; 4737 warnings; 1581.78s), predating later guard/adapter changes: Kadocomi's test-only redirect fixture repair passed its focused check, while the Younganimal cause remains unknown. No changed-source full-repository pass is claimed. Stage 5ca6372 live serial Batch validation passed on existing-grant `49b7e11049871` and free `8c6`; the route-guard error-code follow-up passed independent review. The 9a grant-only run confirmed a second ticket use. The first 0699 normal attempt confirmed checkout and a native grant but failed to persist it; its original reconciliation branch is unknown. A later native-first correction passed review. Full/incremental Discovery and normal direct Batch on existing-grant 0699 then preserved its future episode expiry, reached END with a 30-page PNG ZIP, and used no new checkout or work cooldown backfill. The prior `1d10701c05629` attempt is independently confirmed pre-click by source order: its exact current API was `waitAndFree/hasAccess=false` with null remaining time, a valid ungranted state; checkout/read POSTs were 0. Offline HTML plus a bounded read-only probe showed the exact target row as `mode-current mode-store-item-start` without rental markers. The narrow two-class recognition change passed the 103-case suite and independent review; exact button-label/actionability checks are unchanged. The fresh normal consuming Batch on 1d107 passed the Tester audit with one checkout, a fresh exact current-episode native grant, source/work persistence, END, and a verified 30-page PNG ZIP. Confirmed live ticket use is four on distinct works; the final independent live Reviewer gate passed with 0 blockers, completing Phase 04. Earlier direct Batch and R9 evidence remains historical below.
 
 ## Registration and browser use
@@ -231,7 +237,8 @@ implementation and verification are described below; existing archives remain un
 ### Variable native dimensions and strict failure behavior
 
 At the user's request, the source observer now reads actual source dimensions rather than
-requiring 960x1540. Full-frame source and destination rectangles remain exact, with the original
+requiring 960x1540. The source rectangle remains exactly full-frame; destination rectangles follow
+the fractional-destination contract below, with the original
 identity-transform, context/paint, opacity, episode/slot, generation/write, wrapper identity,
 and pixel replay checks. Each source is independent; a spread may contain different sizes.
 The immutable snapshot, replay rectangle, pixel-count checks, exported PNG dimensions, Python
@@ -484,6 +491,59 @@ A single guarded metadata-only probe passed the existing same-work free prefligh
 The live seek property was min 1, max 17, step 2, value 17 while the counter was 1/17; the saved HTML `value` attribute was 1. The strict viewer parser still stops at slot 1 before capture or END. No general skip or body-count adjustment is justified without proving the page-to-counter mapping and terminal coverage. The previous four-episode/134-page PASS applies only to those verified targets/layouts and does not cover this episode.
 
 Evidence: `output/hanayume_experiment/tester/runs/r7-first-slot-20261011T000424Z-fd0e6310/probe_report.json` and the ignored probe `output/hanayume_experiment/tester/r7_first_slot_metadata_probe.py`. The user Batch metrics contained 445 requests (443 HTTP 200, 2 HTTP 204), one failed candidate, and CLI retry count 0; the probe observed no 403/429/challenge/CAPTCHA. At this checkpoint no production or test files had changed; R8 below supersedes the no-fix status.
+
+## Fractional destination draw dimensions (2026-10-19)
+
+User metrics run `ad9622c2079f48ba8846a8767001dc33` failed for Item/Source 27945,
+episode `a087973196a9d` (`第10翼②`), before saving a page. Its failure metadata records
+ready physical slots 2/3, native sources 960x1364 (inside the supported bounds), display bitmaps
+934x1329, and `native_candidate_missing_or_stale`. The one-second initial quiet interval completed;
+the metrics have zero HTTP 403/429/5xx, challenge, CAPTCHA, or retry events.
+
+The bounded shared-CDP draw probe `output/hanayume-draw-probe-20261019/report.json` reproduced
+the failure. Its observed drawImage rectangle is `[0,0,960,1364,0,0,934.5,1329]` into a
+934x1329 target, with identity transform, alpha 1, source-over, no filter/shadow/clip, and
+sRGB/unorm8 source/target contexts. The former integer-only, exact-target-size rectangle check
+excluded this draw before snapshot creation. This is a distinct cause from the historical
+initial-reset race and fixed-source-dimension failures above.
+
+The observer now accepts finite destination width/height only when their floors equal the
+positive, bounded target bitmap dimensions. This permits the observed subpixel overhang but
+rejects underfill, a whole-pixel overhang, source crops, nonzero origins, and nonfinite sizes.
+Source dimensions and the entire source rectangle remain exact. Each candidate retains all
+eight actual draw arguments. Replay uses them unchanged rather than substituting integer target
+dimensions, preserving exact full-display RGBA comparison. Native opacity, immutable draw-time
+snapshot, paint/context, episode/slot, generation/write, cache/memory bounds, all-or-none spread,
+post-encoding proof, and no-rendered-fallback rules remain in force. Output remains native-size
+lossless WebP, or the same verified native PNG on codec failure. No CLI/config change is needed.
+
+Live evidence: `output/hanayume-fractional-live-20261019/report.json`, generated by the adjacent
+ignored Python verification script. A direct Runner run on the affected active grant reached
+END with nine 960x1364 lossless WebP pages; ordinary free control Source 25326,
+episode `90868f4de278f`, reached END with twelve 960x1540 lossless WebP pages. A separate
+document-start draw hook copied the full source before production observation; all 21 decoded
+outputs matched those independent snapshots in every RGBA byte before advance. This proves
+decoded source-canvas equality, not original JPEG byte preservation. Both Pages blocked mutating
+requests, attempted zero checkout requests, and reported no resource consumption. Only owned
+Pages were closed. The normal Catalog, Item status, and existing archives were not written.
+This verification used Runner; standard Batch orchestration and packaging were not rerun live.
+
+Synthetic browser coverage uses patterned mutable sources to check fractional width, height,
+and combined subpixel overhangs, native dimensions, and exact source RGBA after the source is
+cleared. Negative cases retain strict failure for underfill, whole-pixel overhang, crop, offset,
+and nonfinite geometry. The complete affected suite passed 244 cases, 0 failed/skipped/deselected
+(284 existing pytest-asyncio deprecation warnings; 91.02 seconds):
+`tests/unit/test_hanayume_adapter.py`, `tests/unit/test_hanayume_native_capture.py`, and
+`tests/integration/test_hanayume_adapter_browser.py`. Command: `.venv/Scripts/python.exe -m pytest
+-q -p no:cacheprovider --basetemp output/hanayume-fractional-pytest-20261019 <the three files>`.
+The initial run had nine tmp_path setup errors because the default
+`AppData/Local/Temp/pytest-of-kensu` directory was inaccessible; the explicit isolated workspace
+base temp resolved them without fixture or production changes. The first focused geometry run
+passed 8 cases (124 unrelated cases deselected). `ruff check src tests` and changed-file
+`git diff --check` passed. The full repository suite and Research/Probe helper tests were not
+run because the production change is limited to Hanayume draw geometry/replay, with its complete
+adapter/native Unit and browser-backed Integration contracts covered. Shared Core, Discovery,
+Batch orchestration, access policy, and their notes are unchanged.
 
 ## R8 top-empty layout implementation (implementation review PASS / BLOCKING 0; artifact audit PASS / BLOCKING 0)
 

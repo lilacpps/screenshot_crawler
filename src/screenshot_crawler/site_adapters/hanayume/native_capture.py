@@ -132,10 +132,12 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     neutralShadow: neutralShadow(context),
   });
   const exactFullFrame = (args, source, target) =>
-    args.length === 8 && args.every(Number.isSafeInteger) &&
+    args.length === 8 && args.every(Number.isFinite) &&
     args[0] === 0 && args[1] === 0 && args[2] === source.width &&
     args[3] === source.height && args[4] === 0 && args[5] === 0 &&
-    args[6] === target.width && args[7] === target.height &&
+    // Viewer draw sizes can retain a fraction truncated by canvas bitmap sizing.
+    // Permit only that subpixel overhang, and replay the exact observed rectangle.
+    Math.floor(args[6]) === target.width && Math.floor(args[7]) === target.height &&
     validDimensions(source.width, source.height) && validDimensions(target.width, target.height);
   const locationOf = target => {
     const root = document.querySelector('#xCVPages');
@@ -268,6 +270,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
           generation: state.generation, writes: state.writes,
           targetWidth: target.width, targetHeight: target.height,
           sourceWidth: source.width, sourceHeight: source.height,
+          drawArgs: args.slice(),
           sourceAttributes: prepared.sourceAttrs,
           snapshotAttributes: prepared.snapshot.attributes,
           targetPaint: prepared.targetPaint, snapshot: prepared.snapshot.canvas,
@@ -568,9 +571,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
           const replayContext = Reflect.apply(nativeGetContext, replay, ['2d', copyOptions(targetAttributes)]);
           if (!replayContext) { nativeReason = 'replay_context_unavailable'; break; }
           configureReplay(replayContext, candidate);
-          Reflect.apply(nativeDraw, replayContext, [candidate.snapshot, 0, 0,
-            candidate.sourceWidth, candidate.sourceHeight,
-            0, 0, replay.width, replay.height]);
+          Reflect.apply(nativeDraw, replayContext, [candidate.snapshot, ...candidate.drawArgs]);
           const replayPixels = pixels(replay);
           const targetPixels = pixels(selectedRow.canvas);
           if (!compare(replayPixels, targetPixels)) { nativeReason = 'native_replay_pixel_mismatch'; break; }

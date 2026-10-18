@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
 import threading
@@ -1127,6 +1128,72 @@ async def test_hanayume_spread_preserves_each_source_size_and_immutable_pixels(
         with Image.open(io.BytesIO(item.data)) as image:
             assert image.convert("RGB").getpixel((item.width - 1, item.height - 1)) == (253, slot, 4)
     assert adapter._capture_diagnostics["source_dimensions"] == [[640, 480], [960, 1508]]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("overhang", [(0.5, 0), (0, 0.5), (0.999, 0.999)])
+async def test_hanayume_fractional_destination_replays_exact_draw_and_preserves_native_pixels(
+    browser_page: Page, overhang: tuple[float, float],
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    encoded = await browser_page.locator("#xCVPages > .-cv-page:nth-child(2) canvas").evaluate(
+        """(canvas, overhang) => {
+          canvas.width = 31; canvas.height = 45;
+          const source = document.createElement('canvas'); source.width = 64; source.height = 91;
+          const context = source.getContext('2d');
+          const image = context.createImageData(64, 91);
+          for (let i = 0; i < image.data.length; i += 4) {
+            const pixel = i / 4;
+            image.data.set([pixel % 251, (pixel * 17) % 253, (pixel * 37) % 255, 255], i);
+          }
+          context.putImageData(image, 0, 0);
+          canvas.getContext('2d').drawImage(source, 0, 0, 64, 91, 0, 0,
+            canvas.width + overhang[0], canvas.height + overhang[1]);
+          const png = source.toDataURL('image/png');
+          context.clearRect(0, 0, 64, 91);
+          return png;
+        }""", list(overhang),
+    )
+
+    (capture,) = await adapter.capture_page(browser_page)
+
+    assert capture.mime_type == "image/webp"
+    assert (capture.width, capture.height) == (64, 91)
+    with (
+        Image.open(io.BytesIO(base64.b64decode(encoded.partition(",")[2]))) as source,
+        Image.open(io.BytesIO(capture.data)) as output,
+    ):
+        assert output.convert("RGBA").tobytes() == source.convert("RGBA").tobytes()
+    assert adapter._captured_slots == [1]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize(
+    "geometry", ["underfill", "whole-pixel-overhang", "source-crop", "destination-offset", "nonfinite"],
+)
+async def test_hanayume_fractional_destination_rejects_unproven_geometry(
+    browser_page: Page, geometry: str,
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    await browser_page.locator("#xCVPages > .-cv-page:nth-child(2) canvas").evaluate(
+        """(canvas, geometry) => {
+          const source = document.createElement('canvas'); source.width = 64; source.height = 91;
+          source.getContext('2d').fillRect(0, 0, 64, 91);
+          const args = [0, 0, 64, 91, 0, 0, canvas.width + 0.5, canvas.height];
+          if (geometry === 'underfill') args[6] = canvas.width - 0.001;
+          if (geometry === 'whole-pixel-overhang') args[6] = canvas.width + 1;
+          if (geometry === 'source-crop') args[2] -= 0.5;
+          if (geometry === 'destination-offset') args[4] = 0.5;
+          if (geometry === 'nonfinite') args[6] = Infinity;
+          canvas.getContext('2d').drawImage(source, ...args);
+        }""", geometry,
+    )
+
+    with pytest.raises(UnknownPageStateError, match="native_candidate_missing_or_stale"):
+        await adapter.capture_page(browser_page)
+    assert adapter._captured_slots == []
 
 
 @pytest.mark.asyncio(loop_scope="module")

@@ -83,6 +83,16 @@ failure may retain only the same verified source PNG at the same dimensions. No 
 is needed. Older output ZIPs are not rewritten by this change. Historical 134-page E2E evidence
 below remains specific to 960x1540; current variable-size live verification is in the site note.
 
+Destination draw width/height may retain a fractional part that the Viewer canvas bitmap size
+truncates (observed: 934.5x1329 draw into a 934x1329 bitmap). The source rectangle must still be
+the complete native canvas and both origins must be exactly zero. Only finite destination sizes
+whose floors equal the target bitmap dimensions are accepted: underfill or an overhang of one
+whole pixel remains unsupported. Capture retains all eight original draw arguments and replays
+that exact rectangle with the observed paint/smoothing state; every display pixel must match.
+It never rounds the replay rectangle or resizes the native output. The affected episode
+`a087973196a9d` reached END with nine 960x1364 WebP pages, each independently equal to its
+draw-time source RGBA; a normal control passed 12 pages. See the site note for evidence.
+
 ### Post-encoding verification diagnostics
 
 Native proof rejection still stops capture without retries or a weaker fallback. The error now
