@@ -1250,10 +1250,13 @@ def _batch_viewer_html(
               }}
               const canvas=document.createElement('canvas');canvas.width=5;canvas.height=7;
               canvas.style.cssText='width:5px;height:7px';
-              const context=canvas.getContext('2d');context.fillStyle=`rgb(${{index*30}},40,60)`;
-              context.fillRect(0,0,5,7);
               const holder=document.createElement('div');holder.className='-cv-page-canvas';
-              holder.append(canvas);node.append(holder);node.classList.add('mode-loaded','mode-rendered');
+              holder.append(canvas);node.append(holder);
+              const source=document.createElement('canvas');source.width=5;source.height=7;
+              const context=source.getContext('2d');context.fillStyle=`rgb(${{index*30}},40,60)`;
+              context.fillRect(0,0,5,7);
+              canvas.getContext('2d').drawImage(source,0,0,5,7,0,0,5,7);
+              node.classList.add('mode-loaded','mode-rendered');
             }});
           }}
           seek.addEventListener('input',()=>render(total-Number(seek.value)+1));
@@ -1633,12 +1636,12 @@ async def test_hanayume_discovery_to_batch_zip_completes_only_eligible_candidate
     manifest = manifest_snapshots[0]
     manifest_pages = manifest["pages"]
     assert [entry["identity"]["page_id"] for entry in manifest_pages] == ["1", "2,3", "2,3", "4"]
-    assert all(entry["file"].endswith(".png") for entry in manifest_pages)
+    assert all(entry["file"].endswith(".webp") for entry in manifest_pages)
     assert result.archive_path.name.startswith(candidate.artifact_prefix or "")
     with zipfile.ZipFile(result.archive_path) as archive:
         members = archive.namelist()
         assert len(members) == 4
-        assert all(name.endswith(".png") for name in members)
+        assert all(name.endswith(".webp") for name in members)
     second_plan = BatchPlanner(catalog, executor.policies).plan(site="hanayume", now=BATCH_NOW)
     assert all(item.item_id != candidate.item_id for item in second_plan.candidates)
     assert any(

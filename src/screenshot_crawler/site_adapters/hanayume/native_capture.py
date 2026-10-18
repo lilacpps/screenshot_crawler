@@ -14,13 +14,28 @@ from screenshot_crawler.core.errors import UnknownPageStateError
 
 MAX_CANDIDATES = 8
 MAX_IMAGE_BYTES = 8_000_000
-NATIVE_WIDTH = 960
-NATIVE_HEIGHT = 1540
+# Episode sizes vary; these bounds limit memory rather than select one page size.
+MAX_NATIVE_SIDE = 4_096
+MAX_NATIVE_PIXELS = 4_000_000
+MAX_CACHED_SOURCE_PIXELS = 12_000_000
+
+
+def valid_native_dimensions(width: object, height: object) -> bool:
+    return (
+        type(width) is int and type(height) is int
+        and 0 < width <= MAX_NATIVE_SIDE and 0 < height <= MAX_NATIVE_SIDE
+        and width * height <= MAX_NATIVE_PIXELS
+    )
 
 
 OBSERVER_INIT_SCRIPT = r"""(() => {
   if (window.__hanayumeNativeCapture) return;
   const candidates = new Map();
+  const lastSources = new WeakMap();
+  const validDimensions = (width, height) => Number.isSafeInteger(width) &&
+    Number.isSafeInteger(height) && width > 0 && height > 0 &&
+    width <= __MAX_NATIVE_SIDE__ && height <= __MAX_NATIVE_SIDE__ &&
+    width * height <= __MAX_NATIVE_PIXELS__;
   const states = new WeakMap();
   const attributeOwners = new WeakMap();
   const wrappers = [];
@@ -121,7 +136,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     args[0] === 0 && args[1] === 0 && args[2] === source.width &&
     args[3] === source.height && args[4] === 0 && args[5] === 0 &&
     args[6] === target.width && args[7] === target.height &&
-    source.width === 960 && source.height === 1540 && target.width > 0 && target.height > 0;
+    validDimensions(source.width, source.height) && validDimensions(target.width, target.height);
   const locationOf = target => {
     const root = document.querySelector('#xCVPages');
     const wrapper = target.closest('.-cv-page');
@@ -148,6 +163,8 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   };
   const eligible = (targetContext, source, args, location) => {
     if (!(source instanceof HTMLCanvasElement) || !location || !exactFullFrame(args, source, targetContext.canvas))
+      return null;
+    if (['width', 'height', 'getContext', 'toDataURL'].some(name => Object.hasOwn(source, name)))
       return null;
     const target = targetContext.canvas;
     const targetState = stateFor(target);
@@ -210,8 +227,15 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     try {
       state = bumpWrite(target);
       const location = locationOf(target);
+      if (location && source instanceof HTMLCanvasElement) {
+        lastSources.set(target, {width: source.width, height: source.height,
+          supported: validDimensions(source.width, source.height)});
+      }
       prepared = eligible(this, source, args, location);
-      if (prepared && candidates.size >= 8 && !candidates.has(target)) {
+      const cachedPixels = [...candidates.values()].reduce(
+        (sum, candidate) => sum + candidate.sourceWidth * candidate.sourceHeight, 0);
+      if (prepared && (candidates.size >= __MAX_CANDIDATES__ ||
+          cachedPixels + source.width * source.height > __MAX_CACHED_SOURCE_PIXELS__)) {
         disabledReason = 'candidate_cache_overflow';
         candidates.clear();
       }
@@ -521,12 +545,15 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
               proofApiProperties.some(name => Object.hasOwn(targetContext, name)) ||
               targetContext.drawImage !== CanvasRenderingContext2D.prototype.drawImage ||
               !paintStillSupported(candidate.targetPaint)) {
-            nativeReason = 'native_candidate_missing_or_stale';
+            nativeReason = lastSources.get(selectedRow.canvas)?.supported === false
+              ? 'native_source_dimensions_unsupported' : 'native_candidate_missing_or_stale';
             break;
           }
           const snapshotAttrs = contextAttributes(contextFor(candidate.snapshot));
           if (!attrsEqual(snapshotAttrs, candidate.snapshotAttributes) ||
-              candidate.sourceWidth !== 960 || candidate.sourceHeight !== 1540) {
+              !validDimensions(candidate.sourceWidth, candidate.sourceHeight) ||
+              candidate.snapshot.width !== candidate.sourceWidth ||
+              candidate.snapshot.height !== candidate.sourceHeight) {
             nativeReason = 'native_snapshot_context_changed';
             break;
           }
@@ -541,13 +568,16 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
           const replayContext = Reflect.apply(nativeGetContext, replay, ['2d', copyOptions(targetAttributes)]);
           if (!replayContext) { nativeReason = 'replay_context_unavailable'; break; }
           configureReplay(replayContext, candidate);
-          Reflect.apply(nativeDraw, replayContext, [candidate.snapshot, 0, 0, 960, 1540,
+          Reflect.apply(nativeDraw, replayContext, [candidate.snapshot, 0, 0,
+            candidate.sourceWidth, candidate.sourceHeight,
             0, 0, replay.width, replay.height]);
           const replayPixels = pixels(replay);
           const targetPixels = pixels(selectedRow.canvas);
           if (!compare(replayPixels, targetPixels)) { nativeReason = 'native_replay_pixel_mismatch'; break; }
           const sourcePixels = pixels(candidate.snapshot);
-          if (sourcePixels.length !== 960 * 1540 * 4) { nativeReason = 'native_snapshot_dimensions_invalid'; break; }
+          if (sourcePixels.length !== candidate.sourceWidth * candidate.sourceHeight * 4) {
+            nativeReason = 'native_snapshot_dimensions_invalid'; break;
+          }
           for (let offset = 3; offset < sourcePixels.length; offset += 4) {
             if (sourcePixels[offset] !== 255) { nativeReason = 'native_source_not_opaque'; break; }
           }
@@ -564,7 +594,8 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       try {
         if (useNative) {
           for (const item of native) {
-            images.push({slot: item.selectedRow.index, width: 960, height: 1540,
+            images.push({slot: item.selectedRow.index,
+              width: item.candidate.sourceWidth, height: item.candidate.sourceHeight,
               png: pngDataUrl(item.candidate.snapshot)});
           }
         }
@@ -574,13 +605,10 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         images.length = 0;
       }
       if (!useNative) {
-        try {
-          for (const item of selected) {
-            const canvas = item.canvas;
-            images.push({slot: item.index, width: canvas.width, height: canvas.height,
-              png: pngDataUrl(canvas)});
-          }
-        } catch (_) { return {ok: false, reason: 'selected_canvas_readback_failed', observation}; }
+        // Display-canvas readback would change resolution; retain the failure instead.
+        return {ok: false, reason: nativeReason, observation,
+          source_dimensions: selected.map(item => ({slot: item.index,
+            ...(lastSources.get(item.canvas) || {})}))};
       }
       let token = null;
       if (useNative) {
@@ -609,7 +637,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         });
       }
       for (const item of selected) candidates.delete(item.canvas);
-      return {ok: true, mode: useNative ? 'native' : 'rendered', reason: useNative ? null : nativeReason,
+      return {ok: true, mode: 'native', reason: null,
         token, observation, images};
     },
     release({token, expectedSlots, episodePath}) {
@@ -707,7 +735,11 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   };
   window.__hanayumeNativeCapture = api;
   addEventListener('pagehide', () => { candidates.clear(); proofs.clear(); }, {once: true});
-})()"""
+})()""".replace("__MAX_NATIVE_SIDE__", str(MAX_NATIVE_SIDE)).replace(
+    "__MAX_NATIVE_PIXELS__", str(MAX_NATIVE_PIXELS)
+).replace("__MAX_CANDIDATES__", str(MAX_CANDIDATES)).replace(
+    "__MAX_CACHED_SOURCE_PIXELS__", str(MAX_CACHED_SOURCE_PIXELS)
+)
 
 
 COLLECT_CAPTURE_SCRIPT = r"""args => {
@@ -752,6 +784,8 @@ def decode_capture_images(
         width, height, encoded = item.get("width"), item.get("height"), item.get("png")
         if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
             raise UnknownPageStateError("Hanayume capture image dimensions are invalid")
+        if require_opaque and not valid_native_dimensions(width, height):
+            raise UnknownPageStateError("Hanayume native source dimensions exceed the capture limits")
         prefix = "data:image/png;base64,"
         if (
             not isinstance(encoded, str)

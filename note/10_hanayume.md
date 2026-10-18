@@ -34,7 +34,7 @@ Use the existing CLI form `python -m screenshot_crawler.cli discover --key <watc
 
 Manual Viewer capture accepts the exact supported episode URL, verifies its scoped work link, then opens the exact canonical same-work `/series/<work-id>` route to read the finite range set and fresh auth markers. It stops on one unique target row in the bare listing or first observed numbered range; otherwise it follows the observed numbered routes with current-range, unchanged-range-set, declared row-count, and page-local unique-ID checks, exhausting ranges only when the target is absent. `今なら無料` requires the attempt-local verified series auth result; `無料` does not. After opening the exact episode, the adapter rechecks same-work identity and either the exact target row or, when that target is absent there, an episode preview matching the nonempty, unselected fresh bare-series preview by complete ordered ID/label signature or exact reverse. Login/paid entry dialogs or missing viewer structure fail closed without clicking. Unrelated page-wide purchase/resource copy is not inspected as an access gate.
 
-The reader contract remains the observed desktop `mode-spread` layout. Viewer counters and `#xCVPages` wrappers are checked together, active slots must be structurally valid and fully visible, and capture proceeds in contiguous page order. The selected canvas is read atomically and PNG output uses its actual dimensions. Only after every body slot is captured does the observed terminal state produce END; the adapter never follows a next-episode card. Site-local hooks prevent generic locator/UI screenshot fallback.
+The reader contract remains the observed desktop `mode-spread` layout. Viewer counters and `#xCVPages` wrappers are checked together, active slots must be structurally valid and fully visible, and capture proceeds in contiguous page order. Verified source-canvas pixels are read at their actual native dimensions; source unavailability stops capture without rendered PNG or generic locator/UI screenshot fallback. Only after every body slot is captured does the observed terminal state produce END; the adapter never follows a next-episode card.
 
 For the R8-probed leading-empty layout, `mode-has-top-emptypage` must be present and physical slot 1 must be exactly `-cv-page mode-empty` with no canvas. That slot is excluded from the body; physical body slots are frozen as 2 through `total-5`, giving 11 body pages for the observed 17-page episode. The initial counter-1 state must also contain `mode-first-page`; the adapter uses one normal public seek step to counter 3, then captures body slots 2/3 onward. The top-empty flag, exact blank lead-in, and body-slot tuple remain bound through native collection and verification. Unflagged blanks, interior empty slots, changed layout, missing spread sides, or incomplete terminal coverage fail closed. Archive capture order is sequential while identities retain physical slot IDs.
 
@@ -200,6 +200,140 @@ asyncio event-loop-policy deprecation warnings. Full suite and Research/Live ver
 not run: this change adds site-local failure diagnostics, and synthetic browser tests exercise
 the relevant proof gates and actual diagnostics persistence without operating the shared viewer.
 
+## Observed Yona PNG fallback and native dimension limit (2026-10-18)
+
+Read-only inspection of the Hanayume `akatsuki-no-yona` Catalog artifacts found 20 completed
+archives containing 595 pages, all PNG at 846x1329. The interrupted next Item/Source `26977`,
+episode `b0115b14b2324`, retained 11 pages in its manifest; every page records
+`capture_mode=rendered_body_canvas_png`, `reason=native_candidate_missing_or_stale`, and
+`source_native=false`. This is the clean rendered-canvas fallback, not a source-sized native
+PNG retained after a WebP encoder failure. The output dimensions are the displayed canvas
+bitmap dimensions and therefore can change with the Viewer geometry.
+
+A bounded read-only live draw-metadata probe on that same free episode observed full-frame
+draws from `HTMLCanvasElement` sources at **960x1508** into **846x1329** target canvases.
+Observed draws use the complete source/destination rectangles, identity transform, alpha 1,
+`source-over`, and filter `none`. The production observer reports integrity true, no disabled
+reason, and zero native candidates. The pre-fix `exactFullFrame` condition required
+960x1540 source dimensions, so these 960x1508 draws were excluded before candidate creation.
+Later native replay/encoding/dimension checks also assumed 960x1540; changing only the
+first condition would not provide support. That fixed dimension contract dates to native
+capture commit `202f61a`, preceding the later wrapper-layout correction.
+
+Probe evidence is `output/hanayume-yona-native-draw-26977-20261018.json`. Only metadata was
+recorded; no source pixels, native replay equivalence, or alternate-dimension native output
+were verified. Mutating requests were blocked; checkout attempts and new resource consumption
+were zero. The probe closed only its own shared-CDP Page and did not write the normal Catalog
+or existing archives. The new observation explains this episode's absent native candidates;
+it is not an all-page source-dimension survey of all 20 archives. The subsequent variable-size
+implementation and verification are described below; existing archives remain unchanged.
+
+### Variable native dimensions and strict failure behavior
+
+At the user's request, the source observer now reads actual source dimensions rather than
+requiring 960x1540. Full-frame source and destination rectangles remain exact, with the original
+identity-transform, context/paint, opacity, episode/slot, generation/write, wrapper identity,
+and pixel replay checks. Each source is independent; a spread may contain different sizes.
+The immutable snapshot, replay rectangle, pixel-count checks, exported PNG dimensions, Python
+decode, lossless WebP encoding, and capture metadata all use that source's dimensions.
+
+Both source and display canvases must have strictly positive integer dimensions no greater
+than 4096 per side and at most 4,000,000 pixels. Before snapshot allocation, the observer enforces
+eight cached candidates and 12,000,000 cached source pixels (about 48 MB RGBA); overflow latches
+failure. Python also validates native dimension limits before decoding the PNG. Existing encoded
+image byte limits and bounded capture/encode timeouts remain unchanged. These are resource guards,
+not a claim that every image/source/context format is supported.
+
+Native source absence, unsupported dimensions, missing observer, invalid replay/context, stale
+candidate, or source readback failure now returns an error without reading/saving the display
+canvas. An incomplete native spread cannot produce partial captures or fall back to a rendered
+spread. The adapter also rejects legacy/non-native capture results. The terminal error includes
+the failed reason and explains that rendered PNG fallback is disabled; failure diagnostics retain
+the observed per-slot source dimensions when available. A failure after native encoding still
+uses the original strict post-encoding proof and never retries or weakens it. If only lossless
+WebP encoding fails, the same verified source PNG may be retained at its original dimensions;
+this does not restore the removed rendered-canvas fallback.
+
+No new CLI/config is required. No normal Catalog state, completed status, old ZIP, access rule,
+ticket operation, or browser ownership contract changes. Variable-size captures are verified in
+synthetic tests and a separate isolated live run; detailed results are recorded below.
+
+Final validation: 236 Hanayume adapter/native Unit and adapter-browser Integration cases passed
+(0 failed/skipped; 284 existing deprecation warnings; 79.40s). The full Discovery/Batch browser
+file passed 96 cases (0 failed/skipped; 5 warnings; 265.69s), for 332 distinct affected cases.
+Six Discovery-to-Batch ZIP and grant-only success/failure cases were additionally rerun after
+the final source API-shadow rejection gate (all passed). Ruff (`src tests`) and diff checks pass.
+Coverage includes 960x1540, 960x1508, 1200x1600 and 640x480 through complete native capture to END;
+mixed-size spreads retain each source size and last-pixel values after the mutable source is
+cleared. Unsupported source dimensions stop the real Runner with an empty manifest and no body
+files. The reduced-cache-budget test preserves normal drawing while making capture fail closed.
+Missing observers, stale/reset/tampered targets, and replay errors now stop rather than render-fallback.
+Codec-failure tests still preserve exactly the same original-size source PNG.
+
+Live evidence is `output/hanayume-native-size-live-20261018/report.json`. An isolated direct
+Runner run reached END on Yona Item/Source 26977 with 30 native 960x1508 lossless WebP pages;
+the ordinary control Source 25326 (`90868f4de278f`) reached END with 12 native 960x1540 pages.
+An independent document-start hook copied the source canvas at draw time, outside the production
+observer. Its deferred readback matched decoded output RGBA for all 42 pages before advance.
+This is decoded source-canvas equality, not original JPEG proof. Both runs used owned new Pages,
+blocked mutating requests, had zero checkout attempts, and made no normal Catalog/old archive
+writes. The control's first verification script used a nonexistent result `page_count` accessor
+after END; its 12 verified pages and END were retained and the count was reconciled from the
+existing manifest without another control crawl. After the final source API-shadow gate, a
+fresh one-page Yona smoke passed at 960x1508 WebP with the normal strict proof and no consumption;
+its evidence is `final-source-guard-smoke.json` in the same directory. The isolated outputs are
+retained; the prior 20 completed PNG archives are unchanged and were not automatically reacquired.
+
+### Post-recrawl Yona 764x1200 verification
+
+The user's normal recrawl on 2026-10-18 completed Item/Source 26957, episode `209e25d120624`,
+第274話, at END with 30 WebP pages. Read-only inspection of its current ZIP found all 30 at
+764x1200. This does not contradict the prior 960x1508 observation on Item/Source 26977,
+episode `b0115b14b2324` (a different episode); source dimensions are not work-wide constants.
+
+A bounded direct probe on the completed 26957 episode observed full-frame draws from 764x1200
+source canvases into the Viewer's 846x1329 display canvas. Five naturally delivered Viewer JPEG
+responses also decoded as 764x1200. Production capture on the first body page returned
+`source_canvas_lossless_webp`, `reason=null`, with source/output dimensions both 764x1200.
+Thus this observed output preserves the supplied source size; the Viewer is enlarging it for
+display, rather than the crawler downscaling a 960x1508 source. The JPEG observations cover the
+natural first-page/preload responses, not an independent all-30-page response attribution audit.
+No claim of original JPEG byte preservation is made.
+
+Evidence: `output/hanayume-yona-26957-source-dimensions-20261018.json`. Checkout attempts and
+new resource consumption were zero; only the owned shared-CDP Page was closed. No production
+code, normal Catalog state, or archives were changed by this investigation. Only this note is
+updated, so no production test rerun is needed. The per-episode observation must not be used to
+force 764x1200 or 960x1508 onto other episodes.
+
+### Preparing existing Yona archives for re-crawl
+
+`scripts/prepare_recrawl.py` now has an explicit Hanayume archive policy: WebP is preferred,
+PNG is the fallback format. This labels formats, not pixel fidelity; native-size codec-fallback
+PNGs also match, so use the dry-run before applying. For the known resized Yona archives,
+`python scripts/prepare_recrawl.py --site hanayume --work "暁のヨナ" --catalog catalog.sqlite
+--ignore-missing` selects completed Items for that exact site/title. The 2026-10-18 real
+dry-run found 20 candidates (Items 26957–26976), all FALLBACK_INCLUDED, with zero preferred,
+unexpected, broken, missing, or ambiguous artifacts. Its report is
+`output/hanayume-yona-recrawl-dry-run-20261018.txt`; no real apply was performed.
+
+Adding `--apply` moves each selected ZIP to `output/reimport-backup/<timestamp>/`, updates its
+Artifact locator, and marks the Item pending. Prior runs/artifacts and source/work access state
+are retained. Merely resetting status would leave the existing ZIP at its destination and can
+cause a packaging name collision. Normal Batch, without `--grant-only`, performs the later
+recrawl. Its `--site hanayume` scope includes other pending Hanayume Items; `--work` is supported
+by this preparation script only, and Watchlist enablement does not narrow Batch candidates.
+
+Changed files for preparation support: `scripts/prepare_recrawl.py`, its existing Unit tests,
+and the Core/site notes. All 24 preparation tests passed, zero skipped, plus Ruff on the script
+and tests. Synthetic apply covers Hanayume backup/locator/pending behavior and byte preservation.
+No browser/Live/full-suite rerun is needed for the static policy addition; existing capture code
+is unchanged by this preparation support.
+
+Full repository and Research/Probe helper suites were not run: this change is confined to
+Hanayume production capture and its synthetic fixtures. No newly consuming ticket run was needed;
+the existing grant-only/access behavior is covered by the browser tests without live consumption.
+
 ## Initial body-canvas quiet wait (2026-10-11)
 
 After rewind, ordinary-layout initialization waits at counter 1 / body slot 1; top-empty
@@ -213,8 +347,8 @@ drift; persistent rendering/loading times out rather than capturing or navigatin
 
 Sampling is metadata-only: it does not encode, hash, read pixels, delete source candidates, or
 create native proofs. Node identity tracking uses a WeakMap; only selected rows are returned.
-If the source observer is unavailable or fails its integrity check, the existing rendered-PNG
-fallback remains available after the same quiet interval using visible metadata only. Diagnostics
+If the source observer is unavailable or fails its integrity check, initialization can complete
+the quiet interval using visible metadata only, but capture fails closed without rendered PNG. Diagnostics
 mark this distinction with `adapter_debug.initial_canvas_settle.canvas_tracking=false`.
 The settle diagnostic also records status, quiet/timeout/elapsed milliseconds and the final
 selected-row generation/write/identity sample. Successful tracked waits use `canvas_tracking=true`.
@@ -228,7 +362,7 @@ based on the observed initial-reset race, not a guarantee against arbitrarily la
 
 Synthetic browser tests reproduce a late same-pixel bitmap reset for ordinary and top-empty
 layouts, require a fresh quiet interval and verified native capture, and reject continuous resets
-at the deadline. They also preserve observer-missing rendered-PNG fallback. Existing post-encode
+at the deadline. Observer-missing capture now stops without a rendered-PNG fallback. Existing post-encode
 generation/write/identity/layout/position failure tests continue to require rejection.
 Validation: affected Adapter/native-capture Unit tests passed (45); Adapter browser Integration
 passed (87), totaling 132 unique cases with zero skips. The new stalled-observation Unit test
@@ -267,7 +401,7 @@ The CLI prints the policy-owned next check time for both normal quota and grant-
 Native consumption confirmation requires a same-page checkout `POST /api/checkout/rental` HTTP 200 after the attempted click plus fresh exact native grant evidence. A fresh current-episode `waitAndFree` transition from `hasAccess=false` to `true`, with positive bounded remaining time and all three current endpoint IDs matching the Catalog work/episode, latches `AccessConsumption` before post-action account-list DOM validation. A later account-list, Viewer, capture, or packaging failure cannot erase that confirmed consumption. If a later-started exact series response includes the target, it must also report active `waitAndFree`; expiry is the earlier of the current and series request-start plus `remainingSeconds - 1` values. A newer parsed series denial, paid/unknown target state, duplicate target row, or identity conflict blocks the latch; a later series snapshot that simply omits the target is not a denial. When no fresh current positive proof is available, the existing stricter series-positive response plus exact `mode-read`/rental-history path remains supported. That read row accepts the observed `mode-store-item-start` or `mode-store-item-blank` class only with one rental-expiry marker; a blank row without that marker cannot establish a grant. If the natural current response is missing or the newest native state still explicitly reports `hasAccess=false`, the same Page may make at most two exact read-only GETs within one attempt-scoped five-second recovery deadline. The budget does not reset on exception-path reentry; no navigation or ticket retry occurs. Confirmation time anchors the 23-hour work cooldown. The source grant uses conservative native expiry, capped by policy fallback at confirmation plus 72 hours. An invalid native expiry does not erase confirmed consumption: the generic executor records the policy fallback when possible, then reports the metadata error. Normal Batch continues in the same Page through Viewer capture, END, and ZIP; grant-only validates same-page Viewer readiness with zero CONTENT page captures, zero ZIP, and no completion. A failing candidate may still emit a generic UI screenshot diagnostic. A configured direct candidate fails closed on the exact observed central Work Ticket/login gate during initialization and again at each Viewer CONTENT state, before capture; ordinary free direct and anonymous free paths remain supported. Manual Discovery grants remain target-local and do not invent work cooldowns. Unknown, paid, owned, and rental remain ineligible. No Catalog schema or site-specific Core branch was added; `AccessConsumption` carries an optional generic native expiry. For identity-bound configured Batch, `configure_run` installs a Page route guard before the selected episode `goto`; manual entry and Discovery are unaffected. It passes the exact selected canonical episode document and selected-page RSC, and leaves API/static/image content routes outside guarded `/episodes/*` and `/series/*` families untouched. It aborts only a known nonselected route-data request matching the observed HTTPS/allowed-host, no-userinfo/default-port, GET, single nonempty `_rsc`, `rsc: 1`, `fetch`/`other`, optional `next-router-prefetch: 1` shape and a 13-lowercase-hex episode/work path with an observed range-number or `old` suffix. This conservative signature identifies route data but does not claim every such request is a Next prefetch. Unknown IDs/suffixes, malformed signatures, off-target documents, non-GET requests, or other unrecognized episode/work routes are aborted and latch fatal before ticket click/capture. A response from any off-target episode/work route increments a distinct escaped-response counter and latches fatal. Audit metadata contains only counters and a fixed reason code; it omits request URLs/query values. Stage 5ca6372 live serial validation used the already-granted `49b7e11049871` (30 PNG pages, 925x1329) and free `8c6` work (VP8L); both reached END and passed ZIP audit, with zero checkout and no work quota consumption. Page A closed before Page B opened. Two observed off-target RSC attempts in that run were blocked with Chromium's default `ERR_FAILED`; the explicit `blockedbyclient` error code is covered by synthetic tests, which report `net::ERR_BLOCKED_BY_CLIENT.Inspector` and zero off-target responses. The bounded post-commit live error-code re-audit passed with zero off-target responses; no additional ticket was used for that audit. The later 9a grant-only live check confirmed ticket use. The initial 0699 normal Batch observed checkout HTTP 200 and current-episode false-to-true native access but did not persist consumption in the then-current adapter; the native-first correction later passed independent review and the 342-case affected suite. Full/incremental Discovery and normal direct Batch on the already-granted 0699 source then passed without reconsumption. The separate 1d107 quota candidate stopped before click: source-order review places its UnknownPageStateError before exact-control validation and before `_ticket_click_attempted`; the exact native response reported matching IDs and `hasAccess=false/accessType=waitAndFree`, for which null remaining seconds is valid ungranted state. Offline HTML and a bounded read-only probe found the exact account/public target row as `mode-current mode-store-item-start` with no rental marker. Checkout/read POSTs were 0; the original Tester unresolved label is superseded by source-order adjudication. The targeted two-class recognition change passed 103 unit/browser tests and independent review; the final normal consuming Batch passed Tester and independent Reviewer audit with one checkout, fresh current-episode native grant, source/work persistence, END, and a verified 30-page PNG ZIP. Cumulative confirmed live ticket use is 4.
 
 
-The document-start source observer copies an observed opaque sRGB/unorm8 960x1540 full-frame canvas into a bounded cache of up to eight candidates (about 47.3 MB). Exact target, wrapper/slot, generation/write/dimensions, safe geometry/context, and same-episode provenance must remain valid. Validated native pixels are encoded as strict single-chunk VP8L lossless WebP method 4 only after full RGBA round-trip validation; encoder failure returns the same verified source PNG. Missing or unsafe native proof uses clean rendered-canvas PNG for the whole spread at actual dimensions. The final live run verified all 134 pages as native WebP with exact independent RGBA equality and zero fallback. This is decoded source-canvas fidelity, not original JPEG bytes or tile reconstruction.
+The document-start source observer copies an opaque sRGB/unorm8 full-frame canvas at its actual bounded dimensions. The cache holds at most eight candidates and 12,000,000 source pixels (about 48 MB RGBA). Exact target, wrapper/slot, generation/write/dimensions, safe geometry/context, and same-episode provenance must remain valid. Validated native pixels are encoded as strict single-chunk VP8L lossless WebP method 4 only after full RGBA round-trip validation; encoder failure returns the same verified source PNG at the same dimensions. Missing, over-limit, or unsafe native proof stops capture without rendered PNG. The historical final run verified 134 pages at 960x1540 with independent RGBA equality; the variable-size live run described above adds a separate 960x1508 case. This is decoded source-canvas fidelity, not original JPEG bytes or tile reconstruction.
 
 Phase 03 verification: the affected unit suite passed 370 tests with 0 skips. The full
 Hanayume Discovery/Viewer browser group completed with 166 passed, 1 failed, and 0 skipped. Its one failure was in the
@@ -338,7 +472,7 @@ Final run 20261010T231618Z-a02345e9 performed fresh standard Discovery, validate
 The four selected episodes were `90868f4de278f` (12 pages), `2ec9c6b024ee0` (50), `9202b052ad237` (40), and `8c6f15923caa0` (32). All reached END and completed their Catalog items. The four ZIP artifacts passed CRC, Manifest order, member-count, and SHA-256 checks; all four are present.
 All 134 body pages are 960x1540 original source-canvas pixels encoded as single-chunk VP8L lossless WebP. An independent document-start hook copied the source canvas at draw time; deferred RGBA readback matched all 134 output pages exactly before advance. Rendered fallback count was zero. Tester visual review passed 12 first/middle/final samples. Access metrics recorded 2,426 requests, zero 403/429/challenge/CAPTCHA events, and CLI-reported retries 0. Quota-resource count remained zero and quota/grant state remained unchanged.
 The prior 122-page logged-out PNG run remains historical fallback evidence, not native proof. The initial discovery/preflight failures and an ignored Tester slot-attribution mismatch are recorded in `runbooks/hanayume-free/PROGRESS.md`; each was followed by a bounded fix or evidence correction before the final passing run.
-Limits: no original JPEG bytes or DCT coefficient reconstruction is claimed. The observed display canvas was 828x1329 (CSS 552x886, DPR 1.5); native capture avoids that resize. The tested 385px tile height rejected the specific MCU-8 DCT permutation. Other works/native dimensions can use whole-spread rendered PNG fallback. A ready Viewer overlapping a login/paid-entry dialog and universal overlay detection remain unverified.
+Limits: no original JPEG bytes or DCT coefficient reconstruction is claimed. The observed display canvas was 828x1329 (CSS 552x886, DPR 1.5); native capture avoids that resize. The tested 385px tile height rejected the specific MCU-8 DCT permutation. The historical rendered-PNG fallback has since been removed; current variable-size capture requires verified native proof or stops. A ready Viewer overlapping a login/paid-entry dialog and universal overlay detection remain unverified.
 Final independent review PASS / BLOCKING 0.
 
 ## R7 leading-empty failure evidence (historical cause checkpoint; implementation is described below)

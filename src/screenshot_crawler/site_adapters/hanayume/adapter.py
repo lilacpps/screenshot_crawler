@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
-import io
 import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl, urlsplit
 
-from PIL import Image, UnidentifiedImageError
 from playwright.async_api import ElementHandle, Locator, Page, Request, Response
 from playwright.async_api import Error as PlaywrightError
 
@@ -78,7 +74,6 @@ INITIAL_CANVAS_POLL_INTERVAL_MS = 100
 MAX_RANGE_PAGES = 100
 MAX_LISTING_ROWS = RANGE_PAGE_SIZE * MAX_RANGE_PAGES
 INITIALIZE_TIMEOUT_MS = 240_000
-MAX_PNG_BYTES = 8_000_000
 POLL_INTERVAL_SECONDS = 0.15
 TICKET_AUTH_READY_TIMEOUT_SECONDS = 8.0
 TICKET_RECOVERY_WINDOW_SECONDS = 5.0
@@ -1134,29 +1129,6 @@ def _viewer_debug_snapshot(raw: object) -> dict[str, object]:
             for slot in selected
         ]
     return result
-
-
-def _decode_canvas_png(value: object, *, width: int, height: int) -> bytes:
-    if not isinstance(value, str) or not value.startswith("data:image/png;base64,"):
-        raise UnknownPageStateError("Hanayume canvas PNG readback failed")
-    try:
-        data = base64.b64decode(value.partition(",")[2], validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise UnknownPageStateError("Hanayume canvas PNG data is malformed") from exc
-    if len(data) > MAX_PNG_BYTES:
-        raise UnknownPageStateError("Hanayume canvas PNG exceeds its byte guard")
-    try:
-        with Image.open(io.BytesIO(data)) as image:
-            if image.format != "PNG" or image.size != (width, height):
-                raise UnknownPageStateError("Hanayume canvas PNG dimensions do not match the canvas")
-            image.verify()
-        with Image.open(io.BytesIO(data)) as image:
-            image.load()
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        if isinstance(exc, UnknownPageStateError):
-            raise
-        raise UnknownPageStateError("Hanayume canvas PNG did not decode cleanly") from exc
-    return data
 
 
 class HanayumeAdapter(SiteAdapter):
@@ -2940,7 +2912,7 @@ class HanayumeAdapter(SiteAdapter):
     async def get_capture_target(self, page: Page) -> Locator:
         del page
         raise UnknownPageStateError(
-            "Hanayume capture requires the atomic rendered-canvas PNG readback"
+            "Hanayume capture requires verified source-native canvas pixels"
         )
 
     async def get_capture_targets(self, page: Page) -> tuple[Locator, ...]:
@@ -3005,44 +2977,18 @@ class HanayumeAdapter(SiteAdapter):
         except (PlaywrightError, TimeoutError) as exc:
             raise UnknownPageStateError("Hanayume atomic canvas capture exceeded its bound") from exc
         if not isinstance(raw, dict) or raw.get("ok") is not True:
+            # Missing native proof must not silently produce a display-resolution image.
             reason = raw.get("reason") if isinstance(raw, dict) else "malformed_capture_result"
-            if reason not in {"capture_observer_missing", "observer_integrity_lost"}:
-                self._capture_diagnostics = {"mode": "capture_failed", "reason": str(reason)}
-                raise UnknownPageStateError("Hanayume selected canvas changed or could not be read")
-            rendered = await self._observe(page, include_png=True)
-            if (
-                rendered.current != observation.current
-                or rendered.body_total != observation.body_total
-                or rendered.body_slots != observation.body_slots
-                or rendered.has_top_empty_page != observation.has_top_empty_page
-                or rendered.active_slots != expected
-                or rendered.ready_slots != expected
-            ):
-                raise UnknownPageStateError("Hanayume clean rendered-canvas fallback changed state")
-            slots = rendered.raw.get("slots")
-            if not isinstance(slots, list):
-                raise UnknownPageStateError("Hanayume rendered-canvas fallback slots are missing")
-            captures: list[CaptureResult] = []
-            for index in expected:
-                slot = slots[index]
-                canvas = slot.get("canvas") if isinstance(slot, dict) else None
-                if not isinstance(canvas, dict) or canvas.get("ready") is not True or canvas.get("visible") is not True:
-                    raise UnknownPageStateError("Hanayume rendered-canvas fallback is not ready")
-                width, height = canvas.get("width"), canvas.get("height")
-                if not isinstance(width, int) or not isinstance(height, int):
-                    raise UnknownPageStateError("Hanayume rendered-canvas fallback dimensions are invalid")
-                data = _decode_canvas_png(canvas.get("png"), width=width, height=height)
-                captures.append(CaptureResult(data, width, height, "image/png", ".png"))
             self._capture_diagnostics = {
-                "mode": "rendered_body_canvas_png",
+                "mode": "capture_failed",
                 "reason": str(reason),
                 "slots": list(expected),
-                "output_dimensions": [[item.width, item.height] for item in captures],
-                "output_formats": [item.mime_type for item in captures],
+                "source_dimensions": raw.get("source_dimensions", []) if isinstance(raw, dict) else [],
             }
-            self._captured_slots.extend(expected)
-            self._last_capture_slots = expected
-            return tuple(captures)
+            raise UnknownPageStateError(
+                f"Hanayume source-native capture unavailable (reason={reason}); "
+                "rendered PNG fallback is disabled"
+            )
         raw_token = raw.get("token")
         if isinstance(raw_token, str) and self._capture_attempt is not None:
             self._capture_attempt["token"] = raw_token
@@ -3057,85 +3003,58 @@ class HanayumeAdapter(SiteAdapter):
         ):
             raise UnknownPageStateError("Hanayume selected spread changed during atomic readback")
         mode = raw.get("mode")
-        if mode not in {"native", "rendered"}:
-            raise UnknownPageStateError("Hanayume capture mode is unknown")
+        if mode != "native":
+            self._capture_diagnostics = {"mode": "capture_failed", "reason": "native_capture_required"}
+            raise UnknownPageStateError("Hanayume source-native capture is required; rendered fallback is disabled")
         images = decode_capture_images(
-            raw.get("images"), expected_slots=expected, require_opaque=mode == "native"
+            raw.get("images"), expected_slots=expected, require_opaque=True
         )
-        if mode == "native":
-            if any((image.width, image.height) != (960, 1540) for image in images):
-                raise UnknownPageStateError("Hanayume native capture dimensions are not source-native")
-            token = raw_token
-            if not isinstance(token, str) or not token:
-                raise UnknownPageStateError("Hanayume native capture proof token is missing")
-            encode_started = time.monotonic()
-            encode_task = asyncio.create_task(asyncio.to_thread(encode_native_webp, images))
-            self._webp_encode_job = encode_task
-            encode_task.add_done_callback(self._clear_webp_encode_job)
-            try:
-                captures = await asyncio.wait_for(asyncio.shield(encode_task), timeout=6.0)
-            except TimeoutError as exc:
-                self._capture_diagnostics = {
-                    "mode": "capture_failed",
-                    "reason": "native_encode_timeout",
-                    "source_slots": list(expected),
-                }
-                raise UnknownPageStateError("Hanayume bounded native image encoding timed out") from exc
-            except Exception:  # noqa: BLE001 - retain the same already-verified native PNGs
-                captures = tuple(
-                    CaptureResult(item.png, item.width, item.height, "image/png", ".png")
-                    for item in images
-                )
-            encode_elapsed_ms = round((time.monotonic() - encode_started) * 1000, 3)
-            verified = await self._verify_native_capture(page, token)
-            if not verified:
-                verification = self._capture_diagnostics.get("verification", {})
-                self._capture_diagnostics = {
-                    "mode": "capture_failed",
-                    "reason": "native_target_changed_after_encoding",
-                    "source_slots": list(expected),
-                    "encode_elapsed_ms": encode_elapsed_ms,
-                    "verification": verification,
-                }
-                detail = verification.get("reason", "unknown") if isinstance(verification, dict) else "unknown"
-                raise UnknownPageStateError(
-                    "Hanayume selected canvas changed after native image encoding "
-                    f"(verification={detail})"
-                )
-            output_format = _capture_output_format(captures)
+        token = raw_token
+        if not isinstance(token, str) or not token:
+            raise UnknownPageStateError("Hanayume native capture proof token is missing")
+        encode_started = time.monotonic()
+        encode_task = asyncio.create_task(asyncio.to_thread(encode_native_webp, images))
+        self._webp_encode_job = encode_task
+        encode_task.add_done_callback(self._clear_webp_encode_job)
+        try:
+            captures = await asyncio.wait_for(asyncio.shield(encode_task), timeout=6.0)
+        except TimeoutError as exc:
             self._capture_diagnostics = {
-                "mode": f"source_canvas_lossless_{output_format}",
-                "reason": raw.get("reason"),
-                "slots": list(expected),
-                "source_dimensions": [960, 1540],
-                "output_dimensions": [[item.width, item.height] for item in captures],
-                "output_formats": [item.mime_type for item in captures],
+                "mode": "capture_failed",
+                "reason": "native_encode_timeout",
+                "source_slots": list(expected),
             }
-        else:
-            slots = observation.raw.get("slots")
-            if not isinstance(slots, list):
-                raise UnknownPageStateError("Hanayume canvas wrapper list disappeared during capture")
-            for index, image in zip(expected, images, strict=True):
-                slot = slots[index]
-                canvas = slot.get("canvas") if isinstance(slot, dict) else None
-                if (
-                    not isinstance(canvas, dict)
-                    or canvas.get("ready") is not True
-                    or canvas.get("visible") is not True
-                    or (canvas.get("width"), canvas.get("height")) != (image.width, image.height)
-                ):
-                    raise UnknownPageStateError("Hanayume rendered fallback dimensions changed")
+            raise UnknownPageStateError("Hanayume bounded native image encoding timed out") from exc
+        except Exception:  # noqa: BLE001 - retain the same already-verified native PNGs
             captures = tuple(
-                CaptureResult(image.png, image.width, image.height, "image/png", ".png")
-                for image in images
+                CaptureResult(item.png, item.width, item.height, "image/png", ".png")
+                for item in images
             )
+        encode_elapsed_ms = round((time.monotonic() - encode_started) * 1000, 3)
+        verified = await self._verify_native_capture(page, token)
+        if not verified:
+            verification = self._capture_diagnostics.get("verification", {})
             self._capture_diagnostics = {
-                "mode": "rendered_body_canvas_png",
-                "reason": raw.get("reason"),
-                "slots": list(expected),
-                "output_dimensions": [[item.width, item.height] for item in captures],
-                "output_formats": [item.mime_type for item in captures],
+                "mode": "capture_failed",
+                "reason": "native_target_changed_after_encoding",
+                "source_slots": list(expected),
+                "encode_elapsed_ms": encode_elapsed_ms,
+                "verification": verification,
             }
+            detail = verification.get("reason", "unknown") if isinstance(verification, dict) else "unknown"
+            raise UnknownPageStateError(
+                "Hanayume selected canvas changed after native image encoding "
+                f"(verification={detail})"
+            )
+        output_format = _capture_output_format(captures)
+        self._capture_diagnostics = {
+            "mode": f"source_canvas_lossless_{output_format}",
+            "reason": raw.get("reason"),
+            "slots": list(expected),
+            "source_dimensions": [[item.width, item.height] for item in images],
+            "output_dimensions": [[item.width, item.height] for item in captures],
+            "output_formats": [item.mime_type for item in captures],
+        }
         self._captured_slots.extend(expected)
         self._last_capture_slots = expected
         return tuple(captures)

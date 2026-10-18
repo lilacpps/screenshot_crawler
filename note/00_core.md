@@ -269,7 +269,7 @@ capture contract, and live-verification status are in note/11_younganimal.md.
 
 Discovery consumes only the natural exact work/episode `/api/series/access` observation: native `accessType=waitAndFree` promotes an otherwise unknown row to a nominal `quota` candidate, while exact free labels retain their established precedence. This classification never authorizes an entry click. Full and incremental Discovery refresh the already-buffered validated ranges without extra range/API requests and wait up to five seconds for each authenticated episode-local account root to settle. A manual episode grant requires fresh authenticated series markers plus an exact native `waitAndFree` row with `hasAccess=true` and strict positive remaining seconds (1..259200). When that episode appears in the short account preview, its row must show the observed read/rental markers; a present row without them is contradictory. Absence from the preview is not negative evidence when the exact active native row is present. Unknown/loading/no-user/malformed states preserve prior grants; exact zero remaining clears a stale grant. Only this exact active grant permits a public/history label difference. Catalog stores normalized `access_mode` and source-level `access_granted_until` provenance, not raw labels or native response payloads. Batch selects from Catalog and opens only the chosen canonical episode URL; `work_ticket` uses a work-scoped minimum 23-hour cooldown and one candidate per work, while each episode grant lasts up to 72 hours. Direct access during a recorded active grant does not consume another ticket. No site-specific Core branch or Catalog schema migration was added; shared `AccessConsumption` has an optional generic native expiry. Current site behavior, tests, evidence, and limits are in `note/10_hanayume.md` and `runbooks/hanayume-work-ticket/README.md`.
 
-The site-local manual Viewer path freshly checks the same-work row before capture and its label again after episode entry. Login/paid entry dialogs or unavailable viewer structure fail closed without CTA actions. The document-start source observer snapshots an observed opaque sRGB/unorm8 960x1540 full-frame canvas at draw time and requires exact selected-canvas RGBA replay. Verified pixels use strict lossless VP8L WebP method 4 with full RGBA round-trip validation; encoder failure keeps the same verified PNG. Missing/unsafe native proof uses clean rendered body-canvas PNG for the whole spread at actual dimensions. This does not claim original JPEG bytes or tile reconstruction. Final live E2E verified 134/134 original 960x1540 source-canvas pages as single-chunk VP8L lossless WebP with exact independent RGBA equality and zero rendered fallbacks. Four candidates reached END and produced four verified ZIPs without quota or entitlement mutation. The prior 122-page Phase 05 rendered-PNG run is historical baseline evidence. Details and limits are in `note/10_hanayume.md` and the Hanayume runbook.
+The site-local manual Viewer path freshly checks the same-work row before capture and its label again after episode entry. Login/paid entry dialogs or unavailable viewer structure fail closed without CTA actions. The document-start Hanayume source observer snapshots an opaque sRGB/unorm8 full-frame canvas at its actual dimensions (up to 4096 per side and 4,000,000 pixels) and requires exact selected-canvas RGBA replay. Verified pixels use strict lossless VP8L WebP method 4 with full RGBA round-trip validation; encoder failure keeps the same verified native PNG at the same dimensions. Missing/unsafe/over-limit native proof stops capture without rendered PNG. The site-local cache is bounded to eight candidates and 12,000,000 source pixels. A separate variable-size live check verified 30 Yona pages at 960x1508 and 12 control pages at 960x1540 against independent source-canvas RGBA, all at END without new resource consumption; old archives were not changed. This does not claim original JPEG bytes or tile reconstruction. Final live E2E verified 134/134 original 960x1540 source-canvas pages as single-chunk VP8L lossless WebP with exact independent RGBA equality and zero rendered fallbacks. Four candidates reached END and produced four verified ZIPs without quota or entitlement mutation. The prior 122-page Phase 05 rendered-PNG run is historical baseline evidence. Details and limits are in `note/10_hanayume.md` and the Hanayume runbook.
 
 ## AccessGuard selector cancellation (2026-10-10)
 
@@ -1770,7 +1770,11 @@ exact `--site` and/or Work title scope. It does not run Discovery or modify
 sources, source targets, crawl runs, or ZIP contents. The current site policy
 mapping is intentionally limited to the confirmed production capture paths:
 Comic DAYS and Magapoke prefer JPEG (`.jpg`/`.jpeg`) with PNG fallback, while
-MANGA ONE prefers source-native WebP with PNG fallback. An explicitly unknown
+MANGA ONE and Hanayume prefer source-native WebP with PNG fallback. Hanayume's
+mapping was added on 2026-10-18 for the observed resized Yona PNG archives. This
+is an extension-based recrawl policy, not proof that every PNG has reduced fidelity:
+a verified native-size PNG retained after codec failure is also classified as a fallback format.
+An explicitly unknown
 site fails closed; work-only scans skip sources whose policy is undefined.
 
 ZIP page members are inspected at archive root with case-insensitive
@@ -1791,6 +1795,16 @@ pending failures are reported as partial failures without a rollback
 framework. Synthetic ZIP coverage is in
 `tests/unit/test_prepare_recrawl.py`; no real Catalog `--apply` run is part of
 the implementation verification.
+
+Hanayume usage: `python scripts/prepare_recrawl.py --site hanayume --work "暁のヨナ"
+--catalog catalog.sqlite --ignore-missing` is read-only; adding `--apply` moves the selected
+old archives and returns their Items to pending without clearing source grants or work cooldowns.
+The work title must match exactly, and `--site` prevents the same Work's Piccoma Sources
+from entering this scan. The 2026-10-18 real dry-run found 20 FALLBACK_INCLUDED candidates,
+no missing/broken/ambiguous artifacts, and made no Catalog/file changes. The policy/classifier
+and backup/apply tests passed 24 cases (0 skipped); synthetic apply verifies that moved ZIP
+bytes are preserved. `batch run --site hanayume` subsequently selects site-wide pending Items;
+the Batch CLI has no `--work` filter and Watchlist enablement is not a Batch source filter.
 
 B1/B2/B3/B4/B5/B6ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、BookWalker、Magapoke、Manga ONE以外ではJump+だけproduction bounded Discoveryを実装している。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 

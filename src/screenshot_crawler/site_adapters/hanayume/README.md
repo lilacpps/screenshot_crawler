@@ -64,13 +64,24 @@ existing strict readiness metadata, sampled every 100 ms. Changes restart this q
 failure to settle within five seconds stops initialization. This applies to slot 1 in ordinary
 layouts and slots 2/3 after the existing leading-empty intro seek. Later page turns and strict
 post-encoding proof are unchanged; a later reset still stops without a capture retry.
-Sampling adds no image/pixel readback. If the native observer is unavailable, the existing
-rendered-PNG fallback uses a one-second metadata-only quiet wait. The tracking mode and timing
+Sampling adds no image/pixel readback. If the native observer is unavailable, initialization can
+finish its metadata-only quiet wait, but capture stops without a rendered-PNG fallback. The tracking mode and timing
 are recorded at `adapter_debug.initial_canvas_settle` in failure diagnostics. No new option is
 required. Synthetic browser tests pass late same-pixel reset cases and reject continuous resets;
 live reduction in failures has not yet been verified.
 
-R2 captures the observed opaque sRGB/unorm8 960x1540 full-frame canvas at draw time into a bounded immutable copy tied to the exact target and episode. Selection requires target/slot/generation/write proof, safe full-frame state, and exact no-background RGBA replay. Strict single-chunk VP8L WebP method 4 is accepted only after full RGBA round-trip validation; encoder failure returns the same verified native PNG. Native unavailability uses clean rendered-canvas PNG for the whole spread at actual dimensions. In the final E2E all 134 pages were native source-canvas WebP with 134/134 independent exact RGBA matches and zero rendered fallbacks. This is decoded source-canvas fidelity, not original JPEG bytes or tile reconstruction.
+Capture snapshots an opaque sRGB/unorm8 full-frame source canvas at its actual dimensions,
+including the observed 960x1540 and Yona 960x1508 sources. Width and height must each be positive
+integers at most 4096, with at most 4,000,000 pixels per source and target canvas. The draw-time
+cache holds at most eight candidates and 12,000,000 source pixels (about 48 MB of RGBA storage).
+Over-limit or unproven sources stop capture; no rendered-canvas or screenshot fallback is allowed.
+Source dimensions are not inferred from the display size or another page, and may differ between
+pages in a spread. Each source must pass the existing full-frame/context/provenance/opaque checks
+and exact replay against its selected display canvas. Encoding and native proof both retain the
+actual source dimensions. Lossless VP8L WebP method 4 is verified by full RGBA round-trip; a codec
+failure may retain only the same verified source PNG at the same dimensions. No new CLI option
+is needed. Older output ZIPs are not rewritten by this change. Historical 134-page E2E evidence
+below remains specific to 960x1540; current variable-size live verification is in the site note.
 
 ### Post-encoding verification diagnostics
 

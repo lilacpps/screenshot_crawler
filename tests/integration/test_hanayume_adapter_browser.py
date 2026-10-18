@@ -92,6 +92,7 @@ def _episode_html(
     top_empty: bool = False, top_empty_seek_locked: bool = False,
     top_empty_first_marker_missing: bool = False, top_empty_interior_empty: bool = False,
     padded_counter: bool = False,
+    source_dimensions: tuple[int, int] = (960, 1540),
 ) -> str:
     public_values = episode_rows if episode_rows is not None else [
         (EPISODE_ID, label),
@@ -158,7 +159,7 @@ def _episode_html(
           const preloaded = new WeakSet();
           const sourceFor = index => {{
             const canvas = document.createElement('canvas');
-            canvas.width = 960; canvas.height = 1540;
+            canvas.width = {source_dimensions[0]}; canvas.height = {source_dimensions[1]};
             const context = canvas.getContext('2d');
             context.fillStyle = `rgb(${{index * 20}},40,60)`;
             context.fillRect(0, 0, canvas.width, canvas.height);
@@ -206,7 +207,7 @@ def _episode_html(
               wrappers[index].append(holder);
               if (!(index === 2 && current === 3 && preloaded.has(canvas))) {{
                 const source = sourceFor(index);
-                context.drawImage(source, 0, 0, 960, 1540, 0, 0, canvas.width, canvas.height);
+                context.drawImage(source, 0, 0, source.width, source.height, 0, 0, canvas.width, canvas.height);
                 source.getContext('2d').clearRect(0, 0, source.width, source.height);
               }}
               wrappers[index].classList.add('mode-loaded', 'mode-rendered');
@@ -218,7 +219,7 @@ def _episode_html(
               holder.append(secondCanvas);
               wrapper.append(holder);
               const source = sourceFor(2);
-              secondCanvas.getContext('2d').drawImage(source, 0, 0, 960, 1540, 0, 0, secondCanvas.width, secondCanvas.height);
+              secondCanvas.getContext('2d').drawImage(source, 0, 0, source.width, source.height, 0, 0, secondCanvas.width, secondCanvas.height);
               source.getContext('2d').clearRect(0, 0, source.width, source.height);
               preloaded.add(secondCanvas);
               wrapper.classList.add('mode-loaded', 'mode-req-render');
@@ -274,6 +275,7 @@ async def _install_mock_site(
     top_empty_first_marker_missing: bool = False,
     top_empty_interior_empty: bool = False,
     padded_counter: bool = False,
+    source_dimensions: tuple[int, int] = (960, 1540),
 ) -> dict[str, object]:
     state: dict[str, object] = {"episode_visits": 0, "paths": []}
 
@@ -293,6 +295,7 @@ async def _install_mock_site(
                 top_empty_first_marker_missing=top_empty_first_marker_missing,
                 top_empty_interior_empty=top_empty_interior_empty,
                 padded_counter=padded_counter,
+                source_dimensions=source_dimensions,
             )
         elif path == f"/series/{WORK_ID}":
             body = (
@@ -1031,7 +1034,7 @@ async def test_hanayume_initial_canvas_wait_restarts_after_same_pixel_reset(
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_hanayume_initial_canvas_wait_preserves_observer_missing_rendered_fallback(
+async def test_hanayume_initial_canvas_wait_stops_capture_when_observer_is_missing(
     browser_page: Page, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await _install_mock_site(browser_page, resume_current=1)
@@ -1046,15 +1049,17 @@ async def test_hanayume_initial_canvas_wait_preserves_observer_missing_rendered_
     assert debug["initial_canvas_settle"]["status"] == "settled"
     assert debug["initial_canvas_settle"]["canvas_tracking"] is False
     assert debug["initial_canvas_settle"]["elapsed_ms"] >= 60
-    captures = await adapter.capture_page(browser_page)
-    assert len(captures) == 1 and captures[0].mime_type == "image/png"
+    with pytest.raises(UnknownPageStateError, match="capture_observer_missing"):
+        await adapter.capture_page(browser_page)
+    assert adapter._captured_slots == []
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("source_dimensions", [(960, 1540), (960, 1508), (1200, 1600), (640, 480)])
 async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_spreads_and_ends(
-    browser_page: Page,
+    browser_page: Page, source_dimensions: tuple[int, int],
 ) -> None:
-    await _install_mock_site(browser_page, resume_current=3)
+    await _install_mock_site(browser_page, resume_current=3, source_dimensions=source_dimensions)
     adapter = await _initialized(browser_page)
     await _body_state(browser_page, adapter)
 
@@ -1062,7 +1067,7 @@ async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_sprea
     captures = await adapter.capture_page(browser_page)
     assert captures is not None and len(captures) == 1
     first = Image.open(io.BytesIO(captures[0].data)).convert("RGB")
-    assert first.size == (960, 1540)
+    assert first.size == source_dimensions
     assert captures[0].mime_type == "image/webp"
     assert first.getpixel((0, 0)) == (20, 40, 60)
     assert first_identity.page_id == "1"
@@ -1073,7 +1078,7 @@ async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_sprea
     spread_identity = await adapter.get_content_identity(browser_page)
     spread = await adapter.capture_page(browser_page)
     assert spread is not None and len(spread) == 2
-    assert all(item.mime_type == "image/webp" and (item.width, item.height) == (960, 1540) for item in spread), adapter._capture_diagnostics
+    assert all(item.mime_type == "image/webp" and (item.width, item.height) == source_dimensions for item in spread), adapter._capture_diagnostics
     assert [Image.open(io.BytesIO(item.data)).convert("RGB").getpixel((0, 0)) for item in spread] == [
         (40, 40, 60),
         (60, 40, 60),
@@ -1086,12 +1091,57 @@ async def test_hanayume_local_viewer_rewinds_resume_captures_reused_canvas_sprea
     final_identity = await adapter.get_content_identity(browser_page)
     final = await adapter.capture_page(browser_page)
     assert final is not None and len(final) == 1
-    assert (final[0].width, final[0].height) == (960, 1540)
+    assert (final[0].width, final[0].height) == source_dimensions
     assert Image.open(io.BytesIO(final[0].data)).convert("RGB").getpixel((0, 0)) == (80, 40, 60)
 
     await adapter.go_next(browser_page)
     await adapter.wait_for_change(browser_page, final_identity)
     assert await adapter.detect_state(browser_page) is PageState.END
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_spread_preserves_each_source_size_and_immutable_pixels(
+    browser_page: Page,
+) -> None:
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    first = await adapter.get_content_identity(browser_page)
+    await adapter.capture_page(browser_page)
+    await adapter.go_next(browser_page)
+    await adapter.wait_for_change(browser_page, first)
+    await browser_page.evaluate("""() => {
+      for (const [slot, width, height] of [[2,640,480],[3,960,1508]]) {
+        const target = document.querySelector('#xCVPages').children[slot].querySelector('canvas');
+        const source = document.createElement('canvas'); source.width=width; source.height=height;
+        const context = source.getContext('2d');
+        context.fillStyle=`rgb(${slot*20},40,60)`; context.fillRect(0,0,width,height);
+        context.fillStyle=`rgb(253,${slot},4)`; context.fillRect(width-1,height-1,1,1);
+        target.getContext('2d').drawImage(source,0,0,width,height,0,0,target.width,target.height);
+        context.clearRect(0,0,width,height);
+      }
+    }""")
+    spread = await adapter.capture_page(browser_page)
+    assert [(item.width, item.height) for item in spread] == [(640, 480), (960, 1508)]
+    assert all(item.mime_type == "image/webp" for item in spread)
+    for slot, item in zip((2, 3), spread, strict=True):
+        with Image.open(io.BytesIO(item.data)) as image:
+            assert image.convert("RGB").getpixel((item.width - 1, item.height - 1)) == (253, slot, 4)
+    assert adapter._capture_diagnostics["source_dimensions"] == [[640, 480], [960, 1508]]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_source_cache_pixel_budget_stops_capture_but_preserves_drawing(
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = hanayume_adapter_module.OBSERVER_INIT_SCRIPT.replace("12000000", "2000000")
+    monkeypatch.setattr(hanayume_adapter_module, "OBSERVER_INIT_SCRIPT", script)
+    await _install_mock_site(browser_page)
+    adapter = await _initialized(browser_page)
+    with pytest.raises(UnknownPageStateError, match="candidate_cache_overflow"):
+        await adapter.capture_page(browser_page)
+    assert adapter._captured_slots == []
+    assert await browser_page.evaluate("""() => Array.from(document.querySelector('#xCVPages')
+      .children[1].querySelector('canvas').getContext('2d').getImageData(0,0,1,1).data)""") == [20,40,60,255]
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -1308,10 +1358,10 @@ async def test_hanayume_initialize_does_not_wait_past_duplicate_or_malformed_cou
         "write", "same-width-attribute", "same-height-attribute", "clip",
         "hook-tamper", "instance-write-tamper", "observer-error", "replace",
         "get-transform-tamper", "set-transform-tamper", "context-attrs-tamper",
-        "paint-descriptor-tamper",
+        "paint-descriptor-tamper", "source-width-shadow",
     ],
 )
-async def test_hanayume_unsafe_or_reset_target_uses_only_clean_rendered_png_fallback(
+async def test_hanayume_unsafe_or_reset_target_stops_without_rendered_fallback(
     browser_page: Page, mutation: str
 ) -> None:
     await _install_mock_site(browser_page)
@@ -1334,6 +1384,13 @@ async def test_hanayume_unsafe_or_reset_target_uses_only_clean_rendered_png_fall
             const context = canvas.getContext('2d');
             const clearRect = CanvasRenderingContext2D.prototype.clearRect;
             context.clearRect = function(...args) { return clearRect.apply(this, args); };
+          } else if (mutation === 'source-width-shadow') {
+            const source = document.createElement('canvas');
+            source.width = 960; source.height = 1540;
+            const context = source.getContext('2d');
+            context.fillRect(0, 0, source.width, source.height);
+            Object.defineProperty(source, 'width', {value:960});
+            canvas.getContext('2d').drawImage(source,0,0,960,1540,0,0,canvas.width,canvas.height);
           } else if (mutation === 'observer-error') {
             Object.defineProperty(canvas, 'closest', {configurable:true, value() { throw new Error('observer'); }});
             const source = document.createElement('canvas');
@@ -1379,22 +1436,18 @@ async def test_hanayume_unsafe_or_reset_target_uses_only_clean_rendered_png_fall
         mutation,
     )
 
-    captures = await adapter.capture_page(browser_page)
-
-    assert captures is not None and len(captures) == 1
-    assert captures[0].mime_type == "image/png"
-    assert (captures[0].width, captures[0].height) == (5, 7)
-    assert adapter._capture_diagnostics["mode"] == "rendered_body_canvas_png"
+    with pytest.raises(UnknownPageStateError, match="rendered PNG fallback is disabled"):
+        await adapter.capture_page(browser_page)
+    assert adapter._captured_slots == []
+    assert adapter._capture_diagnostics["mode"] == "capture_failed"
     assert adapter._capture_diagnostics["reason"] in {
         "native_candidate_missing_or_stale",
         "observer_integrity_lost",
     }
-    if mutation == "observer-error":
-        assert Image.open(io.BytesIO(captures[0].data)).convert("RGB").getpixel((0, 0)) == (111, 122, 133)
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_hanayume_spread_uses_rendered_png_for_both_sides_when_one_native_candidate_is_unavailable(
+async def test_hanayume_spread_stops_when_one_native_candidate_is_unavailable(
     browser_page: Page,
 ) -> None:
     await _install_mock_site(browser_page)
@@ -1408,16 +1461,14 @@ async def test_hanayume_spread_uses_rendered_png_for_both_sides_when_one_native_
         "canvas => canvas.getContext('2d').fillRect(0, 0, canvas.width, canvas.height)"
     )
 
-    spread = await adapter.capture_page(browser_page)
-
-    assert spread is not None and len(spread) == 2
-    assert all(item.mime_type == "image/png" for item in spread)
-    assert [(item.width, item.height) for item in spread] == [(5, 7), (5, 7)]
-    assert adapter._capture_diagnostics["mode"] == "rendered_body_canvas_png"
+    with pytest.raises(UnknownPageStateError, match="rendered PNG fallback is disabled"):
+        await adapter.capture_page(browser_page)
+    assert adapter._captured_slots == [1]
+    assert adapter._capture_diagnostics["mode"] == "capture_failed"
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_hanayume_native_replay_exception_falls_back_to_rendered_spread(
+async def test_hanayume_native_replay_exception_stops_without_rendered_spread(
     browser_page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await _install_mock_site(browser_page)
@@ -1441,12 +1492,10 @@ async def test_hanayume_native_replay_exception_falls_back_to_rendered_spread(
         }""",
     )
 
-    captures = await adapter.capture_page(browser_page)
-
-    assert captures is not None and len(captures) == 1
-    assert captures[0].mime_type == "image/png"
-    assert (captures[0].width, captures[0].height) == (5, 7)
-    assert adapter._capture_diagnostics["mode"] == "rendered_body_canvas_png"
+    with pytest.raises(UnknownPageStateError, match="native_validation_exception"):
+        await adapter.capture_page(browser_page)
+    assert adapter._captured_slots == []
+    assert adapter._capture_diagnostics["mode"] == "capture_failed"
     assert adapter._capture_diagnostics["reason"] == "native_validation_exception"
 
 
@@ -1475,7 +1524,7 @@ async def test_hanayume_native_proof_is_single_outstanding_and_release_keeps_pre
     second = await browser_page.evaluate(
         "args => window.__hanayumeNativeCapture.collect(args)", args
     )
-    assert second["ok"] is True and second["mode"] == "rendered"
+    assert second["ok"] is False and second["reason"] == "native_candidate_missing_or_stale"
     assert await browser_page.evaluate(
         "token => window.__hanayumeNativeCapture.verify(token)", first["token"]
     ) is False
@@ -1552,7 +1601,7 @@ async def test_hanayume_native_candidate_is_bound_to_draw_time_episode_route(
         },
     )
 
-    assert result["ok"] is True and result["mode"] == "rendered"
+    assert result["ok"] is False
     assert result["reason"] == "native_candidate_missing_or_stale"
 
 
@@ -1682,6 +1731,29 @@ async def test_hanayume_target_change_after_native_encoding_discards_encoded_sna
     assert status["proofCount"] == 0
     assert status["candidateCount"] == 1
     assert adapter._captured_slots == []
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_hanayume_unsupported_source_dimensions_stop_runner_before_any_page_is_saved(
+    browser_page: Page, tmp_path,
+) -> None:
+    await _install_mock_site(browser_page, source_dimensions=(4097, 2))
+    output = tmp_path / "out"
+    diagnostics = tmp_path / "diag"
+    with pytest.raises(UnknownPageStateError, match="native_source_dimensions_unsupported"):
+        await CrawlerRunner(RunConfig(
+            site="hanayume", source_url=EPISODE_URL, output_dir=output,
+            diagnostics_dir=diagnostics, max_pages=10, page_turn_delay_ms=0,
+        )).run(browser_page, HanayumeAdapter())
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["pages"] == []
+    assert not list(output.glob("page-*"))
+    debug = json.loads((diagnostics / "metadata.json").read_text(encoding="utf-8"))["adapter_debug"]
+    assert debug["capture"]["reason"] == "native_source_dimensions_unsupported"
+    assert debug["capture"]["source_dimensions"] == [
+        {"slot": 1, "width": 4097, "height": 2, "supported": False},
+    ]
+    assert debug["captured_body_slots"] == 0
 
 
 @pytest.mark.asyncio(loop_scope="module")

@@ -77,6 +77,11 @@ SITE_ARCHIVE_POLICIES: dict[str, ArchivePolicy] = {
         preferred_extensions=frozenset({".webp"}),
         fallback_extensions=frozenset({".png"}),
     ),
+    "hanayume": ArchivePolicy(
+        # PNG can also be a native-size codec fallback; this classifies format, not fidelity.
+        preferred_extensions=frozenset({".webp"}),
+        fallback_extensions=frozenset({".png"}),
+    ),
     "magapoke": ArchivePolicy(
         preferred_extensions=frozenset({".jpg", ".jpeg"}),
         fallback_extensions=frozenset({".png"}),
