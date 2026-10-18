@@ -700,10 +700,12 @@ class YounganimalAdapter(SiteAdapter):
         except RuntimeError as exc:
             if after_action or self._ticket_action_attempted:
                 raise AccessConsumptionUnconfirmedError(
-                    "Younganimal ticket entry blocked an off-target route; no retry is allowed"
+                    "Younganimal ticket entry blocked an off-target route "
+                    f"(reason={guard.failure_reason}); no retry is allowed"
                 ) from exc
             raise UnknownPageStateError(
-                "Younganimal ticket entry blocked an off-target route"
+                "Younganimal ticket entry blocked an off-target route "
+                f"(reason={guard.failure_reason})"
             ) from exc
 
     async def _verify_episode_header(self, page: Page) -> None:
@@ -1798,6 +1800,11 @@ class YounganimalAdapter(SiteAdapter):
             "last_slot": self._last_slot,
             "captured_body_slots": list(self._captured_slots),
             "capture_mode": self._capture_diagnostics.get("mode", "not_started"),
+            "ticket_action_attempted": self._ticket_action_attempted,
+            "ticket_route_guard": (
+                self._ticket_route_guard.collect_debug_metadata()
+                if self._ticket_route_guard is not None else None
+            ),
         }
 
     def get_output_metadata(self) -> dict[str, str | None]:

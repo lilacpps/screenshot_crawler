@@ -132,14 +132,31 @@ the single action.
 The Phase 04 zero-dispatch guard trace also observed exact same-site RSC `GET`
 fetches for `/` and `/store_items/series/<positive-id>/<positive-id>`, plus
 Stripe controller/m-outer and Facebook `/tr/` third-party subframe requests.
-The adapter recognizes only those observed route families with their reviewed
+The later Item/Source 33083 read-only trace also observed
+`/store_items/<positive-id>` RSC GET fetches. These use the same abort-only
+known-page predicate: exact same-site origin, main-frame fetch, no navigation,
+and both `_rsc` query and `rsc` header markers. The product prefetch is blocked
+without failing the selected episode; other signatures remain fatal.
+The adapter recognizes only these observed route families with their reviewed
 origin, method, resource, navigation, and query constraints, then aborts them
 before any downstream handler. Stripe matching ignores URL fragments. The
 original zero-dispatch trace omitted request-fragment presence; the later 849
 production audit classified an observed subframe as
 `facebook_known_subframe_navigation`. The audit records that bounded
-classification, not a fragment value. These route classifications retain only a
-bounded count and sanitized path in the live guard object.
+classification, not a fragment value.
+
+Fatal route errors include the reason classification in CLI/metrics error text.
+Failure `diagnostics/metadata.json` includes
+`adapter_debug.ticket_action_attempted` and `adapter_debug.ticket_route_guard`:
+first fatal reason/request, blocked count, and bounded known-page prefetch
+counts/paths. Request diagnostics contain only host (max 253 characters), path
+(512), method (16), resource type (32), and navigation/main-frame flags. They
+retain no credentials, query/header values, fragments, or request bodies.
+Internal guard errors may have no request details. No new setting is needed.
+The updated production guard passed a read-only live check on the exact failed
+episode with the product prefetch aborted, no fatal reason, no click events,
+and no rental-checkout attempts; no consuming grant-only retry was performed.
+Evidence: `output/younganimal-error-33083-fixed-readonly.json`.
 
 At that historical checkpoint, the seven-file regression selection passed 313
 tests with 0 skipped. The current final selection and fresh-quota result are

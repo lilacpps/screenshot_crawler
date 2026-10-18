@@ -346,7 +346,9 @@ def guarded_route_reason(
     if not valid:
         if has_rsc_query and (
             path == "/"
-            or re.fullmatch(r"/store_items/series/[1-9][0-9]*/[1-9][0-9]*", path)
+            or re.fullmatch(
+                r"/store_items/(?:[1-9][0-9]*|series/[1-9][0-9]*/[1-9][0-9]*)", path
+            )
         ):
             return "unknown_rsc_page_route"
         return None
@@ -379,7 +381,7 @@ def guarded_route_reason(
             return "other_episode_rsc_prefetch"
         return "other_episode_page_route"
     known_page_rsc_path = path == "/" or re.fullmatch(
-        r"/store_items/series/[1-9][0-9]*/[1-9][0-9]*", path
+        r"/store_items/(?:[1-9][0-9]*|series/[1-9][0-9]*/[1-9][0-9]*)", path
     ) is not None
     if known_page_rsc_path:
         if (
@@ -951,6 +953,7 @@ class YounganimalEpisodeRouteGuard:
         self._page: Page | None = None
         self._handler = self._handle_route
         self.failure_reason: str | None = None
+        self.failure_request: dict[str, object] | None = None
         self.blocked_count = 0
         self.same_work_prefetch_count = 0
         self.same_work_prefetch_paths: list[str] = []
@@ -1034,7 +1037,19 @@ class YounganimalEpisodeRouteGuard:
                 return
             if reason is not None:
                 self.blocked_count += 1
-                self.failure_reason = self.failure_reason or reason
+                if self.failure_reason is None:
+                    self.failure_reason = reason
+                    parsed = urlsplit(request.url)
+                    # Retain only bounded structural evidence, never raw URLs,
+                    # query/header values, credentials, fragments, or bodies.
+                    self.failure_request = {
+                        "host": (parsed.hostname or "")[:253],
+                        "path": parsed.path[:512],
+                        "method": request.method[:16],
+                        "resource_type": request.resource_type[:32],
+                        "is_navigation": request.is_navigation_request(),
+                        "is_main_frame": is_main_frame,
+                    }
                 await route.abort()
                 return
             await route.fallback()
@@ -1052,6 +1067,17 @@ class YounganimalEpisodeRouteGuard:
             raise RuntimeError(
                 f"Younganimal episode route guard blocked access: {self.failure_reason}"
             )
+
+    def collect_debug_metadata(self) -> dict[str, object]:
+        return {
+            "failure_reason": self.failure_reason,
+            "failure_request": (
+                dict(self.failure_request) if self.failure_request is not None else None
+            ),
+            "blocked_count": self.blocked_count,
+            "known_page_rsc_prefetch_count": self.known_page_rsc_prefetch_count,
+            "known_page_rsc_prefetch_paths": list(self.known_page_rsc_prefetch_paths),
+        }
 
     async def close(self) -> None:
         page, self._page = self._page, None

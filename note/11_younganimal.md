@@ -2,9 +2,38 @@
 
 ## Current verification snapshot (2026-10-19)
 
+The store-item RSC prefetch follow-up recognizes only same-origin
+`/store_items/<positive-id>` GET fetches on the main frame with no navigation
+and both `_rsc` query and `rsc` header markers. Like the existing known-page
+prefetches, these requests are aborted before downstream dispatch without
+failing the selected episode. Other signatures and unknown routes remain fatal.
+Fatal route errors now include their classification in the exception message,
+and `diagnostics/metadata.json` exposes
+`adapter_debug.ticket_action_attempted` and `adapter_debug.ticket_route_guard`.
+The latter contains the first fatal reason/request, total blocked count, and
+bounded known-page prefetch count/paths. The request stores host (253 characters),
+path (512), method (16), resource type (32), and navigation/main-frame flags;
+it omits credentials, query/header values, fragments, and bodies. Guard-internal
+errors may have no request details. No CLI/configuration change is required.
+
+The follow-up passed 94 live-access/policy/batch unit tests and 24 ticket-entry
+browser Integration tests, with 0 skipped, plus an earlier overlapping 73-test
+route-focused selection. Tests verify normal and grant-only continuation with
+zero downstream product-prefetch dispatch, rejection of near-miss signatures,
+first-failure diagnostics before clicking, and post-consumption diagnostic and
+quota preservation. `ruff check src tests` and `git diff --check` passed.
+Read-only live verification on `f14dc7e0ac3f4` used the updated production guard:
+`/store_items/1888` was recorded and aborted, guard failure remained null,
+the target URL remained exact, and click events/rental-checkout attempts were
+both zero. It blocked 28 non-GET/HEAD requests. Evidence:
+`output/younganimal-error-33083-fixed-readonly.json`. A consuming grant-only
+retry, full repository suite, unrelated Viewer/capture Integration cases, and
+standalone Research tests were not run; the change is limited to site-local
+route classification and diagnostic reporting.
+
 The work-ticket implementation, the narrow 78 CI-widget change, and the
 horizontal top-empty/no-CI Viewer profile passed independent source review. The
-current seven-file Younganimal selection covers 379 tests with 0 skipped:
+earlier seven-file Younganimal selection covered 379 tests with 0 skipped:
 95 capture-unit tests, 133 adapter-browser tests, and 151 tests across the other
 five files. After the final no-CI marker and fake-widget test corrections, its
 10 affected adapter cases were rerun and passed; those are part of, not in
@@ -356,7 +385,8 @@ fetch with the `_rsc` query key and an `rsc` header. The exact same-origin
 canonical route signature is now recorded and aborted before reaching the
 network handler, without retaining or using query/header values or its
 response; the selected episode run may continue. The guard retains an internal count capped
-at 16 and up to 16 sanitized paths, not output metadata. Missing either marker,
+at 16 and up to 16 sanitized paths. Known-page counts/paths are also exposed
+through diagnostic metadata. Missing either marker,
 another method, resource, navigation, or frame shape, other series routes,
 off-target navigation, unexpected subframe navigation, and unknown RSC routes
 remain fatal. Immediately before the action latch, both route evidence and
@@ -375,6 +405,27 @@ request-fragment presence; the later 849 production audit classified an observed
 subframe as `facebook_known_subframe_navigation`. The audit records that bounded
 classification, not the fragment value. No resource use is attributed to the
 zero-dispatch trace.
+
+A 2026-10-19 read-only investigation of failed grant-only Item/Source `33083`
+(episode `f14dc7e0ac3f4`, work `ce92c1172487c`) initially reproduced an unsupported
+same-origin `GET`/`fetch` RSC prefetch to `/store_items/1888`, with both `_rsc`
+query and `rsc` header markers, on the main frame without navigation. The
+pre-fix guard classified this as fatal `unknown_rsc_page_route`; its abort-only
+store predicate covered `/store_items/series/<id>/<id>`, not individual
+store-item pages. The updated predicate and verification are described in the
+current snapshot above. The selected episode URL remained exact. The bounded probe
+made one navigation, observed zero click events and zero rental-checkout
+attempts, and aborted 28 non-GET/HEAD requests. Sanitized evidence is
+`output/younganimal-error-33083-readonly.json`.
+
+The original metrics run `32012afaa3b14a07a3ba1c8f9d0dd10a` failed before the
+adapter's ticket-action latch with `UnknownPageStateError`, no retry, no
+403/429/5xx responses, and `resource_consumed=null`; diagnostics retained the
+exact target URL and Capture `not_started`. Its fatal guard reason/path was
+not persisted, so the reproduced store prefetch is a supported explanation,
+not proof of the original blocked request's exact identity. No ticket retry or
+Catalog update was made during the investigation or the later fix verification.
+
 An earlier seven-file Younganimal regression selection passed 313 tests with 0
 skipped: capture+adapter passed 162 (5 existing warnings), and the remaining
 policy/live-access/discovery/batch-unit plus Discovery-browser files passed 151

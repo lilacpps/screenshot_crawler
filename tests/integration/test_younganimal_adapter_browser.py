@@ -490,7 +490,7 @@ async def _install_fixture(
         else ""
     )
     ticket_known_page_prefetch_script = (
-        "for (const path of ['/', '/store_items/series/1708/1']) "
+        "for (const path of ['/', '/store_items/series/1708/1', '/store_items/1888']) "
         "fetch(path + '?_rsc=fixture', {headers:{rsc:'fixture'}}).catch(() => {});"
         if ticket_prefetch_known_pages
         else ""
@@ -934,8 +934,9 @@ async def test_younganimal_work_ticket_waits_for_delayed_initial_hydration(
     assert catalog.get_source(candidate.source_id).quota_started_at is not None
 
 
+@pytest.mark.parametrize("grant_only", [False, True])
 async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefetch(
-    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, grant_only: bool
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     requested = await _install_fixture(
@@ -965,17 +966,20 @@ async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefet
     monkeypatch.setattr(younganimal_adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 2_000)
     catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
 
-    result = await executor.execute_candidate(
-        browser_page,
-        candidate,
-        output_root=tmp_path / "batch",
-        library_dir=tmp_path / "library",
-        max_pages=20,
-        now=NOW,
-    )
-
-    assert result.stop_reason == "end"
-    assert result.page_count == 16
+    if grant_only:
+        result = await executor.execute_grant_only_candidate(
+            browser_page, candidate, output_root=tmp_path / "batch", max_pages=20, now=NOW,
+        )
+        assert result.resource_consumed is True
+        assert catalog.get_item(candidate.item_id).status == "pending"
+        assert catalog.list_artifacts(item_id=candidate.item_id) == []
+    else:
+        result = await executor.execute_candidate(
+            browser_page, candidate, output_root=tmp_path / "batch",
+            library_dir=tmp_path / "library", max_pages=20, now=NOW,
+        )
+        assert result.stop_reason == "end"
+        assert result.page_count == 16
     assert await browser_page.evaluate("window.__ticketClicks") == 1
     assert requested.count("/api/checkout/rental") == 1
     assert not any(path.startswith("/series/") for path in requested)
@@ -984,13 +988,15 @@ async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefet
     assert guards[0].other_episode_prefetch_count == 1
     assert guards[0].other_episode_prefetch_paths == ["/episodes/d19dd3fa4563f"]
     assert "/episodes/d19dd3fa4563f" not in requested
-    assert guards[0].known_page_rsc_prefetch_count == 2
+    assert guards[0].known_page_rsc_prefetch_count == 3
     assert guards[0].known_page_rsc_prefetch_paths == [
         "/",
         "/store_items/series/1708/1",
+        "/store_items/1888",
     ]
     assert "/" not in requested
     assert "/store_items/series/1708/1" not in requested
+    assert "/store_items/1888" not in requested
     assert guards[0].stripe_subframe_count == 1
     assert guards[0].stripe_subframe_paths == [
         "/v3/controller-with-preconnect-837b3ba280ce77b8f4416a2f4686fd3f.html"
@@ -1240,6 +1246,53 @@ async def test_younganimal_work_ticket_click_timeout_after_dispatch_is_reconcile
     assert catalog.list_artifacts(item_id=candidate.item_id) == []
 
 
+async def test_younganimal_unknown_ticket_route_persists_first_failure_before_click(
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    requested = await _install_fixture(browser_page, ticket_gate=True)
+    catalog, executor, candidate = _make_younganimal_batch(tmp_path, quota=True)
+    original_entry = YounganimalAdapter._initialize_work_ticket_entry
+
+    async def inject_unknown_routes(adapter, page, *, entry_only):
+        await page.evaluate("""async () => {
+          for (const path of ['/store_items/1888/extra', '/unrecognized']) {
+            await fetch(path + '?_rsc=secret-query#secret-fragment',
+              {headers: {rsc: 'secret-header'}}).catch(() => {});
+          }
+        }""")
+        await original_entry(adapter, page, entry_only=entry_only)
+
+    monkeypatch.setattr(
+        YounganimalAdapter, "_initialize_work_ticket_entry", inject_unknown_routes
+    )
+    with pytest.raises(CandidateExecutionError, match="reason=unknown_rsc_page_route"):
+        await executor.execute_grant_only_candidate(
+            browser_page, candidate, output_root=tmp_path / "batch", max_pages=20, now=NOW,
+        )
+    assert await browser_page.evaluate("window.__ticketClicks") == 0
+    assert "/api/checkout/rental" not in requested
+    assert "/store_items/1888/extra" not in requested
+    assert "/unrecognized" not in requested
+    assert catalog.get_source(candidate.source_id).quota_started_at is None
+    metadata_files = list((tmp_path / "batch").rglob("diagnostics/metadata.json"))
+    assert len(metadata_files) == 1
+    metadata = json.loads(metadata_files[0].read_text(encoding="utf-8"))
+    debug = metadata["adapter_debug"]
+    assert debug["ticket_action_attempted"] is False
+    guard = debug["ticket_route_guard"]
+    assert guard["failure_reason"] == "unknown_rsc_page_route"
+    assert guard["blocked_count"] == 2
+    assert guard["failure_request"] == {
+        "host": "younganimal.com",
+        "path": "/store_items/1888/extra",
+        "method": "GET",
+        "resource_type": "fetch",
+        "is_navigation": False,
+        "is_main_frame": True,
+    }
+    assert "secret-" not in json.dumps(debug)
+
+
 async def test_younganimal_work_ticket_route_drift_after_proof_keeps_consumption_pending(
     browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1291,6 +1344,13 @@ async def test_younganimal_work_ticket_route_drift_after_proof_keeps_consumption
     assert catalog.get_source(candidate.source_id).quota_started_at is not None
     assert catalog.get_item(candidate.item_id).status == "pending"
     assert catalog.list_artifacts(item_id=candidate.item_id) == []
+
+    metadata_files = list((tmp_path / "batch").rglob("diagnostics/metadata.json"))
+    assert len(metadata_files) == 1
+    debug = json.loads(metadata_files[0].read_text(encoding="utf-8"))["adapter_debug"]
+    assert debug["ticket_action_attempted"] is True
+    assert debug["ticket_route_guard"]["failure_reason"] == "non_target_main_document"
+    assert debug["ticket_route_guard"]["failure_request"]["path"] == f"/series/{WORK_ID}"
 
 
 async def test_younganimal_confirmed_ticket_is_persisted_when_viewer_initialization_fails(
