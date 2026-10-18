@@ -79,7 +79,15 @@ is a valid positive integer; there is no fixed-duration fallback.
 
 The route guard aborts and records a recognized same-work read-only RSC GET
 prefetch without treating it as a series-page visit or failing the selected
-episode run. Other series routes, off-target navigations, unexpected subframe
+episode run. Phase 04 also observed one off-target episode `GET` fetch with an
+`_rsc` query key and an `rsc` header. That exact same-origin canonical route
+signature is recorded and aborted before the network handler, while the
+selected episode run continues. The guard keeps an internal count capped at 16
+and up to 16 sanitized paths; it does not retain or use query/header values or
+the response. Exact other-episode page paths are checked before the generic
+static-resource pass-through; asset suffix paths retain their existing
+handling. Missing either marker, another method/resource/navigation/frame
+shape, other series routes, off-target navigations, unexpected subframe
 navigations, and unrecognized RSC routes remain fatal. The adapter checks both
 this route guard and recorded 403/429 stops again immediately before latching
 the single action.

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import json
+import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -218,6 +219,7 @@ def _episode_html(
     rental: bool = False,
     no_top_pr: bool = False,
     ticket_gate: bool = False,
+    ticket_control_missing: bool = False,
 ) -> str:
     gate = ""
     if ticket_gate:
@@ -229,6 +231,14 @@ def _episode_html(
               data-e2e="epBulkRentTrig">この話をレンタル</button></div>
           </div>
         </div>"""
+        if ticket_control_missing:
+            gate = re.sub(
+                r'<button(?=[^>]*\bdata-e2e="wfRead")[^>]*>.*?</button>',
+                "",
+                gate,
+                count=1,
+                flags=re.DOTALL,
+            )
     elif target_label != "無料" and not rental:
         gate = (
             f'<div class="ep-main-content mode-charge"><div class="ep-charge">'
@@ -383,6 +393,7 @@ async def _install_fixture(
     ticket_series_conflict_after_checkout: bool = False,
     ticket_hydration_delay_ms: int = 0,
     ticket_prefetch_series: bool = False,
+    ticket_prefetch_other_episode_rsc: bool = False,
     ticket_route_drift_after_checkout: bool = False,
 ) -> list[str]:
     requested: list[str] = []
@@ -431,6 +442,12 @@ async def _install_fixture(
         if ticket_prefetch_series
         else ""
     )
+    ticket_other_episode_prefetch_script = (
+        "fetch('/episodes/d19dd3fa4563f?_rsc=fixture', "
+        "{headers:{rsc:'fixture'}}).catch(() => {});"
+        if ticket_prefetch_other_episode_rsc
+        else ""
+    )
     ticket_drift_script = (
         f"setTimeout(() => window.location.assign('/series/{WORK_ID}'), 300);"
         if ticket_route_drift_after_checkout
@@ -445,6 +462,7 @@ async def _install_fixture(
       ]);
       {initial_hydration}
       {ticket_prefetch_script}
+      {ticket_other_episode_prefetch_script}
       document.querySelector('[data-e2e="wfRead"]')?.addEventListener('click', async () => {{
         window.__ticketClicks += 1;
         await fetch('/api/checkout/rental', {{method:'POST',
@@ -482,6 +500,7 @@ async def _install_fixture(
                     rental=rental,
                     no_top_pr=no_top_pr,
                     ticket_gate=ticket_gate and not ticket_initial_access,
+                    ticket_control_missing=ticket_control_variant == "missing",
                 ).replace('value="11"', f'value="{initial_seek}"')
                 if ticket_gate:
                     body = body.replace(
@@ -851,6 +870,7 @@ async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefet
         browser_page,
         ticket_gate=True,
         ticket_prefetch_series=True,
+        ticket_prefetch_other_episode_rsc=True,
         native_source_slots=tuple(range(1, 17)),
     )
     guards = []
@@ -887,6 +907,9 @@ async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefet
     assert not any(path.startswith("/series/") for path in requested)
     assert guards[0].same_work_prefetch_count == 1
     assert guards[0].same_work_prefetch_paths == [f"/series/{WORK_ID}/1"]
+    assert guards[0].other_episode_prefetch_count == 1
+    assert guards[0].other_episode_prefetch_paths == ["/episodes/d19dd3fa4563f"]
+    assert "/episodes/d19dd3fa4563f" not in requested
     assert catalog.get_source(candidate.source_id).quota_started_at is not None
 
 
@@ -902,6 +925,7 @@ async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefet
         {"ticket_control_variant": "disabled"},
         {"ticket_control_variant": "paid_label"},
         {"ticket_control_variant": "duplicate"},
+        {"ticket_control_variant": "missing"},
     ],
     ids=[
         "paid-native-state",
@@ -913,6 +937,7 @@ async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefet
         "disabled",
         "paid-label",
         "duplicate",
+        "missing-free-control",
     ],
 )
 async def test_younganimal_work_ticket_unsafe_prestate_never_clicks(

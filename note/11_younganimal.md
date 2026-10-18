@@ -189,10 +189,19 @@ valid positive native timer supplies a conservative expiry; otherwise expiry is
 unknown. Normal Batch hands that same Page to the unchanged Viewer/Capture/END/ZIP
 flow; grant-only creates no capture/package and leaves the Item pending. The
 route guard aborts and records recognized same-work read-only RSC GET prefetches
-without failing the episode run; other series routes, off-target navigation,
-unexpected subframe navigation, and unknown RSC routes remain fatal. Immediately
-before the action latch, both route evidence and recorded 403/429 access stops
-are checked again. Phase 03 independent review passed; live CLI checks are reserved for Phase 04.
+without failing the episode run. Phase 04 observed one off-target episode `GET`
+fetch with the `_rsc` query key and an `rsc` header. The exact same-origin
+canonical route signature is now recorded and aborted before reaching the
+network handler, without retaining or using query/header values or its
+response; the selected episode run may continue. The guard retains an internal count capped
+at 16 and up to 16 sanitized paths, not output metadata. Missing either marker,
+another method, resource, navigation, or frame shape, other series routes,
+off-target navigation, unexpected subframe navigation, and unknown RSC routes
+remain fatal. Immediately before the action latch, both route evidence and
+recorded 403/429 access stops are checked again. This Phase 04 guard regression
+is synthetic; live CLI verification remains pending. Exact other-episode page
+paths are classified before the generic static-resource pass-through; asset
+suffix paths keep their previous handling.
 Full Discovery buffers before yielding, so an incomplete
 traversal cannot mark unseen sources unavailable. Maximums are 100 ranges and
 3,000 rows.

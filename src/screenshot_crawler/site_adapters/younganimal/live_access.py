@@ -21,6 +21,7 @@ MAX_REQUEST_JSON_BYTES = 65_536
 MAX_JSON_NODES = 50_000
 MAX_JSON_DEPTH = 64
 OBSERVATION_TIMEOUT_SECONDS = 8.0
+MAX_RECORDED_ROUTE_PREFETCHES = 16
 ID_PATTERN = re.compile(r"^[0-9a-f]{13}$")
 STATIC_RESOURCE_TYPES = frozenset({"font", "image", "media", "script", "stylesheet"})
 _ACCESS_TYPE = "waitAndFree"
@@ -250,6 +251,7 @@ def guarded_route_reason(
     method: str,
     is_navigation: bool,
     is_main_frame: bool,
+    has_rsc_header: bool = False,
 ) -> str | None:
     """Classify target routes, including harmless same-work RSC prefetches."""
 
@@ -271,9 +273,35 @@ def guarded_route_reason(
         if series is not None and series.group(1) != expected_work_id:
             return "other_work_api_route"
         return None
+    expected_path = urlsplit(expected_episode_url).path
+    try:
+        has_rsc_query = any(
+            key == "_rsc"
+            for key, _ in parse_qsl(query, keep_blank_values=True, max_num_fields=128)
+        )
+    except ValueError:
+        has_rsc_query = False
+    episode_route = re.fullmatch(r"/episodes/([0-9a-f]{13})/?", path)
+    if (
+        episode_route is not None
+        and episode_route.group(1) != expected_episode_url.rsplit("/", 1)[-1]
+    ):
+        if (
+            not is_navigation
+            and is_main_frame
+            and resource_type == "fetch"
+            and method == "GET"
+            and path == f"/episodes/{episode_route.group(1)}"
+            and has_rsc_query
+            and has_rsc_header
+        ):
+            # A narrowly observed Next.js RSC prefetch for another episode is
+            # aborted before it reaches the network. It is not a page visit and
+            # does not invalidate the selected episode's current-page operation.
+            return "other_episode_rsc_prefetch"
+        return "other_episode_page_route"
     if resource_type in STATIC_RESOURCE_TYPES:
         return None
-    expected_path = urlsplit(expected_episode_url).path
     if path == expected_path:
         return None
     if (
@@ -288,13 +316,6 @@ def guarded_route_reason(
     series_path = re.fullmatch(
         re.escape(expected_work_path) + r"(?:/(?:1|new|old))?/?", path
     )
-    try:
-        has_rsc_query = any(
-            key == "_rsc"
-            for key, _ in parse_qsl(query, keep_blank_values=True, max_num_fields=128)
-        )
-    except ValueError:
-        has_rsc_query = False
     if (
         not is_navigation
         and resource_type == "fetch"
@@ -306,9 +327,6 @@ def guarded_route_reason(
         # episode. The route guard records and aborts it without treating it as
         # a work-page visit or failing the selected episode operation.
         return "same_work_rsc_prefetch"
-    episode_route = re.fullmatch(r"/episodes/([0-9a-f]{13})/?", path)
-    if episode_route is not None and path != urlsplit(expected_episode_url).path:
-        return "other_episode_page_route"
     if path == "/episodes" or path.startswith("/episodes/"):
         return "other_episode_page_route"
     series_route = re.fullmatch(r"/series/([0-9a-f]{13})(?:/.*)?/?", path)
@@ -841,6 +859,8 @@ class YounganimalEpisodeRouteGuard:
         self.blocked_count = 0
         self.same_work_prefetch_count = 0
         self.same_work_prefetch_paths: list[str] = []
+        self.other_episode_prefetch_count = 0
+        self.other_episode_prefetch_paths: list[str] = []
 
     async def attach(self, page: Page) -> None:
         self._page = page
@@ -860,12 +880,23 @@ class YounganimalEpisodeRouteGuard:
                 method=request.method,
                 is_navigation=request.is_navigation_request(),
                 is_main_frame=is_main_frame,
+                has_rsc_header=any(
+                    name.casefold() == "rsc" for name in request.headers
+                ),
             )
-            if reason == "same_work_rsc_prefetch":
+            if reason in {"same_work_rsc_prefetch", "other_episode_rsc_prefetch"}:
                 self.blocked_count += 1
-                self.same_work_prefetch_count += 1
-                if len(self.same_work_prefetch_paths) < 16:
-                    self.same_work_prefetch_paths.append(urlsplit(request.url).path)
+                if reason == "same_work_rsc_prefetch":
+                    self.same_work_prefetch_count += 1
+                    if len(self.same_work_prefetch_paths) < MAX_RECORDED_ROUTE_PREFETCHES:
+                        self.same_work_prefetch_paths.append(urlsplit(request.url).path)
+                else:
+                    self.other_episode_prefetch_count = min(
+                        self.other_episode_prefetch_count + 1,
+                        MAX_RECORDED_ROUTE_PREFETCHES,
+                    )
+                    if len(self.other_episode_prefetch_paths) < MAX_RECORDED_ROUTE_PREFETCHES:
+                        self.other_episode_prefetch_paths.append(urlsplit(request.url).path)
                 await route.abort()
                 return
             if reason is not None:
