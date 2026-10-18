@@ -103,14 +103,19 @@ def _viewer_html(
     clip_slots: tuple[int, ...] = (),
     no_top_pr: bool = False,
     standard15_body: bool = False,
+    standard_body_count: int | None = None,
     odd_body_count: int | None = None,
 ) -> str:
     wrappers: list[str] = []
     odd_profile = standard15_body or odd_body_count is not None
-    body_last = odd_body_count if odd_body_count is not None else 15 if standard15_body else 16
+    body_last = (
+        odd_body_count if odd_body_count is not None else
+        15 if standard15_body else
+        standard_body_count if standard_body_count is not None else 16
+    )
     ci_index = body_last + 1
     wrapper_count = ci_index + 5
-    seek_max = wrapper_count if odd_profile else 21
+    seek_max = wrapper_count if odd_profile else wrapper_count - 1
     for index in range(wrapper_count):
         if index == 0:
             classes = "mode-empty -cv-page" if no_top_pr else "mode-empty mode-pr mode-top-pr -cv-page"
@@ -231,6 +236,7 @@ def _episode_html(
     rental: bool = False,
     no_top_pr: bool = False,
     standard15_body: bool = False,
+    standard_body_count: int | None = None,
     odd_body_count: int | None = None,
     ticket_gate: bool = False,
     ticket_control_missing: bool = False,
@@ -263,7 +269,8 @@ def _episode_html(
       {gate}
       {"" if no_top_pr else _listing(selected_range=True, target_label=target_label, rental=rental)}
       {_viewer_html(native_source_slots=native_source_slots, clip_slots=clip_slots, no_top_pr=no_top_pr,
-                    standard15_body=standard15_body, odd_body_count=odd_body_count)}</body></html>'''
+                    standard15_body=standard15_body, standard_body_count=standard_body_count,
+                    odd_body_count=odd_body_count)}</body></html>'''
 
 
 def _top_empty_viewer_html(
@@ -395,6 +402,7 @@ async def _install_fixture(
     rental: bool = False,
     no_top_pr: bool = False,
     standard15_body: bool = False,
+    standard_body_count: int | None = None,
     odd_body_count: int | None = None,
     ticket_gate: bool = False,
     ticket_initial_access: bool = False,
@@ -538,6 +546,7 @@ async def _install_fixture(
                     rental=rental,
                     no_top_pr=no_top_pr,
                     standard15_body=standard15_body,
+                    standard_body_count=standard_body_count,
                     odd_body_count=odd_body_count,
                     ticket_gate=ticket_gate and not ticket_initial_access,
                     ticket_control_missing=ticket_control_variant == "missing",
@@ -2108,18 +2117,26 @@ async def test_younganimal_capture_rejects_valid_profile_mapping_drift_after_det
     assert not list(tmp_path.glob("*.zip"))
 
 
-@pytest.mark.parametrize("odd_body_count", [None, 7, 9, 15])
+@pytest.mark.parametrize(
+    ("odd_body_count", "standard_body_count"),
+    [(None, None), (7, None), (9, None), (15, None), (None, 12)],
+)
 async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof(
-    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, odd_body_count: int | None
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    odd_body_count: int | None, standard_body_count: int | None,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
-    body_count = 16 if odd_body_count is None else odd_body_count
+    body_count = standard_body_count or (16 if odd_body_count is None else odd_body_count)
     body_slots = tuple(range(1, body_count + 1))
-    final_body_seek = "7" if odd_body_count is not None else "5"
+    final_body_seek = (
+        "17" if standard_body_count == 12 else ("7" if odd_body_count is not None else "5")
+    )
+    exercise_overflow = standard_body_count == 12
     ci_slot = body_count + 1
     requested = await _install_fixture(
         browser_page,
         native_source_slots=body_slots,
+        standard_body_count=standard_body_count,
         odd_body_count=odd_body_count,
     )
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 30)
@@ -2141,23 +2158,29 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
             const ci = pages.children[pages.children.length - 5];
             const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
             if (!widget) throw new Error('fixture_ci_scroll_widget_missing');
-            widget.classList.add('mode-scroll-bottom');
+            const overflowProfile = {str(exercise_overflow).lower()};
+            if (overflowProfile) {{
+              widget.classList.add('mode-overflow');
+              widget.setAttribute('class', widget.getAttribute('class'));
+            }} else {{
+              widget.classList.add('mode-scroll-bottom');
+            }}
             window.__yaStandardCiWidgetMutation = true;
             await new Promise(resolve => requestAnimationFrame(resolve));
             const after = capture.inspect([]);
             const mutations = capture.mutationsSince(before.domGeneration);
-            const record = mutations.records.find(item => item.ciScrollWidgetTarget === true);
+            const records = mutations.records.filter(item => item.ciScrollWidgetTarget === true);
             window.__yaStandardCiWidgetAudit = {{
               seek: seek.value,
               globalDelta: after.domGeneration - before.domGeneration,
               captureDelta: after.captureDomGeneration - before.captureDomGeneration,
-              record: record ? {{
+              records: records.map(record => ({{
                 slot: record.slot,
                 targetArea: record.targetArea,
                 ciScrollWidgetClassNoop: record.ciScrollWidgetClassNoop,
                 classAdded: record.classAdded,
                 classRemoved: record.classRemoved,
-              }} : null,
+              }})),
             }};
           }}
           return ({original_verify})(token);
@@ -2211,17 +2234,30 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
         expected = _rgba_from_png_data_url(sources[str(slot)])
         assert actual == expected
     ci_audit = await browser_page.evaluate("() => window.__yaStandardCiWidgetAudit")
-    assert ci_audit == {
-        "seek": final_body_seek,
-        "globalDelta": 1,
-        "captureDelta": 0,
-        "record": {
+    expected_widget_records = [
+        {
             "slot": ci_slot,
             "targetArea": "wrapper_descendant",
             "ciScrollWidgetClassNoop": True,
-            "classAdded": ["mode-scroll-bottom"],
+            "classAdded": ["mode-overflow"] if exercise_overflow else ["mode-scroll-bottom"],
             "classRemoved": [],
-        },
+        }
+    ]
+    if exercise_overflow:
+        expected_widget_records.append(
+            {
+                "slot": ci_slot,
+                "targetArea": "wrapper_descendant",
+                "ciScrollWidgetClassNoop": True,
+                "classAdded": [],
+                "classRemoved": [],
+            }
+        )
+    assert ci_audit == {
+        "seek": final_body_seek,
+        "globalDelta": len(expected_widget_records),
+        "captureDelta": 0,
+        "records": expected_widget_records,
     }
     manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
     assert {(page["width"], page["height"]) for page in manifest["pages"]} == {(47, 61)}
@@ -2543,13 +2579,21 @@ async def test_younganimal_invalid_odd_profile_ci_scroll_is_capture_mutation(
         "ci_vertical_tab",
         "ci_scroll_widget_unknown_transition",
         "ci_scroll_widget_visible_overlap",
+        "ci_scroll_widget_visible_overlap_overflow",
         "ci_scroll_widget_ambiguous_active_geometry",
+        "ci_scroll_widget_ambiguous_active_geometry_overflow",
+        "ci_scroll_widget_overflow_noop_ambiguous_active_geometry",
         "ci_scroll_widget_other_parent",
+        "ci_scroll_widget_other_parent_overflow",
         "ci_scroll_widget_reparented",
+        "ci_scroll_widget_reparented_overflow",
         "ci_scroll_widget_replaced",
         "ci_scroll_widget_missing",
         "ci_scroll_widget_namespaced",
+        "ci_scroll_widget_namespaced_overflow",
         "ci_scroll_widget_scroll_removed",
+        "ci_scroll_widget_scroll_removed_overflow",
+        "ci_scroll_widget_overflow_unknown_extra",
         "ci_id_noop",
         "selected_wrapper_noop",
         "nonselected_wrapper_noop",
@@ -2565,10 +2609,13 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     standard15_body = mutation.endswith("_standard15_body")
     standard7_body = mutation.endswith("_standard7_body")
+    overflow_case = mutation.endswith("_overflow")
     if standard15_body:
         mutation = mutation.removesuffix("_standard15_body")
     elif standard7_body:
         mutation = mutation.removesuffix("_standard7_body")
+    if overflow_case:
+        mutation = mutation.removesuffix("_overflow")
     scroll_widget_case = mutation.startswith("ci_scroll_widget_")
     await _install_fixture(
         browser_page,
@@ -2721,6 +2768,17 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
           const ci = pages.children[pages.children.length - 5];
           const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
           widget.classList.add('mode-scroll-unknown');""",
+        "ci_scroll_widget_overflow_unknown_extra": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          widget.classList.add('mode-overflow', 'private-user-token');""",
+        "ci_scroll_widget_overflow_noop_ambiguous_active_geometry": """const pages = document.querySelector('#xCVPages');
+          const ci = pages.children[pages.children.length - 5];
+          const activeBody = pages.children[2];
+          activeBody.append(document.createElement('canvas'));
+          const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
+          widget.classList.add('mode-overflow');
+          widget.setAttribute('class', widget.getAttribute('class'));""",
         "ci_scroll_widget_visible_overlap": """const pages = document.querySelector('#xCVPages');
           const ci = pages.children[pages.children.length - 5];
           const activeBody = pages.children[2];
@@ -2773,6 +2831,8 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
           seek.dispatchEvent(new Event('input', {bubbles: true}));
           seek.dispatchEvent(new Event('change', {bubbles: true}));""",
     }[mutation]
+    if overflow_case:
+        mutation_script = mutation_script.replace("mode-scroll-bottom", "mode-overflow")
     monkeypatch.setattr(
         younganimal_adapter_module,
         "VERIFY_NATIVE_CAPTURE_SCRIPT",
@@ -2804,7 +2864,7 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
 
         async def initialize_with_namespaced_ci(page) -> None:
             await original_initialize(page)
-            await page.evaluate("""mutation => {
+            setup_script = """mutation => {
               const pages = document.querySelector('#xCVPages');
               const ci = pages.children[pages.children.length - 5];
               if (mutation === 'ci_namespaced_class_changed_restored') {
@@ -2828,7 +2888,10 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
                   .classList.add('mode-scroll-bottom');
               }
               return new Promise(resolve => requestAnimationFrame(resolve));
-            }""", mutation)
+            }"""
+            if overflow_case:
+                setup_script = setup_script.replace("mode-scroll-bottom", "mode-overflow")
+            await page.evaluate(setup_script, mutation)
 
         monkeypatch.setattr(adapter, "initialize", initialize_with_namespaced_ci)
     locator_fallbacks: list[object] = []
@@ -2880,6 +2943,8 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
         "ci_nbsp": "native_reader_layout_changed",
         "ci_vertical_tab": "native_reader_layout_changed",
         "ci_scroll_widget_unknown_transition": "native_reader_layout_changed",
+        "ci_scroll_widget_overflow_unknown_extra": "native_reader_layout_changed",
+        "ci_scroll_widget_overflow_noop_ambiguous_active_geometry": "native_reader_layout_changed",
         "ci_scroll_widget_visible_overlap": "native_reader_layout_changed",
         "ci_scroll_widget_ambiguous_active_geometry": "native_reader_layout_changed",
         "ci_scroll_widget_other_parent": "native_reader_layout_changed",
@@ -2925,7 +2990,10 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
     assert len(detail["selected"]) == len(expected_active_slots)
     for selected in detail["selected"]:
         expected_target_same = mutation not in {"replacement", "replacement_resized"}
-        if mutation == "ci_scroll_widget_ambiguous_active_geometry" and selected["slot"] == 2:
+        if mutation in {
+            "ci_scroll_widget_ambiguous_active_geometry",
+            "ci_scroll_widget_overflow_noop_ambiguous_active_geometry",
+        } and selected["slot"] == 2:
             expected_target_same = False
         assert selected["targetSame"] is expected_target_same, selected
         assert type(selected["proofGeneration"]) is int
@@ -2933,19 +3001,28 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
         if mutation in {"redraw", "same_value_reset_redraw"}:
             assert not (selected["generationMatches"] and selected["writesMatch"])
         elif mutation not in {"replacement", "replacement_resized", "resized"} and not (
-            mutation == "ci_scroll_widget_ambiguous_active_geometry" and selected["slot"] == 2
+                mutation in {
+                    "ci_scroll_widget_ambiguous_active_geometry",
+                    "ci_scroll_widget_overflow_noop_ambiguous_active_geometry",
+                } and selected["slot"] == 2
         ):
             assert selected["generationMatches"] is True
             assert selected["writesMatch"] is True
         readback_unavailable = mutation in {"replacement", "replacement_resized", "resized"} or (
-            mutation == "ci_scroll_widget_ambiguous_active_geometry" and selected["slot"] == 2
+            mutation in {
+                "ci_scroll_widget_ambiguous_active_geometry",
+                "ci_scroll_widget_overflow_noop_ambiguous_active_geometry",
+            } and selected["slot"] == 2
         )
         if readback_unavailable:
             assert selected["readbackAvailable"] is False
             assert selected["contextMatches"] is None
             assert selected["pixelsMatchProof"] is None
             assert selected["replayMatchesProof"] is None
-            if mutation != "ci_scroll_widget_ambiguous_active_geometry":
+            if mutation not in {
+                "ci_scroll_widget_ambiguous_active_geometry",
+                "ci_scroll_widget_overflow_noop_ambiguous_active_geometry",
+            }:
                 assert await browser_page.evaluate("() => window.__yaPostproofTargetReadbacks") == 0
             if mutation in {"replacement_resized", "resized"}:
                 assert selected["width"] == selected["proofWidth"] + 1
@@ -2970,6 +3047,8 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
     if mutation in {
         "ci_class_changed_restored", "ci_namespaced_class_changed_restored",
         "ci_unknown_extra", "ci_nbsp", "ci_vertical_tab",
+        "ci_scroll_widget_overflow_unknown_extra",
+        "ci_scroll_widget_overflow_noop_ambiguous_active_geometry",
         "ci_id_noop", "selected_wrapper_noop", "nonselected_wrapper_noop",
         "ci_scroll_widget_unknown_transition", "ci_scroll_widget_other_parent",
         "ci_scroll_widget_reparented", "ci_scroll_widget_replaced", "ci_scroll_widget_missing",
@@ -2984,12 +3063,29 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
                 and record["ciScrollWidgetClassNoop"] is False
                 for record in records
             )
+        elif mutation == "ci_scroll_widget_overflow_unknown_extra":
+            assert any(
+                record["ciScrollWidgetTarget"] is True
+                and record["ciScrollWidgetClassNoop"] is False
+                and record["classAdded"] == ["mode-overflow"]
+                for record in records
+            )
+        elif mutation == "ci_scroll_widget_overflow_noop_ambiguous_active_geometry":
+            assert any(record["kind"] == "childList" and record["slot"] == 2 for record in records)
+            widget_records = [
+                record for record in records
+                if record["ciScrollWidgetTarget"] is True
+            ]
+            assert len(widget_records) == 2
+            assert all(record["ciScrollWidgetClassNoop"] is False for record in widget_records)
+            assert widget_records[0]["classAdded"] == ["mode-overflow"]
+            assert widget_records[1]["sameAssignment"] is True
         elif mutation == "ci_scroll_widget_visible_overlap":
             assert detail["observed"]["captureDomGeneration"] == detail["expected"]["captureDomGeneration"] + 1
             assert any(
                 record["ciScrollWidgetTarget"] is True
                 and record["ciScrollWidgetClassNoop"] is False
-                and record["classAdded"] == ["mode-scroll-bottom"]
+                and record["classAdded"] == ["mode-overflow" if overflow_case else "mode-scroll-bottom"]
                 for record in records
             )
         elif mutation == "ci_scroll_widget_ambiguous_active_geometry":
@@ -2998,7 +3094,7 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
             assert any(
                 record["ciScrollWidgetTarget"] is True
                 and record["ciScrollWidgetClassNoop"] is False
-                and record["classAdded"] == ["mode-scroll-bottom"]
+                and record["classAdded"] == ["mode-overflow" if overflow_case else "mode-scroll-bottom"]
                 for record in records
             )
         elif mutation == "ci_scroll_widget_other_parent":

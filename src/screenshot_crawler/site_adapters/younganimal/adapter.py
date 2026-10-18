@@ -130,6 +130,7 @@ _NATIVE_SAFE_CLASS_FLAGS = frozenset(
         "mode-pr-page",
         "mode-rendered",
         "mode-scroll-bottom",
+        "mode-overflow",
         "mode-spread",
         "mode-top-pr",
         "mode-top-pr-page",

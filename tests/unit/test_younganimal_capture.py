@@ -640,7 +640,7 @@ def test_younganimal_native_failure_details_are_bounded_and_drop_page_content() 
                         "canonicalCiClassNoop": True,
                         "ciScrollWidgetTarget": True,
                         "ciScrollWidgetClassNoop": True,
-                        "classAdded": ["mode-scroll-bottom", "private-user-token"],
+                        "classAdded": ["mode-overflow", "mode-scroll-bottom", "private-user-token"],
                         "classRemoved": [],
                         "href": "https://example.invalid/?private=1",
                     }
@@ -664,7 +664,7 @@ def test_younganimal_native_failure_details_are_bounded_and_drop_page_content() 
     assert sanitized["mutations"]["records"][0]["ciScrollWidgetTarget"] is True
     assert sanitized["mutations"]["records"][0]["ciScrollWidgetClassNoop"] is True
     assert sanitized["mutations"]["coverageContiguous"] is True
-    assert sanitized["mutations"]["records"][0]["classAdded"] == ["mode-scroll-bottom"]
+    assert sanitized["mutations"]["records"][0]["classAdded"] == ["mode-overflow", "mode-scroll-bottom"]
     assert "secret=1" not in encoded
     assert "must-not-survive" not in encoded
     assert "data:image" not in encoded

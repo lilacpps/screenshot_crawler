@@ -123,7 +123,10 @@ diagnostic observed nav-open and one splash
 marker throughout, so it does not establish Viewer readiness. It made no click,
 checkout, image read, or Capture call. Evidence: `output/younganimal_work_ticket_tester/normal-postflight-c781.json` and
 `output/younganimal_work_ticket_tester/public_seek_metadata_c781_attempt1.json`.
-No balance-delta claim is made. Ticket use is now 4/5.
+No balance-delta claim is made. The five uses in the original allowance are
+now exhausted (5/5). The user subsequently authorized up to three additional
+candidate uses on `dd9facaba1704`, `849948508c8bc`, and `4ba85f4c9e538`; none has
+been inspected or consumed, and each requires a separate review/Lead GO.
 
 On frozen implementation commit `f2d7ad8`, direct Batch on C781's already-active
 grant exited 0 and captured 7 ordered 925x1329 PNGs through END. ZIP CRC,
@@ -149,7 +152,33 @@ subpath GETs were observed. These were site-generated incidental requests,
 not explicit probe requests. No retry or ticket use followed. Evidence:
 `output/younganimal_work_ticket_tester/readonly-77-final.json`.
 
-The ticket ledger is 4/5. Stage A full and incremental Discovery on the first
+The fifth original ticket use was a normal Batch attempt on
+`78a0c0e1ccfef` / work `423d7471396e9` at `2026-10-18T20:03:38.150057+09:00`.
+Catalog recorded the use and the Source expiry is
+`2026-10-21T20:02:57.649998+09:00`; its 23-hour work cooldown ends at
+`2026-10-19T19:03:38.150057+09:00`. Batch failed closed with
+`UnknownPageStateError` at native post-encoding verification
+(`native_reader_layout_changed`), with 12 body slots, 18 wrappers, and zero
+saved pages/artifacts. The one-shot audit sentinel was absent, so click and
+checkout event counts are UNKNOWN; do not claim zero. No retry occurred.
+Evidence: `output/younganimal_work_ticket_tester/normal-postflight-failed-78.json`
+and `output/ydr-78/runDB/precli-baseline.json`.
+
+A subsequent zero-resource read-only probe on that exact active grant observed
+the CI widget's ordinary class pair `-cv-ci-content` to
+`-cv-ci-content mode-overflow`, followed by an exact overflow same-value pair.
+The 24-second post-install hook window recorded 10 hook events and 10
+MutationObserver transitions (one class-changing event, nine no-op events),
+with complete reconciliation and successful restoration. The widget, parent,
+CI wrapper, selected body geometry and identities were stable across the
+observed pair. The probe used one owned Page and canonical load; it made no
+click, seek, scroll, pixel read, Capture, or checkout. It also recorded
+first-party POST paths aborted before dispatch; a path-only status cannot bind
+the observed 200 to a POST, so server-side side effects remain UNKNOWN. This is
+post-install evidence only, not full page-load history. Evidence:
+`output/younganimal_work_ticket_tester/ci-widget-readonly-78-corrected-summary-20261018.json`.
+
+The ticket ledger is 5/5 for the original allowance. Stage A full and incremental Discovery on the first
 used work retained the manual grant; a disposable stale-grant cache copy then
 skipped grant-only as already granted with no click or checkout. The first local
 cooldown audit was **INCONCLUSIVE** because its hard sentinel stopped before
@@ -161,11 +190,7 @@ gate is verified before Page/site access. Evidence:
 `output/younganimal_work_ticket_tester/LOCAL_COOLDOWN_E15_REPORT.md`. Phase 02
 listing Discovery recognizes authenticated native ticket state, and the
 site-local adapter implements `quota + work_ticket` without a shared Core
-change. Phases 02-03 passed independent review. The latest complete
-seven-file Younganimal regression selection passed 313 tests with 0 skipped:
-capture+adapter passed 162 (5 existing warnings), and the remaining
-policy/live-access/discovery/batch-unit plus Discovery-browser files passed 151
-(203 existing warnings). The full repository suite was not run.
+change. Phases 02-03 passed independent review. The latest seven-file Younganimal selection passed 322 tests with 0 skipped; see the current verification status below.
 
 This target proved the additional `top_empty_no_pr` layout: the positive
 `mode-has-top-emptypage` root flag, one exact empty/no-canvas leading wrapper at
@@ -203,12 +228,16 @@ matched, but the exact failed subcondition is not attributed beyond the stored
 `native_reader_layout_changed` reason. Attempt 8's audit is
 `output/younganimal_experiment/phase04_batch_e2e_20261011/attempt-8/topempty-free/offline-final-audit.json`.
 
-The final capture-epoch rule exempts only observed ordinary `class` mutations
-on the exact nested CI scroll widget: same-token-set no-ops in its two known
-states, and the observed base-to-`mode-scroll-bottom` transition when finite
-raw geometry proves the widget/CI is offscreen or disjoint from every active
-body wrapper/canvas. Missing or ambiguous geometry and overlap fail closed.
-The raw global DOM epoch still counts every observed mutation. Candidate,
+After exact canonical scope validation, the existing base-to-base and
+`mode-scroll-bottom`-to-`mode-scroll-bottom` same-token-set no-ops remain
+accepted without geometry checks. The observed base-to-`mode-scroll-bottom`
+transition remains accepted only with finite raw geometry proving the widget/CI
+is offscreen or disjoint from every active body wrapper/canvas. The 2026-10-18
+probe additionally supports only exact base-to-`mode-overflow` and
+overflow-to-same-overflow pairs, each with that same strict geometry proof.
+Reverse/removal, combined or extra classes, namespaces, foreign parents,
+overlap, and missing or ambiguous geometry remain mutations. The raw global
+DOM epoch still counts every observed mutation. Candidate,
 selected-page, post-encode, frozen-mapping, pixel, END, atomic-spread, and
 cleanup gates remain unchanged. The current revision passed independent review
 and the latest affected local suite; see the current progress checkpoint.
@@ -219,8 +248,7 @@ one-second stable canvas/capture-epoch quiet interval within the same five-secon
 deadline. Reappearing UI resets that interval. Missing or malformed metadata
 and non-settling UI fail closed before collection. Native selection,
 post-encoding verification, D fallback, and the frozen viewer mapping remain
-unchanged. The raw global DOM epoch remains available for diagnostics while
-capture stability uses a separate epoch. The final-code top-empty live pass
+unchanged. Capture stability uses a separate epoch. The final-code top-empty live pass
 reached END for all 44 pages after this settle and CI-widget proof rule.
 
 The preceding diagnostics iteration added a bounded YA mutation journal and
@@ -357,7 +385,7 @@ Stripe matching ignores URL fragments. Facebook requires an empty fragment,
 but the trace omitted request-fragment presence, so its production match remains
 unverified until the next sanitized audit records that Boolean. No ticket was
 used during that audit.
-The latest complete seven-file Younganimal regression selection passed 313
+The previous seven-file Younganimal regression selection passed 313
 tests with 0 skipped: capture+adapter passed 162 (5 existing warnings), and the
 remaining policy/live-access/discovery/batch-unit plus Discovery-browser files
 passed 151 (203 existing warnings). The route-drift fixture triggers the exact
@@ -491,58 +519,34 @@ all-page original-byte claim; no research image bodies were saved.
 
 ## Current verification status and remaining work
 
-The rental/direct-entry change passed all six affected Younganimal unit and
-browser test files: 171 passed, 0 skipped, with 207 existing pytest-asyncio
-deprecation warnings in 172.75s. This covers free/rental Batch-to-Runner-to-ZIP,
-all three viewer profiles, no listing navigation, central access-gate rejection,
-HTTP 429 stop, account-row loading/identity conflicts and stale-grant clearing.
-The final incremental refresh adjustment was also checked by the targeted
-Discovery unit/browser rerun (51 passed, 0 skipped). `ruff check src tests` and `git diff --check`
-passed. No global full suite or Research tests were run: shared code and probe
-contracts were not changed. The previous independent CLI/capture reviews belong
-to the earlier exact-free iteration, not to the current rental change.
+The work-ticket implementation and narrow CI-widget change passed independent
+review. The latest seven-file Younganimal selection passed 322 tests with 0
+skipped and 207 existing pytest-asyncio deprecation warnings. The saved verbose
+run is `output/ya-all7-final.log`; the isolated basetemp is
+`output/ya-all7-final`. `ruff check src tests` and `git diff --check` are
+recorded in the work-ticket progress checkpoint. The full repository suite was
+not run for this site-local change.
 
-Attempt 9 verified the final code on both live exact-free profiles: the standard
-target captured all 16 pages as native VP8L over 9 spreads; the top-empty target
-captured all 44 pages as native VP8L over 22 spreads. Both reached END, passed
-independent ZIP/CRC, raw hash and decoded-RGBA audits, completed one isolated
-Catalog item/artifact, and retained unchanged source fingerprints. The separate
-reports are `output/younganimal_experiment/phase04_batch_e2e_20261011/attempt-9/provided-free/audit.json`
-and `output/younganimal_experiment/phase04_batch_e2e_20261011/attempt-9/topempty-free/audit.json`;
-the combined independent audit is `output/younganimal_experiment/phase04_batch_e2e_20261011/attempt-9/independent-final-audit.json`.
-Attempts 7 and 8 remain historical incomplete attempts; attempt 6 used the
-preceding geometry rule. None is substituted for attempt 9's final-code proof.
+All five uses in the original allowance are recorded in the current ledger.
+Grant-only entry and normal/grant-only same-work cooldown skips passed. Existing-
+grant direct captures on 856, 0634, and C781 reached END/ZIP (28, 15, and 7
+pages). The 0634 direct run preceded the parametric `standard_odd_body` change;
+C781 used that profile. Normal quota attempts on 0634, C781, and 78 confirmed
+resource use but produced no page artifacts. The 78 attempt failed closed at
+native post-encoding verification with 12 body slots and 18 wrappers; its
+missing action sentinel leaves click/checkout counts UNKNOWN. No retry was
+made.
 
-The independent 44-page synthetic Runner compares every native output against
-fixture-source RGBA and verifies END/ZIP bytes. The current geometry contract
-accepts same-state token-set no-ops on the exact nested CI widget, and the
-observed base-to-`mode-scroll-bottom` transition only with positive finite proof
-that the widget/CI is offscreen or geometrically disjoint from all active body
-wrappers/canvases. Ambiguous/missing geometry and overlap fail closed. Attempt
-8 does not prove that its slot-46 record satisfies this widget/geometry rule.
-Global mutation accounting and all candidate, selected-page, post-encode, mapping,
-layout, pixel, cleanup, and whole-spread gates remain intact.
-
-The preceding free-only status was accurate on 2026-10-12. Work-ticket live
-evidence and the four-use ledger are summarized in the current verification
-snapshot above. The 0634 ticketed attempt failed in Viewer readiness; direct
-capture on its existing grant later captured 15 pages through END/ZIP under the
-earlier count-specific `standard15_body` fix. C781's ticketed attempt also
-failed Viewer readiness; direct capture on its existing grant later captured 7
-pages through END/ZIP on the current parametric `standard_odd_body`
-implementation. A fresh normal quota/capture/END/ZIP run remains pending.
-Live B=15 metadata describes the structure, while its direct run predates the
-parametric implementation. Live B=7 direct capture and synthetic B=9 full
-Runner tests passed; no universal odd-count claim is made.
-The final read-only recheck of `77d27c1572ac7` found no target native access row
-or `wfRead` control, so fresh eligibility is UNKNOWN and the fifth authorized
-ticket remains unused. The page naturally generated first-party read/mission
-POSTs and off-target RSC GETs that were aborted before network, plus incidental
-GET paths; no explicit other-episode API/navigation request, ticket action, or
-retry was issued. The sanitized evidence is
-`output/younganimal_work_ticket_tester/readonly-77-final.json`. The first
-cooldown audit was inconclusive; the corrected normal and grant-only audits
-passed before Page/site access. The full repository suite was not run.
+A bounded zero-resource probe on active grant 78 observed the exact
+base-to-overflow and overflow-to-same-overflow CI-widget class pairs, with
+stable strict geometry and identity. The capture exception is limited to those
+pairs with the existing positive geometry and active-body proof. All other
+proof, epoch, identity, source-pixel, and END gates remain unchanged. The 77
+read-only recheck found no exact target access row or free-ticket control, so
+its current eligibility is UNKNOWN. Three later-authorized candidate URLs
+remain uninspected and unused. Fresh quota consumption followed by same-Page
+Capture -> END -> ZIP remains unverified. No balance delta, per-image hash, or
+source-native format claim is made.
 
 ## Historical native geometry diagnostic (2026-10-11)
 

@@ -36,6 +36,14 @@
 
 ## 2. 禁止事項と不変条件
 
+Follow-up authorization (2026-10-18): the original five-use allowance has
+been exhausted. The user separately authorized up to one additional
+candidate use on each exact episode URL `dd9facaba1704`,
+`849948508c8bc`, and `4ba85f4c9e538`. None is included in a blanket
+preflight or automatic retry; each target requires its own sequential
+eligibility check and independent Review/Lead action gate. All three
+remain uninspected and unused in the current checkpoint.
+
 1. **Batch/Grant-onlyで作品ページ (`/series/`)、作品一覧、別話を事前crawlしない。** Discoveryコマンドでの正規の作品一覧列挙は既存仕様のまま許すが、Batchの preflight/消費直前/作品選定に流用しない。
 2. **1作品ずつ逐次完了。** work AのCatalog候補選択→ローカル判定→episode直行→クリックまたはSKIP→通常Capture/ZIPまたはgrant-only確認→close、の後に初めてwork Bへ。先に全作品のlive状態を集めるResolver、作品内全話の試行は禁止。
 3. **消費対象を正確に拘束。** `work_id:episode_id`、canonical episode URL、画面内のwork link・見出し、controlのscope/唯一性・有効性・無料条件を照合。unknown / paid / login / duplicate / hidden / disabled / ID不一致 / DOM変化はfail closed。
@@ -127,5 +135,7 @@
 - [x] 消費確定後にCapture/ZIPが失敗してもwork/sourceの記録と失敗区別が残る
 - [ ] 通常Batch: 1クリック→同じPageで1ページ目→END→有効なZIP→Item completed
 - [x] `--grant-only work_ticket`: 1クリック→消費確認・記録、pages=0、ZIP=0、Item pending
-- [ ] 既存free/rental/描画品質、Hanayume/ComicDAYS、共通Batchの回帰なし
+- [x] 既存free/rental/描画品質、Hanayume/ComicDAYS、共通Batchの回帰確認あり（検証範囲は下記）
 - [x] 実サイトでチケット総消費数・証拠・観測時刻・独立レビュー結果を `PROGRESS.md` に記録
+
+Regression-check scope: an earlier broad affected selection recorded 871 passes and 2 diagnostic-path failures. Both exact shortened-path reruns passed, suggesting path length as the cause (inference). The current seven-file Younganimal selection also passed 322 tests. This bounded evidence does not claim that the original broad run was all-green or that the full repository suite ran.

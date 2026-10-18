@@ -1,39 +1,31 @@
 # Younganimal adapter
 
-The Younganimal adapter provides Discovery, direct manual episode Crawl, and a
-direct Batch path for free sources and active rentals. Discovery also records
-authenticated, work-bound wait-free candidates and active manual ticket grants
-from natural listing responses. The shared CDP BrowserSession / Playwright Page, AccessGuard, Runner,
-manifest, and packager remain in use. Batch supports the existing direct
-free/rental path and the explicit `quota + work_ticket` path. Discovery itself
-never clicks or consumes a ticket. Synthetic Batch coverage and the Phase 03
-independent review are complete. Phase 04 verified manual-grant Discovery,
-grant-only entry, and local cooldown skips in both modes. The conditional
-`standard_odd_body` profile is implemented with strict Python, JS geometry,
-native-proof, marker, and selected-center checks. Live B=7 and B=15 metadata
-support the observed structure. Existing-grant B=15 direct capture on 0634 ran
-after the earlier count-specific `standard15_body` fix, before this parametric
-generalization. Existing-grant B=7 direct capture on C781 passed on the current
-parametric implementation. Synthetic B=9 Runner coverage and independent
-review passed. The profile does not accept arbitrary odd layouts. The
-first normal ticketed run on `0634e2ac53df6`
-failed Viewer readiness before Capture. After the earlier count-specific
-`standard15_body` fix, direct Batch on its already-active grant captured 15 pages
-through END and passed ZIP/Catalog
-verification with no additional resource use. A fresh quota-consuming run
-through same-Page Capture→END→ZIP remains pending. A separate direct capture on
-already-granted episode `856137d88753b` reached END with a CRC-valid 28-page ZIP
-and no checkout or new ticket use. The first overstrict cooldown probe was
-inconclusive; a corrected isolated audit proved both modes skip before Page
-creation or site access.
-Four of the five allowed tickets have now been used. The fourth, on
-`c7819ded99f66`, confirmed access but failed Viewer readiness before Capture.
-Its active grant later supported an authorized non-consuming 7-page direct
-capture through END/ZIP on the current implementation. The work cooldown still
-blocks another quota-consuming attempt until it expires. The final read-only
-recheck of `77d27c1572ac7` found no target native access row or ticket control,
-so fresh eligibility remains unknown and the fifth ticket is unused. A fresh
-quota-consuming run through same-Page Capture -> END -> ZIP remains pending.
+The adapter provides Discovery, direct manual episode Crawl, and Batch support
+for free sources, active rentals, and explicit `quota + work_ticket` entry. It
+reuses the shared CDP BrowserSession / Playwright Page, AccessGuard, Runner,
+manifest, and packager. Discovery recognizes authenticated work-bound wait-free
+candidates and active manual grants from naturally emitted listing responses;
+it does not click or consume tickets.
+
+The original five-ticket allowance is exhausted. Normal quota attempts using
+tickets three, four, and five confirmed resource use but failed before Capture
+artifacts. Existing-grant direct captures on 856 (28 pages), 0634 (15 pages
+under the earlier count-specific fix), and C781 (7 pages on the current
+parametric profile) passed through END/ZIP without another use. The conditional
+`standard_odd_body` profile is strict across Python parsing, JS geometry, and
+native proof; live B=7 and B=15 metadata and synthetic B=9 Runner coverage
+support the observed structural family, not arbitrary odd layouts.
+
+A bounded zero-resource probe on active grant 78 observed only the exact CI
+widget base-to-overflow and overflow-noop class pairs with unchanged strict
+geometry and identity. The reviewed capture exception accepts only those pairs
+under existing geometry and active-body proof; other, extra, reverse,
+foreign, namespaced, overlapping, or ambiguous changes remain fatal. The fifth
+normal quota attempt failed closed at native post-encoding verification for a
+12-body Viewer and saved no pages. Its missing action sentinel makes click and
+checkout counts UNKNOWN. Fresh quota consumption followed by same-Page Capture
+-> END -> ZIP remains unverified; three later-authorized exact candidates remain
+unused and require their own gate.
 
 ## Current live verification (2026-10-18)
 
@@ -68,11 +60,14 @@ The earlier attempt-7 top-empty navigation timeout and attempt-8 native verifica
 failure remain historical and are not treated as current failures.
 
 The reviewed capture-epoch exception is limited to observed ordinary class
-mutations on one exact nested CI scroll widget. Same-token-set no-ops in the two
-known states are accepted; the observed base-to-`mode-scroll-bottom` transition
-is accepted only with positive finite geometry proving the widget/CI is offscreen
-or disjoint from every active body wrapper/canvas. Missing, ambiguous, or
-overlapping geometry fails closed. Global DOM accounting, candidate identity,
+mutations on one exact nested CI scroll widget. After canonical scope validation,
+base-to-base and scroll-bottom-to-scroll-bottom same-token-set no-ops remain
+accepted without geometry checks. The base-to-scroll-bottom transition is
+accepted only with positive finite geometry proving the widget/CI is offscreen
+or disjoint from every active body wrapper/canvas. The later exact
+base-to-overflow and overflow-to-overflow pairs require that same strict geometry
+proof. Missing, ambiguous, or overlapping geometry fails closed. Global DOM
+accounting, candidate identity,
 selected-page and post-encode proofs, frozen mapping, pixels, atomic spread
 handling, and cleanup remain strict. The final code passed the affected local
 suite and both live profiles described above.
@@ -129,7 +124,7 @@ fragment presence, so whether its observed request meets that condition remains
 unverified. These classifications store only a bounded count and sanitized
 path in the live guard object.
 
-The latest complete seven-file Younganimal regression selection passed 313
+The previous seven-file Younganimal regression selection passed 313
 tests with 0 skipped: capture+adapter passed 162 (5 existing warnings), and the
 remaining policy/live-access/discovery/batch-unit plus Discovery-browser files
 passed 151 (203 existing warnings). It includes the route-classifier and
@@ -287,6 +282,30 @@ observer recorded two same-target frame navigation events with cause unknown.
 These were site-generated incidental requests, not explicit probe
 API/navigation calls. No retry followed. Evidence:
 `output/younganimal_work_ticket_tester/readonly-77-final.json`.
+
+The fifth original ticket was used by a normal Batch attempt on
+`78a0c0e1ccfef` / work `423d7471396e9` at
+`2026-10-18T20:03:38.150057+09:00`. The Source grant expiry recorded in its
+isolated Catalog is `2026-10-21T20:02:57.649998+09:00`; the minimum same-work
+cooldown ends at `2026-10-19T19:03:38.150057+09:00`. The CLI failed closed at
+native post-encoding verification (`native_reader_layout_changed`) for a
+12-body / 18-wrapper Viewer before saving any page or artifact. The action
+sentinel was not written, so click and checkout event counts are UNKNOWN, not
+zero. The Item remains pending; there was no retry. Evidence:
+`output/younganimal_work_ticket_tester/normal-postflight-failed-78.json` and
+`output/ydr-78/runDB/precli-baseline.json`.
+
+A later zero-resource read-only probe on the same active grant observed exact
+widget transitions `-cv-ci-content` -> `-cv-ci-content mode-overflow` and an
+overflow same-value write. Ten hook events reconciled with ten MutationObserver
+transitions; strict widget, parent, CI, and selected-body geometry/identity were
+unchanged. The exception is limited to those exact pairs with the existing
+geometry and active-body checks; reverse, combined/extra, foreign, namespaced,
+overlap, and ambiguous-geometry writes still fail closed. The probe used no
+click, seek, scroll, pixel read, capture, or checkout. First-party POST paths
+were aborted, but path-only telemetry cannot bind a reported 200 to a method;
+server-side effects remain UNKNOWN. Evidence:
+`output/younganimal_work_ticket_tester/ci-widget-readonly-78-corrected-summary-20261018.json`.
 
 The corrected local cooldown audit used a fresh copy of the e15 Catalog,
 cleared only its source grant, and preserved the actual work timestamp. Normal
@@ -462,49 +481,31 @@ reconcile unseen sources as unavailable.
 
 ## Verification status
 
-The latest complete seven-file Younganimal regression selection passed 313
-tests with 0 skipped: capture+adapter passed 162 (5 existing warnings), and the
-remaining policy/live-access/discovery/batch-unit plus Discovery-browser files
-passed 151 (203 existing warnings). Targeted Ruff checks passed. The global full repository suite and Research tests were not run
-for this site-local change.
+The latest complete seven-file Younganimal selection passed 322 tests with 0
+skipped and 207 existing pytest-asyncio deprecation warnings. It covered the
+policy, live access, Discovery, capture parser, Batch adapter, Discovery browser,
+and full adapter browser test files. The saved verbose run is
+`output/ya-all7-final.log`; its isolated basetemp is `output/ya-all7-final`.
+`ruff check src tests` and `git diff --check` are recorded in the final checkpoint.
+The full repository suite was not run because this is a site-local change.
 
-Discovery's 925-row live run is complete. The Phase 02 work-ticket Discovery
-contract has been observed on the live listing: two natural series-access GETs
-returned work-bound `episodeAccesses`, and the auth session returned a positive
-integer user. No ticket was used during that listing observation. Its targeted
-unit tests and browser-backed fixture tests pass, and Phase 02 independent review
-passed. The Phase 03 ticket-entry Policy/Batch path also passed independent review;
-synthetic browser verification is complete. Phase 04 verified live grant-only,
-the normal/grant-only local cooldown gate, and three existing-grant direct
-captures. The normal ticketed runs on 0634 and C781 each confirmed resource use
-but failed Viewer readiness before Capture. Direct Batch on 0634's active grant
-completed 15 pages through END/ZIP under the earlier count-specific
-`standard15_body` fix. Direct Batch on C781's active grant completed 7 pages
-through END/ZIP on the current parametric `standard_odd_body` implementation.
-The ticket ledger is 4/5. The final read-only 77 recheck found no target native
-access row or ticket control, so fresh eligibility is UNKNOWN and the fifth
-ticket is unused. A fresh quota-consuming normal END/ZIP run remains pending.
-The previous free/rental direct path has passed independent review and synthetic
-BatchExecutor-to-Runner-to-ZIP tests.
-Attempt 9 verifies the final capture code on both live profiles. The 44-page
-synthetic Runner also verifies all native outputs against independent
-fixture-source RGBA through END/ZIP. A bounded work-ticket research action was
-later observed on the authorized episode `856137d88753b`; it used one resource
-and is recorded in the work-ticket Runbook. The adapter was subsequently
-implemented and independently reviewed; current grant-only live verification
-is summarized above. The first local cooldown audit was inconclusive because a
-hard sentinel stopped before CDP; a corrected audit later passed both modes
-with zero Page creation and site requests. The first normal Batch grant is
-confirmed, but its initial attempt failed before Capture. Direct Batch on the
-already-active grant later completed 15 pages through END and passed the
-ZIP/Catalog audit without another resource use. The conditional
-`standard_odd_body` signature is implemented consistently in Python parsing,
-JS geometry, and native proof, and passed independent review plus focused
-synthetic regression checks. The live B=7 existing-grant direct capture passed
-on the current parametric implementation. The B=15 existing-grant direct
-capture ran under the earlier count-specific `standard15_body` fix, before this
-parametric generalization. Synthetic B=9 Runner coverage passed. A fresh
-quota-consuming normal END/ZIP run
-remains pending. The latest complete seven-file Younganimal regression selection
-passed 313 tests with 0 skipped (208 existing pytest-asyncio warnings across two
-invocations); the full repository suite was not run.
+Phase 04 remains partial. Live manual-grant Discovery, grant-only entry,
+normal/grant-only same-work cooldown skips, and existing-grant direct captures
+passed. Existing grants on 856, 0634, and C781 reached END/ZIP (28, 15, and 7
+pages respectively); the 0634 run used the earlier count-specific fix, while
+C781 used `standard_odd_body`. Normal quota attempts using tickets three,
+four, and five confirmed resource use but failed before page artifacts. The
+78 attempt stopped at native post-encoding verification for 12 body slots and
+18 wrappers. Its one-shot action sentinel is absent, so click and checkout
+event counts are UNKNOWN, not zero. No retry occurred.
+
+The read-only 78 probe observed exact `-cv-ci-content` ->
+`-cv-ci-content mode-overflow` and overflow-to-same-overflow pairs with stable
+strict widget/parent/CI/body geometry. The narrow, independently reviewed
+capture rule accepts only these pairs and preserves all existing capture proof,
+identity, epoch, native-source, and END gates. The final read-only 77 recheck
+found no current target access row or free-ticket control, so eligibility is
+UNKNOWN. All five initial tickets have been used; three later-authorized exact
+candidate URLs remain unused and uninspected. The next proof still required is
+a fresh authorized quota use that completes same-Page Capture -> END -> ZIP.
+No balance delta, per-image hash, or source-native format claim is made.

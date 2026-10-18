@@ -198,7 +198,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     'mode-ci-page', 'mode-empty', 'mode-first-page', 'mode-good', 'mode-h', 'mode-has-top-emptypage',
     'mode-hide', 'mode-last', 'mode-last-page', 'mode-lang-ja', 'mode-loaded',
     'mode-loading', 'mode-nav-dir-rtl', 'mode-nav-open', 'mode-pr', 'mode-req-render',
-    'mode-pr-page', 'mode-rendered', 'mode-scroll-bottom', 'mode-spread', 'mode-top-pr', 'mode-top-pr-page', 'mode-ci', 'mode-lang-ja',
+    'mode-pr-page', 'mode-rendered', 'mode-scroll-bottom', 'mode-overflow', 'mode-spread', 'mode-top-pr', 'mode-top-pr-page', 'mode-ci', 'mode-lang-ja',
     'mode-has-pr', 'mode-has-comic-info', 'mode-has-good-page',
   ]);
   const SAFE_TAGS = new Set(['CANVAS', 'DIV', 'INPUT', 'SECTION', 'SPAN', 'SVG']);
@@ -206,6 +206,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   const CANONICAL_CI_SCROLL_PARENT_CLASSES = new Set(['-cv-ci', '-cv-page-content']);
   const CANONICAL_CI_SCROLL_BASE_CLASSES = new Set(['-cv-ci-content']);
   const CANONICAL_CI_SCROLL_BOTTOM_CLASSES = new Set(['-cv-ci-content', 'mode-scroll-bottom']);
+  const CANONICAL_CI_SCROLL_OVERFLOW_CLASSES = new Set(['-cv-ci-content', 'mode-overflow']);
   const CANONICAL_LEAD_CLASSES = new Set(['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']);
   const CANONICAL_TOP_EMPTY_CLASSES = new Set(['-cv-page', 'mode-empty']);
   const CANONICAL_CI_TAIL = [
@@ -482,10 +483,14 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     if (ciScrollTarget) {
       const oldBase = tokenSetsEqual(oldTokens, CANONICAL_CI_SCROLL_BASE_CLASSES);
       const oldScroll = tokenSetsEqual(oldTokens, CANONICAL_CI_SCROLL_BOTTOM_CLASSES);
+      const oldOverflow = tokenSetsEqual(oldTokens, CANONICAL_CI_SCROLL_OVERFLOW_CLASSES);
       const newBase = tokenSetsEqual(newTokens, CANONICAL_CI_SCROLL_BASE_CLASSES);
       const newScroll = tokenSetsEqual(newTokens, CANONICAL_CI_SCROLL_BOTTOM_CLASSES);
+      const newOverflow = tokenSetsEqual(newTokens, CANONICAL_CI_SCROLL_OVERFLOW_CLASSES);
       result.ciScrollWidgetClassNoop = (oldBase && newBase) || (oldScroll && newScroll) ||
-        (oldBase && newScroll && safeCiScrollMutationGeometry(record.target, ciWrapper));
+        (oldBase && newScroll && safeCiScrollMutationGeometry(record.target, ciWrapper)) ||
+        (((oldBase && newOverflow) || (oldOverflow && newOverflow)) &&
+          safeCiScrollMutationGeometry(record.target, ciWrapper));
     }
     return result;
   };
