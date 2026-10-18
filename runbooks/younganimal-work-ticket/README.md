@@ -1,6 +1,6 @@
 # Young Animal `work_ticket` 実装 Runbook
 
-**Status:** IN PROGRESS (2026-10-18). Phases 01-03 passed independent review; Phase 04 live verification remains.
+**Status:** IN PROGRESS (2026-10-18). Phases 01-03 passed independent review. Phase 04 remains partial: DD9 single-work Discovery passed, but its normal Batch attempt timed out during CDP attach before Page creation; fresh quota-to-END/ZIP is still unverified.
 **Baseline:** 着手時の `main` HEADを確認して記録する。`runbooks/younganimal-adapter/` の free/direct E2E完了実装、および `runbooks/hanayume-work-ticket/` の完了済み実装を参考にする。
 **実装ブランチ:** `main` から新規 `feat/younganimal-work-ticket` を作り、既存 `feat/younganimal-adapter` / `feat/hanayume-work-ticket` を起点にしない。`main` へ自動マージしない。
 **進捗・実測・消費数:** [PROGRESS.md](PROGRESS.md)。既存の Young Animal Adapter Runbook は歴史的記録として維持し、本機能の authority はこの新Runbookと上位仕様。
@@ -37,12 +37,14 @@
 ## 2. 禁止事項と不変条件
 
 Follow-up authorization (2026-10-18): the original five-use allowance has
-been exhausted. The user separately authorized up to one additional
-candidate use on each exact episode URL `dd9facaba1704`,
-`849948508c8bc`, and `4ba85f4c9e538`. None is included in a blanket
-preflight or automatic retry; each target requires its own sequential
-eligibility check and independent Review/Lead action gate. All three
-remain uninspected and unused in the current checkpoint.
+been exhausted. The user separately authorized up to one additional use on
+each exact episode URL `dd9facaba1704`, `849948508c8bc`, and
+`4ba85f4c9e538`. DD9 was inspected sequentially and its one-work Discovery
+produced one pending quota candidate; its single normal Batch attempt timed
+out during CDP attach before Page creation and used no ticket. The other two
+URLs remain uninspected. Additional resource use remains 0/3; each target still
+requires its own sequential eligibility check and independent Review/Lead
+action gate. No blanket preflight or automatic retry is allowed.
 
 1. **Batch/Grant-onlyで作品ページ (`/series/`)、作品一覧、別話を事前crawlしない。** Discoveryコマンドでの正規の作品一覧列挙は既存仕様のまま許すが、Batchの preflight/消費直前/作品選定に流用しない。
 2. **1作品ずつ逐次完了。** work AのCatalog候補選択→ローカル判定→episode直行→クリックまたはSKIP→通常Capture/ZIPまたはgrant-only確認→close、の後に初めてwork Bへ。先に全作品のlive状態を集めるResolver、作品内全話の試行は禁止。

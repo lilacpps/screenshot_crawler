@@ -125,8 +125,11 @@ checkout, image read, or Capture call. Evidence: `output/younganimal_work_ticket
 `output/younganimal_work_ticket_tester/public_seek_metadata_c781_attempt1.json`.
 No balance-delta claim is made. The five uses in the original allowance are
 now exhausted (5/5). The user subsequently authorized up to three additional
-candidate uses on `dd9facaba1704`, `849948508c8bc`, and `4ba85f4c9e538`; none has
-been inspected or consumed, and each requires a separate review/Lead GO.
+candidate uses on `dd9facaba1704`, `849948508c8bc`, and `4ba85f4c9e538`.
+DD9 was inspected and passed one-work Discovery on work `06e1b9373ea6e`; its
+single normal Batch attempt failed before Page creation during Core/Playwright
+CDP attach and used no resource. The other two remain unopened. Additional
+resource use is 0/3; each target still requires a separate review/Lead GO.
 
 On frozen implementation commit `f2d7ad8`, direct Batch on C781's already-active
 grant exited 0 and captured 7 ordered 925x1329 PNGs through END. ZIP CRC,
@@ -151,6 +154,28 @@ network; one incidental other-episode-like GET API path and same-target reader
 subpath GETs were observed. These were site-generated incidental requests,
 not explicit probe requests. No retry or ticket use followed. Evidence:
 `output/younganimal_work_ticket_tester/readonly-77-final.json`.
+
+On 2026-10-18, the separately authorized DD9 candidate
+`dd9facaba1704` / work `06e1b9373ea6e` passed a genuine one-work Discovery in
+an isolated Catalog and produced one pending quota source. Its single normal
+Batch invocation exited 1 with a Playwright `connect_over_cdp` timeout before
+Page creation. The sanitized postflight records zero Page/goto/reload, click,
+checkout, native/viewer, and packaging events; the Item remained pending,
+quota/grant timestamps were null, no work-ticket state/Run/Artifact was added,
+and the source/copy Catalog hashes matched. No retry occurred. Evidence:
+`output/younganimal_work_ticket_tester/discovery-dd9facaba1704/` and
+`output/ydr-dd9/runDB/normal-dd9-one-shot-postflight.json`.
+
+Subsequent local endpoint health returned HTTP 200 for `/json/version`. A
+bounded read-only Browser WebSocket diagnostic completed `Browser.getVersion`
+and `Target.getTargets`, reporting six page and two browser-ui targets without
+creating a Page. The official Core/Playwright attach still timed out at 15
+seconds; initialization replies remained pending for four of six existing page
+targets. The cause remains UNKNOWN; no shared Chrome restart or second browser was used.
+This does not establish why the standard attach stalls or permit a retry.
+Evidence: `output/younganimal_work_ticket_tester/cdp-health-after-dd9.json`,
+`cdp-readonly-rawdiagnostic-after-dd9-corrected.json`, and
+`cdp-attach-protocol-summary.json`.
 
 The fifth original ticket use was a normal Batch attempt on
 `78a0c0e1ccfef` / work `423d7471396e9` at `2026-10-18T20:03:38.150057+09:00`.
@@ -177,6 +202,15 @@ first-party POST paths aborted before dispatch; a path-only status cannot bind
 the observed 200 to a POST, so server-side side effects remain UNKNOWN. This is
 post-install evidence only, not full page-load history. Evidence:
 `output/younganimal_work_ticket_tester/ci-widget-readonly-78-corrected-summary-20261018.json`.
+
+On frozen implementation commit `0574870`, a later direct Batch run on
+episode 78's already-active grant exited 0 and completed 12 pages through END.
+The ZIP contained ordered WEBP images at 848x1200 and passed CRC, decode,
+manifest order/metadata, Catalog completion, and Catalog/archive SHA checks.
+The previous failed Run, Source grant/quota timestamps, and Work
+`last_consumed_at` remained unchanged. No checkout or commerce action occurred;
+no per-image hashes were declared. Evidence:
+`output/younganimal_work_ticket_tester/direct-78-existing-grant/postflight-78.json`.
 
 The ticket ledger is 5/5 for the original allowance. Stage A full and incremental Discovery on the first
 used work retained the manual grant; a disposable stale-grant cache copy then
@@ -529,13 +563,16 @@ not run for this site-local change.
 
 All five uses in the original allowance are recorded in the current ledger.
 Grant-only entry and normal/grant-only same-work cooldown skips passed. Existing-
-grant direct captures on 856, 0634, and C781 reached END/ZIP (28, 15, and 7
-pages). The 0634 direct run preceded the parametric `standard_odd_body` change;
-C781 used that profile. Normal quota attempts on 0634, C781, and 78 confirmed
-resource use but produced no page artifacts. The 78 attempt failed closed at
-native post-encoding verification with 12 body slots and 18 wrappers; its
-missing action sentinel leaves click/checkout counts UNKNOWN. No retry was
-made.
+grant direct captures on 856, 0634, C781, and 78 reached END/ZIP (28, 15, 7,
+and 12 pages). The 0634 direct run preceded the parametric `standard_odd_body`
+change; C781 used that profile. The 78 direct ZIP contained
+ordered WEBP 848x1200 images and passed CRC, decode, order, manifest, and
+Catalog/archive SHA checks; no per-image hashes were declared. Normal quota
+attempts on 0634, C781, and 78 confirmed resource use but produced no page
+artifacts. The first 78 normal attempt failed closed at native post-encoding
+verification with 12 body slots and 18 wrappers; its missing action sentinel
+leaves click/checkout counts UNKNOWN. The later direct run left the failed Run
+and grant/quota timestamps unchanged.
 
 A bounded zero-resource probe on active grant 78 observed the exact
 base-to-overflow and overflow-to-same-overflow CI-widget class pairs, with
@@ -543,10 +580,14 @@ stable strict geometry and identity. The capture exception is limited to those
 pairs with the existing positive geometry and active-body proof. All other
 proof, epoch, identity, source-pixel, and END gates remain unchanged. The 77
 read-only recheck found no exact target access row or free-ticket control, so
-its current eligibility is UNKNOWN. Three later-authorized candidate URLs
-remain uninspected and unused. Fresh quota consumption followed by same-Page
-Capture -> END -> ZIP remains unverified. No balance delta, per-image hash, or
-source-native format claim is made.
+its current eligibility is UNKNOWN. DD9 (`dd9facaba1704` / work
+`06e1b9373ea6e`) passed isolated one-work Discovery and yielded one pending
+quota source, but its only normal attempt timed out during Core/Playwright CDP
+attach before Page creation; it used no resource and left the Catalog/hash
+baseline unchanged. The other two additional URLs remain unopened; resource use
+is 0/3. Fresh quota consumption followed by same-Page Capture -> END -> ZIP
+remains unverified. No balance delta, per-image hash, or source-native format
+claim is made.
 
 ## Historical native geometry diagnostic (2026-10-11)
 
