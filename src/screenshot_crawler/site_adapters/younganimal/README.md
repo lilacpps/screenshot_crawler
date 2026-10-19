@@ -530,9 +530,47 @@ normal Batch completed all ten native 960x1364 WebP pages, independently equal
 to source RGBA, through END/ZIP/Catalog using its existing grant with no checkout.
 No retry, deadline increase, PNG fallback change or access-resource change was made.
 
+Episode `a4457c04d74fc` (Item/Source 35765) combines an initial blank with three
+trailing PRs: top PR 0, exact blank 1, body 2-10, CI 11, PR 12-14, Good 15,
+Last 16, seek min=1/max=17/step=2. `top_empty_three_pr` requires the positive
+top-empty flag, horizontal/spread/RTL and PR/CI/Good capabilities, no vertical
+or single mode, exact canvas-free lead/blank/tail roles and contiguous known
+body states. Its derived body count B=N-8 is odd and at least three; seek max
+must equal N. This adds only the observed P=3 top-empty combination; P=1 with
+an extra blank and arbitrary PR counts remain unsupported.
+
+At max seek the centered top PR/blank has first+top-PR flags and is skipped by
+one ordinary public seek step. Body pairs start at max-2; seek 7 is the final
+single body/CI with CI+PR flags. Seeks 5 and 3 are PR/PR then PR/Good with PR;
+seek 1 is the unique visible/centered Last with Last-only flags. Python parsing,
+rewind, native source proof and CI-widget geometry use the same mapping. Full
+body coverage remains mandatory before END. Isolated normal Batch verification
+completed all nine native 960x1364 WebP pages, independently equal to source
+RGBA, through END/ZIP/Catalog with no checkout or resource consumption. The
+normal Catalog and archives were untouched. The site note records test scope
+and verification limits. No production timeout or proof gate was relaxed.
+
 Readiness timeouts now retain the bounded parser rejection text (up to 256 characters) in
 `adapter_debug.capture.viewer_readiness.last_error_message` and the console/metrics error.
 The existing 20-second deadline and fail-closed handling of unknown layouts are unchanged.
+
+Episode `f6064d438ba06` (Item/Source 35766) has a distinct odd-body three-PR
+profile: top PR 0, body 1-11, CI 12, PR 13-15, Good 16, Last 17, range
+min=1/max=17/step=2. `standard_three_pr_odd_body` requires exactly three PRs,
+no top-empty/vertical/single flags, the positive horizontal/spread/RTL and
+PR/CI/Good capabilities, exact canvas-free lead/tail roles and contiguous
+known body states. Derived B=N-7 must be odd and at least three; max=N-1.
+Three-PR detection now proves the tail independently before checking the
+specific body parity/range contract, rather than assuming max=N for all PR tails.
+
+Maximum seek centers top PR/body 1 with first+top-PR; body pairs have no phase
+flags through seek 7. Seek 5 is CI/first PR with CI+PR; seek 3 is the other PR
+pair with PR; seek 1 centers Good/Last with Last+PR and the unique visible,
+centered Last marker. Every body is still mandatory before END. Python/native/
+CI geometry use this same map. An isolated normal Batch verified all eleven
+native 960x1364 WebP pages against independent source RGBA through END/ZIP/
+Catalog, with zero checkout attempts and no changes to the normal Catalog or
+archives. Odd-body single-PR and arbitrary PR counts remain unsupported.
 
 A separate horizontal no-CI profile was observed on already-granted episode
 `8d92e88ab93ec`. Its metadata had 15 wrappers and seek `min=1`, `max=15`,

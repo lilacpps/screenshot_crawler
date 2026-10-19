@@ -31,6 +31,7 @@ def _snapshot(
     odd_body_count: int | None = None,
     pr_tail_body_count: int | None = None,
     tail_pr_count: int = 1,
+    top_empty_pr: bool = False,
     no_top_pr: bool = False,
     standard_body_count: int | None = None,
 ) -> dict[str, object]:
@@ -38,31 +39,41 @@ def _snapshot(
     odd_body_profile = standard15_body or odd_body_count is not None
     body_count = standard_body_count if standard_body_count is not None else pr_tail_body_count if pr_tail_body_count is not None else odd_body_count if odd_body_count is not None else 15 if standard15_body else 16
     seek_max = 7 if standard_body_count in {1, 2} else body_count + tail_pr_count + 4 if pr_tail_body_count is not None else body_count + 5 if standard_body_count is not None else body_count + 6 if odd_body_profile else 21
+    if top_empty_pr:
+        seek_max += 1
+    pr_tail_odd = pr_tail_body_count is not None and not top_empty_pr and body_count % 2 == 1
+    if pr_tail_odd:
+        seek_max -= 1
+    ci_seek = tail_pr_count + (2 if pr_tail_odd else 4) if pr_tail_body_count is not None else 5
     if odd_body_profile or pr_tail_body_count is not None or standard_body_count in {1, 2}:
         viewer_classes.update({"mode-has-pr", "mode-has-comic-info", "mode-has-good-page"})
     if pr_tail_body_count is not None or standard_body_count in {1, 2}:
         viewer_classes.add("mode-h")
     if no_top_pr:
         viewer_classes.update({"mode-h", "mode-has-top-emptypage"})
+    if top_empty_pr:
+        viewer_classes.add("mode-has-top-emptypage")
     if seek_value == seek_max:
         viewer_classes.update({"mode-first-page", "mode-top-pr-page"})
-    elif seek_value == (tail_pr_count + 4 if pr_tail_body_count is not None else 5):
+    elif seek_value == ci_seek:
         viewer_classes.update({"mode-pr-page", "mode-ci-page"})
-    elif 1 < seek_value < (tail_pr_count + 4 if pr_tail_body_count is not None else 5):
+    elif 1 < seek_value < ci_seek:
         viewer_classes.add("mode-pr-page")
     elif seek_value == 1:
         viewer_classes.update({"mode-pr-page", "mode-last-page"})
     if no_top_pr:
         viewer_classes.discard("mode-top-pr-page")
-    body_slots = tuple(range(1, body_count + 1))
+    body_slots = tuple(range(2, body_count + 2)) if top_empty_pr else tuple(range(1, body_count + 1))
     ci_slot = body_slots[-1] + 1
     wrapper_count = ci_slot + (tail_pr_count + 3 if pr_tail_body_count is not None else 5)
-    if (odd_body_profile or pr_tail_body_count is not None or standard_body_count == 1) and seek_value == 1:
+    if (odd_body_profile or (pr_tail_body_count is not None and not pr_tail_odd) or standard_body_count == 1) and seek_value == 1:
         viewer_classes.discard("mode-pr-page")
     slots: list[dict[str, object]] = []
     for index in range(wrapper_count):
         if index == 0:
             classes = {"-cv-page", "mode-empty"} if no_top_pr else {"-cv-page", "mode-empty", "mode-pr", "mode-top-pr"}
+        elif top_empty_pr and index == 1:
+            classes = {"-cv-page", "mode-empty"}
         elif index in body_slots:
             classes = {"-cv-page", "mode-loaded", "mode-rendered"}
         elif index == ci_slot:
@@ -421,6 +432,101 @@ def test_younganimal_three_pr_maps_all_observed_phases(seek, state, active) -> N
     assert observed.active_slots == active
     if state == "content":
         assert observed.ready_slots == active
+
+
+@pytest.mark.parametrize(
+    ("seek", "state", "active"),
+    [(17, "content", (1,)), (15, "content", (2, 3)), (13, "content", (4, 5)),
+     (11, "content", (6, 7)), (9, "content", (8, 9)), (7, "content", (10, 11)),
+     (5, "ad", ()), (3, "ad", ()), (1, "end", (17,))],
+)
+def test_younganimal_three_pr_odd_body_maps_all_observed_phases(seek, state, active) -> None:
+    observed = _parse_viewer_observation(
+        _snapshot(seek, pr_tail_body_count=11, tail_pr_count=3), expected_url=EPISODE_URL,
+    )
+    assert observed.layout_variant == "standard_three_pr_odd_body"
+    assert observed.body_slots == tuple(range(1, 12))
+    assert (observed.ci_slot, observed.pr_slots, observed.good_slot, observed.last_slot) == (12, (13, 14, 15), 16, 17)
+    assert observed.page_state == state and observed.active_slots == active
+    if state == "content":
+        assert observed.ready_slots == active
+
+
+@pytest.mark.parametrize("mutation", ["capability", "blank", "range", "body", "tail", "canvas", "ci_phase", "end_phase", "end_marker", "end_hidden", "center", "single_pr"])
+def test_three_pr_odd_body_rejects_unobserved_or_changed_profile(mutation: str) -> None:
+    raw = _snapshot(1 if mutation.startswith("end_") else 5, pr_tail_body_count=11, tail_pr_count=3)
+    if mutation == "capability":
+        raw["viewerClasses"].remove("mode-has-comic-info")
+    elif mutation == "blank":
+        raw["viewerClasses"].append("mode-has-top-emptypage")
+    elif mutation == "range":
+        raw["seek"]["max"] = "19"
+    elif mutation in {"body", "tail"}:
+        raw["slots"][4 if mutation == "body" else 14]["classes"] = ["-cv-page", "mode-empty"]
+    elif mutation == "canvas":
+        raw["slots"][13]["canvasCount"] = 1
+        raw["slots"][13]["canvas"] = raw["slots"][1]["canvas"]
+    elif mutation == "ci_phase":
+        raw["viewerClasses"].remove("mode-ci-page")
+    elif mutation == "end_phase":
+        raw["viewerClasses"].remove("mode-pr-page")
+    elif mutation == "end_marker":
+        raw["terminalMarkerCount"] = 2
+    elif mutation == "end_hidden":
+        raw["terminalMarkerVisible"] = False
+    elif mutation == "center":
+        raw["slots"][4]["wrapperCenterInViewport"] = True
+    else:
+        raw = _snapshot(15, pr_tail_body_count=11, tail_pr_count=1)
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
+@pytest.mark.parametrize(
+    ("seek", "state", "active"),
+    [(17, "initial_blank", (1,)), (15, "content", (2, 3)), (13, "content", (4, 5)),
+     (11, "content", (6, 7)), (9, "content", (8, 9)), (7, "content", (10,)),
+     (5, "ad", ()), (3, "ad", ()), (1, "end", (16,))],
+)
+def test_younganimal_top_empty_three_pr_maps_all_observed_phases(seek, state, active) -> None:
+    observed = _parse_viewer_observation(
+        _snapshot(seek, pr_tail_body_count=9, tail_pr_count=3, top_empty_pr=True),
+        expected_url=EPISODE_URL,
+    )
+    assert observed.layout_variant == "top_empty_three_pr"
+    assert observed.body_slots == tuple(range(2, 11))
+    assert (observed.ci_slot, observed.pr_slots, observed.good_slot, observed.last_slot) == (11, (12, 13, 14), 15, 16)
+    assert observed.page_state == state and observed.active_slots == active
+    assert observed.initial_blank is (seek == 17)
+
+
+@pytest.mark.parametrize("mutation", ["blank", "blank_canvas", "capability", "phase", "center", "tail", "tail_canvas", "range", "end_marker", "end_hidden", "unsupported_pr"])
+def test_top_empty_three_pr_rejects_unknown_or_incomplete_layout(mutation: str) -> None:
+    raw = _snapshot(1 if mutation.startswith("end_") else 17, pr_tail_body_count=9, tail_pr_count=3, top_empty_pr=True)
+    if mutation == "blank":
+        raw["slots"][1]["classes"].append("mode-pr")
+    elif mutation in {"blank_canvas", "tail_canvas"}:
+        index = 1 if mutation == "blank_canvas" else 12
+        raw["slots"][index]["canvasCount"] = 1
+        raw["slots"][index]["canvas"] = raw["slots"][2]["canvas"]
+    elif mutation == "capability":
+        raw["viewerClasses"].remove("mode-has-comic-info")
+    elif mutation == "phase":
+        raw["viewerClasses"].append("mode-ci-page")
+    elif mutation == "center":
+        raw["slots"][2]["wrapperCenterInViewport"] = True
+    elif mutation == "tail":
+        raw["slots"][14]["classes"] = ["-cv-page", "mode-good"]
+    elif mutation == "range":
+        raw["seek"]["max"] = "15"
+    elif mutation == "end_marker":
+        raw["terminalMarkerCount"] = 2
+    elif mutation == "end_hidden":
+        raw["terminalMarkerVisible"] = False
+    else:
+        raw = _snapshot(15, pr_tail_body_count=9, tail_pr_count=1, top_empty_pr=True)
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
 
 @pytest.mark.parametrize(

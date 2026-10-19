@@ -1,6 +1,146 @@
 # 11. Younganimal current implementation
 
-## Current verification snapshot (2026-10-19)
+## Current verification snapshot (2026-10-20)
+
+### Odd body plus three trailing PRs: Item/Source 35766
+
+Normal Batch `7c508b7bf8ca4334bd6914847d1d9756` failed before capture on
+`f6064d438ba06` (ナナとカオル / 第2話 交渉①) with
+`PR/Good/Last tail roles changed`. The saved layout has 18 wrappers, no extra
+initial blank, eleven bodies and three trailing PRs. The previous three-PR
+detector required an odd wrapper count and max=N, so it missed this max=N-1
+shape and fell through to the old two-PR tail check. Increasing the wait
+cannot resolve that structural mismatch.
+
+Bounded shared-CDP metadata report:
+`output/younganimal-layout-35766-probe-20261020/report.json`. It reproduced the
+old rejection through six seconds, checked every public seek and rewound to
+17, blocked 32 mutating requests and attempted zero checkouts. Exact roles:
+top PR 0, body 1-11, CI 12, PR 13-15, Good 16, Last 17.
+
+| Seek | Centered wrappers | Phase | State |
+|---|---|---|---|
+| 17 | 0, 1 | first + top-PR | first body |
+| 15..7 by -2 | 2/3..10/11 | none | body pairs |
+| 5 | 12, 13 | CI + PR | CI + first PR |
+| 3 | 14, 15 | PR | other PR pair |
+| 1 | 16, 17 | Last + PR | Good + unique visible/centered Last |
+
+`standard_three_pr_odd_body` is an explicit three-PR profile with no top-empty,
+vertical or single flags, positive horizontal/spread/RTL and PR/CI/Good
+capabilities, exact canvas-free lead/tail roles, and a contiguous known body
+region. Derived B=N-7 is odd and at least three; min=1/max=N-1/step=2. Tail
+recognition is independent of the subsequent validated seek/parity relation.
+The CI phase is at P+2=5 and END has Last+PR flags and Good/Last centers,
+distinct from the even-body three-PR profile's CI phase P+4=7 and Last-only
+END. Python parsing, native JS layout proof and CI mutation geometry all use
+this distinction. Odd-body single-PR, arbitrary PR counts, missing body/role
+proof, wrong flags/ranges/centers, canvas changes and premature END still fail
+closed. Existing top-empty and prior parity profiles retain their contracts;
+no Core, resource, fallback, retry or production timeout policy was changed.
+
+Unit tests cover all nine observed phases and capability/blank/range/body/
+tail/canvas/CI/Last/center mutations. Browser fixtures extend the existing PR
+tail Runner tests with B=11 and boundary B=3, verify native source RGBA through
+END/ZIP and disjoint CI-widget mutation behavior, and reject direct native
+profile drift, premature END and post-encoding canvas/seek changes. Synthetic
+B=3 is structural coverage, not a separately live-observed episode.
+
+Isolated normal Batch evidence: `output/ya35766-live-20261020/report.json`.
+Only pending free Source 35766 was cloned to a dedicated Catalog; direct entry
+blocked mutating requests and used no ticket. It captured all eleven slots
+1-11 as native 960x1364 WebP, independently equal to draw-time source RGBA,
+reached END with max_pages=11, created a CRC/decode/order-checked eleven-entry
+ZIP and completed only the isolated Item. Thirty mutating requests were
+blocked and zero checkout attempts occurred. Normal Catalog/archives and
+settings were not modified. Only the owned browser Page was closed.
+
+Final complete affected selection: **475 passed**, zero failed/skipped/
+deselected, five existing pytest-asyncio deprecation warnings, in 379.74
+seconds. Files: `tests/unit/test_younganimal_capture.py` (263 cases) and
+`tests/integration/test_younganimal_adapter_browser.py` (212 cases), using
+`-q -p no:cacheprovider --disable-warnings --tb=short --maxfail=1` and an
+isolated short temporary directory. This includes every prior layout, the
+previous top-empty/three-PR fix and the new odd-body three-PR tests. The new
+focused browser selection separately passed 11 cases in 14.17 seconds. Ruff
+`src tests` and whitespace checks passed. Full repository/Research test suites
+were not selected because the production change is site-local, with no shared
+runtime, data-model or research changes. Live verification above covers the
+actual failing episode; no ticket-consuming scenario was needed or attempted.
+
+### Initial blank plus three trailing PRs: Item/Source 35765
+
+Normal Batch `c6b82ccc69f7498583eecd3ca5ae7eb7` failed before capture on
+`a4457c04d74fc` (ナナとカオル / 第2話 交渉②) with
+`PR/Good/Last tail roles changed`. The saved 17-wrapper layout combines the
+known initial blank and three-PR structures, which were previously supported
+separately. It has top PR 0, exact blank 1, body 2-10, CI 11, PR 12-14, Good 15
+and Last 16. Waiting cannot change this valid role sequence into the old
+two-PR top-empty sequence.
+
+The bounded shared-CDP metadata probe
+`output/younganimal-layout-35765-probe-20261020/report.json` reproduced the old
+rejection and checked every seek 17..1 by -2 before rewinding to 17. It blocked
+37 mutating requests and attempted zero checkouts. Exact observations:
+
+| Seek | Centered wrappers | Phase | State |
+|---|---|---|---|
+| 17 | 0, 1 | first + top-PR | initial blank |
+| 15..9 by -2 | 2/3..8/9 | none | body pairs |
+| 7 | 10, 11 | CI + PR | last body + CI |
+| 5 | 12, 13 | PR | PR pair |
+| 3 | 14, 15 | PR | PR + Good |
+| 1 | 16 | Last only | unique visible/centered Last |
+
+`top_empty_three_pr` requires the positive top-empty flag, exact top-PR lead
+and separate canvas-free blank, exactly three PRs, and contiguous derived body
+slots starting at 2. B=N-8 must be odd and at least three, with min=1/max=N/
+step=2, horizontal/spread/RTL and PR/CI/Good capabilities, and no vertical or
+single mode. Selected centers and phase flags must match at every seek.
+Initialization/rewind recognizes only this positively proven blank and uses
+one public seek step to the first body pair. Python parsing, native JS layout
+proof and CI mutation geometry share the role map. P=1 plus a separate blank,
+arbitrary PR counts, changed roles/ranges, wrong Last and premature END remain
+fail-closed. Every body slot is still required before END; source/replay,
+node/write/generation, final geometry, post-encoding proof and size guards stay
+unchanged. Existing profiles retain their contracts. No Core, access-resource,
+PNG policy, retry or production timeout changes were made.
+
+Synthetic Unit tests cover all nine observed seek states and invalid blank,
+canvas, capability, phase, center, tail, range and Last mutations. Extended
+browser fixtures exercise B=9 and structural boundary B=3 through native
+RGBA-equal capture/END/ZIP, including incoming draws before final translation
+and permitted disjoint CI-widget mutations at seek 7. Browser rejection cases
+cover profile drift, premature END and canvas/seek changes after encoding.
+These alternate body totals are structural regression coverage, not additional
+claims of live-verified episode shapes.
+
+An isolated normal Batch copied only pending free Source 35765 to a dedicated
+Catalog and used `direct`, with all mutating requests blocked. Evidence:
+`output/ya35765-live-20261020-2/report.json`. It completed all nine body slots
+2-10 as native 960x1364 WebP, independently equal to draw-time source RGBA,
+reached END at max_pages=9, packaged a nine-entry CRC/decode-checked ZIP and
+marked only the isolated Item completed. Thirty-three mutating requests were
+blocked; zero checkouts, HTTP 403/429/5xx, challenge/CAPTCHA and retries occurred.
+The normal Catalog, its pending Item 35765, settings and existing archives were
+not changed. An earlier isolated attempt failed before site access because
+shared CDP was closed; the shared launcher/profile was verified and restarted
+before the successful run. Only the owned Page was closed after verification.
+
+Affected verification covered 445 distinct cases: 242 capture Unit and 203
+real-browser Integration cases, zero skipped. The first complete affected run
+had 444 passes and one PNG positive-path timeout under the test's four-second
+Core call budget (369.56 seconds total). The committed-module control passed;
+an instrumented current-module rerun also passed with capture calls around
+1.1-2.1 seconds, confirming timing sensitivity rather than a role rejection.
+Only that PNG positive test's `adapter_timeout_grace_ms` was raised from 2,000
+to 6,000 (eight-second total call budget); it passed in 19.87 seconds. Production
+timeouts were not changed. All six extended top-empty Runner/END/ZIP cases
+also passed after adding initial-seek-at-END rewind coverage (13.79 seconds).
+The other affected cases passed in the complete selection; no full repository
+suite is claimed. Full suite/Research were not selected because this change
+is site-local and touches no shared runtime or research code. Ruff `src tests`
+and whitespace checks passed.
 
 ### Three trailing PRs: Item/Source 35579
 
