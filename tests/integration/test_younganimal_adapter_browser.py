@@ -106,22 +106,23 @@ def _viewer_html(
     standard_body_count: int | None = None,
     odd_body_count: int | None = None,
     top_empty_no_ci_body_count: int | None = None,
-    single_pr_body_count: int | None = None,
+    pr_tail_body_count: int | None = None,
+    tail_pr_count: int = 1,
 ) -> str:
     wrappers: list[str] = []
     odd_profile = standard15_body or odd_body_count is not None
     no_ci_profile = top_empty_no_ci_body_count is not None
-    single_pr_profile = single_pr_body_count is not None
+    pr_tail_profile = pr_tail_body_count is not None
     body_last = (
-        single_pr_body_count if single_pr_profile else
+        pr_tail_body_count if pr_tail_profile else
         top_empty_no_ci_body_count if no_ci_profile else
         odd_body_count if odd_body_count is not None else
         15 if standard15_body else
         standard_body_count if standard_body_count is not None else 16
     )
     ci_index = body_last + 1
-    wrapper_count = ci_index + (4 if no_ci_profile or single_pr_profile else 5)
-    seek_max = wrapper_count if odd_profile or no_ci_profile or single_pr_profile else wrapper_count - 1
+    wrapper_count = ci_index + (tail_pr_count + 3 if pr_tail_profile else 4 if no_ci_profile else 5)
+    seek_max = wrapper_count if body_last == 1 or odd_profile or no_ci_profile or pr_tail_profile else wrapper_count - 1
     for index in range(wrapper_count):
         if index == 0:
             classes = (
@@ -169,10 +170,10 @@ def _viewer_html(
                 '<span class="-cv-ci-item"></span><span class="-cv-ci-item"></span>'
                 '</div></div>'
             )
-        elif index in ({ci_index, ci_index + 1} if no_ci_profile else {ci_index + 1} if single_pr_profile else {ci_index + 1, ci_index + 2}):
+        elif index in ({ci_index, ci_index + 1} if no_ci_profile else set(range(ci_index + 1, ci_index + tail_pr_count + 1)) if pr_tail_profile else {ci_index + 1, ci_index + 2}):
             classes = "mode-empty mode-pr -cv-page"
             body = ""
-        elif index == ci_index + (2 if no_ci_profile or single_pr_profile else 3):
+        elif index == ci_index + (tail_pr_count + 1 if pr_tail_profile else 2 if no_ci_profile else 3):
             classes = "mode-good -cv-page"
             body = ""
         else:
@@ -188,10 +189,10 @@ def _viewer_html(
     wrappers_html = "".join(wrappers)
     root_flag = "mode-has-top-emptypage" if no_top_pr or no_ci_profile else ""
     odd_flags = (
-        "mode-has-pr mode-has-comic-info mode-has-good-page" if odd_profile or single_pr_profile else
+        "mode-has-pr mode-has-comic-info mode-has-good-page" if odd_profile or pr_tail_profile or body_last in {1, 2} else
         "mode-has-pr mode-has-good-page" if no_ci_profile else ""
     )
-    terminal_markers = "viewer.classList.add('mode-last-page');" if odd_profile or no_ci_profile or single_pr_profile else (
+    terminal_markers = "viewer.classList.add('mode-last-page');" if body_last == 1 or odd_profile or no_ci_profile or pr_tail_profile else (
         "viewer.classList.add('mode-pr-page','mode-last-page');"
     )
     return f'''<section id="comici-viewer" class="-cv mode-lang-ja mode-h mode-dir-rtl mode-nav-dir-rtl mode-spread {root_flag} {odd_flags}">
@@ -200,7 +201,7 @@ def _viewer_html(
     </section>
     <style>
       html,body {{ margin:0; width:1906px; height:986px; overflow:hidden; }}
-      #comici-viewer {{ position:{"fixed" if single_pr_profile else "relative"}; top:0; width:1906px; height:986px; overflow:hidden; }}
+      #comici-viewer {{ position:{"fixed" if pr_tail_profile or body_last in {1, 2} else "relative"}; top:0; width:1906px; height:986px; overflow:hidden; }}
       #xCVSeekBar {{ position:absolute; top:900px; }}
       #xCVPages {{ position:absolute; left:0; top:0; width:1906px; height:886px; }}
       .-cv-page {{ position:absolute; top:0; width:946px; height:886px; }}
@@ -219,22 +220,24 @@ def _viewer_html(
         const update = () => {{
           const value = Number(seek.value);
           const focus = Number(seek.max) - value + 1;
-          wrappers.forEach((wrapper, index) => {{
+          const positionWrappers = () => wrappers.forEach((wrapper, index) => {{
             wrapper.style.left = `${{945 + (focus - index - 1) * 946}}px`;
           }});
+          if (!{str(odd_profile and no_top_pr).lower()}) positionWrappers();
           viewer.classList.remove('mode-first-page','mode-top-pr-page','mode-pr-page','mode-ci-page','mode-last-page');
           if (value === Number(seek.max)) {{
             viewer.classList.add('mode-first-page');
             if (!{str(no_top_pr or no_ci_profile).lower()}) viewer.classList.add('mode-top-pr-page');
           }}
-          if (value === 5) viewer.classList.add({"'mode-pr-page'" if no_ci_profile else "'mode-pr-page','mode-ci-page'"});
-          if (value === 3) viewer.classList.add('mode-pr-page');
+          if (value === {tail_pr_count + 4 if pr_tail_profile else 5}) viewer.classList.add({"'mode-pr-page'" if no_ci_profile else "'mode-pr-page','mode-ci-page'"});
+          if (value > 1 && value < {tail_pr_count + 4 if pr_tail_profile else 5}) viewer.classList.add('mode-pr-page');
           if (value === 1) {terminal_markers}
           body.forEach(wrapper => {{
             wrapper.classList.add('mode-loaded','mode-rendered');
           }});
           const active = [focus - 1, focus].filter(slot => slot >= 1 && slot <= body.length);
           active.forEach(slot => window.__yaRenderers?.[slot]?.());
+          if ({str(odd_profile and no_top_pr).lower()}) positionWrappers();
         }};
         seek.addEventListener('input', update);
         seek.addEventListener('change', update);
@@ -254,7 +257,8 @@ def _episode_html(
     standard_body_count: int | None = None,
     odd_body_count: int | None = None,
     top_empty_no_ci_body_count: int | None = None,
-    single_pr_body_count: int | None = None,
+    pr_tail_body_count: int | None = None,
+    tail_pr_count: int = 1,
     ticket_gate: bool = False,
     ticket_control_missing: bool = False,
 ) -> str:
@@ -289,7 +293,7 @@ def _episode_html(
                     standard15_body=standard15_body, standard_body_count=standard_body_count,
                     odd_body_count=odd_body_count,
                     top_empty_no_ci_body_count=top_empty_no_ci_body_count,
-                    single_pr_body_count=single_pr_body_count)}</body></html>'''
+                    pr_tail_body_count=pr_tail_body_count, tail_pr_count=tail_pr_count)}</body></html>'''
 
 
 def _top_empty_viewer_html(
@@ -433,7 +437,8 @@ async def _install_fixture(
     standard_body_count: int | None = None,
     odd_body_count: int | None = None,
     top_empty_no_ci_body_count: int | None = None,
-    single_pr_body_count: int | None = None,
+    pr_tail_body_count: int | None = None,
+    tail_pr_count: int = 1,
     ticket_gate: bool = False,
     ticket_initial_access: bool = False,
     ticket_access_type: str = "waitAndFree",
@@ -580,7 +585,8 @@ async def _install_fixture(
                     standard_body_count=standard_body_count,
                     odd_body_count=odd_body_count,
                     top_empty_no_ci_body_count=top_empty_no_ci_body_count,
-                    single_pr_body_count=single_pr_body_count,
+                    pr_tail_body_count=pr_tail_body_count,
+                    tail_pr_count=tail_pr_count,
                     ticket_gate=ticket_gate and not ticket_initial_access,
                     ticket_control_missing=ticket_control_variant == "missing",
                 ).replace('value="11"', f'value="{initial_seek}"')
@@ -2019,12 +2025,15 @@ async def test_younganimal_shorter_top_empty_native_rejects_profile_drift(
     assert adapter._captured_slots == []
 
 
-@pytest.mark.parametrize("mutation", ["capability", "phase", "tail", "center"])
-async def test_younganimal_single_pr_native_rejects_profile_drift(
-    browser_page, monkeypatch: pytest.MonkeyPatch, mutation: str,
+@pytest.mark.parametrize("mutation", ["capability", "phase", "tail", "center", "premature_end"])
+@pytest.mark.parametrize(("standard_body_count", "tail_pr_count"), [(None, 1), (None, 3), (1, 1), (2, 1)],
+                         ids=["single_pr", "three_pr", "one_body", "two_body"])
+async def test_younganimal_small_native_layout_rejects_profile_drift(
+    browser_page, monkeypatch: pytest.MonkeyPatch, mutation: str, standard_body_count: int | None, tail_pr_count: int,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
-    await _install_fixture(browser_page, single_pr_body_count=6, native_source_slots=(1,))
+    await _install_fixture(browser_page, pr_tail_body_count=6 if standard_body_count is None else None,
+                           standard_body_count=standard_body_count, tail_pr_count=tail_pr_count, native_source_slots=(1,))
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
     adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
@@ -2032,16 +2041,25 @@ async def test_younganimal_single_pr_native_rejects_profile_drift(
     await adapter.configure_run(browser_page, "auto")
     await browser_page.goto(adapter.resolve_initial_navigation_url(EPISODE_URL), wait_until="commit")
     await adapter.initialize(browser_page)
-    await browser_page.evaluate("""mutation => {
+    await browser_page.evaluate("""({mutation,bodyCount,prCount}) => {
       const viewer=document.querySelector('#comici-viewer');
       const slots=document.querySelector('#xCVPages').children;
       if(mutation==='capability')viewer.classList.remove('mode-has-comic-info');
       if(mutation==='phase')viewer.classList.add('mode-pr-page');
-      if(mutation==='tail')slots[9].className='-cv-page mode-pr mode-empty';
-      if(mutation==='center')slots[4].style.left='0px';
-    }""", mutation)
+      if(mutation==='tail')slots[bodyCount===null?8+prCount:bodyCount+4].className='-cv-page mode-pr mode-empty';
+      if(mutation==='center')slots[bodyCount===null?4:2].style.left='0px';
+      if(mutation==='premature_end') {
+        const seek=document.querySelector('#xCVSeekBar');seek.value='1';
+        seek.dispatchEvent(new Event('input',{bubbles:true}));
+        seek.dispatchEvent(new Event('change',{bubbles:true}));
+      }
+    }""", {"mutation": mutation, "bodyCount": standard_body_count, "prCount": tail_pr_count})
+    if mutation == "premature_end":
+        with pytest.raises(UnknownPageStateError, match="before every body slot was captured"):
+            await adapter.detect_state(browser_page)
     raw = await browser_page.evaluate(younganimal_adapter_module.COLLECT_NATIVE_CAPTURE_SCRIPT, {
-        "expectedSlots": [1], "expectedSeek": 11, "episodePath": f"/episodes/{EPISODE_ID}",
+        "expectedSlots": [1], "expectedSeek": 1 if mutation == "premature_end" else 10 + tail_pr_count if standard_body_count is None else 7,
+        "episodePath": f"/episodes/{EPISODE_ID}",
         "maxPngChars": 12_000_000,
     })
     assert raw["mode"] == "fallback"
@@ -2349,24 +2367,30 @@ async def test_younganimal_capture_rejects_valid_profile_mapping_drift_after_det
 
 
 @pytest.mark.parametrize(
-    ("odd_body_count", "standard_body_count", "top_empty_no_ci_body_count", "single_pr_body_count", "force_rendered_fallback"),
+    ("odd_body_count", "standard_body_count", "top_empty_no_ci_body_count", "pr_tail_body_count", "force_rendered_fallback", "no_top_pr", "tail_pr_count"),
     [
-        (None, None, None, None, False), (7, None, None, None, False), (9, None, None, None, False), (15, None, None, None, False),
-        (None, 12, None, None, False), (None, None, 6, None, False), (None, None, 10, None, False),
-        (None, None, 10, None, True), (None, None, None, 6, False), (None, None, None, 4, False),
+        (None, None, None, None, False, False, 1), (7, None, None, None, False, False, 1), (9, None, None, None, False, False, 1), (15, None, None, None, False, False, 1),
+        (None, 12, None, None, False, False, 1), (None, None, 6, None, False, False, 1), (None, None, 10, None, False, False, 1),
+        (None, None, 10, None, True, False, 1), (None, None, None, 6, False, False, 1), (None, None, None, 4, False, False, 1),
+        pytest.param(7, None, None, None, False, True, 1, id="no_top_pr_odd_7"),
+        pytest.param(3, None, None, None, False, True, 1, id="no_top_pr_odd_3"),
+        pytest.param(None, 2, None, None, False, False, 1, id="two_body"),
+        pytest.param(None, 1, None, None, False, False, 1, id="one_body"),
+        pytest.param(None, None, None, 10, False, False, 3, id="three_pr_10"),
+        pytest.param(None, None, None, 4, False, False, 3, id="three_pr_4"),
     ],
 )
 async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof(
     browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     odd_body_count: int | None, standard_body_count: int | None,
-    top_empty_no_ci_body_count: int | None, single_pr_body_count: int | None, force_rendered_fallback: bool,
+    top_empty_no_ci_body_count: int | None, pr_tail_body_count: int | None, force_rendered_fallback: bool, no_top_pr: bool, tail_pr_count: int,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     no_ci_profile = top_empty_no_ci_body_count is not None
-    body_count = single_pr_body_count or top_empty_no_ci_body_count or standard_body_count or (16 if odd_body_count is None else odd_body_count)
+    body_count = pr_tail_body_count or top_empty_no_ci_body_count or standard_body_count or (16 if odd_body_count is None else odd_body_count)
     body_slots = tuple(range(1, body_count + 1))
     final_body_seek = (
-        "17" if standard_body_count == 12 else "5" if no_ci_profile else ("7" if odd_body_count is not None else "5")
+        str(tail_pr_count + 4) if pr_tail_body_count is not None else "7" if standard_body_count == 1 else "17" if standard_body_count == 12 else "5" if no_ci_profile else ("7" if odd_body_count is not None else "5")
     )
     exercise_overflow = standard_body_count == 12
     ci_slot = body_count + 1
@@ -2377,7 +2401,9 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
         standard_body_count=standard_body_count,
         odd_body_count=odd_body_count,
         top_empty_no_ci_body_count=top_empty_no_ci_body_count,
-        single_pr_body_count=single_pr_body_count,
+        pr_tail_body_count=pr_tail_body_count,
+        tail_pr_count=tail_pr_count,
+        no_top_pr=no_top_pr,
     )
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 30)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
@@ -2395,7 +2421,7 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
           const seek = document.querySelector('#xCVSeekBar');
           if ({str(not no_ci_profile).lower()} && seek?.value === '{final_body_seek}' && !window.__yaStandardCiWidgetMutation) {{
             const pages = document.querySelector('#xCVPages');
-            const ci = pages.children[pages.children.length - {4 if single_pr_body_count is not None else 5}];
+            const ci = pages.children[pages.children.length - {tail_pr_count + 3 if pr_tail_body_count is not None else 5}];
             const widget = ci.querySelector(':scope > .-cv-ci.-cv-page-content > .-cv-ci-content');
             if (!widget) throw new Error('fixture_ci_scroll_widget_missing');
             const overflowProfile = {str(exercise_overflow).lower()};
@@ -2438,7 +2464,7 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
         async def capture_page(self, page):
             if self.source_authority is None:
                 self.source_authority = await _read_fixture_pixel_authority(
-                    page, rendered_slots=body_slots if force_rendered_fallback else (2, 3)
+                    page, rendered_slots=body_slots if force_rendered_fallback or body_count <= 2 else (2, 3)
                 )
             result = await super().capture_page(page)
             self.capture_modes.append(str(self._capture_diagnostics["mode"]))
@@ -2769,8 +2795,9 @@ async def test_younganimal_unsafe_or_missing_native_half_falls_back_for_whole_sp
         "extra_body_center",
     ],
 )
+@pytest.mark.parametrize("no_top_pr", [False, True])
 async def test_younganimal_odd_body_native_collector_rejects_invalid_profile_directly(
-    browser_page, mutation: str
+    browser_page, mutation: str, no_top_pr: bool,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     await _install_fixture(
@@ -2778,6 +2805,7 @@ async def test_younganimal_odd_body_native_collector_rejects_invalid_profile_dir
         initial_seek=13,
         native_source_slots=tuple(range(1, 8)),
         odd_body_count=7,
+        no_top_pr=no_top_pr,
     )
     adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
     await adapter.prepare_page(browser_page)
@@ -2793,7 +2821,7 @@ async def test_younganimal_odd_body_native_collector_rejects_invalid_profile_dir
         baseline_snapshot.get("snapshot"), expected_url=EPISODE_URL
     )
     assert baseline_snapshot.get("observerReady") is True
-    assert baseline.layout_variant == "standard_odd_body"
+    assert baseline.layout_variant == ("top_empty_no_pr_odd_body" if no_top_pr else "standard_odd_body")
     assert baseline.seek_value == 13 and baseline.page_state == "content"
     assert baseline.active_slots == (1,)
 
@@ -2992,7 +3020,12 @@ async def test_younganimal_invalid_odd_profile_ci_scroll_is_capture_mutation(
         "layout_translation_standard15_body",
         "root_class_noop_standard15_body",
         "replacement_single_pr",
+        "replacement_three_pr",
+        "replacement_two_body",
+        "replacement_one_body",
         "root_class_noop_single_pr",
+        "replacement_no_top_pr_odd",
+        "public_seek_last_no_top_pr_odd",
         "public_seek_last_standard7_body",
         "replacement_top_empty_no_ci",
         "no_ci_wrapper_replacement_top_empty_no_ci",
@@ -3013,10 +3046,20 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
     standard15_body = mutation.endswith("_standard15_body")
     standard7_body = mutation.endswith("_standard7_body")
     no_ci_profile = mutation.endswith("_top_empty_no_ci")
-    single_pr_profile = mutation.endswith("_single_pr")
+    pr_tail_profile = mutation.endswith(("_single_pr", "_three_pr"))
+    tail_pr_count = 3 if mutation.endswith("_three_pr") else 1
+    no_top_pr_odd = mutation.endswith("_no_top_pr_odd")
+    two_body = mutation.endswith("_two_body")
+    one_body = mutation.endswith("_one_body")
     overflow_case = mutation.endswith("_overflow")
-    if single_pr_profile:
-        mutation = mutation.removesuffix("_single_pr")
+    if one_body:
+        mutation = mutation.removesuffix("_one_body")
+    elif two_body:
+        mutation = mutation.removesuffix("_two_body")
+    elif no_top_pr_odd:
+        mutation = mutation.removesuffix("_no_top_pr_odd")
+    elif pr_tail_profile:
+        mutation = mutation.removesuffix("_single_pr").removesuffix("_three_pr")
     elif no_ci_profile:
         mutation = mutation.removesuffix("_top_empty_no_ci")
     elif standard15_body:
@@ -3031,9 +3074,12 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
         native_source_slots=(2, 3) if scroll_widget_case else (1,),
         top_empty=scroll_widget_case,
         standard15_body=standard15_body,
-        odd_body_count=7 if standard7_body else None,
+        odd_body_count=7 if standard7_body or no_top_pr_odd else None,
+        no_top_pr=no_top_pr_odd,
         top_empty_no_ci_body_count=10 if no_ci_profile else None,
-        single_pr_body_count=6 if single_pr_profile else None,
+        pr_tail_body_count=6 if pr_tail_profile else None,
+        tail_pr_count=tail_pr_count,
+        standard_body_count=1 if one_body else 2 if two_body else None,
     )
     if mutation in {"ci_namespaced_class_changed_restored", "ci_scroll_widget_namespaced"}:
         original_observer_script = younganimal_adapter_module.OBSERVER_INIT_SCRIPT
@@ -3484,6 +3530,7 @@ async def test_younganimal_native_post_python_mutation_stops_without_saving_page
             "layoutAvailable": expected_layout_available,
             "layoutVariant": (
                 None if not expected_layout_available
+                else "top_empty_no_pr_odd_body" if no_top_pr_odd
                 else "top_empty_no_ci" if no_ci_profile else "standard_odd_body"
             ),
             "activeSlots": [] if expected_layout_available else None,

@@ -416,6 +416,66 @@ canvas state fail closed. A second exact-free live work exposed a distinct top-e
 
 The top-empty profile's slot 1 is recognized only at max seek with the exact root flag, exact blank classes, no canvas, centered wrapper, and first/top-PR markers. The adapter makes one ordinary public seek step to `max - step` and requires both first body canvases ready before capture; it never skips a page by subtracting a wrapper count. Known initial body-loading classes remain unready and cannot produce a capture. Unknown wrapper variants fail closed.
 
+The one-page bonus episode `ccae6b96885d7` (Item/Source 35233) has seven wrappers
+and range min=1/max=7/step=2. Its `standard_one_body` map is top PR 0, body 1,
+CI 2, PR 3-4, Good 5, Last 6. Unlike the two-body shape below, seeks 5 and 3
+are interstitial CI/PR and PR/Good pairs, and seek 1 centers only Last with
+Last-only flags. Seek 7 centers top PR/body 1 with first+top-PR; 5 requires
+CI+PR and 3 requires PR. Both short shapes require the same exact horizontal/
+spread/RTL and PR/CI/Good capabilities, no top-empty/vertical/single modes,
+known body classes, exact non-body roles without canvases, and all selected
+centers and phases. A unique visible/centered Last marker and full captured
+body coverage remain mandatory. Fewer than seven wrappers and unproven short
+shapes fail closed.
+
+Python observation, native proof, and CI geometry distinguish the one- and
+two-body variants; their shared short-layout helper derives CI/tail positions
+from the proven body count. The one-page isolated normal Batch completed a
+native 960x1376 WebP, independently equal to source RGBA, through END/ZIP/Catalog
+with max_pages=1. No retry, timeout increase, blank skip or weaker source/replay
+proof was introduced.
+
+The two-page bonus episode `9f869e61ae122` (Item/Source 35228) has only eight
+wrappers, below the old generic minimum of nine. `standard_two_body` supports
+this exact shape: top PR 0, body 1-2, CI 3, PR 4-5, Good 6, Last 7; range
+min=1/max=7/step=2. It requires horizontal/spread/RTL and PR/CI/Good capabilities,
+absent top-empty/vertical/single modes, exact role classes, contiguous known body
+states, and zero non-body canvases. Other incomplete or unknown short layouts
+remain unsupported.
+
+All selected centers and phase flags must match: seek 7 selects top PR/body 1
+with first+top-PR; 5 selects body 2/CI with CI+PR; 3 selects both PRs with PR;
+1 selects Good/Last with Last+PR and the unique visible/centered terminal marker.
+Both body pages are required before END. Python parsing, native proof and CI
+mutation geometry recognize the same narrow profile, retaining source/replay,
+identity/write/epoch, final geometry, byte bounds, and coverage checks. The live
+isolated normal Batch completed both 960x1376 native WebP pages, independently
+equal to source RGBA, through END/ZIP/Catalog; its max_pages was exactly two.
+No retry, generic blank skip or timeout increase was introduced.
+
+The no-top-PR layout also has an independently observed odd-body variant on
+`fe0edd24d59ae` (Item/Source 35225, 藍より青し / 第一話 縁ーえにしー).
+`top_empty_no_pr_odd_body` requires the positive top-empty flag but no extra blank
+slot: slot 0 is exactly `-cv-page mode-empty`, body 1..B is contiguous, B=N-6 is
+odd and at least three, and the exact five-slot tail is CI/PR/PR/Good/Last without
+canvases. Horizontal/spread/RTL and PR/CI/Good capabilities must be present;
+vertical/single modes are forbidden. Seek is min=1/max=N/step=2, distinct from
+the existing even-body no-top-PR layout's max=N-1.
+
+All selected wrapper centers and phases must match: maximum has first-only;
+body pairs have no phase flags; seek 5 is CI/PR with CI+PR flags; seek 3 is PR/Good
+with PR; minimum is Last-only with its unique visible, centered marker. No body
+is skipped at initialization, and every body must be captured before END. The
+live sample has B=29/N=35; these counts and episode IDs are not allowlisted.
+Python parsing, capture geometry, and native proof use the same mapping. Only
+draw-time observation may precede final CSS translation, under existing node,
+dimension, generation/write, source/replay and full pixel checks. Selection and
+postproof still require final centers. An isolated normal Batch completed all
+29 native 960x1364 WebP pages with independent source RGBA equality, END, ZIP
+and Catalog checks. An earlier audit observed a permitted PNG fallback for an
+unproven first-page source; native availability is not guaranteed during loading.
+No retry, public-seek refresh, timeout increase or proof relaxation was added.
+
 The observed episode `24c5d5dae77b0` additionally has 18 wrappers with max seek 17,
 top PR at 0, an exact blank at 1, eleven body slots 2-12, CI 13, PR 14-15, Good 16,
 and Last 17. The top-empty profile now accepts this shorter odd-body family only with an
@@ -451,6 +511,24 @@ source/draw/replay proof. Unknown layouts continue to fail closed. Isolated norm
 Batch verification of 34211 completed all six 960x1364 native WebP pages through
 END/ZIP/Catalog, with independent source RGBA equality and no checkout attempt,
 using its existing grant. The normal Catalog and archives were not changed.
+
+Episode `be702296e543c` (Item/Source 35579) exposes a separate three-PR tail:
+top PR 0, body 1-10, CI 11, PR 12-14, Good 15, Last 16; seek min=1/max=17/step=2.
+`standard_three_pr` requires the same exact horizontal/spread/RTL, PR/CI/Good,
+lead/body/no-tail-canvas and absent top-empty/vertical/single contracts as the
+single-PR family, with even derived body B=N-P-4>=4 and exactly P=3 trailing PRs.
+The explicit PR-tail proof helper supports P=1 and P=3; it does not infer support
+for arbitrary PR counts or unobserved role sequences.
+
+Its final single body/CI is at seek P+4=7 with CI+PR flags. Seeks 5 and 3 select
+PR/PR then PR/Good with PR-only flags; seek 1 centers only Last with Last-only
+and a unique visible/centered marker. Maximum has first+top-PR, intermediate body
+pairs have no phase flags, and every selected center is checked. Python/native/
+CI geometry derive the same role positions, preserve source/replay and frozen
+body coverage, and require final geometry at selection/postproof. An isolated
+normal Batch completed all ten native 960x1364 WebP pages, independently equal
+to source RGBA, through END/ZIP/Catalog using its existing grant with no checkout.
+No retry, deadline increase, PNG fallback change or access-resource change was made.
 
 Readiness timeouts now retain the bounded parser rejection text (up to 256 characters) in
 `adapter_debug.capture.viewer_readiness.last_error_message` and the console/metrics error.

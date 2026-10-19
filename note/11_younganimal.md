@@ -2,6 +2,375 @@
 
 ## Current verification snapshot (2026-10-19)
 
+### Three trailing PRs: Item/Source 35579
+
+Normal Batch run `f067d1301504474a9f87c5aa63d1b0cf` failed on episode
+`be702296e543c` (work `b10a2a258e602`, ナナとカオル / 第100話 失われた誇り①-1)
+before Capture in 22.836 seconds with `PR/Good/Last tail roles changed`.
+HTTP 403/429/5xx, challenges/CAPTCHA, and retries were all zero. Saved HTML:
+`output/batch/younganimal/item-35579-source-35579-20261019T202845772787+0900-f6b94f78787842cc992092aa87133770/diagnostics/`.
+Its fully formed seventeen-wrapper Viewer has **three** trailing PR wrappers.
+The old parser supported one-PR and two-PR sequences, so waiting could not fix
+the rejection. The extra PR also moves the final body/CI seek from 5 to 7.
+
+The bounded metadata-only shared-CDP probe
+`output/younganimal-layout-35579-probe-20261019/report.json` reproduced the old
+rejection through six seconds, verified every public seek 17..1 by -2 and rewound
+to 17. It blocked 37 mutating requests with zero checkout attempts. Exact roles:
+top PR 0, body 1-10, CI 11, PR 12-14, Good 15, Last 16.
+
+| Seek | Centered wrappers | Phase flags | Role |
+|---|---|---|---|
+| 17 | 0, 1 | first + top-PR | top PR + first body |
+| 15..9 by -2 | 2/3..8/9 | none | body pairs |
+| 7 | 10, 11 | CI + PR | final body + CI |
+| 5 | 12, 13 | PR | first two PRs |
+| 3 | 14, 15 | PR | third PR + Good |
+| 1 | 16 | Last only | unique visible/centered Last marker |
+
+`standard_three_pr` now recognizes this family with exactly P=3 PRs, derived
+even B=N-P-4>=4, exact top-PR lead, contiguous known body classes and exact
+CI/PR/PR/PR/Good/Last tail without canvases. The positive horizontal/spread/RTL
+and PR/CI/Good capabilities are mandatory; top-empty/vertical/single are forbidden.
+Seek is min=1/max=N/step=2. The shared PR-tail helpers explicitly support P=1
+and P=3, preserving the existing `standard_single_pr` variant, and derive CI,
+every PR, Good, Last and final-body seek P+4 from P. An arbitrary PR count is
+not accepted. The two-PR and other profile guards are retained. Every selected
+center and phase must match, the Last marker must be unique/visible/centered,
+and all frozen contiguous body slots are still required before END.
+
+Python parsing, native JS proof and CI mutation geometry share this role map.
+Existing draw-time immutable source, full-frame fractional draw replay, paint,
+node identity, dimensions, generation/write, byte bounds, pure same-size
+translation and full RGBA checks remain. Source draw observation may precede
+settled centers under that existing proof; selection/postproof require the exact
+final geometry. CI widget mutation exceptions retain the disjoint/contained
+active-body geometry and capture-epoch proof. No retry, timeout increase, generic
+blank skip, PNG fallback change or access-resource change was introduced.
+
+Isolated standard CLI Batch evidence is `output/ya35579-live/report.json` and
+`postflight.json`. Read-only SQL copied exactly this source into a private Catalog
+with an empty Watchlist, preserving its grant through 2026-10-22T07:29:57+09:00.
+Planner selected direct=1/quota=0. Standard Executor/Runner/packager/metrics used
+shared CDP, an owned Page, max_pages=10, a mutating-request blocker and independent
+draw-time source audit. All ten ordered physical body slots were native 960x1364
+WebP, every RGBA byte equal to source, and six captures reached END and produced
+a CRC-valid ten-member WebP ZIP with isolated Item completed. This proves decoded
+source equality, not transport-byte identity. Artifact hash and size matched:
+5,605,663 bytes, `ec86bcd185ddf8e63ca666450a843e4e6e9132bb1096b1f56aeb80d4dac6c0de`.
+SQLite integrity_check returned ok. Metrics run `f5d25350cc91413ca2d025f1c3993b6b`
+completed in 26.953 seconds with 255 requests and zero failed candidates, HTTP
+403/429/5xx, challenges/CAPTCHA, and retries. Thirty-six mutating requests were
+blocked and zero checkout attempts occurred. Only the owned Page closed. The
+normal Catalog's Item 35579 remains pending with its same grant, and normal
+archives were not modified.
+
+Synthetic fixtures now parameterize explicit PR counts while retaining all
+prior default shapes. Coverage includes every live P=3 phase, P=1/P=3 role,
+capability, range, CI-phase and interstitial-phase rejection, bad Last markers,
+direct native rejection and premature END, post-encoding replacement, unsupported
+P=5 rejection, B=10/B=4 source RGBA through Runner/END/ZIP and permitted disjoint
+CI-widget changes at seek 7. The first focused run had 67 passes and one fixture
+failure because its hard-coded invalid max=13 was valid for the new P=3 sample;
+the mutation now changes max relative to the fixture's actual range. Production
+range proof was not changed for that correction.
+
+The final complete affected selection passed **412 cases**, zero failed/skipped/
+deselected, five existing pytest-asyncio deprecation warnings, in 376.09 seconds:
+`tests/unit/test_younganimal_capture.py` and
+`tests/integration/test_younganimal_adapter_browser.py`. Command:
+`.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --basetemp output/ya35579-f
+tests/unit/test_younganimal_capture.py tests/integration/test_younganimal_adapter_browser.py --tb=short`.
+Log: `output/ya35579-tests.txt`. This includes every previously supported capture
+profile, earlier short/odd-body changes and ticket/route diagnostics. Ruff
+(`src tests`) and changed-file diff whitespace checks passed. Full repository,
+unrelated Discovery and standalone Research-helper suites were not rerun for
+this site-local change; complete affected synthetic Unit/browser and bounded
+live metadata/standard Batch verification cover the contract. Core/Catalog/
+access/pacing have no new changes, so `note/00_core.md` needs no synchronization.
+Unobserved PR counts remain unsupported and unproven sources retain the existing
+PNG fallback; the observed verification above produced ten native WebP pages.
+
+### One-body bonus Viewer: Item/Source 35233
+
+Normal Batch run `467bd2ca7d34430d812534a2acacd157` failed on free episode
+`ccae6b96885d7` (work `e594f5430dabe`, 俺は何度でもお前を追放する / おまけ)
+before Capture in 22.380 seconds, with `physical page wrappers are incomplete`.
+HTTP 403/429/5xx, challenges/CAPTCHA, and retries were zero. Saved HTML:
+`output/batch/younganimal/item-35233-source-35233-20261019T180118309347+0900-2635f64bca5f4f1296372ad1ee7d534f/diagnostics/`.
+The fully formed Viewer has only one body page and seven wrappers, below the
+previous eight-wrapper minimum. Its seek max is seven, like the two-body bonus,
+but the tail positions and terminal flags differ. A count-only minimum decrease
+would not establish correct body and END semantics.
+
+The metadata-only shared-CDP probe
+`output/younganimal-layout-35233-probe-20261019/report.json` reproduced the old
+rejection through six seconds, observed every public seek 7/5/3/1 and rewound
+to 7. Thirty-two mutating requests were blocked with zero checkout attempts.
+Exact roles are top PR 0, body 1, CI 2, PR 3-4, Good 5, Last 6:
+
+| Seek | Centered wrappers | Phase flags | Role |
+|---|---|---|---|
+| 7 | 0, 1 | first + top-PR | top PR + only body |
+| 5 | 2, 3 | CI + PR | CI + first PR |
+| 3 | 4, 5 | PR | second PR + Good |
+| 1 | 6 | Last only | unique visible/centered Last marker |
+
+`standard_one_body` now recognizes this exact one-body map, distinct from
+`standard_two_body`. Both require positive horizontal/spread/RTL and PR/CI/Good
+capabilities, absent top-empty/vertical/single modes, exact lead/tail classes,
+known contiguous body states, zero non-body canvases, range min=1/max=7/step=2,
+and every selected center and phase. The shared short-layout JS helper derives
+CI and all tail roles from the one/two body count, and filters the nonexistent
+second centered wrapper at one-body END. Python uses the same map, including
+CI/PR and PR/Good interstitial states; after the sole body is captured, Runner
+seeks to minimum and requires the unique visible/centered Last plus full frozen
+body coverage. Fewer than seven wrappers and unknown short shapes fail closed.
+No episode-ID exception, generic blank skip, retry, timeout increase, or access
+change was introduced. Existing source/full-frame draw, paint, immutable source,
+node identity, dimensions, generation/write, same-size translation, full RGBA
+replay and post-encoding proof remain. Selection/postproof still require final
+centers even where source draws precede final CSS translation.
+
+The isolated standard CLI Batch evidence is `output/ya35233-live/report.json`
+and `postflight.json`. Read-only SQL copied exactly this free source to a private
+Catalog with an empty Watchlist; Planner selected direct=1/quota=0. Standard
+Executor/Runner/packager/metrics used shared CDP and an owned Page, max_pages=1,
+mutating-request blocker and independent draw-time source audit. The single
+output was native 960x1376 WebP, every RGBA byte equal to source, and the run
+reached END, produced a CRC-valid one-member WebP ZIP and marked the isolated
+Item completed. This proves decoded source equality, not transport-byte identity.
+Artifact SHA-256 and size matched: 916,815 bytes,
+`399b54f60ce6d055e152965db2054ae2233e2392ba39ba49fdcbe79ef0c52da7`.
+SQLite integrity_check returned ok. Metrics run `6cc12fcca7e64bbc8f45b24aae33fb64`
+completed in 9.393 seconds with 228 requests and zero failed candidates, HTTP
+403/429/5xx, challenges/CAPTCHA, and retries. Thirty mutating requests were
+blocked, zero checkout attempts occurred, and only the owned Page closed.
+The normal Catalog still has pending Item 35233; normal archives and access
+state were not modified.
+
+Existing synthetic short-profile cases were parameterized for one/two bodies:
+all phases/roles/ranges/centers, missing capabilities, tail canvases, incorrect
+Last markers, direct native rejection, premature END before coverage, post-encode
+replacement, source RGBA, permitted disjoint CI-widget changes, full Runner/ZIP
+completion. The focused selection passed 59 cases, 317 deselected, zero failed/
+skipped, five existing pytest-asyncio deprecation warnings in 13.75 seconds.
+The final complete affected selection passed **376 cases**, zero failed/skipped/
+deselected, five existing pytest-asyncio deprecation warnings, in 274.30 seconds:
+`tests/unit/test_younganimal_capture.py` and
+`tests/integration/test_younganimal_adapter_browser.py`. Command:
+`.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --basetemp output/ya35233-f
+tests/unit/test_younganimal_capture.py tests/integration/test_younganimal_adapter_browser.py --tb=short`.
+Log: `output/ya35233-tests.txt`. The short basetemp avoids the previously observed
+Windows diagnostic temporary-path limit. This selection includes the preceding
+odd-body and two-body changes and existing ticket/route/capture behavior. Ruff
+(`src tests`) and changed-file diff whitespace checks passed. Full repository,
+unrelated Discovery and standalone Research-helper suites were not rerun for
+this site-local change; synthetic Unit/browser plus bounded live metadata and
+standard Batch verification cover the changed contract. Core/Catalog/access/
+pacing have no new changes; `note/00_core.md` needs no synchronization. Unknown
+short layouts still fail closed, and unproven sources retain the existing PNG
+fallback; the verified run above produced native WebP.
+
+### Two-body bonus Viewer: Item/Source 35228
+
+Normal Batch run `287fd51f31e24502b80dfe34b85b0c41` failed on free episode
+`9f869e61ae122` (work `e594f5430dabe`, 俺は何度でもお前を追放する / おまけ).
+It failed before Capture in 22.112 seconds with `physical page wrappers are
+incomplete`; HTTP 403/429/5xx, challenges/CAPTCHA, and retries were all zero.
+The saved HTML is under
+`output/batch/younganimal/item-35228-source-35228-20261019T173419871705+0900-ba1739668c7c44579189f4869935363e/diagnostics/`.
+It has a fully formed eight-wrapper two-body layout and seek max 7. The generic
+Python and native/CI layout guards required nine wrappers, so waiting longer
+could not resolve the rejection.
+
+The bounded metadata-only shared-CDP probe
+`output/younganimal-layout-35228-probe-20261019/report.json` reproduced the rejection
+through six seconds and checked all public seeks 7/5/3/1, then rewound to 7.
+It blocked 32 mutating requests with zero checkout attempts. The exact roles
+are top PR 0, body 1-2, CI 3, PR 4-5, Good 6, Last 7:
+
+| Seek | Centered wrappers | Phase flags | Role |
+|---|---|---|---|
+| 7 | 0, 1 | first + top-PR | top PR + first body |
+| 5 | 2, 3 | CI + PR | second body + CI |
+| 3 | 4, 5 | PR | both PRs |
+| 1 | 6, 7 | Last + PR | Good + unique visible/centered Last |
+
+The minimum wrapper guard now admits eight only through explicit
+`standard_two_body` proof: horizontal/spread/RTL and PR/CI/Good capabilities,
+no top-empty/vertical/single modes, exact top-PR lead and five-tail roles,
+exact two-body interval with known loading/rendered classes, zero non-body
+canvases, range min=1/max=7/step=2, and every observed center/phase. Unknown
+short layouts still fail closed; the separately verified seven-wrapper one-body
+profile is documented above. Python parsing,
+native layout proof and CI geometry agree on the new variant. Initialization
+captures body 1; seek 5 captures body 2; END still requires both frozen body
+slots and the unique visible/centered terminal marker. Existing source/draw,
+node/paint/write/generation, immutable snapshot, full RGBA replay, same-size
+translation, byte limits and post-encoding proof remain. Draw-time binding may
+precede final CSS translation only under that existing proof; selection and
+postproof require the exact final centers. No retry, extra navigation, deadline
+increase, generic blank skip, or access-policy change was introduced.
+
+The isolated standard CLI Batch evidence is `output/ya35228-live/report.json`
+and `postflight.json`. Read-only SQL copied only this free source into a private
+Catalog and empty Watchlist. Standard Planner/Executor/Runner/packager/metrics
+ran through shared CDP with direct=1/quota=0, max_pages=2, an owned Page, mutating
+request blocker and independent draw-time source audit. Both physical body
+slots were native 960x1376 WebP, every RGBA byte equal to source; the run reached
+END, created a CRC-valid two-member WebP ZIP and marked the isolated Item
+completed. This is decoded source equality, not transport-byte preservation.
+Artifact hash and size matched: 664,227 bytes,
+`3473687fceaf27dc580ce4aac3099b994fd02be73e7232de0d5d3165223929c6`.
+SQLite integrity_check returned ok. Metrics run `4733748f40cf4162881126e63e01c572`
+completed in 10.858 seconds with 232 requests and zero failed candidates,
+HTTP 403/429/5xx, challenges/CAPTCHA, and retries. Thirty-one mutating requests
+were blocked, zero checkout attempts occurred, and only the owned Page closed.
+The normal Catalog's Item 35228 remains pending; normal archives and access
+state were not modified.
+
+Synthetic tests cover all four phases, exact roles/capabilities/range/centers,
+invalid Last markers, native collector rejection, premature END before coverage,
+post-encoding replacement rejection, source RGBA for both captures, disjoint CI
+widget changes, and Runner/ZIP completion. The initial fixture audit expected
+rendered slot 3 even though it is CI in this profile; it was corrected to audit
+the two actual body slots, without changing production. The focused final
+selection passed 32 cases, 317 deselected, zero failed/skipped, five existing
+pytest-asyncio deprecation warnings (8.60 seconds).
+
+The final complete affected selection passed **349 cases**, zero failed/skipped/
+deselected, five existing pytest-asyncio deprecation warnings, in 268.27 seconds:
+`tests/unit/test_younganimal_capture.py` and
+`tests/integration/test_younganimal_adapter_browser.py`. Command:
+`.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --basetemp output/ya35228-f
+tests/unit/test_younganimal_capture.py tests/integration/test_younganimal_adapter_browser.py --tb=short`.
+Log: `output/ya35228-tests.txt`. The short basetemp avoids the Windows temporary
+path-length problem documented in the previous snapshot. This full selection
+includes the preceding no-top-PR odd-body fix and the existing ticket/route cases;
+no test assertion was relaxed for path length. Ruff (`src tests`) and changed-file
+diff whitespace checks passed. Full repository, unrelated Discovery, and standalone
+Research-helper suites were not rerun for this site-local capture change; synthetic
+Unit/browser and isolated live metadata/Batch verification cover the changed
+contract. Core/Catalog/access/pacing have no changes in this fix, so
+`note/00_core.md` needs no additional synchronization. Other unobserved short
+profiles remain unsupported, and the existing unproven-source PNG fallback remains.
+
+### No top PR with odd body: Item/Source 35225
+
+Normal Batch metrics run `e05e23b6032f48abae61244b307bbdc4` failed on free episode
+`fe0edd24d59ae` (work `7103c2c1e9f08`, 藍より青し / 第一話 縁ーえにしー).
+It stopped before Capture in 22.214 seconds with the seek-range rejection and zero
+HTTP 403/429/5xx, challenge/CAPTCHA, or retries. The saved HTML at
+`output/batch/younganimal/item-35225-source-35225-20261019T171042252727+0900-29f20c42b35045e686e5123d984bb9b3/diagnostics/`
+has 35 wrappers, seek max 35, positive top-empty capability, and exact empty/no-PR
+slot 0. The former `top_empty_no_pr` branch required max=N-1; this odd-body
+variant instead requires max=N. It is a structural mismatch, not slow loading.
+
+The metadata-only shared-CDP probe
+`output/younganimal-layout-35225-probe-20261019/report.json` confirmed the range
+rejection through six seconds and observed every public seek from 35 through 1,
+then rewound to 35. It blocked 32 mutating requests with zero checkout attempts.
+The exact map is empty lead 0, body 1-29, CI 30, PR 31-32, Good 33, Last 34:
+
+| Seek | Centered wrappers | Phase flags | Role |
+|---|---|---|---|
+| 35 | 0, 1 | first only | empty lead + first body |
+| 33..7 by -2 | 2/3..28/29 | none | fourteen body pairs |
+| 5 | 30, 31 | CI + PR | CI + first PR |
+| 3 | 32, 33 | PR | second PR + Good |
+| 1 | 34 | Last only | unique visible/centered Last marker |
+
+`top_empty_no_pr_odd_body` now derives B=N-6, odd and at least three, with exact
+empty lead and five-tail classes, contiguous known body states, and zero non-body
+canvases. It requires top-empty, horizontal/spread/RTL, and PR/CI/Good capabilities;
+vertical/single modes are forbidden. Range is min=1/max=N/step=2. All selected
+centers and phase flags must match, including visible/centered unique Last, and
+the frozen complete body interval is still required before END. The count 29,
+wrapper count 35, and episode ID are not production exceptions. The even-body
+no-top-PR profile retains max=N-1; standard odd-body behavior retains its top PR.
+Python observation, native layout proof, and CI geometry use the same mapping.
+Existing exact odd-body helpers now accept an explicit no-top-PR mode; default
+calls preserve the former standard profile. CI scroll-widget exceptions still
+require the existing disjoint/contained active-body geometry and epoch proof.
+
+For this explicit no-top-PR odd family only, draw-time source binding may precede
+final CSS translation. The draw-time route/seek/role, source/full-frame draw,
+nodes, dimensions, generation/write/context and immutable source snapshot gates
+remain. Selection/postproof require exact final centers and the existing same-size
+pure translation plus full replay RGBA. The bounded draw trace
+`output/younganimal-png-investigation-35225-20261019/report.json` observed incoming
+2/3 draws at seek 33 while centers were still 0/1, then native capture of that
+pair. No new retry, timeout increase, public-seek refresh, blank skip or weaker
+source/pixel proof was introduced.
+
+The first isolated auditing Batch in
+`output/younganimal-no-top-pr-odd-batch-live-20261019/report.json` parsed the new
+layout but stopped at its audit assertion because the first native candidate was
+missing/stale and production returned the permitted rendered PNG. That attempt
+is not successful native verification. The separate bounded draw trace saw early
+draws with no proven native layout, followed by a later proven redraw of slot 1
+and native 1/2/3 capture. Which initial layout condition was incomplete is UNKNOWN;
+native availability at load is not guaranteed. Production still falls back for
+an unproven source, rather than inferring provenance or reusing a stale snapshot.
+
+The final independent normal CLI Batch evidence is
+`output/younganimal-no-top-pr-odd-batch-live-20261019-attempt2/report.json` and
+`postflight.json`. Read-only SQL copied exactly this free source into an isolated
+Catalog with an empty Watchlist. Standard Planner selected direct=1/quota=0, and
+Executor/Runner/packager/metrics used shared CDP and an owned Page. The auditing
+Adapter compared all outputs to independent draw-time source copies. It completed
+29 ordered native 960x1364 WebP pages (fifteen captures), every RGBA byte equal to
+source, reached END, produced a 29-member CRC-valid WebP ZIP, and marked the
+isolated Item completed. This is decoded source equality, not transport-byte
+preservation. ZIP SHA-256 and size matched Artifact: 16,677,529 bytes,
+`8682f22c93ffa07062a1b6a174c0575ac1b79e3ca39b321de28ba650ee705903`.
+SQLite integrity_check returned ok. Metrics run `532e5c30b234450d8e474b0790e24fdd`
+completed in 50.071 seconds with 254 requests and zero failed candidates, HTTP
+403/429/5xx, challenges/CAPTCHA, and retries. Thirty mutating requests were blocked;
+zero checkout attempts were observed. The normal Catalog still has pending Item
+35225; normal archives and access state were not modified. Only the owned Page
+was closed.
+
+Synthetic regressions cover both top-PR/no-top-PR odd profiles, B=29 metadata,
+all phases and exact roles/centers, missing capabilities/halves, invalid Last,
+direct native collector rejection, B=7 and B=3 full native pixel/END/ZIP runs,
+incoming draws before translation, disjoint CI-widget changes, post-encoding
+replacement and premature terminal seek. The focused selection passed 38 cases,
+283 deselected, zero failed/skipped, five existing pytest-asyncio deprecation
+warnings (6.60 seconds).
+
+The complete affected selection exercised 321 cases: 319 passed and two existing
+route-diagnostic tests failed to find metadata.json (265.76 seconds, five existing
+warnings, zero skipped). Command:
+`.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --basetemp
+output/younganimal-no-top-pr-odd-final-pytest-20261019
+tests/unit/test_younganimal_capture.py tests/integration/test_younganimal_adapter_browser.py --tb=short`.
+Log: `output/younganimal-no-top-pr-odd-final-tests-20261019.txt`.
+
+Both failures were reproduced with the long basetemp, then both passed unchanged
+in 3.61 seconds with short basetemp `output/ya35225-r`, using the exact two test
+node IDs: `test_younganimal_unknown_ticket_route_persists_first_failure_before_click`
+and `test_younganimal_work_ticket_route_drift_after_proof_keeps_consumption_pending`
+in `tests/integration/test_younganimal_adapter_browser.py`. Zero failed/skipped,
+five existing warnings. A bounded synthetic atomic-write probe in the long failed
+directory confirmed FileNotFoundError for the sibling `.path-probe.json.tmp`
+(destination absolute path length 260, temporary path longer); evidence is
+`output/younganimal-35225-path-probe-20261019.json`. This is the Windows path-length
+limit of the chosen test directory, not a Viewer or route-decision regression.
+Use a short basetemp for future runs. No production filesystem or diagnostic
+change, test assertion relaxation, or additional site retry was made. All 321
+affected cases therefore have passing evidence across the full selection and
+the two-case short-path recheck; this is not one clean 321-case invocation.
+
+Ruff (`src tests`) and diff whitespace checks passed. Full repository, unrelated
+Discovery and standalone Research-helper suites were not rerun for this site-local
+Viewer/capture change; synthetic Unit/browser tests and bounded live metadata,
+draw-trace, and standard Batch verification cover the changed contract. Shared
+Core, Catalog, access policy and pacing are outside this change, so no additional
+`note/00_core.md` update is needed. The initial native audit's missing-candidate
+limitation above remains: no guarantee of native availability during loading.
+
 ### Single trailing PR Viewer: Item/Source 34211
 
 Normal Batch run `e05dba45a6f54557b94b47264e9a3401` stopped on episode
@@ -800,6 +1169,34 @@ five-tail roles, and derived odd body B>=3. It checks every selected center and 
 seek 5 is last body+CI, seek 3 is PR/PR, and seek 1 is Good/Last with Last+PR.
 Item 33100's eleven-body live verification and bounds are recorded in the current snapshot.
 
+### One-body standard layout
+
+`standard_one_body` is the verified seven-wrapper shape: top PR 0, body 1,
+CI 2, PR 3-4, Good 5, Last 6, range min=1/max=7/step=2. It requires the same
+positive horizontal/spread/RTL and PR/CI/Good capabilities and exact role/no-tail-
+canvas proof as the two-body profile, without top-empty/vertical/single modes.
+Every selected center and phase is checked: 7 first/top-PR with body 1, 5 CI/PR
+with CI+PR, 3 PR/Good with PR, 1 Last-only with a unique visible/centered marker.
+END requires the sole frozen body slot to have been captured. The shared native
+and CI geometry helpers distinguish the one/two body maps while retaining strict
+source/replay, identity/write/epoch, disjoint CI geometry and final-center proofs.
+The current snapshot records max_pages=1 live source RGBA/ZIP/Catalog validation
+and parameterized rejection tests. Unproven shorter/other shapes remain unsupported.
+
+### Two-body standard layout
+
+`standard_two_body` admits exactly the observed two-body/eight-wrapper shape
+with range min=1/max=7/step=2, top PR 0, body 1-2, CI 3, PR 4-5, Good 6 and
+Last 7. The root must be horizontal/spread/RTL with PR/CI/Good capabilities,
+without top-empty/vertical/single flags; every role class and non-body no-canvas
+condition must hold. Every phase and selected center is checked: 7 first/top-PR,
+5 second body/CI with CI+PR, 3 both PRs with PR, 1 Good/Last with Last+PR and a
+unique visible/centered Last marker. Both body slots are required before END.
+Native capture and CI mutation exceptions use this same map and existing strict
+source/replay and disjoint geometry proofs. No arbitrary short/incomplete layout
+is accepted. The current snapshot records the two-page source RGBA/ZIP/Catalog
+live verification with max_pages=2 and the synthetic rejection/coverage tests.
+
 ### Horizontal layout with one trailing PR
 
 `standard_single_pr` supports the separately observed four-tail CI/PR/Good/Last shape,
@@ -814,6 +1211,39 @@ same source/replay/identity/mutation proof. CI widget mutations require the exis
 strict disjoint geometry checks using the derived CI index. Live B=6/N=11 evidence for
 Item 34211 and synthetic B=4 coverage are recorded above. Other unknown shapes remain
 unsupported; neither counts nor episode IDs are allowlisted.
+
+### Horizontal layout with three trailing PRs
+
+`standard_three_pr` uses a top-PR lead, contiguous even body B=N-P-4>=4,
+CI, exactly P=3 empty PR wrappers, Good and Last; range is min=1/max=N/step=2.
+It requires horizontal/spread/RTL and PR/CI/Good capabilities with no top-empty/
+vertical/single flags, exact non-body classes and no canvases. The shared PR-tail
+proof helper supports explicit P=1/P=3 only and derives all role indices and
+final body/CI seek P+4. For P=3, seek 7 is final body/CI with CI+PR, seeks 5/3
+are PR/PR then PR/Good with PR, and 1 centers only Last with Last-only and a
+unique visible/centered marker. Initial maximum and body-pair flags/centers are
+also exact. END still requires complete frozen body coverage. Native source/
+replay, identity/write/epoch and CI disjoint-geometry checks remain. The current
+snapshot records existing-grant live B=10 evidence, synthetic B=4/B=10 captures
+and rejection of unobserved PR counts and incorrect CI/interstitial phases.
+
+### Horizontal no-top-PR layout with odd body
+
+`top_empty_no_pr_odd_body` uses the positive top-empty flag and an exact empty
+slot 0 without PR markers or a second blank. It has contiguous odd body B=N-6>=3
+and exact CI/PR/PR/Good/Last tail with no canvases, horizontal/spread/RTL and
+positive PR/CI/Good capabilities, and no vertical/single modes. Range is
+min=1/max=N/step=2, whereas the existing even-body no-top-PR layout uses max=N-1.
+At maximum the lead and body 1 are selected with first-only; intermediate seeks
+through 7 select body pairs without phase flags. Seeks 5/3 select CI/PR then
+PR/Good with CI+PR then PR flags, and 1 selects only Last with Last-only and a
+unique visible/centered terminal marker. Every selected center is checked. END
+requires complete frozen body coverage; no initial blank skip is inferred.
+Native capture keeps exact source/replay/node/write/epoch proof and requires
+final centers at selection/postproof, even when the incoming draw occurs before
+translation. Unproven native candidates retain the existing rendered fallback.
+The current snapshot records B=29/N=35 live evidence, all source RGBA/ZIP/Catalog
+checks, initial audit limitations, synthetic B=3/B=7 tests, and unsupported shapes.
 
 ### Horizontal top-empty layout without a CI slot
 
