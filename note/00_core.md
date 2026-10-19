@@ -1,5 +1,20 @@
 # 00. Core 現行実装ノート
 
+## Resource pass stop after successful consumption (2026-10-19)
+
+`AccessConsumption.stop_resource_pass` is an optional, default-false site-owned
+signal. Executor forwards it to normal/grant-only success results only for
+matching confirmed consumption with an aware timestamp and observed-commit
+semantics. CLI finishes the successful result and closes the owned Page, then
+ends the resource pass without another Page or inter-candidate delay. Current
+packaging, Item completion and grant persistence run before this stop. Errors
+retain their existing failure paths. Pre-consumption exhaustion/unknown uses
+the existing `AccessResourceUnavailableError.stop_resource_pass` mechanism.
+No balance is stored in Catalog; Core/CLI interpret no site/resource names.
+Magapoke uses this for a confirmed last Premium Ticket. Other adapters keep
+the default behavior. Normal, grant-only and 9,000-candidate stop cases are
+covered by local tests; the ticket-consuming last-ticket path is not live-run.
+
 ## Optional native expiry on observed resource consumption (2026-10-17)
 
 `AccessConsumption` retains its existing `consumed`, `resource`, and aware

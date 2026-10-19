@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -272,6 +273,8 @@ class MagapokeAdapter(SiteAdapter):
         self._access_strategy: AccessStrategy = "auto"
         self._quota_resource: str | None = None
         self._access_consumption = AccessConsumption()
+        self._premium_target_url: str | None = None
+        self._premium_preflight_count: int | None = None
         self._initial_url: str | None = None
         self._initial_parts: MagapokeUrlParts | None = None
         self._source_episode: MagapokeUrlParts | None = None
@@ -312,6 +315,8 @@ class MagapokeAdapter(SiteAdapter):
             )
         self._access_strategy = access_strategy
         self._access_consumption = AccessConsumption()
+        self._premium_target_url = None
+        self._premium_preflight_count = None
         self._confirmation_trace = []
         self._confirmation_poll_count = 0
         self._confirmation_started_monotonic = None
@@ -346,6 +351,40 @@ class MagapokeAdapter(SiteAdapter):
 
     def get_access_consumption(self) -> AccessConsumption:
         return self._access_consumption
+
+    def resolve_initial_navigation_url(self, source_url: str) -> str:
+        # An episode may hide both the Premium button and balance at zero.
+        # Read the account's semantic balance before opening any episode.
+        if self._access_strategy == "quota" and self._quota_resource == "premium_ticket":
+            self._premium_target_url = source_url
+            return "https://pocket.shonenmagazine.com/my/setting"
+        return source_url
+
+    async def _check_premium_account_balance(self, page: Page) -> None:
+        panel = page.locator("dl.p-my-setting__data--ticket:visible")
+        try:
+            await panel.first.wait_for(state="visible", timeout=self.page_change_timeout_ms)
+            if await panel.count() != 1:
+                raise ValueError("ambiguous Premium account balance")
+            label = panel.locator("dt.p-my-setting__data-ttl")
+            value = panel.locator("dd.p-my-setting__data-point")
+            if await label.count() != 1 or await value.count() != 1:
+                raise ValueError("unexpected Premium account balance structure")
+            if self._normalized_access_text(await label.inner_text()) != _PREMIUM_TICKET_LABEL:
+                raise ValueError("unexpected Premium account balance label")
+            text = (await value.inner_text()).strip()
+            if re.fullmatch(r"[0-9]+", text) is None:
+                raise ValueError("malformed Premium account balance")
+            count = int(text)
+        except (PlaywrightError, ValueError) as exc:
+            raise AccessResourceUnavailableError(
+                "premium_ticket_balance_unknown", stop_resource_pass=True
+            ) from exc
+        self._premium_preflight_count = count
+        if count == 0:
+            raise AccessResourceUnavailableError(
+                "premium_ticket_exhausted", stop_resource_pass=True
+            )
 
     def _record_confirmation_trace(self, record: dict[str, Any]) -> None:
         self._confirmation_trace.append(record)
@@ -866,6 +905,12 @@ class MagapokeAdapter(SiteAdapter):
             }
         )
         await self._confirm_ticket_consumption(page, resource="premium_ticket")
+        if count == 1 or self._premium_preflight_count == 1:
+            # The requested debit is now confirmed. Do not open another page to
+            # rediscover exhaustion; first let this capture/grant finish normally.
+            self._access_consumption = replace(
+                self._access_consumption, stop_resource_pass=True
+            )
 
     async def _read_premium_ticket_count(self, page: Page) -> int:
         panels = page.locator("dl.p-episode-purchase__point")
@@ -1148,6 +1193,14 @@ class MagapokeAdapter(SiteAdapter):
         return non_empty_canvas_count > 0
 
     async def _initialize_access_entry(self, page: Page) -> list[dict[str, object]]:
+        if self._premium_target_url is not None:
+            await self._check_premium_account_balance(page)
+            target_url = self._premium_target_url
+            self._premium_target_url = None
+            await page.goto(
+                target_url, wait_until="domcontentloaded",
+                timeout=self.page_change_timeout_ms,
+            )
         self._initial_url = page.url
         self._initial_parts = parse_magapoke_url(page.url)
         self._source_episode = self._initial_parts

@@ -308,6 +308,7 @@ class BatchExecutor:
                 status_path=package.status_path,
                 page_count=len(crawl_result.pages),
                 stop_reason=crawl_result.stop_reason,
+                stop_resource_pass=_stop_after_resource_consumption(candidate, adapter),
             )
         except BaseException as exc:
             resource_consumed = _confirmed_grant_consumption(candidate, adapter)
@@ -680,6 +681,7 @@ class BatchExecutor:
                 resource=candidate.quota_resource,
                 resource_consumed=True,
                 stop_reason=crawl_result.stop_reason,
+                stop_resource_pass=_stop_after_resource_consumption(candidate, adapter),
             )
         except BaseException as exc:
             # Preserve current-attempt proof independently of finalization. A
@@ -872,6 +874,14 @@ def _confirmed_grant_consumption(
     except Exception:  # noqa: BLE001 - reporting must preserve the original failure
         return None
     return None
+
+
+def _stop_after_resource_consumption(candidate: BatchCandidate, adapter: SiteAdapter) -> bool:
+    """Forward only a matching, confirmed consumption's pass-stop signal."""
+
+    if _confirmed_grant_consumption(candidate, adapter) is not True:
+        return False
+    return adapter.get_access_consumption().stop_resource_pass
 
 
 def _record_observed_resource_consumption(

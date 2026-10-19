@@ -1943,6 +1943,11 @@ async def _execute_batch_candidates(
                         if grant_only else None
                     ),
                 )
+            if getattr(result, "stop_resource_pass", False):
+                # Keep this candidate successful; exhaustion only prevents the next attempt.
+                continue_after_candidate = False
+                print("  Stopping this resource pass after successful completion.")
+                return attempts, False
         except BatchInterruptedError as exc:
             primary_error = exc
             if grant_report is not None:

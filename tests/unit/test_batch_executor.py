@@ -1095,14 +1095,18 @@ async def test_success_entry_trace_propagates_control_exception_from_write(
         )
 
 
+@pytest.mark.parametrize("stop_pass", [False, True])
 async def test_grant_only_premium_ticket_persists_source_only(
     tmp_path: Path,
+    stop_pass: bool,
 ) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = _add_magapoke_candidate(service, resource="premium_ticket")
     consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
     executor = _make_magapoke_executor(
-        service, AccessConsumption(True, "premium_ticket", consumed_at)
+        service, AccessConsumption(
+            True, "premium_ticket", consumed_at, stop_resource_pass=stop_pass
+        )
     )
 
     result = await executor.execute_grant_only_candidate(
@@ -1111,6 +1115,7 @@ async def test_grant_only_premium_ticket_persists_source_only(
 
     source = service.get_source(candidate.source_id)
     assert result.resource == "premium_ticket"
+    assert result.stop_resource_pass is stop_pass
     assert source.quota_started_at == consumed_at.isoformat()
     assert source.access_granted_until == "2026-09-20T14:12:00+09:00"
     assert service.get_quota_resource_state(
@@ -1240,15 +1245,17 @@ async def test_premium_ticket_consumption_and_later_failure_are_persisted(
     assert service.list_artifacts() == []
 
 
+@pytest.mark.parametrize("stop_pass", [False, True])
 async def test_successful_premium_ticket_candidate_completes_item(
     tmp_path: Path,
+    stop_pass: bool,
 ) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = _add_magapoke_candidate(service, resource="premium_ticket")
     consumed_at = datetime(2026, 9, 22, 22, 25, 33, tzinfo=JST)
     executor = _make_magapoke_executor(
         service,
-        AccessConsumption(True, "premium_ticket", consumed_at),
+        AccessConsumption(True, "premium_ticket", consumed_at, stop_resource_pass=stop_pass),
     )
 
     result = await executor.execute_candidate(
@@ -1257,6 +1264,7 @@ async def test_successful_premium_ticket_candidate_completes_item(
     )
 
     assert service.get_item(candidate.item_id).status == "completed"
+    assert result.stop_resource_pass is stop_pass
     source = service.get_source(candidate.source_id)
     assert source.quota_started_at == consumed_at.isoformat()
     assert source.access_granted_until == "2026-09-25T21:25:33+09:00"

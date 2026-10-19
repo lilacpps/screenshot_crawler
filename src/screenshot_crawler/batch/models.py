@@ -104,6 +104,7 @@ class BatchExecutionResult:
     status_path: Path
     page_count: int
     stop_reason: str
+    stop_resource_pass: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,3 +118,4 @@ class GrantOnlyExecutionResult:
     resource: str
     resource_consumed: bool
     stop_reason: str
+    stop_resource_pass: bool = False

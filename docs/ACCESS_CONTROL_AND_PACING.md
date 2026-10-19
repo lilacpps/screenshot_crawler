@@ -386,6 +386,16 @@ The existing generic `quota_resource` contract remains the starting point:
 - `SiteAdapter.configure_quota_resource(...)` validates/configures that resource before navigation,
 - `AccessConsumption` reports observed resource use.
 
+`AccessConsumption.stop_resource_pass` defaults to false. An adapter may set it
+with matching, timestamped confirmed consumption when the resource pass must
+end after this candidate. Executor forwards it on successful normal and
+grant-only results only with confirmed consumption for the requested resource.
+CLI records/prints the successful completion, then ends the pass without
+opening or pacing another candidate. Capture, packaging and Catalog errors
+retain their existing failure/consumption persistence paths. Expected
+pre-consumption exhaustion still uses `AccessResourceUnavailableError` with
+`stop_resource_pass=True`. No resource names or balance selectors enter Core.
+
 Evolve these extension points rather than creating a parallel Magapoke-only path.
 
 The generic adapter also exposes an optional scalar

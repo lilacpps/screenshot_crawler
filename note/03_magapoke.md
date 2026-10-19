@@ -37,13 +37,14 @@ behavior remain out of scope.
   Premium pass is `premium_ticket_unavailable`.
   A unique exact `Nポイントで購入` action with
   `.c-btn-icon-primary--point` and no ticket/unknown action is also the
-  requested resource's expected unavailable skip. The known external
+  requested resource's expected unavailable skip; Premium entry first requires
+  the positive account preflight described below. The known external
   `無料ポイント獲得` guide is excluded only with its exact text, guide/free-point
   classes, `_blank` target, and observed Skyflag offer-wall URL prefix.
   Neither purchase nor guide is clicked; extra/duplicate/conflicting actions
   remain fatal. This state does not prove prior manual ticket consumption.
 - Existing viewer content is entered without a ticket click. Consumption is
-  reported only after the unique Work Ticket click, control disappearance, and
+  reported only after the unique requested ticket click, control disappearance, and
   viewer canvas content are all observed.
 - `quota_started_at` is written only after observed consumption, using the
   Adapter's aware click/entry timestamp. Magapoke records a conservative
@@ -52,8 +53,9 @@ behavior remain out of scope.
   already-accessible cases do not record quota state.
 - M3c2 adds a `premium_ticket` resource pass after the complete Work Ticket
   pass. It concentrates Premium candidates in the oldest Work first, and
-  re-reads the live semantic balance before every click. The balance is never
-  written to Catalog. A displayed zero stops the Premium pass.
+  checks the semantic account balance before opening each candidate episode,
+  then re-reads the episode balance before every click. The balance is never
+  written to Catalog. Zero or unknown account balance stops the Premium pass.
 - Premium Ticket access uses the same conservative `consumed_at + 71 hours`
   grant as Work Ticket. The complete Premium path, including that grant,
   was live-verified on 2026-09-23.
@@ -67,18 +69,58 @@ behavior remain out of scope.
   `published_at ASC` (NULL last), existing item order, and `source_id DESC`. It keeps
   all selected candidates for an older Work together before moving to a newer
   Work.
-- Before each Premium click, the Adapter reads one exact semantic balance row:
+- Before each Premium candidate episode, `resolve_initial_navigation_url`
+  selects `https://pocket.shonenmagazine.com/my/setting` on the same guarded Page.
+  Exactly one visible `dl.p-my-setting__data--ticket` must contain one
+  `dt.p-my-setting__data-ttl` labeled `プレミアムチケット` and one
+  `dd.p-my-setting__data-point` with an ASCII non-negative integer. Zero yields
+  `premium_ticket_exhausted`; missing/duplicate/malformed/unreadable data yields
+  `premium_ticket_balance_unknown`. Both stop the pass without opening the
+  candidate episode or checking subsequent candidates. A positive balance
+  allows navigation to the original episode URL, which remains source/context
+  identity. The check is repeated per attempted candidate; no positive balance
+  is reused between candidates. It adds one My Page load per positive attempt.
+- Before each Premium click, the Adapter still reads one exact semantic balance row:
   `dl.p-episode-purchase__point`, normalized `dt` label
   `プレミアムチケット`, and `dd` value matching `N枚`. Header count is not
   authoritative. A missing, duplicate, malformed, or structurally ambiguous
   balance fails closed. `0枚` yields `premium_ticket_exhausted`, does not click,
   and stops the Premium pass. A known Work-only screen yields
   `premium_ticket_unavailable` and leaves the Item pending.
+- Confirmed consumption from a balance of one in either account preflight or
+  episode pre-click state sets `AccessConsumption.stop_resource_pass=True`.
+  Executor finishes the capture/ZIP/Item completion or grant-only finalization
+  normally; CLI then stops before any further Page or pacing. The count of one
+  is a conservative current-attempt budget, not a stored account balance.
 - Consumption is reported only after the requested ticket action disappears
   and viewer canvas content is observed. Executor persists the existing
   conservative 71-hour source grant after observed consumption, including
   crawl failures. Premium's use of the same 71-hour grant as Work Ticket is
   now live-verified for the tested production path.
+
+### Zero-balance fix verification (2026-10-19)
+
+The interrupted production log contained 151 `premium_ticket_unavailable`
+results (24,679 HTTP requests including assets). Saved first/last skipped
+screens showed header ticket `0`, point-only purchase and no episode Premium
+balance row, so the old button-dependent zero check was unreachable. Read-only
+CDP verification of `/my/setting` confirmed the semantic Premium label/value
+structure above and `0`, matching the header. The updated Runner/Adapter
+entry-only path returned `premium_ticket_exhausted` with the pass-stop flag;
+its only main-document request was `/my/setting`, with no episode navigation
+or consumption. An isolated ignored verification output was used and the
+normal Catalog was not opened. No resource was clicked. Local
+real-browser tests cover zero/unknown before any episode navigation, positive
+preflight through confirmed entry, and last-ticket stop signaling. Executor/CLI
+tests cover successful completion/grant persistence and no next Page across
+9,000 candidates. A real ticket-consuming 1-to-0 run is intentionally untested.
+Final affected verification: 350 passed, zero skipped (Magapoke Unit/browser,
+Policy, Batch Executor/Planner, CLI, models and browser AccessGuard); Ruff
+`src tests` and `git diff --check` passed. Full-suite execution was interrupted
+in the slow unrelated browser group and is not claimed as passed. Its single
+observed COMICFUZ positive-END test failure did not reproduce on isolated rerun.
+Research/Probe tests were not separately selected; no research implementation
+changed.
 
 ### M3c2 Premium Ticket live verification (2026-09-23)
 
@@ -830,9 +872,12 @@ This current-state section supersedes the older Phase 3 planning sentence.
 
 ### Phase 5 current state: Premium Ticket grant-only and all
 
-Premium grant-only reads the exact live semantic balance immediately before the
-Premium control. A clear zero produces `premium_ticket_exhausted`, closes the
-candidate, and stops the Premium pass without opening later Premium candidates.
+Premium grant-only first reads the exact account balance on My Page before
+opening the episode, then reads its exact semantic balance before the Premium
+control. Zero produces `premium_ticket_exhausted`; unreadable account balance
+produces `premium_ticket_balance_unknown`. Both stop without episode navigation
+or later candidates. A confirmed last-ticket grant finishes and persists before
+the success-result stop flag ends the pass.
 The normal UI's Work Ticket priority is respected: a Work-only or mixed/unknown
 access panel never forces Premium or another purchase control. Confirmed
 Premium consumption uses `policy.access_grant_until(consumed_at)` (the current

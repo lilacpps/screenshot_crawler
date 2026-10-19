@@ -161,12 +161,34 @@ Allowed resource: `work_ticket` only.
 
 Allowed resource: `premium_ticket` only.
 
+- Before opening each candidate episode, navigate the same guarded Page to
+  `/my/setting` and read the account-global semantic Premium balance. Require
+  exactly one visible `dl.p-my-setting__data--ticket`, one
+  `dt.p-my-setting__data-ttl` labeled `プレミアムチケット`, and one
+  `dd.p-my-setting__data-point` containing an ASCII non-negative integer.
+  Zero returns `premium_ticket_exhausted` with `stop_resource_pass=True`;
+  missing, duplicate, malformed or unreadable data returns
+  `premium_ticket_balance_unknown` with the same pass-stop flag. Neither opens
+  the episode or searches other candidates for a balance. AccessGuard remains
+  active across both navigations; the persisted source URL remains the episode.
 - do not intentionally consume a Work Ticket,
 - if normal UI requires/offers Work Ticket and Premium cannot normally be selected, return `premium_ticket_unavailable`,
 - do not manipulate the page to bypass Work Ticket priority,
 - if normal Premium path is exposed, read the live semantic Premium Ticket balance and proceed,
 - a semantic balance of zero stops further Premium attempts for that resource pass,
 - Premium balance is never persisted as Catalog balance.
+- After confirmed consumption from a balance of one (account preflight or
+  immediate pre-click episode balance), report
+  `AccessConsumption.stop_resource_pass=True`. Finish the current capture,
+  packaging and Catalog completion, or the current grant-only finalization,
+  successfully before stopping. Do not open another account or episode Page to
+  rediscover zero. This is a conservative current-attempt stop, not a persisted
+  balance or a positive availability cache.
+
+The account preflight closes the zero-balance UI gap: the site may hide both
+the Premium action and its episode balance row, leaving only point purchase.
+Point-only/Work-only candidate skips apply only after a positive account check.
+Header counts remain diagnostic; they do not authorize spending.
 
 ### 6.3 `all`
 

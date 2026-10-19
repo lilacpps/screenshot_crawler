@@ -100,6 +100,17 @@ async def test_magapoke_quota_accepts_only_ticket_resources() -> None:
         await adapter.configure_quota_resource(object(), "points")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("resource", ["work_ticket", "premium_ticket"])
+async def test_initial_navigation_checks_premium_account_before_episode(resource: str) -> None:
+    adapter = MagapokeAdapter()
+    source = "https://pocket.shonenmagazine.com/title/695/episode/244815"
+    await adapter.configure_run(object(), "quota")
+    await adapter.configure_quota_resource(object(), resource)
+    assert adapter.resolve_initial_navigation_url(source) == (
+        "https://pocket.shonenmagazine.com/my/setting" if resource == "premium_ticket" else source
+    )
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [("0枚", 0), ("1枚", 1), ("8枚", 8), ("123枚", 123), (" 8 枚 ", 8)],

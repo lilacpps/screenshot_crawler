@@ -14,7 +14,8 @@ from screenshot_crawler.core.errors import (
     PageChangeTimeoutError,
     UnsupportedAccessStrategyError,
 )
-from screenshot_crawler.core.models import ContentContext, ContentIdentity
+from screenshot_crawler.core.models import ContentContext, ContentIdentity, RunConfig
+from screenshot_crawler.core.runner import CrawlerRunner
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.magapoke.adapter import (
     _WORK_TICKET_TEXT,
@@ -860,9 +861,11 @@ async def test_premium_only_is_expected_unavailable_without_click(browser_page: 
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("count", [1, 8])
 async def test_premium_ticket_click_requires_semantic_positive_balance_and_confirms(
     browser_page: Page,
     monkeypatch: pytest.MonkeyPatch,
+    count: int,
 ) -> None:
     page = browser_page
     await page.set_content("""
@@ -885,6 +888,9 @@ async def test_premium_ticket_click_requires_semantic_positive_balance_and_confi
         });
       </script>
     """)
+    await page.locator("dd.p-episode-purchase__point-data").evaluate(
+        "(e, count) => e.textContent = count + '枚'", count
+    )
     adapter = MagapokeAdapter()
 
     async def rows(_page):
@@ -899,6 +905,98 @@ async def test_premium_ticket_click_requires_semantic_positive_balance_and_confi
     assert consumption.resource == "premium_ticket"
     assert consumption.consumed_at is not None
     assert consumption.consumed_at.utcoffset() is not None
+    assert consumption.stop_resource_pass is (count == 1)
+
+
+@pytest.mark.parametrize("entry_only", [False, True])
+@pytest.mark.parametrize("balance", ["0", "missing", "duplicate", "malformed", "wrong-label"])
+async def test_premium_account_preflight_stops_before_episode_navigation(
+    browser_page: Page, tmp_path, entry_only: bool, balance: str,
+) -> None:
+    page = browser_page
+    panel = '''<dl class="p-my-setting__data p-my-setting__data--ticket">
+      <dt class="p-my-setting__data-ttl">プレミアムチケット</dt>
+      <dd class="p-my-setting__data-point">0</dd></dl>'''
+    if balance == "missing":
+        panel = "<p>No balance</p>"
+    elif balance == "duplicate":
+        panel *= 2
+    elif balance == "malformed":
+        panel = panel.replace(">0<", ">?<")
+    elif balance == "wrong-label":
+        panel = panel.replace("プレミアムチケット", "ポイント")
+    requests: list[str] = []
+
+    async def route(request):
+        requests.append(request.request.url)
+        await request.fulfill(content_type="text/html; charset=utf-8", body=panel)
+
+    await page.route("https://pocket.shonenmagazine.com/**", route)
+    adapter = MagapokeAdapter()
+    adapter.page_change_timeout_ms = 100
+    config = RunConfig(
+        site="magapoke", source_url="https://pocket.shonenmagazine.com/title/695/episode/244815",
+        output_dir=tmp_path / "capture", diagnostics_dir=tmp_path / "diagnostics",
+        access_strategy="quota",
+        quota_resource="premium_ticket", entry_only=entry_only,
+    )
+    with pytest.raises(AccessResourceUnavailableError) as error:
+        await CrawlerRunner(config).run(page, adapter)
+    assert error.value.reason == (
+        "premium_ticket_exhausted" if balance == "0" else "premium_ticket_balance_unknown"
+    )
+    assert error.value.stop_resource_pass is True
+    assert requests == ["https://pocket.shonenmagazine.com/my/setting"]
+    assert adapter.get_access_consumption().consumed is False
+
+
+@pytest.mark.parametrize(("count", "episode_count"), [(1, 8), (8, 1), (8, 8)])
+async def test_premium_account_preflight_continues_to_confirmed_grant(
+    browser_page: Page, tmp_path, monkeypatch: pytest.MonkeyPatch,
+    count: int, episode_count: int,
+) -> None:
+    page = browser_page
+    requests: list[str] = []
+    source = "https://pocket.shonenmagazine.com/title/695/episode/244815"
+
+    async def route(request):
+        url = request.request.url
+        requests.append(url)
+        if url.endswith("/my/setting"):
+            body = f'''<dl class="p-my-setting__data--ticket">
+              <dt class="p-my-setting__data-ttl">プレミアムチケット</dt>
+              <dd class="p-my-setting__data-point">{count}</dd></dl>'''
+        else:
+            body = f'''<div class="p-episode-purchase">
+              <a class="c-btn-icon-primary--premium-ticket">プレミアムチケットで読む</a>
+              <dl class="p-episode-purchase__point">
+                <dt class="p-episode-purchase__point-ttl">プレミアムチケット</dt>
+                <dd class="p-episode-purchase__point-data">{episode_count}枚</dd></dl></div>
+              <script>document.querySelector('a').onclick=e=>{{
+                e.currentTarget.remove();document.body.insertAdjacentHTML('beforeend',
+                  '<div class="c-viewer__comic"><canvas width="10" height="10"></canvas></div>');
+              }};</script>'''
+        await request.fulfill(content_type="text/html; charset=utf-8", body=body)
+
+    await page.route("https://pocket.shonenmagazine.com/**", route)
+    adapter = MagapokeAdapter()
+
+    async def rows(_page):
+        return [{"pageIndex": 0}] if await page.locator("canvas").count() else []
+
+    monkeypatch.setattr(adapter, "_canvas_rows", rows)
+    config = RunConfig(
+        site="magapoke", source_url=source, output_dir=tmp_path / "capture",
+        diagnostics_dir=tmp_path / "diagnostics", access_strategy="quota",
+        quota_resource="premium_ticket", entry_only=True,
+    )
+    result = await CrawlerRunner(config).run(page, adapter)
+    assert result.entry_confirmed is True
+    assert requests == ["https://pocket.shonenmagazine.com/my/setting", source]
+    assert adapter.get_access_consumption().stop_resource_pass is (
+        count == 1 or episode_count == 1
+    )
+    assert adapter._source_episode.episode_id == "244815"
 
 
 @pytest.mark.asyncio(loop_scope="module")

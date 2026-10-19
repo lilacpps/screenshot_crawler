@@ -21,6 +21,8 @@ class AccessConsumption:
     resource: str | None = None
     consumed_at: datetime | None = None
     access_granted_until: datetime | None = None
+    # Finish the current successful capture/grant before ending this resource pass.
+    stop_resource_pass: bool = False
 
 
 @dataclass(frozen=True, slots=True)

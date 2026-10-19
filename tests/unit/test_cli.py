@@ -1201,9 +1201,11 @@ def test_batch_run_continues_after_work_ticket_unavailable(
     assert "FAILED" not in output.err
 
 
+@pytest.mark.parametrize("last_ticket_completed", [False, True])
 def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    last_ticket_completed: bool,
 ) -> None:
     monkeypatch.setattr(cli.asyncio, "sleep", _no_cli_pacing_wait)
     initial = [
@@ -1218,13 +1220,9 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     ]
     premium = [
         SimpleNamespace(
-            item_id=3, source_id=33, metadata={}, access_strategy="quota",
+            item_id=item_id, source_id=item_id * 11, metadata={}, access_strategy="quota",
             quota_resource="premium_ticket",
-        ),
-        SimpleNamespace(
-            item_id=4, source_id=44, metadata={}, access_strategy="quota",
-            quota_resource="premium_ticket",
-        ),
+        ) for item_id in range(3, 9003)
     ]
     calls: list[int] = []
     plans: list[str | None] = []
@@ -1263,11 +1261,14 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
             self, _page: object, candidate: object, **_kwargs: object
         ) -> object:
             calls.append(candidate.item_id)
-            if candidate.item_id == 3:
+            if candidate.item_id == 3 and not last_ticket_completed:
                 raise cli.AccessResourceUnavailableError(
                     "premium_ticket_exhausted", stop_resource_pass=True
                 )
-            return SimpleNamespace(archive_path=Path(f"item-{candidate.item_id}.zip"))
+            return SimpleNamespace(
+                archive_path=Path(f"item-{candidate.item_id}.zip"),
+                stop_resource_pass=candidate.item_id == 3,
+            )
 
     monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
     monkeypatch.setattr(
@@ -1297,8 +1298,12 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     output = capsys.readouterr()
     assert plans == [None, "premium_ticket"]
     assert calls == [1, 2, 3]
-    assert "reason=premium_ticket_exhausted" in output.out
-    assert "Stopping this resource pass." in output.out
+    if last_ticket_completed:
+        assert "completed: item-3.zip" in output.out
+        assert "Stopping this resource pass after successful completion." in output.out
+    else:
+        assert "reason=premium_ticket_exhausted" in output.out
+        assert "Stopping this resource pass." in output.out
     assert "item=4" not in output.out
     assert "FAILED" not in output.out
 
@@ -2412,6 +2417,59 @@ async def test_batch_empty_candidate_list_has_no_candidate_delay(
         inter_candidate_delay_ms=17,
     ) == (0, True)
     assert called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grant_only", [False, True])
+@pytest.mark.parametrize("stop_reason", ["exhausted", "unknown", "last-ticket"])
+async def test_resource_pass_stops_without_opening_remaining_candidates(
+    monkeypatch: pytest.MonkeyPatch, grant_only: bool, stop_reason: str,
+) -> None:
+    events: list[str] = []
+
+    class Session:
+        async def new_page(self):
+            events.append("open")
+            return object()
+
+        async def close_page(self, page):
+            events.append("close")
+
+    class Executor:
+        def grant_only_skip_reason(self, candidate):
+            return None
+
+        async def execute_candidate(self, page, candidate, **kwargs):
+            events.append("execute")
+            if stop_reason != "last-ticket":
+                raise cli.AccessResourceUnavailableError(
+                    "premium_ticket_" + stop_reason, stop_resource_pass=True
+                )
+            return SimpleNamespace(
+                archive_path=Path("finished.zip"), resource="premium_ticket",
+                resource_consumed=True, stop_resource_pass=True,
+            )
+
+        execute_grant_only_candidate = execute_candidate
+
+    async def sleep(seconds):
+        events.append("sleep")
+
+    monkeypatch.setattr(cli.asyncio, "sleep", sleep)
+    args = SimpleNamespace(
+        output_root=Path("output/batch"), library_dir=Path("output/Books"),
+        max_pages=1000, max_same_content=3, keep_open=False,
+    )
+    candidate = SimpleNamespace(
+        item_id=1, source_id=1, metadata={}, access_strategy="quota",
+        quota_resource="premium_ticket",
+    )
+    result = await cli._execute_batch_candidates(
+        args, Session(), Executor(), [candidate] * 9000,
+        phase="premium", grant_only=grant_only,
+    )
+    assert result == (1, False)
+    assert events == ["open", "execute", "close"]
 
 
 @pytest.mark.asyncio

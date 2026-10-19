@@ -157,6 +157,10 @@ Status: **IMPLEMENTED**.
 - expose Magapoke `premium_ticket` through generic resource support/order,
 - preserve semantic live Premium Ticket balance parsing,
 - stop Premium pass at zero balance,
+- check the semantic account balance before episode navigation, including when
+  zero hides the episode's Premium control/balance; unknown balance stops the pass,
+- finish the confirmed last-ticket candidate successfully, then stop before
+  any further account/episode navigation via the generic success-result flag,
 - preserve Work Ticket priority in normal UI,
 - treat Work-only UI during Premium pass as `premium_ticket_unavailable`,
 - implement Magapoke `all` through generic Work Ticket pass -> replan -> Premium pass,
@@ -171,6 +175,10 @@ Status: **IMPLEMENTED**.
 - Premium-only never consumes Work Ticket,
 - Work Ticket is never bypassed to force Premium,
 - zero balance stops remaining Premium attempts,
+- starting zero/unknown makes no episode requests; 9,000 pending candidates
+  still cause only the first preflight attempt,
+- the last ticket preserves normal completion or grant-only persistence and
+  prevents the next Page and inter-candidate sleep,
 - ambiguous balance/UI fails closed,
 - confirmed Premium grant persists while Item stays pending in grant-only,
 - normal Premium capture/package flow remains unchanged.
