@@ -291,8 +291,9 @@ def inspect_archive(path: str | Path, policy: ArchivePolicy) -> ArchiveInspectio
                     reason="archive contains no page images",
                 )
             # Allow exactly one BookWalker cover PNG only when a distinct JPEG
-            # body page exists. Archive entry order is not reading order; Core
-            # assigns page-0001 to the cover. A PNG-only archive, an additional
+            # body page exists. ZIP entry order is not reading order; the
+            # normal BookWalker crawl starts at the cover, and Core numbers the
+            # first saved image page-0001. A PNG-only archive, an additional
             # body PNG, or a duplicate page-0001 JPEG still needs a re-crawl.
             allowed_fallback = int(
                 policy.allow_first_page_png
