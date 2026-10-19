@@ -165,11 +165,14 @@ def test_bookwalker_scan_apply_only_targets_problematic_png(
     assert applied.failed == 0
     assert applied.archives_moved == int(should_apply)
     assert applied.items_returned_pending == int(should_apply)
-    assert path.exists() is not should_apply
     assert catalog.get_item(item.id).status == ("pending" if should_apply else "completed")
-    assert catalog.get_artifact(artifact.id).locator != path.as_posix() if should_apply else (
-        catalog.get_artifact(artifact.id).locator == path.as_posix()
-    )
+    if should_apply:
+        assert not path.exists()
+        assert catalog.get_artifact(artifact.id).locator != path.as_posix()
+    else:
+        assert path.exists()
+        assert catalog.get_artifact(artifact.id).locator == path.as_posix()
+
 
 def test_unexpected_empty_broken_and_missing_archives(tmp_path: Path) -> None:
     policy = prepare_recrawl.archive_policy_for_site("comicdays")
