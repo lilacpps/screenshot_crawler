@@ -125,9 +125,9 @@ class ArchiveInspection:
     classification: ArchiveClassification
     preferred_count: int = 0
     fallback_count: int = 0
-    allowed_fallback_count: int = 0
     unexpected_count: int = 0
     reason: str | None = None
+    allowed_fallback_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
