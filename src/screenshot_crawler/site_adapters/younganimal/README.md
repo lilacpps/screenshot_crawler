@@ -416,6 +416,46 @@ canvas state fail closed. A second exact-free live work exposed a distinct top-e
 
 The top-empty profile's slot 1 is recognized only at max seek with the exact root flag, exact blank classes, no canvas, centered wrapper, and first/top-PR markers. The adapter makes one ordinary public seek step to `max - step` and requires both first body canvases ready before capture; it never skips a page by subtracting a wrapper count. Known initial body-loading classes remain unready and cannot produce a capture. Unknown wrapper variants fail closed.
 
+The observed episode `24c5d5dae77b0` additionally has 18 wrappers with max seek 17,
+top PR at 0, an exact blank at 1, eleven body slots 2-12, CI 13, PR 14-15, Good 16,
+and Last 17. The top-empty profile now accepts this shorter odd-body family only with an
+even physical count, `max=wrapper_count-1`, positive horizontal/PR/CI/Good capabilities,
+and unchanged exact blank/body/tail roles. Seek 5 selects the last single body with CI and
+requires CI+PR flags; seek 3 selects both PR wrappers; seek 1 selects Good+Last with
+Last+PR flags and a visible unique Last marker. Exact selected wrapper centers and phase
+flags are checked, and all eleven body pages are required before END.
+
+During a seek, this Viewer draws the incoming body pair before its wrappers translate into
+the viewport. Only draw-time source observation may precede the final selected centers;
+the candidate still binds exact route, seek, slots, nodes, source draw, paint, dimensions,
+and write generations. Selection and postproof require the exact final centers plus the
+existing same-size wrapper/canvas translation and full replay-pixel proof. No screenshot
+fallback, retry, or timeout relaxation was added. The isolated normal Batch verification
+completed eleven native 960x1364 WebP pages, all independently equal to draw-time source
+RGBA, through END, ZIP, and completed Item; the site note records evidence and limits.
+
+The separately observed episode `1517292f23ad0` (Item/Source 34211) has only one
+trailing PR wrapper. Its `standard_single_pr` profile requires horizontal/spread/RTL
+and positive PR/CI/Good capabilities, no top-empty/vertical/single flags, an exact
+top-PR lead, contiguous even body `B = wrapper_count - 5` of at least four pages,
+and the exact four-slot CI/PR/Good/Last tail with no canvases. Its seek range is
+`min=1`, `max=wrapper_count`, `step=2`. The live sample has body 1-6, CI 7, PR 8,
+Good 9, and Last 10; these counts are derived rather than hard-coded.
+
+Every selected wrapper center and phase must match: maximum seek has first/top-PR;
+intermediate body pairs have neither; seek 5 has CI+PR and the final single body;
+seek 3 has PR with the PR/Good pair; minimum seek has only Last with its unique
+visible, centered marker. END still requires complete body coverage. Python parsing,
+native capture, and CI mutation geometry use the same role mapping and existing
+source/draw/replay proof. Unknown layouts continue to fail closed. Isolated normal
+Batch verification of 34211 completed all six 960x1364 native WebP pages through
+END/ZIP/Catalog, with independent source RGBA equality and no checkout attempt,
+using its existing grant. The normal Catalog and archives were not changed.
+
+Readiness timeouts now retain the bounded parser rejection text (up to 256 characters) in
+`adapter_debug.capture.viewer_readiness.last_error_message` and the console/metrics error.
+The existing 20-second deadline and fail-closed handling of unknown layouts are unchanged.
+
 A separate horizontal no-CI profile was observed on already-granted episode
 `8d92e88ab93ec`. Its metadata had 15 wrappers and seek `min=1`, `max=15`,
 `step=2`; the root was horizontal/spread/RTL with top-empty, PR, and Good
@@ -489,6 +529,19 @@ PNG is retained. Candidate/proof state is bounded and released after each try.
 The observer does not hard-code Hanayume dimensions or wrapper arithmetic and
 does no image encoding in the draw hook.
 
+The destination may retain a fractional width/height truncated by the Viewer bitmap sizing
+(observed: 933x1327.5 into a 933x1327 bitmap). Both source and destination origins remain
+exactly zero and the source rectangle must cover the complete native canvas. Only finite
+destination dimensions whose floors equal the bounded target bitmap dimensions are supported;
+underfill, whole-pixel overhang, source crops, and nonzero offsets remain unsupported. Each
+candidate retains the exact eight observed draw arguments for selection and postproof replay.
+Replay never rounds the rectangle, and native output retains the source dimensions. Every
+existing pixel, context, node, generation/write, layout, and all-or-none spread proof still applies.
+The 2026-10-19 isolated direct Runner verification reached END for the affected existing-grant
+Source 33083 and free control Source 33096 with ten 960x1364 WebP pages each. All twenty
+decoded outputs matched independently copied draw-time source RGBA. It used no new ticket
+and did not alter the normal Catalog or existing ZIPs; details and limits are in the site note.
+
 The D rendered body-canvas PNG path remains the atomic fallback. The historical
 D-only Runner audit covered 16 ordered 984?1329 PNG pages through END/ZIP and
 passed raw SHA-256, CRC, physical-slot, and PNG-decode checks; its restored
@@ -499,8 +552,9 @@ ZIP/Catalog packaging. The attempt-7 audit is in
 `output/younganimal_experiment/phase04_batch_e2e_20261011/attempt-7/offline-final-audit.json`.
 
 Attempts 6 through 8 are historical diagnostics under earlier geometry/code
-revisions. Attempt 9 is the current two-profile live verification on the final
-code. Earlier failures remain in the isolated Catalog history and were not
+revisions. Attempt 9 verified the earlier two-profile implementation; the latest
+fractional-destination verification above is separate, bounded evidence. Earlier failures
+remain in the isolated Catalog history and were not
 deleted or rewritten.
 
 Sampled source attribution reports are ignored under

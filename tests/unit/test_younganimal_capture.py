@@ -29,13 +29,16 @@ def _snapshot(
     missing_canvas: int | None = None,
     standard15_body: bool = False,
     odd_body_count: int | None = None,
+    single_pr_body_count: int | None = None,
 ) -> dict[str, object]:
     viewer_classes = {"-cv", "mode-spread", "mode-dir-rtl", "mode-nav-dir-rtl"}
     odd_body_profile = standard15_body or odd_body_count is not None
-    body_count = odd_body_count if odd_body_count is not None else 15 if standard15_body else 16
-    seek_max = body_count + 6 if odd_body_profile else 21
-    if odd_body_profile:
+    body_count = single_pr_body_count if single_pr_body_count is not None else odd_body_count if odd_body_count is not None else 15 if standard15_body else 16
+    seek_max = body_count + 5 if single_pr_body_count is not None else body_count + 6 if odd_body_profile else 21
+    if odd_body_profile or single_pr_body_count is not None:
         viewer_classes.update({"mode-has-pr", "mode-has-comic-info", "mode-has-good-page"})
+    if single_pr_body_count is not None:
+        viewer_classes.add("mode-h")
     if seek_value == seek_max:
         viewer_classes.update({"mode-first-page", "mode-top-pr-page"})
     elif seek_value == 5:
@@ -46,8 +49,8 @@ def _snapshot(
         viewer_classes.update({"mode-pr-page", "mode-last-page"})
     body_slots = tuple(range(1, body_count + 1))
     ci_slot = body_slots[-1] + 1
-    wrapper_count = ci_slot + 5
-    if odd_body_profile and seek_value == 1:
+    wrapper_count = ci_slot + (4 if single_pr_body_count is not None else 5)
+    if (odd_body_profile or single_pr_body_count is not None) and seek_value == 1:
         viewer_classes.discard("mode-pr-page")
     slots: list[dict[str, object]] = []
     for index in range(wrapper_count):
@@ -57,9 +60,9 @@ def _snapshot(
             classes = {"-cv-page", "mode-loaded", "mode-rendered"}
         elif index == ci_slot:
             classes = {"-cv-page", "mode-ci"}
-        elif index in {ci_slot + 1, ci_slot + 2}:
+        elif index in ({ci_slot + 1} if single_pr_body_count is not None else {ci_slot + 1, ci_slot + 2}):
             classes = {"-cv-page", "mode-empty", "mode-pr"}
-        elif index == ci_slot + 3:
+        elif index == ci_slot + (2 if single_pr_body_count is not None else 3):
             classes = {"-cv-page", "mode-good"}
         else:
             classes = {"-cv-page", "mode-last"}
@@ -117,6 +120,8 @@ def _snapshot(
         "slots": slots,
         "terminalMarkerCount": 1 if seek_value == 1 else 0,
         "terminalMarkerParentIndex": wrapper_count - 1 if seek_value == 1 else None,
+        "terminalMarkerVisible": seek_value == 1,
+        "terminalMarkerCenterInViewport": seek_value == 1,
     }
 
 
@@ -201,14 +206,18 @@ def _top_empty_no_ci_snapshot(seek_value: int, *, body_count: int = 10) -> dict[
     }
 
 
-def _top_empty_snapshot(seek_value: int) -> dict[str, object]:
+def _top_empty_snapshot(seek_value: int, *, body_count: int = 44) -> dict[str, object]:
     raw = _snapshot(21)
     base = raw["slots"]
-    focus = 52 - seek_value
+    wrapper_count = body_count + 7
+    maximum = wrapper_count if wrapper_count % 2 else wrapper_count - 1
+    ci_slot = body_count + 2
+    focus = maximum - seek_value + 1
     active = {focus - 1, focus}
     slots: list[dict[str, object]] = []
     lead = dict(base[0])
     lead["index"] = 0
+    lead["wrapperCenterInViewport"] = 0 in active
     slots.append(lead)
     slots.append({
         "index": 1, "wrapperNode": 2, "classes": ["-cv-page", "mode-empty"],
@@ -216,7 +225,7 @@ def _top_empty_snapshot(seek_value: int) -> dict[str, object]:
         "wrapperCenterInViewport": focus == 1, "canvasCount": 0, "canvas": None,
     })
     body_template = base[1]
-    for index in range(2, 46):
+    for index in range(2, ci_slot):
         center = index in active
         wrapper_x = 945 + (focus - index - 1) * 946
         canvas = dict(body_template["canvas"])
@@ -231,30 +240,38 @@ def _top_empty_snapshot(seek_value: int) -> dict[str, object]:
             "wrapperRect": [wrapper_x, 0, 946, 886],
             "wrapperCenterInViewport": center, "canvasCount": 1, "canvas": canvas,
         })
-    for index, original in enumerate(base[17:22], start=46):
+    for index, original in enumerate(base[17:22], start=ci_slot):
         wrapper_x = 945 + (focus - index - 1) * 946
         slots.append({
             **original, "index": index, "wrapperNode": index + 1,
             "wrapperRect": [wrapper_x, 0, 946, 886],
-            "wrapperCenterInViewport": index in active or (seek_value == 1 and index == 50),
+            "wrapperCenterInViewport": index in active or (seek_value == 1 and index == wrapper_count - 1),
         })
     viewer_classes = set(raw["viewerClasses"])
     viewer_classes.add("mode-has-top-emptypage")
     viewer_classes.discard("mode-last-page")
-    if seek_value == 51:
+    if seek_value == maximum:
         viewer_classes.update({"mode-first-page", "mode-top-pr-page"})
     else:
         viewer_classes.discard("mode-first-page")
         viewer_classes.discard("mode-top-pr-page")
     if seek_value == 1:
         viewer_classes.add("mode-last-page")
+    if body_count % 2:
+        viewer_classes.update({"mode-h", "mode-has-pr", "mode-has-comic-info", "mode-has-good-page"})
+        if seek_value == 5:
+            viewer_classes.update({"mode-ci-page", "mode-pr-page"})
+        elif seek_value in {1, 3}:
+            viewer_classes.add("mode-pr-page")
     raw.update({
         "viewerClasses": sorted(viewer_classes),
-        "seek": {"type": "range", "value": str(seek_value), "min": "1", "max": "51", "step": "2", "disabled": False},
-        "pages": {"className": "-cv-pages", "childCount": 51},
+        "seek": {"type": "range", "value": str(seek_value), "min": "1", "max": str(maximum), "step": "2", "disabled": False},
+        "pages": {"className": "-cv-pages", "childCount": wrapper_count},
         "slots": slots,
         "terminalMarkerCount": 1 if seek_value == 1 else 0,
-        "terminalMarkerParentIndex": 50 if seek_value == 1 else None,
+        "terminalMarkerParentIndex": wrapper_count - 1 if seek_value == 1 else None,
+        "terminalMarkerVisible": seek_value == 1,
+        "terminalMarkerCenterInViewport": seek_value == 1,
     })
     return raw
 
@@ -364,6 +381,61 @@ def test_younganimal_unobserved_physical_layouts_fail_closed(mutation: str) -> N
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
 
+@pytest.mark.parametrize(
+    ("seek", "state", "active"),
+    [(11, "content", (1,)), (9, "content", (2, 3)), (7, "content", (4, 5)),
+     (5, "content", (6,)), (3, "ad", ()), (1, "end", (10,))],
+)
+def test_younganimal_single_pr_maps_body_ci_and_visible_terminal(seek, state, active) -> None:
+    observed = _parse_viewer_observation(_snapshot(seek, single_pr_body_count=6), expected_url=EPISODE_URL)
+
+    assert observed.layout_variant == "standard_single_pr"
+    assert observed.body_slots == tuple(range(1, 7))
+    assert (observed.ci_slot, observed.pr_slots, observed.good_slot, observed.last_slot) == (7, (8,), 9, 10)
+    assert observed.seek_max == 11
+    assert observed.page_state == state
+    assert observed.active_slots == active
+    if state == "content":
+        assert observed.ready_slots == active
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["capability", "vertical", "single", "top_empty", "range", "tail", "tail_canvas",
+     "body", "phase", "center", "end_parent", "end_duplicate", "end_invisible", "end_offscreen"],
+)
+def test_younganimal_single_pr_rejects_role_phase_or_terminal_drift(mutation: str) -> None:
+    raw = _snapshot(1 if mutation.startswith("end_") else 11, single_pr_body_count=6)
+    if mutation == "capability":
+        raw["viewerClasses"].remove("mode-has-comic-info")
+    elif mutation in {"vertical", "single", "top_empty"}:
+        raw["viewerClasses"].append({"vertical": "mode-v", "single": "mode-single", "top_empty": "mode-has-top-emptypage"}[mutation])
+    elif mutation == "range":
+        raw["seek"]["max"] = "13"
+    elif mutation == "tail":
+        raw["slots"][9]["classes"] = ["-cv-page", "mode-empty", "mode-pr"]
+    elif mutation == "tail_canvas":
+        raw["slots"][8]["canvasCount"] = 1
+        raw["slots"][8]["canvas"] = raw["slots"][1]["canvas"]
+    elif mutation == "body":
+        raw["slots"][4]["classes"] = ["-cv-page", "mode-empty"]
+    elif mutation == "phase":
+        raw["viewerClasses"].append("mode-pr-page")
+    elif mutation == "center":
+        raw["slots"][4]["wrapperCenterInViewport"] = True
+    elif mutation == "end_parent":
+        raw["terminalMarkerParentIndex"] = 9
+    elif mutation == "end_duplicate":
+        raw["terminalMarkerCount"] = 2
+    elif mutation == "end_invisible":
+        raw["terminalMarkerVisible"] = False
+    else:
+        raw["terminalMarkerCenterInViewport"] = False
+
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
 def test_younganimal_missing_active_canvas_is_not_reported_ready() -> None:
     observation = _parse_viewer_observation(
         _snapshot(19, missing_canvas=3), expected_url=EPISODE_URL
@@ -425,6 +497,56 @@ def test_younganimal_top_empty_variant_rejects_unknown_blank_or_wrapper_contract
         raw["seek"]["max"] = "50"
 
     with pytest.raises(UnknownPageStateError, match=expected_error):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
+@pytest.mark.parametrize(
+    ("seek_value", "state", "active"),
+    [(17, "initial_blank", (1,)), (15, "content", (2, 3)), (7, "content", (10, 11)),
+     (5, "content", (12,)), (3, "ad", (13, 14, 15)), (1, "end", (15, 16, 17))],
+)
+def test_younganimal_shorter_top_empty_maps_last_body_ci_and_terminal(seek_value, state, active) -> None:
+    raw = _top_empty_snapshot(seek_value, body_count=11)
+
+    observed = _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+    assert observed.layout_variant == "top_emptypage"
+    assert observed.body_slots == tuple(range(2, 13))
+    assert (observed.ci_slot, observed.pr_slots, observed.good_slot, observed.last_slot) == (13, (14, 15), 16, 17)
+    assert observed.seek_max == 17
+    assert observed.page_state == state
+    assert observed.active_slots == active
+    if state == "content":
+        assert observed.ready_slots == active
+
+
+@pytest.mark.parametrize(
+    "mutation", ["max", "flag", "capability", "blank", "blank_canvas", "tail", "phase", "center", "end_marker", "end_invisible"],
+)
+def test_younganimal_shorter_top_empty_rejects_unproven_structure_or_phase(mutation: str) -> None:
+    raw = _top_empty_snapshot(1 if mutation.startswith("end_") else 15, body_count=11)
+    if mutation == "max":
+        raw["seek"]["max"] = "19"
+    elif mutation == "flag":
+        raw["viewerClasses"].remove("mode-has-top-emptypage")
+    elif mutation == "capability":
+        raw["viewerClasses"].remove("mode-has-comic-info")
+    elif mutation == "blank":
+        raw["slots"][1]["classes"].append("mode-pr")
+    elif mutation == "blank_canvas":
+        raw["slots"][1].update(canvasCount=1, canvas={"width": 1, "height": 1})
+    elif mutation == "tail":
+        raw["slots"][13]["classes"] = ["-cv-page", "mode-empty", "mode-pr"]
+    elif mutation == "phase":
+        raw["viewerClasses"].append("mode-pr-page")
+    elif mutation == "center":
+        raw["slots"][4]["wrapperCenterInViewport"] = True
+    elif mutation == "end_marker":
+        raw["terminalMarkerParentIndex"] = 16
+    elif mutation == "end_invisible":
+        raw["terminalMarkerVisible"] = False
+
+    with pytest.raises(UnknownPageStateError):
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
 

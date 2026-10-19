@@ -302,6 +302,30 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     ? new Set(value.split(/[\t\n\f\r ]+/).filter(Boolean)) : null;
   const tokenSetsEqual = (left, right) => !!left && !!right && left.size === right.size &&
     [...left].every(token => right.has(token));
+  const exactSinglePrLayout = (viewer, pages, children, seek) => {
+    const bodyCount = children.length - 5;
+    if (bodyCount < 4 || bodyCount % 2 !== 0 || !viewer.contains(pages) || !viewer.contains(seek) ||
+        !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
+          'mode-has-comic-info', 'mode-has-good-page'].every(name => viewer.classList.contains(name)) ||
+        ['mode-has-top-emptypage', 'mode-v', 'mode-single'].some(name => viewer.classList.contains(name)) ||
+        seek.type !== 'range' || seek.disabled || Number(seek.min) !== 1 ||
+        Number(seek.max) !== children.length || Number(seek.step) !== 2 ||
+        !oddBodyPageMarkersMatch(viewer, seek, children.length)) return false;
+    const exact = (index, names) => children[index]?.parentElement === pages && tokenSetsEqual(
+      classTokenSet(Reflect.apply(nativeGetAttribute, children[index], ['class'])), new Set(names));
+    const roles = [[0, ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']],
+      [bodyCount + 1, ['-cv-page', 'mode-ci']], [bodyCount + 2, ['-cv-page', 'mode-empty', 'mode-pr']],
+      [bodyCount + 3, ['-cv-page', 'mode-good']], [bodyCount + 4, ['-cv-page', 'mode-last']]];
+    if (roles.some(([i, names]) => !exact(i, names) || children[i].querySelectorAll('canvas').length !== 0)) return false;
+    for (let slot = 1; slot <= bodyCount; slot += 1) {
+      const tokens = classTokenSet(Reflect.apply(nativeGetAttribute, children[slot], ['class']));
+      if (!tokens || children[slot].parentElement !== pages || !ODD_BODY_CLASSES.has([...tokens].sort().join(' '))) return false;
+    }
+    const focus = children.length - Number(seek.value) + 1;
+    const centers = children.flatMap((node, i) => wrapperCenterInViewport(node) ? [i] : []);
+    const expected = [focus - 1, focus].filter(i => i >= 0 && i < children.length);
+    return centers.length === expected.length && centers.every((value, i) => value === expected[i]);
+  };
   const canonicalCiWrapper = () => {
     const viewers = [...document.querySelectorAll('#comici-viewer')];
     const pageRoots = [...document.querySelectorAll('#xCVPages')];
@@ -315,6 +339,9 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         !viewer.classList.contains('mode-has-comic-info') &&
         !viewer.classList.contains('mode-v') && !viewer.classList.contains('mode-single')) return null;
     const children = [...pages.children];
+    const singlePrSeek = document.querySelectorAll('#xCVSeekBar');
+    if (singlePrSeek.length === 1 && exactSinglePrLayout(viewer, pages, children, singlePrSeek[0]))
+      return children[children.length - 4];
     const ciIndex = children.length - 5;
     const noTopPr = viewer.classList.contains('mode-has-top-emptypage') && children[0] &&
       tokenSetsEqual(classTokenSet(Reflect.apply(nativeGetAttribute, children[0], ['class'])), CANONICAL_TOP_EMPTY_CLASSES);
@@ -380,12 +407,16 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       tokenSetsEqual(classTokenSet(Reflect.apply(nativeGetAttribute, children[0], ['class'])), CANONICAL_TOP_EMPTY_CLASSES);
     const topEmpty = viewer.classList.contains('mode-has-top-emptypage') && !noTopPr;
     const bodyStart = topEmpty ? 2 : 1;
-    const ciIndex = children.length - 5;
+    const singlePr = exactSinglePrLayout(viewer, pages, children, seek);
+    const ciIndex = children.length - (singlePr ? 4 : 5);
     const min = Number(seek.min), max = Number(seek.max), step = Number(seek.step), value = Number(seek.value);
     const standardOddBody = !topEmpty && !noTopPr && oddBodyCandidate(viewer, children, seek);
+    const shortTopEmpty = topEmpty && children.length % 2 === 0 && max === children.length - 1 &&
+      ['mode-h', 'mode-has-pr', 'mode-has-comic-info', 'mode-has-good-page'].every(name => viewer.classList.contains(name)) &&
+      !['mode-v', 'mode-single'].some(name => viewer.classList.contains(name));
     if (ciIndex <= bodyStart || min !== 1 || step !== 2 ||
-        max !== (topEmpty ? children.length : standardOddBody ? children.length : children.length - 1) ||
-        (standardOddBody && !exactStandardOddBody(viewer, pages, children, seek)) ||
+        max !== (singlePr || (topEmpty && !shortTopEmpty) || standardOddBody ? children.length : children.length - 1) ||
+        (!singlePr && standardOddBody && !exactStandardOddBody(viewer, pages, children, seek)) ||
         !Number.isInteger(value) || value < min || value > max || (max - value) % step !== 0 ||
         viewer.classList.contains('mode-last-page')) return null;
     const allowedBodyClasses = [
@@ -954,6 +985,22 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         and _classes(slots[0].get("classes"), "lead-in") == frozenset({"-cv-page", "mode-empty"})
     ):
         layout_variant = "top_empty_no_pr"
+    single_pr_tail = (
+        frozenset({"-cv-page", "mode-ci"}),
+        frozenset({"-cv-page", "mode-empty", "mode-pr"}),
+        frozenset({"-cv-page", "mode-good"}),
+        frozenset({"-cv-page", "mode-last"}),
+    )
+    single_pr = (
+        layout_variant == "standard" and seek_max == len(slots) and len(slots) % 2 == 1
+        and all(isinstance(row, dict) and _classes(row.get("classes"), "single-PR tail") == expected
+                for row, expected in zip(slots[-4:], single_pr_tail, strict=True))
+    )
+    if single_pr:
+        required = {"mode-h", "mode-has-pr", "mode-has-comic-info", "mode-has-good-page"}
+        if required.difference(viewer_classes) or {"mode-v", "mode-single"}.intersection(viewer_classes):
+            raise UnknownPageStateError("Younganimal single-PR capability markers changed")
+        layout_variant = "standard_single_pr"
     odd_body_count = len(slots) - 6
     standard_odd_body = (
         layout_variant == "standard"
@@ -967,7 +1014,17 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         layout_variant = "standard_odd_body"
         if not {"mode-has-pr", "mode-has-comic-info", "mode-has-good-page"}.issubset(viewer_classes):
             raise UnknownPageStateError("Younganimal odd-body viewer capability markers are missing")
-    expected_seek_max = len(slots) if layout_variant in {"top_emptypage", "standard_odd_body"} else len(slots) - 1
+    expected_seek_max = len(slots) if layout_variant in {"top_emptypage", "standard_odd_body", "standard_single_pr"} else len(slots) - 1
+    short_top_empty = (
+        layout_variant == "top_emptypage"
+        and len(slots) % 2 == 0
+        and seek_max == len(slots) - 1
+    )
+    if short_top_empty:
+        required = {"mode-h", "mode-has-pr", "mode-has-comic-info", "mode-has-good-page"}
+        if required.difference(viewer_classes) or {"mode-v", "mode-single"}.intersection(viewer_classes):
+            raise UnknownPageStateError("Younganimal shorter top-empty capability markers changed")
+        expected_seek_max = len(slots) - 1
     if layout_variant == "top_empty_no_ci":
         expected_seek_max = len(slots)
     if seek_min != 1 or seek_step != 2 or seek_max != expected_seek_max or seek_max % 2 != 1:
@@ -1006,7 +1063,14 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         ):
             raise UnknownPageStateError("Younganimal top-empty-page wrapper changed")
         body_start = 2
-    if layout_variant == "top_empty_no_ci":
+    if single_pr:
+        tail_sets = single_pr_tail
+        tail_start = len(parsed_slots) - 4
+        ci_slot = tail_start
+        pr_slots = (tail_start + 1,)
+        good_slot = tail_start + 2
+        last_slot = tail_start + 3
+    elif layout_variant == "top_empty_no_ci":
         required_flags = {
             "mode-h", "mode-spread", "mode-dir-rtl", "mode-nav-dir-rtl",
             "mode-has-top-emptypage", "mode-has-pr", "mode-has-good-page",
@@ -1053,6 +1117,10 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     if ci_slot is not None and ci_slot <= body_start:
         raise UnknownPageStateError("Younganimal viewer has no contiguous body region")
     body_slots = tuple(range(body_start, body_end))
+    if single_pr and (body_start != 1 or len(body_slots) < 4 or len(body_slots) % 2 != 0):
+        raise UnknownPageStateError("Younganimal single-PR body mapping changed")
+    if short_top_empty and (len(body_slots) < 3 or len(body_slots) % 2 != 1):
+        raise UnknownPageStateError("Younganimal shorter top-empty body mapping changed")
     if layout_variant == "standard_odd_body" and (
         body_start != 1
         or len(body_slots) < 3
@@ -1089,6 +1157,26 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     marker_count = raw.get("terminalMarkerCount")
     marker_index = raw.get("terminalMarkerParentIndex")
     focus = seek_max - seek_value + 1
+    if short_top_empty or single_pr:
+        expected_flags = (
+            {"mode-first-page", "mode-top-pr-page"} if seek_value == seek_max
+            else {"mode-ci-page", "mode-pr-page"} if seek_value == 5
+            else {"mode-pr-page"} if seek_value == 3
+            else ({"mode-last-page"} if single_pr else {"mode-last-page", "mode-pr-page"}) if seek_value == 1
+            else set()
+        )
+        observed_flags = viewer_classes.intersection({
+            "mode-first-page", "mode-top-pr-page", "mode-ci-page", "mode-pr-page", "mode-last-page",
+        })
+        centers = tuple(i for i, row in enumerate(parsed_slots) if row.get("wrapperCenterInViewport") is True)
+        expected_centers = tuple(i for i in (focus - 1, focus) if 0 <= i < len(parsed_slots))
+        if observed_flags != expected_flags or centers != expected_centers:
+            raise UnknownPageStateError("Younganimal compact-tail phase or selected centers changed")
+        if seek_value == 1 and (
+            raw.get("terminalMarkerVisible") is not True
+            or raw.get("terminalMarkerCenterInViewport") is not True
+        ):
+            raise UnknownPageStateError("Younganimal compact-tail Last marker is not visible")
     if layout_variant in {"standard_odd_body", "top_empty_no_ci"}:
         marker_flags = {
             name
@@ -1126,7 +1214,22 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
             raise UnknownPageStateError("Younganimal odd-body viewer page markers changed")
     initial_blank = layout_variant == "top_emptypage" and seek_value == seek_max
     active_slots = tuple(index for index in (focus - 1, focus) if index in body_slots)
-    if layout_variant == "top_empty_no_ci":
+    if single_pr:
+        if seek_value == seek_min:
+            if marker_count != 1 or marker_index != last_slot or active_slots:
+                raise UnknownPageStateError("Younganimal single-PR terminal marker changed")
+            state = "end"
+            active_slots = (last_slot,)
+        elif seek_value == 3:
+            if active_slots:
+                raise UnknownPageStateError("Younganimal single-PR interstitial overlaps body")
+            state = "ad"
+            active_slots = ()
+        elif active_slots:
+            state = "content"
+        else:
+            raise UnknownPageStateError("Younganimal single-PR seek maps to no observed state")
+    elif layout_variant == "top_empty_no_ci":
         expected_center_slots = tuple(
             index for index in (focus - 1, focus) if 0 <= index < len(parsed_slots)
         )
@@ -1232,7 +1335,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     elif active_slots:
         if "mode-first-page" in viewer_classes or "mode-top-pr-page" in viewer_classes:
             raise UnknownPageStateError("Younganimal first-page markers persisted after rewind")
-        if layout_variant != "top_emptypage":
+        if layout_variant != "top_emptypage" or short_top_empty:
             if focus == ci_slot and not {"mode-pr-page", "mode-ci-page"}.issubset(viewer_classes):
                 raise UnknownPageStateError("Younganimal final body/CI spread markers are incomplete")
             if focus != ci_slot and ("mode-pr-page" in viewer_classes or "mode-ci-page" in viewer_classes):
@@ -1240,7 +1343,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         elif "mode-pr-page" in viewer_classes or "mode-ci-page" in viewer_classes:
             raise UnknownPageStateError("Younganimal top-empty body spread has unexpected CI/PR markers")
         state = "content"
-    elif layout_variant != "top_emptypage" and focus == ci_slot + 2:
+    elif (layout_variant != "top_emptypage" or short_top_empty) and focus == ci_slot + 2:
         if (
             "mode-pr-page" not in viewer_classes
             or "mode-ci-page" in viewer_classes

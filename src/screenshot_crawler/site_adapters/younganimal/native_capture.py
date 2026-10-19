@@ -199,6 +199,29 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     }
     return true;
   };
+  const exactSinglePrLayout = (viewer, pages, children, seek, forDraw) => {
+    const bodyCount = children.length - 5;
+    if (bodyCount < 4 || bodyCount % 2 !== 0 || !viewer.contains(pages) || !viewer.contains(seek) ||
+        !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
+          'mode-has-comic-info', 'mode-has-good-page'].every(name => viewer.classList.contains(name)) ||
+        ['mode-has-top-emptypage', 'mode-v', 'mode-single'].some(name => viewer.classList.contains(name)) ||
+        seek.type !== 'range' || seek.disabled || Number(seek.min) !== 1 ||
+        Number(seek.max) !== children.length || Number(seek.step) !== 2 ||
+        !oddBodyPageMarkersMatch(viewer, Number(seek.value), children.length)) return false;
+    const roles = [[0, ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']],
+      [bodyCount + 1, ['-cv-page', 'mode-ci']], [bodyCount + 2, ['-cv-page', 'mode-empty', 'mode-pr']],
+      [bodyCount + 3, ['-cv-page', 'mode-good']], [bodyCount + 4, ['-cv-page', 'mode-last']]];
+    if (roles.some(([i, names]) => children[i]?.parentElement !== pages || !exactClasses(children[i], names) ||
+        children[i].querySelectorAll('canvas').length !== 0)) return false;
+    const allowed = ['-cv-page', '-cv-page mode-loading', '-cv-page mode-loading mode-req-render',
+      '-cv-page mode-loaded', '-cv-page mode-loaded mode-rendered'];
+    for (let slot = 1; slot <= bodyCount; slot += 1)
+      if (children[slot]?.parentElement !== pages || !allowed.includes(classes(children[slot]).join(' '))) return false;
+    if (forDraw) return true;
+    const focus = children.length - Number(seek.value) + 1;
+    return sameArray(children.flatMap((node, i) => wrapperCenterInViewport(node) ? [i] : []),
+      [focus - 1, focus].filter(i => i >= 0 && i < children.length));
+  };
   const attr = context => {
     try {
       const value = typeof raw.getContextAttributes === 'function'
@@ -245,7 +268,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     for (let index = 0; index < left.length; index += 1) if (left[index] !== right[index]) return false;
     return true;
   };
-  const normalizedLayout = () => {
+  const normalizedLayout = (forDraw = false) => {
     const viewer = document.querySelector('#comici-viewer');
     const pages = document.querySelector('#xCVPages');
     const seek = document.querySelector('#xCVSeekBar');
@@ -255,7 +278,8 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         pages.children.length < 9 || seek.type !== 'range' || seek.disabled) return null;
     const children = [...pages.children];
     const topEmptyNoCi = noCiCandidate(viewer, children, seek);
-    const ci = topEmptyNoCi ? null : children.length - 5;
+    const singlePr = exactSinglePrLayout(viewer, pages, children, seek, forDraw);
+    const ci = topEmptyNoCi ? null : children.length - (singlePr ? 4 : 5);
     const noTopPr = viewer.classList.contains('mode-has-top-emptypage') &&
       exactClasses(children[0], ['-cv-page', 'mode-empty']);
     const hasTopEmptyPage = viewer.classList.contains('mode-has-top-emptypage') && !noTopPr;
@@ -264,6 +288,8 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     if (children.length < 9 || bodyEnd <= bodyStart) return null;
     if (topEmptyNoCi) {
       if (!exactTopEmptyNoCi(viewer, pages, children, seek)) return null;
+    } else if (singlePr) {
+      // exactSinglePrLayout already proved the complete lead/body/four-tail structure.
     } else if (
         !exactClasses(children[0], noTopPr ? ['-cv-page', 'mode-empty'] : ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']) ||
         (hasTopEmptyPage && !exactClasses(children[1], ['-cv-page', 'mode-empty'])) ||
@@ -273,12 +299,31 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         !exactClasses(children[ci + 3], ['-cv-page', 'mode-good']) ||
         !exactClasses(children[ci + 4], ['-cv-page', 'mode-last'])) return null;
     const min = Number(seek.min), max = Number(seek.max), step = Number(seek.step), value = Number(seek.value);
-    const standardOddBody = !topEmptyNoCi && !hasTopEmptyPage && !noTopPr && oddBodyCandidate(viewer, children, seek);
+    const standardOddBody = !singlePr && !topEmptyNoCi && !hasTopEmptyPage && !noTopPr && oddBodyCandidate(viewer, children, seek);
+    const shortTopEmpty = hasTopEmptyPage && children.length % 2 === 0 && max === children.length - 1;
+    if (shortTopEmpty) {
+      if (!['mode-h', 'mode-has-pr', 'mode-has-comic-info', 'mode-has-good-page'].every(name => viewer.classList.contains(name)) ||
+          ['mode-v', 'mode-single'].some(name => viewer.classList.contains(name)) ||
+          ci - bodyStart < 3 || (ci - bodyStart) % 2 !== 1 ||
+          children[1].querySelectorAll('canvas').length !== 0) return null;
+      const expected = value === max ? ['mode-first-page', 'mode-top-pr-page']
+        : value === 5 ? ['mode-ci-page', 'mode-pr-page'] : value === 3 ? ['mode-pr-page']
+        : value === 1 ? ['mode-last-page', 'mode-pr-page'] : [];
+      const flags = ['mode-first-page', 'mode-top-pr-page', 'mode-ci-page', 'mode-pr-page', 'mode-last-page']
+        .filter(name => viewer.classList.contains(name));
+      const focus = max - value + 1;
+      const centers = children.flatMap((node, index) => wrapperCenterInViewport(node) ? [index] : []);
+      // A seek draws the new pair before its CSS translation reaches the viewport.
+      // Selection/postproof still require the exact final centers; existing replay and
+      // equal-size wrapper/target translation proof bind the draw-time snapshot.
+      if (!sameArray(flags.slice().sort(), expected.slice().sort()) ||
+          (!forDraw && !sameArray(centers, [focus - 1, focus].filter(index => index >= 0 && index < children.length)))) return null;
+    }
     if (min !== 1 || step !== 2 ||
-        max !== (topEmptyNoCi || hasTopEmptyPage ? children.length : standardOddBody ? children.length : children.length - 1) ||
+        max !== (singlePr || topEmptyNoCi || (hasTopEmptyPage && !shortTopEmpty) ? children.length : standardOddBody ? children.length : children.length - 1) ||
         (standardOddBody && !exactStandardOddBody(viewer, pages, children, seek)) ||
         !Number.isInteger(value) || value < min || value > max || (max - value) % step !== 0) return null;
-    if (viewer.classList.contains('mode-last-page') && !standardOddBody && !topEmptyNoCi) return null;
+    if (viewer.classList.contains('mode-last-page') && !singlePr && !standardOddBody && !topEmptyNoCi) return null;
     const focus = max - value + 1;
     const active = [focus - 1, focus].filter(slot => slot >= bodyStart && slot < bodyEnd);
     if (!active.length && !(standardOddBody && (value === min || value === 5 || value === 3)) &&
@@ -295,11 +340,11 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const mutationState = capture.inspect([]);
     if (!mutationState || !Number.isSafeInteger(mutationState.domGeneration) || mutationState.domGeneration < 0 ||
         !Number.isSafeInteger(mutationState.captureDomGeneration) || mutationState.captureDomGeneration < 0) return null;
-    const roles = topEmptyNoCi
+    const roles = singlePr ? [ci, ci + 1, ci + 2, ci + 3] : topEmptyNoCi
       ? [null, bodyEnd, bodyEnd + 1, bodyEnd + 2, bodyEnd + 3]
       : [ci, ci + 1, ci + 2, ci + 3, ci + 4];
     return {viewer, pages, seek, children, ci, bodyStart, bodyEnd, roles,
-      variant: topEmptyNoCi ? 'top_empty_no_ci' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
+      variant: singlePr ? 'standard_single_pr' : topEmptyNoCi ? 'top_empty_no_ci' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
       path: location.pathname, dom: mutationState.domGeneration,
       captureDom: mutationState.captureDomGeneration,
       viewport: {width: innerWidth, height: innerHeight, dpr: devicePixelRatio}};
@@ -319,9 +364,12 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0 &&
     width * height <= MAX_CANVAS_PIXELS && canvas.width === width && canvas.height === height;
   const fullFrame = (args, source, target) => args.length === 8 &&
-    args.every(Number.isSafeInteger) && args[0] === 0 && args[1] === 0 &&
+    args.every(Number.isFinite) && args[0] === 0 && args[1] === 0 &&
     args[2] === source.width && args[3] === source.height && args[4] === 0 &&
-    args[5] === 0 && args[6] === target.width && args[7] === target.height;
+    args[5] === 0 &&
+    // Viewer draw sizes can retain a fraction truncated by canvas bitmap sizing.
+    // Accept only subpixel overhang and replay the exact observed rectangle.
+    Math.floor(args[6]) === target.width && Math.floor(args[7]) === target.height;
   const sourceOptions = attrs => {
     const result = {};
     for (const name of ['alpha', 'colorSpace', 'colorType', 'desynchronized']) {
@@ -387,7 +435,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       const currentPages = document.querySelector('#xCVPages');
       const currentWrapper = target.closest('.-cv-page');
       if (!currentPages || !currentWrapper || currentWrapper.parentElement !== currentPages) return;
-      const layout = normalizedLayout();
+      const layout = normalizedLayout(true);
       const locationRow = targetLocation(target, layout);
       const source = event.source;
       if (!locationRow || !(source instanceof HTMLCanvasElement) ||
@@ -423,6 +471,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         targetRect: [targetRect.x, targetRect.y, targetRect.width, targetRect.height],
         wrapperRect: [wrapperRect.x, wrapperRect.y, wrapperRect.width, wrapperRect.height],
         targetPaint, source, sourceWidth: source.width, sourceHeight: source.height,
+        drawArgs: event.drawArgs.slice(),
         sourceState, sourceAttrs, snapshot: copied.canvas, snapshotAttributes: copied.attributes,
       });
     } catch (_) { pending.delete(target); }
@@ -445,8 +494,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     context.shadowOffsetX = 0;
     context.shadowOffsetY = 0;
     context.shadowColor = 'rgba(0, 0, 0, 0)';
-    Reflect.apply(raw.drawImage, context, [candidate.snapshot, 0, 0,
-      candidate.sourceWidth, candidate.sourceHeight, 0, 0, canvas.width, canvas.height]);
+    Reflect.apply(raw.drawImage, context, [candidate.snapshot, ...candidate.drawArgs]);
     return pixels(canvas);
   };
   const rectEqual = (left, right) => Array.isArray(left) && Array.isArray(right) &&

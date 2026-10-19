@@ -1102,8 +1102,10 @@ class YounganimalAdapter(SiteAdapter):
             "status": "timeout",
             "stable_layout": stable_pair is not None,
             "last_error": type(last_error).__name__ if last_error else None,
+            "last_error_message": str(last_error)[:256] if last_error else None,
         }
-        raise PageChangeTimeoutError("Younganimal viewer did not expose a stable known layout within 20 seconds")
+        detail = f" ({str(last_error)[:256]})" if last_error else ""
+        raise PageChangeTimeoutError("Younganimal viewer did not expose a stable known layout within 20 seconds" + detail)
 
     async def _rewind_to_first_body(
         self, page: Page, observation: ViewerObservation

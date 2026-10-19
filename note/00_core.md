@@ -1770,8 +1770,9 @@ exact `--site` and/or Work title scope. It does not run Discovery or modify
 sources, source targets, crawl runs, or ZIP contents. The current site policy
 mapping is intentionally limited to the confirmed production capture paths:
 Comic DAYS and Magapoke prefer JPEG (`.jpg`/`.jpeg`) with PNG fallback, while
-MANGA ONE and Hanayume prefer source-native WebP with PNG fallback. Hanayume's
-mapping was added on 2026-10-18 for the observed resized Yona PNG archives. This
+MANGA ONE, Hanayume, and Younganimal prefer source-native WebP with PNG fallback. Hanayume's
+mapping was added on 2026-10-18 for the observed resized Yona PNG archives; Younganimal's
+mapping was added on 2026-10-19 after the fractional-destination capture correction. This
 is an extension-based recrawl policy, not proof that every PNG has reduced fidelity:
 a verified native-size PNG retained after codec failure is also classified as a fallback format.
 An explicitly unknown
@@ -1805,6 +1806,23 @@ no missing/broken/ambiguous artifacts, and made no Catalog/file changes. The pol
 and backup/apply tests passed 24 cases (0 skipped); synthetic apply verifies that moved ZIP
 bytes are preserved. `batch run --site hanayume` subsequently selects site-wide pending Items;
 the Batch CLI has no `--work` filter and Watchlist enablement is not a Batch source filter.
+
+Younganimal usage: `python scripts/prepare_recrawl.py --site younganimal --catalog
+catalog.sqlite --ignore-missing` scans all completed Younganimal Items; add an exact
+`--work "ホーリーランド"` to limit preparation to that title. The 2026-10-19 real dry-run
+scanned eight completed Items: six PREFERRED_ONLY and two FALLBACK_INCLUDED (Item 25335,
+six PNGs from `スピカ～羽海野チカ初期短編集～`; Item 33083, ten PNGs from `ホーリーランド`).
+Unexpected, broken, missing, and ambiguous counts were zero. Report:
+`output/younganimal-recrawl-dry-run-20261019.txt`. No real `--apply` or re-crawl was performed.
+Adding `--apply` uses the same backup/Artifact-locator/pending path and retains source grants,
+quota state, and historical runs. Normal Batch still considers site-wide pending Items, including
+unrelated pending Younganimal Items. The policy classifies PNG format, including native-size
+codec-fallback PNGs; it does not assert that every PNG is resized or that every later crawl will
+produce WebP. All 29 preparation tests passed (0 failed/skipped; one existing pytest-asyncio
+deprecation warning), including Younganimal upper-case/mixed extensions and synthetic apply
+with exact ZIP-byte, source, and historical-run preservation. Ruff (`scripts/prepare_recrawl.py
+src tests`) and changed-file diff checks passed. Browser Integration, Research/Probe, live
+re-crawl/apply, and the full repository suite were not rerun for this static site-policy addition.
 
 B1/B2/B3/B4/B5/B6ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、BookWalker、Magapoke、Manga ONE以外ではJump+だけproduction bounded Discoveryを実装している。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 

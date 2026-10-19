@@ -92,6 +92,10 @@ def _add_completed_archive(
         ("hanayume", ["001.WEBP"], "PREFERRED_ONLY"),
         ("hanayume", ["001.PNG"], "FALLBACK_INCLUDED"),
         ("hanayume", ["001.webp", "002.png"], "FALLBACK_INCLUDED"),
+        ("younganimal", ["001.WEBP"], "PREFERRED_ONLY"),
+        ("younganimal", ["001.PNG"], "FALLBACK_INCLUDED"),
+        ("younganimal", ["001.webp", "002.png"], "FALLBACK_INCLUDED"),
+        ("younganimal", ["001.jpg"], "UNEXPECTED_FORMAT"),
         ("magapoke", ["001.jpeg"], "PREFERRED_ONLY"),
     ],
 )
@@ -235,16 +239,18 @@ def test_no_scope_is_cli_error() -> None:
     assert prepare_recrawl.main([]) == 1
 
 
-@pytest.mark.parametrize("site", ["comicdays", "hanayume"])
+@pytest.mark.parametrize("site", ["comicdays", "hanayume", "younganimal"])
 def test_fallback_apply_moves_archive_updates_locator_and_pending(tmp_path: Path, site: str) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     _work, item, _source, _target, _run, artifact, archive_path = _add_completed_archive(
         catalog,
         tmp_path,
         site=site,
-        archive_entries=["page-0001.webp" if site == "hanayume" else "page-0001.jpg", "page-0002.png"],
+        archive_entries=["page-0001.jpg" if site == "comicdays" else "page-0001.webp", "page-0002.png"],
     )
     original = archive_path.read_bytes()
+    source_before = catalog.get_source(_source.id)
+    run_before = catalog.get_crawl_run(_run.id)
     report = prepare_recrawl.scan_catalog(catalog, site=site)
     applied = prepare_recrawl.apply_scan_results(
         catalog,
@@ -263,6 +269,8 @@ def test_fallback_apply_moves_archive_updates_locator_and_pending(tmp_path: Path
     assert updated.locator == backup.as_posix()
     assert updated.state == "present"
     assert catalog.get_item(item.id).status == "pending"
+    assert catalog.get_source(_source.id) == source_before
+    assert catalog.get_crawl_run(_run.id) == run_before
 
 
 def test_broken_apply_moves_zip_and_returns_item_to_pending(tmp_path: Path) -> None:
