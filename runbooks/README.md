@@ -59,3 +59,6 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
   charge/ticket/medal research and consumption deliberately deferred to a later phase.
 
 - [花とゆめ＋ Work Ticket](hanayume-work-ticket/README.md) — 作品単位の23h回復、話単位の72h閲覧、direct episode entry、同一ページBatch、grant-only と安全な実サイト検証（planned）。
+
+- [ヤンマガWeb 通常無料のみ Site Adapter](yanmaga-free/README.md) —
+  初回無料・黄色の無料/チケット・ポイントを対象外にした、Discovery → direct Batch → Viewer → ZIP/E2E の実装契約（planned）。
