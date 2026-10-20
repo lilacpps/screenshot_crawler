@@ -6,6 +6,7 @@ from datetime import datetime
 from urllib.parse import quote, unquote, urlsplit
 
 import pytest
+from PIL import Image
 
 from screenshot_crawler.batch import BatchExecutor, BatchPlanner, CandidateExecutionError
 from screenshot_crawler.catalog import (
@@ -33,6 +34,12 @@ from screenshot_crawler.site_adapters.yanmaga.discovery import (
     YanmagaDiscoveryAdapter,
     YanmagaListingRow,
     YanmagaListingSnapshot,
+)
+from screenshot_crawler.site_adapters.yanmaga.native_capture import (
+    MAX_CAPTURE_PIXELS,
+    capture_yanmaga_native_webp,
+    dispose_yanmaga_native_observer,
+    install_yanmaga_native_observer,
 )
 from screenshot_crawler.site_policies import SitePolicyRegistry, YanmagaSitePolicy
 
@@ -75,21 +82,58 @@ def _viewer_html(
     edge_obstruction: bool = False,
     adjacent_overlap: bool = False,
     terminal_control: str = "valid_next",
+    native_capture: bool = False,
+    native_style_unsupported: bool = False,
+    native_layer_unsupported: bool = False,
+    native_transparent: bool = False,
+    native_ambiguous: bool = False,
+    native_host_pseudo_issue: str | None = None,
+    native_wrapper_transform: str | None = None,
 ) -> str:
     wrappers = []
     colors = ("#b32b39", "#22784c", "#345ca8", "#b08228")
+    pseudo_issue_css = {
+        None: "",
+        "background": "background-color:rgba(255,0,0,.2)",
+        "filter": "filter:blur(1px)",
+        "backdrop_filter": "backdrop-filter:blur(1px)",
+        "shadow": "box-shadow:0 0 2px #f00",
+        "content": "content:'x'",
+    }
+    if native_host_pseudo_issue not in pseudo_issue_css:
+        raise ValueError(f"unsupported synthetic host pseudo issue: {native_host_pseudo_issue}")
     for index, color in enumerate(colors, start=1):
         segment_images = []
         for segment_index in range(3):
             styles = []
+            if native_style_unsupported and index in {1, 3}:
+                styles.append("filter:blur(1px)")
+            if native_layer_unsupported and index == 1 and segment_index == 1:
+                styles.append("z-index:2")
             if thin_segment and index == 4 and segment_index == 0:
                 styles.append("width:1px")
             if oversized_last_segment and index == 4 and segment_index == 2:
                 styles.append("height:700px")
             style_attr = f' style="{";".join(styles)}"' if styles else ""
-            segment_images.append(
-                f'<img src="{_segment_data(color, index)}" alt=""{style_attr}>'
-            )
+            if native_capture:
+                pseudo_issue = (
+                    pseudo_issue_css[native_host_pseudo_issue]
+                    if index == 1 and segment_index == 0
+                    else ""
+                )
+                pseudo_class = (
+                    f" pseudo-{native_host_pseudo_issue}"
+                    if pseudo_issue
+                    else ""
+                )
+                segment_images.append(
+                    f'<div class="segment-host{pseudo_class}">'
+                    f'<img alt=""{style_attr}></div>'
+                )
+            else:
+                segment_images.append(
+                    f'<img src="{_segment_data(color, index)}" alt=""{style_attr}>'
+                )
         images = "" if missing_half and index == 3 else "".join(segment_images)
         left = (
             "1264px"
@@ -98,10 +142,24 @@ def _viewer_html(
             if index == 3
             else "0px"
         )
-        wrappers.append(
-            f'<div id="content-p{index}" class="body-page" '
-            f'style="left:{left};display:none">{images}</div>'
-        )
+        if native_capture:
+            transform_override = (
+                f";transform:{native_wrapper_transform}"
+                if index == 1 and native_wrapper_transform is not None
+                else ""
+            )
+            if missing_half and index == 3:
+                images = ""
+            wrappers.append(
+                f'<div id="content-p{index}" class="body-page" '
+                f'style="left:0;display:none{transform_override}">'
+                f'<div class="pt-img">{images}</div></div>'
+            )
+        else:
+            wrappers.append(
+                f'<div id="content-p{index}" class="body-page" '
+                f'style="left:{left};display:none">{images}</div>'
+            )
     recommend_display = "block" if terminal_geometry == "obstructed" else "none"
     auxiliary = (
         '<div id="ads"></div>'
@@ -189,11 +247,13 @@ def _viewer_html(
     <style>
       html,body{{margin:0;width:100%;height:100%;overflow:hidden}}
       .pages#content{{position:absolute;top:0;left:0;width:2560px;height:1800px;overflow:hidden}}
-      .body-page{{position:absolute;top:0;width:1266px;height:1800px;overflow:hidden}}
-      .body-page img{{position:absolute;left:0;width:1266px;height:602px;object-fit:fill}}
+      .body-page{{position:absolute;top:0;width:{'1265.625px' if native_capture else '1266px'};height:1800px;overflow:hidden}}
+      .body-page img{{position:absolute;left:0;width:{'1267.875px' if native_capture else '1266px'};height:{'auto' if native_capture else '602px'};object-fit:fill;object-position:50% 50%}}
       .body-page img:nth-child(1){{top:0}}
-      .body-page img:nth-child(2){{top:598px}}
-      .body-page img:nth-child(3){{top:1196px}}
+      .body-page img:nth-child(2){{top:{'598.5px' if native_capture else '598px'};height:{'603px' if native_capture else '602px'}}}
+      .body-page img:nth-child(3){{top:{'1197px' if native_capture else '1196px'};height:{'605.25px' if native_capture else '602px'}}}
+      {'#content-p1,#content-p3,#content-p4{transform:translateX(14.375px)} #content-p2{transform:translateX(1280px)} #content-p3{padding-right:2px}' if native_capture else ''}
+      {'.pt-img{position:relative;width:1265.625px;height:1800px;overflow:visible} .segment-host{position:absolute;left:0;box-sizing:border-box;width:1267.864624px;overflow:hidden} .segment-host:nth-child(1){top:0;height:603px} .segment-host:nth-child(2){top:598.5px;height:603px} .segment-host:nth-child(3){top:1197px;height:605.239624px} .segment-host img{position:absolute;left:0;top:0;width:100%;height:100%;overflow:clip;object-fit:fill;object-position:50% 50%} .segment-host::after{content:"";display:block;position:absolute;left:0;top:0;width:100%;height:100%;background-color:rgba(0,0,0,0);background-image:none;border:0;outline-style:none;box-shadow:none;text-shadow:none;filter:none;backdrop-filter:none;transform:none;mix-blend-mode:normal;isolation:auto;clip-path:none;mask-image:none;overflow:visible;padding:0;margin:0} .segment-host.pseudo-background::after{background-color:rgba(255,0,0,.2)} .segment-host.pseudo-filter::after{filter:blur(1px)} .segment-host.pseudo-backdrop_filter::after{backdrop-filter:blur(1px)} .segment-host.pseudo-shadow::after{box-shadow:0 0 2px #f00} .segment-host.pseudo-content::after{content:"x"}' if native_capture else ''}
       #arrow-content{{position:absolute;right:10px;bottom:10px;width:40px;height:40px}}
       #arrow-content.hide .arrow-next-page{{display:none}}
       .arrow-next-page{{width:40px;height:40px}}
@@ -223,6 +283,9 @@ def _viewer_html(
       let leftFromFirst=false;
       const delayedEnd={json.dumps(delayed_end)};
       const arrowVisibleAtEnd={arrow_visible_at_end};
+      const nativeCapture={json.dumps(native_capture)};
+      const nativeTransparent={json.dumps(native_transparent)};
+      const nativeAmbiguous={json.dumps(native_ambiguous)};
       function show(value){{
         const previous=current;
         current=value; counter.textContent=`${{value}}/4`;
@@ -244,6 +307,38 @@ def _viewer_html(
         if(event.key==='ArrowRight') show(current===4?2:1);
         if(event.key==='ArrowLeft') show(current===1?2:4);
       }});
+      if(nativeCapture){{
+        window.__yanmagaTestOriginals={{
+          canvas:window.__yanmagaNativeCaptureV1.originalCanvasDescriptor.value,
+          blob:window.__yanmagaNativeCaptureV1.originalBlobDescriptor.value,
+          url:window.__yanmagaNativeCaptureV1.originalUrlDescriptor.value
+        }};
+        const generated=[];
+        for(const wrapper of pages){{
+          const page=Number(wrapper.id.replace('content-p',''));
+          [...wrapper.querySelectorAll('img')].forEach((image,segment)=>{{
+            const canvas=document.createElement('canvas');
+            canvas.width=1127; canvas.height=segment===2?538:536;
+            const context=canvas.getContext('2d');
+            const duplicate=nativeAmbiguous && page===1 && segment===1;
+            const sourceSegment=duplicate?0:segment;
+            const red=40+page*31+sourceSegment*17;
+            const green=35+page*19+sourceSegment*29;
+            const blue=45+page*23+sourceSegment*13;
+            context.fillStyle=nativeTransparent && page===1 && segment===0
+              ? `rgba(${{red}},${{green}},${{blue}},0.5)`
+              : `rgb(${{red}},${{green}},${{blue}})`;
+            context.fillRect(0,0,canvas.width,canvas.height);
+            const data=canvas.toDataURL('image/jpeg',0.9);
+            generated.push({{image,data}});
+          }});
+        }}
+        const createBlobUrl=({{image,data}})=>{{
+          const bytes=Uint8Array.from(atob(data.split(',')[1]),char=>char.charCodeAt(0));
+          image.src=URL.createObjectURL(new Blob([bytes],{{type:'image/jpeg'}}));
+        }};
+        generated.forEach(createBlobUrl);
+      }}
       show({initial_page});
     </script></body></html>'''
 
@@ -267,6 +362,13 @@ async def _set_routes(
     edge_obstruction: bool = False,
     adjacent_overlap: bool = False,
     terminal_control: str = "valid_next",
+    native_capture: bool = False,
+    native_style_unsupported: bool = False,
+    native_layer_unsupported: bool = False,
+    native_transparent: bool = False,
+    native_ambiguous: bool = False,
+    native_host_pseudo_issue: str | None = None,
+    native_wrapper_transform: str | None = None,
     wrong_route: bool = False,
 ) -> list[str]:
     requested: list[str] = []
@@ -328,33 +430,6 @@ async def _set_routes(
         path = unquote(urlsplit(url).path)
         if path == unquote(urlsplit(WORK_URL).path):
             await route.fulfill(status=200, content_type="text/html", body="<title>Work</title>")
-        elif path == unquote(urlsplit(SOURCE_URL).path):
-            location = (
-                wrong_viewer_url
-                if wrong_route
-                else VIEWER_NAVIGATION_URL
-            )
-            body = _viewer_html(
-                missing_half=missing_half,
-                thin_segment=thin_segment,
-                oversized_last_segment=oversized_last_segment,
-                unknown_aux=unknown_aux,
-                unsafe_end=unsafe_end,
-                delayed_end=delayed_end,
-                access_gate=access_gate,
-                terminal_geometry=terminal_geometry,
-                arrow_mode=arrow_mode,
-                first_page_overlay=first_page_overlay,
-                menu_hideable=menu_hideable,
-                edge_obstruction=edge_obstruction,
-                adjacent_overlap=adjacent_overlap,
-                terminal_control=terminal_control,
-            ).replace(
-                "<head>",
-                f"<head><script>history.replaceState(null, '', {json.dumps(location)});</script>",
-                1,
-            )
-            await route.fulfill(status=200, content_type="text/html", body=body)
         elif path in {
             unquote(urlsplit(VIEWER_URL).path),
             unquote(urlsplit(wrong_viewer_url).path),
@@ -377,12 +452,29 @@ async def _set_routes(
                     edge_obstruction=edge_obstruction,
                     adjacent_overlap=adjacent_overlap,
                     terminal_control=terminal_control,
+                    native_capture=native_capture,
+                    native_style_unsupported=native_style_unsupported,
+                    native_layer_unsupported=native_layer_unsupported,
+                    native_transparent=native_transparent,
+                    native_ambiguous=native_ambiguous,
+                    native_host_pseudo_issue=native_host_pseudo_issue,
+                    native_wrapper_transform=native_wrapper_transform,
                 ),
             )
         else:
             await route.fulfill(status=404, body="not found")
 
     await page.route("https://yanmaga.jp/**", route_handler)
+    original_goto = page.goto
+
+    async def goto_final_viewer_for_public_episode(url, *args, **kwargs):
+        if url == SOURCE_URL:
+            requested.append(url)
+            destination = wrong_viewer_url if wrong_route else VIEWER_NAVIGATION_URL
+            return await original_goto(destination, *args, **kwargs)
+        return await original_goto(url, *args, **kwargs)
+
+    monkeypatch.setattr(page, "goto", goto_final_viewer_for_public_episode)
     return requested
 
 
@@ -459,6 +551,528 @@ async def test_yanmaga_runner_rewinds_captures_spread_and_stops_at_verified_end(
     assert [capture.metadata.get("parts") for capture in result.pages] == [None, 2, 2, None]
     assert browser_page.url == VIEWER_NAVIGATION_URL
     assert (tmp_path / "isolated-output" / "page-0004.png").is_file()
+
+
+@pytest.mark.parametrize("native_wrapper_transform", [None, "translateX(24px)"])
+async def test_yanmaga_captures_exact_pre_jpeg_page_pixels_as_lossless_webp(
+    browser_page, tmp_path, monkeypatch, native_wrapper_transform
+) -> None:
+    await _set_routes(
+        browser_page,
+        monkeypatch,
+        native_capture=True,
+        native_wrapper_transform=native_wrapper_transform,
+    )
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+    result = await CrawlerRunner(_config(tmp_path)).run(
+        browser_page, YanmagaAdapter()
+    )
+
+    assert result.stop_state is PageState.END
+    assert len(result.pages) == 4
+    assert all(
+        (capture.mime_type, capture.file_extension, capture.width, capture.height)
+        == ("image/webp", ".webp", 1125, 1600)
+        for capture in result.pages
+    )
+    assert all(
+        capture.metadata["capture_method"] == "native_pre_jpeg_lossless_webp"
+        and capture.metadata["source_native_pixels_used"] is True
+        for capture in result.pages
+    )
+    pseudo = await browser_page.evaluate(
+        """() => {
+          const host=document.querySelector('#content-p1 .pt-img > .segment-host');
+          const style=getComputedStyle(host,'::after');
+          return {content:style.content,background:style.backgroundColor,
+            image:style.backgroundImage,outline:style.outlineStyle,
+            outlineWidth:style.outlineWidth,boxShadow:style.boxShadow,
+            filter:style.filter,backdrop:style.backdropFilter};
+        }"""
+    )
+    assert pseudo == {
+        "content": '""',
+        "background": "rgba(0, 0, 0, 0)",
+        "image": "none",
+        "outline": "none",
+        "outlineWidth": pseudo["outlineWidth"],
+        "boxShadow": "none",
+        "filter": "none",
+        "backdrop": "none",
+    }
+    assert pseudo["outlineWidth"] not in {"0px", "0px 0px 0px 0px"}
+    with Image.open(tmp_path / "isolated-output" / "page-0001.webp") as image:
+        image.load()
+        assert image.format == "WEBP"
+        rgba = image.convert("RGBA")
+        assert rgba.getpixel((10, 100)) == (71, 54, 68, 255)
+        assert rgba.getpixel((10, 532)) == (88, 83, 81, 255)
+        assert rgba.getpixel((10, 1064)) == (105, 112, 94, 255)
+        assert rgba.getpixel((1124, 1599)) == (105, 112, 94, 255)
+    assert await browser_page.evaluate(
+        """() => !window.__yanmagaNativeCaptureV1 &&
+          HTMLCanvasElement.prototype.toDataURL===window.__yanmagaTestOriginals.canvas &&
+          Blob===window.__yanmagaTestOriginals.blob &&
+          URL.createObjectURL===window.__yanmagaTestOriginals.url"""
+    )
+
+
+async def test_yanmaga_native_observer_is_top_frame_viewer_route_only(
+    browser_page, monkeypatch
+) -> None:
+    await _set_routes(browser_page, monkeypatch, native_capture=True)
+    await install_yanmaga_native_observer(browser_page)
+
+    await browser_page.goto(WORK_URL, wait_until="domcontentloaded")
+    assert await browser_page.evaluate(
+        """() => !window.__yanmagaNativeCaptureV1 &&
+          !window.__yanmagaNativeCaptureArmV1"""
+    )
+
+    await browser_page.goto(VIEWER_NAVIGATION_URL, wait_until="domcontentloaded")
+    await browser_page.wait_for_function(
+        "window.__yanmagaNativeCaptureV1?.active === true"
+    )
+    await browser_page.evaluate(
+        """() => {
+          const frame=document.createElement('iframe');
+          frame.id='native-observer-frame';
+          frame.srcdoc='<html><body>child</body></html>';
+          document.body.append(frame);
+        }"""
+    )
+    frame = next(item for item in browser_page.frames if item.parent_frame is not None)
+    assert await frame.evaluate("typeof window.__yanmagaNativeCaptureV1 === 'undefined'")
+    assert await browser_page.evaluate("window.__yanmagaNativeCaptureV1.active === true")
+
+
+async def test_yanmaga_observes_preloads_after_page_capture_returns(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    await _set_routes(browser_page, monkeypatch, native_capture=True)
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+    adapter = YanmagaAdapter()
+    capture = adapter.capture_page
+    first_capture = True
+    hook_state: dict[str, bool] = {}
+    encoded_budget_observations: list[tuple[int, int]] = []
+
+    release_page = adapter_module.release_yanmaga_native_page
+
+    async def release_and_check_encoded_budget(page, page_id):
+        before = await page.evaluate(
+            "window.__yanmagaNativeCaptureV1?.storedEncodedBytes ?? -1"
+        )
+        await release_page(page, page_id)
+        after = await page.evaluate(
+            "window.__yanmagaNativeCaptureV1?.storedEncodedBytes ?? -1"
+        )
+        encoded_budget_observations.append((before, after))
+
+    monkeypatch.setattr(
+        adapter_module, "release_yanmaga_native_page", release_and_check_encoded_budget
+    )
+
+    async def capture_then_generate_later_page(page):
+        nonlocal first_capture
+        result = await capture(page)
+        if first_capture:
+            first_capture = False
+            hook_state.update(
+                await page.evaluate(
+                    """() => {
+                      const state=window.__yanmagaNativeCaptureV1;
+                      const active=!!state && state.active;
+                      [...document.querySelectorAll('#content-p4 img')].forEach((image,index)=>{
+                        const canvas=document.createElement('canvas');
+                        canvas.width=1127; canvas.height=index===2?538:536;
+                        const context=canvas.getContext('2d');
+                        context.fillStyle=['#e10221','#31e243','#4254e6'][index];
+                        context.fillRect(0,0,canvas.width,canvas.height);
+                        const data=canvas.toDataURL('image/jpeg',0.9);
+                        const bytes=Uint8Array.from(atob(data.split(',')[1]),char=>char.charCodeAt(0));
+                        image.src=URL.createObjectURL(new Blob([bytes],{type:'image/jpeg'}));
+                      });
+                      return {activeBefore:active,activeAfter:!!state && state.active};
+                    }"""
+                )
+            )
+        return result
+
+    monkeypatch.setattr(adapter, "capture_page", capture_then_generate_later_page)
+    result = await CrawlerRunner(_config(tmp_path)).run(browser_page, adapter)
+
+    assert hook_state == {"activeBefore": True, "activeAfter": True}
+    assert encoded_budget_observations
+    assert all(before == after and before >= 0 for before, after in encoded_budget_observations)
+    assert result.stop_state is PageState.END
+    assert [capture.mime_type for capture in result.pages] == ["image/webp"] * 4
+
+
+async def test_yanmaga_retains_eager_60_segment_preload_before_first_capture(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    await _set_routes(browser_page, monkeypatch, native_capture=True)
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+    adapter = YanmagaAdapter()
+    capture = adapter.capture_page
+    observations: dict[str, object] = {}
+
+    async def capture_after_eager_preload(page):
+        if "before" not in observations:
+            await page.wait_for_function(
+                "window.__yanmagaNativeCaptureV1?.inFlight === 0", timeout=2_000
+            )
+            observations["generated"] = await page.evaluate(
+                """async () => {
+                  const state=window.__yanmagaNativeCaptureV1;
+                  const generated=[];
+                  for(let index=0;index<48;index++){
+                    const canvas=document.createElement('canvas');
+                    canvas.width=1127; canvas.height=index%3===2?538:536;
+                    const context=canvas.getContext('2d');
+                    const red=(index*37+111)%256, green=(index*71+44)%256;
+                    const blue=(index*113+7)%256;
+                    context.fillStyle=`rgb(${red},${green},${blue})`;
+                    context.fillRect(0,0,canvas.width,canvas.height);
+                    context.fillStyle=`rgb(${(red+83)%256},${(green+127)%256},${(blue+191)%256})`;
+                    context.fillRect((index*13)%1100,(index*17)%500,27,27);
+                    const data=canvas.toDataURL('image/jpeg',0.9);
+                    const bytes=Uint8Array.from(atob(data.split(',')[1]),char=>char.charCodeAt(0));
+                    const blob=new Blob([bytes],{type:'image/jpeg'});
+                    generated.push(URL.createObjectURL(blob));
+                  }
+                  return {generatedCount:generated.length, maxPixelBytes:state.maxPixelBytes};
+                }"""
+            )
+            await page.wait_for_function(
+                """() => {
+                  const state=window.__yanmagaNativeCaptureV1;
+                  return !!state && state.inFlight===0 && state.byUrl.size===60;
+                }""",
+                timeout=5_000,
+            )
+            observations["before"] = await page.evaluate(
+                """() => {
+                  const state=window.__yanmagaNativeCaptureV1;
+                  return {overflow:state.overflow,reason:state.overflowReason,
+                    total:state.totalCandidates,pending:state.candidates.length,
+                    bound:state.boundCandidates.size,urls:state.byUrl.size,
+                    storedPixelBytes:state.storedPixelBytes,
+                    canvasCopies:state.stats.canvasCopies,
+                    exactBlobBindings:state.stats.exactBlobBindings,
+                    ambiguities:state.stats.ambiguities,misses:state.stats.misses,
+                    readFailures:state.stats.readFailures,inFlight:state.inFlight};
+                }"""
+            )
+        result = await capture(page)
+        if "firstCapture" not in observations:
+            observations["firstCapture"] = {
+                "mime": result[0].mime_type if result else None,
+                "dimensions": (result[0].width, result[0].height) if result else None,
+            }
+            observations["afterFirstCapture"] = await page.evaluate(
+                """() => {
+                  const state=window.__yanmagaNativeCaptureV1;
+                  return {overflow:state.overflow,total:state.totalCandidates,
+                    bound:state.boundCandidates.size,urls:state.byUrl.size,
+                    storedPixelBytes:state.storedPixelBytes,inFlight:state.inFlight};
+                }"""
+            )
+        return result
+
+    monkeypatch.setattr(adapter, "capture_page", capture_after_eager_preload)
+    result = await CrawlerRunner(_config(tmp_path)).run(browser_page, adapter)
+
+    expected_page_bytes = 7_257_880
+    expected_chapter_bytes = 20 * expected_page_bytes
+    assert observations["generated"] == {
+        "generatedCount": 48,
+        "maxPixelBytes": MAX_CAPTURE_PIXELS,
+    }
+    before = observations["before"]
+    assert before == {
+        "overflow": False,
+        "reason": None,
+        "total": 60,
+        "pending": 0,
+        "bound": 60,
+        "urls": 60,
+        "storedPixelBytes": expected_chapter_bytes,
+        "canvasCopies": 60,
+        "exactBlobBindings": 60,
+        "ambiguities": 0,
+        "misses": 0,
+        "readFailures": 0,
+        "inFlight": 0,
+    }
+    assert expected_chapter_bytes == 145_157_600
+    assert expected_chapter_bytes < MAX_CAPTURE_PIXELS
+    assert observations["firstCapture"] == {
+        "mime": "image/webp",
+        "dimensions": (1125, 1600),
+    }
+    assert observations["afterFirstCapture"] == {
+        "overflow": False,
+        "total": 60,
+        "bound": 60,
+        "urls": 57,
+        "storedPixelBytes": expected_chapter_bytes - expected_page_bytes,
+        "inFlight": 0,
+    }
+    assert result.stop_state is PageState.END
+    assert [capture.mime_type for capture in result.pages] == ["image/webp"] * 4
+
+
+async def test_yanmaga_native_pixel_budget_exact_boundary_and_overflow(
+    browser_page, monkeypatch
+) -> None:
+    await _set_routes(browser_page, monkeypatch, native_capture=True)
+    await install_yanmaga_native_observer(browser_page)
+    await browser_page.goto(VIEWER_NAVIGATION_URL, wait_until="domcontentloaded")
+    await browser_page.wait_for_function(
+        "window.__yanmagaNativeCaptureV1?.active === true"
+    )
+
+    observations = await browser_page.evaluate(
+        """() => {
+          const state=window.__yanmagaNativeCaptureV1;
+          const pixels=1127*536*4;
+          const makeCanvas=(color)=>{
+            const canvas=document.createElement('canvas');
+            canvas.width=1127; canvas.height=536;
+            const context=canvas.getContext('2d');
+            context.fillStyle=color; context.fillRect(0,0,canvas.width,canvas.height);
+            return canvas;
+          };
+          state.storedPixelBytes=state.maxPixelBytes-pixels;
+          const copiesBefore=state.stats.canvasCopies;
+          makeCanvas('#21a3d9').toDataURL('image/jpeg',0.9);
+          const accepted={maxPixelBytes:state.maxPixelBytes,
+            storedPixelBytes:state.storedPixelBytes,overflow:state.overflow,
+            canvasCopies:state.stats.canvasCopies-copiesBefore};
+          state.storedPixelBytes=state.maxPixelBytes-pixels+1;
+          makeCanvas('#db7132').toDataURL('image/jpeg',0.9);
+          const rejected={storedPixelBytes:state.storedPixelBytes,
+            overflow:state.overflow,reason:state.overflowReason,
+            canvasCopies:state.stats.canvasCopies-copiesBefore};
+          return {accepted,rejected};
+        }"""
+    )
+
+    assert observations == {
+        "accepted": {
+            "maxPixelBytes": MAX_CAPTURE_PIXELS,
+            "storedPixelBytes": MAX_CAPTURE_PIXELS,
+            "overflow": False,
+            "canvasCopies": 1,
+        },
+        "rejected": {
+            "storedPixelBytes": MAX_CAPTURE_PIXELS - (1127 * 536 * 4) + 1,
+            "overflow": True,
+            "reason": "capture_buffer_overflow",
+            "canvasCopies": 1,
+        },
+    }
+    await dispose_yanmaga_native_observer(browser_page)
+
+
+@pytest.mark.parametrize(
+    ("node_selector", "style_property", "style_value"),
+    [
+        ("#content-p1 img", "filter", "blur(1px)"),
+        ("#content-p1 img", "opacity", "0.99"),
+        ("#content-p1 .pt-img > div:first-child", "filter", "blur(1px)"),
+        ("#content-p1 .pt-img > div:first-child", "opacity", "0.99"),
+        ("#content-p1 .pt-img", "filter", "blur(1px)"),
+        ("#content-p1 .pt-img", "opacity", "0.99"),
+    ],
+)
+async def test_yanmaga_native_proof_rejects_same_size_style_drift_during_source_wait(
+    browser_page, tmp_path, monkeypatch, node_selector, style_property, style_value
+) -> None:
+    await _set_routes(browser_page, monkeypatch, native_capture=True)
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+    capture = adapter_module.capture_yanmaga_native_webp
+    armed = False
+
+    async def capture_with_delayed_style_change(page, page_id):
+        nonlocal armed
+        if page_id == "content-p1" and not armed:
+            armed = True
+            await page.evaluate(
+                """({selector,property,value}) => {
+                  const node=document.querySelector(selector);
+                  const state=window.__yanmagaNativeCaptureV1;
+                  const source=document.querySelector('#content-p1 img').currentSrc;
+                  const record=state.byUrl.get(source);
+                  state.byUrl.delete(source);
+                  setTimeout(()=>{
+                    node.style.setProperty(property,value);
+                    state.byUrl.set(source,record);
+                  },40);
+                }""",
+                {
+                    "selector": node_selector,
+                    "property": style_property,
+                    "value": style_value,
+                },
+            )
+        return await capture(page, page_id)
+
+    monkeypatch.setattr(
+        adapter_module, "capture_yanmaga_native_webp", capture_with_delayed_style_change
+    )
+    result = await CrawlerRunner(_config(tmp_path)).run(
+        browser_page, YanmagaAdapter()
+    )
+
+    assert result.stop_state is PageState.END
+    assert armed
+    assert [capture.mime_type for capture in result.pages] == [
+        "image/png",
+        "image/webp",
+        "image/webp",
+        "image/webp",
+    ]
+    assert result.pages[0].metadata["capture_group"]["fallback_reason"] == (
+        "native_proof_changed_while_waiting"
+    )
+
+
+async def test_yanmaga_native_group_revalidation_rejects_prior_page_style_drift(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    await _set_routes(browser_page, monkeypatch, native_capture=True)
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+    capture = adapter_module.capture_yanmaga_native_webp
+    changed = False
+
+    async def capture_then_change_prior_spread_page(page, page_id):
+        nonlocal changed
+        outcome = await capture(page, page_id)
+        if page_id == "content-p3" and not changed and outcome.capture is not None:
+            changed = True
+            await page.locator("#content-p2 img").first.evaluate(
+                "image => { image.style.opacity='0.99'; }"
+            )
+        return outcome
+
+    monkeypatch.setattr(
+        adapter_module, "capture_yanmaga_native_webp", capture_then_change_prior_spread_page
+    )
+    result = await CrawlerRunner(_config(tmp_path)).run(
+        browser_page, YanmagaAdapter()
+    )
+
+    assert result.stop_state is PageState.END
+    assert changed
+    assert [capture.mime_type for capture in result.pages] == [
+        "image/webp",
+        "image/png",
+        "image/png",
+        "image/webp",
+    ]
+    assert result.pages[1].metadata["capture_group"]["fallback_reason"] == (
+        "native_capture_group_proof_changed"
+    )
+    assert result.pages[2].metadata["capture_group"]["fallback_reason"] == (
+        "native_capture_group_proof_changed"
+    )
+
+
+@pytest.mark.parametrize(
+    ("options", "expected_reasons", "expected_types"),
+    [
+        (
+            {"native_style_unsupported": True},
+            ("unsupported_compositing_style", "unsupported_compositing_style"),
+            ("image/png", "image/png", "image/png", "image/webp"),
+        ),
+        (
+            {"native_transparent": True},
+            ("segment_not_opaque",),
+            ("image/png", "image/webp", "image/webp", "image/webp"),
+        ),
+        (
+            {"native_ambiguous": True},
+            ("segment_source_not_exactly_bound",),
+            ("image/png", "image/webp", "image/webp", "image/webp"),
+        ),
+        (
+            {"native_layer_unsupported": True},
+            ("unsupported_painter_order",),
+            ("image/png", "image/webp", "image/webp", "image/webp"),
+        ),
+        *[
+            (
+                {"native_host_pseudo_issue": issue},
+                ("unsupported_compositing_style",),
+                ("image/png", "image/webp", "image/webp", "image/webp"),
+            )
+            for issue in ("background", "filter", "backdrop_filter", "shadow", "content")
+        ],
+    ],
+)
+async def test_yanmaga_native_capture_falls_back_for_unproven_segment_groups(
+    browser_page, tmp_path, monkeypatch, options, expected_reasons, expected_types
+) -> None:
+    await _set_routes(browser_page, monkeypatch, native_capture=True, **options)
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+
+    result = await CrawlerRunner(_config(tmp_path)).run(
+        browser_page, YanmagaAdapter()
+    )
+
+    assert result.stop_state is PageState.END
+    assert len(result.pages) == 4
+    assert tuple(capture.mime_type for capture in result.pages) == expected_types
+    assert result.pages[0].metadata["capture_group"]["fallback_reason"] == expected_reasons[0]
+    assert result.pages[0].metadata["capture_method"] == "rendered_dom_body_wrapper_png"
+    assert result.pages[0].metadata["source_native_pixels_used"] is False
+    if len(expected_reasons) == 2:
+        assert result.pages[1].metadata["capture_group"]["fallback_reason"] == expected_reasons[1]
+        assert result.pages[2].metadata["capture_group"]["fallback_reason"] == expected_reasons[1]
+    if expected_types[-1] == "image/webp":
+        assert result.pages[-1].metadata["capture_method"] == "native_pre_jpeg_lossless_webp"
+
+
+@pytest.mark.parametrize(
+    "native_wrapper_transform",
+    ["translateY(1px)", "scale(1.01)", "skewX(1deg)", "rotateY(1deg)"],
+)
+async def test_yanmaga_native_page_profile_rejects_non_x_wrapper_transforms(
+    browser_page, monkeypatch, native_wrapper_transform
+) -> None:
+    await _set_routes(
+        browser_page,
+        monkeypatch,
+        native_capture=True,
+        native_wrapper_transform=native_wrapper_transform,
+    )
+    await install_yanmaga_native_observer(browser_page)
+    try:
+        await browser_page.goto(VIEWER_NAVIGATION_URL, wait_until="domcontentloaded")
+        await browser_page.wait_for_function(
+            "window.__yanmagaNativeCaptureV1?.active === true"
+        )
+        await browser_page.wait_for_function(
+            """() => [...document.querySelectorAll('#content-p1 img')].length === 3 &&
+              [...document.querySelectorAll('#content-p1 img')].every(
+                image => image.complete && image.naturalWidth === 1127)"""
+        )
+        await browser_page.keyboard.press("ArrowRight")
+        await browser_page.keyboard.press("ArrowRight")
+        await browser_page.wait_for_function(
+            "getComputedStyle(document.querySelector('#content-p1')).display === 'block'"
+        )
+
+        outcome = await capture_yanmaga_native_webp(browser_page, "content-p1")
+
+        assert outcome.capture is None
+        assert outcome.reason == "unsupported_compositing_style"
+    finally:
+        await dispose_yanmaga_native_observer(browser_page)
 
 
 async def test_yanmaga_accepts_verified_two_pixel_overlap_between_spread_pages(
@@ -642,11 +1256,42 @@ async def test_yanmaga_rejects_same_geometry_source_replacement_during_capture(
     monkeypatch.setattr(adapter_module, "capture_locator", capture_then_replace_source)
     with pytest.raises(
         UnknownPageStateError,
-        match="reader changed while rendered pages were captured",
+        match="reader changed while page pixels were captured",
     ):
         await CrawlerRunner(_config(tmp_path)).run(browser_page, YanmagaAdapter())
 
     assert changed
+    assert not list((tmp_path / "isolated-output").glob("page-*.png"))
+
+
+async def test_yanmaga_native_capture_rejects_same_geometry_source_replacement(
+    browser_page, tmp_path, monkeypatch
+) -> None:
+    await _set_routes(browser_page, monkeypatch, native_capture=True)
+    monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 500)
+    capture = adapter_module.capture_yanmaga_native_webp
+    changed = False
+
+    async def capture_then_replace_source(page, page_id):
+        nonlocal changed
+        outcome = await capture(page, page_id)
+        if not changed and page_id == "content-p1" and outcome.capture is not None:
+            changed = True
+            await page.locator("#content-p1 img").first.evaluate(
+                "(image, source) => { image.src = source; }",
+                _segment_data("#f000ff", 1),
+            )
+        return outcome
+
+    monkeypatch.setattr(adapter_module, "capture_yanmaga_native_webp", capture_then_replace_source)
+    with pytest.raises(
+        UnknownPageStateError,
+        match="reader changed while page pixels were captured",
+    ):
+        await CrawlerRunner(_config(tmp_path)).run(browser_page, YanmagaAdapter())
+
+    assert changed
+    assert not list((tmp_path / "isolated-output").glob("page-*.webp"))
     assert not list((tmp_path / "isolated-output").glob("page-*.png"))
 
 
@@ -696,6 +1341,7 @@ async def test_yanmaga_runner_fails_closed_on_unproven_reader_state(
         "oversized_last_segment": scenario == "oversized_last_segment",
         "unknown_aux": scenario == "unknown_aux",
         "unsafe_end": scenario == "unsafe_end",
+        "native_capture": scenario in {"wrong_route", "unsafe_end"},
         "access_gate": scenario == "access_gate",
         "terminal_geometry": (
             "offscreen" if scenario == "offscreen_rental" else
@@ -705,8 +1351,18 @@ async def test_yanmaga_runner_fails_closed_on_unproven_reader_state(
     requested = await _set_routes(browser_page, monkeypatch, **options)
     monkeypatch.setattr(adapter_module, "PAGE_CHANGE_TIMEOUT_MS", 300)
 
+    adapter = YanmagaAdapter()
     with pytest.raises(expected_error):
-        await CrawlerRunner(_config(tmp_path)).run(browser_page, YanmagaAdapter())
+        await CrawlerRunner(_config(tmp_path)).run(browser_page, adapter)
+
+    if scenario in {"wrong_route", "unsafe_end"}:
+        assert await browser_page.evaluate(
+            """() => !window.__yanmagaNativeCaptureV1 &&
+              HTMLCanvasElement.prototype.toDataURL===window.__yanmagaTestOriginals.canvas &&
+              Blob===window.__yanmagaTestOriginals.blob &&
+              URL.createObjectURL===window.__yanmagaTestOriginals.url"""
+        )
+        assert adapter._native_observer_installed is False
 
     if scenario in {"unknown_access", "known_restricted"}:
         assert not any(urlsplit(url).path.endswith(EPISODE_ID) for url in requested)

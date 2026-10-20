@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 from urllib.parse import quote
 
 import pytest
+from PIL import Image
 
 from screenshot_crawler.core.errors import UnknownPageStateError, UnsupportedAccessStrategyError
 from screenshot_crawler.site_adapters.yanmaga import (
@@ -15,6 +17,12 @@ from screenshot_crawler.site_adapters.yanmaga.adapter import (
     _BodyPage,
     _ImageSegment,
     _ReaderSnapshot,
+)
+from screenshot_crawler.site_adapters.yanmaga.native_capture import (
+    PAGE_HEIGHT,
+    PAGE_WIDTH,
+    _encode_lossless_webp,
+    _single_vp8l,
 )
 
 SLUG = "ウサギとカメのゆる山歩"
@@ -91,6 +99,42 @@ def test_page_counter_is_bounded_and_consistent() -> None:
     assert parse_yanmaga_page_counter("36/36") == (36, 36)
     for value in (None, "0/36", "37/36", "1/0", "1 / 36", "1/2001", "1/2/3"):
         assert parse_yanmaga_page_counter(value) is None
+
+
+def test_native_page_encoder_emits_exact_single_frame_lossless_webp() -> None:
+    rgba = bytearray(bytes((11, 22, 33, 255)) * (PAGE_WIDTH * PAGE_HEIGHT))
+    rgba[0:4] = bytes((21, 84, 139, 255))
+    rgba[-4:] = bytes((212, 103, 47, 255))
+    image = Image.frombytes("RGBA", (PAGE_WIDTH, PAGE_HEIGHT), bytes(rgba))
+    png_buffer = io.BytesIO()
+    image.save(png_buffer, format="PNG")
+
+    result = _encode_lossless_webp(png_buffer.getvalue())
+
+    assert (result.width, result.height, result.mime_type, result.file_extension) == (
+        PAGE_WIDTH,
+        PAGE_HEIGHT,
+        "image/webp",
+        ".webp",
+    )
+    assert _single_vp8l(result.data, width=PAGE_WIDTH, height=PAGE_HEIGHT)
+    with Image.open(io.BytesIO(result.data)) as decoded:
+        decoded.load()
+        assert decoded.convert("RGBA").tobytes() == bytes(rgba)
+
+
+def test_native_page_encoder_rejects_transparency_and_wrong_dimensions() -> None:
+    transparent = Image.new("RGBA", (PAGE_WIDTH, PAGE_HEIGHT), (10, 20, 30, 254))
+    transparent_png = io.BytesIO()
+    transparent.save(transparent_png, format="PNG")
+    with pytest.raises(ValueError, match="opaque"):
+        _encode_lossless_webp(transparent_png.getvalue())
+
+    wrong_size = Image.new("RGBA", (PAGE_WIDTH - 1, PAGE_HEIGHT), (10, 20, 30, 255))
+    wrong_png = io.BytesIO()
+    wrong_size.save(wrong_png, format="PNG")
+    with pytest.raises(ValueError, match="dimensions"):
+        _encode_lossless_webp(wrong_png.getvalue())
 
 
 def test_rendered_body_wrapper_requires_three_loaded_contiguous_segments() -> None:

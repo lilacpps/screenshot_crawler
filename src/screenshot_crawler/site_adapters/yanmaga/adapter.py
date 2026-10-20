@@ -34,6 +34,15 @@ from screenshot_crawler.site_adapters.yanmaga.discovery import (
     parse_yanmaga_episode_url,
     parse_yanmaga_work_url,
 )
+from screenshot_crawler.site_adapters.yanmaga.native_capture import (
+    NativeCaptureOutcome,
+    activate_yanmaga_native_observer,
+    capture_yanmaga_native_webp,
+    dispose_yanmaga_native_observer,
+    install_yanmaga_native_observer,
+    release_yanmaga_native_page,
+    verify_yanmaga_native_group,
+)
 from screenshot_crawler.watchlist.models import WatchlistTarget
 
 VIEWPORT_WIDTH = 2560
@@ -357,6 +366,16 @@ class YanmagaAdapter(SiteAdapter):
         self._advance_pending = False
         self._ended = False
         self._listing_rows = None
+        self._native_observer_installed = False
+        self._last_capture_group: dict[str, object] = {}
+
+    async def prepare_page(self, page: Page) -> None:
+        try:
+            await install_yanmaga_native_observer(page)
+        except PlaywrightError:
+            self._native_observer_installed = False
+            return
+        self._native_observer_installed = True
 
     def get_access_profile(self) -> AccessProfile:
         return yanmaga_access_profile()
@@ -364,6 +383,10 @@ class YanmagaAdapter(SiteAdapter):
     def get_initialize_timeout_ms(self, default_ms: int) -> int:
         del default_ms
         return INITIALIZE_TIMEOUT_MS
+
+    async def _dispose_native_observer(self, page: Page) -> None:
+        await dispose_yanmaga_native_observer(page)
+        self._native_observer_installed = False
 
     async def configure_run(self, page: Page, access_strategy: AccessStrategy) -> None:
         del page
@@ -411,6 +434,13 @@ class YanmagaAdapter(SiteAdapter):
         return self._work_url
 
     async def initialize(self, page: Page) -> None:
+        try:
+            await self._initialize_impl(page)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    async def _initialize_impl(self, page: Page) -> None:
         expected = self._require_expected()
         if self._source_url is None or self._work_url is None:
             raise UnknownPageStateError("Yanmaga target URL was not resolved before navigation")
@@ -1106,6 +1136,13 @@ class YanmagaAdapter(SiteAdapter):
         )
 
     async def detect_state(self, page: Page) -> PageState:
+        try:
+            return await self._detect_state_impl(page)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    async def _detect_state_impl(self, page: Page) -> PageState:
         if self._ended:
             return PageState.END
         self._validate_viewer_route(page)
@@ -1120,6 +1157,7 @@ class YanmagaAdapter(SiteAdapter):
         ):
             await self._wait_for_positive_terminal(page, timeout_ms=PAGE_CHANGE_TIMEOUT_MS)
             self._ended = True
+            await self._dispose_native_observer(page)
             return PageState.END
         visible_indices = tuple(sorted(page.index for page in snapshot.visible_pages))
         if any(index not in self._captured_indices for index in visible_indices):
@@ -1129,12 +1167,23 @@ class YanmagaAdapter(SiteAdapter):
         raise UnknownPageStateError("Yanmaga viewer has no uncaptured body page")
 
     async def get_capture_target(self, page: Page) -> Locator:
-        targets = await self.get_capture_targets(page)
-        if len(targets) != 1:
-            raise UnknownPageStateError("Yanmaga screen is a spread; use all capture targets")
-        return targets[0]
+        try:
+            targets = await self.get_capture_targets(page)
+            if len(targets) != 1:
+                raise UnknownPageStateError("Yanmaga screen is a spread; use all capture targets")
+            return targets[0]
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
 
     async def get_capture_targets(self, page: Page) -> tuple[Locator, ...]:
+        try:
+            return await self._get_capture_targets_impl(page)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    async def _get_capture_targets_impl(self, page: Page) -> tuple[Locator, ...]:
         self._validate_viewer_route(page)
         snapshot = await self._read_snapshot(page)
         if snapshot is None:
@@ -1155,6 +1204,13 @@ class YanmagaAdapter(SiteAdapter):
         return targets
 
     async def capture_page(self, page: Page) -> tuple[CaptureResult, ...] | None:
+        try:
+            return await self._capture_page_impl(page)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    async def _capture_page_impl(self, page: Page) -> tuple[CaptureResult, ...] | None:
         targets = await self.get_capture_targets(page)
         snapshot = await self._wait_for_stable_snapshot(
             page, timeout_ms=PAGE_CHANGE_TIMEOUT_MS
@@ -1172,9 +1228,33 @@ class YanmagaAdapter(SiteAdapter):
         )
         if target_indices != current_new_indices:
             raise UnknownPageStateError("Yanmaga visible page group changed before capture")
+        native_outcomes: list[NativeCaptureOutcome] = []
+        fallback_reason: str | None = None
+        if self._native_observer_installed:
+            for index in target_indices:
+                outcome = await capture_yanmaga_native_webp(
+                    page, f"content-p{index}"
+                )
+                native_outcomes.append(outcome)
+                if outcome.capture is None:
+                    fallback_reason = outcome.reason
+                    break
+        else:
+            fallback_reason = "native_observer_not_installed"
+
+        native_group = (
+            fallback_reason is None
+            and len(native_outcomes) == len(target_indices)
+            and all(outcome.capture is not None for outcome in native_outcomes)
+        )
+        if native_group and not await self._native_group_proof_is_current(
+            page, target_indices, native_outcomes
+        ):
+            native_group = False
+            fallback_reason = "native_capture_group_proof_changed"
         captures: list[CaptureResult] = []
         captured_now: list[int] = []
-        for target in targets:
+        for target_position, target in enumerate(targets):
             match = _PAGE_ID.fullmatch((await target.get_attribute("id")) or "")
             if match is None:
                 raise UnknownPageStateError("Yanmaga capture target lost its native page ID")
@@ -1184,11 +1264,24 @@ class YanmagaAdapter(SiteAdapter):
                 raise UnknownPageStateError("Yanmaga rendered page visibility proof changed before capture")
             if not self._segments_form_observed_page(proof):
                 raise UnknownPageStateError("Yanmaga rendered page proof changed before capture")
-            result = await capture_locator(target)
+            result = (
+                native_outcomes[target_position].capture
+                if native_group
+                else await capture_locator(target)
+            )
+            if result is None:
+                raise UnknownPageStateError("Yanmaga native capture group is incomplete")
             natural_width = max(segment.natural_width for segment in proof.segments)
-            if result.width is None or result.height is None or result.width < natural_width:
+            valid_dimensions = (
+                result.width == 1125 and result.height == 1600
+                if native_group
+                else result.width is not None
+                and result.height == 1800
+                and result.width >= natural_width
+            )
+            if not valid_dimensions:
                 raise UnknownPageStateError(
-                    "Yanmaga rendered page capture is below the verified source-segment width"
+                    "Yanmaga capture dimensions differ from the verified page profile"
                 )
             captures.append(result)
             captured_now.append(index)
@@ -1198,11 +1291,81 @@ class YanmagaAdapter(SiteAdapter):
             page, timeout_ms=PAGE_CHANGE_TIMEOUT_MS
         )
         if self._snapshot_signature(after) != self._snapshot_signature(snapshot):
-            raise UnknownPageStateError("Yanmaga reader changed while rendered pages were captured")
+            raise UnknownPageStateError("Yanmaga reader changed while page pixels were captured")
+        if native_group and not await self._native_group_proof_is_current(
+            page, target_indices, native_outcomes
+        ):
+            native_group = False
+            fallback_reason = "native_capture_group_proof_changed_before_return"
+            captures = []
+            for target, index in zip(targets, target_indices, strict=True):
+                rendered = await capture_locator(target)
+                proof = by_index[index]
+                natural_width = max(segment.natural_width for segment in proof.segments)
+                if (
+                    rendered.width is None
+                    or rendered.width < natural_width
+                    or rendered.height != 1800
+                ):
+                    raise UnknownPageStateError(
+                        "Yanmaga rendered fallback dimensions differ from the verified page profile"
+                    )
+                captures.append(rendered)
+            fallback_snapshot = await self._wait_for_stable_snapshot(
+                page, timeout_ms=PAGE_CHANGE_TIMEOUT_MS
+            )
+            if self._snapshot_signature(fallback_snapshot) != self._snapshot_signature(snapshot):
+                raise UnknownPageStateError(
+                    "Yanmaga reader changed while fallback pixels were captured"
+                )
+        for index in target_indices:
+            await release_yanmaga_native_page(page, f"content-p{index}")
+        method = (
+            "native_pre_jpeg_lossless_webp"
+            if native_group
+            else "rendered_dom_body_wrapper_png"
+        )
+        self._last_capture_group = {
+            "group_method": method,
+            "page_indices": list(target_indices),
+            "pages": [
+                {
+                    "page_index": index,
+                    "mime_type": capture.mime_type,
+                    "width": capture.width,
+                    "height": capture.height,
+                    "method": method,
+                }
+                for index, capture in zip(captured_now, captures, strict=True)
+            ],
+            "fallback_reason": None if native_group else fallback_reason,
+        }
         self._captured_indices.extend(captured_now)
         return tuple(captures)
 
+    @staticmethod
+    async def _native_group_proof_is_current(
+        page: Page,
+        indices: tuple[int, ...],
+        outcomes: list[NativeCaptureOutcome],
+    ) -> bool:
+        if len(indices) != len(outcomes):
+            return False
+        proofs: list[tuple[str, int]] = []
+        for index, outcome in zip(indices, outcomes, strict=True):
+            if outcome.capture is None or outcome.proof_token is None:
+                return False
+            proofs.append((f"content-p{index}", outcome.proof_token))
+        return await verify_yanmaga_native_group(page, proofs)
+
     async def get_content_identity(self, page: Page) -> ContentIdentity:
+        try:
+            return await self._get_content_identity_impl(page)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    async def _get_content_identity_impl(self, page: Page) -> ContentIdentity:
         self._validate_viewer_route(page)
         snapshot = await self._read_snapshot(page)
         if snapshot is None:
@@ -1216,6 +1379,13 @@ class YanmagaAdapter(SiteAdapter):
         )
 
     async def get_content_context(self, page: Page) -> ContentContext:
+        try:
+            return await self._get_content_context_impl(page)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    async def _get_content_context_impl(self, page: Page) -> ContentContext:
         self._validate_viewer_route(page)
         expected = self._require_expected()
         title: str | None = None
@@ -1233,6 +1403,13 @@ class YanmagaAdapter(SiteAdapter):
         )
 
     async def go_next(self, page: Page) -> None:
+        try:
+            await self._go_next_impl(page)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    async def _go_next_impl(self, page: Page) -> None:
         self._validate_viewer_route(page)
         if self._ended:
             return
@@ -1245,11 +1422,23 @@ class YanmagaAdapter(SiteAdapter):
                 page, timeout_ms=PAGE_CHANGE_TIMEOUT_MS
             )
             self._ended = True
+            await self._dispose_native_observer(page)
             return
+        if self._native_observer_installed:
+            await activate_yanmaga_native_observer(page)
         self._advance_pending = True
         await page.keyboard.press("ArrowLeft")
 
     async def wait_for_change(
+        self, page: Page, previous_identity: ContentIdentity | None
+    ) -> None:
+        try:
+            await self._wait_for_change_impl(page, previous_identity)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    async def _wait_for_change_impl(
         self, page: Page, previous_identity: ContentIdentity | None
     ) -> None:
         if self._ended:
@@ -1282,17 +1471,32 @@ class YanmagaAdapter(SiteAdapter):
         raise PageChangeTimeoutError("Yanmaga reader did not advance within the bounded wait")
 
     async def collect_debug_metadata(self, page: Page) -> dict[str, object]:
+        try:
+            return await self._collect_debug_metadata_impl(page)
+        except BaseException:
+            await self._dispose_native_observer(page)
+            raise
+
+    async def _collect_debug_metadata_impl(self, page: Page) -> dict[str, object]:
         snapshot = await self._read_snapshot(page)
         visible = snapshot.visible_pages if snapshot is not None else ()
+        group = dict(self._last_capture_group)
+        native_group = group.get("group_method") == "native_pre_jpeg_lossless_webp"
         metadata: dict[str, object] = {
-            "capture_provenance": "rendered_dom_body_wrapper",
-            "capture_method": "playwright_locator_screenshot_png",
+            "capture_provenance": (
+                "pre_jpeg_viewer_canvas_composition"
+                if native_group
+                else "rendered_dom_body_wrapper"
+            ),
+            "capture_method": group.get("group_method", "capture_not_recorded"),
             "source_native_bytes_used": False,
+            "source_native_pixels_used": native_group,
             "capture_viewport": f"{VIEWPORT_WIDTH}x{VIEWPORT_HEIGHT}",
             "source_segment_count": 3,
             "source_segment_widths": sorted(
                 {segment.natural_width for body_page in visible for segment in body_page.segments}
             ),
+            "capture_group": group,
         }
         if (
             snapshot is not None

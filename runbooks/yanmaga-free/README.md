@@ -1,6 +1,6 @@
 # ヤンマガWeb（yanmaga.jp）通常無料のみ Site Adapter 実装 Runbook
 
-**Status:** IN PROGRESS（Phases 02–04 accepted; Phase 05 ordinary CLI E2E passed for the observed Chapter 11 candidate; final independent Reviewer accepted with BLOCKING 0. The implementation commit is recorded in PROGRESS.md; Phase 01 daily-limit scope is unknown.）
+**Status:** IMPLEMENTED / VERIFIED FOR THE OBSERVED LAYOUT (Phases 02-05 accepted; normal Chapter 11 CLI E2E and independent all-20-page RGBA equality passed; final independent Reviewer accepted with BLOCKING 0. The implementation commit is recorded in PROGRESS.md. Phase 01 daily-limit scope and other reader layouts remain unknown.)
 **Repository:** `lilacpps/screenshot_crawler`
 **実装ブランチ:** `feat/yanmaga-adapter`（`main` の `ddfcee7` から計画ファイルを作成。コードはこのブランチで実装し、`main` へ自動マージしない）
 **サイトキー:** `yanmaga`
