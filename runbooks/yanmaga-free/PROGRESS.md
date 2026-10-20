@@ -1,8 +1,9 @@
 # ヤンマガWeb free-only Adapter — evidence / progress ledger
 
 **Date:** 2026-10-20（JST）
-**Status:** Phases 02-04 passed independent review. Phase 05 normal CLI E2E and rediscovery retention passed for the observed Chapter 11 candidate. Final independent Reviewer accepted with BLOCKING 0; root commit/push handoff remains. Phase 01 remains partial because applicability of the site's daily-free notice to red-free rows is unknown. Other reader layouts and a site-wide no-cap rule are not verified.
+**Status:** Phases 02-04 passed independent review. Phase 05 normal CLI E2E and rediscovery retention passed for the observed Chapter 11 candidate. Final independent Reviewer accepted with BLOCKING 0; the implementation commit is recorded below. Phase 01 remains partial because applicability of the site's daily-free notice to red-free rows is unknown. Other reader layouts and a site-wide no-cap rule are not verified.
 **Branch:** `feat/yanmaga-adapter`
+**Implementation commit:** `fa7010cfb94694b4b67f58952f3e2e8d5c7432c9`
 **Site key:** `yanmaga`
 **Scope:** 赤字の無条件公開「無料」だけ。初回無料・黄色の無料/チケット・ポイント・認証Grantは取得対象外。
 
@@ -116,7 +117,7 @@ The archive SHA-256 is `e0f3fc218937699e957c5854633f70291d22069ca83284235f130292
 
 Tester evidence and archive audit: `output/yanmaga_experiment/phase05-independent-token/qa/tester-report.md`, `manifest-snapshot.json`, `archive-audit-before-rediscovery.json`, Catalog snapshots, and first/middle/last samples. No raw HTML, manga images, cookies, or signed URLs are committed.
 
-**LIMITS / REVIEW:** The listing-level daily-free limit's scope remains unknown and is not generalized. Analytics availability can vary; missing, stale, or conflicting anonymous-state proof remains `unknown` and fails closed. Other Yanmaga reader layouts and original image-byte attribution are unsupported. Captures are rendered locator PNGs, 1266/1268×1800 for the verified viewport, not original segment bytes. Final independent Reviewer accepted the frozen implementation/docs with BLOCKING 0; root commit/push handoff remains.
+**LIMITS / REVIEW:** The listing-level daily-free limit's scope remains unknown and is not generalized. Analytics availability can vary; missing, stale, or conflicting anonymous-state proof remains `unknown` and fails closed. Other Yanmaga reader layouts and original image-byte attribution are unsupported. Captures are rendered locator PNGs, 1266/1268×1800 for the verified viewport, not original segment bytes. Final independent Reviewer accepted the frozen implementation/docs with BLOCKING 0; the implementation commit is recorded above.
 
 ## Remaining evidence and implementation constraints
 

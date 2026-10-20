@@ -247,7 +247,7 @@ The unique task metrics file was emitted to the CLI's default `output/metrics`
 location and moved by exact path into isolated QA; the Watchlist, Catalog,
 archive, and capture output used dedicated paths throughout. The final independent
 Reviewer accepted the implementation and documentation with BLOCKING 0; root
-commit/push handoff remains. The CLI E2E verifies one currently free candidate
+implementation commit is recorded in the progress ledger. The CLI E2E verifies one currently free candidate
 and the observed reader layout only. The site's daily-free-limit applicability
 remains unknown, missing or conflicting anonymous telemetry remains `unknown`,
 and other layouts and original image bytes are unsupported. The captured files

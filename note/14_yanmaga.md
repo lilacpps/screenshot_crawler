@@ -2,7 +2,7 @@
 
 ## 現在の実装範囲
 
-Phases 02–04 passed independent review, and the Phase 05 ordinary CLI E2E passed for the observed free Chapter 11 candidate. The fresh run produced and independently audited a 20-page Manifest/ZIP, present Artifact, successful CrawlRun, and Completed Item; rediscovery preserved the Catalog IDs, positions, completion timestamp, and Artifact. Final independent Reviewer accepted with BLOCKING 0; root commit/push handoff remains. The daily-limit scope, other reader layouts, and source-native image bytes remain unverified.
+Phases 02–04 passed independent review, and the Phase 05 ordinary CLI E2E passed for the observed free Chapter 11 candidate. The fresh run produced and independently audited a 20-page Manifest/ZIP, present Artifact, successful CrawlRun, and Completed Item; rediscovery preserved the Catalog IDs, positions, completion timestamp, and Artifact. Final independent Reviewer accepted with BLOCKING 0; the implementation commit is recorded in the progress ledger. The daily-limit scope, other reader layouts, and source-native image bytes remain unverified.
 
 
 Discovery は `src/screenshot_crawler/site_adapters/yanmaga/discovery.py`
@@ -228,5 +228,5 @@ Final combined tests: **209 passed, 0 skipped**, with 423 existing pytest-asynci
 deprecation warnings (148.67s). `ruff check src tests` and `git diff --check` passed. Full
 `pytest -q` and the standalone Research suite were not run because changes were site-local plus
 registries and did not alter shared Core, schema, or Probe contracts. Final independent Reviewer
-accepted with BLOCKING 0; root commit/push handoff remains. Detailed sanitized audit is in the ignored
+accepted with BLOCKING 0; the implementation commit is recorded in the progress ledger. Detailed sanitized audit is in the ignored
 `output/yanmaga_experiment/phase05-independent-token/qa/tester-report.md`.
