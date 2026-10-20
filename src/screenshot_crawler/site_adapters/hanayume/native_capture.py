@@ -468,11 +468,13 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       return row?.index === index && row.classes.length === expected.length &&
         expected.every(name => row.classes.includes(name));
     };
+    const prCount = exactClasses(last - 5, ['-cv-page', 'mode-ci']) ? 3 : 2;
+    const ciSlot = last - prCount - 2;
     const tails = [
       [0, ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']],
-      [last - 4, ['-cv-page', 'mode-ci']],
-      [last - 3, ['-cv-page', 'mode-empty', 'mode-pr']],
-      [last - 2, ['-cv-page', 'mode-empty', 'mode-pr']],
+      [ciSlot, ['-cv-page', 'mode-ci']],
+      ...Array.from({length: prCount}, (_, offset) =>
+        [ciSlot + 1 + offset, ['-cv-page', 'mode-empty', 'mode-pr']]),
       [last - 1, ['-cv-page', 'mode-good']],
       [last, ['-cv-page', 'mode-last']],
     ];
@@ -480,7 +482,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         (topEmpty && (!exactClasses(1, ['-cv-page', 'mode-empty']) ||
           slots[1].canvasCount !== 0 || slots[1].canvas !== null))) return null;
     const start = topEmpty ? 2 : 1;
-    const length = last - 4 - start;
+    const length = ciSlot - start;
     return length > 0 ? Array.from({length}, (_, offset) => start + offset) : null;
   };
   const api = {

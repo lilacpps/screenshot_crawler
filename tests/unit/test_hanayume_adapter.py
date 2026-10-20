@@ -722,10 +722,11 @@ def _range_entries(*, selected_page: int | None = None) -> list[dict[str, object
 
 def _viewer_snapshot(
     *, current: int = 1, visible: tuple[int, ...] | None = None, top_empty: bool = False,
-    padded_counter: bool = False, total: int = 9,
+    padded_counter: bool = False, total: int = 9, tail_pr_count: int = 2,
 ) -> dict[str, object]:
     last_slot = total - int(padded_counter)
-    body_slots = tuple(range(2 if top_empty else 1, last_slot - 4))
+    ci_slot = last_slot - tail_pr_count - 2
+    body_slots = tuple(range(2 if top_empty else 1, ci_slot))
     visible = visible if visible is not None else _expected_active_slots(current, body_slots)
     viewport = {"width": 1906, "height": 986}
     slots = []
@@ -734,9 +735,9 @@ def _viewer_snapshot(
             classes = ["-cv-page", "mode-empty", "mode-pr", "mode-top-pr"]
         elif index == 1 and top_empty:
             classes = ["-cv-page", "mode-empty"]
-        elif index == last_slot - 4:
+        elif index == ci_slot:
             classes = ["-cv-page", "mode-ci"]
-        elif index in {last_slot - 3, last_slot - 2}:
+        elif ci_slot < index < last_slot - 1:
             classes = ["-cv-page", "mode-empty", "mode-pr"]
         elif index == last_slot - 1:
             classes = ["-cv-page", "mode-good"]
@@ -1019,14 +1020,17 @@ def test_hanayume_padded_counter_rejects_missing_or_changed_layout(mutate) -> No
         _parse_viewer_observation(snapshot)
 
 
-@pytest.mark.parametrize("padded_counter", [False, True])
-@pytest.mark.parametrize("total", [9, 17, 21])
+@pytest.mark.parametrize(
+    ("padded_counter", "total", "tail_pr_count"),
+    [(padded, total, 2) for padded in (False, True) for total in (9, 17, 21)]
+    + [(True, 11, 3)],
+)
 def test_hanayume_viewer_uses_physical_body_slots_for_observed_top_empty_layout(
-    padded_counter: bool, total: int,
+    padded_counter: bool, total: int, tail_pr_count: int,
 ) -> None:
-    body_slots = tuple(range(2, total - int(padded_counter) - 4))
+    body_slots = tuple(range(2, total - int(padded_counter) - tail_pr_count - 2))
     intro = _parse_viewer_observation(_viewer_snapshot(
-        top_empty=True, padded_counter=padded_counter, total=total,
+        top_empty=True, padded_counter=padded_counter, total=total, tail_pr_count=tail_pr_count,
     ))
     assert intro.has_top_empty_page is True
     assert intro.body_slots == body_slots
@@ -1037,6 +1041,7 @@ def test_hanayume_viewer_uses_physical_body_slots_for_observed_top_empty_layout(
 
     first_spread = _parse_viewer_observation(_viewer_snapshot(
         current=3, top_empty=True, padded_counter=padded_counter, total=total,
+        tail_pr_count=tail_pr_count,
     ))
     assert first_spread.body_slots == body_slots
     assert first_spread.active_slots == (2, 3)
@@ -1044,6 +1049,14 @@ def test_hanayume_viewer_uses_physical_body_slots_for_observed_top_empty_layout(
     assert _expected_active_slots(5, first_spread.body_slots) == tuple(
         slot for slot in (4, 5) if slot in body_slots
     )
+
+
+@pytest.mark.parametrize("slot", [2, 4, 5, 6, 7, 8, 9, 10])
+def test_hanayume_three_pr_tail_rejects_changed_body_or_tail(slot: int) -> None:
+    snapshot = _viewer_snapshot(total=11, padded_counter=True, top_empty=True, tail_pr_count=3)
+    snapshot["slots"][slot]["classes"].append("unobserved-state")
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(snapshot)
 
 
 @pytest.mark.parametrize(

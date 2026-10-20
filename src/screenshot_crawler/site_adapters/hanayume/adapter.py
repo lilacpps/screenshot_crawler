@@ -939,7 +939,8 @@ def _next_body_slots(
 
 
 def _slot_role(
-    index: int, last_slot: int, classes: object, *, has_top_empty_page: bool = False
+    index: int, last_slot: int, classes: object, *, has_top_empty_page: bool = False,
+    tail_pr_count: int = 2,
 ) -> str:
     if not isinstance(classes, list) or not all(isinstance(value, str) for value in classes):
         raise UnknownPageStateError("Hanayume viewer slot classes are malformed")
@@ -948,9 +949,11 @@ def _slot_role(
         raise UnknownPageStateError("Hanayume viewer slot is missing its page wrapper")
     tails = {
         0: {"-cv-page", "mode-empty", "mode-pr", "mode-top-pr"},
-        last_slot - 4: {"-cv-page", "mode-ci"},
-        last_slot - 3: {"-cv-page", "mode-empty", "mode-pr"},
-        last_slot - 2: {"-cv-page", "mode-empty", "mode-pr"},
+        last_slot - tail_pr_count - 2: {"-cv-page", "mode-ci"},
+        **{
+            position: {"-cv-page", "mode-empty", "mode-pr"}
+            for position in range(last_slot - tail_pr_count - 1, last_slot - 1)
+        },
         last_slot - 1: {"-cv-page", "mode-good"},
         last_slot: {"-cv-page", "mode-last"},
     }
@@ -962,7 +965,7 @@ def _slot_role(
         if actual != {"-cv-page", "mode-empty"}:
             raise UnknownPageStateError("Hanayume top-empty lead-in slot changed structure")
         return "nonbody"
-    if not 1 <= index <= last_slot - 5:
+    if not 1 <= index < last_slot - tail_pr_count - 2:
         raise UnknownPageStateError("Hanayume viewer slot is outside the known layout")
     state_classes = actual - {"-cv-page"}
     if not (
@@ -1032,8 +1035,16 @@ def _parse_viewer_observation(raw: object) -> ViewerObservation:
     # The observed odd-body layout has an extra counter position, not a DOM page.
     # Keep seek/counter semantics separate from the fully validated physical tail.
     last_slot = len(slots) - 1
+    # Both observed tails end in good/last, preceded by CI and exactly two or
+    # three PR slots. Select the longer form only by its exact CI marker; every
+    # remaining tail class is still checked by _slot_role below.
+    ci_candidate = slots[last_slot - 5]
+    tail_pr_count = 3 if (
+        isinstance(ci_candidate, dict)
+        and ci_candidate.get("classes") == ["-cv-page", "mode-ci"]
+    ) else 2
     body_start = 2 if has_top_empty_page else 1
-    body_slots = tuple(range(body_start, last_slot - 4))
+    body_slots = tuple(range(body_start, last_slot - tail_pr_count - 2))
     if not body_slots:
         raise UnknownPageStateError("Hanayume viewer has no body slots in its observed layout")
     body_total = len(body_slots)
@@ -1044,7 +1055,8 @@ def _parse_viewer_observation(raw: object) -> ViewerObservation:
         if not isinstance(slot, dict) or slot.get("index") != index:
             raise UnknownPageStateError("Hanayume viewer page-wrapper order is invalid")
         role = _slot_role(
-            index, last_slot, slot.get("classes"), has_top_empty_page=has_top_empty_page
+            index, last_slot, slot.get("classes"), has_top_empty_page=has_top_empty_page,
+            tail_pr_count=tail_pr_count,
         )
         if has_top_empty_page and index == 1 and (
             slot.get("canvasCount") != 0 or slot.get("canvas") is not None

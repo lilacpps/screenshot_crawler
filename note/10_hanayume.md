@@ -42,7 +42,7 @@ Manual Viewer capture accepts the exact supported episode URL, verifies its scop
 
 The reader contract remains the observed desktop `mode-spread` layout. Viewer counters and `#xCVPages` wrappers are checked together, active slots must be structurally valid and fully visible, and capture proceeds in contiguous page order. Verified source-canvas pixels are read at their actual native dimensions; source unavailability stops capture without rendered PNG or generic locator/UI screenshot fallback. Only after every body slot is captured does the observed terminal state produce END; the adapter never follows a next-episode card.
 
-For the R8-probed leading-empty layout, `mode-has-top-emptypage` must be present and physical slot 1 must be exactly `-cv-page mode-empty` with no canvas. That slot is excluded from the body; physical body slots are frozen as 2 through `total-5`, giving 11 body pages for the observed 17-page episode. The initial counter-1 state must also contain `mode-first-page`; the adapter uses one normal public seek step to counter 3, then captures body slots 2/3 onward. The top-empty flag, exact blank lead-in, and body-slot tuple remain bound through native collection and verification. Unflagged blanks, interior empty slots, changed layout, missing spread sides, or incomplete terminal coverage fail closed. Archive capture order is sequential while identities retain physical slot IDs.
+For the R8-probed leading-empty layout, `mode-has-top-emptypage` must be present and physical slot 1 must be exactly `-cv-page mode-empty` with no canvas. That slot is excluded from the body; physical body slots are frozen from 2 up to the exact validated CI slot (exclusive), giving 11 body pages for the original 17-page two-PR episode. The initial counter-1 state must also contain `mode-first-page`; the adapter uses one normal public seek step to counter 3, then captures body slots 2/3 onward. The top-empty flag, exact blank lead-in, and body-slot tuple remain bound through native collection and verification. Unflagged blanks, interior empty slots, changed layout, missing spread sides, or incomplete terminal coverage fail closed. Archive capture order is sequential while identities retain physical slot IDs.
 
 ### Supported counter/physical-wrapper variant: episode `e2a7ca7bd6dd7`
 
@@ -50,7 +50,7 @@ Investigation on 2026-10-11 reproduced the normal Batch failure for Item/Source 
 
 There is no `mode-has-top-emptypage` flag: slot 1 is rendered body, slots 1–11 precede `mode-ci` at 12, PR placeholders at 13/14, `mode-good` at 15, and `mode-last` at 16. Every trailing role is one physical slot earlier than the former `total`-based contract. A normal public seek `Home` produced counter `17/17`, seek value 1, and `mode-last-page` with the same 17 wrappers. The probe rewound to counter 1 and closed only its own page. The metadata probe alone did not establish captured coverage; the subsequent standard Batch verification below did. The viewer's internal rounding/padding algorithm remains unproven and is not used as an implementation assumption.
 
-Current behavior accepts the existing `wrapper_count == total + 1` layout, and additionally the observed `wrapper_count == total` variant only for an odd total, with or without the top-empty flag. The flagged shorter variant was confirmed on episode `7c893d766d5ac` on 2026-10-18 as detailed below. Let `last_slot = wrapper_count - 1`. Both variants require the exact top PR and five-tail structure relative to `last_slot`; unknown/missing/shifted tail classes fail closed. Body slots are frozen from 1 (or 2 for the exactly validated flagged leading blank) through `last_slot - 5`. The public counter/seek validation remains unchanged. For the original unflagged target this yields exactly physical slots 1–11, rather than incorrectly treating slot 12 (`mode-ci`) as body; the newly confirmed flagged target uses slots 2–11.
+Current behavior accepts the existing `wrapper_count == total + 1` layout, and additionally the observed `wrapper_count == total` variant only for an odd total, with or without the top-empty flag. The flagged shorter variant was confirmed on episode `7c893d766d5ac` on 2026-10-18 as detailed below. Let `last_slot = wrapper_count - 1`. Both variants require the exact top PR and a validated CI/two-or-three-PR/good/last suffix relative to `last_slot`; unknown/missing tail classes fail closed. Body slots are frozen from 1 (or 2 for the exactly validated flagged leading blank) to immediately before CI. The original two-PR layout ends at `last_slot - 5`; the three-PR correction below ends at `last_slot - 6`. The public counter/seek validation remains unchanged. For the original unflagged target this yields exactly physical slots 1–11, rather than incorrectly treating slot 12 (`mode-ci`) as body; the newly confirmed flagged target uses slots 2–11.
 
 Native collect and post-encode verification independently validate this physical tail and exact body tuple. Proofs also retain the wrapper count; count/tail/flag drift rejects the capture, with no generic screenshot fallback. Leading-empty validation remains exact and now also supports the confirmed shorter odd-counter variant. Synthetic tests cover both flagged and unflagged shorter layouts, complete native capture to END, rejected tail/count/flag changes, missing spread halves, and premature END alongside the prior layouts.
 
@@ -549,7 +549,56 @@ Batch orchestration, access policy, and their notes are unchanged.
 
 The bounded mapping probe `output/hanayume_experiment/tester/runs/r8-topempty-mapping-20261011T001336Z-a1f9f190/probe_report.json` used one fresh exact-target/authenticated preflight and metadata-only observations. At counter 1/17, the viewer had `mode-has-top-emptypage` and `mode-first-page`; slot 1 was exactly `-cv-page mode-empty`, centered, and canvas-free. The top-empty marker remained present at counters 1 through 17; `mode-first-page` appeared only at counter 1 and the terminal marker only at 17. The public seek property was 17 at counter 1; eight ordinary step-2 seek changes reached counters 3 through 17. Body candidates 2 through 12 were active and ready exactly once across counters 3 through 13; counter 15 showed promotional slots and counter 17 showed the known terminal tail. No pixels or image bytes were read. The probe observed no 403/429/challenge/CAPTCHA.
 
-Production derives and freezes an explicit physical `body_slots` tuple using `last_slot = wrapper_count - 1`: normal layout 1 through `last_slot-5`; the narrowly flagged layout 2 through `last_slot-5`. For the R8 layouts `last_slot == total`, so their bounds and identity numbering remain unchanged. It accepts the leading blank only with the exact viewer flag, exact slot-1 class set, and zero canvas; `mode-first-page` is required for the initial counter-1 intro, followed by one public seek to the ready counter-3 spread. Capture identity, sequential body coverage, END, and native proof use physical slots. Synthetic browser tests cover top-empty success, missing first marker, failed initial seek, interior empty state, layout drift before/after native encoding, missing spread side, and premature END. Two R8 standard CLI E2E cases passed; see the R8 live verification below and the newer wrapper-variant verification above.
+Production derives and freezes an explicit physical `body_slots` tuple using `last_slot = wrapper_count - 1` and the exact validated CI position: normal layout starts at 1; the narrowly flagged layout starts at 2; both end immediately before CI. The physical tail must be exactly CI, two or three PR wrappers, good, last. For two PR wrappers the final body slot remains `last_slot-5`; for three it is `last_slot-6`. Both Python and native collection/post-encoding proof enforce this tail. For the R8 layouts `last_slot == total`, so their bounds and identity numbering remain unchanged. It accepts the leading blank only with the exact viewer flag, exact slot-1 class set, and zero canvas; `mode-first-page` is required for the initial counter-1 intro, followed by one public seek to the ready counter-3 spread. Capture identity, sequential body coverage, END, and native proof use physical slots. Synthetic browser tests cover top-empty success, missing first marker, failed initial seek, interior empty state, layout drift before/after native encoding, missing spread side, and premature END. Two R8 standard CLI E2E cases passed; see the R8 live verification below and the newer wrapper-variant verification above.
+
+### Three-PR tail correction (2026-10-21)
+
+Source 36494, episode `3a165f3a11574` (`おまけ.鍵とお嬢`), failed before
+capture with `Hanayume body slot has an unknown state class`. Its saved
+diagnostic has 11 counters and 11 wrappers: top PR 0, exact flagged blank 1,
+body 2–4, CI 5, PR 6–8, good 9, last 10. The previous fixed five-slot tail
+misclassified CI 5 as body. This was a viewer layout issue, independent of
+Discovery access classification and recrawl Item status.
+
+The adapter now recognizes the exact CI marker at either observed tail
+position, validates the entire two/three-PR suffix, and derives body slots
+before CI. It does not skip arbitrary PR/empty/unknown body slots. Native
+capture uses the same bound at collection and after encoding. Sequential
+coverage, frozen body slots, empty-lead-in proof, active spread checks,
+no rendered fallback, and full-coverage END remain required. No configuration,
+CLI, output format, shared Core, Discovery, or Batch policy change is needed.
+
+Live verification used the shared CDP BrowserSession with serial owned Pages
+and first-party mutations blocked. The affected episode saved exactly three
+960x1508 WebP pages (body 2–4) at END. Ordinary two-PR control Source 25326,
+episode `90868f4de278f`, saved twelve 960x1540 WebP pages at END. Both isolated
+ZIPs passed CRC, manifest order/member count, and full image decode checks.
+Checkout attempts were zero and adapter consumption was false. Read/readCompleted
+and mission POSTs were blocked. Normal Catalog access was read only, so the
+pending Item and normal archive were not updated. Evidence and the adjacent
+verification script: `output/hanayume-tail-live-20261021/report.json`. This
+was Runner plus standard packaging; normal Batch orchestration was not rerun.
+Independent source-canvas RGBA comparison was not measured in this live run.
+
+Regression coverage extends the existing top-empty parser/capture-to-END and
+post-encoding drift tests for the observed three-PR shape. Additional parser
+cases reject changed body/CI/each PR/good/last classes. The focused 20-case
+Unit/Integration run passed with zero skips. The complete affected suite
+(`tests/unit/test_hanayume_adapter.py`, `tests/unit/test_hanayume_native_capture.py`,
+`tests/integration/test_hanayume_adapter_browser.py`) passed 255 tests,
+0 failed/skipped/deselected, 284 existing pytest-asyncio deprecation warnings,
+100.00 seconds. Command: `.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
+--basetemp output/hanayume-tail-affected-r2-20261021 <the three files>`.
+The first affected run passed 253 and failed two existing 0.4-second initialization
+timing assertions (actual 0.494/0.465 seconds); the expected immediate exceptions
+were correct. Both passed an isolated rerun, then the entire suite passed
+without changes to production timeouts or test timing limits. The initial new
+fixture had a stale seek maximum of 9 for the 11-counter variant; correcting
+the fixture resolved that focused failure. `ruff check src tests` and changed-file
+`git diff --check` passed. Full repository and Research/Probe suites were not
+run because only Hanayume viewer/native layout changed; relevant browser
+Integration and bounded live verification were completed. No shared/site-other
+note update is needed.
 
 R8 post-fix standard CLI E2E and independent artifact audit (2026-10-11)
 

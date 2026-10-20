@@ -92,7 +92,7 @@ def _episode_html(
     counter_duplicate: bool = False, counter_malformed: bool = False,
     top_empty: bool = False, top_empty_seek_locked: bool = False,
     top_empty_first_marker_missing: bool = False, top_empty_interior_empty: bool = False,
-    padded_counter: bool = False,
+    padded_counter: bool = False, tail_pr_count: int = 2,
     source_dimensions: tuple[int, int] = (960, 1540),
 ) -> str:
     public_values = episode_rows if episode_rows is not None else [
@@ -107,6 +107,7 @@ def _episode_html(
     unknown_rows_html = "".join(
         _row(episode_id, row_label) for episode_id, row_label in episode_unknown_rows or []
     )
+    total = 9 + (tail_pr_count - 2) * 2
     return f"""<!doctype html><html><body>
       <header id="xHeader"><a class="ep-h-main-h-series" href="{WORK_URL}">work</a></header>
       <div class="ep-main series-safe-filter-target" data-e2e="pageEpisode">
@@ -125,17 +126,17 @@ def _episode_html(
       <div id="comici-viewer" class="-cv mode-spread">
         <div class="-cv-f-page-current"></div>
         {'<div class="-cv-f-page-current"></div>' if counter_duplicate else ''}
-        <div class="-cv-f-page-total">{'' if counter_delay_ms or counter_never else '9'}</div>
-        <input id="xCVSeekBar" type="range" min="1" max="9" step="2" value="9">
+        <div class="-cv-f-page-total">{'' if counter_delay_ms or counter_never else total}</div>
+        <input id="xCVSeekBar" type="range" min="1" max="{total}" step="2" value="{total}">
         <div id="xCVPages"></div>
       </div>
       <script>
         (() => {{
-          const total = 9;
+          const total = {total};
           const lastSlot = total - {int(padded_counter)};
           const topEmpty = {json.dumps(top_empty)};
           const bodyStart = topEmpty ? 2 : 1;
-          const bodyEnd = lastSlot - 5;
+          const bodyEnd = lastSlot - {tail_pr_count} - 3;
           const bodyTotal = bodyEnd - bodyStart + 1;
           const root = document.querySelector('#comici-viewer');
           const pageRoot = document.querySelector('#xCVPages');
@@ -169,8 +170,8 @@ def _episode_html(
           const classFor = index => {{
             if (index === 0) return '-cv-page mode-empty mode-pr mode-top-pr';
             if (topEmpty && index === 1) return '-cv-page mode-empty';
-            if (index === lastSlot - 4) return '-cv-page mode-ci';
-            if (index === lastSlot - 3 || index === lastSlot - 2) return '-cv-page mode-empty mode-pr';
+            if (index === bodyEnd + 1) return '-cv-page mode-ci';
+            if (index > bodyEnd + 1 && index < lastSlot - 1) return '-cv-page mode-empty mode-pr';
             if (index === lastSlot - 1) return '-cv-page mode-good';
             if (index === lastSlot) return '-cv-page mode-last';
             return '-cv-page';
@@ -276,6 +277,7 @@ async def _install_mock_site(
     top_empty_first_marker_missing: bool = False,
     top_empty_interior_empty: bool = False,
     padded_counter: bool = False,
+    tail_pr_count: int = 2,
     source_dimensions: tuple[int, int] = (960, 1540),
 ) -> dict[str, object]:
     state: dict[str, object] = {"episode_visits": 0, "paths": []}
@@ -296,6 +298,7 @@ async def _install_mock_site(
                 top_empty_first_marker_missing=top_empty_first_marker_missing,
                 top_empty_interior_empty=top_empty_interior_empty,
                 padded_counter=padded_counter,
+                tail_pr_count=tail_pr_count,
                 source_dimensions=source_dimensions,
             )
         elif path == f"/series/{WORK_ID}":
@@ -1212,19 +1215,20 @@ async def test_hanayume_source_cache_pixel_budget_stops_capture_but_preserves_dr
 
 
 @pytest.mark.asyncio(loop_scope="module")
-@pytest.mark.parametrize("padded_counter", [False, True])
+@pytest.mark.parametrize(("padded_counter", "tail_pr_count"), [(False, 2), (True, 2), (True, 3)])
 async def test_hanayume_top_empty_lead_in_captures_only_physical_body_slots_and_ends(
-    browser_page: Page, padded_counter: bool,
+    browser_page: Page, padded_counter: bool, tail_pr_count: int,
 ) -> None:
     await _install_mock_site(
         browser_page, resume_current=3, top_empty=True, padded_counter=padded_counter,
+        tail_pr_count=tail_pr_count,
     )
     adapter = await _initialized(browser_page)
 
     observation = await adapter._observe(browser_page)
     assert observation.current == 3
     assert observation.has_top_empty_page is True
-    body_slots = (2, 3) if padded_counter else (2, 3, 4)
+    body_slots = (2, 3) if padded_counter and tail_pr_count == 2 else (2, 3, 4)
     assert observation.body_slots == body_slots
     assert observation.body_total == len(body_slots)
     assert observation.active_slots == observation.ready_slots == (2, 3)
@@ -1241,7 +1245,7 @@ async def test_hanayume_top_empty_lead_in_captures_only_physical_body_slots_and_
     ]
 
     final_identity = first_identity
-    if not padded_counter:
+    if len(body_slots) == 3:
         await adapter.go_next(browser_page)
         await adapter.wait_for_change(browser_page, first_identity)
         await _body_state(browser_page, adapter)
@@ -1285,10 +1289,14 @@ async def test_hanayume_top_empty_lead_in_rejects_marker_seek_or_interior_drift(
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("tail_drift", [False, True])
 async def test_hanayume_top_empty_flag_drift_during_native_encoding_discards_proof(
-    browser_page: Page, monkeypatch: pytest.MonkeyPatch
+    browser_page: Page, monkeypatch: pytest.MonkeyPatch, tail_drift: bool,
 ) -> None:
-    await _install_mock_site(browser_page, resume_current=3, top_empty=True)
+    await _install_mock_site(
+        browser_page, resume_current=3, top_empty=True,
+        padded_counter=tail_drift, tail_pr_count=3 if tail_drift else 2,
+    )
     adapter = await _initialized(browser_page)
     entered = threading.Event()
     continue_encoding = threading.Event()
@@ -1303,9 +1311,14 @@ async def test_hanayume_top_empty_flag_drift_during_native_encoding_discards_pro
     monkeypatch.setattr(hanayume_adapter_module, "encode_native_webp", delayed_encoder)
     task = asyncio.create_task(adapter.capture_page(browser_page))
     assert await asyncio.to_thread(entered.wait, 3)
-    await browser_page.locator("#comici-viewer").evaluate(
-        "viewer => viewer.classList.remove('mode-has-top-emptypage')"
-    )
+    if tail_drift:
+        await browser_page.locator("#xCVPages > div").nth(8).evaluate(
+            "slot => slot.classList.add('unobserved-state')"
+        )
+    else:
+        await browser_page.locator("#comici-viewer").evaluate(
+            "viewer => viewer.classList.remove('mode-has-top-emptypage')"
+        )
     continue_encoding.set()
 
     with pytest.raises(UnknownPageStateError, match="changed after native image encoding"):

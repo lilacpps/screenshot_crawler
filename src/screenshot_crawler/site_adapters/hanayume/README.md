@@ -18,13 +18,27 @@ Configured Batch uses only its selected Catalog episode URL and configured work/
 
 The observed desktop spread layout uses explicit counter, wrapper, readiness, visibility, and terminal checks. The adapter captures every body slot in order and cannot reach generic locator/UI screenshot fallback. END is accepted only after full body coverage and the observed terminal UI.
 
+The physical tail is validated as exactly `mode-ci`, two or three exact
+`mode-empty mode-pr` wrappers, `mode-good`, and `mode-last`. The exact CI
+position bounds the body in both Python and native capture; unknown classes or
+tail drift still stop capture. Episode `3a165f3a11574` (Source 36494) exposed
+the three-PR variant: 11 counter positions/11 wrappers, an empty lead-in at
+slot 1, body slots 2–4, CI at 5, PR at 6–8, good at 9, last at 10. On
+2026-10-21 it reached END with three 960x1508 lossless WebP pages through
+Runner and isolated packaging. The ordinary two-PR control Source 25326
+reached END with twelve 960x1540 WebP pages. Both ZIPs passed CRC, manifest
+ordering, and decoding checks; mutations were blocked, no checkout was
+attempted, and the normal Catalog was read only. This verifies Runner and
+packaging, not normal Batch completion or independent source-pixel equality.
+Evidence: `output/hanayume-tail-live-20261021/report.json`.
+
 ### R8 leading-empty layout
 
-For the observed layout only, the viewer's `mode-has-top-emptypage` flag together with physical slot 1 having exactly `-cv-page mode-empty` and no canvas identifies a non-body lead-in. The adapter freezes physical body slots 2 through `total-5` (11 body pages in the probed 17-page episode), waits for the initial `mode-first-page` state, and performs one observed public seek step from counter 1 to counter 3 before capture. It preserves physical slot IDs for identity and native proof, while capture/archive order stays sequential. An unflagged blank slot, any other empty body slot, flag drift, missing spread side, or incomplete END fails closed. This passed synthetic browser tests and a standard CLI Batch run for the observed 11-body-page target; an ordinary-layout 12-page control also passed. The latest run verified artifact format/dimensions and packaging, but did not independently compare the 23 output pages against source-canvas RGBA. See the runbook and site note for exact evidence and limits.
+For the observed layout only, the viewer's `mode-has-top-emptypage` flag together with physical slot 1 having exactly `-cv-page mode-empty` and no canvas identifies a non-body lead-in. The adapter freezes physical body slots from 2 up to the exact validated CI slot (exclusive), waits for the initial `mode-first-page` state, and performs one observed public seek step from counter 1 to counter 3 before capture. In the original R8 two-PR layout the last body slot remains `total-5` (11 body pages in the probed 17-page episode). It preserves physical slot IDs for identity and native proof, while capture/archive order stays sequential. An unflagged blank slot, any other empty body slot, flag drift, missing spread side, or incomplete END fails closed. This passed synthetic browser tests and a standard CLI Batch run for the observed 11-body-page target; an ordinary-layout 12-page control also passed. That run verified artifact format/dimensions and packaging, but did not independently compare the 23 output pages against source-canvas RGBA. See the runbook and site note for exact evidence and limits.
 
 ### Counter and physical-wrapper variant
 
-The adapter also supports the observed unflagged episode `e2a7ca7bd6dd7`, whose counter is 17 but whose physical wrapper count is 17. The existing `total + 1` wrapper contract remains supported; `total` wrappers are accepted only for odd totals and with the complete exact top PR/five-tail structure. This includes the live-confirmed top-empty variant on episode `7c893d766d5ac`: 17 counters/17 wrappers, an exact empty slot 1, and body slots 2–11. Body bounds use the last physical wrapper; the unflagged episode captures slots 1–11 and excludes `mode-ci` at 12. Counter/seek validation is unchanged. Native collection and post-encode proof use the same physical bounds and reject tail/count/flag drift. Unknown layouts, missing spread halves, and END without full body coverage still fail closed.
+The adapter also supports the observed unflagged episode `e2a7ca7bd6dd7`, whose counter is 17 but whose physical wrapper count is 17. The existing `total + 1` wrapper contract remains supported; `total` wrappers are accepted only for odd totals and with the complete exact top PR and validated CI/two-or-three-PR/good/last tail structure. This includes the live-confirmed top-empty variant on episode `7c893d766d5ac`: 17 counters/17 wrappers, an exact empty slot 1, and body slots 2–11. Body bounds use the last physical wrapper; the unflagged episode captures slots 1–11 and excludes `mode-ci` at 12. Counter/seek validation is unchanged. Native collection and post-encode proof use the same physical bounds and reject tail/count/flag drift. Unknown layouts, missing spread halves, and END without full body coverage still fail closed.
 
 Post-fix standard CLI Batch verification passed for this target (11 pages), an ordinary control (12), and a leading-empty control (11), all at END with verified ZIPs and completed isolated Catalog Items. All 34 members decoded as 960x1540 VP8L WebP; CRC, ordering, archive hashes/sizes, and Catalog/crawl-status checks passed. Independent source-canvas RGBA equality was not measured for these runs. Evidence: `output/hanayume-wrapper-live-20261011-bc7bbdb0/verification.json`; details and test scope are in the site note. No normal Catalog was changed by verification.
 
