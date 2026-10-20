@@ -1,6 +1,6 @@
 # Phase 05 — 正常CLIでの実サイトE2E・独立監査
 
-**Start:** Phase 01-04の成果とReviewerの修正反映が揃っている。公開freeの候補は2026-10-20の観測時点では存在したが、E2E時点で無料とは限らない。
+**Start:** Phase 01-04の成果とReviewerの修正反映が揃っている。指定作品のChapter 1は2026-10-20の観測時点で赤字通常無料だったが、E2E時点で無料とは限らず、fresh listing gateが必要。
 **担当:** Leadが1 operatorを予約、Testerがread-only site確認と隔離E2E/Artifact検証、Reviewerが実際のdiffを最終査読。ImplementerはTester実行中に共有Chromeを触らない。
 
 ## Isolated run — Windows PowerShell（登録後の想定コマンド）
@@ -14,17 +14,17 @@ $env:PYTHONUTF8 = "1"
 
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli watch add `
   --watchlist output\yanmaga_experiment\watchlist.yaml `
-  --key yanmaga-made-in-yamato --work-key yanmaga-made-in-yamato `
-  --site yanmaga --url "https://yanmaga.jp/comics/MADE_IN_YAMATO" `
-  --label "MADE IN YAMATO"
+  --key yanmaga-usagi --work-key yanmaga-usagi `
+  --site yanmaga --url "https://yanmaga.jp/comics/%E3%82%A6%E3%82%B5%E3%82%AE%E3%81%A8%E3%82%AB%E3%83%A1%E3%81%AE%E3%82%86%E3%82%8B%E5%B1%B1%E6%AD%A9" `
+  --label "ウサギとカメのゆる山歩"
 
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `
-  --key yanmaga-made-in-yamato --mode full `
+  --key yanmaga-usagi --mode full `
   --watchlist output\yanmaga_experiment\watchlist.yaml `
   --catalog output\yanmaga_experiment\catalog.sqlite
 
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli discover `
-  --key yanmaga-made-in-yamato --mode incremental `
+  --key yanmaga-usagi --mode incremental `
   --watchlist output\yanmaga_experiment\watchlist.yaml `
   --catalog output\yanmaga_experiment\catalog.sqlite
 
@@ -37,7 +37,7 @@ $env:PYTHONUTF8 = "1"
   --library-dir output\yanmaga_experiment\library --limit 1
 ```
 
-**PowerShellの行継続記号はバッククォート**。`watch add`のURLが正規seedとして受理されるかはPhase 01で検証する。対象作品に現在の無条件無料がない、あるいは日次上限等で非消費閲覧できない場合は、権利使用に切り替えず別の公開free作品を採用。調査用候補はチケット消費の許可ではない。
+**PowerShellの行継続記号はバッククォート**。指定作品URLのDiscoveryはPhase 02でshared-CDPにより確認済み。Phase 05時点で通常free話がなくなった、または日次上限等で非消費閲覧できない場合は、権利使用に切り替えず別の公開free作品を採用する。
 
 ## Tester acceptance audit
 

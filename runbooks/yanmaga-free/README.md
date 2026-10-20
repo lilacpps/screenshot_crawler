@@ -1,10 +1,10 @@
 # ヤンマガWeb（yanmaga.jp）通常無料のみ Site Adapter 実装 Runbook
 
-**Status:** PLANNED（2026-10-20。実装・実サイトCDP/Viewer/E2Eは未着手）
+**Status:** IN PROGRESS（Phases 02–04 accepted; Phase 05 ordinary CLI E2E passed for the observed Chapter 11 candidate; final independent Reviewer accepted with BLOCKING 0. Root commit/push handoff remains; Phase 01 daily-limit scope is unknown.）
 **Repository:** `lilacpps/screenshot_crawler`
 **実装ブランチ:** `feat/yanmaga-adapter`（`main` の `ddfcee7` から計画ファイルを作成。コードはこのブランチで実装し、`main` へ自動マージしない）
 **サイトキー:** `yanmaga`
-**調査用候補作品:** https://yanmaga.jp/comics/MADE_IN_YAMATO （無料話が恒常的に存在する保証ではない）
+**優先対象作品:** https://yanmaga.jp/comics/%E3%82%A6%E3%82%B5%E3%82%AE%E3%81%A8%E3%82%AB%E3%83%A1%E3%81%AE%E3%82%86%E3%82%8B%E5%B1%B1%E6%AD%A9 （Chapter 1 の無条件赤字無料は2026-10-20の観測結果であり、再実行時もfresh checkが必要）
 **進捗:** [PROGRESS.md](PROGRESS.md)。各フェーズは実行契約であり、観測・実行結果はPROGRESSに分けて記録する。
 
 ## 1. 目的・スコープ

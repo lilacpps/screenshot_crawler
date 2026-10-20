@@ -1,5 +1,17 @@
 # 00. Core 現行実装ノート
 
+## Yanmaga CLI registrations (Phase 02/03/04)
+
+CLI `_discovery_registry()` registers the site-local Yanmaga Discovery adapter;
+`_registry()` registers `YanmagaAdapter` for manual Crawl/Runner;
+`_batch_adapter_registry()` registers the same adapter for Batch; and
+`_batch_policy_registry()` registers `YanmagaSitePolicy`. The policy selects
+only available free sources via `direct`, with no resource/grant-only pass.
+Batch uses the existing Planner, Executor, packager, Artifact, and Completed
+path after the adapter's fresh free preflight and positive END. DiscoveryService,
+Catalog schema, BrowserSession, shared Core behavior, and other sites were not changed. See
+[`14_yanmaga.md`](14_yanmaga.md) for the site-local implementation and limits.
+
 ## Resource pass stop after successful consumption (2026-10-19)
 
 `AccessConsumption.stop_resource_pass` is an optional, default-false site-owned
