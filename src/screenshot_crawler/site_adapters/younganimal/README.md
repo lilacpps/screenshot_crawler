@@ -7,6 +7,40 @@ manifest, and packager. Discovery recognizes authenticated work-bound wait-free
 candidates and active manual grants from naturally emitted listing responses;
 it does not click or consume tickets.
 
+The `top_empty_no_ci_odd_body` profile supports Item/Source 35865
+(`b4dd7f6fe26b2`): exact empty lead 0, odd body B=N-5>=5 starting at 1,
+canvas-free PR/PR/Good/Last tail, and min=1/max=N-1/step=2. Positive top-empty,
+horizontal/spread/RTL and PR/Good capabilities are required; comic-info,
+vertical and single modes are forbidden. Maximum seek has first-only flags
+and empty lead plus first body; seek 5 is the final body pair without PR flags,
+3 is PR-only, and 1 has Last+PR with Good/Last centers. Every phase/center
+and the unique visible/centered Last must match. Python/native proof now use
+the same no-CI wrapper-parity map across both lead configurations and body
+parities, with full role/capability/source/geometry guards. Rewind requires
+first body 1; complete body coverage is mandatory before END. No option,
+timeout, resource or Core behavior changes. Isolated direct Runner verification
+captured all eleven pages as native 960x1364 WebP through END/ZIP at max_pages=11,
+with independent source RGBA equality on every page. One main-document request,
+30 blocked mutating requests and no ticket action were observed. Normal Catalog
+and library were not modified. Evidence:
+`output/younganimal-fix-35865/verified/live-report.json` and `note/11_younganimal.md`.
+
+The additional `no_lead_no_ci_even_body` profile supports the observed
+Item/Source 35815 (`3a61cfb8d02ff`): no lead or CI wrapper, even body B=N-4>=6,
+exact canvas-free PR/PR/Good/Last tail, horizontal/spread/RTL and PR/Good
+capabilities, and no top-empty/comic-info/vertical/single flags. It uses
+min=1/max=N-1/step=2, first-only at max, no phase flags through seek 5,
+PR-only at 3 and Last+PR at 1. Every selected center must match; initialization
+and rewind require body slots 0/1 and END requires complete body coverage plus
+the unique visible/centered Last. Python parsing and native proof retain the
+source replay, nodes/write epochs, translation and post-encoding guards.
+There is no new option or timeout/resource/Core change. An isolated direct
+Runner captured all twelve pages as native 960x1364 WebP through END and ZIP
+with max_pages=12; independent draw-time source RGBA hashes match every output.
+It made one main-document request, blocked 35 mutating requests and attempted
+no ticket action. Evidence: `output/younganimal-fix-35815/verified/live-report.json`.
+The normal Catalog and archives were not changed; the full Batch was not rerun.
+
 The `no_lead_no_ci` viewer profile also supports the observed Item/Source
 35814 layout: no lead or CI wrapper, contiguous odd body B=N-4>=5, exact
 PR/PR/Good/Last tail, positive horizontal/spread/RTL and PR/Good flags,

@@ -126,11 +126,14 @@ def _viewer_html(
     body_end = body_last + body_start
     ci_index = body_end
     wrapper_count = ci_index + (tail_pr_count + 3 if pr_tail_profile else 4 if no_ci_profile else 5)
+    no_ci_even_wrappers = no_ci_profile and wrapper_count % 2 == 0
     seek_max = wrapper_count if body_last == 1 or odd_profile or no_ci_profile or pr_tail_profile else wrapper_count - 1
     pr_tail_odd = pr_tail_profile and body_last % 2 == 1
     if pr_tail_odd:
         seek_max -= 1
-    ci_seek = tail_pr_count + (2 if pr_tail_odd else 4) if pr_tail_profile else 5
+    if no_ci_even_wrappers:
+        seek_max -= 1
+    ci_seek = tail_pr_count + (2 if pr_tail_odd else 4) if pr_tail_profile else 3 if no_ci_even_wrappers else 5
     for index in range(wrapper_count):
         if index == 0 and not no_lead:
             classes = (
@@ -200,7 +203,7 @@ def _viewer_html(
         "mode-has-pr mode-has-comic-info mode-has-good-page" if odd_profile or pr_tail_profile or body_last in {1, 2} else
         "mode-has-pr mode-has-good-page" if no_ci_profile else ""
     )
-    terminal_markers = "viewer.classList.add('mode-last-page');" if body_last == 1 or odd_profile or no_ci_profile or (pr_tail_profile and not pr_tail_odd) else (
+    terminal_markers = "viewer.classList.add('mode-last-page');" if body_last == 1 or odd_profile or (no_ci_profile and not no_ci_even_wrappers) or (pr_tail_profile and not pr_tail_odd) else (
         "viewer.classList.add('mode-pr-page','mode-last-page');"
     )
     return f'''<section id="comici-viewer" class="-cv mode-lang-ja mode-h mode-dir-rtl mode-nav-dir-rtl mode-spread {root_flag} {odd_flags}">
@@ -2077,21 +2080,21 @@ async def test_younganimal_shorter_top_empty_native_rejects_profile_drift(
 
 
 @pytest.mark.parametrize("mutation", ["replacement", "seek"])
-@pytest.mark.parametrize("profile", ["three_pr", "top_empty_three_pr", "top_empty_no_ci", "no_lead_no_ci"])
+@pytest.mark.parametrize("profile", ["three_pr", "top_empty_three_pr", "top_empty_no_ci", "no_lead_no_ci", "no_lead_no_ci_even_body", "top_empty_no_ci_odd_body"])
 async def test_younganimal_tail_profile_post_encoding_mutation_saves_no_artifact(
     browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str,
     profile: str,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     top_empty = profile == "top_empty_three_pr"
-    no_ci = profile in {"top_empty_no_ci", "no_lead_no_ci"}
-    no_lead = profile == "no_lead_no_ci"
+    no_ci = profile in {"top_empty_no_ci", "no_lead_no_ci", "no_lead_no_ci_even_body", "top_empty_no_ci_odd_body"}
+    no_lead = profile in {"no_lead_no_ci", "no_lead_no_ci_even_body"}
     first_slot = 0 if no_lead else 2 if top_empty else 1
     await _install_fixture(browser_page, top_empty=top_empty, top_empty_body_count=9,
                            top_empty_tail_pr_count=3,
                            native_source_slots=(0, 1) if no_lead else (2, 3) if top_empty else (1,),
                            pr_tail_body_count=None if top_empty or no_ci else 11, tail_pr_count=3,
-                           top_empty_no_ci_body_count=13 if no_lead else 10 if no_ci else None,
+                           top_empty_no_ci_body_count=11 if profile == "top_empty_no_ci_odd_body" else 12 if profile == "no_lead_no_ci_even_body" else 13 if no_lead else 10 if no_ci else None,
                            no_top_pr=no_lead)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
@@ -2470,6 +2473,12 @@ async def test_younganimal_capture_rejects_valid_profile_mapping_drift_after_det
         pytest.param(None, None, 13, None, False, True, 1, id="no_lead_no_ci_13"),
         pytest.param(None, None, 5, None, False, True, 1, id="no_lead_no_ci_5"),
         pytest.param(None, None, 13, None, True, True, 1, id="no_lead_no_ci_rendered"),
+        pytest.param(None, None, 12, None, False, True, 1, id="no_lead_no_ci_even_12"),
+        pytest.param(None, None, 6, None, False, True, 1, id="no_lead_no_ci_even_6"),
+        pytest.param(None, None, 12, None, True, True, 1, id="no_lead_no_ci_even_rendered"),
+        pytest.param(None, None, 11, None, False, False, 1, id="top_empty_no_ci_odd_11"),
+        pytest.param(None, None, 5, None, False, False, 1, id="top_empty_no_ci_odd_5"),
+        pytest.param(None, None, 11, None, True, False, 1, id="top_empty_no_ci_odd_rendered"),
         pytest.param(7, None, None, None, False, True, 1, id="no_top_pr_odd_7"),
         pytest.param(3, None, None, None, False, True, 1, id="no_top_pr_odd_3"),
         pytest.param(None, 2, None, None, False, False, 1, id="two_body"),
@@ -2498,7 +2507,7 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
     ci_slot = body_count + 1
     requested = await _install_fixture(
         browser_page,
-        initial_seek=(body_count + 3 if no_ci_profile else 11),
+        initial_seek=(1 if no_ci_profile and not no_lead and body_count % 2 else body_count + 3 if no_ci_profile else 11),
         native_source_slots=() if force_rendered_fallback else body_slots,
         standard_body_count=standard_body_count,
         odd_body_count=odd_body_count,
@@ -2585,7 +2594,7 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
             output_dir=output_dir,
             diagnostics_dir=tmp_path / "native-diagnostics",
             page_turn_delay_ms=0,
-            max_pages=20,
+            max_pages=len(body_slots),
             max_same_content=3,
             page_change_timeout_ms=2_000,
         )
@@ -2666,7 +2675,7 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
         ("target_relative_drift", "rendered_canvas_png"),
     ],
 )
-@pytest.mark.parametrize("no_ci_variant", [None, "top_empty_no_ci", "no_lead_no_ci"])
+@pytest.mark.parametrize("no_ci_variant", [None, "top_empty_no_ci", "no_lead_no_ci", "no_lead_no_ci_even_body", "top_empty_no_ci_odd_body"])
 async def test_younganimal_draw_to_selection_geometry_requires_pure_translation(
     browser_page,
     monkeypatch: pytest.MonkeyPatch,
@@ -2675,11 +2684,11 @@ async def test_younganimal_draw_to_selection_geometry_requires_pure_translation(
     no_ci_variant: str | None,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
-    no_lead = no_ci_variant == "no_lead_no_ci"
+    no_lead = no_ci_variant in {"no_lead_no_ci", "no_lead_no_ci_even_body"}
     await _install_fixture(
         browser_page,
         native_source_slots=(0, 1, 2, 3) if no_lead else (1, 2, 3),
-        top_empty_no_ci_body_count=13 if no_lead else 10 if no_ci_variant else None,
+        top_empty_no_ci_body_count=11 if no_ci_variant == "top_empty_no_ci_odd_body" else 12 if no_ci_variant == "no_lead_no_ci_even_body" else 13 if no_lead else 10 if no_ci_variant else None,
         no_top_pr=no_lead,
     )
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
@@ -2971,16 +2980,16 @@ async def test_younganimal_odd_body_native_collector_rejects_invalid_profile_dir
         "top_pr_lead_role",
     ],
 )
-@pytest.mark.parametrize("no_lead", [False, True])
+@pytest.mark.parametrize(("no_lead", "body_count"), [(False, 10), (True, 11), (True, 12), (False, 11)])
 async def test_younganimal_no_ci_native_collector_rejects_unobserved_profile_mutations(
-    browser_page, mutation: str, no_lead: bool,
+    browser_page, mutation: str, no_lead: bool, body_count: int,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     await _install_fixture(
         browser_page,
         initial_seek=13,
-        native_source_slots=tuple(range(11)) if no_lead else tuple(range(1, 11)),
-        top_empty_no_ci_body_count=11 if no_lead else 10,
+        native_source_slots=tuple(range(body_count)) if no_lead else tuple(range(1, body_count + 1)),
+        top_empty_no_ci_body_count=body_count,
         no_top_pr=no_lead,
     )
     adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
@@ -2997,7 +3006,12 @@ async def test_younganimal_no_ci_native_collector_rejects_unobserved_profile_mut
         baseline_snapshot.get("snapshot"), expected_url=EPISODE_URL
     )
     assert baseline_snapshot.get("observerReady") is True
-    assert baseline.layout_variant == ("no_lead_no_ci" if no_lead else "top_empty_no_ci")
+    expected_variant = (
+        "no_lead_no_ci_even_body" if no_lead and body_count % 2 == 0 else
+        "no_lead_no_ci" if no_lead else
+        "top_empty_no_ci_odd_body" if body_count % 2 else "top_empty_no_ci"
+    )
+    assert baseline.layout_variant == expected_variant
     assert baseline.seek_value == baseline.seek_max == 15
     assert baseline.active_slots == ((0, 1) if no_lead else (1,))
 

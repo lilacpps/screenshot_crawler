@@ -1020,14 +1020,17 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     ):
         raise UnknownPageStateError("Younganimal physical page wrappers are incomplete")
     has_top_empty_flag = "mode-has-top-emptypage" in viewer_classes
+    # No-CI layouts use max=N-1 with even wrapper totals: PR only at seek 3
+    # and Last+PR at seek 1. Odd wrapper totals retain max=N.
     no_lead_no_ci = (
         not has_top_empty_flag
         and "mode-has-comic-info" not in viewer_classes
         and "mode-h" in viewer_classes
         and {"mode-has-pr", "mode-has-good-page"}.issubset(viewer_classes)
         and not {"mode-v", "mode-single"}.intersection(viewer_classes)
-        and len(slots) >= 9 and (len(slots) - 4) % 2 == 1
-        and seek_min == 1 and seek_step == 2 and seek_max == len(slots)
+        and len(slots) >= 9
+        and seek_min == 1 and seek_step == 2
+        and seek_max == len(slots) - (1 if len(slots) % 2 == 0 else 0)
     )
     no_ci_candidate = (
         "mode-h" in viewer_classes
@@ -1039,12 +1042,13 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         and "mode-single" not in viewer_classes
         and seek_min == 1
         and seek_step == 2
-        and seek_max == len(slots)
+        and seek_max == len(slots) - (1 if len(slots) % 2 == 0 else 0)
     )
+    no_ci_even_wrappers = (no_lead_no_ci or no_ci_candidate) and len(slots) % 2 == 0
     if no_lead_no_ci:
-        layout_variant = "no_lead_no_ci"
+        layout_variant = "no_lead_no_ci_even_body" if no_ci_even_wrappers else "no_lead_no_ci"
     elif no_ci_candidate:
-        layout_variant = "top_empty_no_ci"
+        layout_variant = "top_empty_no_ci_odd_body" if no_ci_even_wrappers else "top_empty_no_ci"
     else:
         layout_variant = "top_emptypage" if has_top_empty_flag else "standard"
     if (
@@ -1126,9 +1130,9 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         if required.difference(viewer_classes) or {"mode-v", "mode-single"}.intersection(viewer_classes):
             raise UnknownPageStateError("Younganimal shorter top-empty capability markers changed")
         expected_seek_max = len(slots) - 1
-    no_ci_profile = layout_variant in {"top_empty_no_ci", "no_lead_no_ci"}
+    no_ci_profile = layout_variant in {"top_empty_no_ci", "top_empty_no_ci_odd_body", "no_lead_no_ci", "no_lead_no_ci_even_body"}
     if no_ci_profile:
-        expected_seek_max = len(slots)
+        expected_seek_max = len(slots) - int(no_ci_even_wrappers)
     if seek_min != 1 or seek_step != 2 or seek_max != expected_seek_max or seek_max % 2 != 1:
         raise UnknownPageStateError("Younganimal seek range does not match its physical wrapper layout")
     if not 1 <= seek_value <= seek_max or (seek_max - seek_value) % seek_step:
@@ -1150,7 +1154,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     lead_classes = _classes(parsed_slots[0].get("classes"), "lead-in")
     expected_lead = (
         frozenset({"-cv-page", "mode-empty"})
-        if layout_variant in {"top_empty_no_pr", "top_empty_no_pr_odd_body", "top_empty_no_ci"}
+        if layout_variant in {"top_empty_no_pr", "top_empty_no_pr_odd_body", "top_empty_no_ci", "top_empty_no_ci_odd_body"}
         else frozenset({"-cv-page", "mode-empty", "mode-pr", "mode-top-pr"})
     )
     if not no_lead_no_ci and (lead_classes != expected_lead or parsed_slots[0].get("canvasCount") != 0):
@@ -1188,8 +1192,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
             or forbidden_flags.intersection(viewer_classes)
             or len(parsed_slots) < 9
             or body_count < (5 if no_lead_no_ci else 4)
-            or body_count % 2 != (1 if no_lead_no_ci else 0)
-            or seek_max != len(parsed_slots)
+            or seek_max != len(parsed_slots) - int(no_ci_even_wrappers)
         ):
             raise UnknownPageStateError("Younganimal no-CI capability or seek profile is unknown")
         tail_sets = (
@@ -1243,9 +1246,8 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     if no_ci_profile and (
         body_start != (0 if no_lead_no_ci else 1)
         or len(body_slots) < (5 if no_lead_no_ci else 4)
-        or len(body_slots) % 2 != (1 if no_lead_no_ci else 0)
         or tail_start != len(body_slots) + body_start
-        or seek_max != len(parsed_slots)
+        or seek_max != len(parsed_slots) - int(no_ci_even_wrappers)
     ):
         raise UnknownPageStateError("Younganimal no-CI physical mapping changed")
     allowed_body_classes = {
@@ -1304,8 +1306,8 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         if no_ci_profile:
             expected_marker_flags = (
                 {"mode-first-page"} if seek_value == seek_max
-                else {"mode-pr-page"} if seek_value in {5, 3}
-                else {"mode-last-page"} if seek_value == seek_min
+                else {"mode-pr-page"} if seek_value == 3 or (seek_value == 5 and not no_ci_even_wrappers)
+                else ({"mode-last-page", "mode-pr-page"} if no_ci_even_wrappers else {"mode-last-page"}) if seek_value == seek_min
                 else set()
             )
             if seek_value not in {seek_max, 5, 3, seek_min} and seek_value < 7:
@@ -1383,7 +1385,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         if seek_value == seek_min:
             if (
                 "mode-last-page" not in viewer_classes
-                or "mode-pr-page" in viewer_classes
+                or ("mode-pr-page" in viewer_classes) != no_ci_even_wrappers
                 or marker_count != 1
                 or marker_index != last_slot
                 or raw.get("terminalMarkerVisible") is not True
@@ -1406,7 +1408,11 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
                 raise UnknownPageStateError("Younganimal no-CI first spread changed")
             state = "content"
         elif seek_value == 3:
-            if active_slots or not set(pr_slots).intersection(expected_center_slots) or good_slot not in expected_center_slots:
+            pr_centers_match = (
+                expected_center_slots == pr_slots if no_ci_even_wrappers else
+                bool(set(pr_slots).intersection(expected_center_slots)) and good_slot in expected_center_slots
+            )
+            if active_slots or not pr_centers_match:
                 raise UnknownPageStateError("Younganimal no-CI PR/Good interstitial changed")
             state = "ad"
             active_slots = ()

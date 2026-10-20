@@ -1,6 +1,153 @@
 # 11. Younganimal current implementation
 
-## Current verification snapshot (2026-10-20)
+## Current verification snapshot (2026-10-21)
+
+### Initial empty lead, no CI, odd body: Item/Source 35865
+
+Normal Batch `128c228275a8467095e2902474c2711c` completed the preceding
+Item 35815 through END, then stopped before capture on `b4dd7f6fe26b2` /
+work `932cedf273921` (ナナとカオル Last Year / 第6話 いい子じゃない証明②).
+The new error was `PR/Good/Last tail roles changed`. Its saved diagnostic DOM
+has exact empty lead 0, eleven bodies 1-11, PR 12-13, Good 14 and Last 15;
+N=16/max=15 and no comic-info capability. The previous top-empty/no-CI
+candidate required max=N and even B, so this odd-body layout fell through
+to a CI-bearing profile. Increasing the timeout cannot repair the mismatch.
+Batch metrics record zero HTTP 403/429/5xx, challenges, CAPTCHA or retries.
+
+Bounded shared-CDP metadata evidence:
+`output/younganimal-fix-35865/metadata-probe.json`. It reproduced the original
+parser rejection at all eight public seek states, blocked 29 mutating requests
+and restored the starting seek 15. It read structural metadata without pixels.
+
+| Seek | Centered wrappers | Phase/state |
+|---|---|---|
+| 15 | 0, 1 | first-only / empty lead plus first body |
+| 13..5 by -2 | 2/3..10/11 | no phase flags / body pairs |
+| 3 | 12, 13 | PR-only / PR pair, no capture |
+| 1 | 14, 15 | Last+PR / unique visible and centered Last |
+
+The explicit `top_empty_no_ci_odd_body` profile derives odd B=N-5>=5,
+min=1/max=N-1/step=2, with positive top-empty/horizontal/spread/RTL and PR/Good
+capabilities, no comic-info/vertical/single flags, exact canvas-free empty
+lead and PR/PR/Good/Last tail, and contiguous known body classes. All phases
+and selected centers must match. The lead is not a blank-only spread: first
+body 1 must be ready at max, including after rewind. Both Python parsing and
+native JS proof derive the shared no-CI PR/Last phase map from wrapper parity:
+even N uses max=N-1, no PR flag at 5, PR at 3 and Last+PR at 1; odd N retains
+max=N, PR at 5/3 and Last-only at 1. The four explicit profiles retain their
+different lead/body boundaries and minimum body counts. Wrapper parity alone
+does not authorize a layout: exact roles, capabilities, range, phase and geometry
+are all mandatory. There is no episode-ID/count allowlist, timeout increase,
+Core/resource/CLI change or CI mutation exception. Frozen mapping, complete
+body coverage before END, native source/replay/node/write/epoch/post-encode
+proof and atomic rendered PNG fallback remain. Other roles/tails and shorter
+unsupported layouts still fail closed.
+
+Isolated direct production Runner evidence is
+`output/younganimal-fix-35865/verified/live-report.json` and `live-manifest.json`.
+At max_pages=11 it captured all body slots 1-11 in order, reached END at seek 1,
+and packaged eleven native 960x1364 WebPs with zero PNG fallbacks. Independent
+draw-time source RGBA SHA-256 equals every decoded output. This proves source
+canvas pixels, not original response bytes. ZIP CRC/decode/order/dimensions and
+manifest encoded hashes pass; archive SHA-256 is
+`d349fc01eb869711a79dee1b7bcd679b1cade49e7de9ac60dea78a0a1e0b3a9d`.
+There was one target main-document request, 30 blocked mutating requests and
+no adapter ticket action. Only the owned Page closed. The normal Catalog and
+library were not modified; this is isolated Runner/packaging, not a rerun of
+the remaining normal Batch or a Catalog completion.
+
+Existing synthetic fixtures cover the new B=11 and boundary B=5 profile,
+native and rendered paths through END/ZIP at max_pages, rewind from initial
+END, exact source RGBA, bad ranges/roles/canvases/capabilities/phases/centers/
+Last markers, draw-to-selection geometry and post-encoding canvas/seek changes.
+B=5 is synthetic structural coverage, not another live-observed episode.
+Final affected validation: **526 passed** across the five Younganimal Unit
+files (1.39 seconds, 200 existing warnings), and **120 passed**, 163 deselected
+in the Adapter browser Integration selection (292.67 seconds, six existing
+warnings). There were zero failed/skipped tests. Browser selection was
+`no_ci or no_lead or lossless_native_spreads_after_pixel_proof or
+tail_profile_post_encoding or pure_translation`, covering all four no-CI
+variants and the existing native spread/geometry/post-encoding families.
+Both selections used separate workspace `--basetemp` directories.
+`ruff check src tests` and scoped `git diff --check` pass. Full suite,
+unrelated Integration and Research/Probe suites were not selected because
+the change is confined to this site's parser/native layout contract and does
+not change shared runtime/data models or research implementation. The remaining
+55-candidate normal Batch was not rerun; its predecessor Item 35815 is already
+recorded completed through END in the user-triggered normal Batch metrics.
+
+### No lead wrapper and no CI, even body: Item/Source 35815
+
+Normal Batch `99e8ff1f10364dd0a07a4b15c97d6236` stopped before capture on
+`3a61cfb8d02ff` / work `932cedf273921` (ナナとカオル Last Year / 最終話①).
+Its error was `leading PR placeholder changed`: the no-lead/no-CI detector
+supported only odd B and max=N. The actual N=16/max=15 layout has even B=12
+and fell through to a profile requiring a lead placeholder. This is a structural
+mismatch, not loading delay. Metrics record zero HTTP 403/429/5xx, challenges,
+CAPTCHA or retries.
+
+Bounded shared-CDP observations are saved in
+`output/younganimal-fix-35815/metadata-probe.json`: no lead or CI, contiguous
+body 0-11, canvas-free PR 12-13, Good 14 and Last 15. All eight public seek
+states were checked and the starting seek 15 restored. Thirty-five mutating
+requests were blocked. Snapshots were parsed offline with the corrected
+`expected_url` argument; the initial diagnostic console's missing-argument
+messages are a probe-call error, not an additional production failure.
+
+| Seek | Centered wrappers | Phase/state |
+|---|---|---|
+| 15 | 0, 1 | first-only / first body pair |
+| 13..5 by -2 | 2/3..10/11 | no phase flags / body pairs |
+| 3 | 12, 13 | PR-only / PR pair, no capture |
+| 1 | 14, 15 | Last+PR / unique visible and centered Last |
+
+The explicit `no_lead_no_ci_even_body` variant derives even B=N-4>=6,
+min=1/max=N-1/step=2. It requires positive horizontal/spread/RTL and PR/Good
+capabilities, absent top-empty/comic-info/vertical/single flags, exact
+PR/PR/Good/Last roles without canvases, contiguous known body classes, exact
+phase flags and every selected center. Initialization and rewind require both
+first body pages 0/1. The odd no-lead and top-empty/no-CI variants retain their
+different range, PR and Last contracts. Python parsing and native JS proof
+agree. Draw-time positioning may settle later under the existing replay and
+equal-size translation proof; selection/post-encoding still require final
+geometry. Frozen mapping, all-body coverage before END, native source/replay,
+node/write/epoch, atomic PNG fallback, max_pages and bounded waits are retained.
+There is no CI mutation exception, new setting, CLI, resource or Core change.
+Shorter no-lead bodies, other tails and CI-bearing no-lead layouts remain
+unsupported. B=6 artificial coverage is a structural boundary, not live evidence.
+
+Isolated direct production Runner evidence:
+`output/younganimal-fix-35815/verified/live-report.json` and `live-manifest.json`.
+With max_pages=12 it captured every body slot 0-11 in order, reached END at
+seek 1, and produced twelve native 960x1364 WebPs with zero PNG fallbacks.
+An independent draw observer's source RGBA SHA-256 equals each decoded output;
+this proves draw-time source pixels, not original response bytes. ZIP CRC,
+decode, order, dimensions and manifest encoded hashes pass. Archive SHA-256:
+`3320f896f130e54227989847f9bcba949aadb976174e244fd065b88b4e3a29aa`.
+One target main-document request, thirty-five blocked mutating requests and
+no adapter ticket action were observed. The normal Catalog and library were
+not modified, and only the owned Page was closed. This verifies isolated
+Runner/packaging; the original 55-candidate Batch has not been rerun.
+
+Tests extend existing no-CI fixtures for B=12/B=6 native capture, B=12 rendered
+fallback, resumed seek rewind, source RGBA/END/ZIP at max_pages, capability,
+role, canvas, phase, range, Last and center rejection, geometry changes and
+post-encoding seek/canvas changes that save no artifact. Validation results
+are **491 passed** across the five Younganimal Unit files and **98 passed**
+(163 deselected) in the affected Adapter browser Integration selection, zero
+failed/skipped. Browser selection: `no_ci or no_lead or
+lossless_native_spreads_after_pixel_proof or tail_profile_post_encoding or
+pure_translation`; duration 246.10 seconds with six existing warnings. Unit
+selection used an isolated workspace `--basetemp` and finished in 1.20 seconds
+with 200 existing warnings. An earlier Unit attempt stopped after 421 passes
+on denied access to the default external pytest temp directory; the full
+selection passed after relocating temporary output into the workspace.
+The final capture Unit rerun passed all 335 cases after the readability-only
+PR-center predicate adjustment. `ruff check src tests` and scoped
+`git diff --check` pass. Full suite, unrelated Integration and Research/Probe
+suites were not selected for this site-local change, which touches no shared
+runtime/data model or research implementation. No normal Batch/Catalog
+completion is claimed.
 
 ### No lead wrapper and no CI: Item/Source 35814
 
@@ -37,8 +184,8 @@ source/target replay RGBA, retained node/write/epoch and equal-size wrapper/targ
 translation checks bind the incoming draw to the selected body. There is no CI
 mutation exception for this profile. Frozen mapping, all-body coverage before
 END, source replay/node/write/epoch proof, atomic rendered PNG fallback,
-max_pages, timeouts and access rules remain unchanged. Other no-lead body
-parities, tails and short layouts remain unsupported.
+max_pages, timeouts and access rules remain unchanged. The even-body no-lead
+variant is described above; other tails and shorter layouts remain unsupported.
 
 Evidence: `output/younganimal-fix-35814/metadata-probe.json` checks all nine
 public seek states without pixel reads and restores the starting seek. The
@@ -1521,6 +1668,21 @@ Its remaining phases and Last proof match the no-CI table above. Current
 Item 35814 live evidence and output-format limits are recorded in the current
 verification snapshot. The top-empty even-body variant retains slot 0 as its
 empty lead and B=N-5; removing a flag without changing roles is rejected.
+
+The separate `no_lead_no_ci_even_body` variant also starts at body slot 0,
+but requires even B=N-4>=6, max=N-1, no phase flags at seek 5 (the final body
+pair), PR-only at 3 (two PR wrappers), and Last+PR at 1 (Good/Last).
+All other no-CI structural and source/capture guards remain. Live B=12
+Item 35815 and synthetic B=6/12 coverage are detailed in the current snapshot.
+
+The separate `top_empty_no_ci_odd_body` variant retains the exact empty lead 0
+and starts at body 1. It derives odd B=N-5>=5, with max=N-1, no phase flags at
+seek 5, PR-only at 3 and Last+PR at 1. The maximum selects empty lead plus
+first body, so initialization/rewind capture body 1 without a blank-only skip.
+All selected centers, exact roles, capabilities and unique visible/centered
+Last remain mandatory. Live B=11 Item 35865, synthetic B=5/11 and output proof
+are detailed in the current snapshot. These four profiles cover both observed
+lead configurations and both body parities under their explicit structure.
 
 The adapter prefers verified C source-native pixels when every active half has a
 supported full-frame draw candidate. The observer copies the source canvas into a

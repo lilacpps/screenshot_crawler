@@ -146,7 +146,9 @@ def _snapshot(
 def _top_empty_no_ci_snapshot(seek_value: int, *, body_count: int = 10, no_lead: bool = False) -> dict[str, object]:
     body_start = 0 if no_lead else 1
     body_end = body_start + body_count
-    seek_max = body_end + 4
+    wrapper_count = body_end + 4
+    even_wrappers = wrapper_count % 2 == 0
+    seek_max = wrapper_count - int(even_wrappers)
     viewer_classes = {
         "-cv", "mode-h", "mode-spread", "mode-dir-rtl", "mode-nav-dir-rtl",
         "mode-has-pr", "mode-has-good-page",
@@ -155,12 +157,13 @@ def _top_empty_no_ci_snapshot(seek_value: int, *, body_count: int = 10, no_lead:
         viewer_classes.add("mode-has-top-emptypage")
     if seek_value == seek_max:
         viewer_classes.add("mode-first-page")
-    elif seek_value in {5, 3}:
+    elif seek_value == 3 or (seek_value == 5 and not even_wrappers):
         viewer_classes.add("mode-pr-page")
     elif seek_value == 1:
         viewer_classes.add("mode-last-page")
+        if even_wrappers:
+            viewer_classes.add("mode-pr-page")
     focus = seek_max - seek_value + 1
-    wrapper_count = seek_max
     slots: list[dict[str, object]] = []
     for index in range(wrapper_count):
         if index == 0 and not no_lead:
@@ -380,7 +383,10 @@ def test_younganimal_body_interval_is_derived_from_verified_roles_not_fixed_coun
         "seek_relation",
         "wrong_route",
         "no_lead_short_body",
-        "no_lead_even_body",
+        "no_lead_short_even_body",
+        "no_lead_even_wrong_range",
+        "top_empty_no_ci_wrong_range",
+        "top_empty_no_ci_short_odd_body",
     ],
 )
 def test_younganimal_unobserved_physical_layouts_fail_closed(mutation: str) -> None:
@@ -396,9 +402,16 @@ def test_younganimal_unobserved_physical_layouts_fail_closed(mutation: str) -> N
         raw["pages"]["childCount"] = 21
     elif mutation == "seek_relation":
         raw["seek"]["max"] = "23"
-    elif mutation in {"no_lead_short_body", "no_lead_even_body"}:
-        body_count = 3 if mutation == "no_lead_short_body" else 12
+    elif mutation.startswith("no_lead_"):
+        body_count = 3 if mutation == "no_lead_short_body" else 4 if mutation == "no_lead_short_even_body" else 12
         raw = _top_empty_no_ci_snapshot(body_count + 4, body_count=body_count, no_lead=True)
+        if mutation == "no_lead_even_wrong_range":
+            raw["seek"]["max"] = str(body_count + 4)
+    elif mutation.startswith("top_empty_no_ci_"):
+        body_count = 11 if mutation == "top_empty_no_ci_wrong_range" else 3
+        raw = _top_empty_no_ci_snapshot(body_count + 4, body_count=body_count)
+        if mutation == "top_empty_no_ci_wrong_range":
+            raw["seek"]["max"] = str(body_count + 5)
     else:
         raw["url"] = "https://younganimal.com/episodes/0000000000001"
 
@@ -888,25 +901,32 @@ def test_younganimal_no_top_pr_odd_body_rejects_unproven_layout(mutation: str) -
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
 
-@pytest.mark.parametrize(("body_count", "no_lead"), [(6, False), (10, False), (5, True), (13, True)])
+@pytest.mark.parametrize(("body_count", "no_lead"), [(6, False), (10, False), (5, True), (13, True), (6, True), (12, True), (5, False), (11, False)])
 def test_younganimal_top_empty_no_ci_profile_maps_all_observed_roles_and_seek_states(
     body_count: int, no_lead: bool,
 ) -> None:
     body_start = 0 if no_lead else 1
-    maximum = body_count + body_start + 4
+    wrapper_count = body_count + body_start + 4
+    even_wrappers = wrapper_count % 2 == 0
+    maximum = wrapper_count - int(even_wrappers)
     pr_slots = (body_count + body_start, body_count + body_start + 1)
-    good_slot = maximum - 2
-    last_slot = maximum - 1
+    good_slot = wrapper_count - 2
+    last_slot = wrapper_count - 1
     for value in range(maximum, 0, -2):
         raw = _top_empty_no_ci_snapshot(value, body_count=body_count, no_lead=no_lead)
         observation = _parse_viewer_observation(raw, expected_url=EPISODE_URL)
         focus = maximum - value + 1
-        centers = tuple(index for index in (focus - 1, focus) if 0 <= index < maximum)
+        centers = tuple(index for index in (focus - 1, focus) if 0 <= index < wrapper_count)
         body_centers = tuple(index for index in centers if body_start <= index < body_start + body_count)
         expected_state = "end" if value == 1 else "ad" if value == 3 else "content"
         expected_active = (last_slot,) if value == 1 else () if value == 3 else body_centers
 
-        assert observation.layout_variant == ("no_lead_no_ci" if no_lead else "top_empty_no_ci")
+        expected_variant = (
+            "no_lead_no_ci_even_body" if no_lead and even_wrappers else
+            "no_lead_no_ci" if no_lead else
+            "top_empty_no_ci_odd_body" if even_wrappers else "top_empty_no_ci"
+        )
+        assert observation.layout_variant == expected_variant
         assert observation.body_slots == tuple(range(body_start, body_start + body_count))
         assert observation.ci_slot is None
         assert observation.pr_slots == pr_slots
@@ -943,10 +963,13 @@ def test_younganimal_top_empty_no_ci_profile_maps_all_observed_roles_and_seek_st
         ("ci_marker", 5),
         ("missing_pr_marker", 3),
         ("early_last_marker", 5),
+        ("wrong_pr_phase", 5),
+        ("wrong_terminal_pr", 1),
         ("wrong_seek_max", 15),
         ("odd_body_role", 13),
         ("extra_ci_role", 15),
         ("tail_role", 15),
+        ("tail_canvas", 15),
         ("extra_center", 13),
         ("missing_center", 11),
         ("last_marker_parent", 1),
@@ -957,11 +980,11 @@ def test_younganimal_top_empty_no_ci_profile_maps_all_observed_roles_and_seek_st
         ("last_wrapper_center", 1),
     ],
 )
-@pytest.mark.parametrize("no_lead", [False, True])
+@pytest.mark.parametrize(("no_lead", "body_count"), [(False, 10), (True, 11), (True, 12), (False, 11)])
 def test_younganimal_top_empty_no_ci_profile_rejects_unobserved_markers_roles_and_geometry(
-    mutation: str, seek_value: int, no_lead: bool,
+    mutation: str, seek_value: int, no_lead: bool, body_count: int,
 ) -> None:
-    raw = _top_empty_no_ci_snapshot(seek_value, body_count=11 if no_lead else 10, no_lead=no_lead)
+    raw = _top_empty_no_ci_snapshot(seek_value, body_count=body_count, no_lead=no_lead)
     classes = raw["viewerClasses"]
     if mutation == "missing_horizontal":
         classes.remove("mode-h")
@@ -998,6 +1021,11 @@ def test_younganimal_top_empty_no_ci_profile_rejects_unobserved_markers_roles_an
         classes.remove("mode-pr-page")
     elif mutation == "early_last_marker":
         classes.append("mode-last-page")
+    elif mutation in {"wrong_pr_phase", "wrong_terminal_pr"}:
+        if "mode-pr-page" in classes:
+            classes.remove("mode-pr-page")
+        else:
+            classes.append("mode-pr-page")
     elif mutation == "wrong_seek_max":
         raw["seek"]["max"] = "14"
     elif mutation == "odd_body_role":
@@ -1008,6 +1036,9 @@ def test_younganimal_top_empty_no_ci_profile_rejects_unobserved_markers_roles_an
         raw["slots"][10]["classes"] = ["-cv-page", "mode-ci"]
     elif mutation == "tail_role":
         raw["slots"][11]["classes"] = ["-cv-page", "mode-good"]
+    elif mutation == "tail_canvas":
+        raw["slots"][-3]["canvasCount"] = 1
+        raw["slots"][-3]["canvas"] = dict(raw["slots"][4]["canvas"])
     elif mutation == "extra_center":
         raw["slots"][4]["wrapperCenterInViewport"] = True
     elif mutation == "missing_center":
@@ -1023,7 +1054,7 @@ def test_younganimal_top_empty_no_ci_profile_rejects_unobserved_markers_roles_an
     elif mutation == "last_marker_offscreen":
         raw["terminalMarkerCenterInViewport"] = False
     else:
-        raw["slots"][14]["wrapperCenterInViewport"] = False
+        raw["slots"][-1]["wrapperCenterInViewport"] = False
 
     with pytest.raises(UnknownPageStateError):
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)
