@@ -639,7 +639,7 @@ class YounganimalAdapter(SiteAdapter):
                 include_pixels=True,
             )
         else:
-            first_slots = (self._body_slots[0],)
+            first_slots = self._body_slots[:2] if observation.layout_variant == "no_lead_no_ci" else (self._body_slots[0],)
             first = await self._wait_for_observation(
                 page,
                 lambda row: (
@@ -1126,7 +1126,7 @@ class YounganimalAdapter(SiteAdapter):
             predicate = lambda row: (
                 row.page_state == "content"
                 and row.seek_value == observation.seek_max
-                and row.active_slots == (row.body_slots[0],)
+                and row.active_slots == (row.body_slots[:2] if row.layout_variant == "no_lead_no_ci" else (row.body_slots[0],))
                 and row.ready_slots == row.active_slots
             )
         return await self._wait_for_observation(

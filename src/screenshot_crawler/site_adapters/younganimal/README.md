@@ -7,6 +7,26 @@ manifest, and packager. Discovery recognizes authenticated work-bound wait-free
 candidates and active manual grants from naturally emitted listing responses;
 it does not click or consume tickets.
 
+The `no_lead_no_ci` viewer profile also supports the observed Item/Source
+35814 layout: no lead or CI wrapper, contiguous odd body B=N-4>=5, exact
+PR/PR/Good/Last tail, positive horizontal/spread/RTL and PR/Good flags,
+absent top-empty/comic-info/vertical/single flags, and min=1/max=N/step=2.
+It validates every phase and selected center, initializes/rewinds to two body
+pages at slots 0/1, and requires complete frozen body coverage plus the unique
+visible/centered Last before END. Incoming draw snapshots may precede CSS
+translation; selection/postproof still require final centers, exact source replay,
+retained nodes/write epochs and equal-size wrapper/target translation. Native
+proof and rendered PNG fallback retain their other guards; no CI mutation
+exception is available. A direct production
+Runner on the existing grant captured all thirteen pages through END and a
+CRC/decode/manifest/order/hash-checked ZIP with max_pages=13: thirteen native
+960x1364 WebPs, zero rendered PNG fallbacks, and independent draw-time source RGBA
+SHA-256 equality for every output page. There was one main-document request, no checkout POST
+and no adapter ticket action. The normal Catalog was not modified; this was
+isolated Runner/packaging verification, not Batch completion. Evidence and
+limits: `output/younganimal-native-35814/verified/live-report.json` and
+`note/11_younganimal.md`. No new setting or CLI option is needed.
+
 The current verified fresh-quota path is a normal Batch run on episode
 `849948508c8bc` / work `71460b2b6686f`: one exact wait-free click and a bound
 checkout were followed on the same Page through the standard Viewer, END, ZIP,

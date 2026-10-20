@@ -158,33 +158,33 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     return sameArray(names, expected);
   };
   const noCiCandidate = (viewer, children, seek) => {
-    const bodyCount = children.length - 5;
+    const topEmpty = viewer?.classList.contains('mode-has-top-emptypage');
+    const bodyCount = children.length - (topEmpty ? 5 : 4);
     return viewer instanceof Element && viewer.classList.contains('mode-h') &&
       viewer.classList.contains('mode-spread') && viewer.classList.contains('mode-dir-rtl') &&
       viewer.classList.contains('mode-nav-dir-rtl') &&
-      viewer.classList.contains('mode-has-top-emptypage') &&
       viewer.classList.contains('mode-has-pr') && viewer.classList.contains('mode-has-good-page') &&
       !viewer.classList.contains('mode-has-comic-info') &&
       !viewer.classList.contains('mode-v') && !viewer.classList.contains('mode-single') &&
-      bodyCount >= 4 && bodyCount % 2 === 0 && seek?.type === 'range' && !seek.disabled &&
+      bodyCount >= (topEmpty ? 4 : 5) && bodyCount % 2 === (topEmpty ? 0 : 1) && seek?.type === 'range' && !seek.disabled &&
       Number(seek.min) === 1 && Number(seek.max) === children.length && Number(seek.step) === 2;
   };
-  const exactTopEmptyNoCi = (viewer, pages, children, seek) => {
-    const bodyCount = children.length - 5;
+  const exactNoCiLayout = (viewer, pages, children, seek, forDraw = false) => {
+    const bodyStart = viewer.classList.contains('mode-has-top-emptypage') ? 1 : 0;
+    const tailStart = children.length - 4;
     if (!(pages instanceof Element) || !noCiCandidate(viewer, children, seek) ||
-        !exactClasses(children[0], ['-cv-page', 'mode-empty']) ||
-        children[0].querySelectorAll('canvas').length !== 0) return false;
+        (bodyStart === 1 && (!exactClasses(children[0], ['-cv-page', 'mode-empty']) ||
+        children[0].querySelectorAll('canvas').length !== 0))) return false;
     const allowedBody = [
       ['-cv-page'], ['-cv-page', 'mode-loading'],
       ['-cv-page', 'mode-loading', 'mode-req-render'],
       ['-cv-page', 'mode-loaded'], ['-cv-page', 'mode-loaded', 'mode-rendered'],
     ];
-    for (let slot = 1; slot <= bodyCount; slot += 1) {
+    for (let slot = bodyStart; slot < tailStart; slot += 1) {
       const wrapper = children[slot];
       if (!wrapper || wrapper.parentElement !== pages ||
           !allowedBody.some(expected => exactClasses(wrapper, expected))) return false;
     }
-    const tailStart = bodyCount + 1;
     const tail = [
       ['-cv-page', 'mode-empty', 'mode-pr'], ['-cv-page', 'mode-empty', 'mode-pr'],
       ['-cv-page', 'mode-good'], ['-cv-page', 'mode-last'],
@@ -202,7 +202,10 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     for (let slot = 0; slot < children.length; slot += 1) {
       if (wrapperCenterInViewport(children[slot])) actualCenters.push(slot);
     }
-    if (!sameArray(actualCenters, expectedCenters)) return false;
+    // Incoming bodies draw before the public seek's CSS translation settles.
+    // Selection/postproof still require final centers; replay and equal-size
+    // wrapper/target translation bind the draw-time source to the selected body.
+    if (!forDraw && !sameArray(actualCenters, expectedCenters)) return false;
     if (value === children.length && expectedCenters[0] !== 0) return false;
     if (value === 1) {
       const markers = [...document.querySelectorAll('#xCVLastPage')];
@@ -349,11 +352,11 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const noTopPr = viewer.classList.contains('mode-has-top-emptypage') &&
       exactClasses(children[0], ['-cv-page', 'mode-empty']);
     const hasTopEmptyPage = viewer.classList.contains('mode-has-top-emptypage') && !noTopPr;
-    const bodyStart = topEmptyNoCi ? 1 : hasTopEmptyPage ? 2 : 1;
+    const bodyStart = topEmptyNoCi ? (viewer.classList.contains('mode-has-top-emptypage') ? 1 : 0) : hasTopEmptyPage ? 2 : 1;
     const bodyEnd = topEmptyNoCi ? children.length - 4 : ci;
     if ((children.length < 9 && !shortStandard) || bodyEnd <= bodyStart) return null;
     if (topEmptyNoCi) {
-      if (!exactTopEmptyNoCi(viewer, pages, children, seek)) return null;
+      if (!exactNoCiLayout(viewer, pages, children, seek, forDraw)) return null;
     } else if (prCount) {
       // The explicit PR-tail helper proved the complete lead/body/tail structure.
     } else if (
@@ -412,7 +415,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       ? [null, bodyEnd, bodyEnd + 1, bodyEnd + 2, bodyEnd + 3]
       : [ci, ci + 1, ci + 2, ci + 3, ci + 4];
     return {viewer, pages, seek, children, ci, bodyStart, bodyEnd, roles,
-      variant: oneBody ? 'standard_one_body' : twoBody ? 'standard_two_body' : prCount === 3 ? (hasTopEmptyPage ? 'top_empty_three_pr' : children.length % 2 === 0 ? 'standard_three_pr_odd_body' : 'standard_three_pr') : prCount === 1 ? 'standard_single_pr' : topEmptyNoCi ? 'top_empty_no_ci' : noTopPrOddBody ? 'top_empty_no_pr_odd_body' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
+      variant: oneBody ? 'standard_one_body' : twoBody ? 'standard_two_body' : prCount === 3 ? (hasTopEmptyPage ? 'top_empty_three_pr' : children.length % 2 === 0 ? 'standard_three_pr_odd_body' : 'standard_three_pr') : prCount === 1 ? 'standard_single_pr' : topEmptyNoCi ? (bodyStart === 0 ? 'no_lead_no_ci' : 'top_empty_no_ci') : noTopPrOddBody ? 'top_empty_no_pr_odd_body' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
       path: location.pathname, dom: mutationState.domGeneration,
       captureDom: mutationState.captureDomGeneration,
       viewport: {width: innerWidth, height: innerHeight, dpr: devicePixelRatio}};

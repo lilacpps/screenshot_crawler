@@ -2,6 +2,94 @@
 
 ## Current verification snapshot (2026-10-20)
 
+### No lead wrapper and no CI: Item/Source 35814
+
+Normal Batch `0be4eb4073ce404ab5593b27b2486c70` failed before capture on
+`07e91638d2a1b` / work `932cedf273921` (ナナとカオル Last Year / 最終話②).
+Its N=17/max=17 structure was mistaken for the standard odd-body candidate;
+the missing comic-info capability caused the reported readiness timeout.
+The saved DOM and bounded shared-CDP probe instead prove no lead wrapper,
+no CI wrapper, thirteen contiguous body slots 0-12, PR 13-14, Good 15, Last 16.
+This is a structural mismatch, so a longer wait cannot resolve it.
+
+`no_lead_no_ci` requires positive horizontal/spread/RTL and PR/Good flags,
+absent top-empty/comic-info/vertical/single flags, exact canvas-free
+PR/PR/Good/Last roles, contiguous known body classes, derived odd B=N-4>=5,
+and range min=1/max=N/step=2. No episode IDs or wrapper totals are allowlisted.
+Every phase and centered wrapper must match:
+
+| Seek | Centered wrappers in the live B=13 sample | Phase/state |
+|---|---|---|
+| 17 | 0, 1 | first-only / two body pages |
+| 15..7 by -2 | 2/3..10/11 | no phase flags / body pairs |
+| 5 | 12, 13 | PR-only / final body plus first PR |
+| 3 | 14, 15 | PR-only / PR plus Good, no body capture |
+| 1 | 16 | Last-only / unique visible and centered Last |
+
+Initialization and public rewind require both first body pages ready, followed
+by the existing UI-settle/quiet proof. Physical slot identity starts at zero;
+saved artifact sequence remains one-based. Python parsing and native layout
+proof use the same body/tail map, range, phases and final centers. Native
+draw-time observation alone permits pending CSS translation: the exact roles,
+capabilities, seek and expected body slots must already match, while selection
+and post-encoding proof still require every final wrapper center. The existing
+source/target replay RGBA, retained node/write/epoch and equal-size wrapper/target
+translation checks bind the incoming draw to the selected body. There is no CI
+mutation exception for this profile. Frozen mapping, all-body coverage before
+END, source replay/node/write/epoch proof, atomic rendered PNG fallback,
+max_pages, timeouts and access rules remain unchanged. Other no-lead body
+parities, tails and short layouts remain unsupported.
+
+Evidence: `output/younganimal-fix-35814/metadata-probe.json` checks all nine
+public seek states without pixel reads and restores the starting seek. The
+initial layout-only fix still produced two native WebPs and eleven rendered
+PNGs with `native_candidate_missing_or_stale`. The bounded read-only draw probe
+`output/younganimal-native-35814/baseline-draw-probe.json` establishes why:
+at seek 15 the incoming slots 2/3 draw while centers remain 0/1; at seek 13
+slots 4/5 draw while centers remain 2/3. Centers settle correctly afterwards,
+but the old unconditional draw-time center check discarded the candidates.
+An artificial fixture with this order failed before the correction and now
+passes source-native capture. Extending waits would not recover a missed draw.
+
+Current direct production Runner verification on the existing grant is in
+`output/younganimal-native-35814/verified/live-report.json` and
+`live-manifest.json`: max_pages=13, all slots 0-12 captured in order through END
+at seek 1, **13 native 960x1364 WebPs and zero rendered PNG fallbacks**.
+A separate draw observer's source RGBA SHA-256 matches the decoded output for
+every page; ZIP CRC, decode, manifest order, encoded hashes and dimensions pass.
+The check proves draw-time source canvas pixels, not original response bytes.
+One target main-document request, no checkout POST and no adapter ticket action
+were observed. Normal Catalog and library were not modified; only the owned
+Page was closed. A convenient copy is `output/younganimal-native-35814/35814-native.zip`,
+SHA-256 `e3418a294152fa8ab77f28b8987b8669092dac12116674414aad6c0cea956817`.
+This verifies Runner/capture/packaging, not a new Catalog completion or ticket
+consumption. The first additional audit attempt stopped before saving pages
+because its independent filter incorrectly excluded fractional destination sizes;
+it is not a passing run. The corrected audit follows the existing subpixel
+destination rule without changing production draw bounds. Natural site traffic
+and site-side reading effects are not excluded.
+
+Synthetic coverage extends the existing no-CI cases for all phases and missing
+capabilities, changed roles/ranges/centers/Last markers. Browser coverage includes
+B=5/B=13 native source RGBA and B=13 rendered fallback through END/ZIP, resumed
+seek rewind to the first pair, and direct native collector rejection of drift.
+No-CI fixtures now draw before repositioning, matching the live evidence. Both
+no-CI variants additionally cover equal-size translation versus resizing/relative
+drift, and post-encoding canvas replacement/seek changes that save no artifact.
+The new structure adds no setting or CLI option. Existing completed mixed-format
+archives are not rewritten by the code change; the verified replacement ZIP is
+available at the isolated path above. The final capture Unit file passed 295
+cases; affected browser Integration passed 76 cases (163 deselected) in 165.54
+seconds, including both no-CI variants, native Runner spread families, geometry,
+direct collector rejection and post-encoding failures. There were zero failed
+or skipped tests; the browser run reported five existing pytest-asyncio
+deprecation warnings. The earlier focused/geometry/postproof runs overlap these
+final selections and are not additional unique cases. `ruff check src tests`
+and scoped `git diff --check` passed. Full-suite and unrelated Research/Discovery
+runs were not needed for this site-local native observer change. This verification
+does not run a normal multi-candidate Batch or modify Catalog completion; it
+deliberately uses isolated Runner/packaging output.
+
 ### Odd body plus three trailing PRs: Item/Source 35766
 
 Normal Batch `7c508b7bf8ca4334bd6914847d1d9756` failed before capture on
@@ -1425,6 +1513,14 @@ all resulting site-side effects. Evidence: `output/younganimal_work_ticket_teste
 `output/younganimal_work_ticket_tester/direct-8d-fix/sentinel.json`,
 `output/younganimal_work_ticket_tester/direct-8d-fix/page-audit.jsonl`, and
 `output/younganimal_work_ticket_tester/direct-8d-fix/pre-package-manifest.json`.
+
+The separate `no_lead_no_ci` variant starts its body at slot 0 and requires
+absent top-empty capability, odd B=N-4>=5 and the same exact four-tail roles.
+At maximum seek both slots 0 and 1 are body pages; no blank or lead is skipped.
+Its remaining phases and Last proof match the no-CI table above. Current
+Item 35814 live evidence and output-format limits are recorded in the current
+verification snapshot. The top-empty even-body variant retains slot 0 as its
+empty lead and B=N-5; removing a flag without changing roles is rejected.
 
 The adapter prefers verified C source-native pixels when every active half has a
 supported full-frame draw candidate. The observer copies the source canvas into a

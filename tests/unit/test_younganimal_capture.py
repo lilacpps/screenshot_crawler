@@ -143,14 +143,16 @@ def _snapshot(
     }
 
 
-def _top_empty_no_ci_snapshot(seek_value: int, *, body_count: int = 10) -> dict[str, object]:
-    if body_count < 4 or body_count % 2:
-        raise ValueError("fixture body_count must be an even value of at least four")
-    seek_max = body_count + 5
+def _top_empty_no_ci_snapshot(seek_value: int, *, body_count: int = 10, no_lead: bool = False) -> dict[str, object]:
+    body_start = 0 if no_lead else 1
+    body_end = body_start + body_count
+    seek_max = body_end + 4
     viewer_classes = {
         "-cv", "mode-h", "mode-spread", "mode-dir-rtl", "mode-nav-dir-rtl",
-        "mode-has-top-emptypage", "mode-has-pr", "mode-has-good-page",
+        "mode-has-pr", "mode-has-good-page",
     }
+    if not no_lead:
+        viewer_classes.add("mode-has-top-emptypage")
     if seek_value == seek_max:
         viewer_classes.add("mode-first-page")
     elif seek_value in {5, 3}:
@@ -161,20 +163,20 @@ def _top_empty_no_ci_snapshot(seek_value: int, *, body_count: int = 10) -> dict[
     wrapper_count = seek_max
     slots: list[dict[str, object]] = []
     for index in range(wrapper_count):
-        if index == 0:
+        if index == 0 and not no_lead:
             classes = {"-cv-page", "mode-empty"}
-        elif index <= body_count:
+        elif index < body_end:
             classes = {"-cv-page", "mode-loaded", "mode-rendered"}
-        elif index <= body_count + 2:
+        elif index < body_end + 2:
             classes = {"-cv-page", "mode-empty", "mode-pr"}
-        elif index == body_count + 3:
+        elif index == body_end + 2:
             classes = {"-cv-page", "mode-good"}
         else:
             classes = {"-cv-page", "mode-last"}
         rect_x = 945 + ((focus - index - 1) * 946)
         canvas = None
         canvas_count = 0
-        if 1 <= index <= body_count:
+        if body_start <= index < body_end:
             canvas_count = 1
             canvas = {
                 "node": index + 100,
@@ -377,6 +379,8 @@ def test_younganimal_body_interval_is_derived_from_verified_roles_not_fixed_coun
         "wrapper_count",
         "seek_relation",
         "wrong_route",
+        "no_lead_short_body",
+        "no_lead_even_body",
     ],
 )
 def test_younganimal_unobserved_physical_layouts_fail_closed(mutation: str) -> None:
@@ -392,6 +396,9 @@ def test_younganimal_unobserved_physical_layouts_fail_closed(mutation: str) -> N
         raw["pages"]["childCount"] = 21
     elif mutation == "seek_relation":
         raw["seek"]["max"] = "23"
+    elif mutation in {"no_lead_short_body", "no_lead_even_body"}:
+        body_count = 3 if mutation == "no_lead_short_body" else 12
+        raw = _top_empty_no_ci_snapshot(body_count + 4, body_count=body_count, no_lead=True)
     else:
         raw["url"] = "https://younganimal.com/episodes/0000000000001"
 
@@ -881,25 +888,26 @@ def test_younganimal_no_top_pr_odd_body_rejects_unproven_layout(mutation: str) -
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 
 
-@pytest.mark.parametrize("body_count", [6, 10])
+@pytest.mark.parametrize(("body_count", "no_lead"), [(6, False), (10, False), (5, True), (13, True)])
 def test_younganimal_top_empty_no_ci_profile_maps_all_observed_roles_and_seek_states(
-    body_count: int,
+    body_count: int, no_lead: bool,
 ) -> None:
-    maximum = body_count + 5
-    pr_slots = (body_count + 1, body_count + 2)
-    good_slot = body_count + 3
-    last_slot = body_count + 4
+    body_start = 0 if no_lead else 1
+    maximum = body_count + body_start + 4
+    pr_slots = (body_count + body_start, body_count + body_start + 1)
+    good_slot = maximum - 2
+    last_slot = maximum - 1
     for value in range(maximum, 0, -2):
-        raw = _top_empty_no_ci_snapshot(value, body_count=body_count)
+        raw = _top_empty_no_ci_snapshot(value, body_count=body_count, no_lead=no_lead)
         observation = _parse_viewer_observation(raw, expected_url=EPISODE_URL)
         focus = maximum - value + 1
         centers = tuple(index for index in (focus - 1, focus) if 0 <= index < maximum)
-        body_centers = tuple(index for index in centers if 1 <= index <= body_count)
+        body_centers = tuple(index for index in centers if body_start <= index < body_start + body_count)
         expected_state = "end" if value == 1 else "ad" if value == 3 else "content"
         expected_active = (last_slot,) if value == 1 else () if value == 3 else body_centers
 
-        assert observation.layout_variant == "top_empty_no_ci"
-        assert observation.body_slots == tuple(range(1, body_count + 1))
+        assert observation.layout_variant == ("no_lead_no_ci" if no_lead else "top_empty_no_ci")
+        assert observation.body_slots == tuple(range(body_start, body_start + body_count))
         assert observation.ci_slot is None
         assert observation.pr_slots == pr_slots
         assert observation.good_slot == good_slot
@@ -949,10 +957,11 @@ def test_younganimal_top_empty_no_ci_profile_maps_all_observed_roles_and_seek_st
         ("last_wrapper_center", 1),
     ],
 )
+@pytest.mark.parametrize("no_lead", [False, True])
 def test_younganimal_top_empty_no_ci_profile_rejects_unobserved_markers_roles_and_geometry(
-    mutation: str, seek_value: int
+    mutation: str, seek_value: int, no_lead: bool,
 ) -> None:
-    raw = _top_empty_no_ci_snapshot(seek_value)
+    raw = _top_empty_no_ci_snapshot(seek_value, body_count=11 if no_lead else 10, no_lead=no_lead)
     classes = raw["viewerClasses"]
     if mutation == "missing_horizontal":
         classes.remove("mode-h")
@@ -963,7 +972,10 @@ def test_younganimal_top_empty_no_ci_profile_rejects_unobserved_markers_roles_an
     elif mutation == "missing_nav_rtl":
         classes.remove("mode-nav-dir-rtl")
     elif mutation == "missing_top_empty":
-        classes.remove("mode-has-top-emptypage")
+        if no_lead:
+            classes.append("mode-has-top-emptypage")
+        else:
+            classes.remove("mode-has-top-emptypage")
     elif mutation == "missing_pr_capability":
         classes.remove("mode-has-pr")
     elif mutation == "missing_good_capability":

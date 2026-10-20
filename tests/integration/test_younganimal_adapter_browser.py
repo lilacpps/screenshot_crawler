@@ -120,7 +120,11 @@ def _viewer_html(
         15 if standard15_body else
         standard_body_count if standard_body_count is not None else 16
     )
-    ci_index = body_last + 1
+    # In the no-CI fixture, no_top_pr explicitly removes the entire lead wrapper.
+    no_lead = no_ci_profile and no_top_pr
+    body_start = 0 if no_lead else 1
+    body_end = body_last + body_start
+    ci_index = body_end
     wrapper_count = ci_index + (tail_pr_count + 3 if pr_tail_profile else 4 if no_ci_profile else 5)
     seek_max = wrapper_count if body_last == 1 or odd_profile or no_ci_profile or pr_tail_profile else wrapper_count - 1
     pr_tail_odd = pr_tail_profile and body_last % 2 == 1
@@ -128,13 +132,13 @@ def _viewer_html(
         seek_max -= 1
     ci_seek = tail_pr_count + (2 if pr_tail_odd else 4) if pr_tail_profile else 5
     for index in range(wrapper_count):
-        if index == 0:
+        if index == 0 and not no_lead:
             classes = (
                 "mode-empty -cv-page" if no_top_pr or no_ci_profile
                 else "mode-empty mode-pr mode-top-pr -cv-page"
             )
             body = ""
-        elif index <= body_last:
+        elif index < body_end:
             classes = "-cv-page mode-loaded mode-rendered"
             shade = (index * 13) % 255
             if index in native_source_slots:
@@ -191,7 +195,7 @@ def _viewer_html(
             f'<div class="{classes}"{marker_id} data-slot="{index}">{body}</div>'
         )
     wrappers_html = "".join(wrappers)
-    root_flag = "mode-has-top-emptypage" if no_top_pr or no_ci_profile else ""
+    root_flag = "mode-has-top-emptypage" if (no_top_pr or no_ci_profile) and not no_lead else ""
     odd_flags = (
         "mode-has-pr mode-has-comic-info mode-has-good-page" if odd_profile or pr_tail_profile or body_last in {1, 2} else
         "mode-has-pr mode-has-good-page" if no_ci_profile else ""
@@ -220,14 +224,14 @@ def _viewer_html(
         const seek = document.querySelector('#xCVSeekBar');
         const pages = document.querySelector('#xCVPages');
         const wrappers = [...pages.children];
-        const body = wrappers.slice(1, {body_last + 1});
+        const body = wrappers.slice({body_start}, {body_end});
         const update = () => {{
           const value = Number(seek.value);
           const focus = Number(seek.max) - value + 1;
           const positionWrappers = () => wrappers.forEach((wrapper, index) => {{
             wrapper.style.left = `${{945 + (focus - index - 1) * 946}}px`;
           }});
-          if (!{str(odd_profile and no_top_pr).lower()}) positionWrappers();
+          if (!{str((odd_profile and no_top_pr) or no_ci_profile).lower()}) positionWrappers();
           viewer.classList.remove('mode-first-page','mode-top-pr-page','mode-pr-page','mode-ci-page','mode-last-page');
           if (value === Number(seek.max)) {{
             viewer.classList.add('mode-first-page');
@@ -239,9 +243,9 @@ def _viewer_html(
           body.forEach(wrapper => {{
             wrapper.classList.add('mode-loaded','mode-rendered');
           }});
-          const active = [focus - 1, focus].filter(slot => slot >= 1 && slot <= body.length);
+          const active = [focus - 1, focus].filter(slot => slot >= {body_start} && slot < {body_end});
           active.forEach(slot => window.__yaRenderers?.[slot]?.());
-          if ({str(odd_profile and no_top_pr).lower()}) positionWrappers();
+          if ({str((odd_profile and no_top_pr) or no_ci_profile).lower()}) positionWrappers();
         }};
         seek.addEventListener('input', update);
         seek.addEventListener('change', update);
@@ -2073,19 +2077,26 @@ async def test_younganimal_shorter_top_empty_native_rejects_profile_drift(
 
 
 @pytest.mark.parametrize("mutation", ["replacement", "seek"])
-@pytest.mark.parametrize("top_empty", [False, True])
-async def test_three_pr_post_encoding_mutation_saves_no_artifact(
+@pytest.mark.parametrize("profile", ["three_pr", "top_empty_three_pr", "top_empty_no_ci", "no_lead_no_ci"])
+async def test_younganimal_tail_profile_post_encoding_mutation_saves_no_artifact(
     browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str,
-    top_empty: bool,
+    profile: str,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
+    top_empty = profile == "top_empty_three_pr"
+    no_ci = profile in {"top_empty_no_ci", "no_lead_no_ci"}
+    no_lead = profile == "no_lead_no_ci"
+    first_slot = 0 if no_lead else 2 if top_empty else 1
     await _install_fixture(browser_page, top_empty=top_empty, top_empty_body_count=9,
-                           top_empty_tail_pr_count=3, native_source_slots=(2, 3) if top_empty else (1,),
-                           pr_tail_body_count=None if top_empty else 11, tail_pr_count=3)
+                           top_empty_tail_pr_count=3,
+                           native_source_slots=(0, 1) if no_lead else (2, 3) if top_empty else (1,),
+                           pr_tail_body_count=None if top_empty or no_ci else 11, tail_pr_count=3,
+                           top_empty_no_ci_body_count=13 if no_lead else 10 if no_ci else None,
+                           no_top_pr=no_lead)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
     script = (
-        f"const c=document.querySelector('#xCVPages').children[{2 if top_empty else 1}].querySelector('canvas');c.replaceWith(c.cloneNode(true));"
+        f"const c=document.querySelector('#xCVPages').children[{first_slot}].querySelector('canvas');c.replaceWith(c.cloneNode(true));"
         if mutation == "replacement" else
         "const s=document.querySelector('#xCVSeekBar');s.value='1';s.dispatchEvent(new Event('input',{bubbles:true}));"
     )
@@ -2456,6 +2467,9 @@ async def test_younganimal_capture_rejects_valid_profile_mapping_drift_after_det
         (None, None, None, None, False, False, 1), (7, None, None, None, False, False, 1), (9, None, None, None, False, False, 1), (15, None, None, None, False, False, 1),
         (None, 12, None, None, False, False, 1), (None, None, 6, None, False, False, 1), (None, None, 10, None, False, False, 1),
         (None, None, 10, None, True, False, 1), (None, None, None, 6, False, False, 1), (None, None, None, 4, False, False, 1),
+        pytest.param(None, None, 13, None, False, True, 1, id="no_lead_no_ci_13"),
+        pytest.param(None, None, 5, None, False, True, 1, id="no_lead_no_ci_5"),
+        pytest.param(None, None, 13, None, True, True, 1, id="no_lead_no_ci_rendered"),
         pytest.param(7, None, None, None, False, True, 1, id="no_top_pr_odd_7"),
         pytest.param(3, None, None, None, False, True, 1, id="no_top_pr_odd_3"),
         pytest.param(None, 2, None, None, False, False, 1, id="two_body"),
@@ -2474,7 +2488,9 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     no_ci_profile = top_empty_no_ci_body_count is not None
     body_count = pr_tail_body_count or top_empty_no_ci_body_count or standard_body_count or (16 if odd_body_count is None else odd_body_count)
-    body_slots = tuple(range(1, body_count + 1))
+    no_lead = no_ci_profile and no_top_pr
+    body_start = 0 if no_lead else 1
+    body_slots = tuple(range(body_start, body_count + body_start))
     final_body_seek = (
         str(tail_pr_count + 4) if pr_tail_body_count is not None else "7" if standard_body_count == 1 else "17" if standard_body_count == 12 else "5" if no_ci_profile else ("7" if odd_body_count is not None else "5")
     )
@@ -2580,7 +2596,8 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
     assert requested == [f"/episodes/{EPISODE_ID}"]
     expected_mode = "rendered_canvas_png" if force_rendered_fallback else "native_source_canvas"
     assert adapter.capture_modes[0] == expected_mode, adapter.capture_records[0]
-    assert adapter.capture_modes == [expected_mode] * (1 + len(body_slots) // 2), adapter.capture_modes
+    spread_count = (len(body_slots) + 1) // 2 if no_lead else 1 + len(body_slots) // 2
+    assert adapter.capture_modes == [expected_mode] * spread_count, adapter.capture_modes
     assert adapter.source_authority is not None
     sources = adapter.source_authority["sources"]
     assert isinstance(sources, dict)
@@ -2649,14 +2666,22 @@ async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof
         ("target_relative_drift", "rendered_canvas_png"),
     ],
 )
+@pytest.mark.parametrize("no_ci_variant", [None, "top_empty_no_ci", "no_lead_no_ci"])
 async def test_younganimal_draw_to_selection_geometry_requires_pure_translation(
     browser_page,
     monkeypatch: pytest.MonkeyPatch,
     geometry_change: str,
     expected_mode: str,
+    no_ci_variant: str | None,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
-    await _install_fixture(browser_page, native_source_slots=(1, 2, 3))
+    no_lead = no_ci_variant == "no_lead_no_ci"
+    await _install_fixture(
+        browser_page,
+        native_source_slots=(0, 1, 2, 3) if no_lead else (1, 2, 3),
+        top_empty_no_ci_body_count=13 if no_lead else 10 if no_ci_variant else None,
+        no_top_pr=no_lead,
+    )
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_MS", 20)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_DEADLINE_MS", 1_000)
     monkeypatch.setattr(younganimal_adapter_module, "INITIAL_QUIET_POLL_MS", 10)
@@ -2671,7 +2696,7 @@ async def test_younganimal_draw_to_selection_geometry_requires_pure_translation(
 
     first = await adapter.capture_page(browser_page)
     assert first is not None
-    assert adapter._capture_diagnostics["slots"] == [1]
+    assert adapter._capture_diagnostics["slots"] == ([0, 1] if no_lead else [1])
     await adapter.go_next(browser_page)
     await adapter.wait_for_change(browser_page, None)
     before_authority = await _read_fixture_pixel_authority(browser_page)
@@ -2946,15 +2971,17 @@ async def test_younganimal_odd_body_native_collector_rejects_invalid_profile_dir
         "top_pr_lead_role",
     ],
 )
+@pytest.mark.parametrize("no_lead", [False, True])
 async def test_younganimal_no_ci_native_collector_rejects_unobserved_profile_mutations(
-    browser_page, mutation: str
+    browser_page, mutation: str, no_lead: bool,
 ) -> None:
     await browser_page.set_viewport_size({"width": 1906, "height": 986})
     await _install_fixture(
         browser_page,
         initial_seek=13,
-        native_source_slots=tuple(range(1, 11)),
-        top_empty_no_ci_body_count=10,
+        native_source_slots=tuple(range(11)) if no_lead else tuple(range(1, 11)),
+        top_empty_no_ci_body_count=11 if no_lead else 10,
+        no_top_pr=no_lead,
     )
     adapter = YounganimalAdapter(preflight_work_url=WORK_URL)
     await adapter.prepare_page(browser_page)
@@ -2970,9 +2997,9 @@ async def test_younganimal_no_ci_native_collector_rejects_unobserved_profile_mut
         baseline_snapshot.get("snapshot"), expected_url=EPISODE_URL
     )
     assert baseline_snapshot.get("observerReady") is True
-    assert baseline.layout_variant == "top_empty_no_ci"
+    assert baseline.layout_variant == ("no_lead_no_ci" if no_lead else "top_empty_no_ci")
     assert baseline.seek_value == baseline.seek_max == 15
-    assert baseline.active_slots == (1,)
+    assert baseline.active_slots == ((0, 1) if no_lead else (1,))
 
     mutations = {
         "missing_horizontal": "document.querySelector('#comici-viewer').classList.remove('mode-h')",
@@ -2990,11 +3017,13 @@ async def test_younganimal_no_ci_native_collector_rejects_unobserved_profile_mut
         "top_pr_marker": "document.querySelector('#comici-viewer').classList.add('mode-top-pr-page')",
         "top_pr_lead_role": "document.querySelector('#xCVPages').children[0].className='-cv-page mode-empty mode-pr mode-top-pr'",
     }
+    if no_lead and mutation == "missing_top_empty":
+        mutations[mutation] = "document.querySelector('#comici-viewer').classList.add('mode-has-top-emptypage')"
     await browser_page.evaluate(mutations[mutation])
     result = await browser_page.evaluate(
         younganimal_adapter_module.COLLECT_NATIVE_CAPTURE_SCRIPT,
         {
-            "expectedSlots": [1],
+            "expectedSlots": list(baseline.active_slots),
             "expectedSeek": 15,
             "episodePath": urlsplit(EPISODE_URL).path,
             "maxPngChars": 8_000_000,
