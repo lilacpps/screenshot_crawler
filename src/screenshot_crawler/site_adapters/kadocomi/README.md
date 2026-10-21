@@ -2,12 +2,11 @@
 
 ## Current phase
 
-Current capture supports twelve observed layouts through eleven strict profiles,
-including the 第10話-2 direct-first PR/END maintenance fix described below.
-Latest maintenance validation, live Batch/ZIP runs and
-source comparisons are recorded in the progress ledger.
+Current capture includes the remaining 40-candidate topology maintenance described below.
+The latest maintenance evidence is described below and in `note/12_kadocomi.md`;
+earlier phase and maintenance evidence is recorded in the progress ledger.
 The independent P4 gates in the following paragraph cover the original scope.
-Final maintenance selection: 269 passed / 0 failed / 0 skipped; Ruff and diff
+Previous maintenance selection: 269 passed / 0 failed / 0 skipped; Ruff and diff
 checks passed. Normal CLI Batch completed all 23 remaining episodes of
 `KC_011605_S` (347 pages) in an isolated Catalog. Every ZIP passed
 inventory-count, CRC, decoding and Artifact checks; all 15 target pages
@@ -55,7 +54,7 @@ ArrowLeft reaches the paired END, leaving the recommendation inactive.
 
 The native DOM collector recognizes a directly typed canvas only when it is
 the sole contents node on the first slide. Adapter acceptance additionally
-requires one of the two direct-first profiles and validated beginning ownership/geometry; direct
+requires one of the explicit direct-first profiles and validated beginning ownership/geometry; direct
 canvases elsewhere, duplicates or unknown beginning/END topology fail closed.
 Native capture still requires the original Blob, full-frame identity draw,
 matching source/canvas RGBA, bounded budgets, ordered slots and async stability.
@@ -68,6 +67,150 @@ The five unrechecked rows included 26207, which still failed. The new sweep and
 full Batch/ZIP scope are recorded below; prior all-supported claims are withdrawn.
 Five representative live episodes were captured and compared with ordered ZIP
 members; other works and a separate independent source observer were not tested.
+
+## Remaining 40-candidate topology maintenance (2026-10-22)
+
+The Item/Source 36662 failure is a separate unsupported layout from 36661:
+`direct_first_mixed_final` has a directly typed first page inside the validated
+beginning root, paired middle slides, a final singleton owning main END n=2,
+and an empty paired main END. Its failed-run DOM and fresh settled live state
+agree on `[1,2,2,2,2,2,2,2,2,1,0]` (18 pages). The previous fix only supported
+PR-free direct-first content ending with two main END slides; it did not cover
+this final singleton or the other remaining layouts.
+
+A bounded CDP/Playwright inventory sweep inspected all 40 remaining pending,
+available/free candidates 36662..36701 across the two batch works. Exact
+markers, source-slot order, directly typed beginning ownership and contained
+geometry are validated per profile; no unknown reader structure is accepted.
+The new observed profiles are:
+
+- `direct_first_mixed_final` (6 candidates) and `paired_first_mixed_final` (6):
+  no PR; final singleton owns main n=2, immediately followed by paired main END.
+- `direct_first_paired_end` (13): directly typed first page followed by zero or
+  more pairs, paired main END, and either no trailing slide or exactly one
+  recognized secondary recommendation. Zero middle pairs were observed on
+  36668 (one page). `paired_first_paired_end` (1) has pairs from the first slide,
+  paired main END and no trailing recommendation.
+- `direct_first_secondary_end` (2) and `paired_first_secondary_end` (2): no PR;
+  final singleton owns the sole main n=2 marker. The immediately following empty
+  slide owns the sole recognized secondary END marker and is the exact terminal.
+  Main n=2 on the content slide alone never establishes completion.
+- `direct_first_pr_pair_double_end` (1) and
+  `direct_first_pr_pair_recommendation` (4): directly typed first page, pairs,
+  final singleton owning PR n=2, an empty PR n=1,n=2 slide, then paired main END.
+  The former has one further paired main END; the latter one recognized
+  secondary recommendation. Neither trailing slide is entered or captured.
+- `direct_first_pr_pair_bridge` (4) and `paired_first_pr_pair_bridge` (1): all
+  body slides after the optional direct-first singleton are pairs; then an
+  empty PR n=1,n=2 slide, an empty PR n=1 / main END n=2 slide, and paired main
+  END. The direct-first one-page case was observed on 36693/36696.
+
+Direct beginning role/owner/geometry and the absence or exact ordered PR roles
+participate in inventory settlement and native/Python async-change checks.
+First direct content uses the existing guarded ArrowLeft. Mixed-final body
+singletons use the existing final-END ArrowLeft guard. The new PR sequences
+require complete ordered body capture before empty slides are advanced. Each
+empty PR slide must settle twice; its exact inventory, metadata, visible
+reader target and focus are checked before one ordinary ArrowLeft. The same
+12-second bounded change wait must reach the next exact slide and ultimately
+END; a failed key is not repeated. Empty PR slides are neither captured nor
+terminal. Missing/misowned/duplicate markers, content at END, extra slides,
+unknown geometry, no advance, skipped slides and asynchronous mutations fail
+closed. Native source Blob/full-frame/RGBA proof, Core, access policy, settings,
+CLI, max-pages and same-content contracts remain unchanged. No `00_core.md`
+update is needed for this site-local change.
+
+Thirteen bounded representative source probes covered the observed ordinary,
+single-page, secondary-END and PR-sequence transitions. Every expected body
+source passed the existing production native proof and reached the exact
+terminal without entering later slides. These probes share the production
+native observer; they are not an independent source observer. Dedicated
+Watchlist, online-backup Catalog, source records, snapshots, CLI logs and audits
+are ignored under `work/kadocomi/error-36662-20261022/`.
+
+The focused new-profile selections passed 43 and 75 cases. Final local affected
+capture regression passed **392 / 0 failed / 0 skipped** (529.53 seconds):
+`tests/unit/test_kadocomi_adapter.py`, `tests/unit/test_kadocomi_native_capture.py`
+and `tests/integration/test_kadocomi_adapter_browser.py`. The 41 warnings are
+existing pytest-asyncio/Python deprecations. This includes the original wrapped
+singleton/mixed-final profiles, legacy unrelated PR handling (one/three markers),
+all new profiles, both CSS directions, source proof failures, exact ordered
+Runner/Batch ZIP, malformed ownership/markers/content, secondary END faults,
+no advance, skipped steps and asynchronous PR mutation. PR bridge no-advance
+cases verify exactly one key attempt per bridge. Ruff (`ruff check src tests`)
+and diff checks passed. No further live verification is running.
+At the user's explicit stop request, the isolated normal CLI Batch was stopped:
+36662..36668 had completed (7 episodes, 99 pages), and 36669 was interrupted.
+The interrupted record remains running in the disposable copied Catalog; it is
+not a successful or completed crawl. The normal Catalog's 40 Items and their
+existing failure history were unchanged at the read-only audit. All seven
+completed ZIPs passed ordered inventory counts, CRC, WebP decoding and Artifact
+hash/length checks. Four of these episodes (51 pages), including all 18 pages
+of 36662, also matched the fresh source hashes, byte lengths and dimensions.
+The other three archives were not compared against separate fresh source records.
+The stopped stock CLI run did not reach the PR-sequence candidates: their
+ordinary live keyboard/source probes passed, and the new production bridge
+orchestration is covered by local synthetic Runner/Batch tests; live stock-CLI
+verification of that orchestration remains incomplete.
+All-40 Batch/ZIP completion is explicitly unverified and will not be resumed
+unless the user asks. The 194 planning skips are not test skips. The user will
+report subsequent real-site failures. Per the user's 2026-10-22 instruction,
+future maintenance must limit live verification to the reported target and
+necessary bounded representative cases. Do not proactively run all-episode
+inventory/capture/Batch sweeps; require a new explicit request for that scope. Separate Research/Probe, Discovery/
+Policy and full repository suites were not run because only site-local capture
+acceptance and transitions changed. Core and other sites are unchanged.
+
+## Episode 9.2 direct-first double-END maintenance (2026-10-22)
+
+Item/Source 36661, `KC_008463_S:KC_0084630001100021_E`, uses
+`direct_first_double_end`: one directly typed first canvas inside the unique
+known beginning root (zero owned PR), seven RTL pairs, then two consecutive
+empty main END slides, each owning exactly n=1,n=2. Slot counts are
+`[1,2,2,2,2,2,2,2,0,0]`; PR and secondary recommendation inventories are empty.
+The two failed run DOMs and repeated fresh live snapshots agree. The previous
+four-main-END branch assumed paired-first content with a final PR n=2 and
+therefore raised `Kadocomi paired-first final PR role or geometry is unknown`
+before capture. This was an unsupported topology, not a transient loading error.
+
+The new profile requires validated direct-first beginning ownership and
+positive contained geometry, at least one following pair, the exact ordered
+four main END markers, no PR/recommendation, no additional slides, and no
+content at either END. First-source capture is followed by the existing guarded
+ArrowLeft to exact index 1. Subsequent turns, including the final pair, use the
+verified ordinary overlay. Completion requires every ordered source slot and
+exactly the first END; the second END remains inactive. Beginning/PR data stay
+in settlement and native/Python async stability checks, including absence of PR.
+Unknown structures, source-proof failures, no advance and skipped END fail closed.
+Core, native Blob/full-frame/RGBA proof, access policy, CLI/config and output
+contracts are unchanged; `note/00_core.md` needs no update.
+
+A bounded live probe verified all 15 original WebP sources with the existing
+production native proof and exact index 7 -> 8 overlay transition. A fresh
+normal CLI `batch run --limit 1` completed the exact target in an isolated
+SQLite online-backup Catalog (CrawlRun 13764, 15 pages, explicit END, one ZIP).
+All ordered ZIP members passed CRC/decoding and matched the fresh source
+SHA-256, byte length and dimensions; archive hash/size matched its Artifact.
+At that checkpoint the original Item was pending and unchanged, with both
+failed runs preserved; the user subsequently completed 36661 in the normal Catalog. Evidence/scripts/logs and the dedicated Catalog/library are ignored
+under `work/kadocomi/error-36661-20261022/`. The source probe uses production
+native proof, not a separate independent observer. At that checkpoint, other episodes in the
+41-candidate batch were not run; unobserved layouts remain unsupported.
+
+Previous checkpoint validation: the focused new-profile selection passed 21 cases; the final
+capture selection passed **257 / 0 failed / 0 skipped** (340.76 seconds), covering
+`tests/unit/test_kadocomi_adapter.py`, `tests/unit/test_kadocomi_native_capture.py`
+and `tests/integration/test_kadocomi_adapter_browser.py`. Its 41 warnings are
+existing pytest-asyncio/Python deprecations. Coverage includes all prior reader
+profiles, both CSS directions, byte-preserved Runner/Batch ZIP, malformed
+beginning roles, missing/wrong END, extra slides/content, unexpected and
+asynchronous PR insertion, early/skipped END and no advance. Global
+`ruff check src tests` and `git diff --check` passed. Full repository,
+separate Research/Probe and Discovery/Policy suites were not run because only
+site-local capture profile acceptance changed. Live metrics recorded one
+completed target, zero retries and zero relevant HTTP errors. The 233 planning
+skips in the dedicated Catalog are not test skips. Live execution of the
+remaining 40 batch candidates and an independent source observer were not run.
 
 ## 第10話-2 direct-first PR/END maintenance
 
@@ -165,19 +308,18 @@ The manual `crawl` CLI registry and Batch adapter/Policy registries include Kado
 
 The adapter installs a non-interfering observer before navigation. It preserves the original `URL.createObjectURL` and `drawImage` calls, retaining only bounded Blob references and immutable draw-time metadata. A capture succeeds only when the active unique Kadocomi reader slide has the next expected content slot or right-to-left spread; each canvas must map through its last full-frame identity `HTMLImageElement` draw to the retained Blob, and decoded Blob RGBA pixels must equal the finished canvas both before and after asynchronous byte reads. The original Blob bytes are returned unchanged as `.webp` / `image/webp`. Missing, changed, composed, transformed, oversized, or non-WebP proof fails hard. Locator and screenshot fallback are disabled.
 
-The content slot inventory is derived from the live reader DOM. Eleven observed reader layouts are accepted through ten strict profiles; the mixed-final profile supports two reviewed recommendation forms. Episode 4.1 starts with one canvas, continues with two canvases per content slide in physical right-to-left order, and stops at the paired `n=1`,`n=2` END slide; its observed trailing recommendation slide is excluded. The first-episode variant starts with one slot plus a PR item, has paired spreads, ends content with a single slot owning main END `n=2`, then requires the immediately following empty slide with main END `n=1`,`n=2`. Episode 79 starts with one content slot, has nine paired spreads, and ends content with a single slot owning `n=2`; its empty paired END is followed by one recognized recommendation slide. Episode 22.2 starts on an empty slide containing one visible beginning root and its owned PR marker, advances once with the observed ordinary `ArrowLeft` action, then has nine paired content spreads and a paired main END slide at index 10. Its recommendation at index 11 is excluded. The observed Episode 20.2 uses the same strict owned beginning-PR entry, five paired content slides, one final singleton owning main END n=2, and the immediately following empty paired END (n=1,n=2); there is no trailing recommendation. Episode 8.2 adds an empty beginning-PR slide with paired content, a final singleton with main-wrapper PR n=2, and an empty paired END. Episode 7.2 is content-first with at least one pair, a final singleton with main-wrapper PR n=2, an empty paired END, and one recognized trailing recommendation. These PR markers are not END markers. The accepted profile requires at least one paired content slide (end index >=3), not a fixed five-slide count. The beginning-slide rule applies only to this observed empty-first topology; PR metadata on existing content-first layouts remains outside their prior acceptance rule. For the mixed-final layouts, ordinary overlay turns are used through the final content slide; only after its unique slot is captured does a safe `ArrowLeft` action request the next slide, which must settle exactly one index later as the explicit empty END. The recommendation slide is never entered or captured. Marker class, number, slide ownership, positive geometry, and the entire slot inventory are revalidated. Any unrecognized marker, extra slide, content at/after END, missing transition, skipped index, or changed inventory fails closed. Evidence for these original seven layouts is limited to the observed routes on `KC_004915_S`; the additional `KC_011605_S` route is described below. The Episode 79 normal CLI run and independent all-20 source/RGBA-to-ZIP audit passed; final post-Discovery audit passed; live-evidence Reviewer and Lead gates passed; the prior Episode 79 milestone documentation review passed (Reviewer BLOCKING=0, NONBLOCKING=0). The bounded native capture currently covers at most 8,000,000 total decoded pixels per capture and 4 MiB per source Blob.
+The content slot inventory is derived from the live reader DOM. The explicitly observed reader profiles described above are accepted; the mixed-final profile supports two reviewed recommendation forms. Episode 4.1 starts with one canvas, continues with two canvases per content slide in physical right-to-left order, and stops at the paired `n=1`,`n=2` END slide; its observed trailing recommendation slide is excluded. The first-episode variant starts with one slot plus a PR item, has paired spreads, ends content with a single slot owning main END `n=2`, then requires the immediately following empty slide with main END `n=1`,`n=2`. Episode 79 starts with one content slot, has nine paired spreads, and ends content with a single slot owning `n=2`; its empty paired END is followed by one recognized recommendation slide. Episode 22.2 starts on an empty slide containing one visible beginning root and its owned PR marker, advances once with the observed ordinary `ArrowLeft` action, then has nine paired content spreads and a paired main END slide at index 10. Its recommendation at index 11 is excluded. The observed Episode 20.2 uses the same strict owned beginning-PR entry, five paired content slides, one final singleton owning main END n=2, and the immediately following empty paired END (n=1,n=2); there is no trailing recommendation. Episode 8.2 adds an empty beginning-PR slide with paired content, a final singleton with main-wrapper PR n=2, and an empty paired END. Episode 7.2 is content-first with at least one pair, a final singleton with main-wrapper PR n=2, an empty paired END, and one recognized trailing recommendation. These PR markers are not END markers. The accepted profile requires at least one paired content slide (end index >=3), not a fixed five-slide count. The beginning-slide rule applies only to this observed empty-first topology; PR metadata on existing content-first layouts remains outside their prior acceptance rule. For the mixed-final layouts, ordinary overlay turns are used through the final content slide; only after its unique slot is captured does a safe `ArrowLeft` action request the next slide, which must settle exactly one index later as the explicit empty END. The recommendation slide is never entered or captured. Marker class, number, slide ownership, positive geometry, and the entire slot inventory are revalidated. Any unrecognized marker, extra slide, content at/after END, missing transition, skipped index, or changed inventory fails closed. Evidence for these original seven layouts is limited to the observed routes on `KC_004915_S`; the additional `KC_011605_S` route is described below. The Episode 79 normal CLI run and independent all-20 source/RGBA-to-ZIP audit passed; final post-Discovery audit passed; live-evidence Reviewer and Lead gates passed; the prior Episode 79 milestone documentation review passed (Reviewer BLOCKING=0, NONBLOCKING=0). The bounded native capture currently covers at most 8,000,000 total decoded pixels per capture and 4 MiB per source Blob.
 
-Local synthetic browser tests exercise all eleven observed layouts through Runner and Batch-to-ZIP, keep source WebP bytes in order, and cover wrong Blob attribution, asynchronous canvas mutation, transformed draws, 404/500 responses, non-render, delayed or inconsistent metadata, visible dialogs, foreign-episode redirects, main and recommendation marker omissions/ownership/duplicates/wrong numbers, content at END or recommendation, extra slides, missing terminal pairs, reversed spreads, skipped turns, and final ArrowLeft transitions that do not advance. The original 21-slot layouts and their independent P2 source audits remain unchanged. The 38-slot implementation passed independent review, normal live CLI Batch/ZIP, and an all-38 independent source-byte/full-RGBA audit. Episode 79 passed live source proof for all 20 slots, reached the empty END without entering its recommendation, passed local tests and independent review (45 targeted tests, BLOCKING=0), and completed a normal CLI ZIP run. The separate all-20 independent source/RGBA-to-ZIP audit also passed. Those CLI runs predate direct entry; the post-change isolated Runner probe is recorded in `runbooks/kadocomi/PROGRESS.md`.
+Local synthetic browser tests exercise the observed layouts through Runner and Batch-to-ZIP, keep source WebP bytes in order, and cover wrong Blob attribution, asynchronous canvas mutation, transformed draws, 404/500 responses, non-render, delayed or inconsistent metadata, visible dialogs, foreign-episode redirects, main and recommendation marker omissions/ownership/duplicates/wrong numbers, content at END or recommendation, extra slides, missing terminal pairs, reversed spreads, skipped turns, and final ArrowLeft transitions that do not advance. The original 21-slot layouts and their independent P2 source audits remain unchanged. The 38-slot implementation passed independent review, normal live CLI Batch/ZIP, and an all-38 independent source-byte/full-RGBA audit. Episode 79 passed live source proof for all 20 slots, reached the empty END without entering its recommendation, passed local tests and independent review (45 targeted tests, BLOCKING=0), and completed a normal CLI ZIP run. The separate all-20 independent source/RGBA-to-ZIP audit also passed. Those CLI runs predate direct entry; the post-change isolated Runner probe is recorded in `runbooks/kadocomi/PROGRESS.md`.
 
-The local Kadocomi Batch integration test uses real Discovery, Catalog, Planner, Executor, Runner, and packager code with browser fixtures. It verifies byte-preserved WebP ZIP members for the eleven observed reader layouts, exactly one canonical episode navigation, source identity, Watchlist/Catalog title and episode-label naming, Artifact registration, and Completed only after END. HTTP failure, non-render, foreign-episode redirect, missing END, main/recommendation marker faults, extra slides/content, and final no-advance leave the Item pending without ZIP/Artifact or without completion. Eligibility expiry remains covered by Site Policy tests; capture no longer repeats the work-list query. Previous P3 review results and current follow-up test results are recorded in `runbooks/kadocomi/PROGRESS.md`.
+The local Kadocomi Batch integration test uses real Discovery, Catalog, Planner, Executor, Runner, and packager code with browser fixtures. It verifies byte-preserved WebP ZIP members for the observed reader layouts, exactly one canonical episode navigation, source identity, Watchlist/Catalog title and episode-label naming, Artifact registration, and Completed only after END. HTTP failure, non-render, foreign-episode redirect, missing END, main/recommendation marker faults, extra slides/content, and final no-advance leave the Item pending without ZIP/Artifact or without completion. Eligibility expiry remains covered by Site Policy tests; capture no longer repeats the work-list query. Previous P3 review results and current follow-up test results are recorded in `runbooks/kadocomi/PROGRESS.md`.
 
 Earlier P4 checkpoint ZIPs and audits are historical. The final normal CLI sweep completed 15 selected target episodes across the initial and resumed runs, plus an Episode 22.2 control retest. Episode 8.2 and 7.2 ZIPs matched saved P0 source records; the 22.2 retest matched its P0 files. The first Episode 7.2 and 22.2 failures remain in run history; the control failure cause is unknown. The P4 ZIP audit did not use a fresh independent Blob/RGBA observer. Final post-Discovery/backup, Reviewer, and Lead gates passed; Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope). See `runbooks/kadocomi/PROGRESS.md` for evidence and limits.
 
 The current adapter additionally supports `paired_first_double_end`, verified
 on `KC_011605_S:KC_0116050001200031_E` (第12話-3): eight RTL pairs, a final
 singleton owning the only main-wrapper PR `n=2`, then two consecutive empty
-main END slides, each owning `n=1,n=2`. Together with the maintenance profiles described above, current support is eleven
-observed layouts through ten strict profiles. It requires at least one pair,
+main END slides, each owning `n=1,n=2`. Together with the maintenance profiles described above, current support includes the strict profiles described above. It requires at least one pair,
 the final singleton, no beginning/initial PR/secondary recommendation, exactly
 four correctly owned END markers with valid geometry, and no additional slides
 or content. All source slots must be captured before one guarded ArrowLeft

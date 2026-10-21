@@ -52,12 +52,48 @@ _PAIRED_FIRST_FINAL_PR_LAYOUT = "paired_first_final_pr"
 _PAIRED_FIRST_PR_END_LAYOUT = "paired_first_pr_end"
 _DIRECT_FIRST_FINAL_PR_LAYOUT = "direct_first_final_pr"
 _DIRECT_FIRST_PR_END_LAYOUT = "direct_first_pr_end"
-_DIRECT_FIRST_LAYOUTS = {_DIRECT_FIRST_FINAL_PR_LAYOUT, _DIRECT_FIRST_PR_END_LAYOUT}
+_DIRECT_FIRST_DOUBLE_END_LAYOUT = "direct_first_double_end"
+_DIRECT_FIRST_MIXED_FINAL_LAYOUT = "direct_first_mixed_final"
+_PAIRED_FIRST_MIXED_FINAL_LAYOUT = "paired_first_mixed_final"
+_DIRECT_FIRST_PAIRED_END_LAYOUT = "direct_first_paired_end"
+_PAIRED_FIRST_PAIRED_END_LAYOUT = "paired_first_paired_end"
+_DIRECT_FIRST_SECONDARY_END_LAYOUT = "direct_first_secondary_end"
+_PAIRED_FIRST_SECONDARY_END_LAYOUT = "paired_first_secondary_end"
+_SECONDARY_END_LAYOUTS = {_DIRECT_FIRST_SECONDARY_END_LAYOUT, _PAIRED_FIRST_SECONDARY_END_LAYOUT}
+_NO_PR_MIXED_LAYOUTS = {
+    _DIRECT_FIRST_MIXED_FINAL_LAYOUT, _PAIRED_FIRST_MIXED_FINAL_LAYOUT, *_SECONDARY_END_LAYOUTS,
+}
+_NO_PR_PAIRED_LAYOUTS = {_DIRECT_FIRST_PAIRED_END_LAYOUT, _PAIRED_FIRST_PAIRED_END_LAYOUT}
+_NO_PR_LAYOUTS = {*_NO_PR_MIXED_LAYOUTS, *_NO_PR_PAIRED_LAYOUTS}
+_DIRECT_FIRST_PR_PAIR_DOUBLE_END_LAYOUT = "direct_first_pr_pair_double_end"
+_DIRECT_FIRST_PR_PAIR_RECOMMENDATION_LAYOUT = "direct_first_pr_pair_recommendation"
+_DIRECT_FIRST_PR_PAIR_BRIDGE_LAYOUT = "direct_first_pr_pair_bridge"
+_PAIRED_FIRST_PR_PAIR_BRIDGE_LAYOUT = "paired_first_pr_pair_bridge"
+_PR_SEQUENCE_FINAL_LAYOUTS = {
+    _DIRECT_FIRST_PR_PAIR_DOUBLE_END_LAYOUT, _DIRECT_FIRST_PR_PAIR_RECOMMENDATION_LAYOUT,
+}
+_PR_SEQUENCE_PAIRED_LAYOUTS = {_DIRECT_FIRST_PR_PAIR_BRIDGE_LAYOUT, _PAIRED_FIRST_PR_PAIR_BRIDGE_LAYOUT}
+_PR_SEQUENCE_LAYOUTS = {*_PR_SEQUENCE_FINAL_LAYOUTS, *_PR_SEQUENCE_PAIRED_LAYOUTS}
+
+
+def _pr_sequence_bridge_indexes(layout: str, end_index: int) -> tuple[int, ...]:
+    if layout in _PR_SEQUENCE_FINAL_LAYOUTS:
+        return (end_index - 1,)
+    if layout in _PR_SEQUENCE_PAIRED_LAYOUTS:
+        return (end_index - 2, end_index - 1)
+    return ()
+
+
+_DIRECT_FIRST_LAYOUTS = {
+    _DIRECT_FIRST_FINAL_PR_LAYOUT, _DIRECT_FIRST_PR_END_LAYOUT, _DIRECT_FIRST_DOUBLE_END_LAYOUT,
+    _DIRECT_FIRST_MIXED_FINAL_LAYOUT, _DIRECT_FIRST_PAIRED_END_LAYOUT, _DIRECT_FIRST_SECONDARY_END_LAYOUT,
+    *_PR_SEQUENCE_FINAL_LAYOUTS, _DIRECT_FIRST_PR_PAIR_BRIDGE_LAYOUT,
+}
 _PR_END_LAYOUTS = {_PAIRED_FIRST_PR_END_LAYOUT, _DIRECT_FIRST_PR_END_LAYOUT}
 _TRACKED_PR_LAYOUTS = {
     _CONTENT_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_DOUBLE_END_LAYOUT,
     _PAIRED_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_PR_END_LAYOUT,
-    *_DIRECT_FIRST_LAYOUTS,
+    *_DIRECT_FIRST_LAYOUTS, *_NO_PR_LAYOUTS, *_PR_SEQUENCE_LAYOUTS,
 }
 _EXTERNAL_ID = re.compile(r"^(?P<work>KC_[0-9]{6}_S):(?P<episode>KC_[0-9]{16}_E)$")
 _EPISODE_HEADING = re.compile(r"^\u3010(?P<order>[^\u3011]+)\u3011(?P<work>.+)$")
@@ -136,6 +172,26 @@ _NAVIGATION_TARGET_SCRIPT = r"""() => {
   }
   return {ok: false, reason: 'left_overlay_hit_test_failed'};
 }"""
+
+_PR_SEQUENCE_ARROW_SAFE_SCRIPT = r"""args => {
+  const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
+  const roots = screens.length === 1 ? [...screens[0].querySelectorAll('.splide._root_1542n_1')] : [];
+  if (roots.length !== 1) return {ok: false};
+  const root = roots[0], slides = [...root.querySelectorAll('.splide__slide')];
+  const active = slides.filter(node => node.classList.contains('is-active'));
+  const visible = node => { const r = node.getBoundingClientRect(), s = getComputedStyle(node);
+    return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 &&
+      r.left < innerWidth && r.top < innerHeight && s.display !== 'none' && s.visibility !== 'hidden'; };
+  if (!root.classList.contains('splide--rtl') || !visible(root) || active.length !== 1 ||
+      active[0] !== slides[args.activeIndex] || !visible(active[0]) ||
+      active[0].querySelectorAll('[data-type="contents"]').length !== args.slotCount ||
+      [...active[0].querySelectorAll('div[data-type="pr"]')].some(node => !visible(node)) ||
+      [...document.querySelectorAll('[role="dialog"], dialog')].some(visible) ||
+      (document.activeElement !== document.body && document.activeElement !== document.documentElement))
+    return {ok: false};
+  return {ok: true, activeIndex: args.activeIndex, slotCount: args.slotCount};
+}"""
+
 
 _MIXED_FINAL_ARROW_SAFE_SCRIPT = r"""args => {
   const screens = [...document.querySelectorAll('._mainScreen_191o7_1')];
@@ -1094,7 +1150,71 @@ class KadocomiAdapter(SiteAdapter):
             or len(pr_markers) != snapshot.get("prMarkerCount")
         ):
             raise UnknownPageStateError("Kadocomi explicit end marker is missing or malformed")
-        if (
+        first_slots_for_profile = rows[0].get("contentSlots") if isinstance(rows[0], dict) else None
+        if len(pr_markers) == 3 and (
+            snapshot.get("directFirstContent") is True
+            or (isinstance(first_slots_for_profile, list) and len(first_slots_for_profile) == 2)
+        ):
+            # Two observed PR sequences. All roles remain exact and site-local;
+            # an empty PR slide is a transition, never a terminal or capture.
+            if (
+                marker_count in (2, 4) and marker_numbers == (["1", "2"] * (marker_count // 2))
+                and marker_indexes[0] == marker_indexes[1] >= 4
+                and snapshot.get("directFirstContent") is True
+            ):
+                end_index = marker_indexes[0]
+                double_end = marker_count == 4
+                layout = (
+                    _DIRECT_FIRST_PR_PAIR_DOUBLE_END_LAYOUT if double_end
+                    else _DIRECT_FIRST_PR_PAIR_RECOMMENDATION_LAYOUT
+                )
+                expected_main_markers = [("1", end_index), ("2", end_index)]
+                if double_end:
+                    expected_main_markers += [("1", end_index + 1), ("2", end_index + 1)]
+                expected_secondary_indexes = [] if double_end else [end_index + 1]
+                expected_prs = [("2", end_index - 2), ("1", end_index - 1), ("2", end_index - 1)]
+                if len(rows) != end_index + 2:
+                    raise UnknownPageStateError("Kadocomi final PR-pair sequence has extra slides")
+            elif (
+                marker_count == 3 and marker_numbers == ["2", "1", "2"]
+                and marker_indexes[0] + 1 == marker_indexes[1] == marker_indexes[2]
+                and marker_indexes[1] >= 3 and len(rows) == marker_indexes[1] + 1
+            ):
+                end_index = marker_indexes[1]
+                layout = (
+                    _DIRECT_FIRST_PR_PAIR_BRIDGE_LAYOUT if snapshot.get("directFirstContent") is True
+                    else _PAIRED_FIRST_PR_PAIR_BRIDGE_LAYOUT
+                )
+                expected_main_markers = [("2", end_index - 1), ("1", end_index), ("2", end_index)]
+                expected_secondary_indexes = []
+                expected_prs = [("1", end_index - 2), ("2", end_index - 2), ("1", end_index - 1)]
+            else:
+                raise UnknownPageStateError("Kadocomi PR-pair sequence topology is unsupported")
+            if beginning_markers and layout not in _DIRECT_FIRST_LAYOUTS:
+                raise UnknownPageStateError("Kadocomi paired-first PR sequence has a beginning role")
+            for marker, (number, index) in zip(pr_markers, expected_prs, strict=True):
+                if (
+                    not isinstance(marker, dict) or marker.get("tagName") != "DIV"
+                    or marker.get("wrapperClass") is not True or marker.get("secondaryClass") is not False
+                    or marker.get("dataType") != "pr" or marker.get("dataN") != number
+                    or marker.get("slideIndex") != index or marker.get("beginningOwnerIndex") != -1
+                    or not self._marker_geometry_is_valid(marker.get("box"))
+                ):
+                    raise UnknownPageStateError("Kadocomi PR-pair marker role or geometry changed")
+        elif (
+            marker_count == 1 and marker_numbers == ["2"]
+            and marker_indexes[0] >= 1
+            and len(rows) == marker_indexes[0] + 2
+            and snapshot.get("secondaryEndMarkerSlideIndexes") == [marker_indexes[0] + 1]
+        ):
+            end_index = marker_indexes[0] + 1
+            layout = (
+                _DIRECT_FIRST_SECONDARY_END_LAYOUT
+                if snapshot.get("directFirstContent") is True else _PAIRED_FIRST_SECONDARY_END_LAYOUT
+            )
+            expected_main_markers = [("2", end_index - 1)]
+            expected_secondary_indexes = [end_index]
+        elif (
             marker_count == 2
             and len(set(marker_indexes)) == 1
             and marker_numbers == ["1", "2"]
@@ -1148,6 +1268,10 @@ class KadocomiAdapter(SiteAdapter):
                     and len(pr_markers) == 1
                 ):
                     layout = _DIRECT_FIRST_FINAL_PR_LAYOUT
+                elif snapshot.get("directFirstContent") is True and not pr_markers:
+                    layout = _DIRECT_FIRST_PAIRED_END_LAYOUT
+                elif len(first_slots) == 2 and not beginning_markers and not pr_markers and trailing_count == 0:
+                    layout = _PAIRED_FIRST_PAIRED_END_LAYOUT
                 else:
                     layout = _PAIRED_END_LAYOUT
             expected_main_markers = [("1", end_index), ("2", end_index)]
@@ -1189,6 +1313,13 @@ class KadocomiAdapter(SiteAdapter):
                 and len(rows) == end_index + 1
             ):
                 layout = _DIRECT_FIRST_PR_END_LAYOUT
+            elif not pr_markers and len(rows) == end_index + 1 and (
+                snapshot.get("directFirstContent") is True or len(first_slots) == 2
+            ):
+                layout = (
+                    _DIRECT_FIRST_MIXED_FINAL_LAYOUT
+                    if snapshot.get("directFirstContent") is True else _PAIRED_FIRST_MIXED_FINAL_LAYOUT
+                )
         elif (
             marker_count == 4
             and marker_numbers == ["1", "2", "1", "2"]
@@ -1203,7 +1334,13 @@ class KadocomiAdapter(SiteAdapter):
                 ("1", end_index + 1), ("2", end_index + 1),
             ]
             expected_secondary_indexes = []
-            if (
+            if snapshot.get("directFirstContent") is True:
+                # Observed direct singleton, then pairs, then two empty main END slides;
+                # unlike paired_first_double_end, this profile has no PR or final singleton.
+                layout = _DIRECT_FIRST_DOUBLE_END_LAYOUT
+                if pr_markers:
+                    raise UnknownPageStateError("Kadocomi direct-first double-END has unexpected PR markers")
+            elif (
                 beginning_markers
                 or len(pr_markers) != 1
                 or not isinstance(pr_markers[0], dict)
@@ -1219,9 +1356,18 @@ class KadocomiAdapter(SiteAdapter):
                 raise UnknownPageStateError("Kadocomi paired-first final PR role or geometry is unknown")
         else:
             raise UnknownPageStateError("Kadocomi END marker topology is unsupported or ambiguous")
+        if layout in _NO_PR_LAYOUTS and (
+            pr_markers or (beginning_markers and layout not in _DIRECT_FIRST_LAYOUTS)
+            or (layout in _NO_PR_MIXED_LAYOUTS and end_index < (
+                3 if layout in _DIRECT_FIRST_LAYOUTS else 2
+            ))
+        ):
+            raise UnknownPageStateError("Kadocomi no-PR profile roles or boundary are unknown")
         if snapshot.get("directFirstContent") is True and layout not in _DIRECT_FIRST_LAYOUTS:
             raise UnknownPageStateError("Kadocomi direct first canvas has an unsupported topology")
-        if layout in {_PAIRED_FIRST_FINAL_PR_LAYOUT, *_PR_END_LAYOUTS, *_DIRECT_FIRST_LAYOUTS}:
+        if layout in {
+            _PAIRED_FIRST_FINAL_PR_LAYOUT, *_PR_END_LAYOUTS, _DIRECT_FIRST_FINAL_PR_LAYOUT,
+        }:
             expected_number = "1" if layout in _PR_END_LAYOUTS else "2"
             if (
                 (beginning_markers and layout not in _DIRECT_FIRST_LAYOUTS) or len(pr_markers) != 1
@@ -1252,7 +1398,7 @@ class KadocomiAdapter(SiteAdapter):
             raise UnknownPageStateError("Kadocomi main END marker count is inconsistent")
         self._validate_main_end_markers(snapshot, expected_main_markers)
         self._validate_secondary_end_markers(snapshot, expected_secondary_indexes)
-        if layout in {_BEGINNING_PR_FINAL_PR_LAYOUT, _CONTENT_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_FINAL_PR_LAYOUT, _DIRECT_FIRST_FINAL_PR_LAYOUT}:
+        if layout in {_BEGINNING_PR_FINAL_PR_LAYOUT, _CONTENT_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_FINAL_PR_LAYOUT, _DIRECT_FIRST_FINAL_PR_LAYOUT} or (layout in {*_NO_PR_LAYOUTS, *_PR_SEQUENCE_LAYOUTS} and expected_secondary_indexes):
             secondary = snapshot.get("secondaryEndMarkers")
             if (
                 not isinstance(secondary, list)
@@ -1276,7 +1422,33 @@ class KadocomiAdapter(SiteAdapter):
                 or len(canvases) != len(slots)
             ):
                 raise UnknownPageStateError("Kadocomi content slot identity is incomplete")
-            if layout == _PAIRED_END_LAYOUT:
+            if layout in _PR_SEQUENCE_LAYOUTS:
+                bridges = _pr_sequence_bridge_indexes(layout, end_index)
+                first_count = 1 if layout in _DIRECT_FIRST_LAYOUTS else 2
+                final_singleton = layout in _PR_SEQUENCE_FINAL_LAYOUTS and index == end_index - 2
+                if (
+                    (index == 0 and len(slots) != first_count)
+                    or (0 < index < bridges[0] and len(slots) != (1 if final_singleton else 2))
+                    or (index >= bridges[0] and slots)
+                ):
+                    raise UnknownPageStateError("Kadocomi PR-pair sequence content shape changed")
+            elif layout in _NO_PR_MIXED_LAYOUTS:
+                first_count = 1 if layout in _DIRECT_FIRST_LAYOUTS else 2
+                if (
+                    (index == 0 and len(slots) != first_count)
+                    or (0 < index < end_index - 1 and len(slots) != 2)
+                    or (index == end_index - 1 and len(slots) != 1)
+                    or (index >= end_index and slots)
+                ):
+                    raise UnknownPageStateError("Kadocomi no-PR mixed-final spread shape changed")
+            elif layout in _NO_PR_PAIRED_LAYOUTS:
+                if (
+                    (index < end_index and len(slots) != (
+                        1 if index == 0 and layout in _DIRECT_FIRST_LAYOUTS else 2
+                    )) or (index >= end_index and slots)
+                ):
+                    raise UnknownPageStateError("Kadocomi no-PR paired spread shape changed")
+            elif layout == _PAIRED_END_LAYOUT:
                 if index < end_index and (len(slots) > 2 or (index == 0 and len(slots) != 1)):
                     raise UnknownPageStateError("Kadocomi reader spread shape is unsupported")
                 if 0 < index < end_index and len(slots) != 2:
@@ -1312,6 +1484,13 @@ class KadocomiAdapter(SiteAdapter):
                     or (index >= end_index - 1 and slots)
                 ):
                     raise UnknownPageStateError("Kadocomi paired-first PR/END spread shape changed")
+            elif layout == _DIRECT_FIRST_DOUBLE_END_LAYOUT:
+                if (
+                    (index == 0 and len(slots) != 1)
+                    or (0 < index < end_index and len(slots) != 2)
+                    or (index >= end_index and slots)
+                ):
+                    raise UnknownPageStateError("Kadocomi direct-first double-END spread shape changed")
             elif layout in {_PAIRED_FIRST_DOUBLE_END_LAYOUT, _PAIRED_FIRST_FINAL_PR_LAYOUT}:
                 if (
                     (index < end_index - 1 and len(slots) != 2)
@@ -1359,7 +1538,8 @@ class KadocomiAdapter(SiteAdapter):
             if slide_slots[0] or any(not slide_slots[index] for index in range(1, end_index)):
                 raise UnknownPageStateError("Kadocomi beginning PR layout has an unexplained empty slide")
         elif any(not slide_slots[index] for index in range(
-            end_index - 1 if layout in _PR_END_LAYOUTS else end_index
+            _pr_sequence_bridge_indexes(layout, end_index)[0] if layout in _PR_SEQUENCE_LAYOUTS
+            else (end_index - 1 if layout in _PR_END_LAYOUTS else end_index)
         )):
             raise UnknownPageStateError("Kadocomi content inventory has an unexplained empty slide")
         return tuple(flattened), tuple(slide_slots), end_index, layout
@@ -1558,6 +1738,8 @@ class KadocomiAdapter(SiteAdapter):
                 _PAIRED_FIRST_PR_END_LAYOUT,
                 _DIRECT_FIRST_FINAL_PR_LAYOUT,
                 _DIRECT_FIRST_PR_END_LAYOUT,
+                _DIRECT_FIRST_DOUBLE_END_LAYOUT,
+                *_NO_PR_LAYOUTS, *_PR_SEQUENCE_LAYOUTS,
             }
             or tuple(self._captured_slots) != self._all_slots
             or end_index != self._end_slide_index
@@ -1570,7 +1752,13 @@ class KadocomiAdapter(SiteAdapter):
         numbers = snapshot.get("markerNumbers")
         if not isinstance(indexes, list) or not isinstance(numbers, list):
             return False
-        if self._reader_layout == _PAIRED_FIRST_DOUBLE_END_LAYOUT:
+        if self._reader_layout in _SECONDARY_END_LAYOUTS:
+            return (
+                indexes == [end_index - 1] and numbers == ["2"]
+                and snapshot.get("secondaryEndMarkerSlideIndexes") == [end_index]
+                and len(slide_slots) == end_index + 1
+            )
+        if self._reader_layout in {_PAIRED_FIRST_DOUBLE_END_LAYOUT, _DIRECT_FIRST_DOUBLE_END_LAYOUT, _DIRECT_FIRST_PR_PAIR_DOUBLE_END_LAYOUT}:
             return (
                 indexes == [end_index, end_index, end_index + 1, end_index + 1]
                 and numbers == ["1", "2", "1", "2"]
@@ -1584,12 +1772,13 @@ class KadocomiAdapter(SiteAdapter):
             _CONTENT_FIRST_FINAL_PR_LAYOUT,
             _PAIRED_FIRST_FINAL_PR_LAYOUT,
             _DIRECT_FIRST_FINAL_PR_LAYOUT,
+            *_NO_PR_PAIRED_LAYOUTS, _DIRECT_FIRST_PR_PAIR_RECOMMENDATION_LAYOUT,
         }:
             return indexes == [end_index, end_index] and numbers == ["1", "2"]
         return (
             indexes == [end_index - 1, end_index, end_index]
             and numbers == ["2", "1", "2"]
-            and (bool(slide_slots[end_index - 1]) or self._reader_layout in _PR_END_LAYOUTS)
+            and (bool(slide_slots[end_index - 1]) or self._reader_layout in {*_PR_END_LAYOUTS, *_PR_SEQUENCE_PAIRED_LAYOUTS})
         )
 
     async def get_capture_target(self, page: Page) -> Locator:
@@ -1737,6 +1926,7 @@ class KadocomiAdapter(SiteAdapter):
             self._reader_layout in {
                 _MIXED_FINAL_END_LAYOUT,
                 _BEGINNING_PR_MIXED_FINAL_LAYOUT,
+                *_NO_PR_MIXED_LAYOUTS,
             }
             and self._end_slide_index is not None
             and active_index == self._end_slide_index - 1
@@ -1748,13 +1938,29 @@ class KadocomiAdapter(SiteAdapter):
             await page.keyboard.press("ArrowLeft")
             self._pending_next_index = 0
             return
+        if (
+            layout in _PR_SEQUENCE_FINAL_LAYOUTS and active_index == end_index - 2
+        ):
+            if tuple(self._captured_slots) != self._all_slots or len(self._last_capture_slots) != 1:
+                raise UnknownPageStateError("Kadocomi final PR-pair turn precedes complete capture")
+            target = await page.evaluate(
+                _PR_SEQUENCE_ARROW_SAFE_SCRIPT, {"activeIndex": active_index, "slotCount": 1}
+            )
+            if not isinstance(target, dict) or target.get("ok") is not True:
+                raise UnknownPageStateError("Kadocomi final PR-pair keyboard target is unsafe")
+            await page.keyboard.press("ArrowLeft")
+            self._pending_next_index = active_index
+            return
         is_beginning_final_pr_turn = (
             self._reader_layout == _BEGINNING_PR_FINAL_PR_LAYOUT
             and self._end_slide_index is not None
             and active_index == self._end_slide_index - 1
         )
         is_content_first_final_pr_turn = (
-            self._reader_layout in _TRACKED_PR_LAYOUTS - _PR_END_LAYOUTS
+            self._reader_layout in {
+                _CONTENT_FIRST_FINAL_PR_LAYOUT, _PAIRED_FIRST_DOUBLE_END_LAYOUT,
+                _PAIRED_FIRST_FINAL_PR_LAYOUT, _DIRECT_FIRST_FINAL_PR_LAYOUT,
+            }
             and self._end_slide_index is not None
             and active_index == self._end_slide_index - 1
         )
@@ -1882,6 +2088,25 @@ class KadocomiAdapter(SiteAdapter):
                     continue
                 if active_index != previous_index + 1:
                     raise UnknownPageStateError("Kadocomi page turn skipped a reader slide")
+                if layout in _PR_SEQUENCE_LAYOUTS and active_index in _pr_sequence_bridge_indexes(layout, end_index):
+                    if tuple(self._captured_slots) != self._all_slots:
+                        raise UnknownPageStateError("Kadocomi PR-pair bridge reached before all content")
+                    signature = _snapshot_signature(snapshot, include_pr_markers=True)
+                    if signature and signature == previous_signature:
+                        await self._validate_episode_metadata(page)
+                        target = await page.evaluate(
+                            _PR_SEQUENCE_ARROW_SAFE_SCRIPT, {"activeIndex": active_index, "slotCount": 0}
+                        )
+                        if not isinstance(target, dict) or target.get("ok") is not True:
+                            raise UnknownPageStateError("Kadocomi PR-pair bridge keyboard target is unsafe")
+                        await page.keyboard.press("ArrowLeft")
+                        previous_index = active_index
+                        self._pending_next_index = active_index
+                        previous_signature = None
+                    else:
+                        previous_signature = signature
+                    await page.wait_for_timeout(VIEWER_POLL_MS)
+                    continue
                 if layout in _PR_END_LAYOUTS and active_index == end_index - 1:
                     if tuple(self._captured_slots) != self._all_slots:
                         raise UnknownPageStateError("Kadocomi PR/END bridge reached before all content")
