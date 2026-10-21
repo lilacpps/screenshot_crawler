@@ -7,6 +7,69 @@ manifest, and packager. Discovery recognizes authenticated work-bound wait-free
 candidates and active manual grants from naturally emitted listing responses;
 it does not click or consume tickets.
 
+The `standard_odd_body` native observer accepts incoming draws before their CSS
+centers settle, including a rewind to the first body. Structural capabilities,
+roles, seek and active-slot proof remain mandatory; selection/postproof still
+require final geometry and exact replay pixels. This fixes the repeated PNG
+fallback observed on 36225 / 35454 and fifteen other odd-body episodes.
+
+Initial full-frame source draws made before the strict layout becomes available
+leave only a weak node marker. After normal layout/UI/pixel readiness, a missed
+first-body candidate can request one public seek to the next body and back,
+with frozen mapping, ready slots, dimensions and quiet checks. No unproven early
+pixels are retained or used. A successful existing candidate avoids this revisit;
+single-body episodes or absent early canvas draws do not request it. The hint
+does not authorize capture: all native proofs and atomic PNG fallback remain.
+`initial_native_redraw` diagnostics expose the bounded revisit and its status.
+No entry control, reload, ticket, CLI option or Core change is involved.
+The isolated 2026-10-21 production Runner audit verified all nineteen previously
+flagged episodes (227 pages) through END/ZIP with only native WebPs and
+independent draw-time source RGBA equality. Synthetic and forced-loss live
+checks cover the initial revisit; unsafe replay still retains PNG fallback.
+The normal Catalog/library is not updated by those isolated audits. Full
+evidence, test partitions and limitations are in `note/11_younganimal.md`.
+
+The `no_lead_ci_even_body` profile supports Item/Source 36105
+(`847b9bebb9373`): no lead wrapper, even contiguous body B=N-5>=6 starting at
+0, exact canvas-free CI/PR/PR/Good/Last tail and min=1/max=N/step=2. It requires
+the same positive horizontal/spread/RTL and PR/CI/Good capabilities and absent
+top-empty/vertical/single flags as the odd-body family below. Maximum selects
+body 0/1 with first-only flags; body pairs have no phase flags through seek 7.
+Seek 5 selects CI/first PR with CI+PR, 3 selects PR/Good with PR, and 1 selects
+only Last with Last-only flags. Every center/phase, the unique visible/centered
+Last and complete body coverage remain mandatory. Python/native/CI geometry
+use this exact map and distinguish it from the older lead-bearing odd-body
+profile. Source replay, identity/write/epoch/post-encode proof and atomic PNG
+fallback remain. Isolated direct Runner verification at max_pages=12 captured
+all twelve native 960x1364 WebPs through END/ZIP, independently equal to
+draw-time source RGBA. It made one main-document request, blocked 30 mutating
+requests and attempted no ticket action. The normal Catalog/library and the
+remaining normal Batch were not changed or rerun. Evidence and test scope:
+`output/younganimal-fix-36105/verified/live-report.json` and `note/11_younganimal.md`.
+
+The `no_lead_ci_odd_body` profile supports Item/Source 36053
+(`a56d3710a458c`): no lead wrapper, odd contiguous body B=N-5>=5 starting at
+0, exact canvas-free CI/PR/PR/Good/Last tail and min=1/max=N-1/step=2.
+Positive horizontal/spread/RTL and PR/CI/Good capabilities are mandatory;
+top-empty/vertical/single modes are forbidden. Maximum selects body 0/1
+with first-only flags; body pairs have no phase flags until final body/CI
+at seek 5 (CI+PR), followed by PR pair at 3 (PR) and Good/Last at 1 (Last+PR).
+Every phase and center, full body coverage, and the unique visible/centered
+Last are required. Initialization/rewind require both first body pages.
+Python, native proof and the existing exact CI-widget mutation/geometry
+classifier use the same map; unknown/overlapping widget changes and body
+mutations remain fail-closed. Native replay/node/write/epoch/post-encoding
+proof and atomic rendered PNG fallback are retained. No option, timeout,
+Core or resource change is needed; B<5 no-lead/CI shapes remain unsupported.
+The even-body profile above retains its distinct seek and terminal map.
+Isolated direct Runner verification at max_pages=15 captured
+all fifteen native 960x1344 WebPs through END and ZIP, independently equal to
+draw-time source RGBA. It made one main-document request, blocked 31 mutating
+requests, attempted no ticket action and did not change the normal Catalog
+or library. This is isolated Runner/packaging verification; the normal Batch
+has not been rerun. Evidence and validation scope:
+`output/younganimal-fix-36053/verified-final/live-report.json` and `note/11_younganimal.md`.
+
 The `top_empty_no_ci_odd_body` profile supports Item/Source 35865
 (`b4dd7f6fe26b2`): exact empty lead 0, odd body B=N-5>=5 starting at 1,
 canvas-free PR/PR/Good/Last tail, and min=1/max=N-1/step=2. Positive top-empty,

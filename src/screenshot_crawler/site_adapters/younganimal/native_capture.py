@@ -31,6 +31,9 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   const pending = new WeakMap();
   const clipUnsafe = new WeakSet();
   const proofs = new Map();
+  // Only metadata is retained for draws made before the strict layout exists.
+  // Never snapshot or authorize native pixels from these unproven draws.
+  const missedLayoutDraws = new WeakSet();
   let candidateSpread = null;
   let nextProof = 1;
   const apiIdentity = capture;
@@ -124,6 +127,9 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       }
       return true;
     }
+    // The seek changes before CSS centers settle, including a rewind to the
+    // first body. Selection/postproof still check every final center below.
+    if (forDraw) return true;
     const expectedBodyCenters = value === children.length ? [1]
       : value >= 7 ? [focus - 1, focus].filter(slot => slot >= 1 && slot <= bodyCount)
       : [];
@@ -216,6 +222,41 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       if (!lastWrapper || lastWrapper !== children.at(-1) || lastWrapper.parentElement !== pages ||
           !wrapperCenterInViewport(lastWrapper)) return false;
       if (!visibleCenterInViewport(markers[0])) return false;
+    }
+    return true;
+  };
+  const exactNoLeadCiLayout = (viewer, pages, children, seek, forDraw) => {
+    const ci = children.length - 5, evenBody = ci % 2 === 0;
+    const max = children.length - (evenBody ? 0 : 1), value = Number(seek.value);
+    if (ci < 5 || !viewer.contains(pages) || !viewer.contains(seek) ||
+        !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
+          'mode-has-comic-info', 'mode-has-good-page'].every(name => viewer.classList.contains(name)) ||
+        ['mode-has-top-emptypage', 'mode-v', 'mode-single'].some(name => viewer.classList.contains(name)) ||
+        seek.type !== 'range' || seek.disabled || Number(seek.min) !== 1 || Number(seek.max) !== max ||
+        Number(seek.step) !== 2 || !Number.isInteger(value) || value < 1 || value > max ||
+        (max - value) % 2 !== 0) return false;
+    const allowed = ['-cv-page', '-cv-page mode-loading', '-cv-page mode-loading mode-req-render',
+      '-cv-page mode-loaded', '-cv-page mode-loaded mode-rendered'];
+    for (let slot = 0; slot < ci; slot += 1)
+      if (children[slot]?.parentElement !== pages || !allowed.includes(classes(children[slot]).join(' '))) return false;
+    const tail = [['-cv-page', 'mode-ci'], ['-cv-page', 'mode-empty', 'mode-pr'],
+      ['-cv-page', 'mode-empty', 'mode-pr'], ['-cv-page', 'mode-good'], ['-cv-page', 'mode-last']];
+    if (tail.some((names, offset) => children[ci + offset]?.parentElement !== pages ||
+        !exactClasses(children[ci + offset], names) || children[ci + offset].querySelectorAll('canvas').length !== 0)) return false;
+    const phase = value === max ? ['mode-first-page'] : value === 5 ? ['mode-ci-page', 'mode-pr-page']
+      : value === 3 ? ['mode-pr-page'] : value === 1 ? (evenBody ? ['mode-last-page'] : ['mode-last-page', 'mode-pr-page']) : [];
+    const flags = ['mode-first-page', 'mode-top-pr-page', 'mode-ci-page', 'mode-pr-page', 'mode-last-page']
+      .filter(name => viewer.classList.contains(name));
+    if (flags.length !== phase.length || !phase.every(name => flags.includes(name))) return false;
+    const focus = max - value + 1;
+    // Retain the existing draw-before-translation proof. Final geometry is
+    // mandatory at selection and after encoding, with replay/node/write proof.
+    if (!forDraw && !sameArray(children.flatMap((node, i) => wrapperCenterInViewport(node) ? [i] : []),
+        [focus - 1, focus].filter(i => i < children.length))) return false;
+    if (value === 1) {
+      const markers = [...document.querySelectorAll('#xCVLastPage')];
+      if (markers.length !== 1 || markers[0].closest('.-cv-page') !== children.at(-1) ||
+          !visibleCenterInViewport(markers[0])) return false;
     }
     return true;
   };
@@ -350,19 +391,20 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const oneBody = shortStandard && children.length === 7;
     const twoBody = shortStandard && children.length === 8;
     const topEmptyNoCi = noCiCandidate(viewer, children, seek);
+    const noLeadCi = exactNoLeadCiLayout(viewer, pages, children, seek, forDraw);
     const prCount = [1, 3].find(count => exactPrTailLayout(viewer, pages, children, seek, count, forDraw)) || 0;
     const ci = topEmptyNoCi ? null : children.length - (prCount ? prCount + 3 : 5);
     const noTopPr = viewer.classList.contains('mode-has-top-emptypage') &&
       exactClasses(children[0], ['-cv-page', 'mode-empty']);
     const hasTopEmptyPage = viewer.classList.contains('mode-has-top-emptypage') && !noTopPr;
-    const bodyStart = topEmptyNoCi ? (viewer.classList.contains('mode-has-top-emptypage') ? 1 : 0) : hasTopEmptyPage ? 2 : 1;
+    const bodyStart = noLeadCi ? 0 : topEmptyNoCi ? (viewer.classList.contains('mode-has-top-emptypage') ? 1 : 0) : hasTopEmptyPage ? 2 : 1;
     const bodyEnd = topEmptyNoCi ? children.length - 4 : ci;
     const noCiEvenWrappers = topEmptyNoCi && children.length % 2 === 0;
     if ((children.length < 9 && !shortStandard) || bodyEnd <= bodyStart) return null;
     if (topEmptyNoCi) {
       if (!exactNoCiLayout(viewer, pages, children, seek, forDraw)) return null;
-    } else if (prCount) {
-      // The explicit PR-tail helper proved the complete lead/body/tail structure.
+    } else if (prCount || noLeadCi) {
+      // The explicit layout helper proved the complete body/tail structure.
     } else if (
         !exactClasses(children[0], noTopPr ? ['-cv-page', 'mode-empty'] : ['-cv-page', 'mode-empty', 'mode-pr', 'mode-top-pr']) ||
         (hasTopEmptyPage && !exactClasses(children[1], ['-cv-page', 'mode-empty'])) ||
@@ -372,7 +414,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         !exactClasses(children[ci + 3], ['-cv-page', 'mode-good']) ||
         !exactClasses(children[ci + 4], ['-cv-page', 'mode-last'])) return null;
     const min = Number(seek.min), max = Number(seek.max), step = Number(seek.step), value = Number(seek.value);
-    const standardOddBody = !prCount && !topEmptyNoCi && !hasTopEmptyPage && !noTopPr && oddBodyCandidate(viewer, children, seek);
+    const standardOddBody = !noLeadCi && !prCount && !topEmptyNoCi && !hasTopEmptyPage && !noTopPr && oddBodyCandidate(viewer, children, seek);
     const noTopPrOddBody = noTopPr && oddBodyCandidate(viewer, children, seek, true);
     const oddBody = standardOddBody || noTopPrOddBody;
     const shortTopEmpty = hasTopEmptyPage && children.length % 2 === 0 && max === children.length - 1;
@@ -395,14 +437,15 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
           (!forDraw && !sameArray(centers, [focus - 1, focus].filter(index => index >= 0 && index < children.length)))) return null;
     }
     if (min !== 1 || step !== 2 ||
-        max !== (topEmptyNoCi ? children.length - (noCiEvenWrappers ? 1 : 0) : prCount ? children.length - (children.length % 2 === 0 ? 1 : 0) : oneBody || (hasTopEmptyPage && !shortTopEmpty) || oddBody ? children.length : children.length - 1) ||
+        max !== (noLeadCi ? children.length - (children.length % 2 === 0 ? 1 : 0) : topEmptyNoCi ? children.length - (noCiEvenWrappers ? 1 : 0) : prCount ? children.length - (children.length % 2 === 0 ? 1 : 0) : oneBody || (hasTopEmptyPage && !shortTopEmpty) || oddBody ? children.length : children.length - 1) ||
         (oddBody && !exactStandardOddBody(viewer, pages, children, seek, noTopPrOddBody, forDraw)) ||
         !Number.isInteger(value) || value < min || value > max || (max - value) % step !== 0) return null;
-    if (viewer.classList.contains('mode-last-page') && !prCount && !oddBody && !topEmptyNoCi) return null;
+    if (viewer.classList.contains('mode-last-page') && !prCount && !oddBody && !topEmptyNoCi && !noLeadCi) return null;
     const focus = max - value + 1;
     const active = [focus - 1, focus].filter(slot => slot >= bodyStart && slot < bodyEnd);
     if (!active.length && !(oddBody && (value === min || value === 5 || value === 3)) &&
-        !(topEmptyNoCi && (value === min || value === 3))) return null;
+        !((topEmptyNoCi || noLeadCi) && (value === min || value === 3)) &&
+        !(noLeadCi && bodyEnd % 2 === 0 && value === 5)) return null;
     const allowedBodyClasses = [
       ['-cv-page'], ['-cv-page', 'mode-loading'],
       ['-cv-page', 'mode-loading', 'mode-req-render'],
@@ -419,7 +462,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       ? [null, bodyEnd, bodyEnd + 1, bodyEnd + 2, bodyEnd + 3]
       : [ci, ci + 1, ci + 2, ci + 3, ci + 4];
     return {viewer, pages, seek, children, ci, bodyStart, bodyEnd, roles,
-      variant: oneBody ? 'standard_one_body' : twoBody ? 'standard_two_body' : prCount === 3 ? (hasTopEmptyPage ? 'top_empty_three_pr' : children.length % 2 === 0 ? 'standard_three_pr_odd_body' : 'standard_three_pr') : prCount === 1 ? 'standard_single_pr' : topEmptyNoCi ? (bodyStart === 0 ? (noCiEvenWrappers ? 'no_lead_no_ci_even_body' : 'no_lead_no_ci') : noCiEvenWrappers ? 'top_empty_no_ci_odd_body' : 'top_empty_no_ci') : noTopPrOddBody ? 'top_empty_no_pr_odd_body' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
+      variant: noLeadCi ? (bodyEnd % 2 === 0 ? 'no_lead_ci_even_body' : 'no_lead_ci_odd_body') : oneBody ? 'standard_one_body' : twoBody ? 'standard_two_body' : prCount === 3 ? (hasTopEmptyPage ? 'top_empty_three_pr' : children.length % 2 === 0 ? 'standard_three_pr_odd_body' : 'standard_three_pr') : prCount === 1 ? 'standard_single_pr' : topEmptyNoCi ? (bodyStart === 0 ? (noCiEvenWrappers ? 'no_lead_no_ci_even_body' : 'no_lead_no_ci') : noCiEvenWrappers ? 'top_empty_no_ci_odd_body' : 'top_empty_no_ci') : noTopPrOddBody ? 'top_empty_no_pr_odd_body' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
       path: location.pathname, dom: mutationState.domGeneration,
       captureDom: mutationState.captureDomGeneration,
       viewport: {width: innerWidth, height: innerHeight, dpr: devicePixelRatio}};
@@ -496,6 +539,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
             prepared.snapshot.height !== prepared.sourceHeight || prepared.snapshot.isConnected ||
             !attrsEqual(prepared.snapshotAttributes, prepared.sourceAttrs)) return;
         candidates.set(target, {...prepared, targetAfter: state});
+        missedLayoutDraws.delete(target);
         if (candidates.size > MAX_CANDIDATES) {
           candidates.clear();
           candidates.set(target, {...prepared, targetAfter: state});
@@ -513,6 +557,10 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       const layout = normalizedLayout(true);
       const locationRow = targetLocation(target, layout);
       const source = event.source;
+      if (!layout && source instanceof HTMLCanvasElement && safeDimensions(source) &&
+          safeDimensions(target) && fullFrame(event.drawArgs, source, target)) {
+        missedLayoutDraws.add(target);
+      }
       if (!locationRow || !(source instanceof HTMLCanvasElement) ||
           !safeDimensions(source) || !safeDimensions(target) ||
           !fullFrame(event.drawArgs, source, target) || clipUnsafe.has(target)) return;
@@ -714,6 +762,23 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
 
   const api = {
     integrity() { return window.__younganimalViewerCapture === apiIdentity && capture.integrity(); },
+    needsInitialRedraw({expectedSlots, expectedSeek, episodePath}) {
+      // A navigation hint only: collect/verify remain the capture authorities.
+      if (!api.integrity() || proofs.size || !Array.isArray(expectedSlots) ||
+          expectedSlots.length < 1 || expectedSlots.length > 2) return false;
+      const layout = normalizedLayout();
+      if (!layout || location.pathname !== episodePath || location.search || location.hash ||
+          layout.value !== expectedSeek || !sameArray(layout.active, expectedSlots)) return false;
+      return expectedSlots.some(slot => {
+        const wrapper = layout.children[slot];
+        const targets = wrapper ? [...wrapper.querySelectorAll('canvas')] : [];
+        const target = targets.length === 1 ? targets[0] : null;
+        const candidate = target ? candidates.get(target) : null;
+        return target && missedLayoutDraws.has(target) &&
+          (!candidate || candidate.seekValue !== expectedSeek || candidate.slot !== slot ||
+            candidate.layoutVariant !== layout.variant);
+      });
+    },
     collect({expectedSlots, expectedSeek, episodePath, maxPngChars}) {
       const fallback = reason => {
         clearWindow();
@@ -900,6 +965,11 @@ RELEASE_CAPTURE_SCRIPT = r"""args => {
   return api.release(args);
 }"""
 
+INITIAL_REDRAW_NEEDED_SCRIPT = r"""args => {
+  const api = window.__younganimalNativeCapture;
+  return !!api && typeof api.needsInitialRedraw === 'function' && api.needsInitialRedraw(args);
+}"""
+
 
 @dataclass(frozen=True, slots=True)
 class NativeImage:
@@ -1027,6 +1097,7 @@ def _single_vp8l(data: bytes, *, width: int, height: int) -> bool:
 
 __all__ = [
     "COLLECT_CAPTURE_SCRIPT",
+    "INITIAL_REDRAW_NEEDED_SCRIPT",
     "MAX_CANDIDATES",
     "MAX_CANVAS_PIXELS",
     "MAX_IMAGE_BYTES",

@@ -229,6 +229,80 @@ def _top_empty_no_ci_snapshot(seek_value: int, *, body_count: int = 10, no_lead:
     }
 
 
+def _no_lead_ci_snapshot(seek_value: int, *, body_count: int = 15) -> dict[str, object]:
+    raw = _top_empty_no_ci_snapshot(seek_value, body_count=body_count + 1, no_lead=True)
+    raw["viewerClasses"].append("mode-has-comic-info")
+    if seek_value == 5:
+        raw["viewerClasses"].extend(["mode-ci-page", "mode-pr-page"])
+    ci = raw["slots"][body_count]
+    ci.update(classes=["-cv-page", "mode-ci"], canvasCount=0, canvas=None)
+    return raw
+
+
+@pytest.mark.parametrize("body_count", [5, 15, 6, 12])
+def test_younganimal_no_lead_ci_maps_every_phase(body_count: int) -> None:
+    covered = []
+    maximum = body_count + 5 - body_count % 2
+    even_body = body_count % 2 == 0
+    for seek in range(maximum, 0, -2):
+        row = _parse_viewer_observation(_no_lead_ci_snapshot(seek, body_count=body_count), expected_url=EPISODE_URL)
+        assert row.layout_variant == ("no_lead_ci_even_body" if even_body else "no_lead_ci_odd_body")
+        assert row.body_slots == tuple(range(body_count))
+        assert row.ci_slot == body_count
+        assert row.pr_slots == (body_count + 1, body_count + 2)
+        assert row.page_state == ("end" if seek == 1 else "ad" if seek == 3 or (even_body and seek == 5) else "content")
+        if row.page_state == "content":
+            focus = maximum - seek + 1
+            assert row.active_slots == tuple(i for i in (focus - 1, focus) if i < body_count)
+            assert row.ready_slots == row.active_slots
+            covered.extend(row.active_slots)
+    assert covered == list(range(body_count))
+
+
+@pytest.mark.parametrize("mutation", [
+    "horizontal", "pr", "ci", "good", "top_empty", "vertical", "single", "range", "step", "min",
+    "short_body", "short_even_body", "lead", "body", "tail", "tail_canvas", "centers", "first_phase",
+    "body_phase", "ci_phase", "pr_phase", "end_phase", "end_parity_phase", "end_missing", "end_duplicate",
+    "end_parent", "end_hidden", "end_offscreen", "end_centers",
+])
+@pytest.mark.parametrize("body_count", [15, 12])
+def test_younganimal_no_lead_ci_rejects_unproven_layout(mutation: str, body_count: int) -> None:
+    body_count = 3 if mutation == "short_body" else 4 if mutation == "short_even_body" else body_count
+    maximum = body_count + 5 - body_count % 2
+    seek = 1 if mutation.startswith("end_") else 5 if mutation == "ci_phase" else 3 if mutation == "pr_phase" else maximum - 2 if mutation == "body_phase" else maximum
+    raw = _no_lead_ci_snapshot(seek, body_count=body_count)
+    flags = {"horizontal": "mode-h", "pr": "mode-has-pr", "ci": "mode-has-comic-info", "good": "mode-has-good-page"}
+    if mutation in flags:
+        raw["viewerClasses"].remove(flags[mutation])
+    elif mutation in {"top_empty", "vertical", "single"}:
+        raw["viewerClasses"].append({"top_empty": "mode-has-top-emptypage", "vertical": "mode-v", "single": "mode-single"}[mutation])
+    elif mutation in {"range", "step", "min"}:
+        raw["seek"][{"range": "max", "step": "step", "min": "min"}[mutation]] = {"range": str(maximum + 2), "step": "1", "min": "0"}[mutation]
+    elif mutation == "lead":
+        raw["slots"][0]["classes"] = ["-cv-page", "mode-pr"]
+    elif mutation in {"body", "tail"}:
+        raw["slots"][4 if mutation == "body" else body_count]["classes"] = ["-cv-page", "mode-good"]
+    elif mutation == "tail_canvas":
+        raw["slots"][body_count].update(canvasCount=1, canvas=raw["slots"][0]["canvas"])
+    elif mutation.endswith("centers"):
+        raw["slots"][0]["wrapperCenterInViewport"] = not raw["slots"][0]["wrapperCenterInViewport"]
+    elif mutation == "end_parity_phase":
+        if body_count % 2:
+            raw["viewerClasses"].remove("mode-pr-page")
+        else:
+            raw["viewerClasses"].append("mode-pr-page")
+    elif mutation.endswith("phase"):
+        raw["viewerClasses"].append("mode-top-pr-page")
+    elif mutation in {"end_missing", "end_duplicate"}:
+        raw["terminalMarkerCount"] = 0 if mutation == "end_missing" else 2
+    elif mutation == "end_parent":
+        raw["terminalMarkerParentIndex"] = body_count + 3
+    elif mutation in {"end_hidden", "end_offscreen"}:
+        raw["terminalMarkerVisible" if mutation == "end_hidden" else "terminalMarkerCenterInViewport"] = False
+    with pytest.raises(UnknownPageStateError):
+        _parse_viewer_observation(raw, expected_url=EPISODE_URL)
+
+
 def _top_empty_snapshot(seek_value: int, *, body_count: int = 44) -> dict[str, object]:
     raw = _snapshot(21)
     base = raw["slots"]

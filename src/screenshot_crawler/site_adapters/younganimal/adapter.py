@@ -51,6 +51,11 @@ from screenshot_crawler.site_adapters.younganimal.native_capture import (
     COLLECT_CAPTURE_SCRIPT as COLLECT_NATIVE_CAPTURE_SCRIPT,
 )
 from screenshot_crawler.site_adapters.younganimal.native_capture import (
+    INITIAL_REDRAW_NEEDED_SCRIPT,
+    decode_native_images,
+    encode_native_webp,
+)
+from screenshot_crawler.site_adapters.younganimal.native_capture import (
     MAX_IMAGE_BYTES as MAX_NATIVE_IMAGE_BYTES,
 )
 from screenshot_crawler.site_adapters.younganimal.native_capture import (
@@ -61,10 +66,6 @@ from screenshot_crawler.site_adapters.younganimal.native_capture import (
 )
 from screenshot_crawler.site_adapters.younganimal.native_capture import (
     VERIFY_CAPTURE_SCRIPT as VERIFY_NATIVE_CAPTURE_SCRIPT,
-)
-from screenshot_crawler.site_adapters.younganimal.native_capture import (
-    decode_native_images,
-    encode_native_webp,
 )
 
 BASE_URL = "https://younganimal.com"
@@ -448,6 +449,7 @@ class YounganimalAdapter(SiteAdapter):
         self._native_cleanup_token: str | None = None
         self._capture_diagnostics: dict[str, Any] = {"mode": "not_started"}
         self._initial_canvas_quiet: dict[str, object] | None = None
+        self._initial_native_redraw: dict[str, object] | None = None
         self._access_stop: dict[str, object] | None = None
         self._response_listener = None
         self._access_strategy: AccessStrategy = "auto"
@@ -609,6 +611,7 @@ class YounganimalAdapter(SiteAdapter):
         self._native_cleanup_token = None
         self._capture_diagnostics = {"mode": "not_started"}
         self._initial_canvas_quiet = None
+        self._initial_native_redraw = None
         if self._access_strategy == "quota":
             await self._initialize_work_ticket_entry(page, entry_only=False)
         await self._verify_episode_entry(page)
@@ -639,7 +642,7 @@ class YounganimalAdapter(SiteAdapter):
                 include_pixels=True,
             )
         else:
-            first_slots = self._body_slots[:2] if observation.layout_variant in {"no_lead_no_ci", "no_lead_no_ci_even_body"} else (self._body_slots[0],)
+            first_slots = self._body_slots[:2] if observation.layout_variant in {"no_lead_no_ci", "no_lead_no_ci_even_body", "no_lead_ci_odd_body", "no_lead_ci_even_body"} else (self._body_slots[0],)
             first = await self._wait_for_observation(
                 page,
                 lambda row: (
@@ -659,6 +662,65 @@ class YounganimalAdapter(SiteAdapter):
                 "Younganimal first body canvas disappeared after quiet wait"
             )
         self._rendered_dimensions = (first_canvas["width"], first_canvas["height"])
+        await self._recover_initial_native_draw(page, first)
+
+    async def _recover_initial_native_draw(self, page: Page, first: ViewerObservation) -> None:
+        """Revisit the first body once, only after an observed early source draw."""
+        remaining = first.body_slots[len(first.active_slots):]
+        if not remaining:
+            return
+        current = await self._observe(page)
+        if (
+            self._captured_slots or current.page_state != "content"
+            or current.seek_value != first.seek_value or current.active_slots != first.active_slots
+            or current.ready_slots != first.active_slots
+            or first.active_slots != first.body_slots[:len(first.active_slots)]
+        ):
+            raise UnknownPageStateError("Younganimal first body changed before initial redraw inspection")
+        arguments = {
+            "expectedSlots": list(first.active_slots),
+            "expectedSeek": first.seek_value,
+            "episodePath": urlsplit(self._target_url or "").path,
+        }
+        try:
+            needed = await asyncio.wait_for(
+                page.evaluate(INITIAL_REDRAW_NEEDED_SCRIPT, arguments),
+                timeout=OBSERVATION_TIMEOUT_SECONDS,
+            )
+        except (PlaywrightError, TimeoutError) as exc:
+            raise UnknownPageStateError("Younganimal initial draw inspection exceeded its bound") from exc
+        if needed is not True:
+            return
+        away_seek = first.seek_value - first.seek_step
+        away_slots = tuple(remaining[:2])
+        self._initial_native_redraw = {
+            "status": "started", "first_seek": first.seek_value,
+            "away_seek": away_seek, "slots": list(first.active_slots),
+        }
+        self._capture_diagnostics["initial_native_redraw"] = self._initial_native_redraw
+        await self._release_native_candidates(page, token=None, expected=(), clear_all=True)
+        # Use only the existing public range. Do not reload, click entry controls,
+        # consume resources or accept any of the earlier unproven source pixels.
+        for value, slots in ((away_seek, away_slots), (first.seek_value, first.active_slots)):
+            await self._set_public_seek_value(page, value)
+            restored = await self._wait_for_observation(
+                page,
+                lambda row, value=value, slots=slots: (
+                    row.page_state == "content" and row.seek_value == value
+                    and row.active_slots == slots and row.ready_slots == slots
+                ),
+                reason="Younganimal initial native redraw did not restore its frozen body spread",
+                timeout_ms=PAGE_CHANGE_TIMEOUT_MS,
+                include_pixels=True,
+            )
+            if any(
+                (restored.raw["slots"][slot]["canvas"]["width"],
+                 restored.raw["slots"][slot]["canvas"]["height"]) != self._rendered_dimensions
+                for slot in slots
+            ):
+                raise UnknownPageStateError("Younganimal rendered dimensions changed during initial redraw")
+        await self._wait_for_initial_quiet(page, restored)
+        self._initial_native_redraw["status"] = "redrawn"
 
     async def initialize_entry_only(self, page: Page) -> None:
         """Confirm a work-ticket grant without initializing or capturing the Viewer."""
@@ -1126,7 +1188,7 @@ class YounganimalAdapter(SiteAdapter):
             predicate = lambda row: (
                 row.page_state == "content"
                 and row.seek_value == observation.seek_max
-                and row.active_slots == (row.body_slots[:2] if row.layout_variant in {"no_lead_no_ci", "no_lead_no_ci_even_body"} else (row.body_slots[0],))
+                and row.active_slots == (row.body_slots[:2] if row.layout_variant in {"no_lead_no_ci", "no_lead_no_ci_even_body", "no_lead_ci_odd_body", "no_lead_ci_even_body"} else (row.body_slots[0],))
                 and row.ready_slots == row.active_slots
             )
         return await self._wait_for_observation(
@@ -1597,6 +1659,7 @@ class YounganimalAdapter(SiteAdapter):
                 "formats": [item.mime_type for item in captures],
                 "body_slots_captured": list(self._captured_slots),
                 "initial_canvas_quiet": dict(self._initial_canvas_quiet or {}),
+                "initial_native_redraw": dict(self._initial_native_redraw or {}),
             }
             return captures
 
@@ -1654,6 +1717,7 @@ class YounganimalAdapter(SiteAdapter):
             "initial_rendered_dimensions": list(self._rendered_dimensions),
             "formats": [item.mime_type for item in captures],
             "body_slots_captured": list(self._captured_slots),
+            "initial_native_redraw": dict(self._initial_native_redraw or {}),
         }
         return captures
 
