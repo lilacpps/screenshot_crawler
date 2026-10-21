@@ -250,10 +250,20 @@ The Phase 04 zero-dispatch guard trace also observed exact same-site RSC `GET`
 fetches for `/` and `/store_items/series/<positive-id>/<positive-id>`, plus
 Stripe controller/m-outer and Facebook `/tr/` third-party subframe requests.
 The later Item/Source 33083 read-only trace also observed
-`/store_items/<positive-id>` RSC GET fetches. These use the same abort-only
+`/store_items/<positive-id>` RSC GET fetches. Item/Source 33403's failure and
+bounded read-only reproduction on 2026-10-22 additionally identified the exact
+`/category/manga/day/2/1` RSC GET fetch. These use the same abort-only
 known-page predicate: exact same-site origin, main-frame fetch, no navigation,
 and both `_rsc` query and `rsc` header markers. The product prefetch is blocked
 without failing the selected episode; other signatures remain fatal.
+Only that observed category path is recognized; other category paths, suffixes
+and trailing-slash variants remain unknown. The 33403 diagnostics recorded
+`ticket_action_attempted=false`, and its metrics contain no rental-checkout
+request. The fixed production guard was checked on the exact episode with one
+main document, unchanged canonical URL, zero click/checkout attempts and all
+26 mutating requests blocked. It recorded/aborted the category prefetch with no
+fatal reason. Evidence: `output/younganimal-error-33403/baseline.json` and
+`fixed.json`. No consuming grant-only retry was performed.
 The adapter recognizes only these observed route families with their reviewed
 origin, method, resource, navigation, and query constraints, then aborts them
 before any downstream handler. Stripe matching ignores URL fragments. The

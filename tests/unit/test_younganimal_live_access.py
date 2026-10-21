@@ -14,28 +14,31 @@ EPISODE_ID = "856137d88753b"
 EPISODE_URL = f"https://younganimal.com/episodes/{EPISODE_ID}"
 
 
+@pytest.mark.parametrize("path", ["/store_items/1888", "/category/manga/day/2/1"])
 @pytest.mark.parametrize(
     ("changes", "expected"),
     [
         ({}, "known_page_rsc_prefetch"),
         ({"url": "https://younganimal.com/store_items/1?_rsc=fixture"}, "known_page_rsc_prefetch"),
         ({"url": "https://younganimal.com/store_items/0?_rsc=fixture"}, "unknown_rsc_page_route"),
-        ({"url": "https://younganimal.com/store_items/1888/extra?_rsc=fixture"}, "unknown_rsc_page_route"),
-        ({"url": "https://younganimal.com/store_items/1888/?_rsc=fixture"}, "unknown_rsc_page_route"),
-        ({"url": "https://evil.example/store_items/1888?_rsc=fixture"}, "unknown_rsc_page_route"),
-        ({"url": "http://younganimal.com/store_items/1888?_rsc=fixture"}, "unknown_rsc_page_route"),
-        ({"url": "https://younganimal.com:444/store_items/1888?_rsc=fixture"}, "unknown_rsc_page_route"),
+        ({"url": "https://younganimal.com/category/manga/day/4/1?_rsc=fixture"}, "unknown_rsc_page_route"),
+        ({"url": "https://younganimal.com/category/column?_rsc=fixture"}, "unknown_rsc_page_route"),
+        ({"url": "https://younganimal.com{path}/extra?_rsc=fixture"}, "unknown_rsc_page_route"),
+        ({"url": "https://younganimal.com{path}/?_rsc=fixture"}, "unknown_rsc_page_route"),
+        ({"url": "https://evil.example{path}?_rsc=fixture"}, "unknown_rsc_page_route"),
+        ({"url": "http://younganimal.com{path}?_rsc=fixture"}, "unknown_rsc_page_route"),
+        ({"url": "https://younganimal.com:444{path}?_rsc=fixture"}, "unknown_rsc_page_route"),
         ({"has_rsc_header": False}, "unknown_rsc_page_route"),
-        ({"url": "https://younganimal.com/store_items/1888"}, "unknown_rsc_page_route"),
+        ({"url": "https://younganimal.com{path}"}, "unknown_rsc_page_route"),
         ({"method": "POST"}, "unknown_rsc_page_route"),
         ({"resource_type": "script"}, "unknown_rsc_page_route"),
         ({"is_main_frame": False}, "unknown_rsc_page_route"),
         ({"is_navigation": True, "resource_type": "document"}, "non_target_main_document"),
     ],
 )
-def test_store_item_prefetch_requires_exact_readonly_signature(changes, expected) -> None:
+def test_known_page_prefetch_requires_exact_readonly_signature(path, changes, expected) -> None:
     arguments = {
-        "url": "https://younganimal.com/store_items/1888?_rsc=fixture",
+        "url": f"https://younganimal.com{path}?_rsc=fixture",
         "expected_episode_url": EPISODE_URL,
         "expected_work_id": WORK_ID,
         "resource_type": "fetch",
@@ -45,6 +48,7 @@ def test_store_item_prefetch_requires_exact_readonly_signature(changes, expected
         "has_rsc_header": True,
     }
     arguments.update(changes)
+    arguments["url"] = arguments["url"].format(path=path)
     assert guarded_route_reason(**arguments) == expected
 
 

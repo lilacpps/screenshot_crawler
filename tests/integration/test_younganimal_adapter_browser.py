@@ -533,7 +533,8 @@ async def _install_fixture(
         else ""
     )
     ticket_known_page_prefetch_script = (
-        "for (const path of ['/', '/store_items/series/1708/1', '/store_items/1888']) "
+        "for (const path of ['/', '/store_items/series/1708/1', '/store_items/1888', "
+        "'/category/manga/day/2/1']) "
         "fetch(path + '?_rsc=fixture', {headers:{rsc:'fixture'}}).catch(() => {});"
         if ticket_prefetch_known_pages
         else ""
@@ -1038,15 +1039,17 @@ async def test_younganimal_work_ticket_aborts_and_records_known_same_work_prefet
     assert guards[0].other_episode_prefetch_count == 1
     assert guards[0].other_episode_prefetch_paths == ["/episodes/d19dd3fa4563f"]
     assert "/episodes/d19dd3fa4563f" not in requested
-    assert guards[0].known_page_rsc_prefetch_count == 3
+    assert guards[0].known_page_rsc_prefetch_count == 4
     assert guards[0].known_page_rsc_prefetch_paths == [
         "/",
         "/store_items/series/1708/1",
         "/store_items/1888",
+        "/category/manga/day/2/1",
     ]
     assert "/" not in requested
     assert "/store_items/series/1708/1" not in requested
     assert "/store_items/1888" not in requested
+    assert "/category/manga/day/2/1" not in requested
     assert guards[0].stripe_subframe_count == 1
     assert guards[0].stripe_subframe_paths == [
         "/v3/controller-with-preconnect-837b3ba280ce77b8f4416a2f4686fd3f.html"

@@ -1,6 +1,47 @@
 # 11. Younganimal current implementation
 
-## Current verification snapshot (2026-10-21)
+## Current verification snapshot (2026-10-22)
+
+### Ticket-entry category prefetch: Item/Source 33403
+
+The 2026-10-22 06:01:52 JST grant-only attempt on episode `c54c96563dfb3`
+/ work `94d9f27c19815` failed before any ticket action. Its diagnostic
+`ticket_action_attempted` is false; the corresponding metrics contain zero
+`/api/checkout/rental` requests and no HTTP 403/429/5xx. The first rejected
+request was the natural main-frame, non-navigation GET fetch for the exact
+path `/category/manga/day/2/1`. A bounded shared-CDP read-only reproduction
+confirmed both `_rsc` query and `rsc` header markers. The same error reason
+alone did not identify this path; diagnosis used the retained first-failure
+request and the live trace.
+
+`live_access.guarded_route_reason()` now recognizes that exact path under the
+existing known-page predicate: exact HTTPS site origin, GET, fetch, main frame,
+no navigation, and both RSC markers. The route is recorded and aborted before
+downstream dispatch while the selected episode operation continues. Recognition
+does not authorize visiting a category page. Other category paths, suffixes,
+trailing slashes and other signatures remain fatal. Existing target identity,
+auth, one-click, consumption proof, HTTP/access-stop, and unknown-route checks
+are retained. No CLI/configuration, shared Core, Catalog or resource-policy
+change is required.
+
+Evidence: `output/younganimal-error-33403/baseline.json` and `fixed.json`.
+Each probe owned one Page and made one main-document request to the exact
+episode, blocked all 26 mutating requests, and observed zero click events and
+zero checkout attempts. The baseline reproduced the fatal category route;
+the fixed production guard recorded four known-page prefetches including the
+category path, with no failure and the canonical URL unchanged. No ticket use,
+normal Catalog/library write, capture or consuming grant-only retry was made.
+The fix verifies route handling; fresh consuming entry remains unverified here.
+
+Validation covers 112 live-access/policy/batch Unit cases and 24 real-browser
+ticket-entry Integration cases, including normal Capture/END and grant-only
+continuation with zero downstream category dispatch, malformed signatures,
+unknown-route diagnostics before click and consumption persistence after a
+later failure. All selected tests pass with zero skipped. Ruff passes for
+`src tests`. The initial Unit selection encountered one default temporary-dir
+setup error; the complete selection passes with an isolated short workspace
+basetemp. Full repository pytest, unrelated Discovery/Viewer Integration and
+standalone Research tests are outside this small site-local routing change.
 
 ### Remaining PNG fallback correction after recrawl: 36225 / 35454
 
@@ -1331,8 +1372,9 @@ apply/re-crawl, and full repository pytest were not rerun because only the prepa
 static site policy changed. Shared Core, Catalog schema, Batch, and Viewer code are unchanged
 by this extension; the earlier Viewer correction above is a separate change.
 
-The store-item RSC prefetch follow-up recognizes only same-origin
-`/store_items/<positive-id>` GET fetches on the main frame with no navigation
+The known-page RSC prefetch handling recognizes same-origin
+`/store_items/<positive-id>` and the exact observed `/category/manga/day/2/1`
+GET fetches on the main frame with no navigation
 and both `_rsc` query and `rsc` header markers. Like the existing known-page
 prefetches, these requests are aborted before downstream dispatch without
 failing the selected episode. Other signatures and unknown routes remain fatal.

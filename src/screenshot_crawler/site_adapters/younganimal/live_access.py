@@ -343,13 +343,13 @@ def guarded_route_reason(
             return "non_target_main_document"
         if not is_main_frame:
             return "unexpected_subframe_navigation"
+    # The category path is the exact natural prefetch observed on Item 33403;
+    # other category routes remain unknown. Recognition only authorizes abort.
+    known_page_rsc_path = path in {"/", "/category/manga/day/2/1"} or re.fullmatch(
+        r"/store_items/(?:[1-9][0-9]*|series/[1-9][0-9]*/[1-9][0-9]*)", path
+    ) is not None
     if not valid:
-        if has_rsc_query and (
-            path == "/"
-            or re.fullmatch(
-                r"/store_items/(?:[1-9][0-9]*|series/[1-9][0-9]*/[1-9][0-9]*)", path
-            )
-        ):
+        if has_rsc_query and known_page_rsc_path:
             return "unknown_rsc_page_route"
         return None
     if path.startswith("/api/"):
@@ -380,9 +380,6 @@ def guarded_route_reason(
             # does not invalidate the selected episode's current-page operation.
             return "other_episode_rsc_prefetch"
         return "other_episode_page_route"
-    known_page_rsc_path = path == "/" or re.fullmatch(
-        r"/store_items/(?:[1-9][0-9]*|series/[1-9][0-9]*/[1-9][0-9]*)", path
-    ) is not None
     if known_page_rsc_path:
         if (
             not is_navigation
