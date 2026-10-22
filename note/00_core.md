@@ -57,7 +57,9 @@ For a fully ordered work, the shared archive plan sorts Watchlist keys by
 `archive_order`, then all `acquisition_enabled=1` Sources by `display_position`.
 Assigned Sources reserve ordinals regardless of access mode, availability or
 Item status; excluded Sources do not. No-order works retain legacy site-local
-naming. Batch checks current cross-site ZIP/status names before site access.
+naming. Batch reports historical cross-site ZIP/status naming drift as a maintenance warning.
+Actual candidate ZIP/status path occupancy, stale current naming/scope/identity, and
+access-policy failures remain hard stops before site access.
 `scripts/renumber_archives.py --watchlist watchlist.yaml --catalog catalog.sqlite
 --work-key KEY --dry-run --json` previews all sites; managed work requires a
 whole-work `--apply --json`. ZIP hashes/sizes, sidecars and Catalog locators
@@ -1258,7 +1260,10 @@ title自体は常にlibrary directoryに含める。50文字ちょうども省�
 filename要素がすべて空の場合は`archive`をfallbackにする。statusは
 `output/crawl-status/<genre>/<title>/<stem>.json`へ保存し、Work間の同じstemでも衝突しないようにする。destination存在時の
 `FileExistsError`と自動連番なしの安全性を維持する。既存archive/status/Artifact
-locatorは通常Batchで変更せず、明示的なP4 renumberだけが現在のstemへ移行する。
+locator is not changed by an ordinary Batch. Historical naming/status inconsistencies are
+warnings; actual candidate-path occupancy remains a hard stop and is checked again after
+crawl immediately before packaging. Explicit renumber remains a separate strict maintenance
+operation for updating existing names and Catalog locators.
 
 既存archiveのP4 renumberは `scripts/renumber_archives.py` が薄いCLI wrapperとして提供する。
 `--work-key`、`--site`、両方のAND、または`--all`の明示scopeが必須で、defaultはdry-run、

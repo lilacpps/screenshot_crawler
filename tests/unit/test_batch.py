@@ -1,3 +1,5 @@
+import hashlib
+import json
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -6,6 +8,7 @@ import pytest
 
 from screenshot_crawler.batch import BatchPlanner, BatchPlanningError
 from screenshot_crawler.catalog import (
+    ArtifactInput,
     CatalogService,
     ItemInput,
     SourceInput,
@@ -14,6 +17,7 @@ from screenshot_crawler.catalog import (
     WorkInput,
 )
 from screenshot_crawler.catalog.service import JST
+from screenshot_crawler.core.packaging import archive_stem
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
     MagapokeSitePolicy,
@@ -376,6 +380,133 @@ def test_batch_metadata_uses_source_display_position_for_archive_order(
         "genre": "漫画",
     }
     assert candidate.artifact_prefix == "003"
+
+
+@pytest.mark.parametrize(
+    "history_issue",
+    ["wrong_status", "malformed_status", "multiple_latest_artifacts"],
+)
+def test_existing_legacy_archive_name_is_a_plan_warning_not_a_blocker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, history_issue: str,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    item, source = add_source(
+        service,
+        item=ItemInput(item_title="legacy episode"),
+        external_id="legacy-episode",
+        access_mode="free",
+    )
+    candidate = plan_for(service).candidates[0]
+    _stem, title, genre, _order, _author = archive_stem(candidate.metadata)
+    archive_path = tmp_path / "Books" / genre / title / "legacy-name.zip"
+    archive_path.parent.mkdir(parents=True)
+    archive_bytes = b"existing legacy archive"
+    archive_path.write_bytes(archive_bytes)
+    target = service.list_source_targets(source_id=source.id)[0]
+    run = service.create_crawl_run(
+        item_id=item.id,
+        source_id=source.id,
+        target_id=target.id,
+        access_strategy="direct",
+        started_at=NOW,
+    )
+    service.finalize_successful_crawl(
+        run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256=hashlib.sha256(archive_bytes).hexdigest(),
+            byte_size=len(archive_bytes),
+            storage_backend="filesystem",
+            locator=archive_path.as_posix(),
+            state="present",
+        ),
+        page_count=1,
+        stop_reason="end",
+        finished_at=NOW,
+    )
+    service.mark_item_pending(item.id)
+    if history_issue == "multiple_latest_artifacts":
+        second_archive = archive_path.with_name("second-legacy-name.zip")
+        second_archive.write_bytes(b"second historical archive")
+        service.create_artifact(
+            ArtifactInput(
+                kind="archive",
+                format="zip",
+                sha256="1" * 64,
+                byte_size=len(b"second historical archive"),
+                storage_backend="filesystem",
+                locator=second_archive.as_posix(),
+                state="present",
+            ),
+            item_id=item.id,
+            crawl_run_id=run.id,
+        )
+    status_path = (
+        tmp_path / "crawl-status" / genre / title / "legacy-name.json"
+    )
+    if history_issue != "multiple_latest_artifacts":
+        status_path.parent.mkdir(parents=True)
+        status_path.write_text(
+            "{" if history_issue == "malformed_status" else json.dumps(
+                {"archive_path": (tmp_path / "wrong.zip").as_posix()}
+            ),
+            encoding="utf-8",
+        )
+
+    plan = plan_for(service)
+
+    assert [candidate.source_id for candidate in plan.candidates] == [source.id]
+    if history_issue == "multiple_latest_artifacts":
+        assert any("multiple current ZIP Artifacts" in warning for warning in plan.warnings)
+    else:
+        assert any("current expected name" in warning for warning in plan.warnings)
+        if history_issue == "malformed_status":
+            assert any(
+                "is unreadable" in warning for warning in plan.warnings
+            ), plan.warnings
+        else:
+            assert any(
+                "status repair is separate maintenance" in warning
+                for warning in plan.warnings
+            )
+    assert archive_path.read_bytes() == archive_bytes
+    assert service.get_item(item.id).status == "pending"
+
+    if history_issue == "multiple_latest_artifacts":
+        return
+
+    original_stat = Path.stat
+
+    def inaccessible_archive(path: Path, *args: object, **kwargs: object):
+        if path == archive_path:
+            raise PermissionError("archive inspection denied")
+        return original_stat(path, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(Path, "stat", inaccessible_archive)
+        unreadable_archive_plan = plan_for(service)
+    assert unreadable_archive_plan.candidates
+    assert any(
+        "locator cannot be inspected" in warning
+        for warning in unreadable_archive_plan.warnings
+    )
+
+    original_stat = Path.stat
+
+    def inaccessible_status(path: Path, *args: object, **kwargs: object):
+        if path == status_path:
+            raise PermissionError("status inspection denied")
+        return original_stat(path, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(Path, "stat", inaccessible_status)
+        unreadable_status_plan = plan_for(service)
+    assert unreadable_status_plan.candidates
+    assert any(
+        "status path cannot be inspected" in warning
+        for warning in unreadable_status_plan.warnings
+    )
 
 
 def test_position_resolves_repeated_label_without_disambiguator(tmp_path: Path) -> None:

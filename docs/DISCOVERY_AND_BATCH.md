@@ -2083,18 +2083,21 @@ mode, availability or paid state. Unordered works retain the prior site-local
 `display_position` naming. Existing ZIP renumber is implemented as a work-wide
 operation across sites.
 
-Before Batch creates an archive, a work-wide preflight checks current ZIP
-stems, path occupancy, status metadata and synchronized Watchlist state. A
-changed ordinal or inconsistent existing archive blocks the work until an
-explicit `scripts/renumber_archives.py --work-key KEY --dry-run --json` review
-and, after operator confirmation, `--apply --json`. Partial `--site`
-application is rejected for managed works. The command retains excluded ZIPs,
-rejects Catalog hash/size drift and ambiguous status or Artifact aliases, and
-updates Catalog locators/status sidecars with rollback verification. JSON mode
-emits one result document for service/GUI callers. See
-[BOOK_NAMING_RULES.md](BOOK_NAMING_RULES.md) and the
-[work-key runbook](../runbooks/work-key-archive-order/README.md) for the
-operational copy-first migration and sync procedure.
+Before Batch creates an archive, a work-wide preflight still validates the current
+Watchlist/scope snapshot, source identity, metadata, and the candidate output ZIP
+and status paths. Historical ZIP stems, expected ordinal differences, old status
+mismatches, and ambiguous historical Artifact records are shown as maintenance
+warnings; they do not by themselves block planning or acquisition. Batch never
+renames, deletes, overwrites, or repairs those historical files or Catalog rows.
+A real file occupying the candidate ZIP or status path remains a hard error,
+including when it appears during a crawl and is still present at the final check:
+the executor checks immediately before packaging and preserves a detected file. Stale current
+naming plans, unsafe candidate paths, identity/scope mismatches, and access-policy
+failures remain fail-closed. Use `scripts/renumber_archives.py` separately when
+you choose to align existing archives and Catalog locators with current numbering;
+its strict collision, hash/size, status, alias, CAS and rollback checks are unchanged.
+See [BOOK_NAMING_RULES.md](BOOK_NAMING_RULES.md) and the
+[work-key runbook](../runbooks/work-key-archive-order/README.md) for details.
 
 Schema v2はsequential migrationの対象外であり、v2→v3 migrationは実装しない。
 `catalog migrate`はv3以降のDBに対してのみcomplete migration pathを要求する。v2 DBを利用する場合は、

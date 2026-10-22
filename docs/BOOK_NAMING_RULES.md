@@ -384,11 +384,16 @@ CrawlerのZIPでは、Watchlistの同じ`work_key`に複数key/siteを明示し�
 予約番号を保持し、担当外の有償話は番号を消費しない。`enabled: false`はDiscoveryの
 実行設定であり、担当範囲や番号を変えない。
 
-全keyで`archive_order`を省略した作品は従来のsite-local `display_position`名を
-維持する。一部だけ指定、同一work内の重複、NULL/不確定position、未同期scopeは
-fail-closedとなる。Batchは同じpure naming planを利用し、既存ZIP名/statusと同期
-状態に矛盾があればアクセス前に停止する。ファイルが既に存在しない既存Artifactは
-従来のoperator管理recrawlを妨げず、Item statusを自動変更しない。
+When every key omits `archive_order`, existing site-local naming is retained. Partial
+ordering, duplicate orders, unknown positions, and unsynchronized scope remain
+fail-closed. Batch uses the current pure naming plan for new candidates. Existing ZIP
+stems, historical status mismatches, and ambiguous old Artifact records are reported as
+maintenance warnings and do not alone stop planning or acquisition. A real file at the
+candidate ZIP or status path is a hard collision; it is checked before site access and
+again immediately before packaging. These historical warnings do not modify old files,
+Artifact locators, or Item status; a successful new acquisition still finalizes normally.
+Use the separate strict renumber workflow when you choose to
+align historical archives and Catalog metadata with current numbering.
 
 既存workの変更後に明示renumberする例:
 

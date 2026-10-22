@@ -725,3 +725,35 @@ and the next blocking issue. Do not label planning as implemented.
   Catalog/Watchlist/Books write or live-site operation was performed.
 
 - Final independent review of the site-wide Scope sync follow-up: APPROVE, 0 blocking findings. Documentation and implementation are frozen for this follow-up.
+
+## 2026-10-23: Historical naming warnings in Batch
+
+- User-directed follow-up supersedes the earlier P4 rule that any old ordinal or
+  status mismatch must stop Batch pending renumber. Historical ZIP stem drift,
+  old status mismatch, and ambiguous historical Artifact records are now visible
+  maintenance warnings. Batch does not rename, delete, overwrite, or repair them.
+- The current candidate naming/scope/identity and Site Policy checks remain hard
+  gates. Actual candidate ZIP or status path occupancy is still a hard error before
+  site access and is checked again after a successful crawl immediately before
+  packaging. A collision found at either check fails without overwriting the operator file;
+  if it occurs during crawl, the Item remains unfinalized.
+- Strict whole-work renumber behavior is unchanged and remains a separate
+  operator-controlled maintenance task.
+- Initial focused Batch/naming/scope/CLI/renumber/packaging run passed **301**
+  tests with 1,081 existing pytest-asyncio deprecation warnings. After the
+  reviewer-requested history-shape, grant/resolver, and post-debit-collision
+  regressions were added, the final focused run passed **306 tests**, 1,108
+  existing warnings, 0 skipped (68.24 seconds).
+- Root's affected 22-module Unit suite passed **534 tests**, 1,576 existing
+  warnings, 0 skipped (141.66 seconds). Its non-Markdown source/test hash audit
+  was unchanged. The selected local-browser Integration run passed **57 tests**,
+  17 warnings, 0 skipped (116.79 seconds); its source/test hash audit was also
+  unchanged. Root Ruff across `src tests scripts` passed; the final changed-file
+  Ruff and `git diff --check` results are recorded below.
+- No full suite was selected because the reviewed production change is limited to
+  historical diagnostics/warning presentation and reuse of the existing output
+  path check immediately before packaging. The broad affected Unit and selected
+  browser-backed Batch tests passed; subsequent changes were test-only and docs.
+- Final Ruff check on all changed production/test files: **All checks passed**;
+  `git diff --check` passed (Git emitted only its configured LF-to-CRLF advisory).
+  Final independent review of source, tests, and documentation: **APPROVE / BLOCKING 0**.

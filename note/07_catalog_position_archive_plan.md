@@ -395,7 +395,7 @@ Requirements:
 - a successful re-crawl creates a new Artifact row,
 - previous CrawlRun/Artifact rows remain historical records.
 
-If the old ZIP still exists, existing packaging collision behavior may stop the re-crawl. That is intentional.
+If an existing ZIP occupies the exact new candidate output path, packaging collision behavior stops the re-crawl. A historical ZIP at a different path is only a maintenance warning.
 
 ## 10. Existing archive renumber tool
 
@@ -884,11 +884,13 @@ Catalog source snapshot fails closed and requires scope sync or replanning.
 For an all-ordered work, Batch and renumber share the cross-site archive plan.
 All enabled Sources reserve a number regardless of access/status; all-disabled
 Sources are excluded. No-order works retain the legacy site-local naming.
-Before Batch access, existing ZIP/status names are checked work-wide. A stale
-ordinal blocks until the whole-work renumber preview is reviewed and explicitly
-applied. Renumber JSON mode provides a single machine-readable result; managed
-works cannot be partially applied by site. Catalog ZIP hashes and sizes,
-status sidecars, global Artifact locator aliases and rollback are checked.
+Historical ZIP stem/ordinal drift, old status mismatches, and ambiguous historical
+Artifacts are maintenance warnings; they do not alone block Batch. Current scope and
+candidate naming/identity must still be valid. A real ZIP or status file at the candidate
+output path is a hard stop before site access and is rechecked immediately before packaging;
+a collision found at either check fails without overwriting that file. Renumber remains a separate strict whole-work
+maintenance operation: it checks hashes/sizes, status sidecars, global Artifact locator
+aliases, and rollback, and managed works cannot be partially applied by site.
 
 P5 copy verification confirmed the 7 legacy tables' old-column data digests
 survive v6-to-v7 migration, but does not authorize migration or renumber of a

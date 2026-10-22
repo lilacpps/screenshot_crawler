@@ -16,11 +16,13 @@ from screenshot_crawler.batch import (
     BatchInterruptedError,
     BatchPlanner,
 )
+from screenshot_crawler.batch.archive_guard import ArchiveHistoryWarning
 from screenshot_crawler.batch.executor import (
     _cancel_task_bounded,
     _write_success_entry_trace,
 )
 from screenshot_crawler.catalog import (
+    ArtifactInput,
     CatalogService,
     ItemInput,
     SourceInput,
@@ -92,12 +94,22 @@ class ImmediateStopGuard:
 
 
 class FakeRunner:
-    def __init__(self, config: RunConfig, *, catalog: CatalogService, fail: bool = False) -> None:
+    def __init__(
+        self,
+        config: RunConfig,
+        *,
+        catalog: CatalogService,
+        fail: bool = False,
+        during_run: Callable[[RunConfig], None] | None = None,
+    ) -> None:
         self.config = config
         self.catalog = catalog
         self.fail = fail
+        self.during_run = during_run
 
     async def run(self, _page: object, _adapter: FakeAdapter) -> RunResult:
+        if self.during_run is not None:
+            self.during_run(self.config)
         if self.fail:
             raise RuntimeError("crawler failed")
         return RunResult(pages=(), stop_state=PageState.END, stop_reason="end")
@@ -122,6 +134,7 @@ def make_executor(
         tuple[dict[str, str], dict[str, str], str | None, str | None]
     ] | None = None,
     before_run: Callable[[RunConfig], None] | None = None,
+    during_run: Callable[[RunConfig], None] | None = None,
     runtime_settings: SiteRuntimeSettings | None = None,
 ) -> BatchExecutor:
     policies = SitePolicyRegistry()
@@ -136,7 +149,12 @@ def make_executor(
             configs.append(config)
         if before_run is not None:
             before_run(config)
-        return FakeRunner(config, catalog=service, fail=fail_crawl)
+        return FakeRunner(
+            config,
+            catalog=service,
+            fail=fail_crawl,
+            during_run=during_run,
+        )
 
     def package_function(
         output_dir: Path,
@@ -327,16 +345,205 @@ async def test_stale_archive_prefix_is_rejected_before_run_creation(
     assert service.get_item(candidate.item_id).status == "pending"
 
 
-async def test_occupied_candidate_archive_path_blocks_quota_access(
+async def test_historical_archive_name_warns_but_executor_continues(
     tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    old_archive = tmp_path / "Books" / "old-title" / "old-name.zip"
+    old_archive.parent.mkdir(parents=True)
+    old_bytes = b"historical archive"
+    old_archive.write_bytes(old_bytes)
+    target = service.get_source_target(candidate.target_id)
+    previous_run = service.create_crawl_run(
+        item_id=candidate.item_id,
+        source_id=candidate.source_id,
+        target_id=target.id,
+        access_strategy="direct",
+        started_at=NOW,
+    )
+    service.finalize_successful_crawl(
+        previous_run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256="0" * 64,
+            byte_size=len(old_bytes),
+            storage_backend="filesystem",
+            locator=old_archive.as_posix(),
+            state="present",
+        ),
+        page_count=1,
+        stop_reason="end",
+        finished_at=NOW,
+    )
+    service.mark_item_pending(candidate.item_id)
+    executor = make_executor(service)
+
+    with pytest.warns(ArchiveHistoryWarning, match="current expected name"):
+        result = await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "Books",
+            now=NOW,
+        )
+
+    assert result.archive_path.exists()
+    assert old_archive.read_bytes() == old_bytes
+    assert service.get_item(candidate.item_id).status == "completed"
+
+
+def _record_historical_archive(
+    service: CatalogService, candidate: BatchCandidate, archive_path: Path
+) -> bytes:
+    archive_bytes = b"historical archive"
+    archive_path.parent.mkdir(parents=True)
+    archive_path.write_bytes(archive_bytes)
+    target = service.get_source_target(candidate.target_id)
+    run = service.create_crawl_run(
+        item_id=candidate.item_id,
+        source_id=candidate.source_id,
+        target_id=target.id,
+        access_strategy=candidate.access_strategy,
+        started_at=NOW,
+    )
+    service.finalize_successful_crawl(
+        run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256="0" * 64,
+            byte_size=len(archive_bytes),
+            storage_backend="filesystem",
+            locator=archive_path.as_posix(),
+            state="present",
+        ),
+        page_count=1,
+        stop_reason="end",
+        finished_at=NOW,
+    )
+    service.mark_item_pending(candidate.item_id)
+    return archive_bytes
+
+
+@pytest.mark.parametrize("entrypoint", ["grant_only", "resolver"])
+async def test_historical_name_warning_is_kept_on_grant_and_resolver_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+) -> None:
+    service = CatalogService(tmp_path / f"history-{entrypoint}.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    old_archive = tmp_path / "Books" / "old-title" / "old-name.zip"
+    old_bytes = _record_historical_archive(service, candidate, old_archive)
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "work_ticket", consumed_at),
+    )
+
+    if entrypoint == "grant_only":
+        with pytest.warns(ArchiveHistoryWarning, match="current expected name"):
+            result = await executor.execute_grant_only_candidate(
+                object(), candidate, output_root=tmp_path / "batch", now=NOW
+            )
+        assert result.resource_consumed is True
+        assert service.get_source(candidate.source_id).quota_started_at == consumed_at.isoformat()
+        assert service.get_item(candidate.item_id).status == "pending"
+    else:
+        class ResolverAdapter:
+            def get_access_profile(self) -> AccessProfile:
+                return AccessProfile()
+
+            async def resolve_access_resource_candidates(
+                self, _page: object, candidates: tuple[object, ...], _resource: str,
+                *, timeout_ms: int = 15_000,
+            ) -> AccessResourceResolution:
+                del timeout_ms
+                return AccessResourceResolution(
+                    selected_source_ids=(candidates[0].source_id,),
+                )
+
+        monkeypatch.setattr(
+            executor.adapters, "create", lambda _site: ResolverAdapter()
+        )
+        monkeypatch.setattr(
+            batch_executor_module.AccessGuard,
+            "from_profile",
+            staticmethod(lambda **_kwargs: ImmediateStopGuard(None)),
+        )
+        with pytest.warns(ArchiveHistoryWarning, match="current expected name"):
+            resolution = await executor.resolve_access_resource_candidates(
+                object(), [candidate], "work_ticket"
+            )
+        assert resolution.selected_source_ids == (candidate.source_id,)
+        assert service.get_source(candidate.source_id).quota_started_at is None
+        assert service.get_item(candidate.item_id).status == "pending"
+
+    assert old_archive.read_bytes() == old_bytes
+
+
+@pytest.mark.parametrize("occupied_kind", ["archive", "status"])
+async def test_output_collision_created_during_crawl_is_not_overwritten(
+    tmp_path: Path, occupied_kind: str
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    library_dir = tmp_path / "Books"
+    stem, title, genre, _order, _author = archive_stem(candidate.metadata)
+    archive_path = library_dir / genre / title / f"{stem}.zip"
+    status_path = tmp_path / "crawl-status" / genre / title / f"{stem}.json"
+    occupied_path = archive_path if occupied_kind == "archive" else status_path
+    occupied_bytes = b"operator file appeared during crawl"
+    package_calls: list[tuple[dict[str, str], dict[str, str], str | None, str | None]] = []
+    capture_path: Path | None = None
+
+    def create_racing_file(config: RunConfig) -> None:
+        nonlocal capture_path
+        capture_path = config.output_dir / "captured-page.bin"
+        capture_path.parent.mkdir(parents=True, exist_ok=True)
+        capture_path.write_bytes(b"captured output remains available")
+        occupied_path.parent.mkdir(parents=True, exist_ok=True)
+        occupied_path.write_bytes(occupied_bytes)
+
+    executor = make_executor(
+        service,
+        during_run=create_racing_file,
+        package_calls=package_calls,
+    )
+
+    with pytest.raises(BatchExecutionError, match="Candidate output already exists"):
+        await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=library_dir,
+            now=NOW,
+        )
+
+    assert occupied_path.read_bytes() == occupied_bytes
+    assert capture_path is not None and capture_path.read_bytes() == b"captured output remains available"
+    assert package_calls == []
+    run = service.list_crawl_runs(source_id=candidate.source_id)[-1]
+    assert run.status == "failed"
+    assert service.list_artifacts(item_id=candidate.item_id) == []
+    assert service.get_item(candidate.item_id).status == "pending"
+
+
+@pytest.mark.parametrize("occupied_kind", ["archive", "status"])
+async def test_occupied_candidate_archive_path_blocks_quota_access(
+    tmp_path: Path, occupied_kind: str,
 ) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = _add_magapoke_candidate(service)
     library_dir = tmp_path / "Books"
     stem, title, genre, _order, _author = archive_stem(candidate.metadata)
     archive_path = library_dir / genre / title / f"{stem}.zip"
-    archive_path.parent.mkdir(parents=True)
-    archive_path.write_bytes(b"existing archive")
+    status_path = tmp_path / "crawl-status" / genre / title / f"{stem}.json"
+    occupied_path = archive_path if occupied_kind == "archive" else status_path
+    occupied_path.parent.mkdir(parents=True)
+    occupied_path.write_bytes(b"existing archive or status")
     executor = _make_magapoke_executor(service, AccessConsumption())
 
     with pytest.raises(BatchExecutionError, match="Candidate output already exists"):
@@ -819,6 +1026,7 @@ def _make_magapoke_executor(
     consumption: AccessConsumption,
     *,
     failure: BaseException | None = None,
+    during_run: Callable[[RunConfig], None] | None = None,
     site: str = "magapoke",
     policy: type[MagapokeSitePolicy] = MagapokeSitePolicy,
 ) -> BatchExecutor:
@@ -827,10 +1035,12 @@ def _make_magapoke_executor(
             return consumption
 
     class Runner:
-        def __init__(self, _config: RunConfig) -> None:
-            pass
+        def __init__(self, config: RunConfig) -> None:
+            self.config = config
 
         async def run(self, _page: object, _adapter: ConsumingAdapter) -> RunResult:
+            if during_run is not None:
+                during_run(self.config)
             if failure is not None:
                 raise failure
             return RunResult(
@@ -892,6 +1102,51 @@ async def test_comicdays_policy_boundary_records_observed_consumption_and_keeps_
         site="comicdays", resource="work_ticket",
     )
     assert state is not None and state.last_consumed_at == consumed_at.isoformat()
+
+
+async def test_candidate_collision_after_observed_ticket_debit_preserves_history(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "comicdays-collision-after-debit.sqlite")
+    candidate = _add_magapoke_candidate(service, site="comicdays")
+    consumed_at = datetime(2026, 9, 17, 15, 12, tzinfo=JST)
+    library_dir = service.path.parent / "Books"
+    stem, title, genre, _order, _author = archive_stem(candidate.metadata)
+    archive_path = library_dir / genre / title / f"{stem}.zip"
+    occupied_bytes = b"operator file appeared during crawl"
+
+    def create_collision(_config: RunConfig) -> None:
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        archive_path.write_bytes(occupied_bytes)
+
+    executor = _make_magapoke_executor(
+        service,
+        AccessConsumption(True, "work_ticket", consumed_at),
+        site="comicdays",
+        policy=ComicDaysSitePolicy,
+        during_run=create_collision,
+    )
+
+    with pytest.raises(
+        BatchExecutionError, match="Candidate output already exists"
+    ) as raised:
+        await executor.execute_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
+
+    assert raised.value.resource_consumed is True
+    assert archive_path.read_bytes() == occupied_bytes
+    source = service.get_source(candidate.source_id)
+    assert source.quota_started_at == consumed_at.isoformat()
+    state = service.get_quota_resource_state(
+        service.get_item(candidate.item_id).work_id,
+        site="comicdays",
+        resource="work_ticket",
+    )
+    assert state is not None and state.last_consumed_at == consumed_at.isoformat()
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_artifacts() == []
+    assert service.list_crawl_runs(source_id=candidate.source_id)[-1].status == "failed"
 
 
 async def test_comicdays_policy_boundary_entry_failure_after_consumption_persists_state(

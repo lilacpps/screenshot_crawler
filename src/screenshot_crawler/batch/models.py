@@ -81,6 +81,7 @@ class BatchPlan:
     skipped: list[BatchSkipped] = field(default_factory=list)
     quota_available: int | None = None
     quota_remaining: int | None = None
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def direct_count(self) -> int:

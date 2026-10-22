@@ -1,9 +1,10 @@
-"""Fail-closed checks for current work-wide archive names and status records."""
+"""Inspect historical archive naming/status state without blocking Batch output."""
 
 from __future__ import annotations
 
 import json
 import os
+import stat
 from collections import defaultdict
 from pathlib import Path
 
@@ -13,18 +14,28 @@ from screenshot_crawler.core.packaging import safe_component
 
 
 class ArchiveNameGuardError(ValueError):
-    """Raised when an existing current archive disagrees with its naming plan."""
+    """Raised when current Catalog ownership is insufficient for safe inspection."""
 
 
-def validate_existing_archive_names(
+class ArchiveHistoryWarning(UserWarning):
+    """A historical archive name or sidecar needs separate maintenance review."""
+
+
+def inspect_existing_archive_names(
     catalog: CatalogService,
     *,
     work: Work,
     items: list[Item],
     sources: list[Source],
     archive_positions_by_source: dict[int, int],
-) -> None:
-    """Check every active Source in a Work across sites before site access."""
+) -> list[str]:
+    """Return maintenance warnings for existing artifacts in a work.
+
+    Existing paths and sidecars are historical records. Their naming or status
+    disagreement is reported for separate maintenance, while current ownership
+    ambiguity remains an error. Planned output-path occupancy is checked by the
+    Planner and Executor independently.
+    """
 
     items_by_id = {item.id: item for item in items}
     rows_by_source: dict[int, list[tuple[CrawlRun, Artifact]]] = defaultdict(list)
@@ -32,6 +43,7 @@ def validate_existing_archive_names(
         rows_by_source[run.source_id].append((run, artifact))
 
     sources_by_site: dict[str, list[Source]] = defaultdict(list)
+    warnings: list[str] = []
     for source in sources:
         sources_by_site[source.site].append(source)
     collision_ids = set().union(
@@ -49,7 +61,14 @@ def validate_existing_archive_names(
             raise ArchiveNameGuardError(
                 f"Source {source.id} has unknown Work/Item ownership"
             )
-        current = _latest_archive(rows_by_source.get(source.id, []))
+        source_context = f"work={work.work_key!r} source={source.id}"
+        current, ambiguous = _latest_archive(rows_by_source.get(source.id, []))
+        if ambiguous:
+            warnings.append(
+                f"{source_context}: latest CrawlRun has multiple current ZIP Artifacts; "
+                "review archive history separately"
+            )
+            continue
         if current is None:
             continue
         _run, artifact = current
@@ -58,15 +77,35 @@ def validate_existing_archive_names(
             and artifact.state == "present"
             and artifact.locator is None
         ):
-            raise ArchiveNameGuardError(
-                f"Current archive for Source {source.id} is marked present but has no "
-                "filesystem locator"
+            warnings.append(
+                f"{source_context}: current archive is marked present but has no "
+                "filesystem locator; review archive history separately"
             )
-        if artifact.storage_backend != "filesystem" or artifact.locator is None:
             continue
-        old_path = Path(artifact.locator)
-        if not old_path.is_file():
+        if artifact.storage_backend != "filesystem" or artifact.locator is None:
+            if artifact.state == "present":
+                warnings.append(
+                    f"{source_context}: current archive is marked present but cannot be "
+                    "checked as a filesystem path; review archive history separately"
+                )
+            continue
+        try:
+            old_path = Path(artifact.locator)
+            old_stat = old_path.stat()
+        except (FileNotFoundError, NotADirectoryError):
             # A missing file is a valid operator-controlled recrawl case.
+            continue
+        except (OSError, ValueError) as exc:
+            warnings.append(
+                f"{source_context}: existing archive locator cannot be inspected "
+                f"({type(exc).__name__}); review archive history separately"
+            )
+            continue
+        if not stat.S_ISREG(old_stat.st_mode):
+            warnings.append(
+                f"{source_context}: current archive locator is not a regular file; "
+                "review archive history separately"
+            )
             continue
         expected_stem = catalog_archive_stem(
             work,
@@ -82,31 +121,33 @@ def validate_existing_archive_names(
             ),
         )
         if old_path.stem != expected_stem:
-            raise ArchiveNameGuardError(
-                f"Source {source.id} has existing archive {old_path.name!r}, but the current "
-                f"work-wide naming plan requires {expected_stem + '.zip'!r}; run a full "
-                "work-wide renumber dry-run and resolve it before Batch"
+            warnings.append(
+                f"{source_context}: existing archive {old_path.name!r} differs from the "
+                f"current expected name {expected_stem + '.zip'!r}; renumbering is "
+                "separate maintenance and Batch may continue when its output path is free"
             )
-        _validate_matching_status(old_path, work)
+        warnings.extend(_matching_status_warnings(old_path, work, source_context))
+
+    return warnings
 
 
 def _latest_archive(
     rows: list[tuple[CrawlRun, Artifact]],
-) -> tuple[CrawlRun, Artifact] | None:
+) -> tuple[tuple[CrawlRun, Artifact] | None, bool]:
     if not rows:
-        return None
+        return None, False
     latest_run_id = max(run.id for run, _artifact in rows)
     latest = [(run, artifact) for run, artifact in rows if run.id == latest_run_id]
     if len(latest) != 1:
-        raise ArchiveNameGuardError(
-            f"CrawlRun {latest_run_id} has multiple current ZIP Artifacts; resolve ambiguity"
-        )
-    return latest[0]
+        return None, True
+    return latest[0], False
 
 
-def _validate_matching_status(archive_path: Path, work: Work) -> None:
+def _matching_status_warnings(
+    archive_path: Path, work: Work, source_context: str
+) -> list[str]:
     if len(archive_path.parents) < 3:
-        return
+        return []
     library_root = archive_path.parents[2]
     status_root = library_root.parent / "crawl-status"
     genre = safe_component(work.genre, fallback="小説")
@@ -115,21 +156,34 @@ def _validate_matching_status(archive_path: Path, work: Work) -> None:
         status_root / genre / title / f"{archive_path.stem}.json",
         status_root / f"{archive_path.stem}.json",
     )
+    warnings: list[str] = []
     for status_path in candidates:
-        if not status_path.exists():
+        try:
+            status_path.stat()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except (OSError, ValueError) as exc:
+            warnings.append(
+                f"{source_context}: existing status path cannot be inspected "
+                f"({type(exc).__name__}); status repair is separate maintenance"
+            )
             continue
         try:
             payload = json.loads(status_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ArchiveNameGuardError(
-                f"Current archive status {status_path} is unreadable"
-            ) from exc
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            warnings.append(
+                f"{source_context}: existing status {status_path} is unreadable; "
+                "status repair is separate maintenance"
+            )
+            continue
         if not isinstance(payload, dict) or not _same_path(
             payload.get("archive_path"), archive_path
         ):
-            raise ArchiveNameGuardError(
-                f"Current archive status {status_path} does not match {archive_path}"
+            warnings.append(
+                f"{source_context}: existing status {status_path} does not match "
+                f"archive {archive_path}; status repair is separate maintenance"
             )
+    return warnings
 
 
 def _same_path(value: object, expected: Path) -> bool:

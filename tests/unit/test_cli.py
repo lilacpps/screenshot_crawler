@@ -1018,6 +1018,68 @@ def test_batch_run_parser_rejects_zero_limit() -> None:
         )
 
 
+def test_batch_run_prints_archive_maintenance_warnings_without_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    warning = "work='series' source=7: existing archive uses an old name"
+
+    class FakePlanner:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+            assert site == "mangaone"
+            assert quota_resource is None
+            return SimpleNamespace(
+                candidates=[], skipped=[], warnings=[warning],
+                direct_count=0, quota_count=0, quota_available=None,
+                quota_remaining=None,
+            )
+
+    class FakePolicy:
+        def defer_quota_access_to_grant_phase(self) -> bool:
+            return False
+
+    class FakeMetrics:
+        path = Path("metrics.jsonl")
+
+        def record_planned_skips(self, _skipped: object) -> None:
+            return None
+
+        def finish(self, *, stop_reason: str) -> None:
+            assert stop_reason == "no_candidates"
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        cli,
+        "CatalogService",
+        lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()),
+    )
+    monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
+    monkeypatch.setattr(
+        cli,
+        "_batch_policy_registry",
+        lambda: SimpleNamespace(create=lambda _site: FakePolicy()),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_runtime_settings",
+        lambda *_args: SimpleNamespace(for_site=lambda _site: SimpleNamespace()),
+    )
+    monkeypatch.setattr(cli, "BatchMetricsWriter", lambda *_args, **_kwargs: FakeMetrics())
+
+    args = _parser().parse_args(["batch", "run", "--site", "mangaone"])
+    asyncio.run(cli._run_batch_run(args))
+
+    output = capsys.readouterr().out
+    assert "Archive maintenance warnings:" in output
+    assert warning in output
+    assert "planned: 0" in output
+
+
 def test_batch_plan_magapoke_shows_potential_premium_pass_without_browser(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1049,6 +1111,7 @@ def test_batch_plan_magapoke_shows_potential_premium_pass_without_browser(
             return SimpleNamespace(
                 candidates=normal if quota_resource is None else premium,
                 skipped=[],
+                warnings=["work='series' source=7: legacy archive name"],
                 direct_count=5 if quota_resource is None else 0,
                 quota_count=1 if quota_resource is None else 135,
                 quota_remaining=None,
@@ -1080,6 +1143,7 @@ def test_batch_plan_magapoke_shows_potential_premium_pass_without_browser(
     assert "Potential resource pass (premium_ticket):" in output
     assert "  candidates: 135" in output
     assert "  availability: checked during batch run" in output
+    assert output.count("work='series' source=7: legacy archive name") == 1
 
 
 @pytest.mark.parametrize("site", ["mangaone", "bookwalker"])

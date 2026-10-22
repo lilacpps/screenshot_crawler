@@ -118,7 +118,7 @@ Scope sync proofは単なる `complete=true` やWatchlist fingerprintと分離�
 - Incremental Discoveryはcomplete listingの証拠ではない。新規確実なin-scope Sourceの登録・位置更新はよいが、「今回見つからなかった」ことを理由に既存Sourceを取得担当外にしない。scope変更時の全Source再判定をincrementalのknown-streak結果だけで確定しない。
 - Discoveryがincomplete/exception/プロセスクラッシュなら同期成功マーカーを付けない。Incremental/partial Catalog mutationがscope eligibilityまたはposition inventoryへ影響する場合も古いFull proofを失効させる。更新途中に作られたSourceはBatchが見ないよう同期ゲートまたは保守的な初期フラグで守る。ジョブ排他も実装し、Discover/同期/Batch/renumberの同時変更を防ぐ。
 - Watchlistを直接手編集したケースもサポートする。Batch開始時には **軽量なfingerprint照合だけ** 行い、scope未同期なら実行しない。各SourceのWeb照合をBatchに持ち込まない。
-- Full/Incrementalによるlisting position変更がopt-in work_keyの既存ZIP名へ及ぼす影響を事前判定。必要ならrenumberが先。採番整合性未確認のまま同名ZIPを上書き・改名しない。
+- Full/Incremental listing-position changes may cause historical ZIP names to differ from the current plan; Batch reports that drift as a maintenance warning. Renumber existing files only when you choose to align them. Batch still stops on a detected collision at the current candidate ZIP/status path and never overwrites a detected file.
 
 ### 3.3 Scopeがない、disabled、orphan
 
@@ -162,8 +162,9 @@ opt-inしたwork_keyについて:
 - 対象外SourceのZIPは勝手に消去・rename・locator削除しない。既存パス占有を含む衝突ではapplyしない。
 - Opt-in workはそのwork_key全体でatomicなpreflight policyを適用する。参加Sourceのposition/key/scope証拠が不明、対象外既存ZIPとの衝突、Artifact locator/Status JSON不整合、またはCatalog/Watchlist fingerprint差異が1件でもあれば、他の正常なrenameだけを部分適用せずwork全体のapplyを拒否する。
 - 既存preflightのTEMP rename、rollback、status更新、Artifact locator更新を維持。手動で管理しているZIPや過去に複数Artifactがあるケースは曖昧性を拒否。異なるArchive同士の入れ替え/ずらしは対象全体をpreflightしなければならない。
-- 再取得時も現在の名前と既存ZIPを検査。自動overwriteをしない。
-- 名前の変更が必要な場合、**scope同期の完了とrenumber適用を別操作**にし、未解決collisionがある状態の後続Batchは停止。
+- Old ZIP names, ordinal drift, and historical status/Artifact inconsistencies are visible maintenance warnings. They do not alone block a new Batch or trigger a rename/repair.
+- A real file occupying the candidate ZIP or status path remains a hard stop. Check it before site access and again immediately before packaging; a collision detected at either check fails without overwriting that file, and post-crawl detection leaves the Item pending.
+- Current scope/naming plan, candidate metadata/identity, access policy, and quota/ticket gates remain fail-closed. Use the separate strict renumber command when you choose to align old archives and Catalog locators; Batch never repairs them automatically.
 
 ## 6. CLI / API契約（実装時に命名調整可）
 
@@ -303,7 +304,7 @@ python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --c
 - pure naming plan共通化、Batch新規ZIP命名と既存renumberを統一。
 - known paid/expired/completed/disabledを採番母集団に保持。
 - preflightで跨サイトのファイル名重複と非参加ファイル占有を検出し、fail/rollbackを維持。
-**Acceptance/tests**: zeblack 100話 + bookwalker 2巻=001～102、exclude有償には採番しない/対象内有償には採番、legacy未指定に回帰なし。途中追加で後続番号がずれた場合に明示renumberを要求。
+**Acceptance/tests**: Cross-site numbering and legacy compatibility; out-of-scope paid sources do not consume ordinals, while in-scope paid sources reserve them. Existing ordinal drift is a maintenance warning. If you choose to align existing archives, use explicit whole-work renumber; a collision at the current candidate ZIP/status path remains a hard stop.
 **Exit**: isolated ZIP/status/Artifactのdry-run / apply / collision / forced-failure rollback合格。P4 Reviewer **APPROVE / BLOCKING 0**。
 
 **実装結果**: Batchとrenumberは同じwork-wide numbering planを使用する。既存ZIPのhash/size、status JSON、全WorkにまたがるArtifact locator alias、collision、Watchlist/sync状態をapply前に検証する。managed Workのrenumberは全site一括のみで、`--site` partial applyは拒否する。`--json`はold/new、excluded rows、blockers、summary/resultを単一JSON documentで返す。既存ZIP/status/Catalog更新の途中失敗ではrollbackを検証し、状態が不確かな場合は成功と報告せずrecovery detailsを返す。
@@ -328,10 +329,10 @@ RenumberのArtifact locatorは旧ZIPパスの正本です。隔離status directo
 2. まずworking copyにmigrationを実行する: `python -m screenshot_crawler.cli catalog migrate --catalog <copy.sqlite> --backup-dir <copy-backups>`。Migration後にschema v7とbackupを確認し、既存7 tablesの既存columns/rows、Item status、Source IDs/positions、run/artifact/quota履歴が保持されていることを照合する。Migrationだけではscope syncもrenumberも行わない。
 3. Watchlist copyの対象workのうち、必要なproof hookがあるsite/keyでsuccessful Full Discoveryを行う。Scoped / archive-ordered workでhook未対応のsiteは、Fullが成功しても必要なproofを作れずpreviewはblockしたままになる。未対応workはhook実装まで停止する。Full Discoveryはevidenceだけを更新し、取得担当flagsは変更しない。
 4. `python -m screenshot_crawler.cli watch scope-sync --watchlist <copy-watchlist.yaml> --catalog <copy.sqlite> --work-key <work> --dry-run --json` を確認する。差分とarchive numbering impactが期待どおりの場合だけ、同じ引数に `--apply --json` を付ける。適用後はBatch planをcopyで検証する。
-5. Archive order workは、Booksとstatus directoryを隔離copyに設定し、`python scripts/renumber_archives.py --watchlist <copy-watchlist.yaml> --catalog <copy.sqlite> --work-key <work> --status-dir <copy-status> --dry-run --json` を実行する。衝突/ERROR/hash-size drift/status mismatch/ambiguous aliasがあれば解消方法を人手で決める。問題がなく、rename listを確認した後にのみ、copy上で `--apply --json` を実行する。担当外ZIPは自動削除/上書きしない。
-6. Copy上の結果・status・Artifact locators・hashを再検証し、restore手順を確認する。運用環境では同じ順序を使うが、DB migration、scope apply、renumberそれぞれの前に個別backupとpreview reviewを行い、曖昧なWorkは停止する。失敗時はmigration backup / rename rollback reportから復旧し、手動でstatusやCatalogを推測修正しない。
+5. Archive-order renumber is optional maintenance, only when you choose to align existing ZIP names and Catalog history. Scope sync does not require it: when scope is synced and the current candidate/output-path checks pass, Batch can plan and run. If you choose renumbering, point Books and status paths at isolated copies, run `python scripts/renumber_archives.py --watchlist <copy-watchlist.yaml> --catalog <copy.sqlite> --work-key <work> --status-dir <copy-status> --dry-run --json`, review every blocker and planned move, and apply only on that copy after review. Excluded ZIPs are not deleted or overwritten.
+6. Verify copied results, status files, Artifact locators, hashes, and restore steps. Operational rollout follows migration then scope sync; run renumber afterward only if you choose to align existing ZIPs. Take a separate backup and review a preview before each applied operation. Stop on ambiguous works and recover from migration backups or the renumber rollback report; do not guess at status or Catalog repairs.
 
-`renumber_archives.py --json`はsingle JSON outputを返す。未managedのlegacy workは既存互換のためWatchlist省略でも使えるが、Catalog上でmanagedと判定されたworkにはmatching Watchlistと同期済みsnapshotが必要。明示的opt-out後もmanaged historyがあるため、legacy namingに戻す場合もwhole-work preview/renumberが必要。
+`renumber_archives.py --json` returns one JSON document. An unmanaged legacy work may omit Watchlist for compatibility, while a managed work requires a matching Watchlist and synchronized snapshot. Explicit opt-out retains the legacy naming plan. If you choose to align existing ZIPs back to legacy names, review and apply a whole-work renumber; that optional maintenance is not a prerequisite for Batch when current candidate paths are free.
 
 ## 8. テスト観点（具体的な境界）
 

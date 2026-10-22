@@ -13,7 +13,7 @@ from pathlib import Path
 from screenshot_crawler.archive_order import build_work_archive_position_plan
 from screenshot_crawler.batch.archive_guard import (
     ArchiveNameGuardError,
-    validate_existing_archive_names,
+    inspect_existing_archive_names,
 )
 from screenshot_crawler.batch.models import (
     BatchCandidate,
@@ -78,6 +78,7 @@ class BatchPlanner:
     ) -> BatchPlan:
         current = _normalize_now(now_jst() if now is None else now)
         archive_positions_by_source: dict[int, int] = {}
+        archive_warnings: list[str] = []
         unmanaged_source_ids: set[int] = set()
         try:
             policy = self.policies.create(site)
@@ -161,7 +162,7 @@ class BatchPlanner:
                         archive_positions_by_source.update(
                             archive_plan.positions_by_source_id
                         )
-                self._validate_existing_archive_names(
+                archive_warnings = self._validate_existing_archive_names(
                     works=works,
                     items=items,
                     sources=[
@@ -185,7 +186,7 @@ class BatchPlanner:
         collision_source_ids = _collision_source_ids(items, sources, works_by_id)
         # A site-scoped plan only considers items with at least one source for that site.
         site_item_ids = set(sources_by_item)
-        plan = BatchPlan()
+        plan = BatchPlan(warnings=archive_warnings)
         try:
             quota_available = policy.available_quota(sources, current)
             plan.quota_available = quota_available
@@ -333,8 +334,8 @@ class BatchPlanner:
         targets_by_work: dict[str, list[WatchlistTarget]],
         work_keys: set[str],
         archive_positions_by_source: dict[int, int],
-    ) -> None:
-        """Block stale names or occupied targets before a Batch can access a site."""
+    ) -> list[str]:
+        """Collect historical-name warnings; output occupancy has its own hard gate."""
 
         works_by_id = {work.id: work for work in works}
         items_by_id = {item.id: item for item in items}
@@ -345,6 +346,7 @@ class BatchPlanner:
             if work is not None and work.work_key in work_keys:
                 sources_by_work[work.work_key].append(source)
 
+        warnings: list[str] = []
         for work_key in sorted(work_keys):
             if not targets_by_work.get(work_key):
                 continue
@@ -354,20 +356,18 @@ class BatchPlanner:
             work = works_by_id.get(items_by_id[work_sources[0].item_id].work_id)
             assert work is not None
             try:
-                validate_existing_archive_names(
-                    self.catalog,
-                    work=work,
-                    items=[item for item in items if item.work_id == work.id],
-                    sources=work_sources,
-                    archive_positions_by_source=archive_positions_by_source,
+                warnings.extend(
+                    inspect_existing_archive_names(
+                        self.catalog,
+                        work=work,
+                        items=[item for item in items if item.work_id == work.id],
+                        sources=work_sources,
+                        archive_positions_by_source=archive_positions_by_source,
+                    )
                 )
             except ArchiveNameGuardError as exc:
-                raise BatchPlanningError(
-                    f"{exc}; review `scripts/renumber_archives.py --watchlist "
-                    f"{self.scope_reconciler.watchlist.path if self.scope_reconciler else 'watchlist.yaml'} "
-                    f"--work-key {work_key} --dry-run`, then apply a full work-wide "
-                    "renumber before Batch"
-                ) from exc
+                raise BatchPlanningError(str(exc)) from exc
+        return warnings
 
     @staticmethod
     def _select_source(

@@ -654,7 +654,12 @@ Bounded Full Discoveryはlisting全体のfresh position/evidenceを安全に返�
 preview/applyで担当としてbootstrapできる。全既存作品にproof目的のFull Discoveryを強制する
 と従来のunbounded Batch運用へ不要な退行を生むためである。
 
-採番と取得権利を分離することで、将来購入予定のin-scope paid話は番号を予約し、取得担当外
-になった有償話は番号を消費しない。Catalogの履歴を削除せず、Batchとrenumberが同じpure
-work-wide planを利用し、scope変更後の古いZIPは明示renumberまで新規取得を止められる。
+2026-10-23 user-requested refinement: separating archive numbering from access rights reserves
+numbers for future in-scope paid sources and excludes out-of-scope sources. Batch and renumber
+still share the same pure work-wide plan. Historical ZIP naming drift, old status mismatches,
+and ambiguous old Artifacts are maintenance warnings and do not alone stop acquisition. Real
+candidate ZIP/status path collisions, stale current naming/scope/identity, access-policy failures,
+and other safety errors remain blocking conditions. Candidate paths are checked again immediately
+before packaging; a collision detected there fails without overwriting that file. Explicit strict
+renumber remains a separate operator-controlled maintenance operation.
 

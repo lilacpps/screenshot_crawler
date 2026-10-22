@@ -1184,7 +1184,11 @@ def _run_catalog(args: argparse.Namespace) -> None:
 
 
 def _print_batch_plan(
-    plan: BatchPlan, *, site: str, defer_quota: bool = False
+    plan: BatchPlan,
+    *,
+    site: str,
+    defer_quota: bool = False,
+    warning_seen: set[str] | None = None,
 ) -> None:
     """Print the stable, human-readable plan summary."""
 
@@ -1221,6 +1225,26 @@ def _print_batch_plan(
         print("Skipped:")
         for reason, count in sorted(Counter(item.reason for item in plan.skipped).items()):
             print(f"  {reason}: {count}")
+    _print_batch_warnings(plan, warning_seen=warning_seen)
+
+
+def _print_batch_warnings(
+    plan: object, *, warning_seen: set[str] | None = None
+) -> None:
+    """Show historical archive diagnostics without turning them into blockers."""
+
+    seen = warning_seen if warning_seen is not None else set()
+    messages = [
+        message
+        for message in getattr(plan, "warnings", ())
+        if isinstance(message, str) and message not in seen
+    ]
+    if not messages:
+        return
+    seen.update(messages)
+    print("Archive maintenance warnings:")
+    for message in messages:
+        print(f"  - {message}")
 
 
 def _print_batch_candidate(candidate: BatchCandidate) -> None:
@@ -1242,16 +1266,19 @@ def _run_batch_plan(args: argparse.Namespace) -> None:
     )
     plan = planner.plan(site=args.site)
     policy = policies.create(args.site)
+    warning_seen: set[str] = set()
     _print_batch_plan(
         plan,
         site=args.site,
         defer_quota=_policy_defers_quota_access(policy),
+        warning_seen=warning_seen,
     )
     for resource in _additional_access_resource_passes(policy):
         resource_plan = planner.plan(site=args.site, quota_resource=resource)
         print(f"Potential resource pass ({resource}):")
         print(f"  candidates: {len(resource_plan.candidates)}")
         print("  availability: checked during batch run")
+        _print_batch_warnings(resource_plan, warning_seen=warning_seen)
 
 
 def _additional_access_resource_passes(policy: object) -> tuple[str, ...]:
@@ -1596,6 +1623,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
     deferred_candidates: list[BatchCandidate] = []
     deferred_resource: str | None = None
     grant_only_all_preflight: dict[str, BatchPlan] = {}
+    warning_seen: set[str] = set()
     if grant_only_all:
         grant_only_resources = _grant_only_resource_passes(policy)
         # Establish that at least one currently eligible source exists before
@@ -1604,6 +1632,8 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             resource: planner.plan(site=args.site, quota_resource=resource)
             for resource in grant_only_resources
         }
+        for resource_plan in grant_only_all_preflight.values():
+            _print_batch_warnings(resource_plan, warning_seen=warning_seen)
         plan = None
         candidates: list[BatchCandidate] = []
         metrics_mode = "grant-only:all"
@@ -1629,6 +1659,8 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
         else:
             candidates = plan.candidates[:limit] if limit is not None else plan.candidates
         metrics_mode = "normal"
+    if plan is not None:
+        _print_batch_warnings(plan, warning_seen=warning_seen)
     metrics = BatchMetricsWriter("output/metrics", site=args.site, mode=metrics_mode)
     if plan is not None:
         metrics.record_planned_skips(plan.skipped)
@@ -1729,6 +1761,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                     site=args.site,
                     quota_resource=resource,
                 )
+                _print_batch_warnings(resource_plan, warning_seen=warning_seen)
                 metrics.record_planned_skips(resource_plan.skipped)
                 resource_candidates = resource_plan.candidates
                 deferred_pool_count = len(resource_candidates)
@@ -1840,6 +1873,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 if confirmed_grants:
                     granted_source_ids = {candidate.source_id for candidate in confirmed_grants}
                     post_plan = planner.plan(site=args.site)
+                    _print_batch_warnings(post_plan, warning_seen=warning_seen)
                     post_candidates = [
                         candidate
                         for candidate in post_plan.candidates
@@ -1902,6 +1936,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                     site=args.site,
                     quota_resource=quota_resource,
                 )
+                _print_batch_warnings(resource_plan, warning_seen=warning_seen)
                 resource_candidates = resource_plan.candidates
                 if remaining_limit is not None:
                     resource_candidates = resource_candidates[:remaining_limit]

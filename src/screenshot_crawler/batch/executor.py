@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import re
 import uuid
+import warnings
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -21,8 +22,9 @@ from screenshot_crawler.archive_order import (
     build_work_archive_position_plan,
 )
 from screenshot_crawler.batch.archive_guard import (
+    ArchiveHistoryWarning,
     ArchiveNameGuardError,
-    validate_existing_archive_names,
+    inspect_existing_archive_names,
 )
 from screenshot_crawler.batch.models import (
     BatchCandidate,
@@ -200,6 +202,7 @@ class BatchExecutor:
         self.scope_reconciler = (
             ScopeReconciler(watchlist, catalog) if watchlist is not None else None
         )
+        self._reported_archive_warnings: set[str] = set()
 
     @_catalog_job_locked
     async def execute_candidate(
@@ -310,6 +313,12 @@ class BatchExecutor:
             _record_observed_resource_consumption(self.catalog, candidate, policy, adapter)
             consumption_checked = True
             _require_normal_stop(crawl_result, candidate)
+            # The output directory is selected before site access. Recheck the
+            # final ZIP/status path immediately before packaging so a file that
+            # appeared during the crawl is preserved rather than replaced.
+            _validate_candidate_output_path(
+                candidate, library_dir=effective_library_dir
+            )
             package_kwargs = {
                 "library_dir": effective_library_dir,
                 "explicit_metadata": candidate.metadata,
@@ -920,7 +929,7 @@ class BatchExecutor:
                 "stale batch candidate: archive metadata no longer matches the Catalog"
             )
         try:
-            validate_existing_archive_names(
+            archive_warnings = inspect_existing_archive_names(
                 self.catalog,
                 work=work,
                 items=work_items,
@@ -932,14 +941,19 @@ class BatchExecutor:
                 ),
             )
         except ArchiveNameGuardError as exc:
-            raise BatchExecutionError(
-                f"Current work-wide archive naming is unresolved: {exc}. Run a full "
-                "work-wide renumber dry-run and resolve it before Batch"
-            ) from exc
+            raise BatchExecutionError(str(exc)) from exc
         _validate_candidate_output_path(
             candidate,
             library_dir=library_dir if library_dir is not None else self.library_dir,
         )
+        for message in archive_warnings:
+            self._warn_archive_history(message)
+
+    def _warn_archive_history(self, message: str) -> None:
+        if message in self._reported_archive_warnings:
+            return
+        self._reported_archive_warnings.add(message)
+        warnings.warn(message, ArchiveHistoryWarning, stacklevel=3)
 
     def _validate_candidate(
         self,
