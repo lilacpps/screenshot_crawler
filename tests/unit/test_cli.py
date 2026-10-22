@@ -1784,9 +1784,16 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+        def plan(
+            self,
+            *,
+            site: str,
+            quota_resource: str | None = None,
+            output_mode: str = "capture",
+        ) -> object:
             assert site == "zeblack"
             assert quota_resource == "work_ticket"
+            assert output_mode == "grant_only"
             return SimpleNamespace(candidates=[candidate], skipped=[])
 
     class FakePolicy:
@@ -2033,8 +2040,15 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+        def plan(
+            self,
+            *,
+            site: str,
+            quota_resource: str | None = None,
+            output_mode: str = "capture",
+        ) -> object:
             assert site == "magapoke"
+            assert output_mode == "grant_only"
             plans.append(quota_resource)
             if quota_resource == "resource_a":
                 candidates = [candidate("resource_a", 1), candidate("resource_a", 2)]
@@ -2140,8 +2154,15 @@ def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+        def plan(
+            self,
+            *,
+            site: str,
+            quota_resource: str | None = None,
+            output_mode: str = "capture",
+        ) -> object:
             assert site == "magapoke"
+            assert output_mode == "grant_only"
             return SimpleNamespace(
                 candidates=(
                     [candidate("resource_a", 1)]

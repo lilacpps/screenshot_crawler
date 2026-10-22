@@ -58,8 +58,22 @@ For a fully ordered work, the shared archive plan sorts Watchlist keys by
 Assigned Sources reserve ordinals regardless of access mode, availability or
 Item status; excluded Sources do not. No-order works retain legacy site-local
 naming. Batch reports historical cross-site ZIP/status naming drift as a maintenance warning.
-Actual candidate ZIP/status path occupancy, stale current naming/scope/identity, and
-access-policy failures remain hard stops before site access.
+The current candidate ZIP path must be absent. A sidecar may remain only when its
+completed state, exact planned `archive_path`, valid page count, and same-Source Catalog
+history are proven: either a matching structured output-directory identity plus at least
+one successful same-Item/Source/site/external-id run at its encoded timestamp with a ZIP
+Artifact, or, for tokenless legacy sidecars, unambiguous same-Item/Source filesystem
+Artifact references to that path backed by successful runs. Other locator aliases and
+additional same-Source runs do not invalidate structured proof; non-filesystem references
+are not used as local ownership proof in the tokenless fallback, but do not invalidate
+otherwise complete filesystem evidence. Foreign/malformed tokens, missing
+run ownership, unreadable or ambiguous state fail closed. A proven stale sidecar is
+refreshed as part of successful packaging; crawl or pre-package failure keeps its prior
+bytes. If packaging has generated the new ZIP/status pair but hashing or Catalog
+finalization then fails, keep the new pair for inspection rather than restoring the old
+sidecar. Grant-only and resolver passes do not produce archives and skip output
+occupancy checks; a later capture replan checks them. Stale current naming/scope/identity,
+an occupied candidate ZIP, and access-policy failures remain hard stops before site access.
 `scripts/renumber_archives.py --watchlist watchlist.yaml --catalog catalog.sqlite
 --work-key KEY --dry-run --json` previews all sites; managed work requires a
 whole-work `--apply --json`. ZIP hashes/sizes, sidecars and Catalog locators
@@ -1945,6 +1959,17 @@ pending failures are reported as partial failures without a rollback
 framework. Synthetic ZIP coverage is in
 `tests/unit/test_prepare_recrawl.py`; no real Catalog `--apply` run is part of
 the implementation verification.
+
+`prepare_recrawl.py --apply` deliberately leaves the old completion-status JSON
+in place after moving a ZIP and returning its Item to `pending`. A subsequent
+normal Batch may reuse that sidecar only when the candidate ZIP is absent and
+the status plus Catalog run/Artifact history proves the same Source, as described
+in the archive-output preflight above. This does not clear or rewrite the sidecar
+before the crawl: a crawl or pre-package failure leaves it byte-for-byte intact;
+successful packaging writes the refreshed status. If hashing or Catalog finalization
+fails after packaging generated the new ZIP/status pair, that pair remains for
+inspection; the prior sidecar is not restored over it. A foreign, malformed, or
+unprovable status remains a hard stop for operator review.
 
 BookWalker usage: `python scripts/prepare_recrawl.py --site bookwalker --catalog
 catalog.sqlite --show-all` performs a read-only scan. Exactly one root member

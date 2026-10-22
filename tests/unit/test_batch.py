@@ -24,6 +24,7 @@ from screenshot_crawler.site_policies import (
     MangaOneSitePolicy,
     SitePolicyError,
     SitePolicyRegistry,
+    ZeblackSitePolicy,
 )
 from screenshot_crawler.watchlist.reconcile import ScopeReconciler
 from screenshot_crawler.watchlist.service import WatchlistService
@@ -162,6 +163,111 @@ def magapoke_plan_for(service: CatalogService, *, now: datetime = NOW):
     return BatchPlanner(service, make_magapoke_registry(), watchlist=watchlist).plan(
         site="magapoke", now=now
     )
+
+
+def test_grant_only_plan_skips_output_occupancy_but_capture_plan_does_not(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="grant-output", title="Grant output"))
+    item, source = add_magapoke_source(
+        service,
+        work=work,
+        order_label="Episode 1",
+        external_id="grant-output-1",
+    )
+    service.update_source_external_state(
+        "magapoke", source.external_id, access_mode="quota"
+    )
+    watchlist = synchronized_legacy_watchlist(service)
+    library_dir = tmp_path / "Books"
+    planner = BatchPlanner(
+        service,
+        make_magapoke_registry(),
+        watchlist=watchlist,
+        library_dir=library_dir,
+    )
+    initial = planner.plan(
+        site="magapoke",
+        now=NOW,
+        quota_resource="work_ticket",
+        output_mode="grant_only",
+    )
+    candidate = next(value for value in initial.candidates if value.source_id == source.id)
+    stem, title, genre, _order, _author = archive_stem(candidate.metadata)
+    archive_path = library_dir / genre / title / f"{stem}.zip"
+    status_path = tmp_path / "crawl-status" / genre / title / f"{stem}.json"
+    archive_path.parent.mkdir(parents=True)
+    status_path.parent.mkdir(parents=True)
+    archive_path.write_bytes(b"occupied ZIP")
+    status_path.write_bytes(b"occupied status")
+
+    grant_plan = planner.plan(
+        site="magapoke",
+        now=NOW,
+        quota_resource="work_ticket",
+        output_mode="grant_only",
+    )
+    assert [value.source_id for value in grant_plan.candidates] == [source.id]
+    with pytest.raises(BatchPlanningError, match="Candidate output already exists"):
+        planner.plan(site="magapoke", now=NOW, quota_resource="work_ticket")
+    assert archive_path.read_bytes() == b"occupied ZIP"
+    assert status_path.read_bytes() == b"occupied status"
+    assert service.get_item(item.id).status == "pending"
+
+
+def test_deferred_normal_plan_only_checks_immediate_capture_candidates(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="zeblack-output", title="Zeblack"))
+    candidates = []
+    for label, access_mode in (("Episode 1", "free"), ("Episode 2", "quota")):
+        item = service.create_item(
+            ItemInput(item_title=label, order_label=label), work_id=work.id
+        )
+        source = service.create_source(
+            SourceInput(
+                site="zeblack",
+                external_id=f"zeblack-{label}",
+                access_mode=access_mode,
+            ),
+            item_id=item.id,
+        )
+        service.create_source_target(
+            SourceTargetInput(
+                backend="web", locator=f"https://example.invalid/{label}"
+            ),
+            source_id=source.id,
+        )
+        candidates.append(source)
+    watchlist = synchronized_legacy_watchlist(service)
+    library_dir = tmp_path / "Books"
+    policies = SitePolicyRegistry()
+    policies.register("zeblack", ZeblackSitePolicy)
+    planner = BatchPlanner(
+        service,
+        policies,
+        watchlist=watchlist,
+        library_dir=library_dir,
+    )
+    plan = planner.plan(site="zeblack", now=NOW)
+    assert {value.source_id for value in plan.candidates} == {
+        value.id for value in candidates
+    }
+    quota_candidate = next(
+        value for value in plan.candidates if value.consumes_quota
+    )
+    stem, title, genre, _order, _author = archive_stem(quota_candidate.metadata)
+    archive_path = library_dir / genre / title / f"{stem}.zip"
+    archive_path.parent.mkdir(parents=True)
+    archive_path.write_bytes(b"grant-pool occupancy")
+
+    replanned = planner.plan(site="zeblack", now=NOW)
+    assert {value.source_id for value in replanned.candidates} == {
+        value.id for value in candidates
+    }
+    assert archive_path.read_bytes() == b"grant-pool occupancy"
 
 
 def add_magapoke_source(

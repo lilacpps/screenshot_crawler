@@ -24,7 +24,10 @@ from screenshot_crawler.archive_order import (
 from screenshot_crawler.batch.archive_guard import (
     ArchiveHistoryWarning,
     ArchiveNameGuardError,
+    CandidateOutputPathError,
+    CandidateOutputPreflight,
     inspect_existing_archive_names,
+    validate_candidate_output_paths,
 )
 from screenshot_crawler.batch.models import (
     BatchCandidate,
@@ -233,7 +236,7 @@ class BatchExecutor:
                     f"unsupported batch backend: {candidate.backend!r}"
                 )
             policy = self.policies.create(candidate.site)
-            self._validate_candidate(
+            output_preflight = self._validate_candidate(
                 candidate, policy, current, library_dir=effective_library_dir
             )
             local_skip_reason = self.resource_state_skip_reason(
@@ -316,9 +319,15 @@ class BatchExecutor:
             # The output directory is selected before site access. Recheck the
             # final ZIP/status path immediately before packaging so a file that
             # appeared during the crawl is preserved rather than replaced.
-            _validate_candidate_output_path(
-                candidate, library_dir=effective_library_dir
-            )
+            try:
+                _validate_candidate_output_path(
+                    self.catalog,
+                    candidate,
+                    library_dir=effective_library_dir,
+                    baseline=output_preflight,
+                )
+            except CandidateOutputPathError as exc:
+                raise BatchExecutionError(str(exc)) from exc
             package_kwargs = {
                 "library_dir": effective_library_dir,
                 "explicit_metadata": candidate.metadata,
@@ -539,6 +548,7 @@ class BatchExecutor:
                 candidate,
                 expected_quota_resource=quota_resource,
                 library_dir=self.library_dir,
+                check_output_paths=False,
             )
         adapter = self.adapters.create(next(iter(sites)))
         guard = AccessGuard.from_profile(
@@ -660,7 +670,9 @@ class BatchExecutor:
                 raise BatchExecutionError("grant-only candidate has no access resource")
             policy = self.policies.create(candidate.site)
             policy.validate_grant_only_resource(candidate.quota_resource)
-            self._validate_candidate(candidate, policy, current)
+            self._validate_candidate(
+                candidate, policy, current, output_mode="grant_only"
+            )
             local_skip_reason = self.resource_state_skip_reason(
                 candidate, policy=policy, now=current
             )
@@ -818,7 +830,8 @@ class BatchExecutor:
         target=None,
         expected_quota_resource: str | None = None,
         library_dir: Path | None = None,
-    ) -> None:
+        check_output_paths: bool = True,
+    ) -> CandidateOutputPreflight | None:
         """Validate Catalog identity and scope before policy or site access."""
         if self.scope_reconciler is None:
             raise BatchExecutionError(
@@ -942,12 +955,25 @@ class BatchExecutor:
             )
         except ArchiveNameGuardError as exc:
             raise BatchExecutionError(str(exc)) from exc
-        _validate_candidate_output_path(
-            candidate,
-            library_dir=library_dir if library_dir is not None else self.library_dir,
-        )
+        output_preflight = None
+        if check_output_paths:
+            try:
+                output_preflight = _validate_candidate_output_path(
+                    self.catalog,
+                    candidate,
+                    library_dir=library_dir if library_dir is not None else self.library_dir,
+                )
+            except CandidateOutputPathError as exc:
+                raise BatchExecutionError(str(exc)) from exc
         for message in archive_warnings:
             self._warn_archive_history(message)
+        if output_preflight is not None and output_preflight.stale_status is not None:
+            self._warn_archive_history(
+                f"Candidate output for item={candidate.item_id}, source={candidate.source_id} "
+                "has a completed status with proven same-Source history but no current ZIP; "
+                "a successful capture will refresh it"
+            )
+        return output_preflight
 
     def _warn_archive_history(self, message: str) -> None:
         if message in self._reported_archive_warnings:
@@ -962,8 +988,12 @@ class BatchExecutor:
         now: datetime,
         *,
         library_dir: Path | None = None,
-    ) -> None:
+        output_mode: str = "capture",
+    ) -> CandidateOutputPreflight | None:
         """Reject a plan whose required Catalog identity/state is stale."""
+
+        if output_mode not in {"capture", "grant_only"}:
+            raise BatchExecutionError(f"unsupported candidate output mode: {output_mode!r}")
 
         try:
             item = self.catalog.get_item(candidate.item_id)
@@ -972,12 +1002,13 @@ class BatchExecutor:
         except CatalogError as exc:
             raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
 
-        self._require_candidate_scope(
+        output_preflight = self._require_candidate_scope(
             candidate,
             item=item,
             source=source,
             target=target,
             library_dir=library_dir,
+            check_output_paths=output_mode == "capture",
         )
         mismatches: list[str] = []
         if candidate.quota_resource is not None:
@@ -1040,6 +1071,7 @@ class BatchExecutor:
         if mismatches:
             details = ", ".join(mismatches)
             raise BatchExecutionError(f"stale batch candidate: {details}")
+        return output_preflight
 
 
 def _require_normal_stop(result: RunResult, candidate: BatchCandidate) -> None:
@@ -1051,9 +1083,36 @@ def _require_normal_stop(result: RunResult, candidate: BatchCandidate) -> None:
 
 
 def _validate_candidate_output_path(
-    candidate: BatchCandidate, *, library_dir: Path
-) -> None:
-    """Refuse an occupied final ZIP/status path before any site or quota action."""
+    catalog: CatalogService,
+    candidate: BatchCandidate,
+    *,
+    library_dir: Path,
+    baseline: CandidateOutputPreflight | None = None,
+) -> CandidateOutputPreflight:
+    """Check planned outputs before access and again before packaging."""
+
+    try:
+        item = catalog.get_item(candidate.item_id)
+        source = catalog.get_source(candidate.source_id)
+        target = catalog.get_source_target(candidate.target_id)
+        work = catalog.get_work(item.work_id)
+    except CatalogError as exc:
+        raise CandidateOutputPathError(
+            f"Candidate identity changed before packaging: {exc}"
+        ) from exc
+    if (
+        item.id != candidate.item_id
+        or item.work_id != candidate.work_id
+        or source.item_id != item.id
+        or source.id != candidate.source_id
+        or target.source_id != source.id
+        or target.id != candidate.target_id
+        or target.locator != candidate.locator
+        or target.backend != candidate.backend
+    ):
+        raise CandidateOutputPathError(
+            "Candidate Item/Source/Target changed before output packaging"
+        )
 
     stem, title, genre, _order, _author = archive_stem(
         candidate.metadata,
@@ -1064,11 +1123,16 @@ def _validate_candidate_output_path(
     status_path = (
         library_dir.parent / "crawl-status" / genre / title / f"{stem}.json"
     )
-    if archive_path.exists() or status_path.exists():
-        raise BatchExecutionError(
-            f"Candidate output already exists at {archive_path} or {status_path}; "
-            "Batch will not overwrite an existing archive/status pair"
-        )
+    return validate_candidate_output_paths(
+        catalog,
+        work=work,
+        item=item,
+        source=source,
+        target=target,
+        archive_path=archive_path,
+        status_path=status_path,
+        baseline=baseline,
+    )
 
 
 def _hash_archive(path: Path, *, chunk_size: int = 1024 * 1024) -> tuple[str, int]:

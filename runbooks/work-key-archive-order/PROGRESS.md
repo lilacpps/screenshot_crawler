@@ -757,3 +757,65 @@ and the next blocking issue. Do not label planning as implemented.
 - Final Ruff check on all changed production/test files: **All checks passed**;
   `git diff --check` passed (Git emitted only its configured LF-to-CRLF advisory).
   Final independent review of source, tests, and documentation: **APPROVE / BLOCKING 0**.
+
+## 2026-10-23: Same-Source stale status after recrawl preparation
+
+- Work was performed on `feature/work-key-archive-order` from the root-provided
+  task branch. This implementation did not edit or stage `crawler.yaml`,
+  `watchlist.yaml`, `watchlist.bak.yaml`, or `.catalog.sqlite.job.lock`. Root's
+  hash audit confirmed the three YAML files unchanged; the lock was left untouched
+  and was not content-hash audited. `debug.log` had an additional 198-byte suffix
+  of unknown attribution while its recorded starting prefix remained intact, and
+  was not reverted or staged.
+- This user-directed follow-up refines the earlier statement above that any
+  candidate status-path occupancy blocks Batch. The candidate ZIP path remains
+  exclusive. A completed sidecar at that exact candidate path is reusable only
+  with an exact `archive_path`, valid `page_count`, and same-Source proof: either
+  the structured output-directory site/Item/Source/timestamp token plus at least
+  one successful matching run with a ZIP Artifact for the Item, or the tokenless
+  legacy fallback where filesystem Artifact references at that path are
+  unambiguously owned by successful runs for the same Item/Source. Explicit
+  malformed/foreign tokens, missing run ownership, unreadable status, and
+  ambiguous legacy filesystem history remain hard failures. Non-filesystem
+  Artifact locators do not establish local ownership in the tokenless fallback,
+  but do not invalidate otherwise complete filesystem proof. Structured proof
+  is not defeated by unrelated old locator aliases or additional same-Source
+  runs.
+- This allows `scripts/prepare_recrawl.py --apply` to move an old ZIP, update its
+  Artifact locator to the backup, set the Item pending, and leave its old status
+  JSON in place. A normal capture can proceed when the new ZIP is absent and the
+  sidecar passes the same-Source proof. Grant-only and resolver passes create no
+  ZIP/status pair and therefore skip output-occupancy checks; capture re-plans
+  restore them. Scope/ownership/current candidate/metadata/Site Policy guards
+  remain strict.
+- The stale sidecar is refreshed as part of successful packaging. Crawl and
+  pre-package failures preserve its original bytes; a sidecar changed during
+  crawl blocks packaging and remains untouched. If packaging generated the new
+  ZIP/status pair but subsequent hashing or Catalog finalization fails, keep the
+  new pair for inspection and do not restore the old status over it.
+- A focused ownership/recrawl/grant/deferred/CLI run passed **16 tests**, 124
+  existing warnings, 0 skipped (8.01 seconds). A second CLI grant-pass run
+  passed **3 tests**, 10 warnings, 0 skipped (0.88 seconds). These cover the
+  real synthetic `prepare_recrawl --apply` workflow, structured proof, tokenless
+  same-source / foreign / no-run / non-filesystem cases, status-change races,
+  grant-only/deferred output-mode propagation, and successful packaging refresh.
+- Root's selected local-browser Batch Integration run passed **64 tests**, 25
+  warnings, 0 skipped (155.52 seconds) on the revision before the final narrow
+  filesystem-backend filter for tokenless legacy proof; the browser path does
+  not exercise that status-only fallback. The final filter has a focused
+  non-filesystem regression and is included in the affected Unit rerun below.
+- Root's first affected Unit run passed **597 tests** and had one test-fixture
+  failure: a legacy fake planner did not accept the newly explicit grant-only
+  output mode. The fixture now accepts and asserts `output_mode="grant_only"`;
+  the focused test passed (3 grant-only CLI tests total, above). The affected
+  rerun passed **598 tests**, 1,735 warnings, 0 skipped in 131.20 seconds; its
+  283-file source/test hash audit found no unexpected changes. Root's complete
+  Ruff check for source, tests, and the two recrawl/renumber scripts passed.
+- No full suite was selected: the production change is limited to Batch output
+  path preflight and explicit grant/capture mode propagation; Catalog schema,
+  Discovery, adapters, naming plan, and renumber behavior are unchanged. The
+  affected Batch/CLI/prepare-recrawl Unit modules and selected local-browser
+  Batch paths were run. No operational Catalog/Watchlist/Books mutation, live-site
+  action, or paid/quota action was performed.
+- Final independent review of source, tests, documentation, and verification
+  evidence for this recrawl-status follow-up: **APPROVE / BLOCKING 0**.

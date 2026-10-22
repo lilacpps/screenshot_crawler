@@ -1629,7 +1629,11 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
         # Establish that at least one currently eligible source exists before
         # connecting the browser. Each pass still replans after prior grants.
         grant_only_all_preflight = {
-            resource: planner.plan(site=args.site, quota_resource=resource)
+            resource: planner.plan(
+                site=args.site,
+                quota_resource=resource,
+                output_mode="grant_only",
+            )
             for resource in grant_only_resources
         }
         for resource_plan in grant_only_all_preflight.values():
@@ -1642,7 +1646,11 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             policy.validate_grant_only_resource(grant_only)
         except SitePolicyError as exc:
             raise BatchPlanningError(str(exc)) from exc
-        plan = planner.plan(site=args.site, quota_resource=grant_only)
+        plan = planner.plan(
+            site=args.site,
+            quota_resource=grant_only,
+            output_mode="grant_only",
+        )
         candidates = plan.candidates
         if defer_quota:
             _immediate_candidates, candidates, _deferred_resource = (
@@ -1760,6 +1768,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 resource_plan = planner.plan(
                     site=args.site,
                     quota_resource=resource,
+                    output_mode="grant_only",
                 )
                 _print_batch_warnings(resource_plan, warning_seen=warning_seen)
                 metrics.record_planned_skips(resource_plan.skipped)

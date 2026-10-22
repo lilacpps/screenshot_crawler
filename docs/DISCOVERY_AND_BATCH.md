@@ -2084,18 +2084,41 @@ mode, availability or paid state. Unordered works retain the prior site-local
 operation across sites.
 
 Before Batch creates an archive, a work-wide preflight still validates the current
-Watchlist/scope snapshot, source identity, metadata, and the candidate output ZIP
-and status paths. Historical ZIP stems, expected ordinal differences, old status
-mismatches, and ambiguous historical Artifact records are shown as maintenance
-warnings; they do not by themselves block planning or acquisition. Batch never
-renames, deletes, overwrites, or repairs those historical files or Catalog rows.
-A real file occupying the candidate ZIP or status path remains a hard error,
-including when it appears during a crawl and is still present at the final check:
-the executor checks immediately before packaging and preserves a detected file. Stale current
-naming plans, unsafe candidate paths, identity/scope mismatches, and access-policy
-failures remain fail-closed. Use `scripts/renumber_archives.py` separately when
-you choose to align existing archives and Catalog locators with current numbering;
-its strict collision, hash/size, status, alias, CAS and rollback checks are unchanged.
+Watchlist/scope snapshot, source identity, metadata, and candidate output paths.
+Historical ZIP stems, expected ordinal differences, old status mismatches, and
+ambiguous historical Artifact records are maintenance warnings; they do not by
+themselves block planning or acquisition. Batch never renames, deletes, or repairs
+historical files or Catalog rows.
+
+The candidate ZIP path must be absent. A candidate status sidecar normally must
+also be absent, except when it is a completed JSON record whose `archive_path`
+equals the planned ZIP, whose page count is valid, and whose source identity is
+proven by either the structured Batch output-directory token plus a successful
+same-Item/Source/site/external-id CrawlRun with a ZIP Artifact, or unambiguous
+same-Item/Source filesystem Artifact references for a legacy tokenless sidecar.
+A structured token naming another Item/Source/site, or lacking a successful
+matching run at its encoded timestamp with at least one same-Item ZIP Artifact,
+is a hard error. Unrelated old locator aliases and multiple successful runs for
+the same Item/Source do not invalidate a matching structured proof. For the
+tokenless legacy fallback only, every filesystem Artifact reference at the
+candidate path must have unambiguous successful same-Item/Source run ownership;
+non-filesystem references are not used as local-path proof, but do not invalidate
+otherwise complete filesystem evidence. Unreadable or incomplete evidence remains a hard error. This
+permits `prepare_recrawl.py --apply` to move an old ZIP and return its Item to
+pending while retaining the sidecar. Batch warns, then refreshes that sidecar as
+part of successful packaging. A crawl or pre-package failure leaves the old
+sidecar intact; a sidecar changed during the crawl blocks packaging and is
+preserved. If packaging has generated the new ZIP/status pair and later hashing
+or Catalog finalization fails, that pair remains for inspection under the existing
+post-package failure contract; Batch does not restore the stale sidecar over it.
+The executor repeats the ZIP/status check immediately before
+packaging. Stale current naming plans, unsafe output state, identity/scope
+mismatches, and access-policy failures remain fail-closed. Grant-only and
+resolver passes create no output and skip occupancy checks; capture replanning
+restores them. Use
+`scripts/renumber_archives.py` separately when you choose to align existing
+archives and Catalog locators; its strict collision, hash/size, status, alias,
+CAS and rollback checks are unchanged.
 See [BOOK_NAMING_RULES.md](BOOK_NAMING_RULES.md) and the
 [work-key runbook](../runbooks/work-key-archive-order/README.md) for details.
 

@@ -1,5 +1,8 @@
 import asyncio
+import hashlib
+import importlib.util
 import json
+import sys
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -21,6 +24,7 @@ from screenshot_crawler.batch.executor import (
     _cancel_task_bounded,
     _write_success_entry_trace,
 )
+from screenshot_crawler.batch.naming import archive_metadata_for_catalog
 from screenshot_crawler.catalog import (
     ArtifactInput,
     CatalogService,
@@ -33,7 +37,11 @@ from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
 from screenshot_crawler.core.models import RunConfig
-from screenshot_crawler.core.packaging import PackageResult, archive_stem
+from screenshot_crawler.core.packaging import (
+    PackageResult,
+    archive_stem,
+    package_crawl_output,
+)
 from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.runtime_settings import SiteRuntimeSettings, load_runtime_settings
@@ -113,6 +121,19 @@ class FakeRunner:
         if self.fail:
             raise RuntimeError("crawler failed")
         return RunResult(pages=(), stop_state=PageState.END, stop_reason="end")
+
+
+class EmptyManifestRunner:
+    def __init__(self, config: RunConfig) -> None:
+        self.config = config
+
+    async def run(self, _page: object, _adapter: FakeAdapter) -> RunResult:
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        (self.config.output_dir / "page-0001.png").write_bytes(b"synthetic page")
+        (self.config.output_dir / "manifest.json").write_text(
+            json.dumps({"pages": [{"file": "page-0001.png"}]}), encoding="utf-8"
+        )
+        return RunResult(pages=(object(),), stop_state=PageState.END, stop_reason="end")  # type: ignore[arg-type]
 
 
 def test_batch_executor_defaults_to_standard_books_directory(tmp_path: Path) -> None:
@@ -206,8 +227,11 @@ def add_candidate(
     access_granted_until: str | None = None,
     site: str = "mangaone",
     display_position: int | None = None,
+    genre: str | None = None,
 ) -> BatchCandidate:
-    work = service.create_work(WorkInput(work_key=f"work-{access_mode}", title="作品A"))
+    work = service.create_work(
+        WorkInput(work_key=f"work-{access_mode}", title="作品A", genre=genre)
+    )
     item = service.create_item(
         ItemInput(order_label="第01話"), work_id=work.id
     )
@@ -237,12 +261,69 @@ def add_candidate(
         target_key=target.target_key,
         locator=target.locator,
         access_strategy="quota" if consumes_quota else "direct",
-        metadata={"title": "作品A", "order": "第01話"},
+        metadata=archive_metadata_for_catalog(work, item, source),
         access_mode=access_mode,
         consumes_quota=consumes_quota,
         external_id=source.external_id,
         work_id=work.id,
     )
+
+
+def _seed_proven_stale_status(
+    service: CatalogService,
+    candidate: BatchCandidate,
+    *,
+    library_dir: Path,
+    output_root: Path,
+) -> tuple[Path, Path, bytes, Path]:
+    stem, title, genre, _order, _author = archive_stem(
+        candidate.metadata,
+        artifact_prefix=candidate.artifact_prefix,
+        artifact_disambiguator=candidate.artifact_disambiguator,
+    )
+    archive_path = library_dir / genre / title / f"{stem}.zip"
+    status_path = library_dir.parent / "crawl-status" / genre / title / f"{stem}.json"
+    backup_path = output_root / "prepare-recrawl-backup" / "old.zip"
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_bytes = b"previous archive moved by prepare_recrawl"
+    backup_path.write_bytes(backup_bytes)
+
+    run = service.create_crawl_run(
+        item_id=candidate.item_id,
+        source_id=candidate.source_id,
+        target_id=candidate.target_id,
+        access_strategy=candidate.access_strategy,
+        started_at=NOW,
+    )
+    service.finalize_successful_crawl(
+        run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256=hashlib.sha256(backup_bytes).hexdigest(),
+            byte_size=len(backup_bytes),
+            storage_backend="filesystem",
+            locator=backup_path.as_posix(),
+            state="present",
+        ),
+        page_count=1,
+        stop_reason="end",
+        finished_at=NOW,
+    )
+    service.mark_item_pending(candidate.item_id)
+    source_output_dir = batch_executor_module._new_output_dir(
+        output_root / "old-batch", candidate, NOW
+    )
+    status_payload = {
+        "status": "completed",
+        "archive_path": archive_path.as_posix(),
+        "page_count": 1,
+        "source_output_dir": source_output_dir.as_posix(),
+        "source_removed": True,
+    }
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(json.dumps(status_payload), encoding="utf-8")
+    return archive_path, status_path, status_path.read_bytes(), backup_path
 
 
 async def test_piccoma_batch_yaml_delay_reaches_runner_config(tmp_path: Path) -> None:
@@ -442,6 +523,17 @@ async def test_historical_name_warning_is_kept_on_grant_and_resolver_paths(
         service,
         AccessConsumption(True, "work_ticket", consumed_at),
     )
+    stem, title, genre, _order, _author = archive_stem(candidate.metadata)
+    planned_archive = executor.library_dir / genre / title / f"{stem}.zip"
+    planned_status = (
+        executor.library_dir.parent / "crawl-status" / genre / title / f"{stem}.json"
+    )
+    planned_archive.parent.mkdir(parents=True, exist_ok=True)
+    planned_status.parent.mkdir(parents=True, exist_ok=True)
+    planned_archive.write_bytes(b"unrelated occupied archive")
+    planned_status.write_bytes(b"unrelated occupied status")
+    planned_archive_bytes = planned_archive.read_bytes()
+    planned_status_bytes = planned_status.read_bytes()
 
     if entrypoint == "grant_only":
         with pytest.warns(ArchiveHistoryWarning, match="current expected name"):
@@ -482,6 +574,8 @@ async def test_historical_name_warning_is_kept_on_grant_and_resolver_paths(
         assert service.get_item(candidate.item_id).status == "pending"
 
     assert old_archive.read_bytes() == old_bytes
+    assert planned_archive.read_bytes() == planned_archive_bytes
+    assert planned_status.read_bytes() == planned_status_bytes
 
 
 @pytest.mark.parametrize("occupied_kind", ["archive", "status"])
@@ -561,6 +655,427 @@ async def test_occupied_candidate_archive_path_blocks_quota_access(
     assert service.get_quota_resource_state(
         candidate.work_id, site="magapoke", resource="work_ticket"
     ) is None
+
+
+@pytest.mark.parametrize("fail_crawl", [False, True])
+@pytest.mark.parametrize("duplicate_history_run", [False, True])
+async def test_proven_stale_same_source_status_is_refreshed_only_after_success(
+    tmp_path: Path, fail_crawl: bool, duplicate_history_run: bool
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free", genre="\u6f2b\u753b")
+    library_dir = service.path.parent / "Books"
+    archive_path, status_path, old_status, backup_path = _seed_proven_stale_status(
+        service,
+        candidate,
+        library_dir=library_dir,
+        output_root=tmp_path / "history",
+    )
+    if duplicate_history_run:
+        duplicate = service.create_crawl_run(
+            item_id=candidate.item_id,
+            source_id=candidate.source_id,
+            target_id=candidate.target_id,
+            access_strategy=candidate.access_strategy,
+            started_at=NOW,
+        )
+        service.mark_crawl_run_succeeded(
+            duplicate.id, page_count=1, stop_reason="same timestamp, no ZIP"
+        )
+    executor = make_executor(service, fail_crawl=fail_crawl)
+    if not fail_crawl:
+        executor.package_function = package_crawl_output
+        executor.runner_factory = EmptyManifestRunner  # type: ignore[assignment]
+
+    if fail_crawl:
+        with pytest.warns(ArchiveHistoryWarning, match="proven same-Source history"), pytest.raises(
+            BatchExecutionError, match="crawler failed"
+        ):
+            await executor.execute_candidate(
+                object(),
+                candidate,
+                output_root=tmp_path / "new-batch",
+                library_dir=library_dir,
+                now=NOW + timedelta(minutes=1),
+            )
+    else:
+        with pytest.warns(ArchiveHistoryWarning, match="proven same-Source history"):
+            result = await executor.execute_candidate(
+                object(),
+                candidate,
+                output_root=tmp_path / "new-batch",
+                library_dir=library_dir,
+                now=NOW + timedelta(minutes=1),
+            )
+
+    assert backup_path.read_bytes() == b"previous archive moved by prepare_recrawl"
+    if fail_crawl:
+        assert status_path.read_bytes() == old_status
+        assert not archive_path.exists()
+        assert service.get_item(candidate.item_id).status == "pending"
+        assert service.list_crawl_runs(source_id=candidate.source_id)[-1].status == "failed"
+    else:
+        assert result.archive_path.is_file()
+        assert archive_path.is_file(), result.archive_path
+        refreshed = json.loads(status_path.read_text(encoding="utf-8"))
+        old = json.loads(old_status)
+        assert refreshed["status"] == "completed"
+        assert refreshed["archive_path"] == archive_path.as_posix()
+        assert refreshed["source_output_dir"] != old["source_output_dir"]
+        assert service.get_item(candidate.item_id).status == "completed"
+
+
+async def test_prepare_recrawl_moved_archive_with_sidecar_can_batch_recrawl(
+    tmp_path: Path,
+) -> None:
+    script_path = Path(__file__).parents[2] / "scripts" / "prepare_recrawl.py"
+    spec = importlib.util.spec_from_file_location("prepare_recrawl_for_batch_test", script_path)
+    assert spec is not None and spec.loader is not None
+    prepare_recrawl = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = prepare_recrawl
+    spec.loader.exec_module(prepare_recrawl)
+
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(
+        service, access_mode="free", genre="\u6f2b\u753b"
+    )
+    library_dir = tmp_path / "Books"
+    archive_path = library_dir / archive_stem(candidate.metadata)[2] / archive_stem(
+        candidate.metadata
+    )[1] / f"{archive_stem(candidate.metadata)[0]}.zip"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr("page-0001.png", b"synthetic old page")
+
+    run = service.create_crawl_run(
+        item_id=candidate.item_id,
+        source_id=candidate.source_id,
+        target_id=candidate.target_id,
+        access_strategy=candidate.access_strategy,
+        started_at=NOW,
+    )
+    old_bytes = archive_path.read_bytes()
+    _, old_artifact, _ = service.finalize_successful_crawl(
+        run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256=hashlib.sha256(old_bytes).hexdigest(),
+            byte_size=len(old_bytes),
+            storage_backend="filesystem",
+            locator=archive_path.as_posix(),
+            state="present",
+        ),
+        page_count=1,
+        stop_reason="end",
+        finished_at=NOW,
+    )
+    old_source_output_dir = batch_executor_module._new_output_dir(
+        tmp_path / "first-run", candidate, NOW
+    )
+    _stem, title, genre, _order, _author = archive_stem(candidate.metadata)
+    status_path = tmp_path / "crawl-status" / genre / title / f"{archive_path.stem}.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    old_status = json.dumps(
+        {
+            "status": "completed",
+            "archive_path": archive_path.as_posix(),
+            "page_count": 1,
+            "source_output_dir": old_source_output_dir.as_posix(),
+            "source_removed": True,
+        }
+    ).encode()
+    status_path.write_bytes(old_status)
+
+    report = prepare_recrawl.scan_catalog(service, site="mangaone")
+    assert len(report.results) == 1
+    assert report.results[0].classification.value == "FALLBACK_INCLUDED"
+    applied = prepare_recrawl.apply_scan_results(
+        service,
+        report,
+        library_dir=library_dir,
+        backup_root=tmp_path / "recrawl-backup",
+        timestamp="fixture",
+    )
+    assert applied.failed == 0
+    assert applied.archives_moved == 1
+    assert applied.items_returned_pending == 1
+    assert status_path.read_bytes() == old_status
+    assert not archive_path.exists()
+    moved_artifact = service.get_artifact(old_artifact.id)
+    backup_path = Path(moved_artifact.locator)
+    assert backup_path.is_file()
+    assert backup_path.read_bytes() == old_bytes
+    assert service.get_item(candidate.item_id).status == "pending"
+
+    executor = make_executor(service)
+    executor.package_function = package_crawl_output
+    executor.runner_factory = EmptyManifestRunner  # type: ignore[assignment]
+    with pytest.warns(ArchiveHistoryWarning, match="proven same-Source history"):
+        result = await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "second-run",
+            library_dir=library_dir,
+            now=NOW + timedelta(minutes=1),
+        )
+    assert result.archive_path == archive_path
+    assert archive_path.is_file()
+    assert backup_path.read_bytes() == old_bytes
+    assert service.get_artifact(old_artifact.id).locator == moved_artifact.locator
+    assert service.get_item(candidate.item_id).status == "completed"
+    refreshed = json.loads(status_path.read_text(encoding="utf-8"))
+    assert refreshed["status"] == "completed"
+    assert refreshed["archive_path"] == archive_path.as_posix()
+    assert refreshed["source_output_dir"] != old_source_output_dir.as_posix()
+
+
+async def test_proven_status_changed_during_crawl_is_preserved_and_not_replaced(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    library_dir = tmp_path / "Books"
+    archive_path, status_path, old_status, _backup_path = _seed_proven_stale_status(
+        service,
+        candidate,
+        library_dir=library_dir,
+        output_root=tmp_path / "history",
+    )
+    changed_status = old_status + b" \n"
+    package_calls: list[tuple[dict[str, str], dict[str, str], str | None, str | None]] = []
+
+    def update_status_during_crawl(_config: RunConfig) -> None:
+        status_path.write_bytes(changed_status)
+
+    executor = make_executor(
+        service,
+        during_run=update_status_during_crawl,
+        package_calls=package_calls,
+    )
+    with pytest.warns(
+        ArchiveHistoryWarning, match="proven same-Source history"
+    ), pytest.raises(BatchExecutionError, match="status changed during crawl"):
+        await executor.execute_candidate(
+            object(), candidate, library_dir=library_dir, now=NOW + timedelta(minutes=1)
+        )
+
+    assert status_path.read_bytes() == changed_status
+    assert not archive_path.exists()
+    assert package_calls == []
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.list_crawl_runs(source_id=candidate.source_id)[-1].status == "failed"
+
+
+async def test_foreign_structured_status_never_falls_back_to_same_path_artifact(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    library_dir = tmp_path / "Books"
+    archive_path, status_path, old_status, _backup_path = _seed_proven_stale_status(
+        service,
+        candidate,
+        library_dir=library_dir,
+        output_root=tmp_path / "history",
+    )
+    same_path_artifact = service.list_artifacts(item_id=candidate.item_id)[0]
+    service.update_artifact_storage(
+        same_path_artifact.id, locator=archive_path.as_posix(), state="present"
+    )
+    payload = json.loads(old_status)
+    foreign_candidate = replace(candidate, source_id=candidate.source_id + 100)
+    payload["source_output_dir"] = batch_executor_module._new_output_dir(
+        tmp_path / "foreign-run", foreign_candidate, NOW
+    ).as_posix()
+    status_path.write_text(json.dumps(payload), encoding="utf-8")
+    old_runs = service.list_crawl_runs(source_id=candidate.source_id)
+    executor = make_executor(service)
+
+    with pytest.raises(BatchExecutionError, match="different Item/Source/site"):
+        await executor.execute_candidate(
+            object(), candidate, library_dir=library_dir, now=NOW + timedelta(minutes=1)
+        )
+
+    assert status_path.read_text(encoding="utf-8") == json.dumps(payload)
+    assert not archive_path.exists()
+    assert service.list_crawl_runs(source_id=candidate.source_id) == old_runs
+    assert service.get_item(candidate.item_id).status == "pending"
+
+
+@pytest.mark.parametrize(
+    "reference_kind", ["same_source", "foreign_source", "no_run", "non_filesystem"]
+)
+async def test_legacy_status_requires_unambiguous_same_source_catalog_reference(
+    tmp_path: Path, reference_kind: str
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    library_dir = tmp_path / "Books"
+    archive_path, status_path, old_status, _backup_path = _seed_proven_stale_status(
+        service,
+        candidate,
+        library_dir=library_dir,
+        output_root=tmp_path / "history",
+    )
+    original_artifact = service.list_artifacts(item_id=candidate.item_id)[0]
+    if reference_kind != "non_filesystem":
+        service.update_artifact_storage(
+            original_artifact.id, locator=archive_path.as_posix(), state="present"
+        )
+    payload = json.loads(old_status)
+    payload["source_output_dir"] = "legacy-output-directory"
+    status_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    if reference_kind == "foreign_source":
+        foreign = add_candidate(service, access_mode="paid")
+        foreign_run = service.create_crawl_run(
+            item_id=foreign.item_id,
+            source_id=foreign.source_id,
+            target_id=foreign.target_id,
+            access_strategy=foreign.access_strategy,
+            started_at=NOW + timedelta(minutes=2),
+        )
+        service.finalize_successful_crawl(
+            foreign_run.id,
+            artifact=ArtifactInput(
+                kind="archive",
+                format="zip",
+                sha256=hashlib.sha256(b"foreign reference").hexdigest(),
+                byte_size=len(b"foreign reference"),
+                storage_backend="filesystem",
+                locator=archive_path.as_posix(),
+                state="present",
+            ),
+            page_count=1,
+            stop_reason="foreign alias fixture",
+            finished_at=NOW + timedelta(minutes=2),
+        )
+    elif reference_kind == "no_run":
+        service.create_artifact(
+            ArtifactInput(
+                kind="archive",
+                format="zip",
+                sha256=hashlib.sha256(b"manual import").hexdigest(),
+                byte_size=len(b"manual import"),
+                storage_backend="filesystem",
+                locator=archive_path.as_posix(),
+                state="present",
+            ),
+            item_id=candidate.item_id,
+        )
+    elif reference_kind == "non_filesystem":
+        service.create_artifact(
+            ArtifactInput(
+                kind="archive",
+                format="zip",
+                sha256=hashlib.sha256(b"remote key").hexdigest(),
+                byte_size=len(b"remote key"),
+                storage_backend="objectstore",
+                locator=archive_path.as_posix(),
+                state="present",
+            ),
+            item_id=candidate.item_id,
+        )
+
+    executor = make_executor(service, fail_crawl=True)
+    run_count_before = len(service.list_crawl_runs(source_id=candidate.source_id))
+    if reference_kind == "same_source":
+        with pytest.warns(ArchiveHistoryWarning), pytest.raises(
+            BatchExecutionError, match="crawler failed"
+        ):
+            await executor.execute_candidate(
+                object(), candidate, library_dir=library_dir, now=NOW + timedelta(minutes=1)
+            )
+        assert len(service.list_crawl_runs(source_id=candidate.source_id)) == run_count_before + 1
+    else:
+        expected_error = (
+            "no structured source identity or unique Catalog archive history"
+            if reference_kind == "non_filesystem"
+            else "different or ambiguous Catalog history"
+        )
+        with pytest.raises(BatchExecutionError, match=expected_error):
+            await executor.execute_candidate(
+                object(), candidate, library_dir=library_dir, now=NOW + timedelta(minutes=1)
+            )
+        assert len(service.list_crawl_runs(source_id=candidate.source_id)) == run_count_before
+    assert status_path.exists()
+    assert not archive_path.exists()
+
+
+async def test_structured_status_proof_survives_current_target_url_refresh(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    library_dir = tmp_path / "Books"
+    archive_path, status_path, _old_status, _backup_path = _seed_proven_stale_status(
+        service,
+        candidate,
+        library_dir=library_dir,
+        output_root=tmp_path / "history",
+    )
+    refreshed_target = service.upsert_source_target(
+        SourceTargetInput(
+            backend=candidate.backend,
+            target_key=candidate.target_key,
+            locator="https://example.invalid/refreshed-target",
+        ),
+        source_id=candidate.source_id,
+    )
+    candidate = replace(candidate, locator=refreshed_target.locator)
+    executor = make_executor(service, fail_crawl=True)
+
+    with pytest.warns(
+        ArchiveHistoryWarning, match="proven same-Source history"
+    ), pytest.raises(BatchExecutionError, match="crawler failed"):
+        await executor.execute_candidate(
+            object(), candidate, library_dir=library_dir, now=NOW + timedelta(minutes=1)
+        )
+
+    assert status_path.exists()
+    assert not archive_path.exists()
+
+
+@pytest.mark.parametrize("failure", ["permission", "parent_file"])
+async def test_unreadable_candidate_output_state_fails_before_site_or_quota(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(service, access_mode="free")
+    library_dir = tmp_path / "Books"
+    stem, title, genre, _order, _author = archive_stem(candidate.metadata)
+    archive_path = library_dir / genre / title / f"{stem}.zip"
+    if failure == "parent_file":
+        archive_path.parent.parent.mkdir(parents=True, exist_ok=True)
+        archive_path.parent.write_bytes(b"parent is not a directory")
+    else:
+        original_lstat = Path.lstat
+
+        def inaccessible(path: Path, *args: object, **kwargs: object):
+            if path == archive_path:
+                raise PermissionError("output path cannot be inspected")
+            return original_lstat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "lstat", inaccessible)
+    executor = make_executor(service)
+
+    with pytest.raises(
+        BatchExecutionError,
+        match="output state cannot be checked|parent is not a directory",
+    ):
+        await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=library_dir,
+            now=NOW,
+        )
+
+    assert service.list_crawl_runs() == []
+    assert service.get_item(candidate.item_id).status == "pending"
 
 
 async def test_artifact_disambiguator_is_forwarded_to_packaging(

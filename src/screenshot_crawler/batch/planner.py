@@ -9,11 +9,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from screenshot_crawler.archive_order import build_work_archive_position_plan
 from screenshot_crawler.batch.archive_guard import (
     ArchiveNameGuardError,
+    CandidateOutputPathError,
     inspect_existing_archive_names,
+    validate_candidate_output_paths,
 )
 from screenshot_crawler.batch.models import (
     BatchCandidate,
@@ -75,7 +78,10 @@ class BatchPlanner:
         site: str,
         now: datetime | None = None,
         quota_resource: str | None = None,
+        output_mode: Literal["capture", "grant_only"] = "capture",
     ) -> BatchPlan:
+        if output_mode not in {"capture", "grant_only"}:
+            raise BatchPlanningError(f"Unsupported output mode: {output_mode!r}")
         current = _normalize_now(now_jst() if now is None else now)
         archive_positions_by_source: dict[int, int] = {}
         archive_warnings: list[str] = []
@@ -248,11 +254,25 @@ class BatchPlanner:
                     )
                 )
 
-            _validate_candidate_archive_paths(
-                selections,
-                library_dir=self.library_dir,
-                archive_positions_by_source=archive_positions_by_source,
-                collision_source_ids=collision_source_ids,
+            defer_quota = getattr(policy, "defer_quota_access_to_grant_phase", None)
+            deferred_quota = bool(defer_quota()) if callable(defer_quota) else False
+            capture_selections = (
+                [
+                    selection
+                    for selection in selections
+                    if not (deferred_quota and selection.decision.consumes_quota)
+                ]
+                if output_mode == "capture"
+                else []
+            )
+            plan.warnings.extend(
+                _validate_candidate_archive_paths(
+                    self.catalog,
+                    capture_selections,
+                    library_dir=self.library_dir,
+                    archive_positions_by_source=archive_positions_by_source,
+                    collision_source_ids=collision_source_ids,
+                )
             )
 
             quota_selections = [
@@ -478,13 +498,15 @@ def _collision_source_ids(
 
 
 def _validate_candidate_archive_paths(
+    catalog: CatalogService,
     selections: list[_Selection],
     *,
     library_dir: Path,
     archive_positions_by_source: dict[int, int],
     collision_source_ids: set[int],
-) -> None:
+) -> list[str]:
     planned: dict[str, int] = {}
+    warnings: list[str] = []
     for selection in selections:
         source = selection.source
         position = archive_positions_by_source.get(source.id, source.display_position)
@@ -507,12 +529,6 @@ def _validate_candidate_archive_paths(
                 f"{target}; resolve the naming collision before Batch"
             )
         planned[key] = source.id
-        if target.exists():
-            raise BatchPlanningError(
-                f"Planned archive {target} already exists; Batch will not overwrite it. "
-                "Review the work-wide `scripts/renumber_archives.py` dry-run and resolve "
-                "the existing ZIP before retrying"
-            )
         status_path = (
             library_dir.parent
             / "crawl-status"
@@ -520,11 +536,25 @@ def _validate_candidate_archive_paths(
             / title
             / f"{stem}.json"
         )
-        if status_path.exists():
-            raise BatchPlanningError(
-                f"Planned archive status {status_path} already exists without a clear matching "
-                "current ZIP; resolve the status/ZIP pair before Batch"
+        try:
+            output_preflight = validate_candidate_output_paths(
+                catalog,
+                work=selection.work,
+                item=selection.item,
+                source=source,
+                target=selection.target,
+                archive_path=target,
+                status_path=status_path,
             )
+        except CandidateOutputPathError as exc:
+            raise BatchPlanningError(str(exc)) from exc
+        if output_preflight.stale_status is not None:
+            warnings.append(
+                f"work={selection.work.work_key!r} source={source.id}: existing completed "
+                f"status {status_path} is proven to belong to this Source and has no current "
+                "ZIP; Batch may refresh the status after a successful capture"
+            )
+    return warnings
 
 
 def _archive_path_key(path: Path) -> str:

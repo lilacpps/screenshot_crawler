@@ -395,7 +395,7 @@ Requirements:
 - a successful re-crawl creates a new Artifact row,
 - previous CrawlRun/Artifact rows remain historical records.
 
-If an existing ZIP occupies the exact new candidate output path, packaging collision behavior stops the re-crawl. A historical ZIP at a different path is only a maintenance warning.
+If an existing ZIP occupies the exact new candidate output path, Batch stops the re-crawl. A historical ZIP at a different path is only a maintenance warning. A leftover status sidecar is reusable only when it is a completed record for the exact planned `archive_path`, has a valid page count, and Catalog history proves the same Item/Source: either a structured output identity plus a matching successful run at its timestamp containing a ZIP Artifact, or an unambiguous tokenless legacy filesystem Artifact reference backed by successful run history. Foreign/malformed tokens or missing ownership remain hard failures. In the tokenless fallback, non-filesystem references do not prove local ownership, but do not invalidate otherwise complete filesystem evidence. This permits `prepare_recrawl.py --apply` to move the old ZIP and leave the status sidecar while returning the Item to pending. Batch refreshes a proven sidecar as part of successful packaging; crawl/pre-package failure preserves the old bytes. If hashing or Catalog finalization fails after packaging generated the new ZIP/status pair, that pair remains for inspection and the old sidecar is not restored over it. Grant-only/resolver passes do not create ZIP/status outputs and skip occupancy checks; capture replan checks them again.
 
 ## 10. Existing archive renumber tool
 
@@ -886,9 +886,11 @@ All enabled Sources reserve a number regardless of access/status; all-disabled
 Sources are excluded. No-order works retain the legacy site-local naming.
 Historical ZIP stem/ordinal drift, old status mismatches, and ambiguous historical
 Artifacts are maintenance warnings; they do not alone block Batch. Current scope and
-candidate naming/identity must still be valid. A real ZIP or status file at the candidate
-output path is a hard stop before site access and is rechecked immediately before packaging;
-a collision found at either check fails without overwriting that file. Renumber remains a separate strict whole-work
+candidate naming/identity must still be valid. The candidate ZIP must be absent; a status
+file must be absent or pass the proven same-Source stale-sidecar check above. Both are
+checked before site access and immediately before packaging; a detected collision fails
+without overwriting the file. Grant-only/resolver passes skip output occupancy because
+they create no ZIP/status files. Renumber remains a separate strict whole-work
 maintenance operation: it checks hashes/sizes, status sidecars, global Artifact locator
 aliases, and rollback, and managed works cannot be partially applied by site.
 

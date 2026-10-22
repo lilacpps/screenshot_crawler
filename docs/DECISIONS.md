@@ -657,9 +657,21 @@ preview/applyで担当としてbootstrapできる。全既存作品にproof目�
 2026-10-23 user-requested refinement: separating archive numbering from access rights reserves
 numbers for future in-scope paid sources and excludes out-of-scope sources. Batch and renumber
 still share the same pure work-wide plan. Historical ZIP naming drift, old status mismatches,
-and ambiguous old Artifacts are maintenance warnings and do not alone stop acquisition. Real
-candidate ZIP/status path collisions, stale current naming/scope/identity, access-policy failures,
-and other safety errors remain blocking conditions. Candidate paths are checked again immediately
-before packaging; a collision detected there fails without overwriting that file. Explicit strict
-renumber remains a separate operator-controlled maintenance operation.
+and ambiguous old Artifacts are maintenance warnings and do not alone stop acquisition. A
+candidate ZIP collision or unproven candidate status sidecar, stale current naming/scope/identity, access-policy failures,
+and other safety errors remain blocking conditions. The candidate ZIP must be absent. A completed
+status sidecar is reusable only when its exact `archive_path`, valid page count, and same-Source
+Catalog run/Artifact history are proven. Structured proof needs a matching output identity and at
+least one successful timestamp-matched run with a same-Item ZIP Artifact; unrelated aliases and
+additional same-Source runs do not invalidate it. Tokenless legacy proof instead requires
+unambiguous same-Item/Source filesystem references at that path; non-filesystem references are
+not used as local proof and do not invalidate otherwise complete filesystem evidence. Malformed,
+foreign, unreadable, or ambiguous status stays blocking. The
+sidecar is refreshed as part of successful packaging, while crawl/pre-package failure preserves it.
+Grant-only/resolver passes skip output occupancy because they create no files; capture replans
+restore the check. Candidate paths are checked again immediately before packaging; a
+collision detected there fails without overwriting that file. If packaging has generated the new
+ZIP/status pair and hashing or Catalog finalization then fails, keep that pair for inspection rather
+than restoring the old sidecar over it. Explicit strict renumber remains a
+separate operator-controlled maintenance operation.
 

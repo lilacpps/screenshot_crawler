@@ -388,10 +388,25 @@ When every key omits `archive_order`, existing site-local naming is retained. Pa
 ordering, duplicate orders, unknown positions, and unsynchronized scope remain
 fail-closed. Batch uses the current pure naming plan for new candidates. Existing ZIP
 stems, historical status mismatches, and ambiguous old Artifact records are reported as
-maintenance warnings and do not alone stop planning or acquisition. A real file at the
-candidate ZIP or status path is a hard collision; it is checked before site access and
-again immediately before packaging. These historical warnings do not modify old files,
-Artifact locators, or Item status; a successful new acquisition still finalizes normally.
+maintenance warnings and do not alone stop planning or acquisition. The candidate ZIP
+must be absent. A status sidecar is normally also required to be absent; Batch may reuse
+only a completed sidecar whose normalized `archive_path` is the exact candidate ZIP,
+whose page count is valid, and whose same-Source history is proven. A structured
+`source_output_dir` must match the candidate site/Item/Source and at least one successful
+CrawlRun at its encoded timestamp must have a ZIP Artifact for that Item. Other old
+locator aliases or additional same-Source runs do not invalidate this structured proof.
+A tokenless legacy sidecar requires unambiguous same-Item/Source filesystem Artifact
+references at that path, each backed by a successful run; non-filesystem references
+are not used as local-path proof, but do not invalidate otherwise complete filesystem
+evidence. Explicit foreign/malformed tokens, missing run ownership, unreadable state,
+and ambiguity stay hard failures. Candidate output state is checked before site access and again immediately
+before packaging. A proven stale sidecar is refreshed as part of successful packaging;
+crawl or pre-package failure preserves its old bytes. If packaging has generated the
+new ZIP/status pair but subsequent hashing or Catalog finalization fails, the new pair
+remains for inspection; Batch does not restore the stale status over it. Grant-only and resolver passes
+create no ZIP/status output and skip occupancy checks; a later normal capture replan
+restores them. These historical warnings do not modify old files, Artifact locators, or
+Item status; a successful new acquisition still finalizes normally.
 Use the separate strict renumber workflow when you choose to
 align historical archives and Catalog metadata with current numbering.
 
