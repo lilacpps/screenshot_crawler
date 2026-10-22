@@ -241,14 +241,16 @@ re-adding the same key and URL is recognized, while changing a removed key's
 URL requires new proof. Removed Sources remain in Catalog and are disabled.
 
 Complete-listing hooks currently cover Zeblack, BookWalker, Magapoke, Jump+,
-MANGA ONE and Piccoma. Other adapters retain ordinary unbounded Discovery, but
-scoped or archive-ordered synchronization fails closed until they can supply
-site-native listing identity and complete position evidence. For a changed key
-on a site with the proof hook, run Full Discovery, resolve boundary/position
-errors at the source listing, then rerun dry-run and apply. On a site without
-the hook, repeated Full Discovery cannot resolve the blocker; leave the work
-blocked until the hook is implemented. Do not manually edit
-`acquisition_enabled` or use a Full run as implicit sync.
+MANGA ONE, Piccoma, and Comic DAYS. Comic DAYS proves only its validated,
+unbounded full listing; it still does not support `discovery_scope` or bounded
+Discovery. Other adapters retain ordinary unbounded Discovery, but scoped or
+archive-ordered synchronization fails closed until they can supply site-native
+listing identity and complete position evidence. For a changed key on a site
+with the proof hook, run Full Discovery, resolve boundary/position errors at
+the source listing, then rerun dry-run and apply. On a site without the hook,
+repeated Full Discovery cannot resolve the blocker; leave the work blocked
+until the hook is implemented. Do not manually edit `acquisition_enabled` or
+use a Full run as implicit sync.
 
 ### P3 — Batchの対象フィルタと同期ゲート
 **Objective**: 元のチケット/選択セマンティクスを維持して担当外だけを除外。
@@ -319,6 +321,11 @@ RenumberのArtifact locatorは旧ZIPパスの正本です。隔離status directo
 12. full→bounded/full→unbounded/incremental→full変更後の出力、および無変更での既存動作の回帰。
 13. 3-key synthetic workでZeblackの担当100 rows、BookWalkerの2 volumes、Magapokeのin-scope paid 2 rowsを扱う場合、BookWalkerが101/102、Magapokeが103/104となる。Zeblackのout-of-scope paid rowsは採番せず、合計は104。`example.invalid` fixtureはCatalog/Watchlist/ZIP構造専用であり、サイト境界parserの証拠には使わない。Adapter inventory hookは各siteのpure fake identity adapterで検証し、実site境界確認が必要なsiteのみ別途有界に調査する。
 14. Catalog v7 migrationはdefault acquisition flagを設定してもsync/evidenceは未初期化のままとし、migrationのみでscope eligibilityやZIPを変更しない。
+15. Comic DAYSのsuccessful unbounded Fullは、検証済みAtom/readable-product全listingを
+    `comicdays-series:<id>` identityで証明し、latest-first orderをCore display
+    positions `N..1`へ写す。archive_order下でpaid/completed rowも採番予約する。
+    Incremental/partial Fullはproofを作らず、targetの`discovery_scope`指定は
+    引き続き拒否する。
 
 想定の主なテストファイル: tests/unit/test_watchlist.py, test_catalog_migrations.py, test_catalog.py, test_discovery.py, test_batch.py, test_batch_executor.py, test_batch_naming.py, test_archive_renumber.py, test_cli.py と必要なbounded discovery integration。影響範囲が広いため、targeted/affected tests後にfull pytestとruffを推奨（docs/TEST_STRATEGY.mdに従い、実サイト実行は必要時のみ）。
 

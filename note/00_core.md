@@ -38,6 +38,12 @@ unbounded/unordered legacy sync may bootstrap only when all existing Sources
 have matching Watchlist key/site/work ownership. Removed Sources remain in the
 Catalog disabled, with the last key/URL binding retained for safe re-add.
 Batch enforces the fail-closed acquisition-scope gate described below.
+Current complete-listing inventory hooks are available for Zeblack, BookWalker,
+Magapoke, Jump+, Manga ONE, Piccoma, and Comic DAYS. Comic DAYS inventory is
+limited to its validated unbounded full listing, identified as
+`comicdays-series:<id>`; it does not support `discovery_scope` or bounded
+Discovery. Hanayume, Younganimal, Kadocomi, and ComicFUZ remain without the
+shared complete-listing hook.
 Cross-site `archive_order` numbering and existing-archive renumbering are
 implemented through P4. P5 validates the flows on synthetic fixtures and
 isolated working copies; operational Catalog/Books rollout remains a separate

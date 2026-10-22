@@ -851,6 +851,12 @@ P1 currently provides:
   digest. Discovery refresh input omits the acquisition flag and preserves it.
 - Evidence invalidation on full inventory replacement and structural position
   or key changes. Access-state-only refresh does not force a new listing proof.
+- Complete-listing hooks are available for Zeblack, BookWalker, Magapoke,
+  Jump+, Manga ONE, Piccoma, and Comic DAYS. Comic DAYS captures its already
+  validated unbounded Full Atom/readable-product listing with native identity
+  `comicdays-series:<id>` and positions `N..1`, matching Core's oldest-first
+  numbering. It remains unsupported for `discovery_scope` and bounded
+  Discovery; inventory evidence alone does not add boundary semantics.
 - Watchlist comment preservation for scalar enable changes; unsupported
   comment-bearing structural rewrites fail before writing. Commentless edits are
   parsed and compared with the requested target list before atomic replacement.

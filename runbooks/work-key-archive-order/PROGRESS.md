@@ -250,7 +250,7 @@ covered by no-write regression tests.
 - Added a stable advisory Catalog job lock: no preview lock artifact, same-task
   nesting works, competing task/process fails fast, and the stable lock path is
   never unlinked.
-- Site-native complete-inventory hooks are wired for Zeblack, BookWalker,
+- At P2 close, site-native complete-inventory hooks were wired for Zeblack, BookWalker,
   Magapoke, Jump+, Manga ONE and Piccoma. Other adapters retain unbounded
   Discovery behavior; scoped/archive-order opt-in on an adapter without proof
   fails closed until a native identity/inventory hook exists.
@@ -488,14 +488,56 @@ site notes, this runbook/progress, and `COPY_VALIDATION.md`.
 - The user-facing docs now include current P4 behavior, supported scope-sync /
   renumber commands, copy-first migration sequence, rollback handling, a
   locator/status remap recipe and resolved-path containment gate for isolated
-  renumber apply, and current notes for the six complete-listing proof adapters.
+  renumber apply, and current notes for the six complete-listing proof adapters
+  available at initial P5 completion.
   `docs/DECISIONS.md` records the acquisition-scope / archive-order decision
   and why Full evidence refresh is separate from work-wide flag apply.
-  Comic DAYS, Hanayume, Younganimal, Kadocomi, and ComicFUZ notes now state that
-  they do not yet supply the shared complete-listing proof hook: only
-  unbounded/unordered NEVER-MANAGED legacy bootstrap is available there, and
-  Full alone cannot unlock scoped or archive-ordered Batch. Historical empty-
-  Watchlist runs and site-phase schema statements are qualified as historical.
+  Hanayume, Younganimal, Kadocomi, and ComicFUZ notes state that they do not yet
+  supply the shared complete-listing proof hook: only unbounded/unordered
+  NEVER-MANAGED legacy bootstrap is available there, and Full alone cannot
+  unlock scoped or archive-ordered Batch. Comic DAYS now supplies an
+  inventory-only hook for its unbounded listing; bounded `discovery_scope`
+  remains unsupported there. Historical empty-Watchlist runs and site-phase
+  schema statements are qualified as historical.
+
+### Comic DAYS archive-order follow-up (2026-10-22)
+
+- Added the adapter-owned complete-listing inventory hook to Comic DAYS using
+  its already validated full Atom/readable-product listing. The proof binds the
+  validated native series identity (`comicdays-series:<id>`) and preserves the
+  adapter's latest-first identities with Core-compatible positions `N..1`.
+- Inventory is published only after normal Full iterator exhaustion. Adapter
+  reuse resets prior inventory; incremental and early-closed runs do not
+  publish proof. DiscoveryService persists evidence only after successful
+  Catalog finalization. Comic DAYS remains unbounded-only; no
+  `discovery_scope` semantics were added.
+- End-to-end synthetic test verified Comic DAYS plus BookWalker numbering,
+  including paid and completed Comic DAYS rows reserving ordinals, failed Full
+  invalidating scope sync, and Incremental not restoring proof.
+- Final combined follow-up regression command covering
+  `test_comicdays_discovery.py`, `test_discovery.py`, and
+  `test_scope_reconciler.py` passed **111 tests**, 595 existing warnings, in
+  23.56 seconds. No full-suite rerun was needed for this adapter-local change;
+  the full-suite result below predates this follow-up.
+  Root's affected shared regression run before this site-local change passed
+  **151 tests**, 397 existing warnings. No live-site or paid/quota action was
+  performed.
+- Root's browser-backed Discovery-only integration selection passed **3
+  passed, 106 deselected, 0 skipped, 5 warnings** using the existing routed
+  Chromium test fixture; it exercised valid listing, count mismatch, and
+  native feed-series identity mismatch without live-site access. The command
+  and JUnit report are `tests/integration/test_comicdays_adapter_browser.py
+  -k discovery_browser` and
+  `output/comicdays-archive-order/browser-discovery.xml`.
+- The complete-listing inventory-hook count is now seven. Four notes remain
+  explicitly unsupported for scoped/archive-ordered sync: Hanayume,
+  Younganimal, Kadocomi, and ComicFUZ. This count concerns evidence hooks, not
+  bounded Discovery support; Comic DAYS has the hook but still rejects bounded
+  scopes.
+- Follow-up lint `.venv/Scripts/python.exe -m ruff check src tests
+  scripts/renumber_archives.py` passed, as did `git diff --check` (Git emitted
+  only existing LF/CRLF conversion notices for working-tree files).
+- Independent final follow-up review: **APPROVE, 0 blocking findings**.
 
 ### Remaining
 
@@ -523,7 +565,8 @@ weakened. Static AST parsing passed for the corrected ComicFuz module. The
 final full `pytest -vv` run with faulthandler diagnostics completed after these
 fixture corrections.
 
-The final full suite completed with **4,946 passed, 1 failed, 0 skipped, and
+The full suite for the shared P0-P5 implementation, completed before the
+Comic DAYS site-local follow-up above, had **4,946 passed, 1 failed, 0 skipped, and
 5,205 warnings** in 2,480.96 seconds. The sole failure was
 `tests/unit/test_runtime_settings.py::test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_other_sites`:
 it expected the tracked baseline's BookWalker `page_turn_delay_ms` value of 200 but read 0 from the

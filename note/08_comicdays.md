@@ -10,16 +10,21 @@ target enabled controls whether Discovery runs and is not an ownership flag.
 Batch requires a current synchronized Scope Reconciler snapshot and
 sources.acquisition_enabled state.
 
-This adapter does not currently provide the complete-listing inventory proof
-hook required for scoped or archive-ordered work. A site-local bounded
-Discovery implementation, where available, is not sufficient evidence for
-work-wide acquisition reconciliation. With either discovery_scope or
-archive_order set, Scope Reconciler must block; a successful Full alone cannot
-resolve that blocker. Do not keep repeating Full as a workaround. For a
-NEVER-MANAGED legacy work with neither discovery_scope nor archive_order,
-explicit preview/apply may bootstrap existing Sources only when their
-discovery_key, site, and work ownership all match the Watchlist. Newly
-discovered Sources still require a fresh sync before Batch.
+Comic DAYS now supplies a complete-listing inventory hook for `archive_order`
+reconciliation. A successful Full binds the validated native series identity
+`comicdays-series:<id>` to the full unbounded Atom/readable-product listing;
+Core positions those latest-first rows as `N..1` (oldest first for numbering).
+This hook does not add `discovery_scope` or bounded Discovery support: any
+target with a scope is still rejected by the adapter. Full evidence is saved
+only after normal iterator exhaustion and successful Catalog finalization.
+Incremental, failed, or early-closed runs do not publish proof. After a
+successful Full, rerun Scope Reconciler preview and explicit apply before
+Batch; Full does not itself synchronize acquisition flags. A changed URL or
+listing still requires fresh proof. For a NEVER-MANAGED legacy work with
+neither `discovery_scope` nor `archive_order`, explicit preview/apply may
+bootstrap existing Sources only when their discovery_key, site, and work
+ownership all match the Watchlist. Newly discovered Sources still require a
+fresh sync before Batch.
 
 A successful Full after a prior scope sync invalidates the sync marker. After
 Full, rerun preview and explicit apply with the same Watchlist before planning
@@ -34,10 +39,12 @@ validation; replace placeholders with paths under the same COPY_ROOT:
     python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --apply --json
     python -m screenshot_crawler.cli batch plan --site <site> --catalog <copy/catalog.sqlite> --watchlist <copy/watchlist.yaml> --library-dir <copy/Books>
 
-The scope-sync apply example is only for an eligible unbounded, unordered legacy
-work. For scoped or archive-ordered work on this adapter, expect a fail-closed
-preview until a complete-listing proof hook is implemented. Batch plan remains
-read-only; use the same copy paths for any separately authorized execution.
+These commands also apply to Comic DAYS `archive_order` work after a successful
+Full provides the complete unbounded listing proof. The apply is still a
+separate reviewed step. For scoped work, expect a fail-closed result because
+Comic DAYS does not support `discovery_scope`; repeating Full cannot resolve
+that limitation. Batch plan remains read-only; use the same copy paths for any
+separately authorized execution.
 
 ## Current implementation
 

@@ -353,7 +353,7 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
     """Yield a complete Atom listing classified by first-party access state."""
 
     async def iter_records(self, page: Page, target: WatchlistTarget, mode: DiscoveryMode) -> AsyncIterator[DiscoveredRecord]:
-        del mode
+        self.reset_complete_listing_inventory()
         target_id = parse_comicdays_episode_url(target.url)
         if target_id is None or target.discovery_scope is not None:
             raise DiscoveryIncompleteError("Comic DAYS requires an unbounded canonical episode target")
@@ -426,3 +426,14 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
         # pass before the first record is handed to the Catalog service.
         for record in records:
             yield record
+        # Publish the unbounded listing only after normal iterator exhaustion.
+        # DiscoveryService persists this inventory only after Catalog
+        # finalization, and incremental/early-closed iterators cannot leave a
+        # reusable proof behind.
+        if mode == "full":
+            self.capture_complete_listing_inventory(
+                target=target,
+                all_records=records,
+                selected_records=records,
+                listing_identity=f"comicdays-series:{series_id}",
+            )

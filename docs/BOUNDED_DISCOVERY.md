@@ -2,14 +2,17 @@
 
 Status: **ADOPTED SPECIFICATION / CORE IMPLEMENTED; SITE COVERAGE VARIES**
 
-Current implementation note: bounded Discovery and complete-listing inventory
-hooks are implemented for BookWalker, Jump+, Magapoke, MANGA ONE, Piccoma, and
-Zeblack. Each Adapter validates boundaries with its own stable listing
-identity; unsupported scoped synchronization fails closed. `discovery_scope`
-is also the acquisition-scope authority, but Discovery does not itself apply
-acquisition flags: `watch scope-sync` separately reconciles the Catalog after
-complete evidence is available. The shared Catalog is schema v7 and Batch
-checks the synchronized `acquisition_enabled` flags. See
+Current implementation note: bounded Discovery is implemented for BookWalker,
+Jump+, Magapoke, MANGA ONE, Piccoma, and Zeblack. Complete-listing inventory
+hooks cover those sites and Comic DAYS. Comic DAYS is inventory-only for
+unbounded Full and `archive_order`; it still rejects `discovery_scope` and does
+not implement bounded Discovery. Each bounded Adapter validates boundaries
+with its own stable listing identity; unsupported scoped synchronization fails
+closed. `discovery_scope` is also the acquisition-scope authority, but
+Discovery does not itself apply acquisition flags: `watch scope-sync`
+separately reconciles the Catalog after complete evidence is available. The
+shared Catalog is schema v7 and Batch checks the synchronized
+`acquisition_enabled` flags. See
 `docs/DISCOVERY_AND_BATCH.md` and the affected site notes for current details.
 
 この文書は `docs/DISCOVERY_AND_BATCH.md` のDiscovery仕様を補足する詳細仕様である。
@@ -186,8 +189,11 @@ bounded fullでmissing-source reconciliationを行わないのは意図的な安
 
 ### Work-key acquisition proof
 
-Successful Full runs on BookWalker, MANGA ONE, Magapoke, Jump+, Zeblack and
-Piccoma provide a target-bound complete listing identity/position inventory.
+Successful Full runs on BookWalker, MANGA ONE, Magapoke, Jump+, Zeblack,
+Piccoma, and Comic DAYS provide a target-bound complete listing
+identity/position inventory. Comic DAYS is inventory-only: it proves its fully
+validated unbounded Atom/readable-product listing and does not support
+`discovery_scope` or bounded Discovery.
 The proof is committed only after the iterator exhausts normally and Catalog
 finalization succeeds. The same inventory refreshes positions of known Sources
 in that listing, including known rows outside the selected slice; it never
@@ -196,7 +202,8 @@ or history. Scope synchronization is a separate `watch scope-sync` preview /
 apply. Incremental or failed/partial Full runs cannot authorize changed scope.
 Adapters without this inventory hook retain ordinary unbounded Discovery, but
 scoped or archive-ordered work fails closed at reconciliation until the adapter
-can establish site-native listing identity and complete positions.
+can establish site-native listing identity and complete positions. Bounded
+Discovery support alone does not supply this proof.
 
 ## 8. Catalog / Batch semantics
 
