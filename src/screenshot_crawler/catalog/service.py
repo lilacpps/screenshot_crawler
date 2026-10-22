@@ -1,7 +1,9 @@
-"""Catalog v6 SQLite service."""
+"""Catalog v7 SQLite service."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import sqlite3
 from collections.abc import Collection, Mapping
@@ -11,11 +13,17 @@ from pathlib import Path
 from typing import Any
 
 from screenshot_crawler.catalog import schema
+from screenshot_crawler.catalog.job_lock import CatalogJobLock
 from screenshot_crawler.catalog.models import (
+    AcquisitionScopeSnapshot,
+    AcquisitionScopeSync,
     Artifact,
     ArtifactInput,
     CatalogRecord,
     CrawlRun,
+    DiscoveryInventoryEvidence,
+    DiscoveryInventoryPosition,
+    DiscoveryKeySource,
     Item,
     ItemInput,
     QuotaResourceState,
@@ -76,6 +84,11 @@ class CatalogService:
 
     def __init__(self, path: str | Path = "catalog.sqlite") -> None:
         self.path = Path(path)
+
+    def job_lock(self) -> CatalogJobLock:
+        """Return the shared fail-fast lock for this Catalog's mutating jobs."""
+
+        return CatalogJobLock(self.path)
 
     def initialize(self) -> None:
         with self._connection(initialize_schema=False) as connection:
@@ -353,7 +366,7 @@ class CatalogService:
         timestamp = format_timestamp(now_jst())
         last_seen = format_timestamp(source_input.last_seen_at) or timestamp
         with self._connection() as connection:
-            self._require_row(connection, "items", item_id, "item")
+            item = self._require_row(connection, "items", item_id, "item")
             try:
                 cursor = connection.execute(
                     "INSERT INTO sources (item_id, site, external_id, discovery_key, access_mode, "
@@ -371,6 +384,12 @@ class CatalogService:
                 )
             except sqlite3.IntegrityError as exc:
                 raise CatalogValidationError(f"Could not create source: {exc}") from exc
+            if source_input.discovery_key is not None:
+                connection.execute(
+                    "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
+                    (source_input.discovery_key,),
+                )
+            self._mark_acquisition_scope_stale(connection, int(item["work_id"]))
             row = connection.execute("SELECT * FROM sources WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return self._source_from_row(row)
 
@@ -472,17 +491,467 @@ class CatalogService:
                         f"Source {source_id} does not belong to Discovery scope {discovery_key!r}"
                     )
 
+            proof_changed = any(
+                rows_by_id[source_id]["display_position"] != position
+                for source_id, position in normalized
+            )
+
             for source_id, position in normalized:
                 connection.execute(
                     "UPDATE sources SET display_position = ?, updated_at = ? WHERE id = ?",
                     (position, timestamp, source_id),
                 )
+            if proof_changed:
+                connection.execute(
+                    "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
+                    (discovery_key,),
+                )
+                for work_id in {int(row["item_id"]) for row in rows}:
+                    item = connection.execute(
+                        "SELECT work_id FROM items WHERE id = ?", (work_id,)
+                    ).fetchone()
+                    self._mark_acquisition_scope_stale(connection, int(item["work_id"]))
 
             updated_rows = [
                 connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
                 for source_id in source_ids
             ]
         return tuple(self._source_from_row(row) for row in updated_rows)
+
+    def get_acquisition_scope_sync(self, work_key: str) -> AcquisitionScopeSync | None:
+        """Read the last successfully applied Watchlist fingerprint for a work."""
+
+        self._validate_nonempty(work_key, "work_key")
+        with self._read_only_connection() as connection:
+            row = connection.execute(
+                "SELECT w.work_key, s.fingerprint, s.definition_fingerprint, "
+                "s.configuration_json, s.status, s.synced_at "
+                "FROM acquisition_scope_sync s JOIN works w ON w.id = s.work_id "
+                "WHERE w.work_key = ?",
+                (work_key,),
+            ).fetchone()
+        return None if row is None else AcquisitionScopeSync(**dict(row))
+
+    def read_acquisition_scope_snapshot(
+        self, work_key: str, *, discovery_keys: Collection[str] = ()
+    ) -> AcquisitionScopeSnapshot | None:
+        """Read a consistent, genuinely read-only snapshot for scope preview."""
+
+        self._validate_nonempty(work_key, "work_key")
+        with self._read_only_connection() as connection:
+            connection.execute("BEGIN")
+            work = connection.execute(
+                "SELECT id FROM works WHERE work_key = ?", (work_key,)
+            ).fetchone()
+            if work is None:
+                return None
+            work_id = int(work["id"])
+            source_rows = connection.execute(
+                "SELECT s.* FROM sources s JOIN items i ON i.id = s.item_id "
+                "WHERE i.work_id = ? ORDER BY s.id",
+                (work_id,),
+            ).fetchall()
+            sync_row = connection.execute(
+                "SELECT w.work_key, s.fingerprint, s.definition_fingerprint, "
+                "s.configuration_json, s.status, s.synced_at "
+                "FROM acquisition_scope_sync s JOIN works w ON w.id = s.work_id "
+                "WHERE s.work_id = ?",
+                (work_id,),
+            ).fetchone()
+            evidence_rows = connection.execute(
+                "SELECT w.work_key, e.* FROM discovery_inventory_evidence e "
+                "JOIN works w ON w.id = e.work_id WHERE e.work_id = ? "
+                "ORDER BY e.discovery_key",
+                (work_id,),
+            ).fetchall()
+            evidence: list[DiscoveryInventoryEvidence] = []
+            for row in evidence_rows:
+                values = dict(row)
+                discovery_key = str(values["discovery_key"])
+                position_rows = connection.execute(
+                    "SELECT external_id, display_position, in_scope "
+                    "FROM discovery_inventory_positions WHERE discovery_key = ? "
+                    "ORDER BY display_position",
+                    (discovery_key,),
+                ).fetchall()
+                values["positions"] = tuple(
+                    DiscoveryInventoryPosition(
+                        external_id=str(position["external_id"]),
+                        display_position=int(position["display_position"]),
+                        in_scope=bool(position["in_scope"]),
+                    )
+                    for position in position_rows
+                )
+                values.pop("work_id", None)
+                evidence.append(DiscoveryInventoryEvidence(**values))
+            sync = (
+                None if sync_row is None else AcquisitionScopeSync(**dict(sync_row))
+            )
+            sources = tuple(self._source_from_row(row) for row in source_rows)
+            keys = tuple(sorted(set(discovery_keys)))
+            key_sources: list[DiscoveryKeySource] = []
+            if keys:
+                placeholders = ", ".join("?" for _ in keys)
+                owner_rows = connection.execute(
+                    "SELECT s.*, w.work_key AS owner_work_key FROM sources s "
+                    "JOIN items i ON i.id = s.item_id JOIN works w ON w.id = i.work_id "
+                    f"WHERE s.discovery_key IN ({placeholders}) ORDER BY s.id",
+                    keys,
+                ).fetchall()
+                key_sources = [
+                    DiscoveryKeySource(
+                        source=self._source_from_row(
+                            {key: value for key, value in dict(row).items()
+                             if key != "owner_work_key"}
+                        ),
+                        work_key=str(row["owner_work_key"]),
+                    )
+                    for row in owner_rows
+                ]
+            revision_token = self._scope_revision_token(connection, work_id, keys)
+        return AcquisitionScopeSnapshot(
+            work_key=work_key,
+            work_id=work_id,
+            sources=sources,
+            inventory_evidence=tuple(evidence),
+            sync=sync,
+            key_sources=tuple(key_sources),
+            revision_token=revision_token,
+        )
+
+    @staticmethod
+    def _scope_revision_token(
+        connection: sqlite3.Connection, work_id: int, discovery_keys: Collection[str] = ()
+    ) -> str:
+        source_rows = connection.execute(
+            "SELECT s.id, s.item_id, s.site, s.external_id, s.discovery_key, "
+            "s.display_position, s.acquisition_enabled FROM sources s "
+            "JOIN items i ON i.id = s.item_id WHERE i.work_id = ? ORDER BY s.id",
+            (work_id,),
+        ).fetchall()
+        evidence_rows = connection.execute(
+            "SELECT discovery_key, site, target_url, scope_fingerprint, listing_identity, "
+            "inventory_digest, source_count, completed_at FROM discovery_inventory_evidence "
+            "WHERE work_id = ? ORDER BY discovery_key",
+            (work_id,),
+        ).fetchall()
+        evidence = []
+        for row in evidence_rows:
+            values = dict(row)
+            values["positions"] = [
+                list(position)
+                for position in connection.execute(
+                    "SELECT external_id, display_position, in_scope "
+                    "FROM discovery_inventory_positions WHERE discovery_key = ? "
+                    "ORDER BY display_position",
+                    (row["discovery_key"],),
+                ).fetchall()
+            ]
+            evidence.append(values)
+        sync = connection.execute(
+            "SELECT fingerprint, definition_fingerprint, configuration_json, status, synced_at "
+            "FROM acquisition_scope_sync WHERE work_id = ?",
+            (work_id,),
+        ).fetchone()
+        keys = tuple(sorted(set(discovery_keys)))
+        key_sources = []
+        if keys:
+            placeholders = ", ".join("?" for _ in keys)
+            key_sources = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT s.id, s.item_id, s.site, s.external_id, s.discovery_key, "
+                    "i.work_id, w.work_key AS owner_work_key "
+                    "FROM sources s JOIN items i ON i.id = s.item_id "
+                    "JOIN works w ON w.id = i.work_id "
+                    f"WHERE s.discovery_key IN ({placeholders}) ORDER BY s.id",
+                    keys,
+                ).fetchall()
+            ]
+        payload = {
+            "sources": [dict(row) for row in source_rows],
+            "evidence": evidence,
+            "sync": None if sync is None else dict(sync),
+            "key_sources": key_sources,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    def apply_acquisition_scope_sync(
+        self,
+        *,
+        work_key: str,
+        fingerprint: str,
+        source_flags: Mapping[int, bool],
+        definition_fingerprint: str | None = None,
+        configuration_json: str = "[]",
+        expected_revision_token: str | None = None,
+        discovery_keys: Collection[str] = (),
+    ) -> tuple[Source, ...]:
+        """Atomically set one Work's acquisition flags and successful sync marker."""
+
+        self._validate_nonempty(work_key, "work_key")
+        self._validate_nonempty(fingerprint, "fingerprint")
+        self._validate_nonempty(configuration_json, "configuration_json")
+        if definition_fingerprint is None:
+            definition_fingerprint = fingerprint
+        self._validate_nonempty(definition_fingerprint, "definition_fingerprint")
+        if not isinstance(source_flags, Mapping):
+            raise CatalogValidationError("source_flags must be a mapping")
+        normalized: tuple[tuple[int, bool], ...] = tuple(source_flags.items())
+        for source_id, enabled in normalized:
+            if isinstance(source_id, bool) or not isinstance(source_id, int) or source_id < 1:
+                raise CatalogValidationError("source_id must be a positive integer")
+            if not isinstance(enabled, bool):
+                raise CatalogValidationError("acquisition_enabled must be a boolean")
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            work = connection.execute(
+                "SELECT id FROM works WHERE work_key = ?", (work_key,)
+            ).fetchone()
+            if work is None:
+                raise CatalogNotFoundError(f"Catalog work not found: {work_key}")
+            work_id = int(work["id"])
+            if expected_revision_token is not None:
+                actual_revision = self._scope_revision_token(
+                    connection, work_id, discovery_keys
+                )
+                if actual_revision != expected_revision_token:
+                    raise CatalogValidationError(
+                        "Catalog scope state changed after preview; create a new preview"
+                    )
+            all_source_ids = {
+                int(row["id"])
+                for row in connection.execute(
+                    "SELECT s.id FROM sources s JOIN items i ON i.id = s.item_id "
+                    "WHERE i.work_id = ?",
+                    (work_id,),
+                )
+            }
+            if {source_id for source_id, _ in normalized} != all_source_ids:
+                raise CatalogValidationError(
+                    "source_flags must cover every current Source in the work"
+                )
+            if normalized:
+                ids = tuple(source_id for source_id, _ in normalized)
+                placeholders = ", ".join("?" for _ in ids)
+                rows = connection.execute(
+                    "SELECT s.id FROM sources s JOIN items i ON i.id = s.item_id "
+                    f"WHERE s.id IN ({placeholders}) AND i.work_id = ?",
+                    (*ids, work_id),
+                ).fetchall()
+                if {int(row["id"]) for row in rows} != set(ids):
+                    raise CatalogValidationError(
+                        "source_flags contains a missing Source or a Source from another work"
+                    )
+                for source_id, enabled in normalized:
+                    connection.execute(
+                        "UPDATE sources SET acquisition_enabled = ?, updated_at = ? WHERE id = ?",
+                        (int(enabled), timestamp, source_id),
+                    )
+            connection.execute(
+                "INSERT INTO acquisition_scope_sync(work_id, fingerprint, definition_fingerprint, "
+                "configuration_json, status, synced_at) VALUES (?, ?, ?, ?, 'synced', ?) "
+                "ON CONFLICT(work_id) DO UPDATE SET fingerprint = excluded.fingerprint, "
+                "definition_fingerprint = excluded.definition_fingerprint, "
+                "configuration_json = excluded.configuration_json, status = 'synced', "
+                "synced_at = excluded.synced_at",
+                (work_id, fingerprint, definition_fingerprint, configuration_json, timestamp),
+            )
+            rows = connection.execute(
+                "SELECT s.* FROM sources s JOIN items i ON i.id = s.item_id "
+                "WHERE i.work_id = ? ORDER BY s.id",
+                (work_id,),
+            ).fetchall()
+        return tuple(self._source_from_row(row) for row in rows)
+
+    def get_discovery_inventory_evidence(
+        self, discovery_key: str
+    ) -> DiscoveryInventoryEvidence | None:
+        """Return complete-listing evidence stored by a successful full Discovery."""
+
+        self._validate_nonempty(discovery_key, "discovery_key")
+        with self._read_only_connection() as connection:
+            row = connection.execute(
+                "SELECT w.work_key, e.* FROM discovery_inventory_evidence e "
+                "JOIN works w ON w.id = e.work_id WHERE e.discovery_key = ?",
+                (discovery_key,),
+            ).fetchone()
+            if row is None:
+                return None
+            position_rows = connection.execute(
+                "SELECT external_id, display_position, in_scope FROM discovery_inventory_positions "
+                "WHERE discovery_key = ? ORDER BY display_position",
+                (discovery_key,),
+            ).fetchall()
+        values = dict(row)
+        values.pop("work_id", None)
+        values["positions"] = tuple(
+            DiscoveryInventoryPosition(
+                external_id=str(position_row["external_id"]),
+                display_position=int(position_row["display_position"]),
+                in_scope=bool(position_row["in_scope"]),
+            )
+            for position_row in position_rows
+        )
+        return DiscoveryInventoryEvidence(**values)
+
+    def invalidate_discovery_inventory_evidence(self, discovery_key: str) -> None:
+        """Invalidate one listing proof while retaining the last applied binding."""
+
+        self._validate_nonempty(discovery_key, "discovery_key")
+        with self._connection() as connection:
+            work_ids = {
+                int(row["work_id"])
+                for row in connection.execute(
+                    "SELECT work_id FROM discovery_inventory_evidence "
+                    "WHERE discovery_key = ?",
+                    (discovery_key,),
+                )
+            }
+            work_ids.update(
+                int(row["work_id"])
+                for row in connection.execute(
+                    "SELECT DISTINCT i.work_id FROM sources s JOIN items i ON i.id = s.item_id "
+                    "WHERE s.discovery_key = ?",
+                    (discovery_key,),
+                )
+            )
+            connection.execute(
+                "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
+                (discovery_key,),
+            )
+            for work_id in work_ids:
+                self._mark_acquisition_scope_stale(connection, work_id)
+
+    def record_discovery_inventory_evidence(
+        self,
+        *,
+        work_key: str,
+        discovery_key: str,
+        site: str,
+        target_url: str,
+        scope_fingerprint: str,
+        listing_identity: str,
+        positions: Collection[DiscoveryInventoryPosition | Mapping[str, Any]],
+    ) -> DiscoveryInventoryEvidence:
+        """Replace one full-listing proof and refresh only its observed positions.
+
+        No Item status, availability, access state, acquisition flag, target,
+        or artifact history is changed. Call only after a site adapter proves
+        that the complete listing (including both boundaries) was observed.
+        """
+
+        for value, label in (
+            (work_key, "work_key"), (discovery_key, "discovery_key"),
+            (site, "site"), (target_url, "target_url"),
+            (scope_fingerprint, "scope_fingerprint"),
+            (listing_identity, "listing_identity"),
+        ):
+            self._validate_nonempty(value, label)
+        if not _SHA256.fullmatch(scope_fingerprint):
+            raise CatalogValidationError("scope_fingerprint must be a SHA256 hex digest")
+        normalized: list[DiscoveryInventoryPosition] = []
+        for value in positions:
+            if isinstance(value, DiscoveryInventoryPosition):
+                position = value
+            elif isinstance(value, Mapping):
+                try:
+                    position = DiscoveryInventoryPosition(**value)
+                except TypeError as exc:
+                    raise CatalogValidationError(str(exc)) from exc
+            else:
+                raise CatalogValidationError("positions must contain inventory position records")
+            self._validate_nonempty(position.external_id, "external_id")
+            if (isinstance(position.display_position, bool)
+                    or not isinstance(position.display_position, int)
+                    or position.display_position < 1):
+                raise CatalogValidationError("display_position must be an integer >= 1")
+            if not isinstance(position.in_scope, bool):
+                raise CatalogValidationError("in_scope must be a boolean")
+            normalized.append(position)
+        ids = [position.external_id for position in normalized]
+        order_values = [position.display_position for position in normalized]
+        if len(ids) != len(set(ids)) or len(order_values) != len(set(order_values)):
+            raise CatalogValidationError("inventory identities and positions must be unique")
+        normalized.sort(key=lambda value: (value.display_position, value.external_id))
+        digest_input = [
+            (value.external_id, value.display_position, value.in_scope) for value in normalized
+        ]
+        digest = hashlib.sha256(
+            json.dumps(digest_input, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            work = connection.execute(
+                "SELECT id FROM works WHERE work_key = ?", (work_key,)
+            ).fetchone()
+            if work is None:
+                raise CatalogNotFoundError(f"Catalog work not found: {work_key}")
+            work_id = int(work["id"])
+            self._mark_acquisition_scope_stale(connection, work_id)
+            existing = connection.execute(
+                "SELECT s.id, s.discovery_key, i.work_id FROM sources s "
+                "JOIN items i ON i.id = s.item_id WHERE s.site = ? AND s.external_id IN ("
+                + (", ".join("?" for _ in ids) if ids else "NULL")
+                + ")",
+                (site, *ids),
+            ).fetchall()
+            for row in existing:
+                if int(row["work_id"]) != work_id or row["discovery_key"] not in (None, discovery_key):
+                    raise CatalogValidationError(
+                        "inventory contains an existing Source owned by another work or Discovery key"
+                    )
+            in_scope_ids = {item.external_id for item in normalized if item.in_scope}
+            if in_scope_ids:
+                in_scope_rows = connection.execute(
+                    "SELECT s.external_id FROM sources s JOIN items i ON i.id = s.item_id "
+                    "WHERE s.site = ? AND s.discovery_key = ? AND i.work_id = ? AND "
+                    "s.external_id IN ("
+                    + ", ".join("?" for _ in in_scope_ids)
+                    + ")",
+                    (site, discovery_key, work_id, *sorted(in_scope_ids)),
+                ).fetchall()
+                if {str(row["external_id"]) for row in in_scope_rows} != in_scope_ids:
+                    raise CatalogValidationError(
+                        "complete in-scope inventory contains a Source not materialized in Catalog"
+                    )
+            connection.execute(
+                "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
+                (discovery_key,),
+            )
+            connection.execute(
+                "INSERT INTO discovery_inventory_evidence "
+                "(discovery_key, work_id, site, target_url, scope_fingerprint, listing_identity, "
+                "inventory_digest, source_count, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (discovery_key, work_id, site, target_url, scope_fingerprint, listing_identity,
+                 digest, len(normalized), timestamp),
+            )
+            connection.executemany(
+                "INSERT INTO discovery_inventory_positions "
+                "(discovery_key, site, external_id, display_position, in_scope) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(discovery_key, site, item.external_id, item.display_position, int(item.in_scope))
+                 for item in normalized],
+            )
+            connection.execute(
+                "UPDATE sources SET display_position = NULL, updated_at = ? WHERE site = ? "
+                "AND discovery_key = ? AND display_position IS NOT NULL "
+                "AND item_id IN (SELECT id FROM items WHERE work_id = ?)",
+                (timestamp, site, discovery_key, work_id),
+            )
+            for item in normalized:
+                connection.execute(
+                    "UPDATE sources SET display_position = ?, updated_at = ? WHERE site = ? "
+                    "AND external_id = ? AND discovery_key = ? AND item_id IN "
+                    "(SELECT id FROM items WHERE work_id = ?)",
+                    (item.display_position, timestamp, site, item.external_id, discovery_key, work_id),
+                )
+        evidence = self.get_discovery_inventory_evidence(discovery_key)
+        assert evidence is not None
+        return evidence
 
     def update_source_external_state(
         self,
@@ -506,6 +975,12 @@ class CatalogService:
             ).fetchone()
             if row is None:
                 raise CatalogNotFoundError(f"Catalog source not found: ({site}, {external_id})")
+            old_discovery_key = row["discovery_key"]
+            new_discovery_key = old_discovery_key if discovery_key is _UNSET else discovery_key
+            proof_changed = (
+                new_discovery_key != old_discovery_key
+                or (display_position is not _UNSET and display_position != row["display_position"])
+            )
             assignments: list[str] = []
             values: list[Any] = []
             for column, value in (
@@ -535,6 +1010,18 @@ class CatalogService:
                     "UPDATE sources SET " + ", ".join(assignments) +
                     " WHERE site = ? AND external_id = ?", values
                 )
+                if proof_changed:
+                    for invalidated_key in {old_discovery_key, new_discovery_key} - {None}:
+                        connection.execute(
+                            "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
+                            (invalidated_key,),
+                        )
+                    work_id_row = connection.execute(
+                        "SELECT work_id FROM items WHERE id = ?", (row["item_id"],)
+                    ).fetchone()
+                    self._mark_acquisition_scope_stale(
+                        connection, int(work_id_row["work_id"])
+                    )
             updated = connection.execute(
                 "SELECT * FROM sources WHERE site = ? AND external_id = ?", (site, external_id)
             ).fetchone()
@@ -690,6 +1177,18 @@ class CatalogService:
                 f"UPDATE sources SET available = 0, updated_at = ? WHERE {where}",
                 [timestamp, *values],
             )
+            if cursor.rowcount:
+                affected_work_ids = connection.execute(
+                    "SELECT DISTINCT i.work_id FROM sources s JOIN items i ON i.id = s.item_id "
+                    "WHERE s.site = ? AND s.discovery_key = ?",
+                    (site, discovery_key),
+                ).fetchall()
+                connection.execute(
+                    "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
+                    (discovery_key,),
+                )
+                for row in affected_work_ids:
+                    self._mark_acquisition_scope_stale(connection, int(row["work_id"]))
         return cursor.rowcount
 
     def create_discovered_item_source_target(
@@ -735,6 +1234,12 @@ class CatalogService:
                      timestamp, timestamp, source.display_position),
                 )
                 source_id = source_cursor.lastrowid
+                if source.discovery_key is not None:
+                    connection.execute(
+                        "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
+                        (source.discovery_key,),
+                    )
+                self._mark_acquisition_scope_stale(connection, work_id)
                 target_cursor = connection.execute(
                     "INSERT INTO source_targets (source_id, backend, target_key, locator, priority, "
                     "enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -786,6 +1291,20 @@ class CatalogService:
             existing_key = existing_source["discovery_key"]
             if existing_key is not None and existing_key != source.discovery_key:
                 raise CatalogValidationError("source belongs to a different Discovery scope")
+            proof_changed = (
+                source.discovery_key != existing_key
+                or (
+                    source.display_position is not None
+                    and source.display_position != existing_source["display_position"]
+                )
+            )
+            if proof_changed:
+                for invalidated_key in {existing_key, source.discovery_key} - {None}:
+                    connection.execute(
+                        "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
+                        (invalidated_key,),
+                    )
+                self._mark_acquisition_scope_stale(connection, work_id)
             assignments = [
                 "discovery_key = ?",
                 "access_mode = ?",
@@ -1375,6 +1894,17 @@ class CatalogService:
         return row
 
     @staticmethod
+    def _mark_acquisition_scope_stale(
+        connection: sqlite3.Connection, work_id: int
+    ) -> None:
+        """Retain last scope bindings so a stale marker cannot bootstrap silently."""
+
+        connection.execute(
+            "UPDATE acquisition_scope_sync SET status = 'stale' WHERE work_id = ?",
+            (work_id,),
+        )
+
+    @staticmethod
     def _validate_nonempty(value: Any, field: str) -> None:
         if not isinstance(value, str) or not value.strip():
             raise CatalogValidationError(f"{field} must be a non-empty string")
@@ -1600,6 +2130,7 @@ class CatalogService:
     def _source_from_row(row: sqlite3.Row) -> Source:
         values = dict(row)
         values["available"] = bool(values["available"])
+        values["acquisition_enabled"] = bool(values["acquisition_enabled"])
         return Source(**values)
 
     @staticmethod

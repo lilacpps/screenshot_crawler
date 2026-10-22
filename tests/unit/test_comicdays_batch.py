@@ -15,6 +15,7 @@ from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies import SitePolicyRegistry
 from screenshot_crawler.site_policies.comicdays import ComicDaysSitePolicy
 from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
+from tests.helpers.acquisition_scope import synchronized_legacy_watchlist
 
 NOW = datetime(2026, 10, 4, 12, tzinfo=JST)
 
@@ -23,6 +24,13 @@ def _registry(site: str, policy) -> SitePolicyRegistry:
     registry = SitePolicyRegistry()
     registry.register(site, policy)
     return registry
+
+
+def _plan(catalog: CatalogService, site: str, policy, *, now: datetime):
+    watchlist = synchronized_legacy_watchlist(catalog)
+    return BatchPlanner(catalog, _registry(site, policy), watchlist=watchlist).plan(
+        site=site, now=now
+    )
 
 
 def _episode(
@@ -84,7 +92,7 @@ def test_comicdays_planner_keeps_one_quota_candidate_per_work_in_catalog_order(
     _episode(catalog, work=second_work, external_id="2002", order="02", access_mode="quota", site=site)
     _episode(catalog, work=second_work, external_id="2001", order="01", access_mode="quota", site=site)
 
-    plan = BatchPlanner(catalog, _registry(site, policy)).plan(site=site, now=NOW)
+    plan = _plan(catalog, site, policy, now=NOW)
 
     assert [candidate.external_id for candidate in plan.candidates] == ["1001", "2001"]
     assert all(candidate.quota_scope == "work" for candidate in plan.candidates)
@@ -117,7 +125,7 @@ def test_comicdays_planner_direct_and_skip_classifications(
     _episode(catalog, work=work, external_id="paid", order="04", access_mode="paid", site=site)
     _episode(catalog, work=work, external_id="unknown", order="05", access_mode="unknown", site=site)
 
-    plan = BatchPlanner(catalog, _registry(site, policy)).plan(site=site, now=NOW)
+    plan = _plan(catalog, site, policy, now=NOW)
 
     assert [(candidate.external_id, candidate.access_strategy) for candidate in plan.candidates] == [
         ("free", "direct"),
@@ -132,14 +140,10 @@ def test_comicdays_planner_direct_and_skip_classifications(
     assert {skipped.reason for skipped in plan.skipped} >= {"paid", "unknown"}
 
     expires_at = NOW + timedelta(hours=72)
-    before_expiry = BatchPlanner(catalog, _registry(site, policy)).plan(
-        site=site, now=expires_at - timedelta(seconds=1)
-    )
+    before_expiry = _plan(catalog, site, policy, now=expires_at - timedelta(seconds=1))
     assert next(candidate for candidate in before_expiry.candidates if candidate.external_id == "active").access_strategy == "direct"
 
-    at_expiry = BatchPlanner(catalog, _registry(site, policy)).plan(
-        site=site, now=expires_at
-    )
+    at_expiry = _plan(catalog, site, policy, now=expires_at)
     expired_grant = next(
         candidate for candidate in at_expiry.candidates if candidate.external_id == "active"
     )

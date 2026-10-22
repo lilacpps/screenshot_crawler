@@ -2,7 +2,6 @@ from datetime import datetime
 
 import pytest
 
-from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -15,6 +14,7 @@ from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies.base import SitePolicyError
 from screenshot_crawler.site_policies.jumpplus import JumpPlusSitePolicy
 from screenshot_crawler.site_policies.registry import SitePolicyRegistry
+from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=JST)
 
@@ -176,7 +176,9 @@ def test_batch_planner_selects_free_and_active_rental_only(tmp_path) -> None:
 
     registry = SitePolicyRegistry()
     registry.register("jumpplus", JumpPlusSitePolicy)
-    plan = BatchPlanner(catalog, registry).plan(site="jumpplus", now=NOW)
+    plan = synchronized_legacy_planner(catalog, registry).plan(
+        site="jumpplus", now=NOW
+    )
 
     assert [candidate.reason for candidate in plan.candidates] == ["free", "active_rental"]
     assert all(candidate.access_strategy == "direct" for candidate in plan.candidates)
@@ -223,7 +225,9 @@ def test_jumpplus_batch_orders_each_work_by_publication_date(tmp_path) -> None:
 
     registry = SitePolicyRegistry()
     registry.register("jumpplus", JumpPlusSitePolicy)
-    plan = BatchPlanner(catalog, registry).plan(site="jumpplus", now=NOW)
+    plan = synchronized_legacy_planner(catalog, registry).plan(
+        site="jumpplus", now=NOW
+    )
 
     assert [candidate.metadata["order"] for candidate in plan.candidates] == [
         "old",

@@ -1,0 +1,28 @@
+targets:
+  - key: archive-demo-zeblack
+    work_key: archive-demo
+    site: zeblack
+    url: https://example.invalid/zeblack/series
+    enabled: true
+    label: Synthetic series
+    archive_order: 10
+    discovery_scope:
+      from_url: https://example.invalid/zeblack/chapter/100
+      through_url: https://example.invalid/zeblack/chapter/1
+  - key: archive-demo-bookwalker
+    work_key: archive-demo
+    site: bookwalker
+    url: https://example.invalid/bookwalker/series
+    enabled: true
+    label: Synthetic volumes
+    archive_order: 20
+  - key: archive-demo-magapoke
+    work_key: archive-demo
+    site: magapoke
+    url: https://example.invalid/magapoke/series
+    enabled: false
+    label: Planned paid chapters
+    archive_order: 30
+    discovery_scope:
+      from_url: https://example.invalid/magapoke/chapter/2
+      through_url: https://example.invalid/magapoke/chapter/1

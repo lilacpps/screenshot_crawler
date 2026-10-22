@@ -270,6 +270,7 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
         target: WatchlistTarget,
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
+        self.reset_complete_listing_inventory()
         target_episode_id = parse_jumpplus_episode_url(target.url)
         if target_episode_id is None:
             raise DiscoveryIncompleteError("Watchlist target must be a Jump+ episode URL")
@@ -358,9 +359,22 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
                     records,
                     target.discovery_scope,
                 )
+                if mode == "full":
+                    self.capture_complete_listing_inventory(
+                        target=target,
+                        all_records=records,
+                        selected_records=selected_records,
+                        listing_identity=f"jumpplus-series:{series_id}",
+                    )
                 for record in selected_records:
                     yield record
             elif mode == "full":
+                self.capture_complete_listing_inventory(
+                    target=target,
+                    all_records=records,
+                    selected_records=records,
+                    listing_identity=f"jumpplus-series:{series_id}",
+                )
                 for record in records:
                     yield record
         finally:

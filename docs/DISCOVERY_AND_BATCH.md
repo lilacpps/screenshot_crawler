@@ -1893,17 +1893,82 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 
 ## 16. Schema transition policy
 
-The current Catalog schema is v6. The explicit `catalog migrate` flow supports
-the sequential v3 -> v4 -> v5 -> v6 path with an automatic pre-migration backup,
-one transaction, rollback on failure, `quick_check`, foreign-key validation, and
-final schema validation. Normal Catalog runtime does not implicitly migrate an
-older database. Schema v6 adds nullable `items.note` and nullable
+The current Catalog schema is v7. The explicit `catalog migrate` flow supports
+the sequential v3 -> v4 -> v5 -> v6 -> v7 path with an automatic pre-migration
+backup, one transaction, rollback on failure, `quick_check`, foreign-key
+validation, and final schema validation. Normal Catalog runtime does not
+implicitly migrate an older database. Schema v6 adds nullable `items.note` and nullable
 `sources.display_position`, expands Item status to `pending | completed | skipped |
 external`, and keeps only `pending` Batch-eligible. P1 stores display positions
 and P2 assigns them during successful Discovery. P3 uses them for new Batch
 archive/status names. P4 existing archive renumbering is implemented as a local
-filesystem/Catalog maintenance command; P5 real Catalog/output rollout and live
-verification remain planned.
+filesystem/Catalog maintenance command.
+
+Schema v7 adds `sources.acquisition_enabled` (default `1`) and durable tables
+for the last successful Watchlist scope fingerprint and complete-listing
+identity/position evidence. The v6-to-v7 migration does not establish a scope
+sync or alter existing access, Item status, runs, Artifacts or ZIP locators.
+Watchlist `archive_order` is positive, unique and all-or-none within a
+`work_key`. The P2 Scope Reconciler is implemented as a service and explicit
+CLI preview/apply operation. A successful Full Discovery updates complete-
+listing evidence only; it does not silently synchronize work flags. Batch
+filtering and work-key archive naming remain tracked by
+[`runbooks/work-key-archive-order/README.md`](../runbooks/work-key-archive-order/README.md).
+
+Run `watch scope-sync --watchlist PATH --catalog PATH --work-key KEY --dry-run`
+to inspect a read-only diff, then use `--apply` to revalidate the Watchlist and
+atomically sync the work's `acquisition_enabled` flags. Scoped or
+archive-ordered works require fresh complete Full evidence for every required
+key. A first unbounded, unordered legacy sync can bootstrap only when all
+existing Sources have matching current Watchlist key/site/work ownership;
+every existing Source is enabled. Removed keys are retained disabled and
+their last URL binding is kept to detect unsafe URL changes on later re-add.
+Migration alone does not create a sync marker or change existing acquisition
+behavior.
+
+### Batch acquisition-scope gate (work-key P3 implemented)
+
+`batch plan` and `batch run` accept `--watchlist` (default `watchlist.yaml`) and
+require every Work represented in the selected site's Catalog sources to have
+a current, successful Scope Reconciler marker. The active Watchlist
+fingerprint, saved owner/URL bindings, and the complete current Source-flag
+snapshot must agree. A hand edit, changed binding, incomplete sync, stale
+snapshot, or missing Watchlist fails closed before a candidate is emitted.
+Batch does not revisit episode URLs or resolve scope boundaries online.
+
+Planner excludes `acquisition_enabled=0` before Site Policy evaluation and
+quota-candidate allocation, with skip reason `acquisition_disabled`. Quota
+history is calculated from the complete source set before candidate filtering,
+so previously consumed quota remains accounted for even after a source leaves
+the acquisition scope. Existing Item status, source availability, Site Policy,
+access guards, and resource selection retain their independent meanings.
+
+Normal, explicit grant-only, deferred resolver, replan, and additional resource
+passes all use the same gate. Before creating an adapter or preparing a
+resource resolver, Executor rechecks the exact Catalog Work/Item/Source/Target
+identity, target locator, pending Item status, source availability and current
+access mode, acquisition flag, and requested resource. This prevents stale or
+forged candidate objects from sending an out-of-scope URL to a site. CLI Batch
+run holds the shared Catalog job lock across planning and execution. For
+`--grant-only all`, each resource pass is planned before shared Chrome/CDP
+connection; if no pass contains an eligible candidate, the command finishes
+without creating a browser session. Each resource is still replanned before
+its execution pass.
+
+Examples:
+
+```powershell
+python -m screenshot_crawler.cli batch plan --site mangaone --catalog catalog.sqlite --watchlist watchlist.yaml
+python -m screenshot_crawler.cli batch run --site mangaone --catalog catalog.sqlite --watchlist watchlist.yaml
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --dry-run --json
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --apply --json
+```
+
+Scope apply is an explicit operation separate from successful Discovery. After
+editing scope, URL, key membership, or order, operators should inspect
+`scope-sync --dry-run`; changed/unsupported scoped targets need a successful
+complete Full listing proof for each required key before apply. A stale Batch
+plan or concurrent Catalog source change is rejected and must be replanned.
 
 ### Discovery display position contract (P2 implemented)
 
@@ -1969,6 +2034,12 @@ one Item alone do not. Cross-site or pre-existing filesystem collisions are
 not resolved by the Planner and remain fail-closed through packaging's existing
 `FileExistsError` behavior. Existing ZIPs, Artifact locators, and existing
 crawl-status JSON are outside P3 and are not renamed.
+
+The work-key Batch scope gate is an additional precondition: Batch requires a
+Watchlist-backed synchronized Source-flag snapshot and rejects acquisition-
+disabled rows before policy evaluation. This does not change legacy
+site-local `display_position` naming; cross-site `archive_order` numbering and
+existing ZIP renumber remain the P4 contract.
 
 Schema v2はsequential migrationの対象外であり、v2→v3 migrationは実装しない。
 `catalog migrate`はv3以降のDBに対してのみcomplete migration pathを要求する。v2 DBを利用する場合は、

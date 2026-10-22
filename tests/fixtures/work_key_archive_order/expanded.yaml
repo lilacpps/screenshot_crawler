@@ -1,0 +1,56 @@
+targets:
+  - key: archive-demo-zeblack
+    work_key: archive-demo
+    site: zeblack
+    url: https://example.invalid/zeblack/series
+    enabled: true
+    label: Synthetic series
+    archive_order: 10
+    discovery_scope:
+      from_url: https://example.invalid/zeblack/chapter/140
+      through_url: https://example.invalid/zeblack/chapter/1
+  - key: archive-demo-bookwalker
+    work_key: archive-demo
+    site: bookwalker
+    url: https://example.invalid/bookwalker/series
+    enabled: true
+    label: Synthetic volumes
+    archive_order: 20
+  - key: archive-demo-magapoke
+    work_key: archive-demo
+    site: magapoke
+    url: https://example.invalid/magapoke/series
+    enabled: false
+    label: Planned paid chapters
+    archive_order: 30
+    discovery_scope:
+      from_url: https://example.invalid/magapoke/chapter/2
+      through_url: https://example.invalid/magapoke/chapter/1
+
+catalog_fixture:
+  zeblack:
+    discovery_key: archive-demo-zeblack
+    positions: [1, 140]
+    paid_positions: [75, 120]
+    unavailable_positions: [130]
+    item_statuses:
+      10: completed
+      11: skipped
+      12: external
+  bookwalker:
+    discovery_key: archive-demo-bookwalker
+    positions: [1, 2]
+    access_mode: owned
+  magapoke:
+    discovery_key: archive-demo-magapoke
+    positions: [1, 2]
+    access_mode: paid
+    available: false
+
+same_site_identity_conflict:
+  site: zeblack
+  external_id: chapter-100
+  existing_key: archive-demo-zeblack
+  attempted_key: archive-demo-zeblack-overlap
+  expected: reject_without_reparenting
+

@@ -21,6 +21,7 @@ from screenshot_crawler.discovery.models import (
     IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.registry import DiscoveryAdapterRegistry
+from screenshot_crawler.watchlist.fingerprints import target_scope_fingerprint
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -44,6 +45,15 @@ class DiscoveryService:
         self.registry = registry
 
     async def discover(
+        self,
+        page: Page,
+        target: WatchlistTarget,
+        mode: DiscoveryMode | str,
+    ) -> DiscoveryResult:
+        with self.catalog.job_lock():
+            return await self._discover_locked(page, target, mode)
+
+    async def _discover_locked(
         self,
         page: Page,
         target: WatchlistTarget,
@@ -86,6 +96,11 @@ class DiscoveryService:
 
         if adapter is None:
             adapter = self.registry.create(target.site)
+        adapter.reset_complete_listing_inventory()
+        if mode == "full":
+            # A failed or partial Full run must never leave an older listing proof
+            # available to approve a changed scope.
+            self.catalog.invalidate_discovery_inventory_evidence(target.key)
         initial_sources = {
             source.external_id: DiscoverySourceSnapshot(
                 external_id=source.external_id,
@@ -251,6 +266,26 @@ class DiscoveryService:
                 allow_inferred_positions=getattr(
                     adapter, "allow_inferred_display_positions", True
                 ) is True,
+            )
+        inventory = adapter.complete_listing_inventory
+        if mode == "full" and inventory is not None:
+            # Persist proof only after every Catalog finalization step succeeds.
+            # A later failure must not leave a complete marker for a failed run.
+            self.catalog.record_discovery_inventory_evidence(
+                work_key=target.work_key,
+                discovery_key=target.key,
+                site=target.site,
+                target_url=target.url,
+                scope_fingerprint=target_scope_fingerprint(target),
+                listing_identity=inventory.listing_identity,
+                positions=[
+                    {
+                        "external_id": item.external_id,
+                        "display_position": item.display_position,
+                        "in_scope": item.in_scope,
+                    }
+                    for item in inventory.positions
+                ],
             )
         return DiscoveryResult(
             mode=mode,

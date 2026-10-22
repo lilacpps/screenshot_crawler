@@ -1,4 +1,4 @@
-"""Catalog v6 input and row models."""
+"""Catalog input and row models."""
 
 from __future__ import annotations
 
@@ -85,6 +85,57 @@ class Source:
     created_at: str
     updated_at: str
     display_position: int | None = None
+    acquisition_enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionScopeSync:
+    work_key: str
+    fingerprint: str
+    definition_fingerprint: str
+    configuration_json: str
+    status: str
+    synced_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryInventoryPosition:
+    external_id: str
+    display_position: int
+    in_scope: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryInventoryEvidence:
+    work_key: str
+    discovery_key: str
+    site: str
+    target_url: str
+    scope_fingerprint: str
+    listing_identity: str
+    inventory_digest: str
+    source_count: int
+    completed_at: str
+    positions: tuple[DiscoveryInventoryPosition, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionScopeSnapshot:
+    work_key: str
+    work_id: int
+    sources: tuple[Source, ...]
+    inventory_evidence: tuple[DiscoveryInventoryEvidence, ...]
+    sync: AcquisitionScopeSync | None
+    key_sources: tuple[DiscoveryKeySource, ...]
+    revision_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryKeySource:
+    """Read-only Source ownership for keys in a Watchlist work definition."""
+
+    source: Source
+    work_key: str
 
 
 @dataclass(frozen=True, slots=True)

@@ -36,6 +36,7 @@ from screenshot_crawler.site_adapters.zeblack.discovery_protobuf import (
 )
 from screenshot_crawler.site_adapters.zeblack.live_access import ZeblackChapterListSnapshot
 from screenshot_crawler.site_policies import SitePolicyRegistry, ZeblackSitePolicy
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
@@ -80,6 +81,9 @@ async def test_deferred_grant_run_is_sequential_and_reports_each_work(
                     f"/chapter/{external_id}/viewer"
                 )), source_id=source.id,
             )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    for work_index in range(1, 4):
+        reconciler.apply(reconciler.preview(f"work-{work_index}"))
 
     async def sleep(seconds: float) -> None:
         assert seconds == 0.017
@@ -118,7 +122,7 @@ async def test_deferred_grant_run_is_sequential_and_reports_each_work(
             events.append("disconnect")
 
     class Executor:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def grant_only_skip_reason(self, candidate: object) -> str | None:
@@ -347,18 +351,23 @@ async def test_work_cooldown_skips_other_chapters_before_creating_a_page(
         )), source_id=source.id)
     policies = SitePolicyRegistry()
     policies.register("zeblack", ZeblackSitePolicy)
-    before = BatchPlanner(catalog, policies).plan(site="zeblack").candidates
+    watchlist_path = tmp_path / "watchlist.yaml"
+    watchlist = WatchlistService(watchlist_path)
+    watchlist.add(
+        key="target", work_key="work", site="zeblack",
+        url="https://zebrack-comic.shueisha.co.jp/title/1/chapter/list", label="label",
+    )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    reconciler.apply(reconciler.preview("work"))
+    before = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="zeblack"
+    ).candidates
     consumed_at = datetime.now(UTC)
     catalog.record_quota_access_with_resource_state(
         before[0].source_id, work_id=work.id, site="zeblack", resource="work_ticket",
         consumed_at=consumed_at, access_granted_until=consumed_at + timedelta(hours=71),
     )
-    executor = BatchExecutor(catalog, policies, AdapterRegistry())
-    watchlist_path = tmp_path / "watchlist.yaml"
-    WatchlistService(watchlist_path).add(
-        key="target", work_key="work", site="zeblack",
-        url="https://zebrack-comic.shueisha.co.jp/title/1/chapter/list", label="label",
-    )
+    executor = BatchExecutor(catalog, policies, AdapterRegistry(), watchlist=watchlist)
 
     class Session:
         @classmethod
@@ -372,12 +381,14 @@ async def test_work_cooldown_skips_other_chapters_before_creating_a_page(
             pass
 
     monkeypatch.setattr(cli, "BrowserSession", Session)
-    monkeypatch.setattr(cli, "BatchExecutor", lambda *_args: executor)
+    monkeypatch.setattr(cli, "BatchExecutor", lambda *_args, **_kwargs: executor)
     monkeypatch.setattr(cli, "BatchMetricsWriter", lambda *_args, **kwargs: BatchMetricsWriter(
         tmp_path / "metrics", **kwargs
     ))
     if mode == "normal_resolver":
-        remaining = [item for item in BatchPlanner(catalog, policies).plan(site="zeblack").candidates
+        remaining = [item for item in BatchPlanner(
+            catalog, policies, watchlist=watchlist
+        ).plan(site="zeblack").candidates
                      if item.consumes_quota]
         assert await cli._resolve_access_resource_candidates(
             Session(), executor, remaining, resource="work_ticket"

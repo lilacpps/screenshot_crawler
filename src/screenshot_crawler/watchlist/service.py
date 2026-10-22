@@ -64,12 +64,14 @@ class WatchlistService:
         url: str,
         label: str,
         enabled: bool = True,
+        archive_order: int | None = None,
     ) -> WatchlistTarget:
         """Add a target, rejecting an already-used stable key."""
 
         target = self._validate_target(
             WatchlistTarget(
-                key=key, work_key=work_key, site=site, url=url, label=label, enabled=enabled
+                key=key, work_key=work_key, site=site, url=url, label=label,
+                enabled=enabled, archive_order=archive_order,
             ),
             source="new target",
         )
@@ -77,7 +79,7 @@ class WatchlistService:
         if any(existing.key == target.key for existing in targets):
             raise DuplicateWatchlistKeyError(f"Duplicate watchlist key: {target.key}")
         targets.append(target)
-        self._write(targets)
+        self._write(targets, previous=targets[:-1])
         return target
 
     def remove(self, key: str) -> WatchlistTarget:
@@ -87,7 +89,8 @@ class WatchlistService:
         for index, target in enumerate(targets):
             if target.key == key:
                 removed = targets.pop(index)
-                self._write(targets)
+                previous = [*targets[:index], removed, *targets[index:]]
+                self._write(targets, previous=previous)
                 return removed
         raise WatchlistTargetNotFoundError(f"Watchlist target not found: {key}")
 
@@ -105,9 +108,11 @@ class WatchlistService:
                     label=target.label,
                     enabled=enabled,
                     discovery_scope=target.discovery_scope,
+                    archive_order=target.archive_order,
                 )
                 targets[index] = updated
-                self._write(targets)
+                previous = [*targets[:index], target, *targets[index + 1 :]]
+                self._write(targets, previous=previous)
                 return updated
         raise WatchlistTargetNotFoundError(f"Watchlist target not found: {key}")
 
@@ -150,6 +155,7 @@ class WatchlistService:
                 raise DuplicateWatchlistKeyError(f"Duplicate watchlist key: {target.key}")
             keys.add(target.key)
             targets.append(target)
+        self._validate_archive_orders(targets)
         return targets
 
     def _parse_target(self, raw_target: Any, index: int) -> WatchlistTarget:
@@ -168,6 +174,15 @@ class WatchlistService:
         if not isinstance(label, str):
             raise InvalidWatchlistError(f"targets[{index}].label must be a string")
         discovery_scope = self._parse_discovery_scope(raw_target, index)
+        archive_order = raw_target.get("archive_order")
+        if "archive_order" in raw_target and (
+            isinstance(archive_order, bool)
+            or not isinstance(archive_order, int)
+            or archive_order < 1
+        ):
+            raise InvalidWatchlistError(
+                f"targets[{index}].archive_order must be a positive integer"
+            )
         return self._validate_target(
             WatchlistTarget(
                 work_key=raw_target["work_key"],
@@ -177,6 +192,7 @@ class WatchlistService:
                 label=label,
                 enabled=enabled,
                 discovery_scope=discovery_scope,
+                archive_order=archive_order,
             ),
             source=f"targets[{index}]",
         )
@@ -218,6 +234,12 @@ class WatchlistService:
                 raise InvalidWatchlistError(f"{source}.{name} must be a non-empty string")
         if not isinstance(target.enabled, bool):
             raise InvalidWatchlistError(f"{source}.enabled must be a boolean")
+        if target.archive_order is not None and (
+            isinstance(target.archive_order, bool)
+            or not isinstance(target.archive_order, int)
+            or target.archive_order < 1
+        ):
+            raise InvalidWatchlistError(f"{source}.archive_order must be a positive integer")
         if target.discovery_scope is not None:
             if not isinstance(target.discovery_scope, DiscoveryScope):
                 raise InvalidWatchlistError(f"{source}.discovery_scope must be a DiscoveryScope")
@@ -233,27 +255,185 @@ class WatchlistService:
                     )
         return target
 
-    def _write(self, targets: list[WatchlistTarget]) -> None:
+    @staticmethod
+    def _validate_archive_orders(targets: list[WatchlistTarget]) -> None:
+        by_work: dict[str, list[WatchlistTarget]] = {}
+        for target in targets:
+            by_work.setdefault(target.work_key, []).append(target)
+        for work_key, members in by_work.items():
+            specified = [member.archive_order is not None for member in members]
+            if any(specified) and not all(specified):
+                raise InvalidWatchlistError(
+                    f"work_key {work_key!r} must specify archive_order for every key or none"
+                )
+            orders = [member.archive_order for member in members if member.archive_order is not None]
+            if len(orders) != len(set(orders)):
+                raise InvalidWatchlistError(
+                    f"work_key {work_key!r} has duplicate archive_order values"
+                )
+
+    def _write(
+        self,
+        targets: list[WatchlistTarget],
+        *,
+        previous: list[WatchlistTarget] | None = None,
+    ) -> None:
+        self._validate_archive_orders(targets)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists() and previous is not None:
+            original = self.path.read_text(encoding="utf-8")
+            if self._contains_comments(original):
+                patched = self._patch_existing_yaml(original, previous, targets)
+                if patched is None:
+                    raise WatchlistError(
+                        f"Cannot safely update {self.path} while preserving its comments; "
+                        "edit the target mapping directly"
+                    )
+                self._validate_written_content(patched, targets)
+                self._atomic_write(patched)
+                return
+            content = self._serialize_targets(targets)
+            self._validate_written_content(content, targets)
+            self._atomic_write(content)
+            return
+        content = self._serialize_targets(targets)
+        self._validate_written_content(content, targets)
+        self._atomic_write(content)
+
+    @staticmethod
+    def _contains_comments(content: str) -> bool:
+        # A raw '#' may be a real YAML comment, a URL fragment, or part of a
+        # multiline quoted scalar. Treat all cases conservatively: scalar-only
+        # patches remain safe, while structural rewrites must not risk erasing
+        # comment-like or quoted source text.
+        return "#" in content
+
+    def _serialize_targets(self, targets: list[WatchlistTarget]) -> str:
         serialized_targets: list[dict[str, Any]] = []
         for target in targets:
-            serialized: dict[str, Any] = {
-                "key": target.key,
-                "work_key": target.work_key,
-                "site": target.site,
-                "url": target.url,
-                "enabled": target.enabled,
-                "label": target.label,
-            }
-            if target.discovery_scope is not None:
-                scope: dict[str, str] = {}
-                if target.discovery_scope.from_url is not None:
-                    scope["from_url"] = target.discovery_scope.from_url
-                if target.discovery_scope.through_url is not None:
-                    scope["through_url"] = target.discovery_scope.through_url
-                serialized["discovery_scope"] = scope
-            serialized_targets.append(serialized)
+            serialized_targets.append(self._target_mapping(target))
         payload = {"targets": serialized_targets}
+        return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+
+    def _validate_written_content(
+        self, content: str, expected: list[WatchlistTarget]
+    ) -> None:
+        try:
+            raw = yaml.safe_load(content)
+            if not isinstance(raw, dict) or not isinstance(raw.get("targets"), list):
+                raise InvalidWatchlistError("written Watchlist targets are not a list")
+            actual = [self._parse_target(target, index) for index, target in enumerate(raw["targets"])]
+            keys = [target.key for target in actual]
+            if len(keys) != len(set(keys)):
+                raise InvalidWatchlistError("written Watchlist has duplicate keys")
+            self._validate_archive_orders(actual)
+            if actual != expected:
+                raise InvalidWatchlistError("written Watchlist does not match the requested targets")
+        except (yaml.YAMLError, InvalidWatchlistError) as exc:
+            raise WatchlistError(
+                f"Refusing to write invalid or incomplete Watchlist content: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _target_mapping(target: WatchlistTarget) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "key": target.key,
+            "work_key": target.work_key,
+            "site": target.site,
+            "url": target.url,
+            "enabled": target.enabled,
+            "label": target.label,
+        }
+        if target.discovery_scope is not None:
+            scope: dict[str, str] = {}
+            if target.discovery_scope.from_url is not None:
+                scope["from_url"] = target.discovery_scope.from_url
+            if target.discovery_scope.through_url is not None:
+                scope["through_url"] = target.discovery_scope.through_url
+            value["discovery_scope"] = scope
+        if target.archive_order is not None:
+            value["archive_order"] = target.archive_order
+        return value
+
+    def _patch_existing_yaml(
+        self,
+        original: str,
+        previous: list[WatchlistTarget],
+        targets: list[WatchlistTarget],
+    ) -> str | None:
+        """Patch only changed target spans so comments and formatting survive."""
+
+        try:
+            root = yaml.compose(original)
+        except yaml.YAMLError:
+            return None
+        if not isinstance(root, yaml.MappingNode):
+            return None
+        sequence = next(
+            (value for key, value in root.value if isinstance(key, yaml.ScalarNode) and key.value == "targets"),
+            None,
+        )
+        if not isinstance(sequence, yaml.SequenceNode):
+            return None
+        if sequence.flow_style:
+            return None
+        old_by_key = {target.key: target for target in previous}
+        new_by_key = {target.key: target for target in targets}
+        removed = set(old_by_key) - set(new_by_key)
+        added = set(new_by_key) - set(old_by_key)
+        if removed or added:
+            return None
+        edits: list[tuple[int, int, str]] = []
+        node_by_key: dict[str, yaml.MappingNode] = {}
+        for node in sequence.value:
+            if not isinstance(node, yaml.MappingNode):
+                return None
+            key_node = next(
+                (value for key, value in node.value if isinstance(key, yaml.ScalarNode) and key.value == "key"),
+                None,
+            )
+            if not isinstance(key_node, yaml.ScalarNode):
+                return None
+            node_by_key[key_node.value] = node
+
+        changed_fields = {"enabled"}
+        for key in set(old_by_key) & set(new_by_key):
+            old, new = old_by_key[key], new_by_key[key]
+            if old == new:
+                continue
+            if old.archive_order != new.archive_order:
+                return None
+            if any(
+                getattr(old, field) != getattr(new, field)
+                for field in ("key", "work_key", "site", "url", "label", "discovery_scope")
+            ):
+                return None
+            node = node_by_key.get(key)
+            if node is None:
+                return None
+            for field in changed_fields:
+                old_value = getattr(old, field)
+                new_value = getattr(new, field)
+                if old_value == new_value:
+                    continue
+                pair = next(
+                    ((k, v) for k, v in node.value if isinstance(k, yaml.ScalarNode) and k.value == field),
+                    None,
+                )
+                if pair is None:
+                    return None
+                value_node = pair[1]
+                if not isinstance(value_node, yaml.ScalarNode):
+                    return None
+                rendered = "true" if new_value is True else "false" if new_value is False else str(new_value)
+                edits.append((value_node.start_mark.index, value_node.end_mark.index, rendered))
+
+        patched = original
+        for start, end, replacement in sorted(edits, reverse=True):
+            patched = patched[:start] + replacement + patched[end:]
+        return patched
+
+    def _atomic_write(self, content: str) -> None:
         temporary_path: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -266,7 +446,7 @@ class WatchlistService:
                 delete=False,
             ) as temporary:
                 temporary_path = temporary.name
-                yaml.safe_dump(payload, temporary, allow_unicode=True, sort_keys=False)
+                temporary.write(content)
                 temporary.flush()
                 os.fsync(temporary.fileno())
             os.replace(temporary_path, self.path)

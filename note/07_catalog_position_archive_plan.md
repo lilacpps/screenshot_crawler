@@ -802,34 +802,50 @@ Once P5 is complete and all adopted behavior is represented in the authoritative
 
 ---
 
-## Future work: work-key acquisition scope and cross-site archive ordering (PLANNED / NOT IMPLEMENTED)
+## Work-key acquisition scope and cross-site archive ordering (P1-P3 implemented; P4-P5 pending)
 
-The implemented P1-P4 contracts above describe the current Catalog v6
-site-native display-position and archive renumber behavior. They remain in
-force until this separate planned enhancement is implemented.
-
-New adopted workstream:
+The adopted extension is tracked in
 [runbooks/work-key-archive-order/README.md](../runbooks/work-key-archive-order/README.md)
-([progress](../runbooks/work-key-archive-order/PROGRESS.md)).
+and [PROGRESS](../runbooks/work-key-archive-order/PROGRESS.md). Catalog v7 and
+the Watchlist foundation, P2 Scope Reconciler, and P3 Batch ownership gate are
+implemented. Work-key naming, renumber integration and isolated rollout
+verification remain pending. The existing site-local `display_position`
+filename behavior above remains active until P4 naming is complete.
 
-Planning decisions (not yet implemented):
+P1 currently provides:
 
-- Work-key groups existing Watchlist keys without cross-site Item merging.
-- Watchlist `discovery_scope` becomes the acquisition-range authority as well
-  as the bounded Discovery range; `archive_order` explicitly orders keys
-  within one work_key. All-or-none opt-in preserves legacy naming.
-- Catalog v7 adds `sources.acquisition_enabled` and a small durable
-  Watchlist/Catalog sync gate. Out-of-scope Sources retain Item status,
-  availability, discovery_key, run and artifact history.
-- Batch filters the derived acquisition flag, including grant-only/deferred
-  resource passes; Batch does not repeat per-Source site-boundary resolution.
-- ZIP prefix for opt-in Works is recomputed from all participating sources
-  sorted by key order then site-native display position. Paid, completed,
-  expired and disabled-key records still reserve positions if in scope.
-- Existing ZIP changes require explicit work-wide dry-run and safe renumber;
-  no automatic deletion, overwrite or source reassignment.
-- Scope-change behavior must not be described as currently effective until
-  the runbook phases are implemented and tested.
+- `WatchlistTarget.archive_order`, strict positive-integer validation, and
+  all-or-none / unique ordering within each `work_key`.
+- `sources.acquisition_enabled INTEGER NOT NULL DEFAULT 1 CHECK (0, 1)` plus
+  transactional `acquisition_scope_sync` and complete-listing evidence tables.
+- Explicit v6-to-v7 migration with backup and rollback validation. Existing
+  rows default to enabled, while sync/evidence remain empty so migration alone
+  changes no acquisition behavior or ZIP locator.
+- Atomic Catalog APIs for applying a complete Source-flag snapshot with its
+  fingerprint, and storing/retrieving listing identity plus ordered inventory
+  digest. Discovery refresh input omits the acquisition flag and preserves it.
+- Evidence invalidation on full inventory replacement and structural position
+  or key changes. Access-state-only refresh does not force a new listing proof.
+- Watchlist comment preservation for scalar enable changes; unsupported
+  comment-bearing structural rewrites fail before writing. Commentless edits are
+  parsed and compared with the requested target list before atomic replacement.
 
-The detailed phases, migration/bootstrap checks, test matrix, failure
-semantics and future GUI boundaries live exclusively in the runbook.
+Scope sync can be previewed/applied through the current service/CLI. Batch now
+requires the synchronized active fingerprint and current Source flags for
+every Work represented in its candidate source pool. `acquisition_enabled=0`
+is excluded before Site Policy evaluation; all source rows still contribute
+historical quota usage. Normal, grant-only, deferred resolver, replan, and
+additional resource passes share the same gate. Resolver entry validates
+Catalog Work/Item/Source/Target identity and current pending/available/access
+state before creating the site adapter. The CLI run holds the Catalog job lock;
+`--grant-only all` plans all resource passes before CDP connection and skips
+browser setup when every pass is empty. A stale Watchlist/configuration or
+Catalog source snapshot fails closed and requires scope sync or replanning.
+This gate does not change legacy site-local display-position naming. Follow
+P4-P5 before using archive-order naming or renumbering files.
+
+Old archive-maintenance notes that say Watchlist enablement is not a Batch
+source filter refer to the `enabled` Discovery execution flag. They do not
+describe the new independent `discovery_scope` → `acquisition_enabled` gate.
+Discovery enablement remains independent: `enabled: false` does not disable a
+Source for Batch if its last explicit Scope Reconciler sync assigned it.

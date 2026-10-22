@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -40,9 +41,22 @@ from screenshot_crawler.site_adapters.base import AccessResourceResolution, Site
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import SitePolicy
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler, ScopeReconciliationError
+from screenshot_crawler.watchlist.service import WatchlistService
 
 RunnerFactory = Callable[[RunConfig], CrawlerRunner]
 PackageFunction = Callable[..., PackageResult]
+
+
+def _catalog_job_locked(method):
+    """Hold the shared Catalog lock across one public async operation."""
+
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        with self.catalog.job_lock():
+            return await method(self, *args, **kwargs)
+
+    return wrapped
 _RESOLVER_CLEANUP_TIMEOUT_SECONDS = 5
 
 
@@ -157,6 +171,7 @@ class BatchExecutor:
         package_function: PackageFunction = package_crawl_output,
         runtime_settings: SiteRuntimeSettings | None = None,
         access_event_sink: Callable[[AccessEvent], None] | None = None,
+        watchlist: WatchlistService | None = None,
     ) -> None:
         self.catalog = catalog
         self.policies = policies
@@ -165,7 +180,11 @@ class BatchExecutor:
         self.package_function = package_function
         self.runtime_settings = runtime_settings
         self.access_event_sink = access_event_sink
+        self.scope_reconciler = (
+            ScopeReconciler(watchlist, catalog) if watchlist is not None else None
+        )
 
+    @_catalog_job_locked
     async def execute_candidate(
         self,
         page: Page,
@@ -456,6 +475,22 @@ class BatchExecutor:
         *,
         timeout_ms: int = 15_000,
     ) -> AsyncIterator[PreparedAccessResource]:
+        """Lock the Catalog before any access-resource adapter is prepared."""
+        with self.catalog.job_lock():
+            async with self._prepare_access_resource_candidates(
+                page, candidates, quota_resource, timeout_ms=timeout_ms
+            ) as prepared:
+                yield prepared
+
+    @asynccontextmanager
+    async def _prepare_access_resource_candidates(
+        self,
+        page: Page,
+        candidates: list[BatchCandidate] | tuple[BatchCandidate, ...],
+        quota_resource: str,
+        *,
+        timeout_ms: int = 15_000,
+    ) -> AsyncIterator[PreparedAccessResource]:
         """Keep the resolver guard active through a same-page selected grant."""
 
         pending_candidates = tuple(candidates)
@@ -464,6 +499,14 @@ class BatchExecutor:
         sites = {candidate.site for candidate in pending_candidates}
         if len(sites) != 1:
             raise BatchExecutionError("access-resource resolution requires one site")
+        for candidate in pending_candidates:
+            if candidate.quota_resource != quota_resource:
+                raise BatchExecutionError(
+                    "stale grant candidate: quota_resource does not match resolver pass"
+                )
+            self._require_candidate_scope(
+                candidate, expected_quota_resource=quota_resource
+            )
         adapter = self.adapters.create(next(iter(sites)))
         guard = AccessGuard.from_profile(
             site=next(iter(sites)),
@@ -559,6 +602,7 @@ class BatchExecutor:
             except BaseException:  # noqa: BLE001 - cleanup must preserve the active failure
                 await _cancel_task_bounded(guard_close)
 
+    @_catalog_job_locked
     async def execute_grant_only_candidate(
         self,
         page: Page,
@@ -732,6 +776,74 @@ class BatchExecutor:
                 resource_consumed=resource_consumed,
             ) from exc
 
+    def _require_candidate_scope(
+        self,
+        candidate: BatchCandidate,
+        *,
+        item=None,
+        source=None,
+        target=None,
+        expected_quota_resource: str | None = None,
+    ) -> None:
+        """Validate Catalog identity and scope before policy or site access."""
+        if self.scope_reconciler is None:
+            raise BatchExecutionError(
+                "Batch execution requires an explicit Watchlist for acquisition-scope validation"
+            )
+        try:
+            item = item or self.catalog.get_item(candidate.item_id)
+            source = source or self.catalog.get_source(candidate.source_id)
+            target = target or self.catalog.get_source_target(candidate.target_id)
+            if item.id != candidate.item_id or source.item_id != candidate.item_id:
+                raise BatchExecutionError("stale batch candidate: item/source identity")
+            work = self.catalog.get_work(item.work_id)
+            if candidate.work_id is None or candidate.work_id != work.id:
+                raise BatchExecutionError("stale batch candidate: work_id")
+            if source.external_id != candidate.external_id:
+                raise BatchExecutionError("stale batch candidate: external_id")
+            if source.site != candidate.site:
+                raise BatchExecutionError("stale batch candidate: source.site")
+            if target.source_id != source.id:
+                raise BatchExecutionError("stale batch candidate: target.source_id")
+            if target.backend != candidate.backend:
+                raise BatchExecutionError("stale batch candidate: target.backend")
+            if target.target_key != candidate.target_key:
+                raise BatchExecutionError("stale batch candidate: target.target_key")
+            if target.locator != candidate.locator:
+                raise BatchExecutionError("stale batch candidate: target.locator")
+            if not target.enabled:
+                raise BatchExecutionError("stale batch candidate: target.enabled=false")
+            if item.status != "pending":
+                raise BatchExecutionError(
+                    f"stale batch candidate: item.status={item.status!r}"
+                )
+            if not source.available:
+                raise BatchExecutionError("stale batch candidate: source.available=false")
+            if source.access_mode != candidate.access_mode:
+                raise BatchExecutionError("stale batch candidate: source.access_mode")
+            if (
+                expected_quota_resource is not None
+                and candidate.quota_resource != expected_quota_resource
+            ):
+                raise BatchExecutionError("stale batch candidate: quota_resource")
+            snapshot = self.scope_reconciler.require_synchronized_snapshot(work.work_key)
+        except CatalogError as exc:
+            raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
+        except ScopeReconciliationError as exc:
+            raise BatchExecutionError(str(exc)) from exc
+        current_source = next(
+            (record for record in snapshot.sources if record.id == source.id), None
+        )
+        if current_source is None or current_source != source:
+            raise BatchExecutionError(
+                "Catalog source changed while validating acquisition scope; retry Batch"
+            )
+        source = current_source
+        if not source.acquisition_enabled:
+            raise BatchExecutionError(
+                f"Source {source.id} is outside the synchronized acquisition scope"
+            )
+
     def _validate_candidate(
         self, candidate: BatchCandidate, policy: SitePolicy, now: datetime
     ) -> None:
@@ -744,6 +856,7 @@ class BatchExecutor:
         except CatalogError as exc:
             raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
 
+        self._require_candidate_scope(candidate, item=item, source=source, target=target)
         mismatches: list[str] = []
         if candidate.quota_resource is not None:
             try:

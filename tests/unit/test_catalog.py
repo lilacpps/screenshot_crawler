@@ -9,6 +9,7 @@ from screenshot_crawler.catalog import (
     CatalogNotFoundError,
     CatalogService,
     CatalogValidationError,
+    DiscoveryInventoryPosition,
     ItemInput,
     SourceInput,
     SourceTargetInput,
@@ -17,7 +18,7 @@ from screenshot_crawler.catalog import (
     format_timestamp,
     now_jst,
 )
-from screenshot_crawler.catalog.schema import SCHEMA_VERSION
+from screenshot_crawler.catalog.schema import SCHEMA_VERSION, SchemaError, validate_existing_schema
 
 SHA = "A" * 64
 
@@ -43,13 +44,13 @@ def make_graph(service: CatalogService):
     return work, item, source, target
 
 
-def test_initialize_creates_v6_tables_indexes_and_foreign_keys(tmp_path: Path) -> None:
+def test_initialize_creates_v7_tables_indexes_and_foreign_keys(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     service = CatalogService(path)
     service.initialize()
 
-    assert SCHEMA_VERSION == 6
-    assert service.schema_version() == 6
+    assert SCHEMA_VERSION == 7
+    assert service.schema_version() == 7
     with service._connection() as connection:
         tables = {
             row[0]
@@ -59,7 +60,8 @@ def test_initialize_creates_v6_tables_indexes_and_foreign_keys(tmp_path: Path) -
         }
         assert tables == {
             "works", "items", "sources", "source_targets", "crawl_runs", "artifacts",
-            "quota_resource_states",
+            "quota_resource_states", "acquisition_scope_sync",
+            "discovery_inventory_evidence", "discovery_inventory_positions",
         }
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         item_columns = {row[1] for row in connection.execute("PRAGMA table_info(items)")}
@@ -69,12 +71,29 @@ def test_initialize_creates_v6_tables_indexes_and_foreign_keys(tmp_path: Path) -
         source_columns = {row[1] for row in connection.execute("PRAGMA table_info(sources)")}
         assert "published_at" in source_columns
         assert "display_position" in source_columns
+        assert "acquisition_enabled" in source_columns
+        acquisition_column = next(
+            row for row in connection.execute("PRAGMA table_info(sources)")
+            if row[1] == "acquisition_enabled"
+        )
+        assert acquisition_column[3] == 1 and acquisition_column[4] == "1"
+        assert connection.execute("SELECT count(*) FROM acquisition_scope_sync").fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM discovery_inventory_evidence").fetchone()[0] == 0
         assert "note" in item_columns
         indexes = {
             row[1]
             for row in connection.execute("PRAGMA index_list(items)")
         }
         assert "idx_items_work_id" in indexes
+
+
+def test_v7_schema_validator_rejects_missing_scope_index(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    CatalogService(path).initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP INDEX idx_discovery_inventory_positions_position")
+        with pytest.raises(SchemaError, match="missing required index"):
+            validate_existing_schema(connection)
 
 
 def test_work_create_get_find_list_and_validation(tmp_path: Path) -> None:
@@ -373,6 +392,94 @@ def test_set_source_display_positions_empty_assignments_are_noop(tmp_path: Path)
         assignments={},
     ) == ()
     assert not (tmp_path / "catalog.sqlite").exists()
+
+
+def test_scope_sync_and_full_inventory_evidence_are_transactional_and_refresh_safe(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work, item, source, _target = make_graph(service)
+
+    synced = service.apply_acquisition_scope_sync(
+        work_key=work.work_key,
+        fingerprint="watchlist-fingerprint",
+        source_flags={source.id: False},
+    )
+    assert synced[0].acquisition_enabled is False
+    assert service.get_acquisition_scope_sync(work.work_key).fingerprint == "watchlist-fingerprint"
+
+    evidence = service.record_discovery_inventory_evidence(
+        work_key=work.work_key,
+        discovery_key="target-a",
+        site="mangaone",
+        target_url="https://example.invalid/listing",
+        scope_fingerprint="a" * 64,
+        listing_identity="series-42",
+        positions=[
+            DiscoveryInventoryPosition("chapter-1", 1),
+            DiscoveryInventoryPosition("chapter-unobserved", 2, in_scope=False),
+        ],
+    )
+    assert evidence.source_count == 2
+    assert evidence.positions[0].external_id == "chapter-1"
+    stale_sync = service.get_acquisition_scope_sync(work.work_key)
+    assert stale_sync is not None and stale_sync.status == "stale"
+    assert service.get_source(source.id).display_position == 1
+    assert service.get_source(source.id).acquisition_enabled is False
+    assert service.get_item(item.id).status == item.status
+    service.apply_acquisition_scope_sync(
+        work_key=work.work_key,
+        fingerprint="watchlist-fingerprint",
+        source_flags={source.id: False},
+    )
+
+    service.refresh_discovered_source(
+        work_id=work.id,
+        source_id=source.id,
+        item_input=ItemInput(item_title="Refreshed"),
+        source_input=SourceInput(
+            site="mangaone", external_id="chapter-1", discovery_key="target-a",
+            access_mode="quota", display_position=1,
+        ),
+        web_target_input=SourceTargetInput(
+            backend="web", locator="https://example.invalid/chapter"
+        ),
+    )
+    assert service.get_source(source.id).acquisition_enabled is False
+    assert service.get_discovery_inventory_evidence("target-a") is not None
+    assert service.get_acquisition_scope_sync(work.work_key) is not None
+
+    service.refresh_discovered_source(
+        work_id=work.id,
+        source_id=source.id,
+        item_input=ItemInput(item_title="Moved"),
+        source_input=SourceInput(
+            site="mangaone", external_id="chapter-1", discovery_key="target-a",
+            access_mode="free", display_position=2,
+        ),
+        web_target_input=SourceTargetInput(
+            backend="web", locator="https://example.invalid/chapter"
+        ),
+    )
+    assert service.get_source(source.id).acquisition_enabled is False
+    assert service.get_discovery_inventory_evidence("target-a") is None
+    stale_sync = service.get_acquisition_scope_sync(work.work_key)
+    assert stale_sync is not None and stale_sync.status == "stale"
+
+
+def test_scope_sync_rejects_incomplete_source_flags_without_marker(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work, _item, source, _target = make_graph(service)
+    with pytest.raises(CatalogValidationError, match="every current Source"):
+        service.apply_acquisition_scope_sync(
+            work_key=work.work_key, fingerprint="f", source_flags={}
+        )
+    assert service.get_acquisition_scope_sync(work.work_key) is None
+    with pytest.raises(CatalogValidationError, match="every current Source"):
+        service.apply_acquisition_scope_sync(
+            work_key=work.work_key, fingerprint="f", source_flags={source.id + 1: True}
+        )
+    assert service.get_source(source.id).acquisition_enabled is True
 
 
 @pytest.mark.parametrize("value", [True, False, None, 0, -1, 1.5, "1"])

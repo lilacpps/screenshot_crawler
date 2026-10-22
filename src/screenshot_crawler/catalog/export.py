@@ -1,4 +1,4 @@
-"""Read-only CSV snapshot export for the Catalog v6 schema."""
+"""Read-only CSV snapshot export for the Catalog v7 schema."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ EXPORT_COLUMNS = {
         "id", "item_id", "site", "external_id", "discovery_key", "access_mode",
         "free_until", "available", "access_checked_at", "last_seen_at", "quota_started_at",
         "access_granted_until", "created_at", "updated_at", "display_position",
+        "acquisition_enabled",
     ),
     "source_targets": (
         "id", "source_id", "backend", "target_key", "locator", "priority", "enabled",
@@ -42,7 +43,7 @@ EXPORT_COLUMNS = {
 }
 
 EXPORT_FILENAMES = tuple(f"{table}.csv" for table in EXPORT_COLUMNS)
-_BOOLEAN_COLUMNS = {"available", "enabled"}
+_BOOLEAN_COLUMNS = {"available", "acquisition_enabled", "enabled"}
 
 
 class CatalogExportError(CatalogError):
@@ -51,7 +52,7 @@ class CatalogExportError(CatalogError):
 
 @dataclass(frozen=True, slots=True)
 class ExportResult:
-    """Summary of a completed six-table Catalog export."""
+    """Summary of a completed six-table data export."""
 
     output_dir: Path
     works: int
@@ -70,7 +71,7 @@ class ExportResult:
 
 
 def export_catalog_csv(catalog_path: str | Path, output_dir: str | Path) -> ExportResult:
-    """Export all v6 Catalog tables to a read-only, six-CSV snapshot."""
+    """Export Catalog's six data tables to a read-only CSV snapshot."""
 
     catalog_path = Path(catalog_path)
     output_dir = Path(output_dir)

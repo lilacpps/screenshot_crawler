@@ -19,6 +19,7 @@ from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import BookWalkerSitePolicy, SitePolicyRegistry
+from tests.helpers.acquisition_scope import synchronized_legacy_watchlist
 
 NOW = datetime(2026, 9, 19, 12, 0, tzinfo=JST)
 
@@ -70,6 +71,8 @@ def make_candidate(service: CatalogService, *, order: str = "01") -> BatchCandid
         metadata={"title": "BookWalker volume", "order": order},
         access_mode="quota",
         consumes_quota=True,
+        external_id=source.external_id,
+        work_id=work.id,
     )
 
 
@@ -114,6 +117,7 @@ def make_executor(service: CatalogService, *, fail: bool = False) -> BatchExecut
         service,
         policies,
         adapters,
+        watchlist=synchronized_legacy_watchlist(service),
         runner_factory=FakeRunner,
         package_function=package_function,
     )

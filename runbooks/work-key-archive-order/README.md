@@ -1,6 +1,6 @@
 # Work-key横断の取得範囲・ZIP採番 — 実装Runbook
 
-> Status: **PLANNED / NOT IMPLEMENTED** (2026-10-22)
+> Status: **IN PROGRESS** (2026-10-22). P1-P2 are reviewed; P3 implementation and targeted tests are complete and awaiting independent review; P4-P5 remain.
 > Owner: Lead + Codex Implementer。進捗は同ディレクトリの PROGRESS.md で更新する。
 > This is an execution plan, **not** a description of currently shipped behavior.
 
@@ -29,7 +29,7 @@
 - src/screenshot_crawler/batch/planner.py: 現在はsiteスナップショットを読んで pending とSite Policyで候補決定。scopeを参照せず、artifact_prefixはsources.display_positionから作る。
 - src/screenshot_crawler/batch/naming.py + core/packaging.py: ZIP名のprefixとdisambiguatorを構成。zipファイルを既存パスへ暗黙上書きしない。
 - scripts/renumber_archives.py + maintenance/archive_renumber.py: dry-run、衝突検査、ZIP/status JSON/Artifact locator更新、rollbackを実装済み。
-- watchlist/service.py: YAMLは読み書きできるがsafe_dumpでコメントが保存されない。現在の範囲に関するコメントを壊さないことが別途重要。
+- watchlist/service.py: YAMLのコメントはsafe_dumpでは保存されない。今回のCLIはコメントを含むWatchlistではenabledのscalarだけを保守的に更新し、追加・削除・archive_order変更など構造変更はファイルを書き換える前に拒否する。コメントレスの構造変更は再parseし、要求したtarget一覧と一致することを確認してからatomic replaceする。
 
 変更開始前に必ず最新の code/tests と docs/SPEC.md、docs/ARCHITECTURE.md、docs/DISCOVERY_AND_BATCH.md、docs/BOUNDED_DISCOVERY.md、docs/ACCESS_CONTROL_AND_PACING.md、docs/TEST_STRATEGY.md、note/00_core.md、note/07_catalog_position_archive_plan.md を再確認する。既存ドキュメントとこの計画に矛盾があれば黙って変更せず、差分を明示して整合を取る。
 
@@ -74,6 +74,8 @@ targets:
 
 上記URLは概念例、実サイトURLではない。境界の向き・site-native識別・inclusive判定は既存docs/BOUNDED_DISCOVERY.mdと各Adapterをauthorityとする。archive_orderは同一work_key内で重複禁止、boolean/0/負数/非整数禁止。値は10,20,30など間隔を空けてよい。
 
+CLIで新しいkeyを追加する場合は `watch add --key ... --work-key ... --site ... --url ... --archive-order 10` を使う。work_keyの全keyに順序を追加・変更する場合、既存YAMLにコメントがあるとCLIの構造書き換えは安全側に拒否されるため、Watchlistを直接編集する。raw `#` 文字をURL fragmentや引用scalar内で使っている場合もコメント保持のため保守的に同じ扱いとなる。
+
 **後方互換**:
 - work_key配下の全targetにarchive_orderが **ない** 場合、既存のsite-native display_position命名を維持する。
 - work_key配下の **全targetにarchive_orderがある** 場合のみ、新しいwork-key通し採番を使う。keyが1つでも明示的に指定すればopt-in可能。
@@ -91,7 +93,9 @@ Catalog v7 migration（バックアップと既存migrations.pyの明示migratio
 3. Item/Source/CrawlRun/Artifactの既存ID、履歴、quota state、display_positionは移行時に変更しない。自動的な全件reconcileや改名はmigrationに混ぜない。
 4. migration直後は旧取得動作を突然変えない。同期状態が未初期化の作品は、明示bootstrap syncを要するものとして表示・実行ガードする。実Catalogの事前バックアップは必須。
 
-同期fingerprintは正規化したwork_key内の全key・site・scope・archive_order・key集合（disabled含む）から決定的に計算する。label等の表示用編集だけでは不要な再同期を発生させない。site/key/work_key不一致、境界未解決、途中更新があれば同期完了としない。
+同期fingerprintは正規化したwork_key内の全key・site・target URL・scope・archive_order・key集合（disabled含む）から決定的に計算する。target URLは同じlistingであることの根拠に関わるため含める。label等の表示用編集だけでは不要な再同期を発生させない。site/key/work_key不一致、境界未解決、途中更新があれば同期完了としない。
+
+Scope sync proofは単なる `complete=true` やWatchlist fingerprintと分離する。成功したFull Discoveryから、`work_key / key / site / target URLまたはsite-native listing identity`、そのlisting全体のstable Source identityとglobal position、完全性を検証したinventory digestを保持する。既存bounded Discoveryは境界確認のためlisting全体を一時観測するが、Serviceが現在永続化するのはyieldされた範囲内のpositionだけである。そのため、yield範囲内の行や以前の `display_position` だけで未観測Sourceの範囲判定を完了してはならない。境界照合・complete inventoryを提供できないsiteはScope syncをfail closedにする。target URL/listing identityの変更、incomplete Discovery、または位置inventoryへ影響するCatalog mutationで証明を失効させる。
 
 **重要**: filenameの通し番号は永続カラムにしない。現在のCatalogスナップショットとWatchlist順序から同じpure functionで計算し、新規Batchとrenumberが共有する。
 
@@ -100,8 +104,8 @@ Catalog v7 migration（バックアップと既存migrations.pyの明示migratio
 ### 3.1 更新前計画 / 完了反映
 
 - scope編集時は新Watchlistの設定を読み、対象work_keyに属するCatalogの全Sourceを確認する。
-- Scope判定はsite-native stable identityで境界を解決し、同一site/listingであることを確認したうえで、既存display_positionを使って比較する。URL文字列の大小比較、話数表記、漢数字の推定、Source IDの大小を境界の代用にしない。
-- 範囲境界がCatalogにない・位置がNULL・同一listingと証明できない・逆転している・重複所有が疑われる場合は **fail closed**。必要なsiteの有界なfull Discoveryで境界を検証するまでは同期しない。
+- Scope判定はsite-native stable identityで境界を解決し、同一site/listingであることを確認したうえで、成功Fullの完全なinventoryに含まれるglobal `display_position` を使って比較する。URL文字列の大小比較、話数表記、漢数字の推定、Source IDの大小を境界の代用にしない。
+- 範囲境界がCatalog/listing inventoryにない・位置がNULL・同一listingと証明できない・inventoryがincomplete・逆転している・重複所有が疑われる場合は **fail closed**。必要なsiteの有界なfull Discoveryで境界とinventoryを検証するまでは同期しない。既存のbounded Service書き込みはscope外Sourceのpositionを更新しないため、Adapter/Service間にlisting全体identity-position inventoryを安全に渡す小hookを実装し、既存Sourceに対してのみ位置を反映する。範囲外Sourceを新規Discovery/Item化しない。
 - 管理操作は **preview/dry-run → apply**。差分としてSource ID/外部ID/key/old→new flag、担当外件数、ZIP採番/衝突への影響を提示する。
 - applyでは1 work_key分を一つのSQLite transactionで更新。fingerprint記録も同一transactionとする。途中失敗で一部のフラグだけが有効にならない。
 - GUIは後から同じpreview/apply APIを利用する。WatchlistとSQLiteの更新を物理的な1 transactionにできないため、途中クラッシュ時はfingerprint不一致としてBatchを **fail closed** させる。
@@ -110,9 +114,9 @@ Catalog v7 migration（バックアップと既存migrations.pyの明示migratio
 ### 3.2 新規Discover・再Discover
 
 - 新しくDiscoverされたSourceは、そのkeyのscope内で確定したものとして acquisition_enabled=1 とする。旧Sourceは今回観測しなくても、必要なら同期処理でscope内/外を再評価する。
-- Full Discovery（成功）では境界と一覧positionの整合を確定してからscope同期をcommit。bounded fullが未観測Sourceをunavailable化しない既存契約は維持する。
+- A successful Full Discovery stores target/listing-bound complete inventory evidence only after iterator exhaustion and Catalog finalization. It does not apply Watchlist acquisition flags. A separate explicit `scope-sync --dry-run` / `--apply` operation commits the full work once all required key proofs are current. This avoids partial multi-key synchronization.
 - Incremental Discoveryはcomplete listingの証拠ではない。新規確実なin-scope Sourceの登録・位置更新はよいが、「今回見つからなかった」ことを理由に既存Sourceを取得担当外にしない。scope変更時の全Source再判定をincrementalのknown-streak結果だけで確定しない。
-- Discoveryがincomplete/exception/プロセスクラッシュなら同期成功マーカーを付けない。更新途中に作られたSourceはBatchが見ないよう同期ゲートまたは保守的な初期フラグで守る。ジョブ排他も実装し、Discover/同期/Batch/renumberの同時変更を防ぐ。
+- Discoveryがincomplete/exception/プロセスクラッシュなら同期成功マーカーを付けない。Incremental/partial Catalog mutationがscope eligibilityまたはposition inventoryへ影響する場合も古いFull proofを失効させる。更新途中に作られたSourceはBatchが見ないよう同期ゲートまたは保守的な初期フラグで守る。ジョブ排他も実装し、Discover/同期/Batch/renumberの同時変更を防ぐ。
 - Watchlistを直接手編集したケースもサポートする。Batch開始時には **軽量なfingerprint照合だけ** 行い、scope未同期なら実行しない。各SourceのWeb照合をBatchに持ち込まない。
 - Full/Incrementalによるlisting position変更がopt-in work_keyの既存ZIP名へ及ぼす影響を事前判定。必要ならrenumberが先。採番整合性未確認のまま同名ZIPを上書き・改名しない。
 
@@ -126,7 +130,7 @@ Catalog v7 migration（バックアップと既存migrations.pyの明示migratio
 
 ## 4. Batch・grant-only統合
 
-- BatchPlanner.plan(site=...)の候補構築で acquisition_enabled=0 をSite Policy評価・quota消費候補選択の前に除外。スキップ理由は acquisition_excluded 等で明示。
+- BatchPlanner.plan(site=...)の候補構築で acquisition_enabled=0 をSite Policy評価・quota消費候補選択の前に除外。スキップ理由は `acquisition_disabled`。
 - 通常Batch、明示 grant-only、deferred/live resolver、replan、追加resource passまで **同じ対象フィルタ** を適用する。quota消費/サイトアクセスの直前で選択集合が意図せず拡張しないこと。
 - Site Policy / Core Runner / Adapterの既存resource/チケット消費ルールは変えない。購入・ポイント/コイン消費は新規導入しない。acquisition_enabledは購入可否を意味しない。
 - Batch PLAN/RUNはCatalogだけで話単位の可否を判定。開始前のWatchlist読込は軽いfingerprint整合チェックと、opt-in採番用のkey順序情報の取得に限定。個々のURL境界を再解決しない。
@@ -156,6 +160,7 @@ opt-inしたwork_keyについて:
 - 既存scripts/renumber_archives.pyを拡張し、--work-key単位の**全サイト**にわたるdry-run / applyに対応。
 - Renameプレビューで old→new、件数、対象外の既存ZIP、collision、不明なposition、status JSON、Catalog Artifactsへの影響を表示。
 - 対象外SourceのZIPは勝手に消去・rename・locator削除しない。既存パス占有を含む衝突ではapplyしない。
+- Opt-in workはそのwork_key全体でatomicなpreflight policyを適用する。参加Sourceのposition/key/scope証拠が不明、対象外既存ZIPとの衝突、Artifact locator/Status JSON不整合、またはCatalog/Watchlist fingerprint差異が1件でもあれば、他の正常なrenameだけを部分適用せずwork全体のapplyを拒否する。
 - 既存preflightのTEMP rename、rollback、status更新、Artifact locator更新を維持。手動で管理しているZIPや過去に複数Artifactがあるケースは曖昧性を拒否。異なるArchive同士の入れ替え/ずらしは対象全体をpreflightしなければならない。
 - 再取得時も現在の名前と既存ZIPを検査。自動overwriteをしない。
 - 名前の変更が必要な場合、**scope同期の完了とrenumber適用を別操作**にし、未解決collisionがある状態の後続Batchは停止。
@@ -181,7 +186,7 @@ python scripts/renumber_archives.py --work-key sample --apply
 - dry-runはWatchlist・Catalog・ZIPに一切書き込まない。失敗事由を具体的に返す。
 - applyは対象work_keyを明示要求。--all一括は段階導入時はpreview重視。
 - 実行後はselected, enabled, excluded, unresolved, renamed, unchanged, collision等を機械可読な形式でも取得できるようにする（必要最小限のJSON summaryでよい）。
-- Watchlist編集/renameをCLIで実装するときは、既存コメント・スコープ境界・archive_orderの消失に注意。初期実装で一律YAML再整形するなら、運用前に差分を明示し、意図しないコメント破壊を避ける。GUI用の高度なエディタは今回不要。
+- Watchlist CLIの書き込みは、コメントを含むファイルでenabledのscalar変更のみを元テキスト上に反映し、それ以外の構造変更を拒否する。コメントレスの構造変更ではserialize後に再parseし、正規化したtargetsが要求された一覧と完全一致することを確認してからatomic replaceする。GUI用の高度なエディタは今回不要。
 
 ## 7. フェーズ契約・チェックポイント
 
@@ -210,12 +215,56 @@ python scripts/renumber_archives.py --work-key sample --apply
 **Acceptance/tests**: 1～140→1～100→1～140の再拡張でSource IDs/履歴不変、NULL position/未知境界/同一site重複でfail closed、incremental missingでfalse excludeしない。
 **Exit**: legacy + scopedのreconcileが専用fixtureで検証済み。
 
+#### P2 implementation contract and operational split
+
+P2 adds the service API `ScopeReconciler.preview()` / `.apply()` and the CLI
+`watch scope-sync --watchlist PATH --catalog PATH --work-key KEY
+(--dry-run|--apply) [--json]`. Dry-run is read-only, including when the
+Catalog path does not yet exist. Apply re-reads the Watchlist, revalidates the
+preview under the stable per-Catalog job lock, and atomically commits the
+complete Source-flag set with the sync marker.
+
+A successful Full Discovery writes complete listing evidence only after
+normal iterator exhaustion and Catalog finalization. It does **not** apply
+Watchlist scope flags. Scope changes require a separate explicit preview and
+apply after the required keys have fresh proof. This is a safety refinement to
+the original combined Full-proof/sync wording: a multi-key work cannot be
+partially synchronized merely because one key completed first. Position or
+membership changes require fresh Full evidence and another explicit sync.
+
+For compatibility, a first sync without discovery proof may bootstrap only a
+work with no `discovery_scope` and no `archive_order`, when every existing
+Source belongs to a current Watchlist key with matching site/work ownership;
+all such Sources are enabled. Scoped or archive-ordered works require complete
+Full proof. Removed keys retain their last site/URL binding in sync metadata:
+re-adding the same key and URL is recognized, while changing a removed key's
+URL requires new proof. Removed Sources remain in Catalog and are disabled.
+
+Complete-listing hooks currently cover Zeblack, BookWalker, Magapoke, Jump+,
+MANGA ONE and Piccoma. Other adapters retain ordinary unbounded Discovery, but
+scoped or archive-ordered synchronization fails closed until they can supply
+site-native listing identity and complete position evidence. Recovery for a
+blocked preview: run Full Discovery for each changed/unsupported key, resolve
+boundary/position errors at the source listing, then rerun dry-run and apply.
+Do not manually edit `acquisition_enabled` or use a Full run as implicit sync.
+
 ### P3 — Batchの対象フィルタと同期ゲート
 **Objective**: 元のチケット/選択セマンティクスを維持して担当外だけを除外。
 - plan/run（normal/direct/quota/grant-only/deferred/replan/追加resource）で除外フィルタの一貫性を実装。
 - setting fingerprint mismatchなら消費前に停止。Watchlistの境界照合はBatchに埋め込まない。
-**Acceptance/tests**: 担当外のpaid/free/quotaが候補にならず、quota消費・ログインサイト操作も起きない。属するWorkの別サイトを自動mergeしない。既存Site Policyテストを回帰させない。
-**Exit**: 実サイトを用いない正常系/拒否系のBatch候補比較が合格。
+**Implemented**: CLI `batch plan` / `batch run` はWatchlistを読み、各Workのactive fingerprint・sync marker・現在Source flagsを照合する。Discovery証拠が更新されても、別途 `watch scope-sync --apply` が完了するまでBatchは拒否する。Plannerは担当外SourceをPolicy評価の前に候補外とし、quota履歴の集計には全Sourceを残す。Executorは通常実行とresolver入口でCatalog上のWork/Item/Source/Target identity、pending/available/current access mode、resource passの一致および同期snapshotを再検証する。grant-only allは全resourceをCDP接続前にpreflightし、候補がなければBrowser/Loginを開始しない。CLI run中はCatalog job lockを保持する。
+**CLI**:
+```powershell
+python -m screenshot_crawler.cli batch plan --site mangaone --catalog catalog.sqlite --watchlist watchlist.yaml
+python -m screenshot_crawler.cli batch run --site mangaone --catalog catalog.sqlite --watchlist watchlist.yaml
+```
+Watchlistを直接編集した後は、Batchの前に作品ごとにscope preview/applyを実行する。
+```powershell
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --dry-run --json
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --apply --json
+```
+**Acceptance/tests**: 担当外のpaid/free/quotaが候補にならず、quota消費・ログインサイト操作も起きない。属するWorkの別サイトを自動mergeしない。既存Site Policyテストを回帰させない。skip reasonは`acquisition_disabled`。
+**Exit**: synthetic normal/grant-only/deferred/replan/resource-passの候補拒否、同期stale・TOCTOU・forged resolver候補の拒否、empty grant-onlyのno-browserがtargeted testsで合格。P3 reviewer承認後にP4へ進む。
 
 ### P4 — opt-in通し採番と安全なrenumber
 **Objective**: 複数keyにまたがるZIPの並び順を統一。
@@ -248,6 +297,8 @@ python scripts/renumber_archives.py --work-key sample --apply
 10. 既存ZIP（同名/非参加/既に除外済み）、Status JSON不一致、Artifact locator欠落、失敗時のrollback。
 11. Watchlist YAMLのキー・scope・archive_orderのload/write保持、コメント消失を伴う操作は防止または明示警告。
 12. full→bounded/full→unbounded/incremental→full変更後の出力、および無変更での既存動作の回帰。
+13. 3-key synthetic workでZeblackの担当100 rows、BookWalkerの2 volumes、Magapokeのin-scope paid 2 rowsを扱う場合、BookWalkerが101/102、Magapokeが103/104となる。Zeblackのout-of-scope paid rowsは採番せず、合計は104。`example.invalid` fixtureはCatalog/Watchlist/ZIP構造専用であり、サイト境界parserの証拠には使わない。Adapter inventory hookは各siteのpure fake identity adapterで検証し、実site境界確認が必要なsiteのみ別途有界に調査する。
+14. Catalog v7 migrationはdefault acquisition flagを設定してもsync/evidenceは未初期化のままとし、migrationのみでscope eligibilityやZIPを変更しない。
 
 想定の主なテストファイル: tests/unit/test_watchlist.py, test_catalog_migrations.py, test_catalog.py, test_discovery.py, test_batch.py, test_batch_executor.py, test_batch_naming.py, test_archive_renumber.py, test_cli.py と必要なbounded discovery integration。影響範囲が広いため、targeted/affected tests後にfull pytestとruffを推奨（docs/TEST_STRATEGY.mdに従い、実サイト実行は必要時のみ）。
 

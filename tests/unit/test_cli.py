@@ -1,7 +1,7 @@
 import asyncio
 import builtins
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +10,6 @@ from typing import ClassVar
 import pytest
 
 from screenshot_crawler import cli
-from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import (
     ArtifactInput,
     CatalogService,
@@ -29,6 +28,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveredSource,
     DiscoveryResult,
 )
+from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 
 async def _no_cli_pacing_wait(_seconds: float) -> None:
@@ -672,7 +672,7 @@ def test_catalog_item_status_cli_updates_batch_eligibility(
         SourceTargetInput(backend="web", locator="https://example.test/chapter/1"),
         source_id=source.id,
     )
-    planner = BatchPlanner(service, cli._batch_policy_registry())
+    planner = synchronized_legacy_planner(service, cli._batch_policy_registry())
 
     monkeypatch.setattr(
         sys,
@@ -1040,7 +1040,7 @@ def test_batch_plan_magapoke_shows_potential_premium_pass_without_browser(
     premium = [candidate("quota", index) for index in range(135)]
 
     class FakePlanner:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
@@ -1054,7 +1054,7 @@ def test_batch_plan_magapoke_shows_potential_premium_pass_without_browser(
                 quota_remaining=None,
             )
 
-    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",
@@ -1089,7 +1089,7 @@ def test_batch_plan_non_magapoke_does_not_show_potential_premium_pass(
     site: str,
 ) -> None:
     class FakePlanner:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
@@ -1099,7 +1099,7 @@ def test_batch_plan_non_magapoke_does_not_show_potential_premium_pass(
                 quota_remaining=None,
             )
 
-    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",
@@ -1135,7 +1135,7 @@ def test_batch_run_continues_after_work_ticket_unavailable(
     calls: list[int] = []
 
     class FakePlanner:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
@@ -1158,7 +1158,7 @@ def test_batch_run_continues_after_work_ticket_unavailable(
             pass
 
     class FakeExecutor:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         async def execute_candidate(
@@ -1169,7 +1169,7 @@ def test_batch_run_continues_after_work_ticket_unavailable(
                 raise cli.AccessResourceUnavailableError("work_ticket_unavailable")
             return SimpleNamespace(archive_path=Path("candidate-b.zip"))
 
-    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",
@@ -1228,7 +1228,7 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
     plans: list[str | None] = []
 
     class FakePlanner:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
@@ -1254,7 +1254,7 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
             pass
 
     class FakeExecutor:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         async def execute_candidate(
@@ -1270,7 +1270,7 @@ def test_batch_run_replans_premium_after_work_pass_and_stops_at_zero_balance(
                 stop_resource_pass=candidate.item_id == 3,
             )
 
-    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",
@@ -1326,7 +1326,7 @@ def test_batch_run_limit_spans_initial_and_premium_phases(
     plans: list[str | None] = []
 
     class FakePlanner:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
@@ -1349,14 +1349,14 @@ def test_batch_run_limit_spans_initial_and_premium_phases(
             pass
 
     class FakeExecutor:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         async def execute_candidate(self, _page: object, candidate: object, **_kwargs: object) -> object:
             calls.append(candidate.item_id)
             return SimpleNamespace(archive_path=Path(f"item-{candidate.item_id}.zip"))
 
-    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",
@@ -1494,7 +1494,7 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         events.append(f"sleep:{seconds}")
 
     class FakePlanner:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
@@ -1548,7 +1548,7 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
             pass
 
     class FakeExecutor:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
@@ -1717,7 +1717,7 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
     events: list[str] = []
 
     class FakePlanner:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
@@ -1774,7 +1774,7 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
             pass
 
     class FakeExecutor:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
@@ -1811,6 +1811,7 @@ async def test_zeblack_grant_only_prints_deferred_pool_before_live_selection(
         cli, "CatalogService", lambda *_args: SimpleNamespace(
             get_work=lambda _id: SimpleNamespace(title="作品名", work_key="work"),
             get_source=lambda _id: SimpleNamespace(discovery_key=None),
+            job_lock=lambda: nullcontext(),
         )
     )
     monkeypatch.setattr(
@@ -1965,7 +1966,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
         )
 
     class FakePlanner:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
@@ -1993,7 +1994,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
             pass
 
     class FakeExecutor:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
@@ -2009,7 +2010,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
                 stop_reason="entry_confirmed",
             )
 
-    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",
@@ -2048,7 +2049,8 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
     cli.main()
 
     output = capsys.readouterr()
-    assert plans == ["resource_a", "resource_b"]
+    # Preflight all resource passes before CDP, then replan each pass at execution.
+    assert plans == ["resource_a", "resource_b", "resource_a", "resource_b"]
     assert executions == [("resource_a", 1), ("resource_a", 2), ("resource_b", 3)]
     assert "resource=all" in output.out
     assert "item=4" not in output.out
@@ -2071,7 +2073,7 @@ def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
         )
 
     class FakePlanner:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def plan(self, *, site: str, quota_resource: str | None = None) -> object:
@@ -2100,7 +2102,7 @@ def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
             pass
 
     class FakeExecutor:
-        def __init__(self, *_args: object) -> None:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
@@ -2120,7 +2122,7 @@ def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
                 stop_reason="entry_confirmed",
             )
 
-    monkeypatch.setattr(cli, "CatalogService", lambda *_args: object())
+    monkeypatch.setattr(cli, "CatalogService", lambda *_args: SimpleNamespace(job_lock=lambda: nullcontext()))
     monkeypatch.setattr(
         cli,
         "_batch_policy_registry",

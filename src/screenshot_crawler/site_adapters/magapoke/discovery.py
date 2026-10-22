@@ -144,7 +144,7 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
         target: WatchlistTarget,
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
-        del mode
+        self.reset_complete_listing_inventory()
         target_parts = parse_magapoke_episode_url(target.url)
         if target_parts is None:
             raise DiscoveryIncompleteError(
@@ -166,6 +166,7 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
                 target_parts,
                 canonical_title,
             )
+            all_records = records
             if target.discovery_scope is not None:
                 records = [
                     replace(
@@ -181,6 +182,13 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
                     records,
                     target_parts,
                     target.discovery_scope,
+                )
+            if mode == "full":
+                self.capture_complete_listing_inventory(
+                    target=target,
+                    all_records=all_records,
+                    selected_records=records,
+                    listing_identity=f"magapoke-title:{target_parts.title_id}",
                 )
         except DiscoveryIncompleteError:
             raise

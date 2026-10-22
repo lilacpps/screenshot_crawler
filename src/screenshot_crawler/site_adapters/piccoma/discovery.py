@@ -317,7 +317,7 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
         target: WatchlistTarget,
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
-        del mode  # Both modes use the same validated latest-first listing stream.
+        self.reset_complete_listing_inventory()
         target_identity = parse_piccoma_viewer_url(target.url)
         if target_identity is None:
             raise DiscoveryIncompleteError(
@@ -421,14 +421,33 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
                 "Piccoma Watchlist episode was not present in the product listing"
             )
 
-        records = _parse_listing_rows(
+        all_records = _parse_listing_rows(
             rows=rows,
             product_id=target_identity.product_id,
             canonical_title=canonical_title,
             declared_count=declared_count,
-            scope=target.discovery_scope,
+            scope=None,
             observed_at=observed_at,
         )
+        records = (
+            all_records
+            if target.discovery_scope is None
+            else _parse_listing_rows(
+                rows=rows,
+                product_id=target_identity.product_id,
+                canonical_title=canonical_title,
+                declared_count=declared_count,
+                scope=target.discovery_scope,
+                observed_at=observed_at,
+            )
+        )
+        if mode == "full":
+            self.capture_complete_listing_inventory(
+                target=target,
+                all_records=all_records,
+                selected_records=records,
+                listing_identity=f"piccoma-product:{target_identity.product_id}",
+            )
         for record in records:
             yield record
 

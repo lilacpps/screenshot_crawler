@@ -83,10 +83,77 @@ def migrate_v5_to_v6(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE INDEX idx_items_work_id ON items(work_id)")
 
 
+def migrate_v6_to_v7(connection: sqlite3.Connection) -> None:
+    """Add acquisition scope state and complete-listing evidence containers.
+
+    Existing Sources become acquisition-enabled to retain the legacy Batch
+    behavior, while the sync and evidence tables remain empty. Migration never
+    claims that a Watchlist range has been reconciled.
+    """
+
+    connection.execute(
+        "ALTER TABLE sources ADD COLUMN acquisition_enabled INTEGER NOT NULL DEFAULT 1 "
+        "CHECK(acquisition_enabled IN (0, 1))"
+    )
+    connection.execute(
+        "CREATE INDEX idx_sources_acquisition_enabled ON sources(acquisition_enabled)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE acquisition_scope_sync (
+            work_id INTEGER PRIMARY KEY REFERENCES works(id),
+            fingerprint TEXT NOT NULL,
+            definition_fingerprint TEXT NOT NULL,
+            configuration_json TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('synced', 'stale')),
+            synced_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE discovery_inventory_evidence (
+            discovery_key TEXT PRIMARY KEY,
+            work_id INTEGER NOT NULL REFERENCES works(id),
+            site TEXT NOT NULL,
+            target_url TEXT NOT NULL,
+            scope_fingerprint TEXT NOT NULL,
+            listing_identity TEXT NOT NULL,
+            inventory_digest TEXT NOT NULL,
+            source_count INTEGER NOT NULL CHECK(source_count >= 0),
+            completed_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE discovery_inventory_positions (
+            discovery_key TEXT NOT NULL
+                REFERENCES discovery_inventory_evidence(discovery_key) ON DELETE CASCADE,
+            site TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            display_position INTEGER NOT NULL CHECK(display_position >= 1),
+            in_scope INTEGER NOT NULL CHECK(in_scope IN (0, 1)),
+            PRIMARY KEY(discovery_key, site, external_id),
+            UNIQUE(discovery_key, display_position)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX idx_discovery_inventory_work_key "
+        "ON discovery_inventory_evidence(work_id, discovery_key)"
+    )
+    connection.execute(
+        "CREATE INDEX idx_discovery_inventory_positions_position "
+        "ON discovery_inventory_positions(discovery_key, display_position)"
+    )
+
+
 MIGRATIONS: dict[int, Migration] = {
     3: migrate_v3_to_v4,
     4: migrate_v4_to_v5,
     5: migrate_v5_to_v6,
+    6: migrate_v6_to_v7,
 }
 
 

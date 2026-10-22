@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -18,6 +17,7 @@ from screenshot_crawler.site_policies import (
     SitePolicyError,
     SitePolicyRegistry,
 )
+from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 NOW = datetime(2026, 9, 22, 15, 0, tzinfo=JST)
 
@@ -176,7 +176,9 @@ def test_magapoke_batch_plan_contains_direct_then_work_ticket_candidates(tmp_pat
 
     policies = SitePolicyRegistry()
     policies.register("magapoke", MagapokeSitePolicy)
-    plan = BatchPlanner(catalog, policies).plan(site="magapoke", now=NOW)
+    plan = synchronized_legacy_planner(catalog, policies).plan(
+        site="magapoke", now=NOW
+    )
 
     assert [
         (candidate.access_mode, candidate.access_strategy, candidate.reason, candidate.consumes_quota)
@@ -231,7 +233,9 @@ def test_work_ticket_plan_limits_each_work_to_oldest_published_source(
 
     policies = SitePolicyRegistry()
     policies.register("magapoke", MagapokeSitePolicy)
-    plan = BatchPlanner(catalog, policies).plan(site="magapoke", now=NOW)
+    plan = synchronized_legacy_planner(catalog, policies).plan(
+        site="magapoke", now=NOW
+    )
 
     direct = [candidate for candidate in plan.candidates if candidate.access_strategy == "direct"]
     quota = [candidate for candidate in plan.candidates if candidate.access_strategy == "quota"]
@@ -280,7 +284,7 @@ def test_premium_ticket_pass_groups_all_pending_episodes_by_oldest_work(
             )
     policies = SitePolicyRegistry()
     policies.register("magapoke", MagapokeSitePolicy)
-    plan = BatchPlanner(catalog, policies).plan(
+    plan = synchronized_legacy_planner(catalog, policies).plan(
         site="magapoke", now=NOW, quota_resource="premium_ticket"
     )
 
@@ -321,6 +325,8 @@ def test_missing_published_at_sorts_after_dated_sources(tmp_path: Path) -> None:
         )
     policies = SitePolicyRegistry()
     policies.register("magapoke", MagapokeSitePolicy)
-    plan = BatchPlanner(catalog, policies).plan(site="magapoke", now=NOW)
+    plan = synchronized_legacy_planner(catalog, policies).plan(
+        site="magapoke", now=NOW
+    )
     assert len(plan.candidates) == 1
     assert plan.candidates[0].item_id == ordered_ids[1]

@@ -1,3 +1,46 @@
+## Catalog v7 work-key scope foundation (2026-10-22)
+
+Catalog schema v7 adds `sources.acquisition_enabled` (`NOT NULL`, default `1`),
+`acquisition_scope_sync`, and complete-listing inventory evidence tables.
+Explicit v6-to-v7 migration preserves existing Source IDs, positions, statuses,
+run/artifact rows and locator values. It leaves every Source enabled for legacy
+compatibility but writes no successful sync marker or listing proof. Migration
+alone therefore does not establish a Watchlist scope.
+
+Watchlist targets accept optional positive-integer `archive_order`. Within a
+`work_key`, every target must set it or none may set it, and values must be
+unique. `enabled` continues to control Discovery execution only. The `watch add`
+CLI accepts `--archive-order`; editing a group still requires an atomic complete
+set of orders. Commentless Watchlist changes are serialized and revalidated
+before atomic replacement. A comment-bearing file allows safe scalar
+`enabled` updates with comments retained; add/remove/order rewrites fail before
+writing so users can edit the YAML directly without losing comments.
+
+`SourceInput` deliberately has no acquisition flag. New Sources use the schema
+default; Discovery refreshes do not overwrite an existing flag. Catalog services
+now expose atomic work-wide flag/sync-marker writes and complete-listing evidence
+read/write APIs. Evidence binds work/key/site, target URL, adapter-provided
+listing identity, ordered identities/positions and a deterministic digest. A
+full inventory replacement invalidates the prior scope-sync marker. Structural
+position or key changes invalidate listing evidence and the sync marker;
+metadata-only access refreshes preserve them. The evidence write updates only
+existing Sources already owned by that key and changes no availability, access,
+Item status, run, Artifact or acquisition flag.
+
+The P2 Scope Reconciler is implemented as a service and explicit CLI
+`watch scope-sync` dry-run/apply operation. Preview is read-only. Apply reloads
+the Watchlist and revalidates the Catalog snapshot under a stable per-Catalog
+job lock before atomically updating every work Source flag and its sync marker.
+Discovery writes complete listing evidence only after successful Full
+finalization; it does not implicitly apply the scope. Scoped or
+archive-ordered works require current proof for every required key. A first
+unbounded/unordered legacy sync may bootstrap only when all existing Sources
+have matching Watchlist key/site/work ownership. Removed Sources remain in the
+Catalog disabled, with the last key/URL binding retained for safe re-add.
+Batch now enforces the fail-closed acquisition-scope gate described below.
+Cross-site `archive_order` numbering and existing-archive renumbering remain
+pending P4.
+
 # 00. Core 現行実装ノート
 
 ## Resource pass stop after successful consumption (2026-10-19)
@@ -1406,7 +1449,7 @@ authority:
 
 CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disable`を提供する。書き込みは同一directory内のtemporary fileをfsyncして`os.replace`する。Watchlist操作はCatalogを読み書きせず、remove/disableでもCatalog rowを削除しない。
 
-### 22.2 Catalog（Schema v6 P1実装済み）
+### 22.2 Catalog（Schema v7 P1実装済み）
 
 P1 export detail: `items.csv` includes `note` and `sources.csv` includes
 `display_position`; NULL values are emitted as empty CSV fields. P2 adds the
@@ -1415,9 +1458,9 @@ positions and Source identities for `(site, discovery_key)` before updating all
 rows in one transaction and refreshing `updated_at`; empty assignments are a
 no-op and duplicate numeric positions are permitted.
 
-`CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、v6 CRUDを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。通常のCatalogService / Discovery / Batch / Exportはunsupported schemaをmigrationせず拒否する。v3 / v4 / v5からの更新は明示的な`catalog migrate`で行う。
+`CatalogService`（`src/screenshot_crawler/catalog/`）がSQLite connection lifecycle、foreign key enforcement、schema initialization、v7 CRUDを集約する。既定DB pathは`catalog.sqlite`で、`initialize()`または最初のservice operationで初期schemaを作成する。通常のCatalogService / Discovery / Batch / Exportはunsupported schemaをmigrationせず拒否する。v3 / v4 / v5 / v6からの更新は明示的な`catalog migrate`で行う。
 
-Schema v6は`works`、`items`、`sources`、`source_targets`、`crawl_runs`、`artifacts`、`quota_resource_states`の7 domain tableを持つ。Workがstableな`work_key` / title / author / genreを保持し、ItemはWork配下の取得単位として`item_title`、kind、order、status、genericなoperator noteを保持する。`items.status`は`pending | completed | skipped | external`で、通常Batchの候補は`pending`だけである。`completed`以外へ変更すると`completed_at`はNULLになり、`completed`では取得時刻を設定できる。Artifactの移動・missing・deletedではpendingへ戻さない。
+Schema v7は従来の7 domain tableに`acquisition_scope_sync`、`discovery_inventory_evidence`、`discovery_inventory_positions`を加える。`sources.acquisition_enabled`は`INTEGER NOT NULL DEFAULT 1 CHECK (0, 1)`で、既存Source履歴を保持したまま取得担当範囲を表現する。Workがstableな`work_key` / title / author / genreを保持し、ItemはWork配下の取得単位として`item_title`、kind、order、status、genericなoperator noteを保持する。`items.status`は`pending | completed | skipped | external`で、通常Batchの候補は`pending`だけである。`completed`以外へ変更すると`completed_at`はNULLになり、`completed`では取得時刻を設定できる。Artifactの移動・missing・deletedではpendingへ戻さない。v6→v7 migrationは全既存Sourceを`acquisition_enabled=1`にし、Scope sync/evidenceは未設定のままにするため、migrationのみで取得状態やZIP locatorを変更しない。
 
 `Source`のidentityは`(site, external_id)`で、access stateとquota local stateを分離する。`update_source_external_state()`はquota stateを変更せず、`record_quota_access()`はquota stateだけを更新し、`clear_quota_access()`は指定timestampとのcompare-and-setが成功した場合だけquota stateをNULL化する。`mark_sources_unavailable_except()`は指定Discovery scope内のmissing sourceだけをunavailable化する。
 
@@ -1433,7 +1476,7 @@ Catalog確認用に `catalog export` CLIを提供する。`catalog/export.py` �
 
 `catalog item-status <item_id> [pending|completed|skipped|external]` CLIはstatus省略時にItemの現状を表示し、指定時は`CatalogService`経由で状態を変更する。`catalog item-note <item_id> "text"` はnoteをset/updateし、`--clear`はnoteだけをNULLに戻す。status/note操作はCrawlRun / Artifactを作成しない。Discovery refreshはoperator-maintainedなstatus/noteを上書きしない。Batch Plannerは`pending`だけを候補にし、通常crawl成功後も既存の`mark_item_completed()`が使われる。
 
-日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。通常runtimeはschema v6だけをサポートし、異なるversionは暗黙migrationせず明示的に失敗する。v6では7 tablesとrequired columns、Item status CHECK、Source display-position CHECKを検証し、削除済み`items` columnsが存在しないことを確認する。`catalog/backup.py`はschema-neutralなSQLite online backup、WAL-safe standalone化、quick_check、overwrite拒否を提供する。`catalog/migrations.py`は明示`catalog migrate`用のsequential v3→v4→v5→v6 runnerを持ち、migration前automatic backup、single-transaction rollback、final validationを行う。
+日時は`catalog.service.now_jst()`で生成するaware fixed-offset JST timestampを、ISO 8601の`+09:00`文字列として保存する。naive datetimeは拒否する。通常runtimeはschema v7だけをサポートし、異なるversionは暗黙migrationせず明示的に失敗する。v7ではdomain/scope tables、required columns、foreign key、Item status / Source position / acquisition flag constraintsを検証する。`catalog/backup.py`はschema-neutralなSQLite online backup、WAL-safe standalone化、quick_check、overwrite拒否を提供する。`catalog/migrations.py`は明示`catalog migrate`用のsequential v3→v4→v5→v6→v7 runnerを持ち、migration前automatic backup、single-transaction rollback、final validationを行う。
 
 採用した上位flow:
 
@@ -1453,7 +1496,7 @@ Crawl Request
 
 現行実装には、BookWalker quotaの実サイトlive click検証と、quotaのサーバー側実消費をCatalogだけから検証する機能は存在しない。
 
-Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request最小基盤、Schema v6 Batch Planner / Executor、Site Policy registry / Manga ONE・BookWalker・Piccoma Policyは実装済みである。Discoveryはtargetの`work_key`でWorkをfind/createし、`label`は新規Workのtitle初期値にだけ使う。新規recordはWork配下にItem、Source、web/default targetを原子的に作成し、既存recordはItemを再利用する。Batch PlannerはWork metadataとItem order metadataからcandidateを生成し、enabledなweb targetを`priority ASC, target.id ASC`で選ぶ。Batch Executorはstale validation後にCrawlRunを作成し、quota記録、Crawler、packaging、Artifact / Run / Itemの成功確定を順序づける。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。
+Watchlist CLI、Catalog Service、Work-aware Discovery framework、Crawl Request最小基盤、Schema v7 Batch Planner / Executor、Site Policy registry / Manga ONE・BookWalker・Piccoma Policyは実装済みである。Discoveryはtargetの`work_key`でWorkをfind/createし、`label`は新規Workのtitle初期値にだけ使う。新規recordはWork配下にItem、Source、web/default targetを原子的に作成し、既存recordはItemを再利用する。Batch PlannerはWork metadataとItem order metadataからcandidateを生成し、enabledなweb targetを`priority ASC, target.id ASC`で選ぶ。Batch Executorはstale validation後にCrawlRunを作成し、quota記録、Crawler、packaging、Artifact / Run / Itemの成功確定を順序づける。現行CrawlerRunnerへCatalog read/writeは追加せず、1 URL -> 1 run責務を維持する。
 
 主要仕様:
 
@@ -1585,7 +1628,7 @@ target単位で接続を閉じるlifecycleのためCLI validationで拒否し、
 
 cross-site duplicateは同じWork内の別Itemについて、kind/orderが一致する場合だけ候補をwarningにする。warningはmerge、reparent、delete、completed化を行わない。
 
-### 22.5 Batch Planner / Executor（Schema v3 Phase 3実装済み）
+### 22.5 Batch Planner / Executor（Schema v7、取得担当ゲート実装済み）
 
 `BatchPlanner`（`src/screenshot_crawler/batch/planner.py`）はWork-aware read snapshotから
 candidateを生成する。metadataは`Work.title` / `Work.author` / `Work.genre` / `Item.order_label`
@@ -1625,10 +1668,43 @@ CrawlRun(failed)へ記録し、Itemはpending、Artifactは作成しない。
 ```powershell
 .\.venv\Scripts\python.exe -m screenshot_crawler.cli batch run `
   --site mangaone --catalog catalog.sqlite `
+  --watchlist watchlist.yaml `
   --output-root output\batch --library-dir output\Books --limit 1
 ```
 
-`batch plan`は引き続きCatalog read-onlyであり、`batch run`だけがquota local stateと
+### 取得担当範囲とBatch同期ゲート（P3 implemented）
+
+Batch Plannerはsite sourcesを取得する前に、source→item→workを解決し、各WorkのScope
+Reconciler snapshotがactive Watchlist fingerprint、sync marker、Source flagsと一致することを
+確認する。入力source poolと検証済みsnapshot間のSource追加/削除/position/owner/flag変更も拒否し、
+scope applyとplanningの間に起きた変更からstale candidateが生じることを防ぐ。Watchlist省略時に
+Catalog sourcesがあればfail-closedする。scope境界をBatch実行中にサイトへ問い合わせない。
+
+`acquisition_enabled=0`はSite Policy評価前に除外され、skip reasonは`acquisition_disabled`。
+ただしquota availabilityは候補絞り込み前の全Source履歴から計算し、以前の消費履歴を保持する。
+有料/無料やavailable、Item status、Site Policyのaccess decisionと取得担当範囲は独立した判定である。
+
+Normal、grant-only、deferred resolver、replan、追加resource passは同じscope gateを通る。
+Executorはresolver/adapterを作る前にcandidateと実CatalogのWork/Item/Source/Target ID・external ID・
+locator・enabledを照合し、Itemがpending、Sourceがavailableでcurrent access mode一致、flagが有効、
+requested resourceが同一であることを確認する。`batch run`はCatalog job lockをplanningから終了まで
+保持する。`--grant-only all`は全resource passをCDP接続前にpreflightし、全passが空ならBrowser/loginを
+開始せず、execution直前にも各passをreplanする。
+
+実行例:
+
+```powershell
+python -m screenshot_crawler.cli batch plan --site mangaone --catalog catalog.sqlite --watchlist watchlist.yaml
+python -m screenshot_crawler.cli batch run --site mangaone --catalog catalog.sqlite --watchlist watchlist.yaml
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --dry-run --json
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --apply --json
+```
+
+Watchlist編集後はscope previewを確認し、必要なFull listing proofを得てから明示的にapplyする。
+Discovery成功はlisting証拠を更新するが、work-wide Source flagsを自動同期しない。Stale configは
+scope-sync再実行、Catalog poolの競合変更はbatch plan/runの再実行で解消する。
+
+`batch plan`はCatalog flagsやquotaを変更せずread-onlyであり、`batch run`だけがquota local stateと
 CrawlRun / Artifact / Item statusを書き換える。Manga ONEとBookWalkerのquota policyは既存挙動を
 維持し、Android targetはCatalogへ保持できるがPhase 3 Executorでは実行しない。
 
@@ -1850,8 +1926,11 @@ The work title must match exactly, and `--site` prevents the same Work's Piccoma
 from entering this scan. The 2026-10-18 real dry-run found 20 FALLBACK_INCLUDED candidates,
 no missing/broken/ambiguous artifacts, and made no Catalog/file changes. The policy/classifier
 and backup/apply tests passed 24 cases (0 skipped); synthetic apply verifies that moved ZIP
-bytes are preserved. `batch run --site hanayume` subsequently selects site-wide pending Items;
-the Batch CLI has no `--work` filter and Watchlist enablement is not a Batch source filter.
+bytes are preserved. `batch run --site hanayume` has no `--work` filter and may consider
+pending Items across all synchronized Hanayume works. Watchlist `enabled` controls Discovery
+execution only; Batch ownership uses the independent `discovery_scope` →
+`sources.acquisition_enabled` sync gate. A Source assigned out of scope is retained but skipped
+before Site Policy evaluation.
 
 Younganimal usage: `python scripts/prepare_recrawl.py --site younganimal --catalog
 catalog.sqlite --ignore-missing` scans all completed Younganimal Items; add an exact

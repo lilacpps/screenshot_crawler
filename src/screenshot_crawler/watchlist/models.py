@@ -24,3 +24,4 @@ class WatchlistTarget:
     label: str
     enabled: bool = True
     discovery_scope: DiscoveryScope | None = None
+    archive_order: int | None = None

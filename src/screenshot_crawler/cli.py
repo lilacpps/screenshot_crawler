@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from collections import Counter
 from collections.abc import Awaitable
@@ -72,6 +73,10 @@ from screenshot_crawler.site_policies import (
 )
 from screenshot_crawler.site_policies.base import SitePolicyError
 from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.reconcile import (
+    ScopeReconciler,
+    ScopeReconciliationError,
+)
 from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
 
 
@@ -261,6 +266,20 @@ def _parser() -> argparse.ArgumentParser:
     watch_list = watch_subparsers.add_parser("list", help="List watchlist targets")
     watch_list.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
 
+    watch_sync = watch_subparsers.add_parser(
+        "scope-sync", help="Preview or apply Watchlist acquisition scope to Catalog"
+    )
+    watch_sync.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
+    watch_sync.add_argument(
+        "--catalog", type=Path, default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    watch_sync.add_argument("--work-key", required=True)
+    sync_mode = watch_sync.add_mutually_exclusive_group(required=True)
+    sync_mode.add_argument("--dry-run", action="store_true", help="Preview only (read-only)")
+    sync_mode.add_argument("--apply", action="store_true", help="Apply the reviewed scope flags")
+    watch_sync.add_argument("--json", action="store_true", help="Print the preview as JSON")
+
     watch_add = watch_subparsers.add_parser("add", help="Add a watchlist target")
     watch_add.add_argument("--watchlist", type=Path, default=argparse.SUPPRESS)
     watch_add.add_argument("--key", required=True)
@@ -268,6 +287,7 @@ def _parser() -> argparse.ArgumentParser:
     watch_add.add_argument("--site", required=True)
     watch_add.add_argument("--url", required=True)
     watch_add.add_argument("--label", required=True)
+    watch_add.add_argument("--archive-order", type=int)
 
     for action in ("remove", "enable", "disable"):
         action_parser = watch_subparsers.add_parser(action)
@@ -358,6 +378,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("catalog.sqlite"),
         help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    batch_plan.add_argument(
+        "--watchlist",
+        type=Path,
+        default=Path("watchlist.yaml"),
+        help="Watchlist scope authority (default: watchlist.yaml)",
     )
     batch_run = batch_subparsers.add_parser(
         "run", help="Execute the planned candidates sequentially"
@@ -971,6 +997,49 @@ async def _run_login(args: argparse.Namespace) -> None:
 
 
 def _run_watch(args: argparse.Namespace) -> None:
+    if args.watch_action == "scope-sync":
+        reconciler = ScopeReconciler(
+            WatchlistService(args.watchlist), CatalogService(args.catalog)
+        )
+        preview = reconciler.preview(args.work_key)
+        if args.json:
+            if args.apply and preview.ready:
+                reconciler.apply(preview)
+                payload = preview.to_dict()
+                payload["applied"] = True
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return
+            print(json.dumps(preview.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            print(f"Work: {preview.work_key}")
+            print(f"Ready: {'yes' if preview.ready else 'no'}")
+            print(f"Sources changing: {len(preview.changes)}")
+            summary = preview.to_dict()
+            print(
+                "Sources: "
+                f"selected={summary['selected_count']} "
+                f"enabled={summary['enabled_count']} "
+                f"excluded={summary['excluded_count']} "
+                f"unresolved={summary['unresolved_count']}"
+            )
+            if preview.legacy_bootstrap:
+                print("Mode: legacy unbounded bootstrap (all existing Sources assigned)")
+            for change in preview.changes:
+                state = "included" if change.after else "excluded"
+                print(
+                    f"  Source {change.source_id} {change.site}/{change.discovery_key}/"
+                    f"{change.external_id}: {'included' if change.before else 'excluded'}"
+                    f" -> {state} ({change.reason})"
+                )
+            for blocker in preview.blockers:
+                print(f"BLOCKED: {blocker}", file=sys.stderr)
+        if args.apply:
+            reconciler.apply(preview)
+            if not args.json:
+                print(f"Applied acquisition scope for work '{args.work_key}'.")
+        elif not preview.ready:
+            raise ScopeReconciliationError("Scope preview is blocked")
+        return
     service = WatchlistService(args.watchlist)
     if args.watch_action == "list":
         targets = service.list_targets()
@@ -981,7 +1050,8 @@ def _run_watch(args: argparse.Namespace) -> None:
             enabled = "enabled" if target.enabled else "disabled"
             print(
                 f"{target.key}\t{target.work_key}\t{target.site}\t{enabled}\t"
-                f"{target.url}\t{target.label}"
+                f"{target.url}\t{target.label}\t"
+                f"{'' if target.archive_order is None else target.archive_order}"
             )
     elif args.watch_action == "add":
         target = service.add(
@@ -990,6 +1060,7 @@ def _run_watch(args: argparse.Namespace) -> None:
             site=args.site,
             url=args.url,
             label=args.label,
+            archive_order=args.archive_order,
         )
         print(f"Added watchlist target '{target.key}'.")
     elif args.watch_action == "remove":
@@ -1098,7 +1169,9 @@ def _print_batch_candidate(candidate: BatchCandidate) -> None:
 
 def _run_batch_plan(args: argparse.Namespace) -> None:
     policies = _batch_policy_registry()
-    planner = BatchPlanner(CatalogService(args.catalog), policies)
+    planner = BatchPlanner(
+        CatalogService(args.catalog), policies, watchlist=WatchlistService(args.watchlist)
+    )
     plan = planner.plan(site=args.site)
     policy = policies.create(args.site)
     _print_batch_plan(
@@ -1436,8 +1509,14 @@ async def _best_effort_cleanup(awaitable: Awaitable[Any]) -> None:
 
 async def _run_batch_run(args: argparse.Namespace) -> None:
     catalog = CatalogService(args.catalog)
+    with catalog.job_lock():
+        await _run_batch_run_locked(args, catalog)
+
+
+async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogService) -> None:
+    watchlist = WatchlistService(args.watchlist)
     policies = _batch_policy_registry()
-    planner = BatchPlanner(catalog, policies)
+    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
     runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
     grant_only = getattr(args, "grant_only", None)
     grant_only_all = grant_only == "all"
@@ -1446,8 +1525,15 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
     defer_quota = _policy_defers_quota_access(policy)
     deferred_candidates: list[BatchCandidate] = []
     deferred_resource: str | None = None
+    grant_only_all_preflight: dict[str, BatchPlan] = {}
     if grant_only_all:
         grant_only_resources = _grant_only_resource_passes(policy)
+        # Establish that at least one currently eligible source exists before
+        # connecting the browser. Each pass still replans after prior grants.
+        grant_only_all_preflight = {
+            resource: planner.plan(site=args.site, quota_resource=resource)
+            for resource in grant_only_resources
+        }
         plan = None
         candidates: list[BatchCandidate] = []
         metrics_mode = "grant-only:all"
@@ -1514,6 +1600,16 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
         metrics.close()
         print(f"  metrics: {metrics.path}")
         return
+    if grant_only_all and not any(
+        resource_plan.candidates
+        for resource_plan in grant_only_all_preflight.values()
+    ):
+        for resource_plan in grant_only_all_preflight.values():
+            metrics.record_planned_skips(resource_plan.skipped)
+        metrics.finish(stop_reason="no_candidates")
+        metrics.close()
+        print(f"  metrics: {metrics.path}")
+        return
 
     session = None
     primary_error: BaseException | None = None
@@ -1539,7 +1635,12 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
             values=values,
         )
         session = await BrowserSession.connect(endpoint)
-        executor = BatchExecutor(catalog, policies, _batch_adapter_registry(values))
+        executor = BatchExecutor(
+            catalog,
+            policies,
+            _batch_adapter_registry(values),
+            watchlist=watchlist,
+        )
         # Keep the orchestration input site-neutral and preserve compatibility with
         # lightweight test doubles that implement the pre-Phase-1 constructor.
         if hasattr(executor, "runtime_settings"):
@@ -2114,6 +2215,9 @@ def main() -> None:
                 asyncio.run(_run_batch_run(args))
     except WatchlistError as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    except ScopeReconciliationError as exc:
+        print(f"Scope sync error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     except CatalogError as exc:
         print(f"Error: {exc}", file=sys.stderr)

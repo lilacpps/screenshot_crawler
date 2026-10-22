@@ -14,6 +14,7 @@ from screenshot_crawler.catalog import (
 from screenshot_crawler.catalog.models import Source
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies import PiccomaSitePolicy, SitePolicyError, SitePolicyRegistry
+from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 NOW = datetime(2026, 10, 9, 12, tzinfo=JST)
 
@@ -175,7 +176,9 @@ def test_piccoma_planner_keeps_free_and_active_grants_with_catalog_positions(
             source_id=source.id,
         )
 
-    plan = BatchPlanner(catalog, _registry()).plan(site="piccoma", now=NOW)
+    plan = synchronized_legacy_planner(catalog, _registry()).plan(
+        site="piccoma", now=NOW
+    )
 
     assert [candidate.external_id for candidate in plan.candidates] == [
         "900:101",

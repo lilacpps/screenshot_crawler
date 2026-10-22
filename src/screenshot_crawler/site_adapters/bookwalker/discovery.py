@@ -295,8 +295,9 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
         target: WatchlistTarget,
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
-        del mode
-        if parse_bookwalker_series_url(target.url) is None:
+        self.reset_complete_listing_inventory()
+        series_identity = parse_bookwalker_series_url(target.url)
+        if series_identity is None:
             raise DiscoveryIncompleteError(
                 "Watchlist target must be a BookWalker /series/<id>/list/ URL"
             )
@@ -320,6 +321,16 @@ class BookWalkerDiscoveryAdapter(DiscoveryAdapter):
             selected_products = self._apply_discovery_scope(
                 products,
                 target.discovery_scope,
+            )
+        if mode == "full":
+            self.capture_listing_identity_inventory(
+                target=target,
+                external_ids=[product.external_id for product in products],
+                selected_external_ids={
+                    product.external_id for product in selected_products
+                },
+                positions=list(range(len(products), 0, -1)),
+                listing_identity=f"bookwalker-series:{series_identity.series_id}",
             )
         global_positions = {
             product.external_id: len(products) - index

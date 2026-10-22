@@ -123,6 +123,7 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
         target: WatchlistTarget,
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
+        self.reset_complete_listing_inventory()
         target_parts = parse_mangaone_chapter_url(target.url)
         if target_parts is None:
             raise DiscoveryIncompleteError(
@@ -192,6 +193,8 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
                     ),
                 )
                 if target.discovery_scope is None:
+                    if mode == "full":
+                        buffered_records.append(record)
                     yield record
                 else:
                     buffered_records.append(record)
@@ -202,7 +205,7 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
                     "Manga ONE chapter listing has no unambiguous next button"
                 )
             if await self._is_disabled(next_button):
-                if target.discovery_scope is not None:
+                if target.discovery_scope is not None or mode == "full":
                     buffered_records = [
                         replace(
                             record,
@@ -213,12 +216,26 @@ class MangaOneDiscoveryAdapter(DiscoveryAdapter):
                         )
                         for index, record in enumerate(buffered_records)
                     ]
-                    for record in self._apply_discovery_scope(
-                        buffered_records,
-                        target_parts,
-                        target.discovery_scope,
-                    ):
-                        yield record
+                    all_records = buffered_records
+                    selected_records = (
+                        self._apply_discovery_scope(
+                            all_records,
+                            target_parts,
+                            target.discovery_scope,
+                        )
+                        if target.discovery_scope is not None
+                        else all_records
+                    )
+                    if mode == "full":
+                        self.capture_complete_listing_inventory(
+                            target=target,
+                            all_records=all_records,
+                            selected_records=selected_records,
+                            listing_identity=f"mangaone-work:{target_parts.work_id}",
+                        )
+                    if target.discovery_scope is not None:
+                        for record in selected_records:
+                            yield record
                 return
 
             try:

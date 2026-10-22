@@ -12,6 +12,7 @@ from screenshot_crawler.catalog.export import (
     ExportResult,
     export_catalog_csv,
 )
+from screenshot_crawler.catalog.job_lock import CatalogJobLock, CatalogJobLockError
 from screenshot_crawler.catalog.migrations import (
     MIGRATIONS,
     CatalogMigrationError,
@@ -19,10 +20,13 @@ from screenshot_crawler.catalog.migrations import (
     migrate_catalog,
 )
 from screenshot_crawler.catalog.models import (
+    AcquisitionScopeSync,
     Artifact,
     ArtifactInput,
     CatalogRecord,
     CrawlRun,
+    DiscoveryInventoryEvidence,
+    DiscoveryInventoryPosition,
     Item,
     ItemInput,
     QuotaResourceState,
@@ -46,18 +50,23 @@ from screenshot_crawler.catalog.service import (
 __all__ = [
     "EXPORT_COLUMNS",
     "MIGRATIONS",
+    "AcquisitionScopeSync",
     "Artifact",
     "ArtifactInput",
     "BackupResult",
     "CatalogBackupError",
     "CatalogError",
     "CatalogExportError",
+    "CatalogJobLock",
+    "CatalogJobLockError",
     "CatalogMigrationError",
     "CatalogNotFoundError",
     "CatalogRecord",
     "CatalogService",
     "CatalogValidationError",
     "CrawlRun",
+    "DiscoveryInventoryEvidence",
+    "DiscoveryInventoryPosition",
     "ExportResult",
     "Item",
     "ItemInput",

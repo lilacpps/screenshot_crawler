@@ -316,6 +316,7 @@ async def test_mangaone_unbounded_pagination_failure_keeps_partial_refresh_behav
     assert result.stopped_reason == "incomplete"
     assert result.observed_count == 1
     assert [source.external_id for source in catalog.list_sources()] == ["3"]
+    assert catalog.get_discovery_inventory_evidence("juou") is None
     assert next_clicks == [1]
 
 

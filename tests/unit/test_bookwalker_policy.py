@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -18,6 +17,7 @@ from screenshot_crawler.site_policies import (
     SitePolicyError,
     SitePolicyRegistry,
 )
+from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 NOW = datetime(2026, 9, 19, 12, 0, tzinfo=JST)
 
@@ -37,8 +37,10 @@ def add_source(
     quota_started_at: str | None = None,
     access_granted_until: str | None = None,
     available: bool = True,
+    work=None,
+    discovery_key: str | None = None,
 ):
-    work = service.create_work(
+    work = work or service.create_work(
         WorkInput(work_key=f"bookwalker-work-{order}", title=f"Volume {order}")
     )
     item = service.create_item(
@@ -52,6 +54,7 @@ def add_source(
             available=available,
             quota_started_at=quota_started_at,
             access_granted_until=access_granted_until,
+            discovery_key=discovery_key,
         ),
         item_id=item.id,
     )
@@ -188,12 +191,16 @@ def test_record_quota_access_accepts_and_clears_grantless_state(tmp_path: Path) 
 
 def test_planner_allocates_one_site_wide_quota_in_natural_order(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
-    add_source(service, order="03")
-    add_source(service, order="01", access_mode="owned")
-    add_source(service, order="02")
-    add_source(service, order="04")
+    work = service.create_work(WorkInput(work_key="bookwalker-series", title="Series"))
+    for order, mode in [("03", "quota"), ("01", "owned"), ("02", "quota"), ("04", "quota")]:
+        add_source(
+            service, order=order, access_mode=mode, work=work,
+            discovery_key="volumes",
+        )
 
-    plan = BatchPlanner(service, make_registry()).plan(site="bookwalker", now=NOW)
+    plan = synchronized_legacy_planner(service, make_registry()).plan(
+        site="bookwalker", now=NOW
+    )
 
     assert [service.get_item(candidate.item_id).order_key for candidate in plan.candidates] == [
         "01",
@@ -215,7 +222,7 @@ def test_planner_reopens_quota_in_next_window(tmp_path: Path) -> None:
     )
     add_source(service, order="pending")
 
-    plan = BatchPlanner(service, make_registry()).plan(
+    plan = synchronized_legacy_planner(service, make_registry()).plan(
         site="bookwalker",
         now=datetime(2026, 9, 19, 5, 0, tzinfo=JST),
     )

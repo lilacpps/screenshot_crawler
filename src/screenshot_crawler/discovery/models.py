@@ -63,6 +63,21 @@ class DiscoveredRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class CompleteListingPosition:
+    external_id: str
+    display_position: int
+    in_scope: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteListingInventory:
+    """Adapter-proven full listing identity and its selected membership mask."""
+
+    listing_identity: str
+    positions: tuple[CompleteListingPosition, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class DiscoveryResult:
     mode: DiscoveryMode
     target_key: str

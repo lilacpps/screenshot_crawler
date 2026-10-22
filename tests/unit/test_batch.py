@@ -21,6 +21,9 @@ from screenshot_crawler.site_policies import (
     SitePolicyError,
     SitePolicyRegistry,
 )
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
+from tests.helpers.acquisition_scope import synchronized_legacy_watchlist
 
 NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
 
@@ -144,11 +147,17 @@ def add_item(
 
 
 def plan_for(service: CatalogService, *, now: datetime = NOW):
-    return BatchPlanner(service, make_registry()).plan(site="mangaone", now=now)
+    watchlist = synchronized_legacy_watchlist(service)
+    return BatchPlanner(service, make_registry(), watchlist=watchlist).plan(
+        site="mangaone", now=now
+    )
 
 
 def magapoke_plan_for(service: CatalogService, *, now: datetime = NOW):
-    return BatchPlanner(service, make_magapoke_registry()).plan(site="magapoke", now=now)
+    watchlist = synchronized_legacy_watchlist(service)
+    return BatchPlanner(service, make_magapoke_registry(), watchlist=watchlist).plan(
+        site="magapoke", now=now
+    )
 
 
 def add_magapoke_source(
@@ -675,7 +684,10 @@ def test_non_mangaone_candidate_has_no_artifact_disambiguator(tmp_path: Path) ->
 
     registry = SitePolicyRegistry()
     registry.register("bookwalker", BookWalkerSitePolicy)
-    plan = BatchPlanner(service, registry).plan(site="bookwalker", now=NOW)
+    watchlist = synchronized_legacy_watchlist(service)
+    plan = BatchPlanner(service, registry, watchlist=watchlist).plan(
+        site="bookwalker", now=NOW
+    )
 
     assert plan.candidates[0].artifact_disambiguator is None
 
@@ -754,9 +766,12 @@ def test_quota_is_reserved_in_memory_only(tmp_path: Path) -> None:
             external_id=f"quota-{index}",
         )
 
+    watchlist = synchronized_legacy_watchlist(service)
     before = service.read_items_and_sources(site="mangaone")
     before_bytes = service.path.read_bytes()
-    plan = plan_for(service)
+    plan = BatchPlanner(service, make_registry(), watchlist=watchlist).plan(
+        site="mangaone", now=NOW
+    )
     after = service.read_items_and_sources(site="mangaone")
 
     assert len(plan.candidates) == 4
@@ -772,12 +787,14 @@ def test_quota_is_reserved_in_memory_only(tmp_path: Path) -> None:
 
 def test_new_quota_is_allocated_to_oldest_episode_first(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="quota-work", title="Quota work"))
     for index in range(2):
         add_source(
             service,
             item=ItemInput(item_title=f"used-{index}", status="completed"),
             external_id=f"used-{index}",
             quota_started_at="2026-09-17T14:00:00+09:00",
+            work=work,
         )
     inserted_order = ["05", "04", "03", "02", "01"]
     items = {
@@ -785,6 +802,8 @@ def test_new_quota_is_allocated_to_oldest_episode_first(tmp_path: Path) -> None:
             service,
             item=ItemInput(item_title=f"第{order}話", order_key=order),
             external_id=f"episode-{order}",
+                discovery_key="episodes",
+                work=work,
         )[0]
         for order in inserted_order
     }
@@ -812,12 +831,17 @@ def test_new_quota_is_allocated_by_discovery_group_then_item_order(tmp_path: Pat
             quota_started_at="2026-09-17T14:00:00+09:00",
         )
 
+    works = {
+        group: service.create_work(WorkInput(work_key=f"group-{group}", title=group))
+        for group in ("A", "B")
+    }
     for group, order in [("A", "03"), ("B", "01"), ("A", "01"), ("B", "02")]:
         add_source(
             service,
             item=ItemInput(item_title=f"{group}-{order}", order_key=order),
             external_id=f"{group}-{order}",
             discovery_key=group,
+            work=works[group],
         )
 
     plan = plan_for(service)
@@ -837,12 +861,15 @@ def test_new_item_is_kept_in_its_existing_discovery_group(tmp_path: Path) -> Non
         external_id="used",
         quota_started_at="2026-09-17T14:00:00+09:00",
     )
+    work_a = service.create_work(WorkInput(work_key="group-A", title="A"))
+    work_b = service.create_work(WorkInput(work_key="group-B", title="B"))
     for group, order in [("A", "01"), ("A", "02"), ("B", "01"), ("B", "02"), ("A", "03")]:
         add_source(
             service,
             item=ItemInput(item_title=f"{group}-{order}", order_key=order),
             external_id=f"{group}-{order}",
             discovery_key=group,
+            work=work_a if group == "A" else work_b,
         )
 
     plan = plan_for(service)
@@ -853,41 +880,56 @@ def test_new_item_is_kept_in_its_existing_discovery_group(tmp_path: Path) -> Non
     ] == ["A-01", "A-02", "A-03"]
 
 
-def test_null_discovery_key_is_after_explicit_groups(tmp_path: Path) -> None:
+def test_null_discovery_key_cannot_be_batch_owned(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="null-key-work", title="Work"))
     add_source(
         service,
         item=ItemInput(item_title="used", status="completed"),
         external_id="used",
         quota_started_at="2026-09-17T14:00:00+09:00",
+        work=work,
     )
     add_source(
         service,
         item=ItemInput(item_title="null-old", order_key="01"),
         external_id="null-old",
+        work=work,
     )
     add_source(
         service,
         item=ItemInput(item_title="explicit", order_key="99"),
         external_id="explicit",
         discovery_key="A",
+        work=work,
     )
 
-    plan = plan_for(service)
-
-    assert [
-        service.get_item(candidate.item_id).item_title
-        for candidate in plan.candidates
-    ] == ["explicit", "null-old"]
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="A",
+        work_key=work.work_key,
+        site="mangaone",
+        url="https://example.invalid/listing/A",
+        label="A",
+    )
+    reconciler = ScopeReconciler(watchlist, service)
+    assert not reconciler.preview(work.work_key).ready
+    with pytest.raises(BatchPlanningError, match="cannot be classified|unbound|unknown"):
+        BatchPlanner(service, make_registry(), watchlist=watchlist).plan(
+            site="mangaone", now=NOW
+        )
 
 
 def test_numeric_episode_order_is_not_lexicographic(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="numeric-work", title="Numeric"))
     for order in ["11", "1", "10", "9", "2"]:
         add_source(
             service,
             item=ItemInput(item_title=f"第{order}話", order_key=order),
             external_id=f"episode-{order}",
+            discovery_key="episodes",
+            work=work,
         )
 
     plan = plan_for(service)
@@ -902,11 +944,14 @@ def test_numeric_episode_order_is_not_lexicographic(tmp_path: Path) -> None:
 
 def test_episode_parts_are_ordered_before_next_episode(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="part-work", title="Parts"))
     for order in ["13", "12-後編", "12-前編", "11"]:
         add_source(
             service,
             item=ItemInput(item_title=order, order_key=order),
             external_id=f"episode-{order}",
+            discovery_key="episodes",
+            work=work,
         )
 
     plan = plan_for(service)
@@ -1028,6 +1073,7 @@ def test_active_grant_does_not_consume_slot_before_older_quota(tmp_path: Path) -
 
 def test_mixed_access_keeps_direct_behavior_and_allocates_old_quota(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
+    work = service.create_work(WorkInput(work_key="mixed-work", title="Mixed"))
     records = {}
     for order, access_mode in [
         ("05", "quota"),
@@ -1041,6 +1087,8 @@ def test_mixed_access_keeps_direct_behavior_and_allocates_old_quota(tmp_path: Pa
             item=ItemInput(item_title=f"第{order}話", order_key=order),
             external_id=f"mixed-{order}",
             access_mode=access_mode,
+                discovery_key="mixed",
+                work=work,
         )[0]
     for index in range(2):
         add_source(
@@ -1048,6 +1096,8 @@ def test_mixed_access_keeps_direct_behavior_and_allocates_old_quota(tmp_path: Pa
             item=ItemInput(item_title=f"used-{index}", status="completed"),
             external_id=f"mixed-used-{index}",
             quota_started_at="2026-09-17T14:00:00+09:00",
+                discovery_key="mixed",
+                work=work,
         )
 
     plan = plan_for(service)

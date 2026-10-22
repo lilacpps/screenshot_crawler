@@ -27,14 +27,28 @@ from screenshot_crawler.catalog import (
 from screenshot_crawler.catalog.service import JST, now_jst
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
+from screenshot_crawler.watchlist.reconcile import (
+    ScopeReconciler,
+    ScopeReconciliationError,
+)
+from screenshot_crawler.watchlist.service import WatchlistService
 
 
 class BatchPlanner:
     """Select pending Catalog sources without executing or recording a crawl."""
 
-    def __init__(self, catalog: CatalogService, policies: SitePolicyRegistry) -> None:
+    def __init__(
+        self,
+        catalog: CatalogService,
+        policies: SitePolicyRegistry,
+        *,
+        watchlist: WatchlistService | None = None,
+    ) -> None:
         self.catalog = catalog
         self.policies = policies
+        self.scope_reconciler = (
+            ScopeReconciler(watchlist, catalog) if watchlist is not None else None
+        )
 
     def plan(
         self,
@@ -51,7 +65,38 @@ class BatchPlanner:
             works, items, sources, targets = (
                 self.catalog.read_works_items_sources_and_targets(site=site)
             )
-        except (CatalogError, SitePolicyError, ValueError) as exc:
+            if sources and self.scope_reconciler is None:
+                raise BatchPlanningError(
+                    "Batch requires an explicit Watchlist for acquisition-scope validation"
+                )
+            works_by_id = {work.id: work for work in works}
+            items_by_id = {item.id: item for item in items}
+            assert self.scope_reconciler is not None or not sources
+            if self.scope_reconciler is not None:
+                work_keys: set[str] = set()
+                sources_by_work_key: dict[str, dict[int, Source]] = defaultdict(dict)
+                for source in sources:
+                    item = items_by_id.get(source.item_id)
+                    work = works_by_id.get(item.work_id) if item is not None else None
+                    if work is None:
+                        raise BatchPlanningError(
+                            f"Cannot resolve Work for source {source.id}; refusing Batch"
+                        )
+                    work_keys.add(work.work_key)
+                    sources_by_work_key[work.work_key][source.id] = source
+                for work_key in sorted(work_keys):
+                    validated = self.scope_reconciler.require_synchronized_snapshot(work_key)
+                    validated_sources = {
+                        source.id: source
+                        for source in validated.sources
+                        if source.site == site
+                    }
+                    if validated_sources != sources_by_work_key[work_key]:
+                        raise BatchPlanningError(
+                            f"Catalog sources changed while validating acquisition scope for "
+                            f"{work_key!r}; retry Batch planning"
+                        )
+        except (CatalogError, SitePolicyError, ScopeReconciliationError, ValueError) as exc:
             raise BatchPlanningError(str(exc)) from exc
 
         sources_by_item: dict[int, list[Source]] = defaultdict(list)
@@ -60,7 +105,6 @@ class BatchPlanner:
         targets_by_source: dict[int, list[SourceTarget]] = defaultdict(list)
         for target in targets:
             targets_by_source[target.source_id].append(target)
-        works_by_id = {work.id: work for work in works}
         collision_source_ids = _collision_source_ids(items, sources, works_by_id)
         # A site-scoped plan only considers items with at least one source for that site.
         site_item_ids = set(sources_by_item)
@@ -80,8 +124,23 @@ class BatchPlanner:
                     plan.skipped.append(BatchSkipped(item.id, None, "no_source"))
                     continue
 
+                enabled_sources = []
+                for source in item_sources:
+                    if source.acquisition_enabled:
+                        enabled_sources.append(source)
+                    else:
+                        plan.skipped.append(
+                            BatchSkipped(
+                                item.id,
+                                source.id,
+                                "acquisition_disabled",
+                            )
+                        )
+                if not enabled_sources:
+                    continue
+
                 selected = self._select_source(
-                    item_sources,
+                    enabled_sources,
                     policy=policy,
                     now=current,
                     quota_remaining=quota_available,

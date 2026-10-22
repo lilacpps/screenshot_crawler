@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -20,6 +19,7 @@ from screenshot_crawler.site_policies import (
     SitePolicyError,
     SitePolicyRegistry,
 )
+from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 NOW = datetime(2026, 10, 13, 12, tzinfo=JST)
 
@@ -155,7 +155,9 @@ def test_comicfuz_planner_keeps_only_free_and_preserves_global_archive_positions
 
     policies = SitePolicyRegistry()
     policies.register("comicfuz", ComicFuzSitePolicy)
-    plan = BatchPlanner(catalog, policies).plan(site="comicfuz", now=NOW)
+    plan = synchronized_legacy_planner(catalog, policies).plan(
+        site="comicfuz", now=NOW
+    )
 
     assert [candidate.external_id for candidate in plan.candidates] == [
         "1970:80641",

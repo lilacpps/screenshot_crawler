@@ -47,6 +47,7 @@ from screenshot_crawler.site_policies import (
     SitePolicyRegistry,
     YounganimalSitePolicy,
 )
+from tests.helpers.acquisition_scope import synchronized_legacy_watchlist
 
 NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
 COMPLETED_NOW = datetime(2026, 9, 17, 15, 30, tzinfo=JST)
@@ -163,6 +164,7 @@ def make_executor(
         service,
         policies,
         adapters,
+        watchlist=synchronized_legacy_watchlist(service),
         runner_factory=runner_factory,
         package_function=package_function,
         runtime_settings=runtime_settings,
@@ -209,6 +211,8 @@ def add_candidate(
         metadata={"title": "作品A", "order": "第01話"},
         access_mode=access_mode,
         consumes_quota=consumes_quota,
+        external_id=source.external_id,
+        work_id=work.id,
     )
 
 
@@ -641,7 +645,10 @@ async def test_comicdays_candidate_local_identity_skip_does_not_record_consumpti
     policies.register("comicdays", ComicDaysSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("comicdays", ComicDaysAdapter)
-    candidate = BatchPlanner(service, policies).plan(site="comicdays", now=NOW).candidates[0]
+    watchlist = synchronized_legacy_watchlist(service)
+    candidate = BatchPlanner(service, policies, watchlist=watchlist).plan(
+        site="comicdays", now=NOW
+    ).candidates[0]
 
     class Runner:
         def __init__(self, config: RunConfig) -> None:
@@ -659,6 +666,7 @@ async def test_comicdays_candidate_local_identity_skip_does_not_record_consumpti
         service,
         policies,
         adapters,
+        watchlist=watchlist,
         runner_factory=Runner,  # type: ignore[arg-type]
     )
     with pytest.raises(
@@ -716,6 +724,8 @@ def _add_magapoke_candidate(
         quota_resource=resource, quota_scope="work",
         quota_limit=1 if resource == "work_ticket" else None,
         quota_commit_mode="after_observed_consumption",
+        external_id=source.external_id,
+        work_id=work.id,
     )
 
 
@@ -759,8 +769,10 @@ def _make_magapoke_executor(
     policies.register(site, policy)
     adapters = AdapterRegistry()
     adapters.register(site, ConsumingAdapter)
+    watchlist = synchronized_legacy_watchlist(service)
     return BatchExecutor(
         service, policies, adapters,
+        watchlist=watchlist,
         runner_factory=Runner,  # type: ignore[arg-type]
         package_function=package,
     )
@@ -879,6 +891,7 @@ async def test_comicdays_work_cooldown_blocks_both_executor_entrypoints(
         source_id=second_source.id,
         target_id=second_target.id,
         locator=second_target.locator,
+        external_id=second_source.external_id,
     )
     consumed_at = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
     service.record_quota_access_with_resource_state(
@@ -1497,7 +1510,10 @@ async def test_prepared_guard_cleanup_preserves_interruption_or_primary_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, primary_failure: bool,
 ) -> None:
     service = CatalogService(tmp_path / "cleanup.sqlite")
-    candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
+    candidate = replace(
+        add_candidate(service, access_mode="quota", consumes_quota=True),
+        quota_resource="work_ticket",
+    )
     executor = make_executor(service)
 
     class Adapter:
@@ -1534,7 +1550,10 @@ async def test_resolver_timeout_is_bounded_for_cancellation_resistant_adapter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = CatalogService(tmp_path / "resolver-timeout.sqlite")
-    candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
+    candidate = replace(
+        add_candidate(service, access_mode="quota", consumes_quota=True),
+        quota_resource="work_ticket",
+    )
     executor = make_executor(service)
     monkeypatch.setattr(
         executor.adapters,
@@ -1570,7 +1589,10 @@ async def test_resolver_access_guard_stop_is_bounded_for_cancellation_resistant_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = CatalogService(tmp_path / "resolver-stop.sqlite")
-    candidate = add_candidate(service, access_mode="quota", consumes_quota=True)
+    candidate = replace(
+        add_candidate(service, access_mode="quota", consumes_quota=True),
+        quota_resource="work_ticket",
+    )
     executor = make_executor(service)
     monkeypatch.setattr(
         executor.adapters,

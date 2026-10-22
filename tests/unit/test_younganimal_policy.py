@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -14,6 +13,7 @@ from screenshot_crawler.catalog.models import Source
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_policies import SitePolicyRegistry
 from screenshot_crawler.site_policies.younganimal import YounganimalSitePolicy
+from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 NOW = datetime(2026, 10, 11, 12, 0, tzinfo=JST)
 
@@ -196,7 +196,7 @@ def test_younganimal_planner_applies_one_ticket_per_work_in_catalog_order(
 
     policies = SitePolicyRegistry()
     policies.register("younganimal", YounganimalSitePolicy)
-    plan = BatchPlanner(catalog, policies).plan(
+    plan = synchronized_legacy_planner(catalog, policies).plan(
         site="younganimal", now=NOW, quota_resource="work_ticket"
     )
 

@@ -226,7 +226,7 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
         target: WatchlistTarget,
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
-        del mode
+        self.reset_complete_listing_inventory()
         target_identity = parse_zeblack_chapter_list_url(target.url)
         if target_identity is None:
             raise DiscoveryIncompleteError(
@@ -241,9 +241,17 @@ class ZeblackDiscoveryAdapter(DiscoveryAdapter):
                 target=target,
                 target_identity=target_identity,
             )
+            all_records = records
             if target.discovery_scope is not None:
                 records = self._apply_discovery_scope(
                     records, target_identity.title_id, target.discovery_scope
+                )
+            if mode == "full":
+                self.capture_complete_listing_inventory(
+                    target=target,
+                    all_records=all_records,
+                    selected_records=records,
+                    listing_identity=f"zeblack-title:{target_identity.title_id}",
                 )
         except DiscoveryIncompleteError:
             raise

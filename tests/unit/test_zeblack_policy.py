@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import (
     CatalogService,
     ItemInput,
@@ -17,6 +16,7 @@ from screenshot_crawler.site_policies import (
     SitePolicyRegistry,
     ZeblackSitePolicy,
 )
+from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
 NOW = datetime(2026, 9, 30, 12, 0, tzinfo=JST)
 
@@ -161,7 +161,9 @@ def test_zeblack_planner_keeps_multiple_quota_candidates_oldest_first(
 
     policies = SitePolicyRegistry()
     policies.register("zeblack", ZeblackSitePolicy)
-    plan = BatchPlanner(catalog, policies).plan(site="zeblack", now=NOW)
+    plan = synchronized_legacy_planner(catalog, policies).plan(
+        site="zeblack", now=NOW
+    )
 
     assert [candidate.metadata["order"] for candidate in plan.candidates] == [
         "#17",

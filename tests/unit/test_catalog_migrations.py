@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from pathlib import Path
 
@@ -13,6 +14,38 @@ from screenshot_crawler.catalog.migrations import (
 from screenshot_crawler.catalog.schema import SCHEMA_SQL
 
 
+def schema_v6_sql() -> str:
+    """Build the historical v6 fixture schema from current DDL."""
+
+    value = SCHEMA_SQL.replace(
+        "    acquisition_enabled INTEGER NOT NULL DEFAULT 1\n"
+        "        CHECK(acquisition_enabled IN (0, 1)),\n",
+        "",
+    )
+    value = re.sub(
+        r"CREATE TABLE acquisition_scope_sync \(.*?\);\n\n", "", value, flags=re.DOTALL
+    )
+    value = re.sub(
+        r"CREATE TABLE discovery_inventory_evidence \(.*?\);\n\n", "", value, flags=re.DOTALL
+    )
+    value = re.sub(
+        r"CREATE TABLE discovery_inventory_positions \(.*?\);\n\n", "", value, flags=re.DOTALL
+    )
+    for index in (
+        "CREATE INDEX idx_sources_acquisition_enabled ON sources(acquisition_enabled);\n",
+        (
+            "CREATE INDEX idx_discovery_inventory_work_key\n"
+            "    ON discovery_inventory_evidence(work_id, discovery_key);\n"
+        ),
+        (
+            "CREATE INDEX idx_discovery_inventory_positions_position\n"
+            "    ON discovery_inventory_positions(discovery_key, display_position);\n"
+        ),
+    ):
+        value = value.replace(index, "")
+    return value
+
+
 def make_database(path: Path, *, version: int = 3, value: str = "before") -> None:
     with sqlite3.connect(path) as connection:
         connection.execute("CREATE TABLE marker (value TEXT NOT NULL)")
@@ -20,15 +53,15 @@ def make_database(path: Path, *, version: int = 3, value: str = "before") -> Non
         connection.execute(f"PRAGMA user_version = {version}")
 
 
-def test_current_v6_migration_is_noop_without_backup(tmp_path: Path) -> None:
+def test_current_v7_migration_is_noop_without_backup(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     CatalogService(path).initialize()
     before = path.read_bytes()
 
     result = migrate_catalog(path, backup_dir=tmp_path / "backup")
 
-    assert result.from_version == 6
-    assert result.to_version == 6
+    assert result.from_version == 7
+    assert result.to_version == 7
     assert result.migrated is False
     assert result.backup_path is None
     assert path.read_bytes() == before
@@ -184,7 +217,7 @@ def test_missing_migration_step_rejects_before_backup_or_mutation(tmp_path: Path
     assert not backup_dir.exists()
 
 
-@pytest.mark.parametrize("version", [0, 7])
+@pytest.mark.parametrize("version", [0, 8])
 def test_invalid_migration_version_is_rejected_without_backup(
     tmp_path: Path, version: int
 ) -> None:
@@ -198,12 +231,79 @@ def test_invalid_migration_version_is_rejected_without_backup(
     assert not (tmp_path / "backup").exists()
 
 
+def test_v6_to_v7_migration_preserves_history_and_leaves_scope_unbootstrapped(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "catalog-v6.sqlite"
+    backup_dir = tmp_path / "backup"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(schema_v6_sql())
+        connection.execute(
+            "INSERT INTO works (id, work_key, title, created_at, updated_at) "
+            "VALUES (41, 'work', 'Work', '2026-01-01T00:00:00+09:00', "
+            "'2026-01-01T00:00:00+09:00')"
+        )
+        connection.execute(
+            "INSERT INTO items (id, work_id, status, completed_at, created_at, updated_at, note) "
+            "VALUES (51, 41, 'completed', '2026-01-02T00:00:00+09:00', "
+            "'2026-01-01T00:00:00+09:00', '2026-01-02T00:00:00+09:00', 'kept')"
+        )
+        connection.execute(
+            "INSERT INTO sources (id, item_id, site, external_id, discovery_key, access_mode, "
+            "available, created_at, updated_at, display_position) "
+            "VALUES (61, 51, 'site', 'source', 'key', 'paid', 0, "
+            "'2026-01-01T00:00:00+09:00', '2026-01-02T00:00:00+09:00', 8)"
+        )
+        connection.execute(
+            "INSERT INTO source_targets (id, source_id, backend, locator, created_at, updated_at) "
+            "VALUES (71, 61, 'web', 'https://example.invalid/archive.zip', "
+            "'2026-01-01T00:00:00+09:00', '2026-01-01T00:00:00+09:00')"
+        )
+        connection.execute(
+            "INSERT INTO crawl_runs (id, item_id, source_id, target_id, site_snapshot, "
+            "external_id_snapshot, backend_snapshot, target_key_snapshot, locator_snapshot, "
+            "access_strategy, status, started_at, finished_at, created_at, updated_at) "
+            "VALUES (81, 51, 61, 71, 'site', 'source', 'web', 'default', "
+            "'https://example.invalid/archive.zip', 'direct', 'succeeded', "
+            "'2026-01-02T00:00:00+09:00', '2026-01-02T00:05:00+09:00', "
+            "'2026-01-02T00:00:00+09:00', '2026-01-02T00:05:00+09:00')"
+        )
+        connection.execute(
+            "INSERT INTO artifacts (id, item_id, crawl_run_id, kind, format, sha256, byte_size, "
+            "storage_backend, locator, state, created_at, updated_at) "
+            "VALUES (91, 51, 81, 'archive', 'zip', "
+            "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 123, "
+            "'filesystem', 'books/kept.zip', 'present', '2026-01-02T00:05:00+09:00', "
+            "'2026-01-02T00:05:00+09:00')"
+        )
+        connection.execute("PRAGMA user_version = 6")
+
+    result = migrate_catalog(path, backup_dir=backup_dir)
+
+    assert result.from_version == 6 and result.to_version == 7
+    assert result.backup_path is not None and result.backup_path.is_file()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("SELECT id, status, note FROM items").fetchone() == (
+            51, "completed", "kept"
+        )
+        assert connection.execute(
+            "SELECT id, access_mode, available, display_position, acquisition_enabled "
+            "FROM sources"
+        ).fetchone() == (61, "paid", 0, 8, 1)
+        assert connection.execute("SELECT locator FROM artifacts").fetchone()[0] == "books/kept.zip"
+        assert connection.execute("SELECT count(*) FROM acquisition_scope_sync").fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM discovery_inventory_evidence").fetchone()[0] == 0
+
+
 def test_production_v3_to_v6_migration_preserves_rows_and_creates_backup(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "catalog-v3.sqlite"
     backup_dir = tmp_path / "backup"
-    old_schema_sql = SCHEMA_SQL.replace(
+    old_schema_sql = schema_v6_sql().replace(
         "CHECK (status IN ('pending', 'completed', 'skipped', 'external'))",
         "CHECK (status IN ('pending', 'completed'))",
     )
@@ -258,10 +358,10 @@ def test_production_v3_to_v6_migration_preserves_rows_and_creates_backup(
     result = migrate_catalog(path, backup_dir=backup_dir)
 
     assert result.migrated is True
-    assert result.from_version == 3 and result.to_version == 6
+    assert result.from_version == 3 and result.to_version == 7
     assert result.backup_path is not None and result.backup_path.is_file()
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute("SELECT count(*) FROM works").fetchone()[0] == 1
         assert connection.execute("SELECT count(*) FROM items").fetchone()[0] == 1
@@ -283,7 +383,7 @@ def test_production_v5_to_v6_migration_preserves_ids_and_foreign_keys(
 ) -> None:
     path = tmp_path / "catalog-v5.sqlite"
     backup_dir = tmp_path / "backup"
-    old_schema_sql = SCHEMA_SQL.replace(
+    old_schema_sql = schema_v6_sql().replace(
         "CHECK (status IN ('pending', 'completed', 'skipped', 'external'))",
         "CHECK (status IN ('pending', 'completed'))",
     )
@@ -343,10 +443,10 @@ def test_production_v5_to_v6_migration_preserves_ids_and_foreign_keys(
     result = migrate_catalog(path, backup_dir=backup_dir)
 
     assert result.from_version == 5
-    assert result.to_version == 6
+    assert result.to_version == 7
     assert result.backup_path is not None and result.backup_path.is_file()
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
         assert connection.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert connection.execute("SELECT id FROM works").fetchone()[0] == 1
         assert connection.execute(
