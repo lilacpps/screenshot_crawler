@@ -26,6 +26,18 @@ position or key changes invalidate listing evidence and the sync marker;
 metadata-only access refreshes preserve them. The evidence write updates only
 existing Sources already owned by that key and changes no availability, access,
 Item status, run, Artifact or acquisition flag.
+Out-of-scope inventory entries may reference Sources belonging to another key
+of the same Work; those entries are proof only and leave the other key's
+Source rows, including stored positions, untouched. Cross-Work identities and
+in-scope identities owned by another key remain rejected transactionally.
+This supports split older/latest Discovery targets without moving ownership.
+Regression coverage uses synthetic Catalog/Discovery data; the reported Jump+
+split-target failure was traced against the operational Catalog read-only,
+but the corrected Full traversal has not been live-verified.
+Validation: Catalog, Discovery, Scope Reconciler, site scope-sync, Batch
+acquisition-scope and Jump+ Discovery unit files passed (182 tests, 0 skipped);
+`ruff check src tests` passed. Browser Integration, Research/Probe and the full
+suite were not run for this isolated ownership-validation fix.
 
 The P2 Scope Reconciler is implemented as a service and explicit CLI
 `watch scope-sync` dry-run/apply operation. Preview is read-only. Apply reloads

@@ -18,6 +18,12 @@ Full finalization; a partial traversal or Incremental run cannot authorize a
 scope change. `watch scope-sync` applies Watchlist-derived acquisition flags
 separately. Work-key ordinals reserve assigned Sources without changing
 Jump+ access or rental policy. This common change was not live-verified.
+For split older/latest keys within one Work, Full inventory may include the
+other key's episodes outside the selected scope. Shared Catalog validation
+accepts those proof entries without changing their ownership or stored state;
+overlapping in-scope ownership and cross-Work identities still fail closed.
+The split-target regression is covered with synthetic Discovery/Catalog tests;
+the corrected Full traversal has not been live-verified.
 
 このファイルのJ0 probe記録はviewer構造を調査した時点の履歴であり、現在の
 production Discovery / Site Policy / Batchの挙動を置き換えない。通常のBatchは

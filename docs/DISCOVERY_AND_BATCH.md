@@ -2010,6 +2010,12 @@ episode numbers have no identity and are never synthesized. Existing Catalog
 Sources absent from a complete proof retain their prior positions but block
 scope synchronization as `missing_listing`.
 
+Complete-listing evidence may include out-of-scope Sources owned by another
+Discovery key within the same Work. These entries are listing evidence only:
+their ownership, stored positions and other Source state remain unchanged.
+An in-scope Source owned by another key, or any listed Source owned by another
+Work, is rejected. Evidence refresh never transfers Source ownership.
+
 `DiscoveryService` is the sole persistence/finalization authority, but a
 bounded-capable Adapter supplies a run-local
 `global_display_position` hint after it has observed the site's complete

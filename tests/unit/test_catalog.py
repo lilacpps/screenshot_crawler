@@ -467,6 +467,63 @@ def test_scope_sync_and_full_inventory_evidence_are_transactional_and_refresh_sa
     assert stale_sync is not None and stale_sync.status == "stale"
 
 
+@pytest.mark.parametrize(
+    ("same_work", "other_key", "in_scope"),
+    [
+        (True, "target-b", True),
+        (False, "target-a", False),
+        (False, "target-b", False),
+        (False, None, False),
+        (False, "target-b", True),
+    ],
+)
+def test_inventory_rejects_conflicting_ownership_without_replacing_proof(
+    tmp_path: Path, same_work: bool, other_key: str | None, in_scope: bool,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work, _item, source, _target = make_graph(service)
+    other_work = work if same_work else service.create_work(
+        WorkInput(work_key="work-b", title="Other Work")
+    )
+    other_item = service.create_item(work_id=other_work.id)
+    other = service.create_source(
+        SourceInput(site="mangaone", external_id="other", discovery_key=other_key),
+        item_id=other_item.id,
+    )
+    proof_args = {
+        "work_key": work.work_key,
+        "discovery_key": "target-a",
+        "site": "mangaone",
+        "target_url": "https://example.invalid/listing",
+        "scope_fingerprint": "a" * 64,
+        "listing_identity": "series-42",
+    }
+    evidence = service.record_discovery_inventory_evidence(
+        **proof_args, positions=[DiscoveryInventoryPosition("chapter-1", 1)],
+    )
+    flags = {source.id: True}
+    if same_work:
+        flags[other.id] = False
+    service.apply_acquisition_scope_sync(
+        work_key=work.work_key, fingerprint="prior-sync", source_flags=flags,
+    )
+    sync_before = service.get_acquisition_scope_sync(work.work_key)
+    sources_before = service.list_sources()
+
+    with pytest.raises(CatalogValidationError, match="owned by another work or Discovery key"):
+        service.record_discovery_inventory_evidence(
+            **proof_args,
+            positions=[
+                DiscoveryInventoryPosition("chapter-1", 1),
+                DiscoveryInventoryPosition("other", 2, in_scope=in_scope),
+            ],
+        )
+
+    assert service.get_discovery_inventory_evidence("target-a") == evidence
+    assert service.get_acquisition_scope_sync(work.work_key) == sync_before
+    assert service.list_sources() == sources_before
+
+
 def test_inventory_refresh_preserves_unlisted_source_position_and_history(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     work, _observed_item, observed_source, _observed_target = make_graph(service)

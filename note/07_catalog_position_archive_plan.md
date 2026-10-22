@@ -226,7 +226,7 @@ Requirements:
 5. do not change Item status,
 6. do not use position changes as cross-site merge evidence.
 
-For bounded full Discovery, the scope slice remains authoritative for record, access, and availability refresh. When an adapter supplies a successful complete-listing inventory, the Discovery evidence hook may also refresh `display_position` for already-known Sources in that same site/listing outside the selected slice. It does not change their Item status, availability/access state, acquisition flag, run, or Artifact history. This all-listing position refresh is required to avoid making Scope Reconciler decisions from stale positions.
+For bounded full Discovery, the scope slice remains authoritative for record, access, and availability refresh. When an adapter supplies a successful complete-listing inventory, the Discovery evidence hook may also refresh `display_position` for already-known Sources owned by the current Discovery key in that same site/listing outside the selected slice. Out-of-scope Sources owned by another key of the same Work are accepted as listing evidence only and keep their stored positions and ownership. Cross-Work identities and in-scope identities owned by another key remain rejected. The hook does not change Item status, availability/access state, acquisition flag, run, or Artifact history. Current-listing evidence, rather than retained historical positions, remains the Scope Reconciler authority.
 
 Position assignment should be committed only after the run has satisfied the existing full-Discovery completeness contract. An incomplete full Discovery must not partially rewrite established positions.
 

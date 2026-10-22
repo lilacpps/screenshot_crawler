@@ -730,8 +730,9 @@ async def test_bounded_full_syncs_records_without_global_reconciliation(
     assert reconciliation_calls == []
 
 
+@pytest.mark.parametrize("outside_key", ["scope-a", "older-scope"])
 async def test_full_inventory_proof_persists_only_after_normal_exhaustion(
-    tmp_path: Path,
+    tmp_path: Path, outside_key: str,
 ) -> None:
     adapter = InventoryDiscoveryAdapter(
         [
@@ -751,10 +752,12 @@ async def test_full_inventory_proof_persists_only_after_normal_exhaustion(
         SourceInput(
             site=watch_target.site,
             external_id="outside",
-            discovery_key=watch_target.key,
+            discovery_key=outside_key,
+            display_position=9,
         ),
         item_id=outside_item.id,
     )
+    outside_before = catalog.get_source(outside.id)
 
     complete = await service.discover(FakePage(), watch_target, "full")
 
@@ -765,7 +768,10 @@ async def test_full_inventory_proof_persists_only_after_normal_exhaustion(
         ("outside", False),
         ("inside", True),
     ]
-    assert catalog.get_source(outside.id).display_position == 1
+    if outside_key == watch_target.key:
+        assert catalog.get_source(outside.id).display_position == 1
+    else:
+        assert catalog.get_source(outside.id) == outside_before
     inside = catalog.find_source(watch_target.site, "inside")
     assert inside is not None and inside.display_position == 2
     catalog.apply_acquisition_scope_sync(

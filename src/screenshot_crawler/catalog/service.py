@@ -967,6 +967,7 @@ class CatalogService:
             json.dumps(digest_input, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         timestamp = format_timestamp(now_jst())
+        in_scope_ids = {item.external_id for item in normalized if item.in_scope}
         with self._connection() as connection:
             work = connection.execute(
                 "SELECT id FROM works WHERE work_key = ?", (work_key,)
@@ -976,18 +977,22 @@ class CatalogService:
             work_id = int(work["id"])
             self._mark_acquisition_scope_stale(connection, work_id)
             existing = connection.execute(
-                "SELECT s.id, s.discovery_key, i.work_id FROM sources s "
+                "SELECT s.external_id, s.discovery_key, i.work_id FROM sources s "
                 "JOIN items i ON i.id = s.item_id WHERE s.site = ? AND s.external_id IN ("
                 + (", ".join("?" for _ in ids) if ids else "NULL")
                 + ")",
                 (site, *ids),
             ).fetchall()
             for row in existing:
-                if int(row["work_id"]) != work_id or row["discovery_key"] not in (None, discovery_key):
+                # The complete listing may include another key's disjoint scope
+                # within this Work. Keep its ownership and Source state untouched.
+                if int(row["work_id"]) != work_id or (
+                    row["external_id"] in in_scope_ids
+                    and row["discovery_key"] not in (None, discovery_key)
+                ):
                     raise CatalogValidationError(
                         "inventory contains an existing Source owned by another work or Discovery key"
                     )
-            in_scope_ids = {item.external_id for item in normalized if item.in_scope}
             if in_scope_ids:
                 in_scope_rows = connection.execute(
                     "SELECT s.external_id FROM sources s JOIN items i ON i.id = s.item_id "
