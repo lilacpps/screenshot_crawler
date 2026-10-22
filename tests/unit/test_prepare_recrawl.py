@@ -84,6 +84,15 @@ def _add_completed_archive(
 @pytest.mark.parametrize(
     ("site", "entries", "expected"),
     [
+        ("bookwalker", ["page-0001.JPG", "page-0002.jpeg"], "PREFERRED_ONLY"),
+        ("bookwalker", ["page-0001.png", "page-0002.jpg"], "PREFERRED_ONLY"),
+        ("bookwalker", ["page-0002.JPEG", "page-0001.PNG"], "PREFERRED_ONLY"),
+        ("bookwalker", ["page-0001.jpg", "page-0002.png"], "FALLBACK_INCLUDED"),
+        ("bookwalker", ["page-0001.png", "page-0002.jpg", "page-0003.png"], "FALLBACK_INCLUDED"),
+        ("bookwalker", ["page-0001.png"], "FALLBACK_INCLUDED"),
+        ("bookwalker", ["page-0001.png", "page-0001.jpg", "page-0002.jpeg"], "FALLBACK_INCLUDED"),
+        ("bookwalker", ["001.png", "002.jpg"], "FALLBACK_INCLUDED"),
+        ("bookwalker", ["page-0001.webp", "page-0002.jpg"], "UNEXPECTED_FORMAT"),
         ("comicdays", ["001.JPG", "002.jpeg"], "PREFERRED_ONLY"),
         ("comicdays", ["001.png"], "FALLBACK_INCLUDED"),
         ("comicdays", ["001.jpg", "002.PNG"], "FALLBACK_INCLUDED"),
@@ -110,6 +119,59 @@ def test_site_archive_policies_classify_synthetic_zip(
     )
 
     assert inspection.classification.value == expected
+
+
+
+def test_bookwalker_cover_png_is_reported_as_allowed_without_recrawl(tmp_path: Path) -> None:
+    path = tmp_path / "bookwalker.zip"
+    _write_zip(path, ["page-0002.jpg", "page-0001.png"])
+
+    result = prepare_recrawl.inspect_archive(
+        path, prepare_recrawl.archive_policy_for_site("bookwalker")
+    )
+
+    assert result.classification is prepare_recrawl.PREFERRED_ONLY
+    assert result.preferred_count == 1
+    assert result.fallback_count == 0
+    assert result.allowed_fallback_count == 1
+
+
+@pytest.mark.parametrize(
+    ("entries", "should_apply"),
+    [
+        (["page-0001.png", "page-0002.jpg"], False),
+        (["page-0001.jpg", "page-0002.png"], True),
+        (["page-0001.png", "page-0002.jpg", "page-0003.png"], True),
+        (["page-0001.png"], True),
+    ],
+)
+def test_bookwalker_scan_apply_only_targets_problematic_png(
+    tmp_path: Path, entries: list[str], should_apply: bool
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    _work, item, _source, _target, _run, artifact, path = _add_completed_archive(
+        catalog, tmp_path, site="bookwalker", archive_entries=entries
+    )
+
+    report = prepare_recrawl.scan_catalog(catalog, site="bookwalker")
+    assert len(report.recrawl_results(ignore_missing=False)) == int(should_apply)
+    applied = prepare_recrawl.apply_scan_results(
+        catalog,
+        report,
+        library_dir=tmp_path / "library",
+        backup_root=tmp_path / "backup",
+        timestamp="run",
+    )
+    assert applied.failed == 0
+    assert applied.archives_moved == int(should_apply)
+    assert applied.items_returned_pending == int(should_apply)
+    assert catalog.get_item(item.id).status == ("pending" if should_apply else "completed")
+    if should_apply:
+        assert not path.exists()
+        assert catalog.get_artifact(artifact.id).locator != path.as_posix()
+    else:
+        assert path.exists()
+        assert catalog.get_artifact(artifact.id).locator == path.as_posix()
 
 
 def test_unexpected_empty_broken_and_missing_archives(tmp_path: Path) -> None:

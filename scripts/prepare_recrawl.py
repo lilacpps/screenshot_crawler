@@ -55,6 +55,8 @@ class ArchivePolicy:
 
     preferred_extensions: frozenset[str]
     fallback_extensions: frozenset[str]
+    # This is a classification exception, not a change to the capture policy.
+    allow_first_page_png: bool = False
 
     def __post_init__(self) -> None:
         preferred = frozenset(_normalize_extension(value) for value in self.preferred_extensions)
@@ -69,6 +71,13 @@ class ArchivePolicy:
 # implementations and their site notes.  New sites must be added explicitly;
 # an unknown site is never treated as JPEG or any other guessed default.
 SITE_ARCHIVE_POLICIES: dict[str, ArchivePolicy] = {
+    "bookwalker": ArchivePolicy(
+        preferred_extensions=frozenset({".jpg", ".jpeg"}),
+        fallback_extensions=frozenset({".png"}),
+        # BookWalker captures its cover as page-0001, which can legitimately
+        # need a PNG fallback even when the rest of the book is JPEG.
+        allow_first_page_png=True,
+    ),
     "comicdays": ArchivePolicy(
         preferred_extensions=frozenset({".jpg", ".jpeg"}),
         fallback_extensions=frozenset({".png"}),
@@ -118,6 +127,7 @@ class ArchiveInspection:
     fallback_count: int = 0
     unexpected_count: int = 0
     reason: str | None = None
+    allowed_fallback_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +262,8 @@ def inspect_archive(path: str | Path, policy: ArchivePolicy) -> ArchiveInspectio
             preferred = 0
             fallback = 0
             unexpected = 0
+            preferred_names: list[str] = []
+            fallback_names: list[str] = []
             for info in archive.infolist():
                 if info.is_dir() or info.filename.endswith("/"):
                     continue
@@ -263,8 +275,10 @@ def inspect_archive(path: str | Path, policy: ArchivePolicy) -> ArchiveInspectio
                 extension = PurePosixPath(info.filename).suffix.lower()
                 if extension in policy.preferred_extensions:
                     preferred += 1
+                    preferred_names.append(info.filename)
                 elif extension in policy.fallback_extensions:
                     fallback += 1
+                    fallback_names.append(info.filename)
                 else:
                     unexpected += 1
 
@@ -276,6 +290,22 @@ def inspect_archive(path: str | Path, policy: ArchivePolicy) -> ArchiveInspectio
                     unexpected_count=unexpected,
                     reason="archive contains no page images",
                 )
+            # Allow exactly one BookWalker cover PNG only when a distinct JPEG
+            # body page exists. ZIP entry order is not reading order; the
+            # normal BookWalker crawl starts at the cover, and Core numbers the
+            # first saved image page-0001. A PNG-only archive, an additional
+            # body PNG, or a duplicate page-0001 JPEG still needs a re-crawl.
+            allowed_fallback = int(
+                policy.allow_first_page_png
+                and preferred > 0
+                and len(fallback_names) == 1
+                and fallback_names[0].lower() == "page-0001.png"
+                and not any(
+                    PurePosixPath(name).stem.lower() == "page-0001"
+                    for name in preferred_names
+                )
+            )
+            fallback -= allowed_fallback
             if unexpected:
                 classification = ArchiveClassification.UNEXPECTED_FORMAT
             elif fallback:
@@ -286,6 +316,7 @@ def inspect_archive(path: str | Path, policy: ArchivePolicy) -> ArchiveInspectio
                 classification,
                 preferred_count=preferred,
                 fallback_count=fallback,
+                allowed_fallback_count=allowed_fallback,
                 unexpected_count=unexpected,
             )
     except (zipfile.BadZipFile, OSError, RuntimeError, EOFError, ValueError) as exc:
@@ -658,6 +689,7 @@ def _print_result(entry: ScanResult, *, ignored_missing: bool = False) -> None:
         print(
             f"  preferred={entry.inspection.preferred_count} "
             f"fallback={entry.inspection.fallback_count} "
+            f"allowed_fallback={entry.inspection.allowed_fallback_count} "
             f"unexpected={entry.inspection.unexpected_count}"
         )
     if entry.reason:

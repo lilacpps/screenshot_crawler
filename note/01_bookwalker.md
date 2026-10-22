@@ -4,7 +4,7 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-10-10
+最終同期: 2026-10-22
 
 ## 1. 目的と現在のscope
 
@@ -34,6 +34,41 @@ crop時の必須画素比較を通った場合だけJPEGを返す。
 BookWalkerのseries-scoped Discovery、Site Policy、Batch実行は実装済みである。Batchからのstrict `direct` / `quota` entryも実装済みである。Adapterを直接生成
 した場合のstrategy defaultは`auto`で、`configure_run()`は`auto` / `direct` / `quota`を受け付け、
 run stateへ保存する。
+
+## Archive inspection and recrawl preparation (2026-10-22)
+
+`scripts/prepare_recrawl.py --site bookwalker --catalog catalog.sqlite --show-all`
+now supports BookWalker through the existing Catalog-driven archive scanner.
+The default is read-only and does not open the viewer, call Discovery, consume
+access resources, or modify Catalog/files. Only completed Items with recorded
+successful ZIP Artifacts are inspected; orphan ZIPs are not discovered.
+
+JPEG-only archives and exactly one root `page-0001.png` plus a distinct JPEG
+body are `PREFERRED_ONLY`. Names/extensions are case-insensitive; the first PNG
+must be the only PNG, and no JPEG may share its `page-0001` stem. The exception
+does not suppress unexpected page formats. Accepted cover PNGs are reported as
+`allowed_fallback_count=1` and excluded from recrawl/apply. Body PNGs, PNG-only
+archives, extra PNGs, duplicate first-page PNG/JPEG, nonstandard PNG naming and
+unsupported formats remain problems under the extension policy. ZIP member
+order does not affect the saved-page naming rule.
+
+The scanner does not inspect image provenance or prove that the named first
+page is a cover. PNG classification is not a quality verdict: source-native
+PNG remains correct when JPEG provenance is unavailable or the source is PNG.
+The adapter's capture/proof/fallback behavior is unchanged, and a recrawl is
+not guaranteed to produce JPEG. Review the dry-run before an explicit
+`--apply`: the existing workflow backs up selected archives, updates Artifact
+locators, and returns Items to pending while retaining source grants and run
+history. Existing owned/quota/access policy still governs subsequent Batch
+eligibility; preparation does not grant access.
+
+Implementation: `scripts/prepare_recrawl.py`; examples and scope limitations:
+`docs/BOOKWALKER_RECRAWL.md`. Verification uses the synthetic preparation-script
+Unit selection: 43 passed, 0 failed/skipped, with one existing pytest-asyncio
+deprecation warning, including the pre-existing site policies and apply workflow.
+Ruff (`scripts/prepare_recrawl.py src tests`) and diff checks passed.
+No real Catalog apply, browser/live recrawl, Research/Probe or full repository
+suite is required for this script-policy integration; capture code is unchanged.
 
 ## 1.1 Historical Stage 01 source-native baseline (2026-10-05)
 

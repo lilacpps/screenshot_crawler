@@ -1787,7 +1787,9 @@ mapping is intentionally limited to the confirmed production capture paths:
 Comic DAYS and Magapoke prefer JPEG (`.jpg`/`.jpeg`) with PNG fallback, while
 MANGA ONE, Hanayume, and Younganimal prefer source-native WebP with PNG fallback. Hanayume's
 mapping was added on 2026-10-18 for the observed resized Yona PNG archives; Younganimal's
-mapping was added on 2026-10-19 after the fractional-destination capture correction. This
+mapping was added on 2026-10-19 after the fractional-destination capture correction.
+BookWalker is supported as of 2026-10-22 with JPEG preferred and PNG fallback,
+subject to the strict saved-first-page PNG exception described below. This
 is an extension-based recrawl policy, not proof that every PNG has reduced fidelity:
 a verified native-size PNG retained after codec failure is also classified as a fallback format.
 An explicitly unknown
@@ -1811,6 +1813,35 @@ pending failures are reported as partial failures without a rollback
 framework. Synthetic ZIP coverage is in
 `tests/unit/test_prepare_recrawl.py`; no real Catalog `--apply` run is part of
 the implementation verification.
+
+BookWalker usage: `python scripts/prepare_recrawl.py --site bookwalker --catalog
+catalog.sqlite --show-all` performs a read-only scan. Exactly one root member
+named `page-0001.png` (case-insensitive) is an allowed fallback only when at
+least one JPEG member exists and no JPEG has the `page-0001` stem. No additional
+PNG is permitted by this exception; unexpected formats remain problematic.
+An accepted cover PNG plus JPEG body is `PREFERRED_ONLY`, with
+`allowed_fallback_count=1` and `fallback_count=0`, and is excluded from apply.
+Body PNGs, PNG-only archives, nonstandard PNG naming and duplicate first-page
+PNG/JPEG remain recrawl candidates. ZIP entry order is not reading order and
+does not affect the rule. `ArchiveInspection.allowed_fallback_count` is appended
+after the pre-existing fields, preserving positional constructor compatibility;
+printed inspection details include `allowed_fallback`.
+
+This is an archive-name/extension policy, not proof that page 1 is actually a
+cover, that PNG is lossy, or that a source JPEG exists. Verified source-native
+PNG remains valid capture output. Capture/DRM/provenance logic is unchanged,
+and a later crawl is not guaranteed to produce JPEG. Only completed Catalog
+Items with recorded successful ZIP Artifacts are inspected; orphan archives
+are outside scope. `--apply` explicitly uses the existing backup/Artifact/
+pending workflow and preserves source grants and historical runs. Batch access
+policy still decides whether a pending item is readable. Details and examples:
+`docs/BOOKWALKER_RECRAWL.md` and `note/01_bookwalker.md`.
+Validation for this integration: all 43 preparation-script Unit cases passed
+(0 failed/skipped; one existing pytest-asyncio deprecation warning), including
+all existing site policies and synthetic apply. Ruff (`scripts/prepare_recrawl.py
+src tests`) and diff checks passed. No browser Integration, Research/Probe,
+real Catalog apply, live recrawl or full repository suite was run because only
+the archive-policy script and its documentation changed.
 
 Hanayume usage: `python scripts/prepare_recrawl.py --site hanayume --work "暁のヨナ"
 --catalog catalog.sqlite --ignore-missing` is read-only; adding `--apply` moves the selected
