@@ -59,3 +59,7 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
   charge/ticket/medal research and consumption deliberately deferred to a later phase.
 
 - [花とゆめ＋ Work Ticket](hanayume-work-ticket/README.md) — 作品単位の23h回復、話単位の72h閲覧、direct episode entry、同一ページBatch、grant-only と安全な実サイト検証（planned）。
+
+- [Work-key acquisition scope and cross-site archive ordering](work-key-archive-order/README.md) —
+  既存discovery_scopeのCatalog取得担当フラグ同期、archive_orderによる複数key/サイト横断ZIP採番、
+  grant-onlyを含むBatchフィルタ、安全な既存ZIP renumber（planned）。
