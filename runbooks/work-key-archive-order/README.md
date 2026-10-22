@@ -255,6 +255,31 @@ inventory hook remains blocked; repeated Full Discovery cannot resolve that
 blocker. Do not manually edit `acquisition_enabled` or use Full as implicit
 sync.
 
+#### Site-wide Scope sync selector
+
+`watch scope-sync` accepts exactly one of `--work-key KEY` and `--site SITE`.
+The site selector uses current Watchlist targets (including `enabled: false`) to
+select distinct work keys; Catalog-only Sources for removed Watchlist keys do
+not select a Work. Each selected Work is still previewed and validated across
+all of its sites and keys. Dry-run is a read-only aggregate preview. Apply
+preflights the full selection before writing and then applies the existing
+per-Work transaction under the shared Catalog job lock. It is not a site-wide
+atomic transaction. `failure_stage` disambiguates `failed_work_key`: at
+`preflight` it identifies a blocked Work that was not attempted; at `apply` it
+identifies the attempted Work, whose transaction may have committed before an
+exception; at `final_validation` it identifies the Work whose final gate failed
+and may also appear in `applied_work_keys` if its apply call returned. Other
+stages keep their own error context. `not_applied_work_keys` lists only
+Work keys that were definitely unattempted. On any partial result,
+review the JSON and run a new site dry-run before continuing. The final
+Watchlist snapshot checks the selected site membership plus each selected
+Work's complete key/scope/order fingerprint, including keys on other sites.
+
+```powershell
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --site comicdays --dry-run --json
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --site comicdays --apply --json
+```
+
 ### P3 — Batchの対象フィルタと同期ゲート
 **Objective**: 元のチケット/選択セマンティクスを維持して担当外だけを除外。
 - plan/run（normal/direct/quota/grant-only/deferred/replan/追加resource）で除外フィルタの一貫性を実装。

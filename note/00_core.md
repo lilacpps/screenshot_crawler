@@ -1729,7 +1729,23 @@ python -m screenshot_crawler.cli batch plan --site mangaone --catalog catalog.sq
 python -m screenshot_crawler.cli batch run --site mangaone --catalog catalog.sqlite --watchlist watchlist.yaml
 python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --dry-run --json
 python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --apply --json
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --site comicdays --dry-run --json
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --site comicdays --apply --json
 ```
+
+Site-wide `watch scope-sync --site SITE` selects distinct work keys represented
+by current Watchlist targets, including `enabled: false`; removed-key Catalog
+Sources alone do not select a Work. Preview is aggregated and read-only. Apply
+preflights every Work, holds the Catalog job lock, and preserves per-Work
+transaction/CAS boundaries rather than claiming one site-wide transaction.
+Failures report successful-return works, the stage-affected work, and
+definitely unattempted works separately. `failure_stage` disambiguates the
+failed key: preflight identifies a blocked Work not attempted; apply identifies
+an attempted Work that may have committed before an exception; final validation
+identifies the Work whose gate failed and may overlap the successful-return
+list. After
+per-Work synchronization checks, one final Watchlist snapshot compares both site
+membership and each selected Work's complete key/scope/order fingerprint.
 
 Watchlist編集後はscope previewを確認し、必要なFull listing proofを得てから明示的にapplyする。
 Discovery成功はlisting証拠を更新するが、work-wide Source flagsを自動同期しない。Stale configは

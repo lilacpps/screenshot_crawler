@@ -78,6 +78,7 @@ from screenshot_crawler.watchlist.reconcile import (
     ScopeReconciliationError,
 )
 from screenshot_crawler.watchlist.service import WatchlistError, WatchlistService
+from screenshot_crawler.watchlist.site_sync import ScopeSiteSyncService
 
 
 class DiscoveryAllError(RuntimeError):
@@ -274,7 +275,12 @@ def _parser() -> argparse.ArgumentParser:
         "--catalog", type=Path, default=Path("catalog.sqlite"),
         help="Catalog SQLite path (default: catalog.sqlite)",
     )
-    watch_sync.add_argument("--work-key", required=True)
+    sync_selector = watch_sync.add_mutually_exclusive_group(required=True)
+    sync_selector.add_argument("--work-key")
+    sync_selector.add_argument(
+        "--site",
+        help="Preview or apply every distinct Watchlist work that includes this site",
+    )
     sync_mode = watch_sync.add_mutually_exclusive_group(required=True)
     sync_mode.add_argument("--dry-run", action="store_true", help="Preview only (read-only)")
     sync_mode.add_argument("--apply", action="store_true", help="Apply the reviewed scope flags")
@@ -1004,6 +1010,59 @@ async def _run_login(args: argparse.Namespace) -> None:
 
 def _run_watch(args: argparse.Namespace) -> None:
     if args.watch_action == "scope-sync":
+        if args.site is not None:
+            service = ScopeSiteSyncService(
+                WatchlistService(args.watchlist), CatalogService(args.catalog)
+            )
+            preview = service.preview_site(args.site)
+            if args.apply:
+                result = service.apply_site(preview)
+                if args.json:
+                    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+                else:
+                    print(f"Site: {result.site}")
+                    print(f"Complete: {'yes' if result.complete else 'no'}")
+                    print(f"Works selected: {len(result.selected_work_keys)}")
+                    print(f"Works applied: {len(result.applied_work_keys)}")
+                    if result.not_applied_work_keys:
+                        print(
+                            "Works not applied: "
+                            + ", ".join(result.not_applied_work_keys)
+                        )
+                    if result.failed_work_key is not None:
+                        print(f"Failed work: {result.failed_work_key}")
+                    if result.error is not None:
+                        print(f"ERROR: {result.error}", file=sys.stderr)
+                if not result.complete:
+                    raise ScopeReconciliationError(
+                        result.error or "Site scope sync did not complete"
+                    )
+                return
+
+            if args.json:
+                print(json.dumps(preview.to_dict(), ensure_ascii=False, indent=2))
+            else:
+                print(f"Site: {preview.site}")
+                print(f"Ready: {'yes' if preview.ready else 'no'}")
+                print(f"Targets: {len(preview.target_keys)}")
+                print(f"Works: {len(preview.work_keys)}")
+                for work in preview.works:
+                    print(
+                        f"  Work {work.work_key}: "
+                        f"{'ready' if work.ready else 'blocked'}, "
+                        f"{len(work.changes)} source changes"
+                    )
+                    for blocker in work.blockers:
+                        print(f"    BLOCKED: {blocker}", file=sys.stderr)
+                for blocker in preview.blockers:
+                    if not any(blocker.startswith(f"{work.work_key}:") for work in preview.works):
+                        print(f"BLOCKED: {blocker}", file=sys.stderr)
+            if not preview.ready:
+                raise ScopeReconciliationError(
+                    "; ".join(preview.blockers) or "Site scope preview is blocked"
+                )
+            return
+
         reconciler = ScopeReconciler(
             WatchlistService(args.watchlist), CatalogService(args.catalog)
         )

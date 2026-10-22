@@ -895,6 +895,29 @@ survive v6-to-v7 migration, but does not authorize migration or renumber of a
 normal operational path. Follow the copy-first CLI procedure in the work-key
 runbook before any separate production rollout.
 
+
+Site-wide Scope sync is available through `ScopeSiteSyncService` and the
+`watch scope-sync --site SITE` CLI selector. It selects distinct work keys from
+matching Watchlist targets regardless of `enabled`, then previews each complete
+work including its keys on other sites. All selected Works are preflighted
+before any apply. The service keeps the shared Catalog job lock and existing
+per-work transaction/CAS semantics; it does not promise one site-wide atomic
+transaction. A failure reports successful-return work keys, the
+stage-affected work key, and definitely unattempted work keys separately.
+`failure_stage` disambiguates the failed key: preflight identifies a blocked
+Work not attempted; apply identifies an attempted Work that may have committed
+before an exception; final validation identifies the Work whose gate failed and
+may overlap the successful-return list. Unknown or targetless sites are blocked without Catalog-based
+fallback. The final single Watchlist snapshot checks both site membership and
+each selected Work's full key/scope/order fingerprint, catching cross-site key
+edits during final synchronization checks. A Catalog-only Source for a removed
+Watchlist key does not select its Work.
+
+```powershell
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --site comicdays --dry-run --json
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --site comicdays --apply --json
+```
+
 The 2026-10-22 follow-up also corrected inventory position persistence: a
 successful proof refresh writes positions for identities present in that
 complete listing only. A previously known Source absent from the listing keeps

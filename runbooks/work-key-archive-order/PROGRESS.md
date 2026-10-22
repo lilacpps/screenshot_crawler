@@ -681,3 +681,47 @@ documented in the runbook.
 After each phase record: commit/ref, files touched, design deviations, test command/results,
 skipped/failed tests and reasons, integration/live verification limits, reviewer findings,
 and the next blocking issue. Do not label planning as implemented.
+
+
+## 2026-10-23 follow-up: site-wide Scope sync CLI
+
+- Added the reusable `ScopeSiteSyncService` and mutually exclusive
+  `watch scope-sync --site SITE` selector. It selects distinct work keys from
+  current Watchlist targets regardless of `enabled`, while every shared work
+  is still validated across all sites and keys. An unknown or targetless site
+  is blocked without Catalog fallback; removed-key Catalog Sources alone do
+  not select a work.
+- Site dry-run aggregates read-only previews. Apply preflights every selected
+  work before any write, holds the Catalog job lock, and retains the existing
+  per-work transaction/CAS behavior. It intentionally does not claim site-wide
+  atomicity: results separate successful-return works, the stage-affected work,
+  and definitely unattempted works. `failure_stage` disambiguates the failed
+  key: preflight identifies an unattempted blocker, apply identifies a possibly
+  committed attempted Work, and final validation identifies a failed gate that
+  may overlap the successful-return list. The final single
+  Watchlist snapshot checks site membership and each selected work's complete
+  key/scope/order fingerprint after synchronization checks.
+- Reviewer findings fixed: the final Watchlist read compares cross-site work
+  fingerprints as well as site membership. Regressions cover a new site work
+  and a new cross-site key during final synchronization, and a commit-then-raise
+  apply result without falsely claiming rollback. A multi-work successful apply
+  test verifies both work sync markers, including the shared cross-site work.
+- Focused tests: `tests/unit/test_scope_site_sync.py` plus
+  `tests/unit/test_scope_reconciler.py`: **28 passed, 1 warning, 0 skipped**
+  in the final combined run. The new multi-work success case also passed in an
+  isolated rerun (**12 passed, 1 warning** for the site-sync module). Targeted
+  Ruff for the service, CLI, and focused tests passed.
+- Root's first affected-suite run before the terminal configuration recheck had
+  **232 passed, 1 failed, 433 warnings** in 52.35 seconds. The sole failure was
+  the unchanged Windows process-exclusion test's child cleanup timing out after
+  its exclusion assertion succeeded. The affected rerun completed with
+  **234 passed, 433 warnings, 0 skipped** in 38.68 seconds; the cleanup timeout
+  did not recur and the existing test was not changed. The suite's source-wide
+  Ruff check passed.
+- The previous full-suite result (4,991 passed, 2 failed) predates this narrow
+  additive service/CLI follow-up and is not a full-suite result for this
+  follow-up. No full rerun was performed: no Catalog schema, Discovery, Batch
+  execution, adapter, or renumber implementation changed. No operational
+  Catalog/Watchlist/Books write or live-site operation was performed.
+
+- Final independent review of the site-wide Scope sync follow-up: APPROVE, 0 blocking findings. Documentation and implementation are frozen for this follow-up.

@@ -1916,15 +1916,40 @@ filtering and work-key archive naming remain tracked by
 [`runbooks/work-key-archive-order/README.md`](../runbooks/work-key-archive-order/README.md).
 
 Run `watch scope-sync --watchlist PATH --catalog PATH --work-key KEY --dry-run`
-to inspect a read-only diff, then use `--apply` to revalidate the Watchlist and
-atomically sync the work's `acquisition_enabled` flags. Scoped or
-archive-ordered works require fresh complete Full evidence for every required
-key. A first unbounded, unordered legacy sync can bootstrap only when all
-existing Sources have matching current Watchlist key/site/work ownership;
-every existing Source is enabled. Removed keys are retained disabled and
-their last URL binding is kept to detect unsafe URL changes on later re-add.
-Migration alone does not create a sync marker or change existing acquisition
-behavior.
+to inspect one Work, then use `--apply` to revalidate the Watchlist and
+atomically sync that Work's `acquisition_enabled` flags. The alternative
+`--site SITE` selector previews every distinct `work_key` represented by
+Watchlist targets whose `site` equals SITE, including `enabled: false` targets.
+The selectors are mutually exclusive. A shared Work is still validated across
+all of its keys and Sources, including keys on other sites. An unknown site or
+one with no Watchlist targets is a visible blocker; Catalog contents are never
+used to infer targets.
+
+Site dry-run reads all selected Works without applying any. Site apply
+preflights every Work first and applies none if a preview is blocked or stale.
+Under the Catalog job lock it then rechecks the site target set and uses the
+existing per-Work transaction in sequence. This is not one site-wide database
+transaction: if a later Work fails, JSON reports successful-return
+`applied_work_keys`, the stage-affected `failed_work_key`, and only definitely
+unattempted `not_applied_work_keys`, then stops. `failure_stage` disambiguates
+`failed_work_key`: `preflight` names a blocked, unattempted Work; `apply` names
+an attempted Work whose transaction may have committed before an exception;
+`final_validation` names the Work whose final gate failed and may overlap the
+successful-return list. Other stages retain their own error context. Re-run the site dry-run to
+inspect and continue from the current state. Watchlist membership is rechecked
+before each Work and after the sequence. The final Watchlist snapshot checks
+both the site target set and each selected Work's full key/scope/order
+fingerprint, so an edit to another site's key cannot be missed merely because
+the selected site's target list stayed unchanged. Hand edits outside the lock
+require a fresh preview. Site selection comes only from current Watchlist
+targets; a Catalog-only Source for a removed key does not select its Work.
+
+Scoped or archive-ordered works require fresh complete Full evidence for every
+required key. A first unbounded, unordered legacy sync can bootstrap only when
+all existing Sources have matching current Watchlist key/site/work ownership;
+every existing Source is enabled. Removed keys are retained disabled and their
+last URL binding is kept to detect unsafe URL changes on later re-add. Migration
+alone does not create a sync marker or change existing acquisition behavior.
 
 ### Batch acquisition-scope gate (work-key P3 implemented)
 
@@ -1962,6 +1987,8 @@ python -m screenshot_crawler.cli batch plan --site mangaone --catalog catalog.sq
 python -m screenshot_crawler.cli batch run --site mangaone --catalog catalog.sqlite --watchlist watchlist.yaml
 python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --dry-run --json
 python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --apply --json
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --site comicdays --dry-run --json
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --site comicdays --apply --json
 ```
 
 Scope apply is an explicit operation separate from successful Discovery. After
