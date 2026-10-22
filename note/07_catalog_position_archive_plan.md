@@ -799,3 +799,37 @@ As each phase lands:
 - do not leave obsolete planned behavior presented as current behavior.
 
 Once P5 is complete and all adopted behavior is represented in the authoritative/current-state docs, this plan may be reduced to a pointer or removed according to the repository note maintenance rules.
+
+---
+
+## Future work: work-key acquisition scope and cross-site archive ordering (PLANNED / NOT IMPLEMENTED)
+
+The implemented P1-P4 contracts above describe the current Catalog v6
+site-native display-position and archive renumber behavior. They remain in
+force until this separate planned enhancement is implemented.
+
+New adopted workstream:
+[runbooks/work-key-archive-order/README.md](../runbooks/work-key-archive-order/README.md)
+([progress](../runbooks/work-key-archive-order/PROGRESS.md)).
+
+Planning decisions (not yet implemented):
+
+- Work-key groups existing Watchlist keys without cross-site Item merging.
+- Watchlist `discovery_scope` becomes the acquisition-range authority as well
+  as the bounded Discovery range; `archive_order` explicitly orders keys
+  within one work_key. All-or-none opt-in preserves legacy naming.
+- Catalog v7 adds `sources.acquisition_enabled` and a small durable
+  Watchlist/Catalog sync gate. Out-of-scope Sources retain Item status,
+  availability, discovery_key, run and artifact history.
+- Batch filters the derived acquisition flag, including grant-only/deferred
+  resource passes; Batch does not repeat per-Source site-boundary resolution.
+- ZIP prefix for opt-in Works is recomputed from all participating sources
+  sorted by key order then site-native display position. Paid, completed,
+  expired and disabled-key records still reserve positions if in scope.
+- Existing ZIP changes require explicit work-wide dry-run and safe renumber;
+  no automatic deletion, overwrite or source reassignment.
+- Scope-change behavior must not be described as currently effective until
+  the runbook phases are implemented and tested.
+
+The detailed phases, migration/bootstrap checks, test matrix, failure
+semantics and future GUI boundaries live exclusively in the runbook.
