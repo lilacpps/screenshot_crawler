@@ -821,7 +821,7 @@ async def test_comicdays_target_observation_rechecks_atomic_dom_after_graphql_sw
 
 
 async def test_comicdays_real_planner_executor_grant_only_navigates_once(
-    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path, sync_legacy_unscoped_work
 ) -> None:
     await browser_page.add_init_script(
         """
@@ -870,7 +870,10 @@ async def test_comicdays_real_planner_executor_grant_only_navigates_once(
     )
     item = catalog.create_item(ItemInput(item_title="Episode 1"), work_id=work.id)
     source = catalog.create_source(
-        SourceInput(site="comicdays", external_id="1", access_mode="quota"),
+        SourceInput(
+            site="comicdays", external_id="1", access_mode="quota",
+            discovery_key="comicdays-fixture",
+        ),
         item_id=item.id,
     )
     catalog.create_source_target(
@@ -881,9 +884,22 @@ async def test_comicdays_real_planner_executor_grant_only_navigates_once(
     policies.register("comicdays", ComicDaysSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("comicdays", ComicDaysAdapter)
-    planner = BatchPlanner(catalog, policies)
+    watchlist = sync_legacy_unscoped_work(
+        catalog,
+        key="comicdays-fixture",
+        work_key="uchu-kyodai",
+        site="comicdays",
+        url="https://comic-days.com/series/1",
+    )
+    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
     candidate = planner.plan(site="comicdays", now=NOW).candidates[0]
-    result = await BatchExecutor(catalog, policies, adapters).execute_grant_only_candidate(
+    result = await BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+    ).execute_grant_only_candidate(
         page, candidate, output_root=tmp_path / "batch", now=NOW
     )
 
@@ -920,7 +936,7 @@ async def test_comicdays_real_planner_executor_grant_only_navigates_once(
 
 
 async def test_comicdays_real_planner_executor_normal_quota_reuses_page(
-    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path
+    browser_page, monkeypatch: pytest.MonkeyPatch, tmp_path, sync_legacy_unscoped_work
 ) -> None:
     await browser_page.add_init_script(
         """
@@ -1040,7 +1056,10 @@ async def test_comicdays_real_planner_executor_normal_quota_reuses_page(
     )
     item = catalog.create_item(ItemInput(item_title="Episode 1"), work_id=work.id)
     source = catalog.create_source(
-        SourceInput(site="comicdays", external_id="1", access_mode="quota"),
+        SourceInput(
+            site="comicdays", external_id="1", access_mode="quota",
+            discovery_key="comicdays-fixture",
+        ),
         item_id=item.id,
     )
     catalog.create_source_target(
@@ -1051,10 +1070,23 @@ async def test_comicdays_real_planner_executor_normal_quota_reuses_page(
     policies.register("comicdays", ComicDaysSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("comicdays", ComicDaysAdapter)
-    planner = BatchPlanner(catalog, policies)
+    watchlist = sync_legacy_unscoped_work(
+        catalog,
+        key="comicdays-fixture",
+        work_key="uchu-kyodai",
+        site="comicdays",
+        url="https://comic-days.com/series/1",
+    )
+    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
     candidate = planner.plan(site="comicdays", now=NOW).candidates[0]
 
-    result = await BatchExecutor(catalog, policies, adapters).execute_candidate(
+    result = await BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        watchlist=watchlist,
+        library_dir=tmp_path / "library",
+    ).execute_candidate(
         page, candidate, output_root=tmp_path / "batch", library_dir=tmp_path / "library", now=NOW
     )
 

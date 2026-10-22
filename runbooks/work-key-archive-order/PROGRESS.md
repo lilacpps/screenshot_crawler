@@ -1,9 +1,9 @@
 # Work-key acquisition scope / archive ordering — Progress
 
-> Status: **IN PROGRESS** (2026-10-22)
+> Status: **P0-P5 COMPLETE** (2026-10-22; isolated-copy rollout verification only)
 > Main runbook: [README.md](README.md)
-> Branch: `feature/work-key-archive-order`. P0-P3 are complete and independently reviewed; P4 is next.
-> No live site, normal Catalog, Watchlist or Books output has been used.
+> Branch: `feature/work-key-archive-order`. P0-P3 checkpoint: `b0a4a37`; P4 Reviewer approved.
+> No live site or paid access was used. P5 changed only isolated working copies and synthetic fixtures, not operational Catalog/Watchlist/Books.
 
 ## Phase gates
 
@@ -13,8 +13,8 @@
 | P1: Watchlist + Catalog v7 | COMPLETE | implementation, focused tests and independent Reviewer APPROVE; see P1 record below |
 | P2: Scope reconciler | COMPLETE | read-only dry-run, CAS apply, evidence gates, orphan handling; independent Reviewer APPROVE / BLOCKING 0 |
 | P3: Batch integration | COMPLETE | normal/grant-only/deferred/replan filtering and consistency gate; 434 affected tests pass; independent Reviewer APPROVE / BLOCKING 0 |
-| P4: Naming + renumber | NOT STARTED | work-key cross-site numbering and ZIP/status/Artifact transaction checks |
-| P5: Verification + rollout | NOT STARTED | isolated full test, selected-work dry-run, backup, docs/note sync |
+| P4: Naming + renumber | COMPLETE | shared cross-site numbering and strict whole-work renumber; Reviewer APPROVE / BLOCKING 0 |
+| P5: Verification + rollout | COMPLETE | isolated copy/synthetic verification, full-suite attribution, rollout docs, and independent final review complete; production rollout remains a separate operator action |
 
 ## Adopted constraints
 
@@ -359,10 +359,194 @@ and this runbook/progress record. P2 review gate passed. P3 is active.
 `docs/DISCOVERY_AND_BATCH.md`, `note/00_core.md`,
 `note/07_catalog_position_archive_plan.md`, this README and progress record.
 
-Next: receive final P3 Reviewer approval, then implement the P4 shared opt-in
-archive-position plan and work-wide safe renumbering. P4 must also preserve
-legacy no-order behavior and reject existing archive/status/hash drift before
-any selected work-wide apply.
+P3 Reviewer **APPROVE / BLOCKING 0**. The phase is complete; P4's implemented
+shared archive plan, work-wide renumber and strict preflight are recorded below.
+
+## P4 — Cross-site naming and safe renumber (2026-10-22, COMPLETE)
+
+### Implemented and reviewed
+
+- Batch and renumber consume the same pure work-wide archive plan. It sorts all
+  current keys by `archive_order`, then includes every `acquisition_enabled=1`
+  Source in site `display_position` order. Item status, paid/free state,
+  availability and Discovery `enabled` do not remove reserved numbers. A
+  no-order work retains the prior site-local naming; a partial order fails.
+- Planner, normal Executor, grant-only and deferred resolver paths validate
+  all-site existing names/status before site access, and revalidate candidate
+  Catalog identity, metadata, ownership and output-path occupancy. A completely
+  unmanaged orphan Work is skipped before policy evaluation so an unrelated
+  site run can proceed; its full Source history remains in quota accounting.
+- Renumber supports one managed Work across all sites, `--watchlist`,
+  `--catalog`, `--status-dir`, dry-run/apply and single-document `--json`.
+  Managed partial `--site` renumber is rejected. Every apply rebuilds and
+  compares the current plan under the Catalog job lock, including legacy
+  preview→managed-state transitions. Preflight validates current ZIP SHA-256 /
+  byte size, expected names, status sidecars, collisions, all-work Artifact
+  locator aliases and excluded-file occupancy. It never deletes/overwrites an
+  excluded ZIP. Strict blockers prevent partial apply.
+- Failure recovery handles ZIP/status rename exceptions before and after the
+  underlying rename, Catalog commit followed by interruption, locator CAS,
+  status restoration and swap cycles. Recovery is reported as complete only
+  after the original files/sidecars/hashes/locators are verified; otherwise
+  the output includes `recovery_required` and actual paths/locators.
+- Scope preview reports exact ordinal changes using the prior target order when
+  available; if there is no known baseline it reports the old number as
+  unknown rather than claiming unchanged.
+
+### Verification
+
+- Focused affected Batch / Executor / naming / deferred grant / scope /
+  renumber tests: **237 passed**. Standalone `test_archive_renumber.py`:
+  **40 passed**. Ruff for `src tests scripts/renumber_archives.py`: passed.
+- Focused command used short isolated paths after a deeper basetemp reached a
+  Windows path-length limit while writing one diagnostic trace. The same test
+  then passed from `output/p4t-batch`; no test contract was changed for that
+  environment limitation.
+- P4 independent Reviewer: **APPROVE / BLOCKING 0**.
+- Root synthetic E2E: 144 Sources shrink to 104 numbered Sources: Zeblack
+  001–100, BookWalker 101–102, in-scope paid Magapoke 103–104; paid Zeblack
+  rows outside scope consume no number. Both site Batch plans block stale
+  existing names before renumber. Two ZIP/status rows were renamed with
+  matching hashes/locators; excluded ZIPs were untouched. Re-expansion restored
+  all 144 original Source IDs/statuses and BookWalker became 141/142.
+- Root cross-site swap E2E passed: changing key order moved existing Zeblack /
+  BookWalker ZIPs and status metadata to their new ordinals, with content hashes
+  and Catalog locators still matching their Sources.
+- Root rollback injection passed all eight ZIP/status rename stages after the
+  filesystem rename itself succeeded and raised `KeyboardInterrupt`, plus a
+  Catalog commit-then-interruption case. Files, status bytes, hashes, Catalog
+  locators were restored and generated temp files were absent.
+- `renumber_archives.py --json` root verification returned one parseable JSON
+  document in dry-run/apply/error cases and did not mutate copy files during
+  dry-run. A summary counter defect (`errors` zero while error entries existed)
+  was fixed before this review.
+- The full pytest/ruff run is led by root in short ignored `output/ft` and
+  `output/fc` paths. Its first pass exposed existing browser integration tests
+  that still constructed a planner without the newly required Watchlist. Those
+  test fixtures were updated to create/sync explicit isolated legacy-unscoped
+  Watchlists; the final complete rerun result will be recorded below.
+
+### P4 review findings and fixes
+
+- A Batch preflight originally received only the selected site's Sources and
+  missed ordinal drift on another site. It now validates all current Work
+  Sources. A regression checks a BookWalker ZIP mismatch before a Zeblack
+  candidate can access its site.
+- A pending candidate whose intended output path was already occupied by its
+  own prior ZIP could pass preflight and consume quota before packaging raised
+  `FileExistsError`. Candidate destination occupancy now blocks before access.
+- Grant-only/resolver entry now shares the work-wide naming guard and compares
+  fresh metadata/current Catalog identities; forged stale candidates are
+  rejected before adapter/resolver creation.
+- Strict renumber now rejects selected input paths aliased by excluded,
+  historical or cross-Work Catalog artifacts and rejects duplicate status
+  sidecars rather than leaving an orphan copy. Catalog locator validation is
+  protected by `BEGIN IMMEDIATE`; post-commit interruption compensates locators
+  before filesystem rollback.
+- Applying a legacy preview after a Work becomes managed now rebuilds and
+  compares current authority, rejecting the stale preview with zero mutations.
+
+### P4 paths
+
+`src/screenshot_crawler/{archive_order.py,batch/archive_guard.py,batch/naming.py,batch/planner.py,batch/executor.py,catalog/service.py,cli.py,maintenance/archive_renumber.py,watchlist/reconcile.py}`,
+`scripts/renumber_archives.py`, related unit/integration fixtures,
+`docs/{ARCHITECTURE.md,DISCOVERY_AND_BATCH.md,BOUNDED_DISCOVERY.md,BOOK_NAMING_RULES.md}`,
+`docs/DECISIONS.md`, `note/{00_core.md,07_catalog_position_archive_plan.md}`,
+site notes, this runbook/progress, and `COPY_VALIDATION.md`.
+
+## P5 — Isolated copy verification and operator rollout (2026-10-22, COMPLETE)
+
+### Copy-only evidence
+
+- Root created a schema-neutral SQLite backup and raw Watchlist seed under the
+  ignored `output/work-key-archive-order-p5/baseline/` path. P5 used only a
+  separate working copy. No operational migration, scope apply, renumber,
+  purchase, ticket/quota consumption or live-site action was run.
+- The v6→v7 working-copy migration preserved ordered-row digests of all old
+  columns in all seven legacy tables: works 226 rows; items/sources/targets
+  36,701 each; runs 13,819; artifacts 11,236; quota rows 138. New Sources
+  remained enabled by migration default while evidence and sync markers stayed
+  empty. All 11,236 working-copy Artifact locators were remapped into the
+  isolated output root; 42 ZIP/status assets were copied for verification.
+- Repeated copy CLI dry-runs/plans preserved file bytes and mtimes. The scoped
+  `spy-family` copy, which has no v7 complete Full evidence, correctly blocked
+  Scope sync and Batch; no synthetic proof was added. An unscoped legacy
+  `ryuurou-no-mahoro` copy safely bootstrapped and planned without quota change.
+  Its strict renumber preview found exactly two existing Catalog SHA/size
+  drifts (Sources 1364 and 1365); P5 left those files/catalog rows unchanged
+  and does not claim a successful renumber for that Work.
+- The documented copy-locator recipe was independently run against a throwaway
+  synthetic source/copy: all 4 Artifact locators and 4 status references were
+  remapped inside `COPY_ROOT`, and isolated renumber `--apply --json` moved 2
+  copied ZIP/status pairs. Every source file's bytes and mtime stayed
+  unchanged. Negative checks rejected both the original Catalog as the target
+  and an overlapping original Books root before changing database bytes;
+  evidence is `output/work-key-archive-order-p5/document-copy-validation-report.json`.
+- Copy verification, CLI outputs and all rollback/E2E reports are under ignored
+  `output/work-key-archive-order-p5/working/` and `synthetic-final/`; the
+  immutable baseline seed remains unchanged.
+- The user-facing docs now include current P4 behavior, supported scope-sync /
+  renumber commands, copy-first migration sequence, rollback handling, a
+  locator/status remap recipe and resolved-path containment gate for isolated
+  renumber apply, and current notes for the six complete-listing proof adapters.
+  `docs/DECISIONS.md` records the acquisition-scope / archive-order decision
+  and why Full evidence refresh is separate from work-wide flag apply.
+  Comic DAYS, Hanayume, Younganimal, Kadocomi, and ComicFUZ notes now state that
+  they do not yet supply the shared complete-listing proof hook: only
+  unbounded/unordered NEVER-MANAGED legacy bootstrap is available there, and
+  Full alone cannot unlock scoped or archive-ordered Batch. Historical empty-
+  Watchlist runs and site-phase schema statements are qualified as historical.
+
+### Remaining
+
+The first full-suite attempt was stopped after 313 tests / 579.6 seconds when
+the ComicFuz browser stage showed no progress for roughly six minutes. The
+partial log records 295 passes and 18 failures, all from integration fixtures
+that had not yet supplied/reapplied the newly required Watchlist scope sync;
+there is no final teardown/summary, so the run is archived as interrupted and
+not treated as a completed suite. The two adjacent ComicFuz browser nodes
+passed when run alone (2 passed in 3.69 seconds, with a 120-second bound and
+faulthandler diagnostics); evidence is in
+`output/work-key-archive-order-p5/comicfuz-bounded-diagnostic.log` and
+`comicfuz-bounded-result.json`.
+
+The full integration run exposed stale test setup that had not explicitly
+reconciled Watchlists after Full Discovery. The affected integration fixtures
+were updated to create or reuse an isolated Watchlist, assert the unsynced
+Batch rejection where relevant, apply `ScopeReconciler`, and pass the same
+Watchlist / isolated library path through Planner and Executor. In particular,
+the ComicFuz discovery-to-batch-rerun case now proves that a successful Full
+Discovery invalidates scope synchronization: its first replan is rejected,
+then the existing Watchlist is explicitly reconciled before replan. These are
+test-fixture corrections; production gates and access behavior were not
+weakened. Static AST parsing passed for the corrected ComicFuz module. The
+final full `pytest -vv` run with faulthandler diagnostics completed after these
+fixture corrections.
+
+The final full suite completed with **4,946 passed, 1 failed, 0 skipped, and
+5,205 warnings** in 2,480.96 seconds. The sole failure was
+`tests/unit/test_runtime_settings.py::test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_other_sites`:
+it expected the tracked baseline's BookWalker `page_turn_delay_ms` value of 200 but read 0 from the
+user's existing, unmodified `crawler.yaml`. Root reran the exact unchanged test
+file against an isolated copy of the tracked baseline config: **1 passed in
+0.09 seconds**. Independent Reviewer confirmed the tracked baseline value is
+200 ms, the user's current setting is 0 ms, and neither runtime source nor the
+test has a diff. The user's config was not edited. This is recorded as an
+environment-dependent failure, not a code regression; no lengthy full-suite
+repeat was warranted.
+
+The final lint command, `.venv/Scripts/python.exe -m ruff check src tests
+scripts/renumber_archives.py`, passed with **All checks passed**. There were no
+skipped tests. The full run took about 41 minutes. The earlier interrupted run
+and its fixture failures remain documented above for audit history.
+
+Independent final review accepted P5 with the single full-suite failure
+attributed to the user-specific configuration; no code or test changes were
+requested. The phase is complete for isolated-copy verification. It does not
+mean production migration, scope apply, or renumber has been performed.
+
+No live or real Catalog/output operation was performed; production rollout
+remains an explicit operator step documented in the runbook.
 
 ## Update contract
 

@@ -1,11 +1,15 @@
 # Catalog position / archive naming / item status plan
 
-> **P1-P4 IMPLEMENTED; P5 PLANNED / NOT YET IMPLEMENTED**
+> **P1-P5 IMPLEMENTED / COPY-ONLY VERIFICATION COMPLETE; OPERATIONAL ROLLOUT REMAINS**
 >
-> This note is the adopted implementation plan for Catalog schema v6 and the later
-> display-position/archive phases. Catalog schema v6/P1, Discovery position
-> assignment/P2, Batch archive naming/P3, and existing-archive renumbering/P4 are
-> implemented; the real Catalog/output rollout in P5 remains planned.
+> The original Catalog v6 display-position/status plan below is historical implementation context.
+> Current Catalog schema is v7. The work-key scope and cross-site archive-order extension is
+> implemented through P4; P5 validated isolated copies and documents the operator rollout.
+> The full suite completed with 4,946 passed and one environment-dependent runtime-settings
+> failure: the existing user `crawler.yaml` sets BookWalker `page_turn_delay_ms` to 0 while
+> the test expects the tracked baseline value 200. The exact unchanged test passed against an isolated copy of
+> the tracked config, and independent review accepted this attribution. Ruff passed.
+> No operational Catalog migration, scope apply, or ZIP renumber has been performed.
 >
 > Codex must keep this note synchronized while implementing the plan. When a phase is completed,
 > update the corresponding section from PLANNED to IMPLEMENTED and record any verified deviations.
@@ -218,7 +222,7 @@ Requirements:
 5. do not change Item status,
 6. do not use position changes as cross-site merge evidence.
 
-For bounded full Discovery, update only the configured scope. Existing Sources outside that scope must not be renumbered or reconciled by this position update, and selected Sources retain their complete-listing positions.
+For bounded full Discovery, the scope slice remains authoritative for record, access, and availability refresh. When an adapter supplies a successful complete-listing inventory, the Discovery evidence hook may also refresh `display_position` for already-known Sources in that same site/listing outside the selected slice. It does not change their Item status, availability/access state, acquisition flag, run, or Artifact history. This all-listing position refresh is required to avoid making Scope Reconciler decisions from stale positions.
 
 Position assignment should be committed only after the run has satisfied the existing full-Discovery completeness contract. An incomplete full Discovery must not partially rewrite established positions.
 
@@ -566,8 +570,9 @@ IMPLEMENTED.
 
 P1 implementation details:
 
-- Catalog runtime schema version is 6. `items.note` and nullable
-  `sources.display_position` are required schema columns.
+- This subsection records the earlier position/status phase. Current runtime
+  schema is v7; `items.note`, nullable `sources.display_position`,
+  `sources.acquisition_enabled`, and the scope/evidence tables are present.
 - Item statuses are `pending | completed | skipped | external`. Only `pending`
   remains Batch-eligible. Status changes through `CatalogService` clear
   `completed_at` for every non-`completed` status; note updates leave status and
@@ -580,12 +585,10 @@ P1 implementation details:
   read-only inspection and status changes. `catalog item-note <item_id> "text"`
   sets/replaces a note, and `catalog item-note <item_id> --clear` clears it.
 - CSV export includes `items.note` and `sources.display_position`.
-- P1 alone did not assign display positions during Discovery and did not change
-  Batch archive naming, collision handling, archive renumbering, or crawl-status
-  JSON naming. P2 now assigns positions during safe Discovery completion. P3
-  implements new Batch archive/status naming and generic collision handling;
-  P4 now provides the local existing-archive/status renaming and Artifact
-  locator update maintenance command. Real production rollout remains P5.
+- Historical phase note: P1 alone did not assign positions during Discovery.
+  The current work-key implementation below adds the v7 scope gate, cross-key
+  naming, and strict renumbering. Read the current Work-key section below and
+  `docs/DISCOVERY_AND_BATCH.md` for the active contract.
 
 ### P2 - Discovery position
 
@@ -607,9 +610,12 @@ P2 implementation details:
   duplicate observation is counted by the existing Discovery counters but is
   assigned only once.
 - Normal full Discovery assigns `oldest=1 ... newest=N` only after normal
-  exhaustion. Bounded full Discovery persists Adapter-provided complete-listing
-  positions only within the yielded scope; it never scope-local-renumbers them
-  and Sources outside that scope are untouched.
+  exhaustion. Bounded full Discovery never scope-local-renumbers selected rows.
+  Its complete-listing evidence hook refreshes positions for already-known
+  Sources in the same site/listing, including rows outside the configured
+  slice, without changing their availability, access state, Item status,
+  acquisition flag, or artifact/run history. Evidence is recorded only after
+  successful iterator exhaustion and Catalog finalization.
 - Incremental `stable_boundary` and `known_streak` stops use available global
   hints as authority. Without hints, only unbounded incremental Discovery uses
   the maximum
@@ -639,8 +645,9 @@ P2 implementation details:
   Service performs no additional pagination, DOM scan, HTTP request, or
   full-list access.
 
-P5 remains planned: real Catalog/output rollout and live verification are not
-part of the tested P4 maintenance implementation.
+P5 has validated a migrated Catalog copy and isolated assets; production
+Catalog/Watchlist/Books migration and renumber remain a separately scheduled
+operator rollout. No live-site operation was part of P5.
 
 ### P3 - Batch archive naming
 
@@ -657,8 +664,9 @@ IMPLEMENTED.
   `BatchCandidate.metadata["order"]`; title, author, and genre keep their
   existing Work metadata mapping. The Core packaging prefix affects only the
   archive/status stem, not the library directory.
-- Generic collision detection uses the site-scoped planning snapshot across all
-  Item statuses. It compares `archive_stem()` output without a disambiguator,
+- For NEVER-MANAGED legacy Works, generic collision detection uses the
+  site-scoped planning snapshot across all Item statuses. It compares
+  `archive_stem()` output without a disambiguator,
   grouped by `(Work.id, sanitized base stem)`, and marks a group only when it
   contains at least two distinct Item IDs. Same-Item multiple Sources do not
   count as a collision.
@@ -667,9 +675,11 @@ IMPLEMENTED.
   Manga ONE non-numeric and Magapoke-only workarounds while retaining completed
   Item participation and sanitized-stem safety.
 - Core packaging remains Catalog-independent and remains the final filename
-  sanitization authority. Same-site planning collisions are handled by the
-  Planner; cross-site or pre-existing filesystem collisions remain protected by
-  `package_crawl_output()` raising `FileExistsError` without overwrite.
+  sanitization authority. For NEVER-MANAGED legacy Works, same-site planning
+  collisions are handled by the Planner; cross-site or pre-existing filesystem
+  collisions remain protected by `package_crawl_output()` raising
+  `FileExistsError` without overwrite. Managed Works use the current work-wide
+  ordinal/name preflight described below.
 - P3 still does not rename existing ZIP archives, existing crawl-status JSON, or
   historical Artifact locators; those operations are isolated in the P4
   maintenance command described below.
@@ -680,10 +690,12 @@ IMPLEMENTED.
 
 - `scripts/renumber_archives.py` is a thin wrapper over
   `screenshot_crawler.maintenance.archive_renumber`.
-- Scope is explicit: `--work-key`, `--site`, both as AND filters, or `--all`.
-  `--all` cannot be combined with another filter, and no-filter invocation is
-  rejected. Default mode is dry-run; only explicit `--apply` mutates files or
-  Catalog.
+- For NEVER-MANAGED legacy Works only, selection may use `--work-key`, `--site`,
+  both as AND filters, or `--all`. Any managed Work requires whole-work scope
+  through `--work-key` (or `--all`); a partial `--site` renumber is rejected,
+  including after an explicit opt-out. `--all` cannot be combined with another
+  filter, and no-filter invocation is rejected. Default mode is dry-run; only
+  explicit `--apply` mutates files or Catalog.
 - `Artifact.locator` is the sole old-path authority. The selected current
   Artifact is the archive/zip Artifact from the newest successful CrawlRun that
   produced one. A successful run without an archive is skipped while looking
@@ -703,10 +715,11 @@ IMPLEMENTED.
 - Matching `output/crawl-status/<genre>/<title>/<old-stem>.json` is accepted only
   when parsed `archive_path` identifies the current old ZIP. For compatibility,
   explicit renumber also checks the legacy flat `output/crawl-status/<old-stem>.json`.
-  `STATUS_MISSING` and
-  `STATUS_MISMATCH` are warnings that do not block a ZIP rename. A matching
-  status file is renamed safely and only its `archive_path` value is changed;
-  target collisions block that Artifact.
+  For NEVER-MANAGED legacy Works, `STATUS_MISSING` and `STATUS_MISMATCH` remain
+  warnings that do not block a ZIP rename. A matching status file is renamed
+  safely and only its `archive_path` value is changed; target collisions block
+  that Artifact. Managed Works use strict whole-work preflight: missing,
+  mismatched, duplicate, or ambiguous status sidecars block all apply.
 - `CatalogService.update_artifact_locators()` performs one compare-and-set
   transaction after all filesystem/status mutations. It validates every
   Artifact id and expected locator before updating only `locator` and
@@ -723,8 +736,8 @@ IMPLEMENTED.
   two-stage filesystem/status rollback and reports
   `ERROR Catalog update failed; filesystem rollback completed`. If rollback
   cannot complete, `RECOVERY_REQUIRED` includes artifact, old/new/current/temp,
-  and status paths. P5 real Catalog/output rollout and live verification are
-  not performed by this implementation.
+  and status paths. P5 used isolated copies only; production rollout and live
+  verification remain an operator step.
 - Because the old path authority remains `Artifact.locator`, P4 can be applied
   again to archives produced by an earlier title-including naming rule, for
   example `作品名-001-第01話.zip` -> `001-作品名-第01話.zip` for a short
@@ -735,16 +748,26 @@ IMPLEMENTED.
   -> `renumber_archives.py --dry-run` -> `renumber_archives.py --apply`. No
   dedicated migration is required.
 
-### P5 - Real DB rollout / documentation cleanup
+### P5 - Isolated-copy verification / operator rollout documentation
 
-PLANNED.
+COPY-ONLY VERIFICATION AND INTEGRATED REVIEW COMPLETE.
 
-- migrate production Catalog,
-- full Discovery population,
-- renumber dry-run/apply,
-- live verification,
-- update current-state notes,
-- retire this plan once all behavior is represented by current implementation documentation.
+- A schema-neutral backup and raw Watchlist seed were used to create an
+  isolated working copy. v6-to-v7 migration preserved all old-column row
+  digests; only copy locators/status paths were remapped.
+- Synthetic shrink/re-expand, cross-site numbering/swap, ZIP/status/Artifact
+  consistency, and rollback injections passed. No production Catalog, Watchlist,
+  Books directory, live site, or paid resource was touched.
+- Production migration, Scope sync, and renumber were not run. Follow the
+  copy-first sequence in `runbooks/work-key-archive-order/README.md` and
+  `runbooks/work-key-archive-order/COPY_VALIDATION.md` before any separate
+  operator rollout.
+- Full suite: 4,946 passed, 1 failed, 0 skipped, 5,205 warnings in 2,480.96 s.
+  The only failure reads the user's pre-existing `crawler.yaml` (BookWalker
+  `page_turn_delay_ms` 0) where the test expects tracked baseline value 200. The unchanged
+  test passed against an isolated copy of the tracked config (1 passed in
+  0.09 s); neither config nor source/test was changed. Ruff passed. Independent
+  final review accepted P5 with this environment-dependent failure recorded.
 
 ## 15. Acceptance criteria
 
@@ -802,15 +825,17 @@ Once P5 is complete and all adopted behavior is represented in the authoritative
 
 ---
 
-## Work-key acquisition scope and cross-site archive ordering (P1-P3 implemented; P4-P5 pending)
+## Work-key acquisition scope and cross-site archive ordering (P1-P4 implemented; P5 copy verification)
 
 The adopted extension is tracked in
 [runbooks/work-key-archive-order/README.md](../runbooks/work-key-archive-order/README.md)
 and [PROGRESS](../runbooks/work-key-archive-order/PROGRESS.md). Catalog v7 and
 the Watchlist foundation, P2 Scope Reconciler, and P3 Batch ownership gate are
-implemented. Work-key naming, renumber integration and isolated rollout
-verification remain pending. The existing site-local `display_position`
-filename behavior above remains active until P4 naming is complete.
+implemented. Work-key naming and safe whole-work renumbering are implemented.
+P5 has verified schema migration, CLI behavior and cross-site file/status/
+Catalog consistency on isolated working copies and synthetic fixtures. The
+actual operational rollout remains an explicit operator procedure; no live
+Catalog or Books changes were made.
 
 P1 currently provides:
 
@@ -841,8 +866,19 @@ state before creating the site adapter. The CLI run holds the Catalog job lock;
 `--grant-only all` plans all resource passes before CDP connection and skips
 browser setup when every pass is empty. A stale Watchlist/configuration or
 Catalog source snapshot fails closed and requires scope sync or replanning.
-This gate does not change legacy site-local display-position naming. Follow
-P4-P5 before using archive-order naming or renumbering files.
+For an all-ordered work, Batch and renumber share the cross-site archive plan.
+All enabled Sources reserve a number regardless of access/status; all-disabled
+Sources are excluded. No-order works retain the legacy site-local naming.
+Before Batch access, existing ZIP/status names are checked work-wide. A stale
+ordinal blocks until the whole-work renumber preview is reviewed and explicitly
+applied. Renumber JSON mode provides a single machine-readable result; managed
+works cannot be partially applied by site. Catalog ZIP hashes and sizes,
+status sidecars, global Artifact locator aliases and rollback are checked.
+
+P5 copy verification confirmed the 7 legacy tables' old-column data digests
+survive v6-to-v7 migration, but does not authorize migration or renumber of a
+normal operational path. Follow the copy-first CLI procedure in the work-key
+runbook before any separate production rollout.
 
 Old archive-maintenance notes that say Watchlist enablement is not a Batch
 source filter refer to the `enabled` Discovery execution flag. They do not

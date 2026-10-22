@@ -45,7 +45,9 @@ class FakeRunner:
 
 def make_candidate(service: CatalogService, *, order: str = "01") -> BatchCandidate:
     work = service.create_work(WorkInput(work_key=f"bookwalker-{order}", title="BookWalker volume"))
-    item = service.create_item(ItemInput(order_key=order), work_id=work.id)
+    item = service.create_item(
+        ItemInput(order_key=order, order_label=order), work_id=work.id
+    )
     source = service.create_source(
         SourceInput(
             site="bookwalker",
@@ -120,6 +122,7 @@ def make_executor(service: CatalogService, *, fail: bool = False) -> BatchExecut
         watchlist=synchronized_legacy_watchlist(service),
         runner_factory=FakeRunner,
         package_function=package_function,
+        library_dir=service.path.parent / "Books",
     )
 
 

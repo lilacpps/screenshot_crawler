@@ -1,5 +1,14 @@
 # Piccoma current implementation snapshot
 
+## Shared work-key scope inventory (2026-10-22)
+
+Piccoma Discovery exposes complete product-listing identity/position evidence
+after a successful Full traversal. That evidence is distinct from free, paid,
+wait-free, or manual grant state. `watch scope-sync` applies acquisition flags
+only after the Watchlist boundaries and Full proof are validated; Batch does
+not resolve the boundaries online. No paid, ticket, quota, or live-site action
+was performed for this shared change.
+
 Updated: 2026-10-14. Phases 01-05 remain accepted. Phase 06-B's source-derived PNG replay and Phase 06-C's bounded p1-only JPEG coefficient feasibility work are historical accepted checkpoints. For the 1:1 display profiles, Phase 06-D defaults verified replay pixels to lossless WebP, retaining native PNG if encoding/round-trip proof fails and Core PNG if native provenance is unavailable. Phase 06-D code review and independent live Tester both passed with BLOCKING 0. Local Piccoma tests passed 99, packaging tests 26, and Ruff/diff checks passed; the full suite was not rerun after final site-local adjustments. The current two-product live route verified all 39 WebP pages through ZIP and Catalog completion. Phase 07 Stage A/B passed independent review. Stage C's interleaved manual comparison, 24-page Batch END/ZIP/Catalog run, and fresh per-page manifest audit passed; final Stage C Reviewer review passed with BLOCKING 0. Evidence and limits are in the [Phase 07 live profile](../research/piccoma-performance/PHASE07_PROFILE.md) and [Tester report](../research/piccoma-performance/PHASE07_TESTER.md).
 
 

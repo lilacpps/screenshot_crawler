@@ -12,7 +12,12 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from screenshot_crawler.batch import BatchExecutor, BatchPlanner, CandidateExecutionError
+from screenshot_crawler.batch import (
+    BatchExecutor,
+    BatchPlanner,
+    BatchPlanningError,
+    CandidateExecutionError,
+)
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.errors import (
@@ -419,6 +424,7 @@ async def _route_comicfuz(
 async def _comicfuz_batch_fixture(
     browser_page,
     tmp_path: Path,
+    sync_legacy_unscoped_work,
     *,
     package_function=None,
     unknown_tail: bool = False,
@@ -445,6 +451,7 @@ async def _comicfuz_batch_fixture(
     discovery = DiscoveryService(catalog, discovery_registry)
     discovery_result = await discovery.discover(browser_page, target, "full")
     assert discovery_result.complete is True
+    watchlist = sync_legacy_unscoped_work(catalog, target)
 
     policies = SitePolicyRegistry()
     policies.register("comicfuz", ComicFuzSitePolicy)
@@ -459,25 +466,27 @@ async def _comicfuz_batch_fixture(
             return adapter
 
         adapters.register("comicfuz", create_adapter)
-    plan = BatchPlanner(catalog, policies).plan(site="comicfuz")
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(site="comicfuz")
     assert len(plan.candidates) == 1
     candidate = plan.candidates[0]
     assert candidate.external_id == "1970:80641"
     assert candidate.artifact_prefix == "003"
     executor_kwargs = {
         "runtime_settings": SiteRuntimeSettings(page_turn_delay_ms=0),
+        "library_dir": tmp_path / "library",
+        "watchlist": watchlist,
     }
     if package_function is not None:
         executor_kwargs["package_function"] = package_function
     executor = BatchExecutor(catalog, policies, adapters, **executor_kwargs)
-    return catalog, discovery, target, plan, candidate, executor, seen
+    return catalog, discovery, target, plan, candidate, executor, seen, watchlist
 
 
 @pytest.mark.parametrize(("extra_tail", "latest_end"), [
     (False, "none"), (True, "none"), (True, "valid"), (False, "valid"),
 ])
 async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_artifact(
-    browser_page, tmp_path: Path, extra_tail: bool, latest_end: str
+    browser_page, tmp_path: Path, sync_legacy_unscoped_work, extra_tail: bool, latest_end: str
 ) -> None:
     (
         catalog,
@@ -487,8 +496,10 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
         candidate,
         executor,
         _seen,
+        watchlist,
     ) = await _comicfuz_batch_fixture(
-        browser_page, tmp_path, extra_tail=extra_tail, latest_end=latest_end,
+        browser_page, tmp_path, sync_legacy_unscoped_work,
+        extra_tail=extra_tail, latest_end=latest_end,
         native_subtitle="Fixture subtitle" if latest_end == "valid" else "",
     )
 
@@ -515,9 +526,19 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
         assert all(name.lower().endswith(".png") for name in names)
 
     rediscovered = await discovery.discover(browser_page, target, "full")
-    replanned = BatchPlanner(catalog, executor.policies).plan(site="comicfuz", now=NOW)
+    planner = BatchPlanner(catalog, executor.policies, watchlist=watchlist)
     assert rediscovered.complete is True
     assert rediscovered.new_count == 0 and rediscovered.known_count == 3
+    with pytest.raises(BatchPlanningError, match="missing or stale"):
+        planner.plan(site="comicfuz", now=NOW)
+
+    from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+
+    reconciler = ScopeReconciler(watchlist, catalog)
+    preview = reconciler.preview(target.work_key)
+    assert preview.ready, preview.blockers
+    reconciler.apply(preview)
+    replanned = planner.plan(site="comicfuz", now=NOW)
     assert catalog.get_item(candidate.item_id).status == "completed"
     assert len(catalog.list_artifacts(item_id=candidate.item_id)) == 1
     assert all(entry.item_id != candidate.item_id for entry in replanned.candidates)
@@ -529,14 +550,15 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     "missing_actions", "wrong_labels", "hidden_recommendations", "duplicate_title",
 ])
 async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
-    browser_page, tmp_path: Path, failure: str
+    browser_page, tmp_path: Path, sync_legacy_unscoped_work, failure: str
 ) -> None:
     route_change = failure == "route_drift"
     unknown_tail = failure == "unknown_tail"
-    catalog, _discovery, _target, _plan, candidate, executor, _seen = (
+    catalog, _discovery, _target, _plan, candidate, executor, _seen, _watchlist = (
         await _comicfuz_batch_fixture(
             browser_page,
             tmp_path,
+            sync_legacy_unscoped_work,
             unknown_tail=unknown_tail,
             route_change_on_first_turn=route_change,
             extra_tail=failure not in {"stale_free", "route_drift", "unknown_tail"},
@@ -578,14 +600,15 @@ async def test_comicfuz_batch_failures_never_complete_or_create_artifact(
 
 
 async def test_comicfuz_batch_packaging_failure_keeps_item_pending(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, sync_legacy_unscoped_work
 ) -> None:
     def fail_package(*_args, **_kwargs):
         raise OSError("synthetic ZIP failure")
 
-    catalog, _discovery, _target, _plan, candidate, executor, _seen = (
+    catalog, _discovery, _target, _plan, candidate, executor, _seen, _watchlist = (
         await _comicfuz_batch_fixture(
-            browser_page, tmp_path, package_function=fail_package
+            browser_page, tmp_path, sync_legacy_unscoped_work,
+            package_function=fail_package
         )
     )
 
@@ -693,12 +716,13 @@ async def test_comicfuz_waits_through_contiguous_transition_overlap_and_reaches_
 
 
 async def test_comicfuz_persistent_transition_overlap_times_out_without_batch_artifact(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, sync_legacy_unscoped_work
 ) -> None:
-    catalog, _discovery, _target, _plan, candidate, executor, _seen = (
+    catalog, _discovery, _target, _plan, candidate, executor, _seen, _watchlist = (
         await _comicfuz_batch_fixture(
             browser_page,
             tmp_path,
+            sync_legacy_unscoped_work,
             page_change_timeout_ms=250,
             true_mode_body_page_count=10,
             transition_delay_ms=80,

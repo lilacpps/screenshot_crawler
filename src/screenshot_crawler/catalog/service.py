@@ -619,6 +619,89 @@ class CatalogService:
             revision_token=revision_token,
         )
 
+    def read_work_archive_artifacts(
+        self, work_key: str
+    ) -> tuple[tuple[CrawlRun, Artifact], ...]:
+        """Read successful ZIP Artifacts for a Work from one read-only snapshot."""
+
+        self._validate_nonempty(work_key, "work_key")
+        with self._read_only_connection() as connection:
+            connection.execute("BEGIN")
+            work = connection.execute(
+                "SELECT id FROM works WHERE work_key = ?", (work_key,)
+            ).fetchone()
+            if work is None:
+                return ()
+            work_id = int(work["id"])
+            run_rows = connection.execute(
+                "SELECT r.* FROM crawl_runs r JOIN items i ON i.id = r.item_id "
+                "WHERE i.work_id = ? AND r.status = 'succeeded' ORDER BY r.id",
+                (work_id,),
+            ).fetchall()
+            artifact_rows = connection.execute(
+                "SELECT a.* FROM artifacts a JOIN crawl_runs r ON r.id = a.crawl_run_id "
+                "JOIN items i ON i.id = r.item_id "
+                "WHERE i.work_id = ? AND r.status = 'succeeded' "
+                "AND a.kind = 'archive' AND a.format = 'zip' ORDER BY r.id, a.id",
+                (work_id,),
+            ).fetchall()
+        runs_by_id = {
+            int(row["id"]): self._crawl_run_from_row(row) for row in run_rows
+        }
+        return tuple(
+            (runs_by_id[int(row["crawl_run_id"])], self._artifact_from_row(row))
+            for row in artifact_rows
+        )
+
+    def read_work_archive_references(self, work_key: str) -> tuple[Artifact, ...]:
+        """Read every ZIP Artifact reference for a Work, including history/imports."""
+
+        self._validate_nonempty(work_key, "work_key")
+        with self._read_only_connection() as connection:
+            connection.execute("BEGIN")
+            rows = connection.execute(
+                "SELECT a.* FROM artifacts a JOIN items i ON i.id = a.item_id "
+                "JOIN works w ON w.id = i.work_id WHERE w.work_key = ? "
+                "AND a.kind = 'archive' AND a.format = 'zip' ORDER BY a.id",
+                (work_key,),
+            ).fetchall()
+        return tuple(self._artifact_from_row(row) for row in rows)
+
+    def read_all_archive_references(self) -> tuple[Artifact, ...]:
+        """Read every ZIP Artifact reference across Works for locator-alias checks."""
+
+        with self._read_only_connection() as connection:
+            connection.execute("BEGIN")
+            rows = connection.execute(
+                "SELECT a.* FROM artifacts a WHERE a.kind = 'archive' "
+                "AND a.format = 'zip' ORDER BY a.id"
+            ).fetchall()
+        return tuple(self._artifact_from_row(row) for row in rows)
+
+    def read_artifact_locators(self, artifact_ids: Collection[int]) -> dict[int, str | None]:
+        """Read Artifact locators for recovery verification from one read-only snapshot."""
+
+        ids = tuple(artifact_ids)
+        if not ids:
+            return {}
+        if any(isinstance(artifact_id, bool) or not isinstance(artifact_id, int) for artifact_id in ids):
+            raise CatalogValidationError("artifact_ids must contain integers")
+        if len(set(ids)) != len(ids):
+            raise CatalogValidationError("artifact_ids must be unique")
+        placeholders = ", ".join("?" for _ in ids)
+        with self._read_only_connection() as connection:
+            connection.execute("BEGIN")
+            rows = connection.execute(
+                f"SELECT id, locator FROM artifacts WHERE id IN ({placeholders})", ids
+            ).fetchall()
+        result = {int(row["id"]): row["locator"] for row in rows}
+        missing = set(ids) - result.keys()
+        if missing:
+            raise CatalogNotFoundError(
+                "Catalog artifacts not found: " + ", ".join(str(value) for value in sorted(missing))
+            )
+        return result
+
     @staticmethod
     def _scope_revision_token(
         connection: sqlite3.Connection, work_id: int, discovery_keys: Collection[str] = ()
@@ -1776,6 +1859,7 @@ class CatalogService:
 
         timestamp = format_timestamp(now_jst())
         with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             rows: list[sqlite3.Row] = []
             for artifact_id, expected_old_locator, _ in normalized:
                 row = connection.execute(

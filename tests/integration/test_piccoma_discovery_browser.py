@@ -12,6 +12,8 @@ from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryServ
 from screenshot_crawler.site_adapters.piccoma import PiccomaDiscoveryAdapter
 from screenshot_crawler.site_policies import PiccomaSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -204,7 +206,21 @@ async def test_piccoma_incremental_refreshes_old_manual_grants_and_clears_stale_
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     service = DiscoveryService(catalog, _registry())
 
-    await service.discover(browser_page, _target(), "full")
+    target = _target()
+    full_result = await service.discover(browser_page, target, "full")
+    assert full_result.complete is True
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key=target.key,
+        work_key=target.work_key,
+        site=target.site,
+        url=target.url,
+        label=target.label,
+    )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    preview = reconciler.preview(target.work_key)
+    assert preview.ready, preview.blockers
+    reconciler.apply(preview)
     policies = SitePolicyRegistry()
     policies.register("piccoma", PiccomaSitePolicy)
     # The old row lies beyond the generic five-known-record boundary.
@@ -213,7 +229,7 @@ async def test_piccoma_incremental_refreshes_old_manual_grants_and_clears_stale_
         first_label="閲覧期限\n残り71時間",
         declared_count=6, extra_known_rows=True,
     )
-    result = await service.discover(browser_page, _target(), "incremental")
+    result = await service.discover(browser_page, target, "incremental")
 
     assert result.complete is None
     assert result.stopped_reason == "exhausted"
@@ -232,7 +248,7 @@ async def test_piccoma_incremental_refreshes_old_manual_grants_and_clears_stale_
     assert datetime.fromisoformat(source.access_granted_until) == (
         datetime.fromisoformat(source.access_checked_at) + timedelta(hours=70)
     )
-    plan = BatchPlanner(catalog, policies).plan(
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
         site="piccoma", now=datetime.fromisoformat(source.access_checked_at)
     )
     assert [candidate.external_id for candidate in plan.candidates] == ["900:101"]

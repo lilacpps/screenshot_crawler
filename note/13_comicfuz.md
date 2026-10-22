@@ -1,5 +1,44 @@
 # 13. ComicFUZ 現行実装ノート
 
+## Shared Catalog v7 / acquisition-scope gate (2026-10-22)
+
+The site behavior documented below runs through the shared Catalog v7,
+Watchlist, Scope Reconciler, and Batch gate. Run the explicit v6-to-v7
+migration on an isolated Catalog copy first; Discovery never migrates a Catalog
+implicitly. Watchlist discovery_scope is the acquisition-scope authority, while
+target enabled controls whether Discovery runs and is not an ownership flag.
+Batch requires a current synchronized Scope Reconciler snapshot and
+sources.acquisition_enabled state.
+
+This adapter does not currently provide the complete-listing inventory proof
+hook required for scoped or archive-ordered work. A site-local bounded
+Discovery implementation, where available, is not sufficient evidence for
+work-wide acquisition reconciliation. With either discovery_scope or
+archive_order set, Scope Reconciler must block; a successful Full alone cannot
+resolve that blocker. Do not keep repeating Full as a workaround. For a
+NEVER-MANAGED legacy work with neither discovery_scope nor archive_order,
+explicit preview/apply may bootstrap existing Sources only when their
+discovery_key, site, and work ownership all match the Watchlist. Newly
+discovered Sources still require a fresh sync before Batch.
+
+A successful Full after a prior scope sync invalidates the sync marker. After
+Full, rerun preview and explicit apply with the same Watchlist before planning
+Batch. Scope changes also require review and apply. No Source is moved between
+keys or deleted.
+
+Use one isolated Catalog, Watchlist, and library path throughout copy
+validation; replace placeholders with paths under the same COPY_ROOT:
+
+    python -m screenshot_crawler.cli catalog migrate --catalog <copy/catalog.sqlite> --backup-dir <copy/backups>
+    python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --dry-run --json
+    python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --apply --json
+    python -m screenshot_crawler.cli batch plan --site <site> --catalog <copy/catalog.sqlite> --watchlist <copy/watchlist.yaml> --library-dir <copy/Books>
+
+The scope-sync apply example is only for an eligible unbounded, unordered legacy
+work. For scoped or archive-ordered work on this adapter, expect a fail-closed
+preview until a complete-listing proof hook is implemented. Batch plan remains
+read-only; use the same copy paths for any separately authorized execution.
+
 ## Work 3140 compatibility (2026-10-17)
 
 The work-3140 compatibility fix (`f847af0`, developed on `fix/comicfuz-3140-page-roles`) is included in `main`.
@@ -58,6 +97,6 @@ Chapter 80641 (global position 33) initially had multiple normal-CLI failures af
 
 `ComicFuzSitePolicy` admits only sources where `site=comicfuz`, `available=true`, and `access_mode=free`; its only strategy is `direct`. Unavailable rows are skipped first. `unknown`, `quota`, `paid`, `owned`, `grant`, `rental`, and unrecognized modes are skipped. ComicFUZ exposes no quota resources or grant-only pass, and policy evaluation never reads a balance, grant, purchase, or resource state. The existing Catalog model accepts only its established access modes; grant/rental are covered at the policy boundary as unsupported inputs rather than persisted values.
 
-The CLI Batch adapter and Site Policy registries now include ComicFUZ. Batch reads optional `COMICFUZ_WORK_URL` from the selected environment file and otherwise derives the canonical same-work listing from the validated composite Catalog identity; any supplied URL must match the target work. The adapter validates the same-work public listing and exact current free row before opening the viewer. `batch plan` uses normal Catalog position and archive naming; `batch run` uses the standard BatchExecutor, Runner, ZIP packager, Artifact, and Completed lifecycle. No shared Core or Catalog schema was changed.
+The CLI Batch adapter and Site Policy registries now include ComicFUZ. Batch reads optional `COMICFUZ_WORK_URL` from the selected environment file and otherwise derives the canonical same-work listing from the validated composite Catalog identity; any supplied URL must match the target work. The adapter validates the same-work public listing and exact current free row before opening the viewer. `batch plan` uses normal Catalog position and archive naming; `batch run` uses the standard BatchExecutor, Runner, ZIP packager, Artifact, and Completed lifecycle. The original site-specific Phase 04 did not change shared Core or Catalog schema; the subsequently adopted global Catalog v7 migration and synchronized acquisition-scope gate now apply to this adapter.
 
 Synthetic policy/planner and browser-backed Batch integration cover the allowed/rejected access states, direct-only resource contract, global display-position prefixes, Discovery-to-Catalog-to-Plan-to-Runner-to-ZIP completion, rediscovery/replan retention of the completed artifact, loss of free proof before reader entry, route drift, unknown END, and packaging failure. Failed Batch attempts leave the Item pending with a failed CrawlRun and no Artifact. Reviewer selected 20 tests and reported 20 passed, 0 skipped, BLOCKING=0. Phase 05 isolated E2E is complete; the final overall Reviewer gate passed with BLOCKING=0 and the Lead accepted Phases 01-05. The original implementation commit `4b64a3c` is now included in `main`.

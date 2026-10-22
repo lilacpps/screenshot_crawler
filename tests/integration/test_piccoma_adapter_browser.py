@@ -50,6 +50,8 @@ from screenshot_crawler.site_adapters.piccoma.native_capture import (
 )
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import PiccomaSitePolicy, SitePolicyRegistry
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -2057,11 +2059,23 @@ def _piccoma_batch_setup(tmp_path: Path, *, manual_grant: bool = False):
         SourceTargetInput(backend="web", locator=SOURCE_URL),
         source_id=source.id,
     )
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key=PRODUCT_ID,
+        work_key=WORK_KEY,
+        site="piccoma",
+        url=f"https://piccoma.com/web/product/{PRODUCT_ID}",
+        label="Fixture Work",
+    )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    preview = reconciler.preview(WORK_KEY)
+    assert preview.ready, preview.blockers
+    reconciler.apply(preview)
     policies = SitePolicyRegistry()
     policies.register("piccoma", PiccomaSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("piccoma", PiccomaAdapter)
-    candidate = BatchPlanner(catalog, policies).plan(
+    candidate = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
         site="piccoma", now=BATCH_NOW
     ).candidates[0]
     return catalog, work, item, source, target, policies, adapters, candidate
@@ -2089,6 +2103,8 @@ async def test_piccoma_batch_executor_captures_manifest_packages_zip_and_complet
         catalog,
         policies,
         adapters,
+        watchlist=WatchlistService(tmp_path / "watchlist.yaml"),
+        library_dir=tmp_path / "library",
         package_function=package_with_manifest_copy,
         runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
     )
@@ -2185,6 +2201,8 @@ async def test_piccoma_batch_failures_never_package_complete_or_mutate_resources
         catalog,
         policies,
         adapters,
+        watchlist=WatchlistService(tmp_path / "watchlist.yaml"),
+        library_dir=tmp_path / "library",
         runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
     )
 

@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from screenshot_crawler.batch import BatchPlanner
+from screenshot_crawler.batch import BatchPlanner, BatchPlanningError
 from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, WorkInput
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.discovery import (
@@ -22,6 +22,8 @@ from screenshot_crawler.site_adapters.bookwalker.discovery import (
 )
 from screenshot_crawler.site_policies import BookWalkerSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -260,9 +262,29 @@ async def test_bookwalker_full_discovery_read_purchased_reaches_direct_batch_can
     assert source_target is not None
     assert source_target.locator == _product_url(product)
 
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key=target.key,
+        work_key=target.work_key,
+        site=target.site,
+        url=target.url,
+        label=target.label,
+    )
     policies = SitePolicyRegistry()
     policies.register("bookwalker", BookWalkerSitePolicy)
-    plan = BatchPlanner(catalog, policies).plan(
+    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
+    with pytest.raises(BatchPlanningError, match="missing or stale"):
+        planner.plan(
+            site="bookwalker",
+            now=datetime(2026, 9, 20, 12, 0, tzinfo=JST),
+        )
+
+    reconciler = ScopeReconciler(watchlist, catalog)
+    preview = reconciler.preview(target.work_key)
+    assert preview.ready
+    reconciler.apply(preview)
+
+    plan = planner.plan(
         site="bookwalker",
         now=datetime(2026, 9, 20, 12, 0, tzinfo=JST),
     )

@@ -31,7 +31,7 @@ from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.core.access_guard import AccessProfile
 from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
 from screenshot_crawler.core.models import RunConfig
-from screenshot_crawler.core.packaging import PackageResult
+from screenshot_crawler.core.packaging import PackageResult, archive_stem
 from screenshot_crawler.core.runner import RunResult
 from screenshot_crawler.core.state import PageState
 from screenshot_crawler.runtime_settings import SiteRuntimeSettings, load_runtime_settings
@@ -103,6 +103,14 @@ class FakeRunner:
         return RunResult(pages=(), stop_state=PageState.END, stop_reason="end")
 
 
+def test_batch_executor_defaults_to_standard_books_directory(tmp_path: Path) -> None:
+    executor = BatchExecutor(
+        CatalogService(tmp_path / "catalog.sqlite"), SitePolicyRegistry(), AdapterRegistry()
+    )
+
+    assert executor.library_dir == Path("output/Books")
+
+
 def make_executor(
     service: CatalogService,
     *,
@@ -168,6 +176,7 @@ def make_executor(
         runner_factory=runner_factory,
         package_function=package_function,
         runtime_settings=runtime_settings,
+        library_dir=service.path.parent / "Books",
     )
 
 
@@ -178,6 +187,7 @@ def add_candidate(
     consumes_quota: bool = False,
     access_granted_until: str | None = None,
     site: str = "mangaone",
+    display_position: int | None = None,
 ) -> BatchCandidate:
     work = service.create_work(WorkInput(work_key=f"work-{access_mode}", title="作品A"))
     item = service.create_item(
@@ -190,6 +200,7 @@ def add_candidate(
             access_mode=access_mode,
             available=True,
             access_granted_until=access_granted_until,
+            display_position=display_position,
         ),
         item_id=item.id,
     )
@@ -294,6 +305,57 @@ async def test_direct_candidate_runs_and_completes_without_quota_state(
     assert source.access_granted_until is None
 
 
+async def test_stale_archive_prefix_is_rejected_before_run_creation(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = replace(add_candidate(service, access_mode="free"), artifact_prefix="999")
+    configs: list[RunConfig] = []
+    executor = make_executor(service, configs=configs)
+
+    with pytest.raises(BatchExecutionError, match="archive prefix"):
+        await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=tmp_path / "Books",
+            now=NOW,
+        )
+
+    assert configs == []
+    assert service.list_crawl_runs() == []
+    assert service.get_item(candidate.item_id).status == "pending"
+
+
+async def test_occupied_candidate_archive_path_blocks_quota_access(
+    tmp_path: Path,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = _add_magapoke_candidate(service)
+    library_dir = tmp_path / "Books"
+    stem, title, genre, _order, _author = archive_stem(candidate.metadata)
+    archive_path = library_dir / genre / title / f"{stem}.zip"
+    archive_path.parent.mkdir(parents=True)
+    archive_path.write_bytes(b"existing archive")
+    executor = _make_magapoke_executor(service, AccessConsumption())
+
+    with pytest.raises(BatchExecutionError, match="Candidate output already exists"):
+        await executor.execute_candidate(
+            object(),
+            candidate,
+            output_root=tmp_path / "batch",
+            library_dir=library_dir,
+            now=NOW,
+        )
+
+    assert service.list_crawl_runs() == []
+    assert service.get_item(candidate.item_id).status == "pending"
+    assert service.get_source(candidate.source_id).quota_started_at is None
+    assert service.get_quota_resource_state(
+        candidate.work_id, site="magapoke", resource="work_ticket"
+    ) is None
+
+
 async def test_artifact_disambiguator_is_forwarded_to_packaging(
     tmp_path: Path,
 ) -> None:
@@ -302,10 +364,31 @@ async def test_artifact_disambiguator_is_forwarded_to_packaging(
         tuple[dict[str, str], dict[str, str], str | None, str | None]
     ] = []
     candidate = replace(
-        add_candidate(service, access_mode="free"),
+        add_candidate(service, access_mode="free", display_position=3),
         metadata={"title": "作品A", "order": "番外編"},
         artifact_prefix="003",
-        artifact_disambiguator="mangaone-214131",
+        artifact_disambiguator="mangaone-chapter-1",
+    )
+    service.update_item_metadata(
+        candidate.item_id, order_label=candidate.metadata["order"]
+    )
+    duplicate_item = service.create_item(
+        ItemInput(order_label=service.get_item(candidate.item_id).order_label),
+        work_id=candidate.work_id,
+    )
+    duplicate_source = service.create_source(
+        SourceInput(
+            site="mangaone",
+            external_id="chapter-duplicate",
+            display_position=3,
+        ),
+        item_id=duplicate_item.id,
+    )
+    service.create_source_target(
+        SourceTargetInput(
+            backend="web", locator="https://example.invalid/chapter/duplicate"
+        ),
+        source_id=duplicate_source.id,
     )
     executor = make_executor(service, package_calls=package_calls)
 
@@ -318,14 +401,14 @@ async def test_artifact_disambiguator_is_forwarded_to_packaging(
     )
 
     assert result.archive_path == (
-        tmp_path / "Books" / "漫画" / "作品A" / "archive-mangaone-214131.zip"
+        tmp_path / "Books" / "漫画" / "作品A" / "archive-mangaone-chapter-1.zip"
     )
     assert package_calls == [
         (
             {"title": "Adapter title", "genre": "漫画"},
             {"title": "作品A", "order": "番外編"},
             "003",
-            "mangaone-214131",
+            "mangaone-chapter-1",
         )
     ]
 
@@ -668,6 +751,7 @@ async def test_comicdays_candidate_local_identity_skip_does_not_record_consumpti
         adapters,
         watchlist=watchlist,
         runner_factory=Runner,  # type: ignore[arg-type]
+        library_dir=service.path.parent / "Books",
     )
     with pytest.raises(
         AccessResourceUnavailableError,
@@ -720,6 +804,7 @@ def _add_magapoke_candidate(
         item_id=item.id, source_id=source.id, target_id=target.id,
         site=site, backend="web", target_key=target.target_key,
         locator=target.locator, access_strategy="quota", access_mode="quota",
+        metadata={"title": work.title, "order": item.order_label},
         reason=f"{resource}_candidate", consumes_quota=True,
         quota_resource=resource, quota_scope="work",
         quota_limit=1 if resource == "work_ticket" else None,
@@ -775,6 +860,7 @@ def _make_magapoke_executor(
         watchlist=watchlist,
         runner_factory=Runner,  # type: ignore[arg-type]
         package_function=package,
+        library_dir=service.path.parent / "Books",
     )
 
 
@@ -892,6 +978,10 @@ async def test_comicdays_work_cooldown_blocks_both_executor_entrypoints(
         target_id=second_target.id,
         locator=second_target.locator,
         external_id=second_source.external_id,
+        metadata={
+            **candidate.metadata,
+            "order": second_item.order_label,
+        },
     )
     consumed_at = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
     service.record_quota_access_with_resource_state(

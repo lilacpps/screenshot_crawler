@@ -33,6 +33,8 @@ from screenshot_crawler.site_adapters.kadocomi.native_capture import (
     NATIVE_OBSERVER_INIT_SCRIPT,
 )
 from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -1787,8 +1789,23 @@ async def _seed_kadocomi_batch_candidate(
     )
     assert discovery.complete is True and discovery.observed_count == 1
 
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key=target.key,
+        work_key=target.work_key,
+        site=target.site,
+        url=target.url,
+        label=target.label,
+    )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    preview = reconciler.preview(target.work_key)
+    assert preview.ready, preview.blockers
+    reconciler.apply(preview)
+
     policies = cli._batch_policy_registry()
-    plan = BatchPlanner(catalog, policies).plan(site="kadocomi", now=now_jst())
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="kadocomi", now=now_jst()
+    )
     assert len(plan.candidates) == 1
     candidate = plan.candidates[0]
     assert candidate.locator == EPISODE_URL
@@ -1799,6 +1816,8 @@ async def _seed_kadocomi_batch_candidate(
         catalog,
         policies,
         cli._batch_adapter_registry({}),
+        watchlist=watchlist,
+        library_dir=tmp_path / "library",
         runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
     )
     return catalog, plan, candidate, executor, images
@@ -1886,7 +1905,11 @@ async def test_kadocomi_batch_discovers_captures_packages_and_completes(
                 assert image.size == (16, 12)
     status = json.loads(result.status_path.read_text(encoding="utf-8"))
     assert status["status"] == "completed" and status["page_count"] == len(images)
-    second_plan = BatchPlanner(catalog, executor.policies).plan(
+    second_plan = BatchPlanner(
+        catalog,
+        executor.policies,
+        watchlist=WatchlistService(tmp_path / "watchlist.yaml"),
+    ).plan(
         site="kadocomi", now=now_jst()
     )
     assert all(entry.item_id != item.id for entry in second_plan.candidates)

@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
+from screenshot_crawler.archive_order import build_work_archive_position_plan
+from screenshot_crawler.batch.archive_guard import (
+    ArchiveNameGuardError,
+    validate_existing_archive_names,
+)
 from screenshot_crawler.batch.models import (
     BatchCandidate,
     BatchPlan,
     BatchPlanningError,
     BatchSkipped,
 )
-from screenshot_crawler.batch.naming import archive_metadata_for_catalog, archive_position_prefix
+from screenshot_crawler.batch.naming import (
+    archive_metadata_for_catalog,
+    archive_position_prefix,
+)
 from screenshot_crawler.batch.naming import collision_source_ids as shared_collision_source_ids
 from screenshot_crawler.catalog import (
     CatalogError,
@@ -25,8 +35,10 @@ from screenshot_crawler.catalog import (
     Work,
 )
 from screenshot_crawler.catalog.service import JST, now_jst
+from screenshot_crawler.core.packaging import archive_stem
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
+from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.reconcile import (
     ScopeReconciler,
     ScopeReconciliationError,
@@ -43,11 +55,18 @@ class BatchPlanner:
         policies: SitePolicyRegistry,
         *,
         watchlist: WatchlistService | None = None,
+        library_dir: str | Path | None = None,
     ) -> None:
         self.catalog = catalog
         self.policies = policies
         self.scope_reconciler = (
             ScopeReconciler(watchlist, catalog) if watchlist is not None else None
+        )
+        # Non-CLI callers commonly pair an isolated Catalog with a planner in
+        # tests and maintenance services. Keep their filesystem checks beside
+        # that Catalog unless the real runtime output root is explicitly passed.
+        self.library_dir = (
+            Path(library_dir) if library_dir is not None else catalog.path.parent / "Books"
         )
 
     def plan(
@@ -58,13 +77,18 @@ class BatchPlanner:
         quota_resource: str | None = None,
     ) -> BatchPlan:
         current = _normalize_now(now_jst() if now is None else now)
+        archive_positions_by_source: dict[int, int] = {}
+        unmanaged_source_ids: set[int] = set()
         try:
             policy = self.policies.create(site)
             if quota_resource is not None:
                 policy.validate_access_resource(quota_resource)
-            works, items, sources, targets = (
-                self.catalog.read_works_items_sources_and_targets(site=site)
+            works, items, all_sources, all_targets = (
+                self.catalog.read_works_items_sources_and_targets()
             )
+            sources = [source for source in all_sources if source.site == site]
+            site_source_ids = {source.id for source in sources}
+            targets = [target for target in all_targets if target.source_id in site_source_ids]
             if sources and self.scope_reconciler is None:
                 raise BatchPlanningError(
                     "Batch requires an explicit Watchlist for acquisition-scope validation"
@@ -73,8 +97,13 @@ class BatchPlanner:
             items_by_id = {item.id: item for item in items}
             assert self.scope_reconciler is not None or not sources
             if self.scope_reconciler is not None:
+                watchlist_targets = self.scope_reconciler.watchlist.list_targets()
+                targets_by_work: dict[str, list[WatchlistTarget]] = defaultdict(list)
+                for target in watchlist_targets:
+                    targets_by_work[target.work_key].append(target)
                 work_keys: set[str] = set()
                 sources_by_work_key: dict[str, dict[int, Source]] = defaultdict(dict)
+                validated_sources_by_work_key: dict[str, list[Source]] = {}
                 for source in sources:
                     item = items_by_id.get(source.item_id)
                     work = works_by_id.get(item.work_id) if item is not None else None
@@ -85,7 +114,26 @@ class BatchPlanner:
                     work_keys.add(work.work_key)
                     sources_by_work_key[work.work_key][source.id] = source
                 for work_key in sorted(work_keys):
+                    if not targets_by_work.get(work_key):
+                        unmanaged_source_ids.update(sources_by_work_key[work_key])
+                        continue
                     validated = self.scope_reconciler.require_synchronized_snapshot(work_key)
+                    initial_work_sources = {
+                        source.id: source
+                        for source in all_sources
+                        if works_by_id.get(items_by_id[source.item_id].work_id) is not None
+                        and works_by_id[items_by_id[source.item_id].work_id].work_key
+                        == work_key
+                    }
+                    validated_work_sources = {
+                        source.id: source for source in validated.sources
+                    }
+                    if validated_work_sources != initial_work_sources:
+                        raise BatchPlanningError(
+                            f"Catalog Sources changed across sites while validating "
+                            f"acquisition scope for {work_key!r}; retry Batch planning"
+                        )
+                    validated_sources_by_work_key[work_key] = list(validated.sources)
                     validated_sources = {
                         source.id: source
                         for source in validated.sources
@@ -96,6 +144,35 @@ class BatchPlanner:
                             f"Catalog sources changed while validating acquisition scope for "
                             f"{work_key!r}; retry Batch planning"
                         )
+                    work = next(
+                        (value for value in works if value.work_key == work_key), None
+                    )
+                    if work is None:
+                        raise BatchPlanningError(
+                            f"Cannot resolve Work {work_key!r} for archive naming"
+                        )
+                    archive_plan = build_work_archive_position_plan(
+                        work,
+                        targets_by_work.get(work_key, []),
+                        items,
+                        validated.sources,
+                    )
+                    if archive_plan is not None:
+                        archive_positions_by_source.update(
+                            archive_plan.positions_by_source_id
+                        )
+                self._validate_existing_archive_names(
+                    works=works,
+                    items=items,
+                    sources=[
+                        source
+                        for work_key in work_keys
+                        for source in validated_sources_by_work_key.get(work_key, [])
+                    ],
+                    targets_by_work=targets_by_work,
+                    work_keys=work_keys,
+                    archive_positions_by_source=archive_positions_by_source,
+                )
         except (CatalogError, SitePolicyError, ScopeReconciliationError, ValueError) as exc:
             raise BatchPlanningError(str(exc)) from exc
 
@@ -126,6 +203,11 @@ class BatchPlanner:
 
                 enabled_sources = []
                 for source in item_sources:
+                    if source.id in unmanaged_source_ids:
+                        plan.skipped.append(
+                            BatchSkipped(item.id, source.id, "acquisition_unmanaged")
+                        )
+                        continue
                     if source.acquisition_enabled:
                         enabled_sources.append(source)
                     else:
@@ -164,6 +246,13 @@ class BatchPlanner:
                         decision=decision,
                     )
                 )
+
+            _validate_candidate_archive_paths(
+                selections,
+                library_dir=self.library_dir,
+                archive_positions_by_source=archive_positions_by_source,
+                collision_source_ids=collision_source_ids,
+            )
 
             quota_selections = [
                 selection for selection in selections if selection.decision.consumes_quota
@@ -222,6 +311,7 @@ class BatchPlanner:
                     _candidate_from_selection(
                         selection,
                         collision_source_ids=collision_source_ids,
+                        archive_positions_by_source=archive_positions_by_source,
                     )
                 )
 
@@ -233,6 +323,51 @@ class BatchPlanner:
         except SitePolicyError as exc:
             raise BatchPlanningError(str(exc)) from exc
         return plan
+
+    def _validate_existing_archive_names(
+        self,
+        *,
+        works: list[Work],
+        items: list[Item],
+        sources: list[Source],
+        targets_by_work: dict[str, list[WatchlistTarget]],
+        work_keys: set[str],
+        archive_positions_by_source: dict[int, int],
+    ) -> None:
+        """Block stale names or occupied targets before a Batch can access a site."""
+
+        works_by_id = {work.id: work for work in works}
+        items_by_id = {item.id: item for item in items}
+        sources_by_work: dict[str, list[Source]] = defaultdict(list)
+        for source in sources:
+            item = items_by_id.get(source.item_id)
+            work = works_by_id.get(item.work_id) if item is not None else None
+            if work is not None and work.work_key in work_keys:
+                sources_by_work[work.work_key].append(source)
+
+        for work_key in sorted(work_keys):
+            if not targets_by_work.get(work_key):
+                continue
+            work_sources = sources_by_work.get(work_key, [])
+            if not work_sources:
+                continue
+            work = works_by_id.get(items_by_id[work_sources[0].item_id].work_id)
+            assert work is not None
+            try:
+                validate_existing_archive_names(
+                    self.catalog,
+                    work=work,
+                    items=[item for item in items if item.work_id == work.id],
+                    sources=work_sources,
+                    archive_positions_by_source=archive_positions_by_source,
+                )
+            except ArchiveNameGuardError as exc:
+                raise BatchPlanningError(
+                    f"{exc}; review `scripts/renumber_archives.py --watchlist "
+                    f"{self.scope_reconciler.watchlist.path if self.scope_reconciler else 'watchlist.yaml'} "
+                    f"--work-key {work_key} --dry-run`, then apply a full work-wide "
+                    "renumber before Batch"
+                ) from exc
 
     @staticmethod
     def _select_source(
@@ -297,6 +432,7 @@ def _candidate_from_selection(
     selection: _Selection,
     *,
     collision_source_ids: set[int],
+    archive_positions_by_source: dict[int, int],
 ) -> BatchCandidate:
     item = selection.item
     source = selection.source
@@ -313,7 +449,9 @@ def _candidate_from_selection(
         locator=selection.target.locator,
         access_strategy=decision.access_strategy,
         metadata=_metadata(selection.work, item, source),
-        artifact_prefix=archive_position_prefix(source.display_position),
+        artifact_prefix=archive_position_prefix(
+            archive_positions_by_source.get(source.id, source.display_position)
+        ),
         artifact_disambiguator=(
             f"{source.site}-{source.external_id}"
             if source.id in collision_source_ids
@@ -337,6 +475,60 @@ def _collision_source_ids(
     works_by_id: dict[int, Work],
 ) -> set[int]:
     return shared_collision_source_ids(works_by_id.values(), items, sources)
+
+
+def _validate_candidate_archive_paths(
+    selections: list[_Selection],
+    *,
+    library_dir: Path,
+    archive_positions_by_source: dict[int, int],
+    collision_source_ids: set[int],
+) -> None:
+    planned: dict[str, int] = {}
+    for selection in selections:
+        source = selection.source
+        position = archive_positions_by_source.get(source.id, source.display_position)
+        disambiguator = (
+            f"{source.site}-{source.external_id}"
+            if source.id in collision_source_ids
+            else None
+        )
+        stem, title, genre, _order, _author = archive_stem(
+            archive_metadata_for_catalog(selection.work, selection.item, source),
+            artifact_prefix=archive_position_prefix(position),
+            artifact_disambiguator=disambiguator,
+        )
+        target = library_dir / genre / title / f"{stem}.zip"
+        key = _archive_path_key(target)
+        prior = planned.get(key)
+        if prior is not None and prior != source.id:
+            raise BatchPlanningError(
+                f"Selected Sources {prior} and {source.id} map to the same archive path "
+                f"{target}; resolve the naming collision before Batch"
+            )
+        planned[key] = source.id
+        if target.exists():
+            raise BatchPlanningError(
+                f"Planned archive {target} already exists; Batch will not overwrite it. "
+                "Review the work-wide `scripts/renumber_archives.py` dry-run and resolve "
+                "the existing ZIP before retrying"
+            )
+        status_path = (
+            library_dir.parent
+            / "crawl-status"
+            / genre
+            / title
+            / f"{stem}.json"
+        )
+        if status_path.exists():
+            raise BatchPlanningError(
+                f"Planned archive status {status_path} already exists without a clear matching "
+                "current ZIP; resolve the status/ZIP pair before Batch"
+            )
+
+
+def _archive_path_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
 
 
 def _normalize_now(value: datetime) -> datetime:

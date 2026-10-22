@@ -26,9 +26,11 @@ from screenshot_crawler.catalog.models import DiscoveryInventoryPosition
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
+    BookWalkerSitePolicy,
     MagapokeSitePolicy,
     MangaOneSitePolicy,
     SitePolicyRegistry,
+    ZeblackSitePolicy,
 )
 from screenshot_crawler.watchlist.fingerprints import target_scope_fingerprint
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
@@ -36,6 +38,168 @@ from screenshot_crawler.watchlist.reconcile import ScopeReconciler
 from screenshot_crawler.watchlist.service import WatchlistService
 
 NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
+
+
+def test_cross_site_archive_order_assigns_zeblack_100_then_bookwalker_2(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="crosssite", title="Cross Site"))
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    zeblack_target = watchlist.add(
+        key="zeblack-chapters",
+        work_key=work.work_key,
+        site="zeblack",
+        url="https://example.invalid/zeblack/list",
+        label="Zeblack chapters",
+        archive_order=1,
+    )
+    bookwalker_target = watchlist.add(
+        key="bookwalker-volumes",
+        work_key=work.work_key,
+        site="bookwalker",
+        url="https://example.invalid/bookwalker/list",
+        label="BookWalker volumes",
+        archive_order=2,
+    )
+
+    zeblack_positions = []
+    for position in range(1, 101):
+        external_id = f"chapter-{position:03d}"
+        item = catalog.create_item(ItemInput(item_title=external_id), work_id=work.id)
+        source = catalog.create_source(
+            SourceInput(
+                site="zeblack",
+                external_id=external_id,
+                discovery_key=zeblack_target.key,
+                access_mode="free",
+                available=True,
+                display_position=position,
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(
+                backend="web", locator=f"https://example.invalid/zeblack/{external_id}"
+            ),
+            source_id=source.id,
+        )
+        zeblack_positions.append(DiscoveryInventoryPosition(external_id, position))
+
+    bookwalker_positions = []
+    for position in range(1, 3):
+        external_id = f"volume-{position:03d}"
+        item = catalog.create_item(ItemInput(item_title=external_id), work_id=work.id)
+        source = catalog.create_source(
+            SourceInput(
+                site="bookwalker",
+                external_id=external_id,
+                discovery_key=bookwalker_target.key,
+                access_mode="owned",
+                available=True,
+                display_position=position,
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(
+                backend="web", locator=f"https://example.invalid/bookwalker/{external_id}"
+            ),
+            source_id=source.id,
+        )
+        bookwalker_positions.append(DiscoveryInventoryPosition(external_id, position))
+
+    _record_inventory(catalog, zeblack_target, tuple(zeblack_positions))
+    _record_inventory(catalog, bookwalker_target, tuple(bookwalker_positions))
+    reconciler = ScopeReconciler(watchlist, catalog)
+    reconciler.apply(reconciler.preview(work.work_key))
+
+    policies = SitePolicyRegistry()
+    policies.register("zeblack", ZeblackSitePolicy)
+    policies.register("bookwalker", BookWalkerSitePolicy)
+    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
+    zeblack_plan = planner.plan(site="zeblack", now=NOW)
+    bookwalker_plan = planner.plan(site="bookwalker", now=NOW)
+
+    assert [candidate.artifact_prefix for candidate in zeblack_plan.candidates] == [
+        f"{position:03d}" for position in range(1, 101)
+    ]
+    assert [candidate.artifact_prefix for candidate in bookwalker_plan.candidates] == [
+        "101",
+        "102",
+    ]
+
+
+def test_unmanaged_work_sources_are_skipped_without_losing_quota_history(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    managed_work = catalog.create_work(WorkInput(work_key="managed", title="Managed"))
+    unmanaged_work = catalog.create_work(
+        WorkInput(work_key="unmanaged", title="Unmanaged")
+    )
+    managed_item = catalog.create_item(ItemInput(), work_id=managed_work.id)
+    managed_source = catalog.create_source(
+        SourceInput(
+            site="mangaone",
+            external_id="managed-chapter",
+            discovery_key="managed-key",
+            access_mode="free",
+            available=True,
+            display_position=1,
+        ),
+        item_id=managed_item.id,
+    )
+    catalog.create_source_target(
+        SourceTargetInput(
+            backend="web", locator="https://example.invalid/managed-chapter"
+        ),
+        source_id=managed_source.id,
+    )
+    unmanaged_item = catalog.create_item(ItemInput(), work_id=unmanaged_work.id)
+    unmanaged_source = catalog.create_source(
+        SourceInput(
+            site="mangaone",
+            external_id="unmanaged-chapter",
+            discovery_key="removed-key",
+            access_mode="quota",
+            available=True,
+            quota_started_at=NOW,
+            display_position=1,
+        ),
+        item_id=unmanaged_item.id,
+    )
+    catalog.create_source_target(
+        SourceTargetInput(
+            backend="web", locator="https://example.invalid/unmanaged-chapter"
+        ),
+        source_id=unmanaged_source.id,
+    )
+
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="managed-key",
+        work_key=managed_work.work_key,
+        site="mangaone",
+        url="https://example.invalid/managed-list",
+        label="Managed",
+    )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    reconciler.apply(reconciler.preview(managed_work.work_key))
+    policies = SitePolicyRegistry()
+    policies.register("mangaone", MangaOneSitePolicy)
+
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="mangaone", now=NOW
+    )
+
+    assert [candidate.source_id for candidate in plan.candidates] == [managed_source.id]
+    assert plan.quota_available == 3
+    assert any(
+        skip.source_id == unmanaged_source.id
+        and skip.reason == "acquisition_unmanaged"
+        for skip in plan.skipped
+    )
 
 
 def _write_target(path: Path, target: WatchlistTarget) -> None:
@@ -278,7 +442,7 @@ def test_planner_rejects_scope_change_between_source_read_and_validation(
         apply_narrower_scope_during_validation,
     )
 
-    with pytest.raises(BatchPlanningError, match="changed while validating"):
+    with pytest.raises(BatchPlanningError, match="while validating"):
         planner.plan(site="mangaone", now=NOW)
 
     assert catalog.get_source(sources[0].id).acquisition_enabled is True
@@ -314,7 +478,11 @@ async def test_resolver_rejects_forged_target_before_adapter_creation(tmp_path: 
     ).candidates[0]
     forged = replace(candidate, locator="https://outside.invalid/other")
     executor = BatchExecutor(
-        catalog, policies, AdapterRegistry(), watchlist=watchlist
+        catalog,
+        policies,
+        AdapterRegistry(),
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
     )
 
     with pytest.raises(BatchExecutionError, match="target.locator"):

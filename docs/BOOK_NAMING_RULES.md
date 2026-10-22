@@ -369,3 +369,43 @@ SLAMDUNK[新装再編版]-第01巻-井上雄彦.zip
 - 作者名には原則空白を入れない
 - ジャンルはフォルダで管理する
 - ファイル名として使用できない文字は置換する
+
+## 12. Catalog work-key横断の連番
+
+CrawlerのZIPでは、Watchlistの同じ`work_key`に複数key/siteを明示した場合、
+すべてのkeyに正の整数`archive_order`を指定すると、ZIP prefixをwork-wideに
+連結する。まず`archive_order`昇順、各key内はそのsiteの`display_position`昇順で、
+取得担当Sourceへ001から序数を割り当てる。これは作品内容の話数・巻数換算ではない。
+
+担当範囲内ならpending/completed/skipped/external、無料/有償、available/unavailable
+を問わず番号を予約する。`discovery_scope`で担当外となり`acquisition_enabled=0`
+のSourceは採番しない。したがってゼブラックが100話を担当し、後続をBookWalkerが
+2巻担当する場合は001〜100、101〜102になる。担当内のMagapoke有償話は後続の
+予約番号を保持し、担当外の有償話は番号を消費しない。`enabled: false`はDiscoveryの
+実行設定であり、担当範囲や番号を変えない。
+
+全keyで`archive_order`を省略した作品は従来のsite-local `display_position`名を
+維持する。一部だけ指定、同一work内の重複、NULL/不確定position、未同期scopeは
+fail-closedとなる。Batchは同じpure naming planを利用し、既存ZIP名/statusと同期
+状態に矛盾があればアクセス前に停止する。ファイルが既に存在しない既存Artifactは
+従来のoperator管理recrawlを妨げず、Item statusを自動変更しない。
+
+既存workの変更後に明示renumberする例:
+
+```powershell
+python scripts/renumber_archives.py --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --status-dir output/crawl-status --dry-run --json
+python scripts/renumber_archives.py --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --status-dir output/crawl-status --apply --json
+```
+
+Managed workは全site一括で検証し、`--site`による部分適用を拒否する。dry-runは
+JSON一文書でold/new、除外ZIP、blocker、summaryを返す。Apply前に対象ZIPのCatalog
+SHA-256/size、status JSON、filename/path collision、全Catalog Artifact locator aliasを
+照合する。担当外ZIPを削除・上書きしない。ApplyはZIP、status sidecar、Artifact
+locatorを一緒に更新し、途中失敗のrollback状態を検証する。状態を確定できなければ
+復旧情報を出して停止する。
+
+未同期の取得範囲は、先に`watch scope-sync --dry-run --json`で確認し、明示的な
+`--apply --json`で同期する。新しいscope / URL / listing orderのFull証拠がない場合は
+同期もBatchも許可されない。migration、scope sync、renumberはそれぞれ専用copyで
+検証し、運用環境へ順に適用する前に個別backupを取る。詳細は
+[`runbooks/work-key-archive-order/README.md`](../runbooks/work-key-archive-order/README.md)。

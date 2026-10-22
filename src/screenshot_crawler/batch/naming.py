@@ -5,8 +5,23 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 
+from screenshot_crawler.archive_order import (
+    ArchiveOrderPlanningError,
+    WorkArchivePositionPlan,
+    build_work_archive_position_plan,
+)
 from screenshot_crawler.catalog.models import Item, Source, Work
 from screenshot_crawler.core.packaging import archive_stem
+
+__all__ = [
+    "ArchiveOrderPlanningError",
+    "WorkArchivePositionPlan",
+    "archive_metadata_for_catalog",
+    "archive_position_prefix",
+    "build_work_archive_position_plan",
+    "catalog_archive_stem",
+    "collision_source_ids",
+]
 
 
 def archive_position_prefix(display_position: int | None) -> str | None:
@@ -38,12 +53,15 @@ def catalog_archive_stem(
     source: Source,
     *,
     artifact_disambiguator: str | None = None,
+    archive_position: int | None = None,
 ) -> str:
-    """Return the exact P3 archive stem for a Catalog Work/Item/Source."""
+    """Return the exact archive stem, preserving legacy position by default."""
 
     stem, *_ = archive_stem(
         archive_metadata_for_catalog(work, item, source),
-        artifact_prefix=archive_position_prefix(source.display_position),
+        artifact_prefix=archive_position_prefix(
+            source.display_position if archive_position is None else archive_position
+        ),
         artifact_disambiguator=artifact_disambiguator,
     )
     return stem

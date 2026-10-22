@@ -2038,8 +2038,25 @@ crawl-status JSON are outside P3 and are not renamed.
 The work-key Batch scope gate is an additional precondition: Batch requires a
 Watchlist-backed synchronized Source-flag snapshot and rejects acquisition-
 disabled rows before policy evaluation. This does not change legacy
-site-local `display_position` naming; cross-site `archive_order` numbering and
-existing ZIP renumber remain the P4 contract.
+For a work whose every Watchlist key has `archive_order`, the shared naming
+plan orders keys by `archive_order`, then enabled Sources by site
+`display_position`. It reserves an ordinal regardless of Item status, access
+mode, availability or paid state. Unordered works retain the prior site-local
+`display_position` naming. Existing ZIP renumber is implemented as a work-wide
+operation across sites.
+
+Before Batch creates an archive, a work-wide preflight checks current ZIP
+stems, path occupancy, status metadata and synchronized Watchlist state. A
+changed ordinal or inconsistent existing archive blocks the work until an
+explicit `scripts/renumber_archives.py --work-key KEY --dry-run --json` review
+and, after operator confirmation, `--apply --json`. Partial `--site`
+application is rejected for managed works. The command retains excluded ZIPs,
+rejects Catalog hash/size drift and ambiguous status or Artifact aliases, and
+updates Catalog locators/status sidecars with rollback verification. JSON mode
+emits one result document for service/GUI callers. See
+[BOOK_NAMING_RULES.md](BOOK_NAMING_RULES.md) and the
+[work-key runbook](../runbooks/work-key-archive-order/README.md) for the
+operational copy-first migration and sync procedure.
 
 Schema v2はsequential migrationの対象外であり、v2→v3 migrationは実装しない。
 `catalog migrate`はv3以降のDBに対してのみcomplete migration pathを要求する。v2 DBを利用する場合は、
@@ -2048,11 +2065,12 @@ Watchlist全targetを `full` discoveryする運用とする。
 
 Schema v3以降はDBを運用データの正本として扱い、原則として破棄再構築しない。`catalog backup`は
 SQLite online backup API、WAL対応、overwrite拒否、quick_check検証を提供する。現在の
-`SCHEMA_VERSION=6`ではmigration registryにv3→v4、v4→v5、v5→v6の各stepが登録されており、
+`SCHEMA_VERSION=7`ではmigration registryにv3→v4→v5→v6→v7の各stepが登録されており、
 `catalog migrate`は`PRAGMA user_version`に従ってこの順次migrationを明示的に実行する。
 migration実行前にcomplete migration pathを確認してから`BEGIN IMMEDIATE`でwriter lockを取得し、
 そのlock中にautomatic backupを作成する。続いて単一transactionのrollbackと成功後の
-schema/integrity検証を行う。v2→v3 migrationは引き続きunsupportedである。
+schema/integrity検証を行う。v2→v3 migrationは引き続きunsupportedである。Migrationだけでは
+Watchlist scope syncや既存ZIPの改名を実行しない。
 
 現行Catalogでは将来ケースを先取りして過剰なtableを作らない。必要になった時点で以下のような追加tableを
 migrationで足せる境界を維持する。

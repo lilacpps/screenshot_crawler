@@ -2,6 +2,16 @@
 
 ## Current implementation snapshot (updated 2026-10-17)
 
+## Shared work-key scope inventory (2026-10-22)
+
+Zeblack Full Discovery supplies the complete chapter-list identity/position
+inventory used by the shared Scope Reconciler. Evidence is written only after
+the Full run and Catalog finalization succeed; Batch does not reopen the
+chapter list to re-check scope. `watch scope-sync` separately applies the
+Watchlist range to `acquisition_enabled`, preserving excluded Source IDs,
+status, access state and history. This shared feature was not live-verified and
+does not alter Zeblack's entry or ticket behavior.
+
 ### Final-chapter END card (2026-10-16)
 
 The viewer now recognizes the observed no-next-story final-chapter card as

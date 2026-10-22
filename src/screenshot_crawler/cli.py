@@ -385,6 +385,12 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("watchlist.yaml"),
         help="Watchlist scope authority (default: watchlist.yaml)",
     )
+    batch_plan.add_argument(
+        "--library-dir",
+        type=Path,
+        default=Path("output/Books"),
+        help="ZIP archive root used for collision preflight (default: output/Books)",
+    )
     batch_run = batch_subparsers.add_parser(
         "run", help="Execute the planned candidates sequentially"
     )
@@ -1170,7 +1176,10 @@ def _print_batch_candidate(candidate: BatchCandidate) -> None:
 def _run_batch_plan(args: argparse.Namespace) -> None:
     policies = _batch_policy_registry()
     planner = BatchPlanner(
-        CatalogService(args.catalog), policies, watchlist=WatchlistService(args.watchlist)
+        CatalogService(args.catalog),
+        policies,
+        watchlist=WatchlistService(args.watchlist),
+        library_dir=args.library_dir,
     )
     plan = planner.plan(site=args.site)
     policy = policies.create(args.site)
@@ -1516,7 +1525,9 @@ async def _run_batch_run(args: argparse.Namespace) -> None:
 async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogService) -> None:
     watchlist = WatchlistService(args.watchlist)
     policies = _batch_policy_registry()
-    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
+    planner = BatchPlanner(
+        catalog, policies, watchlist=watchlist, library_dir=args.library_dir
+    )
     runtime_settings = load_runtime_settings(args.crawler_config).for_site(args.site)
     grant_only = getattr(args, "grant_only", None)
     grant_only_all = grant_only == "all"
@@ -1640,6 +1651,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             policies,
             _batch_adapter_registry(values),
             watchlist=watchlist,
+            library_dir=args.library_dir,
         )
         # Keep the orchestration input site-neutral and preserve compatibility with
         # lightweight test doubles that implement the pre-Phase-1 constructor.

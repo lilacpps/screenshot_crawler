@@ -1,5 +1,44 @@
 # 12. Kadocomi current implementation
 
+## Shared Catalog v7 / acquisition-scope gate (2026-10-22)
+
+The site behavior documented below runs through the shared Catalog v7,
+Watchlist, Scope Reconciler, and Batch gate. Run the explicit v6-to-v7
+migration on an isolated Catalog copy first; Discovery never migrates a Catalog
+implicitly. Watchlist discovery_scope is the acquisition-scope authority, while
+target enabled controls whether Discovery runs and is not an ownership flag.
+Batch requires a current synchronized Scope Reconciler snapshot and
+sources.acquisition_enabled state.
+
+This adapter does not currently provide the complete-listing inventory proof
+hook required for scoped or archive-ordered work. A site-local bounded
+Discovery implementation, where available, is not sufficient evidence for
+work-wide acquisition reconciliation. With either discovery_scope or
+archive_order set, Scope Reconciler must block; a successful Full alone cannot
+resolve that blocker. Do not keep repeating Full as a workaround. For a
+NEVER-MANAGED legacy work with neither discovery_scope nor archive_order,
+explicit preview/apply may bootstrap existing Sources only when their
+discovery_key, site, and work ownership all match the Watchlist. Newly
+discovered Sources still require a fresh sync before Batch.
+
+A successful Full after a prior scope sync invalidates the sync marker. After
+Full, rerun preview and explicit apply with the same Watchlist before planning
+Batch. Scope changes also require review and apply. No Source is moved between
+keys or deleted.
+
+Use one isolated Catalog, Watchlist, and library path throughout copy
+validation; replace placeholders with paths under the same COPY_ROOT:
+
+    python -m screenshot_crawler.cli catalog migrate --catalog <copy/catalog.sqlite> --backup-dir <copy/backups>
+    python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --dry-run --json
+    python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --apply --json
+    python -m screenshot_crawler.cli batch plan --site <site> --catalog <copy/catalog.sqlite> --watchlist <copy/watchlist.yaml> --library-dir <copy/Books>
+
+The scope-sync apply example is only for an eligible unbounded, unordered legacy
+work. For scoped or archive-ordered work on this adapter, expect a fail-closed
+preview until a complete-listing proof hook is implemented. Batch plan remains
+read-only; use the same copy paths for any separately authorized execution.
+
 ## Status (2026-10-22)
 
 P1 Discovery, P2 native capture, P3 direct-only policy/CLI/Batch, and P4 Tester/live-evidence Reviewer/Lead gates passed for seven observed reader layouts using six strict adapter profiles; the mixed-final profile supports two reviewed recommendation forms. The final P4 sweep completed all 15 selected target episodes and a normal CLI control retest for Episode 22.2. Its earlier control attempt failed before capture with the unchanged beginning-PR guard; the cause is unknown and the failure remains in history. Final documentation review PASS (Reviewer BLOCKING=0; Lead accepted bounded scope). Exact P0/P4 evidence, tests, hashes, and limits are in `runbooks/kadocomi/PROGRESS.md`. Unobserved reader layouts remain unsupported. Current Discovery classifies validated public rows without restriction flags or deadlines as free for all work IDs, following the user-confirmed Kadocomi convention.

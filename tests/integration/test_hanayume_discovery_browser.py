@@ -32,6 +32,8 @@ from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import SitePolicyRegistry
 from screenshot_crawler.site_policies.hanayume import HanayumeSitePolicy
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -1494,8 +1496,9 @@ async def _batch_fixture(
         series_auth_state=("authenticated" if active_grant_candidate else discovery_auth_state),
     )
     catalog = CatalogService(tmp_path / "catalog.sqlite")
+    target = _target()
     discovery = await DiscoveryService(catalog, _registry()).discover(
-        browser_page, _target(), "full"
+        browser_page, target, "full"
     )
     assert discovery.complete is True and discovery.observed_count == TOTAL
     external_id = f"{WORK_ID}:{TARGET_EPISODE_ID}"
@@ -1507,7 +1510,21 @@ async def _batch_fixture(
     policies.register("hanayume", HanayumeSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("hanayume", HanayumeAdapter)
-    plan = BatchPlanner(catalog, policies).plan(site="hanayume", now=BATCH_NOW)
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key=target.key,
+        work_key=target.work_key,
+        site=target.site,
+        url=target.url,
+        label=target.label,
+    )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    preview = reconciler.preview(target.work_key)
+    assert preview.ready, preview.blockers
+    reconciler.apply(preview)
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="hanayume", now=BATCH_NOW
+    )
     candidate = next(item for item in plan.candidates if item.external_id == external_id)
     assert candidate.access_mode == expected_source_mode
     if active_grant_candidate:
@@ -1533,6 +1550,8 @@ async def _batch_fixture(
         catalog,
         policies,
         adapters,
+        watchlist=watchlist,
+        library_dir=tmp_path / "library",
         runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
     )
     return catalog, source, candidate, plan, executor, requested
@@ -1642,7 +1661,9 @@ async def test_hanayume_discovery_to_batch_zip_completes_only_eligible_candidate
         members = archive.namelist()
         assert len(members) == 4
         assert all(name.endswith(".webp") for name in members)
-    second_plan = BatchPlanner(catalog, executor.policies).plan(site="hanayume", now=BATCH_NOW)
+    second_plan = BatchPlanner(
+        catalog, executor.policies, watchlist=WatchlistService(tmp_path / "watchlist.yaml")
+    ).plan(site="hanayume", now=BATCH_NOW)
     assert all(item.item_id != candidate.item_id for item in second_plan.candidates)
     assert any(
         skipped.item_id == candidate.item_id and skipped.reason == "completed"

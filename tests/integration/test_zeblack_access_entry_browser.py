@@ -34,6 +34,7 @@ from screenshot_crawler.site_adapters.zeblack.live_access import (
     ZeblackLiveAccessState,
 )
 from screenshot_crawler.site_policies import SitePolicyRegistry, ZeblackSitePolicy
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
 from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -65,8 +66,28 @@ def _prepared_catalog(tmp_path: Path):
     policies.register("zeblack", ZeblackSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("zeblack", ZeblackAdapter)
-    executor = BatchExecutor(catalog, policies, adapters)
-    candidates = BatchPlanner(catalog, policies).plan(site="zeblack").candidates
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="prepared-target",
+        work_key=work.work_key,
+        site="zeblack",
+        url=LIST_URL,
+        label="最新label",
+    )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    preview = reconciler.preview(work.work_key)
+    assert preview.ready, preview.blockers
+    reconciler.apply(preview)
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        adapters,
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+    )
+    candidates = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="zeblack"
+    ).candidates
     return catalog, executor, candidates
 
 
@@ -140,10 +161,6 @@ async def test_zeblack_cli_single_list_load_then_work_cooldown_without_site_acce
         browser_page, monkeypatch, free_ticket_ui=free_ticket_ui,
     )
     watchlist_path = tmp_path / "watchlist.yaml"
-    WatchlistService(watchlist_path).add(
-        key="prepared-target", work_key="prepared-work", site="zeblack",
-        url=LIST_URL, label="最新label",
-    )
     pages: list[Page] = []
     ticket_clicks: list[int] = []
 

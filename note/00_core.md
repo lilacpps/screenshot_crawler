@@ -37,9 +37,21 @@ archive-ordered works require current proof for every required key. A first
 unbounded/unordered legacy sync may bootstrap only when all existing Sources
 have matching Watchlist key/site/work ownership. Removed Sources remain in the
 Catalog disabled, with the last key/URL binding retained for safe re-add.
-Batch now enforces the fail-closed acquisition-scope gate described below.
-Cross-site `archive_order` numbering and existing-archive renumbering remain
-pending P4.
+Batch enforces the fail-closed acquisition-scope gate described below.
+Cross-site `archive_order` numbering and existing-archive renumbering are
+implemented through P4. P5 validates the flows on synthetic fixtures and
+isolated working copies; operational Catalog/Books rollout remains a separate
+operator action.
+
+For a fully ordered work, the shared archive plan sorts Watchlist keys by
+`archive_order`, then all `acquisition_enabled=1` Sources by `display_position`.
+Assigned Sources reserve ordinals regardless of access mode, availability or
+Item status; excluded Sources do not. No-order works retain legacy site-local
+naming. Batch checks current cross-site ZIP/status names before site access.
+`scripts/renumber_archives.py --watchlist watchlist.yaml --catalog catalog.sqlite
+--work-key KEY --dry-run --json` previews all sites; managed work requires a
+whole-work `--apply --json`. ZIP hashes/sizes, sidecars and Catalog locators
+are preflighted, and failed apply verifies rollback or reports recovery state.
 
 # 00. Core 現行実装ノート
 
@@ -1389,9 +1401,9 @@ loginは既存tabを再利用せず専用new Pageを使い、Pageだけをclose�
 
 これらを変更した場合は、このnoteを必ず更新する。
 
-## Catalog v6: display position / archive naming / status expansion
+## Catalog v6 base plan: display position / archive naming / status expansion (runtime v7)
 
-**P1-P4 IMPLEMENTED; P5 NOT YET IMPLEMENTED.** The adopted implementation plan is:
+**P1-P4 IMPLEMENTED; P5 COPY-ONLY VERIFICATION / OPERATIONAL ROLLOUT REMAINS.** The adopted implementation plan is:
 
 ```text
 note/07_catalog_position_archive_plan.md
@@ -1405,8 +1417,11 @@ storage/validation, v5 -> v6 migration, CSV export fields, Discovery position
 assignment, and P3 position-prefixed Batch archive naming are implemented.
 Existing archive renumbering, current Artifact locator updates, and safe matching
 crawl-status JSON rename are implemented as the local-only
-`scripts/renumber_archives.py` maintenance command. P5 real Catalog/output rollout
-and live verification remain planned.
+`scripts/renumber_archives.py` maintenance command. The later work-key extension
+uses Catalog v7 and adds explicit acquisition-scope synchronization plus
+cross-site archive order; see the current-state section above and the work-key
+runbook. P5 validates working copies and synthetic archive transactions; no
+real Catalog/output migration or renumber has been applied.
 P4 temporary sibling paths use short Artifact-ID-based names without copying the
 archive basename, so long Windows archive paths can complete the two-stage rename
 and rollback without hitting the legacy path-length limit.
@@ -1719,7 +1734,7 @@ Batch metadata now carries generic quota resource, scope, limit, and commit timi
 ### Phase 4 current state: generic grant-only
 
 Generic grant-only uses the existing adapter entry path with Core
-`entry_only=True`. Work Ticket state is persisted in Catalog schema v6 as
+`entry_only=True`. Work Ticket state is persisted in Catalog schema v7 as
 Work/site/resource state, and confirmed consumption atomically updates that
 state plus the source grant. Local cooldown skips happen before browser/page
 creation; confirmed grant-only runs do not capture, package, or complete the

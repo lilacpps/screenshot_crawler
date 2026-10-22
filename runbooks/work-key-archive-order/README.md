@@ -1,8 +1,8 @@
 # Work-key横断の取得範囲・ZIP採番 — 実装Runbook
 
-> Status: **IN PROGRESS** (2026-10-22). P1-P2 are reviewed; P3 implementation and targeted tests are complete and awaiting independent review; P4-P5 remain.
+> Status: **P0-P5 COMPLETE** (2026-10-22). P0-P4 and the final integrated review passed. The full suite reported 4,946 passed and one environment-dependent configuration mismatch; the isolated tracked-config reproduction passed. P5 used isolated copies and synthetic fixtures; operational rollout remains an operator task.
 > Owner: Lead + Codex Implementer。進捗は同ディレクトリの PROGRESS.md で更新する。
-> This is an execution plan, **not** a description of currently shipped behavior.
+> This runbook records the implemented contract and safe operational rollout. Copy-only P5 verification and final review are complete. No migration or renumbering was applied to the operational Catalog, Watchlist, or Books directory.
 
 ## 0. 目的と今回の決定
 
@@ -105,7 +105,7 @@ Scope sync proofは単なる `complete=true` やWatchlist fingerprintと分離�
 
 - scope編集時は新Watchlistの設定を読み、対象work_keyに属するCatalogの全Sourceを確認する。
 - Scope判定はsite-native stable identityで境界を解決し、同一site/listingであることを確認したうえで、成功Fullの完全なinventoryに含まれるglobal `display_position` を使って比較する。URL文字列の大小比較、話数表記、漢数字の推定、Source IDの大小を境界の代用にしない。
-- 範囲境界がCatalog/listing inventoryにない・位置がNULL・同一listingと証明できない・inventoryがincomplete・逆転している・重複所有が疑われる場合は **fail closed**。必要なsiteの有界なfull Discoveryで境界とinventoryを検証するまでは同期しない。既存のbounded Service書き込みはscope外Sourceのpositionを更新しないため、Adapter/Service間にlisting全体identity-position inventoryを安全に渡す小hookを実装し、既存Sourceに対してのみ位置を反映する。範囲外Sourceを新規Discovery/Item化しない。
+- 範囲境界がCatalog/listing inventoryにない・位置がNULL・同一listingと証明できない・inventoryがincomplete・逆転している・重複所有が疑われる場合は **fail closed**。そのsiteにcomplete-listing proof hookがある場合は、必要なsiteのFull Discoveryで証拠を更新してから再同期する。hook未対応のsiteでは、bounded Discovery自体が動作してもscope/archive-order同期の証明にはならず、Fullの反復でも解決しない。Adapter/Service間にlisting全体identity-position inventoryを安全に渡すhookが実装されるまで同期しない。範囲外Sourceを新規Discovery/Item化しない。
 - 管理操作は **preview/dry-run → apply**。差分としてSource ID/外部ID/key/old→new flag、担当外件数、ZIP採番/衝突への影響を提示する。
 - applyでは1 work_key分を一つのSQLite transactionで更新。fingerprint記録も同一transactionとする。途中失敗で一部のフラグだけが有効にならない。
 - GUIは後から同じpreview/apply APIを利用する。WatchlistとSQLiteの更新を物理的な1 transactionにできないため、途中クラッシュ時はfingerprint不一致としてBatchを **fail closed** させる。
@@ -167,20 +167,20 @@ opt-inしたwork_keyについて:
 
 ## 6. CLI / API契約（実装時に命名調整可）
 
-利用例は実装対象のインターフェース案であり、**現在は存在しない**。
+以下は現在利用できるCLIである。Scope Reconciler / archive renumber planはservice APIからも呼び出せるため、GUI integrationは同じvalidation結果を利用できる。
 
 ~~~powershell
 # Workのscope変更をCatalogへ反映する前に影響を確認
-python -m screenshot_crawler.cli watch scope-sync --work-key sample --dry-run
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key sample --dry-run --json
 
 # 境界確認済みで問題なければ同期
-python -m screenshot_crawler.cli watch scope-sync --work-key sample --apply
+python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key sample --apply --json
 
 # 変更されたZIP番号を確認（既存CLIを拡張）
-python scripts/renumber_archives.py --work-key sample --dry-run
+python scripts/renumber_archives.py --watchlist watchlist.yaml --catalog catalog.sqlite --work-key sample --status-dir output/crawl-status --dry-run --json
 
 # 明示承認のうえ既存ZIPを改名
-python scripts/renumber_archives.py --work-key sample --apply
+python scripts/renumber_archives.py --watchlist watchlist.yaml --catalog catalog.sqlite --work-key sample --status-dir output/crawl-status --apply --json
 ~~~
 
 - dry-runはWatchlist・Catalog・ZIPに一切書き込まない。失敗事由を具体的に返す。
@@ -243,10 +243,12 @@ URL requires new proof. Removed Sources remain in Catalog and are disabled.
 Complete-listing hooks currently cover Zeblack, BookWalker, Magapoke, Jump+,
 MANGA ONE and Piccoma. Other adapters retain ordinary unbounded Discovery, but
 scoped or archive-ordered synchronization fails closed until they can supply
-site-native listing identity and complete position evidence. Recovery for a
-blocked preview: run Full Discovery for each changed/unsupported key, resolve
-boundary/position errors at the source listing, then rerun dry-run and apply.
-Do not manually edit `acquisition_enabled` or use a Full run as implicit sync.
+site-native listing identity and complete position evidence. For a changed key
+on a site with the proof hook, run Full Discovery, resolve boundary/position
+errors at the source listing, then rerun dry-run and apply. On a site without
+the hook, repeated Full Discovery cannot resolve the blocker; leave the work
+blocked until the hook is implemented. Do not manually edit
+`acquisition_enabled` or use a Full run as implicit sync.
 
 ### P3 — Batchの対象フィルタと同期ゲート
 **Objective**: 元のチケット/選択セマンティクスを維持して担当外だけを除外。
@@ -264,24 +266,42 @@ python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --c
 python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --work-key my-work --apply --json
 ```
 **Acceptance/tests**: 担当外のpaid/free/quotaが候補にならず、quota消費・ログインサイト操作も起きない。属するWorkの別サイトを自動mergeしない。既存Site Policyテストを回帰させない。skip reasonは`acquisition_disabled`。
-**Exit**: synthetic normal/grant-only/deferred/replan/resource-passの候補拒否、同期stale・TOCTOU・forged resolver候補の拒否、empty grant-onlyのno-browserがtargeted testsで合格。P3 reviewer承認後にP4へ進む。
+**Exit**: synthetic normal/grant-only/deferred/replan/resource-passの候補拒否、同期stale・TOCTOU・forged resolver候補の拒否、empty grant-onlyのno-browserがtargeted testsで合格。P3 Reviewer **APPROVE / BLOCKING 0** 後、P4へ進んだ。
 
-### P4 — opt-in通し採番と安全なrenumber
+### P4 — opt-in通し採番と安全なrenumber — COMPLETE
 **Objective**: 複数keyにまたがるZIPの並び順を統一。
 - pure naming plan共通化、Batch新規ZIP命名と既存renumberを統一。
 - known paid/expired/completed/disabledを採番母集団に保持。
 - preflightで跨サイトのファイル名重複と非参加ファイル占有を検出し、fail/rollbackを維持。
 **Acceptance/tests**: zeblack 100話 + bookwalker 2巻=001～102、exclude有償には採番しない/対象内有償には採番、legacy未指定に回帰なし。途中追加で後続番号がずれた場合に明示renumberを要求。
-**Exit**: isolated ZIP/status/Artifactのdry-run / apply / collision / forced-failure rollback合格。
+**Exit**: isolated ZIP/status/Artifactのdry-run / apply / collision / forced-failure rollback合格。P4 Reviewer **APPROVE / BLOCKING 0**。
 
-### P5 — End-to-end と手動適用
+**実装結果**: Batchとrenumberは同じwork-wide numbering planを使用する。既存ZIPのhash/size、status JSON、全WorkにまたがるArtifact locator alias、collision、Watchlist/sync状態をapply前に検証する。managed Workのrenumberは全site一括のみで、`--site` partial applyは拒否する。`--json`はold/new、excluded rows、blockers、summary/resultを単一JSON documentで返す。既存ZIP/status/Catalog更新の途中失敗ではrollbackを検証し、状態が不確かな場合は成功と報告せずrecovery detailsを返す。
+
+**独立レビュー**: P4 Reviewer **APPROVE / BLOCKING 0**。全変更後のroot full-suite結果はPROGRESSに記録する。
+
+### P5 — End-to-end と手動適用 — COPY-ONLY VERIFICATION
 **Objective**: 既存実環境を壊さず導入。
-- Watchlist/catelog/ZIPの実環境コピーでdry-run。バックアップ実施後、少数の明示work_keyのみで検証。
-- 実サイトは、Site Adapterを変更した箇所/境界解決の不確実性があるサイトのみ、チケットを消費しない有界テストで確認。実際の購入・quota消費テストは明示許可なしに行わない。
-- 過去のZIPは明示確認後にrenumber apply。不可逆な変更をまとめて自動実行しない。
+- schema-neutral online backupとraw Watchlistを隔離seedにし、working copyだけをmigration・CLI検証に使用。
+- synthetic fixtureでcross-site E2E、scope shrink/re-expand、renumber、status/Catalog locator整合、rollbackを確認。
+- 実サイト確認・購入・quota/ticket消費は実施しない。scope proofを本番copy用に捏造しない。
+- P5では本番Catalog migration/Scope apply/renumberを実施しない。運用適用は以下の手順に従い、operatorがpreviewを確認してから個別に実施する。
 - docs/DISCOVERY_AND_BATCH.md、docs/BOUNDED_DISCOVERY.md、docs/BOOK_NAMING_RULES.md、docs/DECISIONS.md、note/00_core.md、note/07_catalog_position_archive_plan.md、必要なsite note、README/CLI helpを実装内容に合わせ更新。
 **Acceptance/tests**: 複数サイトの一作品で期待通り採番、Catalog/ZIP/status locator整合、現行未opt-in siteの実行結果を維持。
-**Exit**: reviewer確認、実行テスト・skip理由・未検証範囲・migration/rollback手順をPROGRESSに記録。
+**Exit**: synthetic E2E、rollback injection、migration-copy invariants、CLI read-only behaviorをPROGRESSに記録。全テスト結果はroot full-suite完了後に追記する。
+
+#### 運用への適用手順（別途明示実行）
+
+RenumberのArtifact locatorは旧ZIPパスの正本です。隔離status directoryだけでは十分ではありません。P5検証copyで `--apply` する場合は、必ず [COPY_VALIDATION.md](COPY_VALIDATION.md) の手順で全Artifact locatorとstatus JSONの `archive_path` を `COPY_ROOT` 内へremapし、symlink解決後の全参照がcopy root内にあることをapply直前にも検査してください。
+
+1. Crawlerを停止し、運用Watchlist/Catalog/`output/Books`を変更しない保管先へコピーする。Catalogは `catalog backup --catalog <運用DB> --output <backup.sqlite>` 相当のSQLite online backupを使い、通常runtimeのDBを直接コピーしない。WatchlistとBooks/statusも同じ時点のcopyを保存する。
+2. まずworking copyにmigrationを実行する: `python -m screenshot_crawler.cli catalog migrate --catalog <copy.sqlite> --backup-dir <copy-backups>`。Migration後にschema v7とbackupを確認し、既存7 tablesの既存columns/rows、Item status、Source IDs/positions、run/artifact/quota履歴が保持されていることを照合する。Migrationだけではscope syncもrenumberも行わない。
+3. Watchlist copyの対象workのうち、必要なproof hookがあるsite/keyでsuccessful Full Discoveryを行う。Scoped / archive-ordered workでhook未対応のsiteは、Fullが成功しても必要なproofを作れずpreviewはblockしたままになる。未対応workはhook実装まで停止する。Full Discoveryはevidenceだけを更新し、取得担当flagsは変更しない。
+4. `python -m screenshot_crawler.cli watch scope-sync --watchlist <copy-watchlist.yaml> --catalog <copy.sqlite> --work-key <work> --dry-run --json` を確認する。差分とarchive numbering impactが期待どおりの場合だけ、同じ引数に `--apply --json` を付ける。適用後はBatch planをcopyで検証する。
+5. Archive order workは、Booksとstatus directoryを隔離copyに設定し、`python scripts/renumber_archives.py --watchlist <copy-watchlist.yaml> --catalog <copy.sqlite> --work-key <work> --status-dir <copy-status> --dry-run --json` を実行する。衝突/ERROR/hash-size drift/status mismatch/ambiguous aliasがあれば解消方法を人手で決める。問題がなく、rename listを確認した後にのみ、copy上で `--apply --json` を実行する。担当外ZIPは自動削除/上書きしない。
+6. Copy上の結果・status・Artifact locators・hashを再検証し、restore手順を確認する。運用環境では同じ順序を使うが、DB migration、scope apply、renumberそれぞれの前に個別backupとpreview reviewを行い、曖昧なWorkは停止する。失敗時はmigration backup / rename rollback reportから復旧し、手動でstatusやCatalogを推測修正しない。
+
+`renumber_archives.py --json`はsingle JSON outputを返す。未managedのlegacy workは既存互換のためWatchlist省略でも使えるが、Catalog上でmanagedと判定されたworkにはmatching Watchlistと同期済みsnapshotが必要。明示的opt-out後もmanaged historyがあるため、legacy namingに戻す場合もwhole-work preview/renumberが必要。
 
 ## 8. テスト観点（具体的な境界）
 

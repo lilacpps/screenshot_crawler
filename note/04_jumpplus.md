@@ -10,6 +10,15 @@ resource pass: paid episodes are eligible only when Discovery observed an
 active manual rental grant. Point purchase, rental automation, ticket access,
 and login automation remain out of scope.
 
+## Shared work-key scope inventory (2026-10-22)
+
+Jump+ Full Discovery provides a complete listing identity/position inventory
+for supported listing traversals. Scope proof is stored only after complete
+Full finalization; a partial traversal or Incremental run cannot authorize a
+scope change. `watch scope-sync` applies Watchlist-derived acquisition flags
+separately. Work-key ordinals reserve assigned Sources without changing
+Jump+ access or rental policy. This common change was not live-verified.
+
 このファイルのJ0 probe記録はviewer構造を調査した時点の履歴であり、現在の
 production Discovery / Site Policy / Batchの挙動を置き換えない。通常のBatchは
 Discoveryの取得順を変更せず、Batch PlannerのWork内orderingだけを変更する。

@@ -44,6 +44,8 @@ from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_adapters.younganimal import adapter as younganimal_adapter_module
 from screenshot_crawler.site_adapters.younganimal.adapter import YounganimalAdapter
 from screenshot_crawler.site_policies import SitePolicyRegistry, YounganimalSitePolicy
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -723,11 +725,23 @@ def _make_younganimal_batch(
     catalog.create_source_target(
         SourceTargetInput(backend="web", locator=EPISODE_URL), source_id=source.id
     )
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="fixture-discovery",
+        work_key=work.work_key,
+        site="younganimal",
+        url=WORK_URL,
+        label="Catalog Work",
+    )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    preview = reconciler.preview(work.work_key)
+    assert preview.ready, preview.blockers
+    reconciler.apply(preview)
     policies = SitePolicyRegistry()
     policies.register("younganimal", YounganimalSitePolicy)
     adapters = AdapterRegistry()
     adapters.register("younganimal", YounganimalAdapter)
-    plan = BatchPlanner(catalog, policies).plan(
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
         site="younganimal",
         now=NOW,
         quota_resource="work_ticket" if quota else None,
@@ -748,6 +762,8 @@ def _make_younganimal_batch(
         catalog,
         policies,
         adapters,
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
         package_function=package_function,
         runtime_settings=SiteRuntimeSettings(page_turn_delay_ms=0),
     )

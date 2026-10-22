@@ -23,8 +23,10 @@ unsupported.
 v2からの自動migrationは行わない。v3以降は明示的な`catalog migrate`とmigration前backupを使う。
 
 `catalog backup`はSQLite online backup APIでWALを含むCatalogをstandalone SQLiteへ保存し、
-`PRAGMA quick_check`で検証する。現在のmigration registryは空で、実際のv3→v4 migrationは未実装だが、
-明示migration runnerはtransaction、rollback、final schema validationを提供する。
+`PRAGMA quick_check`で検証する。Catalog schema v7はdomain/scope tables、required columns、
+foreign keyおよびstatus/position/acquisition flag constraintsをruntime validationする。
+明示migration registryはv3→v4→v5→v6→v7を提供し、pre-migration backup、single-transaction
+rollback、`quick_check`、final schema validationを行う。通常のCatalog初期化は旧schemaを暗黙移行しない。
 
 ## 1. 設計原則
 

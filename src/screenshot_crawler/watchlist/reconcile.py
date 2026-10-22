@@ -5,8 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
+from screenshot_crawler.archive_order import (
+    ArchiveOrderPlanningError,
+    build_work_archive_position_plan,
+)
 from screenshot_crawler.catalog import CatalogError, CatalogService
 from screenshot_crawler.catalog.models import AcquisitionScopeSnapshot, Source
 from screenshot_crawler.watchlist.fingerprints import (
@@ -16,7 +21,7 @@ from screenshot_crawler.watchlist.fingerprints import (
     work_definition_fingerprint,
     work_scope_fingerprint,
 )
-from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
@@ -43,6 +48,7 @@ class ScopeSyncPreview:
     changes: tuple[ScopeFlagChange, ...]
     blockers: tuple[str, ...]
     legacy_bootstrap: bool = False
+    archive_order_preview: dict[str, Any] | None = None
 
     @property
     def ready(self) -> bool:
@@ -415,6 +421,13 @@ class ScopeReconciler:
                     )
                 )
 
+        archive_order_preview = self._archive_order_preview(
+            work_key=work_key,
+            targets=targets,
+            snapshot=snapshot,
+            future_flags=flags,
+            blockers=blockers,
+        )
         return ScopeSyncPreview(
             work_key=work_key,
             fingerprint=fingerprint,
@@ -426,7 +439,217 @@ class ScopeReconciler:
             changes=tuple(changes),
             blockers=tuple(dict.fromkeys(blockers)),
             legacy_bootstrap=legacy_bootstrap,
+            archive_order_preview=archive_order_preview,
         )
+
+    def _archive_order_preview(
+        self,
+        *,
+        work_key: str,
+        targets: list[WatchlistTarget],
+        snapshot: AcquisitionScopeSnapshot,
+        future_flags: dict[int, bool],
+        blockers: list[str],
+    ) -> dict[str, Any] | None:
+        if not any(target.archive_order is not None for target in targets):
+            return None
+        result: dict[str, Any] = {
+            "ready": False,
+            "positions": [],
+            "number_changes": [],
+            "previous_positions_status": "unknown",
+            "existing_archives": [],
+            "preserved_excluded_archives": [],
+            "blockers": list(dict.fromkeys(blockers)),
+        }
+        if blockers:
+            return result
+        works, items, _sources, _source_targets = (
+            self.catalog.read_works_items_sources_and_targets()
+        )
+        work = next((value for value in works if value.work_key == work_key), None)
+        if work is None:
+            result["blockers"] = ["Catalog Work disappeared while previewing archive order"]
+            return result
+        items_by_id = {item.id: item for item in items}
+        try:
+            future = build_work_archive_position_plan(
+                work,
+                targets,
+                items,
+                snapshot.sources,
+                acquisition_flags=future_flags,
+            )
+        except ArchiveOrderPlanningError as exc:
+            result["blockers"] = [str(exc)]
+            return result
+        if future is None:
+            result["blockers"] = [
+                "Archive-order preview could not prove a complete ordered work"
+            ]
+            return result
+        previous_positions: dict[int, int] = {}
+        previous_is_known = snapshot.sync is None or snapshot.sync.status == "synced"
+        if previous_is_known:
+            try:
+                prior_targets = self._targets_from_saved_configuration(
+                    snapshot.sync.configuration_json
+                ) if snapshot.sync is not None else []
+                previous = (
+                    build_work_archive_position_plan(
+                        work,
+                        prior_targets,
+                        items,
+                        snapshot.sources,
+                    )
+                    if prior_targets
+                    else None
+                )
+                if previous is not None:
+                    previous_positions = dict(previous.positions_by_source_id)
+                else:
+                    previous_positions = {
+                        source.id: source.display_position
+                        for source in snapshot.sources
+                        if source.acquisition_enabled
+                        and source.display_position is not None
+                    }
+            except (ArchiveOrderPlanningError, ValueError):
+                previous_is_known = False
+                previous_positions = {}
+        result["previous_positions_status"] = (
+            "known" if previous_is_known else "unknown"
+        )
+        result["positions"] = [
+            {
+                "source_id": source_id,
+                "archive_position": position,
+            }
+            for source_id, position in sorted(
+                future.positions_by_source_id.items(), key=lambda pair: pair[1]
+            )
+        ]
+        source_by_id = {source.id: source for source in snapshot.sources}
+        for source in snapshot.sources:
+            before = previous_positions.get(source.id) if previous_is_known else None
+            after = future.positions_by_source_id.get(source.id)
+            if before != after:
+                result["number_changes"].append({
+                    "source_id": source.id,
+                    "from": before,
+                    "to": after,
+                    "before_known": previous_is_known,
+                })
+
+        archive_rows = self.catalog.read_work_archive_artifacts(work_key)
+        by_source: dict[int, list[tuple[int, Any]]] = {}
+        for run, artifact in archive_rows:
+            by_source.setdefault(run.source_id, []).append((run.id, artifact))
+        for source_id, rows in by_source.items():
+            latest_run_id = max(run_id for run_id, _artifact in rows)
+            latest = [artifact for run_id, artifact in rows if run_id == latest_run_id]
+            if len(latest) != 1:
+                result["blockers"].append(
+                    f"Source {source_id} has ambiguous current ZIP Artifacts"
+                )
+                continue
+            artifact = latest[0]
+            source = source_by_id.get(source_id)
+            if source is None:
+                result["blockers"].append(
+                    f"Archive Artifact for unknown Source {source_id} cannot be classified"
+                )
+                continue
+            if not future_flags.get(source_id, False):
+                result["preserved_excluded_archives"].append(
+                    {
+                        "source_id": source_id,
+                        "artifact_id": artifact.id,
+                        "locator": artifact.locator,
+                        "state": artifact.state,
+                    }
+                )
+                continue
+            if (
+                artifact.storage_backend == "filesystem"
+                and artifact.state == "present"
+                and artifact.locator is None
+            ):
+                result["blockers"].append(
+                    f"Present filesystem Artifact for Source {source_id} has no locator"
+                )
+                continue
+            path = Path(artifact.locator) if artifact.locator is not None else None
+            if path is None or not path.is_file():
+                continue
+            item = items_by_id.get(source.item_id)
+            if item is None:
+                result["blockers"].append(
+                    f"Source {source_id} has no Item while previewing its archive"
+                )
+                continue
+            expected = future.positions_by_source_id.get(source_id)
+            if expected is None:
+                result["blockers"].append(
+                    f"Enabled Source {source_id} has no work-wide archive position"
+                )
+                continue
+            expected_prefix = f"{expected:03d}-"
+            needs_renumber = not path.stem.startswith(expected_prefix)
+            result["existing_archives"].append(
+                {
+                    "source_id": source_id,
+                    "artifact_id": artifact.id,
+                    "current_name": path.name,
+                    "expected_prefix": f"{expected:03d}",
+                    "renumber_required": needs_renumber,
+                }
+            )
+        result["blockers"] = list(dict.fromkeys(result["blockers"]))
+        result["ready"] = not result["blockers"]
+        return result
+
+    @staticmethod
+    def _targets_from_saved_configuration(configuration_json: str) -> list[WatchlistTarget]:
+        try:
+            values = json.loads(configuration_json)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ArchiveOrderPlanningError(
+                "Saved Watchlist configuration is malformed"
+            ) from exc
+        if not isinstance(values, list):
+            raise ArchiveOrderPlanningError("Saved Watchlist configuration is malformed")
+        targets: list[WatchlistTarget] = []
+        for value in values:
+            if not isinstance(value, dict):
+                raise ArchiveOrderPlanningError("Saved Watchlist target is malformed")
+            scope_value = value.get("discovery_scope")
+            if scope_value is None:
+                scope = None
+            elif isinstance(scope_value, dict):
+                scope = DiscoveryScope(
+                    from_url=scope_value.get("from_url"),
+                    through_url=scope_value.get("through_url"),
+                )
+            else:
+                raise ArchiveOrderPlanningError("Saved Watchlist scope is malformed")
+            try:
+                targets.append(
+                    WatchlistTarget(
+                        key=str(value["key"]),
+                        work_key=str(value["work_key"]),
+                        site=str(value["site"]),
+                        url=str(value["url"]),
+                        label="",
+                        discovery_scope=scope,
+                        archive_order=value.get("archive_order"),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ArchiveOrderPlanningError(
+                    "Saved Watchlist target is malformed"
+                ) from exc
+        return targets
 
     @staticmethod
     def _prior_configuration(

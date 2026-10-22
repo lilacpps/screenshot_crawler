@@ -624,3 +624,37 @@ consistent backupを作成し、成功後にschema/integrityを検証する。
 現段階ではv2 local stateを移行する価値が低く、新規構築の方が実装と検証が単純である。一方v3では
 CrawlRun/Artifact等の長期履歴を正本として持つため、それ以降はDB破棄を通常運用にできない。
 
+---
+
+## D-037 Watchlist discovery scope also defines acquisition ownership
+
+### 決定
+
+既存Watchlistの `discovery_scope` をDiscovery範囲と取得担当範囲の両方の正本とし、
+Catalogの `sources.acquisition_enabled` は明示Scope Reconcilerが同期する派生状態とする。
+Discovery成功はlisting proofを更新するだけで、取得担当flagを自動同期しない。複数keyの
+workは、必要なkeyの証拠が揃った後にwork単位でpreview/applyし、未同期・不一致のBatchは
+fail closedとする。
+
+`archive_order` は同一 `work_key` の全keyへ指定するか、全keyで省略する。指定作品のZIP
+番号はarchive_order順、次に各keyのsite `display_position` 順で連結する。取得担当flagが
+有効なら、paid/free、取得状態、Item status、availabilityにかかわらず位置を予約する。
+担当外Sourceは番号から除く。未指定作品は従来命名を維持する。
+
+Scope縮小はSourceを削除せず `acquisition_enabled=0` にし、ID・Item status・run・Artifact・
+quota履歴を保持する。v6→v7 migrationは既存Sourceを有効のまま初期化し、migrationだけで
+Scope同期や既存ZIPの変更を起こさない。同一siteのSourceを別keyへ移す機能は追加しない。
+
+### 理由 / 仕様調整
+
+Bounded Full Discoveryはlisting全体のfresh position/evidenceを安全に返せても、Watchlistの
+手編集を原子的にCatalog flagsへ反映するのとは別操作である。自動同期すると一部keyのFull
+成功後にmulti-key workの半分だけを有効化する窓が生じるため、明示applyを採用した。
+一方、scopeもarchive_orderもない既存Workは、owner/site/workが一致する既存Sourceを初回
+preview/applyで担当としてbootstrapできる。全既存作品にproof目的のFull Discoveryを強制する
+と従来のunbounded Batch運用へ不要な退行を生むためである。
+
+採番と取得権利を分離することで、将来購入予定のin-scope paid話は番号を予約し、取得担当外
+になった有償話は番号を消費しない。Catalogの履歴を削除せず、Batchとrenumberが同じpure
+work-wide planを利用し、scope変更後の古いZIPは明示renumberまで新規取得を止められる。
+

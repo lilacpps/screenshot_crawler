@@ -2,14 +2,15 @@
 
 Status: **ADOPTED SPECIFICATION / CORE IMPLEMENTED; SITE COVERAGE VARIES**
 
-Current implementation note: Zeblack Z4-1 now implements site-native
-bounded Discovery in `ZeblackDiscoveryAdapter`. Its boundaries are strict
-viewer URLs and are matched by the site-native `chapter_id` only. The adapter
-buffers the complete validated listing before yielding, so invalid/missing/
-reversed boundaries and DOM/protobuf set mismatches cannot produce partial
-Discovery writes. This document remains the cross-site specification; see
-`docs/DISCOVERY_AND_BATCH.md` and `note/06_zeblack.md` for the Zeblack
-implementation snapshot.
+Current implementation note: bounded Discovery and complete-listing inventory
+hooks are implemented for BookWalker, Jump+, Magapoke, MANGA ONE, Piccoma, and
+Zeblack. Each Adapter validates boundaries with its own stable listing
+identity; unsupported scoped synchronization fails closed. `discovery_scope`
+is also the acquisition-scope authority, but Discovery does not itself apply
+acquisition flags: `watch scope-sync` separately reconciles the Catalog after
+complete evidence is available. The shared Catalog is schema v7 and Batch
+checks the synchronized `acquisition_enabled` flags. See
+`docs/DISCOVERY_AND_BATCH.md` and the affected site notes for current details.
 
 この文書は `docs/DISCOVERY_AND_BATCH.md` のDiscovery仕様を補足する詳細仕様である。
 
@@ -24,7 +25,9 @@ implementation snapshot.
 - 別siteとの内容重複は許容する
 - cross-site identity resolutionをDiscoveryの正しさの前提にしない
 - 誤った名寄せによって未取得contentをcompleted扱いするリスクを避ける
-- Catalog schema、Batch Planner / Executor、CrawlerRunnerの契約は変更しない
+- bounded listing selection itself does not merge/reparent cross-site Items or
+  delete Catalog rows. The current shared Catalog is v7; Batch's separate
+  acquisition-scope gate is specified in `docs/DISCOVERY_AND_BATCH.md`.
 
 優先するfailure modeは `false negative / no dedupe -> duplicate crawl` であり、これは許容する。`false positive cross-site match -> 未取得contentをcompleted扱い` は許容しない。
 
@@ -38,7 +41,8 @@ implementation snapshot.
 - 1:1 / 1:Nの自動対応付け
 - 別siteのItemへのcompleted伝播
 - scopeに基づくCatalog row削除
-- Catalog schema migration
+- schema migration during a Discovery run (Catalog migration is a separate
+  explicit operation; current schema is v7)
 - bounded fullにおけるscope内missing-source reconciliation
 
 既存のcross-site duplicate warningはwarning onlyのまま維持してよい。warningをmerge、delete、reparent、completed化の根拠にしてはならない。
@@ -168,7 +172,8 @@ bounded + full:
 - configured scope内を完全列挙する
 - iteratorが安全にscope末尾まで完了した場合のみ `complete=true`
 - 未観測Sourceを `available=false` にするglobal missing-source reconciliationは実行しない
-- scope外の既存Source stateには触らない
+- Item status、availability/access state、run/artifact履歴、取得担当flagは scope外を含め変更しない
+- 成功したFullがsite-native complete-listing inventoryを提供する場合、同じlistingに属する既存Sourceの `display_position` をscope外も含めて更新し、inventory proofを保存する。これはmembership/positionの新鮮さを示すだけで、取得担当flagを反映する操作ではない
 
 bounded + incremental:
 
@@ -177,7 +182,21 @@ bounded + incremental:
 - early stop時は `complete=None`
 - 未観測Sourceをunavailableにしない
 
-bounded fullでmissing-source reconciliationを行わないのは意図的な安全策である。scope内だけのmissing reconciliationが必要になった場合は別仕様として追加する。
+bounded fullでmissing-source reconciliationを行わないのは意図的な安全策である。Complete-listing inventory hookがないAdapterではscope同期の証拠を出せず、scoped / archive-ordered WorkのScope Reconcilerはfail-closedにする。
+
+### Work-key acquisition proof
+
+Successful Full runs on BookWalker, MANGA ONE, Magapoke, Jump+, Zeblack and
+Piccoma provide a target-bound complete listing identity/position inventory.
+The proof is committed only after the iterator exhausts normally and Catalog
+finalization succeeds. The same inventory refreshes positions of known Sources
+in that listing, including known rows outside the selected slice; it never
+changes those rows' Item status, access/availability state, acquisition flag,
+or history. Scope synchronization is a separate `watch scope-sync` preview /
+apply. Incremental or failed/partial Full runs cannot authorize changed scope.
+Adapters without this inventory hook retain ordinary unbounded Discovery, but
+scoped or archive-ordered work fails closed at reconciliation until the adapter
+can establish site-native listing identity and complete positions.
 
 ## 8. Catalog / Batch semantics
 
@@ -192,7 +211,7 @@ one discovered site record
 
 cross-site equivalenceは作らない。同じ `work_key` 配下に内容が実質同一の別site Itemが複数存在してよい。その結果、同じ内容を別siteから複数回crawlする場合があるが、初期仕様では許容する。
 
-Batch Planner / Executorはbounded scopeを解釈しない。Catalogに存在するpending Item / Sourceを従来のsite policyとaccess stateだけで処理する。
+Batch Planner / Executorはsite-native boundaryを再判定しない。Watchlist `discovery_scope` をScope Reconcilerが `sources.acquisition_enabled` へ同期し、Batchは同期fingerprintとSource flagsを検証する。取得担当外SourceはSite Policy/quota候補の前に除外するが、quota履歴の集計には全Sourceを残す。`enabled: false`はDiscovery実行設定のままで、既存Sourceの担当状態を変えない。
 
 ## 9. 責務分担
 
@@ -218,11 +237,10 @@ AdapterはCatalogへ直接read/writeしない。
 ## 10. Backward compatibility
 
 - scopeなしWatchlist targetの挙動は変更しない
-- Catalog schema versionを変更しない
-- 既存DB migrationを要求しない
+- Discovery自体はCatalogを暗黙migrationしない。Scope Reconciler / acquisition Batch gateを使う前に、明示的な `catalog migrate` でschema v7へ移行する
 - unbounded fullのmissing-source reconciliationは現行どおり
 - unbounded incrementalのknown-streak / stop-hook behaviorは現行どおり
-- Batch Planner / Executor / CrawlerRunner contractを変更しない
+- BatchはWatchlist境界を解析せず、Scope Reconcilerが保存した担当flag/sync snapshotだけを検証する
 - Discoveryはexisting Sourceのlocal completed stateを変更しない
 
 ## 11. Acceptance criteria / tests
@@ -242,8 +260,8 @@ AdapterはCatalogへ直接read/writeしない。
 11. bounded incrementalで既存incremental stop semanticsを維持する
 12. scope未対応Adapterがscopeをsilent ignoreしない
 13. Watchlist rewriteでscopeを保持する
-14. Catalog schema versionを変えない
-15. Batch / Crawlコードにscope判定を持ち込まない
+14. Discovery runがCatalog schemaを自動migrationしない。取得担当同期を使うCatalogは事前に明示移行済みv7である
+15. Batch / Crawlコードにboundary URL解決を持ち込まない。担当flag未同期ならBatchはfail-closed
 
 必要なtest category:
 

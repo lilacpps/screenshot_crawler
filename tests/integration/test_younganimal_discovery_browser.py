@@ -14,6 +14,8 @@ from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryServ
 from screenshot_crawler.site_adapters.younganimal import YounganimalDiscoveryAdapter
 from screenshot_crawler.site_adapters.younganimal import discovery as younganimal_discovery
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -376,16 +378,29 @@ async def test_younganimal_rental_history_joins_public_identity_and_clears_stale
     catalog = CatalogService(tmp_path / "rental.sqlite")
     service = DiscoveryService(catalog, _registry())
     await _install_pages(browser_page, rental_label="レンタル中 閲覧期限 14日+23時間")
-    result = await service.discover(browser_page, _target(), "full")
+    target = _target()
+    result = await service.discover(browser_page, target, "full")
     assert result.complete is True
     assert len(catalog.list_sources(site="younganimal")) == TOTAL
     source = catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(2)}")
     assert source.access_mode == "paid"
     assert source.display_position == 2
     assert source.access_granted_until is not None
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key=target.key,
+        work_key=target.work_key,
+        site=target.site,
+        url=target.url,
+        label=target.label,
+    )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    preview = reconciler.preview(target.work_key)
+    assert preview.ready, preview.blockers
+    reconciler.apply(preview)
     policies = SitePolicyRegistry()
     policies.register("younganimal", YounganimalSitePolicy)
-    plan = BatchPlanner(catalog, policies).plan(site="younganimal")
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(site="younganimal")
     candidate = next(row for row in plan.candidates if row.source_id == source.id)
     assert candidate.access_strategy == "direct"
     assert candidate.reason == "active_rental"
@@ -393,7 +408,7 @@ async def test_younganimal_rental_history_joins_public_identity_and_clears_stale
 
     await browser_page.unroute("https://younganimal.com/**")
     await _install_pages(browser_page, rental_label="レンタル中")
-    refreshed = await service.discover(browser_page, _target(), "incremental")
+    refreshed = await service.discover(browser_page, target, "incremental")
     assert refreshed.observed_count == TOTAL
     assert refreshed.complete is None
     assert refreshed.stopped_reason == "exhausted"

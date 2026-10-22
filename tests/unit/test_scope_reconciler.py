@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -153,6 +154,59 @@ def test_full_proof_drives_scope_flags_and_stale_marker_keeps_binding(tmp_path: 
     stale = catalog.get_acquisition_scope_sync(work.work_key)
     assert stale is not None and stale.status == "stale"
     assert json.loads(stale.configuration_json) == saved
+
+
+def test_archive_order_preview_compares_previous_binding_after_reordering_keys(
+    tmp_path: Path,
+) -> None:
+    watchlist_path = tmp_path / "watchlist.yaml"
+    first = WatchlistTarget(
+        "first", "series", "zeblack", "https://example.test/first", "First",
+        archive_order=10,
+    )
+    second = WatchlistTarget(
+        "second", "series", "bookwalker", "https://example.test/second", "Second",
+        archive_order=20,
+    )
+    _write_targets(watchlist_path, (first, second))
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="series", title="Series"))
+    for target in (first, second):
+        item = catalog.create_item(ItemInput(order_label="Volume 1"), work_id=work.id)
+        catalog.create_source(
+            SourceInput(
+                site=target.site,
+                external_id=f"{target.key}-one",
+                discovery_key=target.key,
+                display_position=1,
+            ),
+            item_id=item.id,
+        )
+        _record_full_proof(catalog, target, (True,))
+    watchlist = WatchlistService(watchlist_path)
+    reconciler = ScopeReconciler(watchlist, catalog)
+    initial = reconciler.preview(work.work_key)
+    assert initial.ready
+    assert initial.archive_order_preview is not None
+    assert initial.archive_order_preview["previous_positions_status"] == "known"
+    assert initial.archive_order_preview["number_changes"]
+    reconciler.apply(initial)
+
+    reordered = (replace(first, archive_order=20), replace(second, archive_order=10))
+    _write_targets(watchlist_path, reordered)
+    preview = reconciler.preview(work.work_key)
+    assert preview.ready
+    assert preview.archive_order_preview is not None
+    assert preview.archive_order_preview["previous_positions_status"] == "known"
+    changes = {
+        row["source_id"]: (row["from"], row["to"], row["before_known"])
+        for row in preview.archive_order_preview["number_changes"]
+    }
+    sources = catalog.list_sources()
+    assert changes == {
+        sources[0].id: (1, 2, True),
+        sources[1].id: (2, 1, True),
+    }
 
 
 def test_mixed_scoped_and_unbounded_keys_classifies_every_source(tmp_path: Path) -> None:

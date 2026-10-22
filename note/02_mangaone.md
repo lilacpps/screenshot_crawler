@@ -4,7 +4,16 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-09-21
+最終同期: 2026-10-22
+
+## Shared work-key scope inventory (2026-10-22)
+
+MANGA ONE Discovery provides complete site-listing identity/position evidence
+for successful Full runs, recorded only after normal pagination exhaustion and
+Catalog finalization. A failed or partial Full, and an Incremental run, cannot
+authorize a changed scope. The separate `watch scope-sync` operation updates
+acquisition flags; Batch never resolves a boundary against the site. No live
+site operation was run for this shared work-key change.
 
 ## 1. 目的と現在のscope
 

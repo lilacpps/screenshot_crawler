@@ -6,6 +6,16 @@
 
 最終同期: 2026-10-22
 
+## Shared work-key scope inventory (2026-10-22)
+
+BookWalker Discovery exposes a complete site-listing identity/position inventory
+for successful Full runs. Core stores it only after iterator exhaustion and
+Catalog finalization; a partial/error run does not create fresh proof. Scope
+flags are applied separately by `watch scope-sync`, and Batch does not revisit
+the site to re-evaluate a boundary. This shared Catalog feature did not change
+BookWalker viewer/access behavior and was not live-verified as part of the
+work-key change; see the runbook for the copy-first rollout.
+
 ## 1. 目的と現在のscope
 
 BookWalkerの商品ページまたはviewer URLから、現在コンテンツの本文だけを読書順で保存する。

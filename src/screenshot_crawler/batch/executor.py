@@ -16,6 +16,14 @@ from typing import Any
 
 from playwright.async_api import Page
 
+from screenshot_crawler.archive_order import (
+    ArchiveOrderPlanningError,
+    build_work_archive_position_plan,
+)
+from screenshot_crawler.batch.archive_guard import (
+    ArchiveNameGuardError,
+    validate_existing_archive_names,
+)
 from screenshot_crawler.batch.models import (
     BatchCandidate,
     BatchExecutionError,
@@ -24,12 +32,19 @@ from screenshot_crawler.batch.models import (
     CandidateExecutionError,
     GrantOnlyExecutionResult,
 )
+from screenshot_crawler.batch.naming import (
+    archive_metadata_for_catalog,
+    archive_position_prefix,
+)
+from screenshot_crawler.batch.naming import (
+    collision_source_ids as shared_collision_source_ids,
+)
 from screenshot_crawler.catalog import ArtifactInput, CatalogError, CatalogService
 from screenshot_crawler.catalog.service import JST, now_jst
 from screenshot_crawler.core.access_guard import AccessEvent, AccessGuard
 from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
 from screenshot_crawler.core.models import RunConfig
-from screenshot_crawler.core.packaging import PackageResult, package_crawl_output
+from screenshot_crawler.core.packaging import PackageResult, archive_stem, package_crawl_output
 from screenshot_crawler.core.progress import atomic_write_json, normalize_path
 from screenshot_crawler.core.runner import CrawlerRunner, RunResult
 from screenshot_crawler.core.state import PageState
@@ -172,6 +187,7 @@ class BatchExecutor:
         runtime_settings: SiteRuntimeSettings | None = None,
         access_event_sink: Callable[[AccessEvent], None] | None = None,
         watchlist: WatchlistService | None = None,
+        library_dir: str | Path | None = None,
     ) -> None:
         self.catalog = catalog
         self.policies = policies
@@ -180,6 +196,7 @@ class BatchExecutor:
         self.package_function = package_function
         self.runtime_settings = runtime_settings
         self.access_event_sink = access_event_sink
+        self.library_dir = Path(library_dir) if library_dir is not None else Path("output/Books")
         self.scope_reconciler = (
             ScopeReconciler(watchlist, catalog) if watchlist is not None else None
         )
@@ -191,7 +208,7 @@ class BatchExecutor:
         candidate: BatchCandidate,
         *,
         output_root: str | Path = "output/batch",
-        library_dir: str | Path = "output/Books",
+        library_dir: str | Path | None = None,
         max_pages: int = 1000,
         max_same_content: int = 3,
         now: datetime | None = None,
@@ -199,6 +216,9 @@ class BatchExecutor:
         """Run, package, and complete one candidate, or raise clearly."""
 
         current = _normalize_now(now_jst() if now is None else now)
+        effective_library_dir = (
+            Path(library_dir) if library_dir is not None else self.library_dir
+        )
         run_id: int | None = None
         crawl_result: RunResult | None = None
         adapter: SiteAdapter | None = None
@@ -210,7 +230,9 @@ class BatchExecutor:
                     f"unsupported batch backend: {candidate.backend!r}"
                 )
             policy = self.policies.create(candidate.site)
-            self._validate_candidate(candidate, policy, current)
+            self._validate_candidate(
+                candidate, policy, current, library_dir=effective_library_dir
+            )
             local_skip_reason = self.resource_state_skip_reason(
                 candidate, policy=policy, now=current
             )
@@ -289,7 +311,7 @@ class BatchExecutor:
             consumption_checked = True
             _require_normal_stop(crawl_result, candidate)
             package_kwargs = {
-                "library_dir": library_dir,
+                "library_dir": effective_library_dir,
                 "explicit_metadata": candidate.metadata,
             }
             if candidate.artifact_prefix is not None:
@@ -505,7 +527,9 @@ class BatchExecutor:
                     "stale grant candidate: quota_resource does not match resolver pass"
                 )
             self._require_candidate_scope(
-                candidate, expected_quota_resource=quota_resource
+                candidate,
+                expected_quota_resource=quota_resource,
+                library_dir=self.library_dir,
             )
         adapter = self.adapters.create(next(iter(sites)))
         guard = AccessGuard.from_profile(
@@ -784,6 +808,7 @@ class BatchExecutor:
         source=None,
         target=None,
         expected_quota_resource: str | None = None,
+        library_dir: Path | None = None,
     ) -> None:
         """Validate Catalog identity and scope before policy or site access."""
         if self.scope_reconciler is None:
@@ -843,9 +868,86 @@ class BatchExecutor:
             raise BatchExecutionError(
                 f"Source {source.id} is outside the synchronized acquisition scope"
             )
+        try:
+            _works, all_items, _all_sources, _all_targets = (
+                self.catalog.read_works_items_sources_and_targets()
+            )
+            work_items = [row for row in all_items if row.work_id == work.id]
+            current_targets = [
+                row
+                for row in self.scope_reconciler.watchlist.list_targets()
+                if row.work_key == work.work_key
+            ]
+            position_plan = build_work_archive_position_plan(
+                work,
+                current_targets,
+                work_items,
+                snapshot.sources,
+            )
+            position = (
+                position_plan.positions_by_source_id.get(source.id)
+                if position_plan is not None
+                else source.display_position
+            )
+            expected_prefix = archive_position_prefix(position)
+            same_site_sources = [
+                row for row in snapshot.sources if row.site == source.site
+            ]
+            disambiguated_ids = shared_collision_source_ids(
+                [work], work_items, same_site_sources
+            )
+            expected_disambiguator = (
+                f"{source.site}-{source.external_id}"
+                if source.id in disambiguated_ids
+                else None
+            )
+            expected_metadata = archive_metadata_for_catalog(work, item, source)
+        except (CatalogError, ArchiveOrderPlanningError, ValueError) as exc:
+            raise BatchExecutionError(
+                f"Cannot validate current archive numbering for Work {work.work_key!r}: {exc}"
+            ) from exc
+        if candidate.artifact_prefix != expected_prefix:
+            raise BatchExecutionError(
+                f"stale batch candidate: archive prefix {candidate.artifact_prefix!r} "
+                f"does not match current {expected_prefix!r}"
+            )
+        if candidate.artifact_disambiguator != expected_disambiguator:
+            raise BatchExecutionError(
+                "stale batch candidate: archive disambiguator does not match current naming"
+            )
+        if candidate.metadata != expected_metadata:
+            raise BatchExecutionError(
+                "stale batch candidate: archive metadata no longer matches the Catalog"
+            )
+        try:
+            validate_existing_archive_names(
+                self.catalog,
+                work=work,
+                items=work_items,
+                sources=list(snapshot.sources),
+                archive_positions_by_source=(
+                    dict(position_plan.positions_by_source_id)
+                    if position_plan is not None
+                    else {}
+                ),
+            )
+        except ArchiveNameGuardError as exc:
+            raise BatchExecutionError(
+                f"Current work-wide archive naming is unresolved: {exc}. Run a full "
+                "work-wide renumber dry-run and resolve it before Batch"
+            ) from exc
+        _validate_candidate_output_path(
+            candidate,
+            library_dir=library_dir if library_dir is not None else self.library_dir,
+        )
 
     def _validate_candidate(
-        self, candidate: BatchCandidate, policy: SitePolicy, now: datetime
+        self,
+        candidate: BatchCandidate,
+        policy: SitePolicy,
+        now: datetime,
+        *,
+        library_dir: Path | None = None,
     ) -> None:
         """Reject a plan whose required Catalog identity/state is stale."""
 
@@ -856,7 +958,13 @@ class BatchExecutor:
         except CatalogError as exc:
             raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
 
-        self._require_candidate_scope(candidate, item=item, source=source, target=target)
+        self._require_candidate_scope(
+            candidate,
+            item=item,
+            source=source,
+            target=target,
+            library_dir=library_dir,
+        )
         mismatches: list[str] = []
         if candidate.quota_resource is not None:
             try:
@@ -925,6 +1033,27 @@ def _require_normal_stop(result: RunResult, candidate: BatchCandidate) -> None:
         raise CandidateExecutionError(
             f"Crawler did not stop normally for item={candidate.item_id}, "
             f"source={candidate.source_id}: {result.stop_reason}"
+        )
+
+
+def _validate_candidate_output_path(
+    candidate: BatchCandidate, *, library_dir: Path
+) -> None:
+    """Refuse an occupied final ZIP/status path before any site or quota action."""
+
+    stem, title, genre, _order, _author = archive_stem(
+        candidate.metadata,
+        artifact_prefix=candidate.artifact_prefix,
+        artifact_disambiguator=candidate.artifact_disambiguator,
+    )
+    archive_path = library_dir / genre / title / f"{stem}.zip"
+    status_path = (
+        library_dir.parent / "crawl-status" / genre / title / f"{stem}.json"
+    )
+    if archive_path.exists() or status_path.exists():
+        raise BatchExecutionError(
+            f"Candidate output already exists at {archive_path} or {status_path}; "
+            "Batch will not overwrite an existing archive/status pair"
         )
 
 

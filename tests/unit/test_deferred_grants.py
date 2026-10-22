@@ -367,7 +367,13 @@ async def test_work_cooldown_skips_other_chapters_before_creating_a_page(
         before[0].source_id, work_id=work.id, site="zeblack", resource="work_ticket",
         consumed_at=consumed_at, access_granted_until=consumed_at + timedelta(hours=71),
     )
-    executor = BatchExecutor(catalog, policies, AdapterRegistry(), watchlist=watchlist)
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        AdapterRegistry(),
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+    )
 
     class Session:
         @classmethod
