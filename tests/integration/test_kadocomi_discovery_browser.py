@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import pytest
 
 from screenshot_crawler.catalog import ArtifactInput, CatalogService
 from screenshot_crawler.catalog.service import now_jst
+from screenshot_crawler.core.errors import AccessStopError
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
 from screenshot_crawler.site_adapters.kadocomi import KadocomiDiscoveryAdapter
 from screenshot_crawler.site_adapters.kadocomi import discovery as kadocomi_discovery
-from screenshot_crawler.watchlist import WatchlistTarget
+from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -381,4 +386,437 @@ async def test_kadocomi_incremental_does_not_change_unseen_sources(browser_page,
     assert unseen_after.id == unseen_before.id
     assert unseen_after.available is True
     assert unseen_after.last_seen_at == unseen_before.last_seen_at
+
+
+def _native_episodes() -> list[dict[str, object]]:
+    labels = {
+        1: "Episode 1",
+        2: "Episode 2",
+        3: "Episode 4-A",
+        4: "Episode 44",
+        5: "Episode 59",
+        6: "Episode 60",
+        7: "Episode 77",
+    }
+    positions = {1: 1, 2: 2, 3: 6, 4: 88, 5: 89, 6: 108, 7: 125}
+    active = {1, 2, 5}
+    return [
+        {
+            "code": _episode_id(number),
+            "id": str(UUID(int=500 + number)),
+            "title": labels[number],
+            "serviceId": "web",
+            "type": "normal",
+            "isActive": number in active,
+            "internal": {
+                "episodeNo": positions[number],
+                "episodetype": "normal",
+                "pageCount": 12,
+            },
+            "hasRead": False,
+            "deliveryPeriod": None,
+        }
+        for number in range(1, 8)
+    ]
+
+
+def _native_page_html(
+    *,
+    episodes: list[dict[str, object]] | None = None,
+    expand: bool = False,
+    expand_count: int = 3,
+    omit_marker: bool = False,
+    post_click: str | None = None,
+) -> str:
+    episodes = episodes or _native_episodes()
+    children: list[str] = []
+    for index, episode in enumerate(episodes):
+        if episode["isActive"] is not True:
+            continue
+        code = str(episode["code"])
+        href = f"/detail/{WORK_ID}/episodes/{code}"
+        title = str(episode["title"])
+        children.append(
+            f'''<li><a href="{href}"><div class="EpisodeThumbnail_title__fixture">{title}</div>
+              <span>2026/10/07 {title}</span></a></li>'''
+        )
+        if (
+            index + 1 < len(episodes)
+            and episodes[index + 1]["isActive"] is False
+            and not omit_marker
+        ):
+            children.append(
+                f"<li><p>{kadocomi_discovery._ENDED_EPISODES_PLACEHOLDER}</p></li>"
+            )
+    rendered = "".join(children)
+    data = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {
+                    "queries": [
+                        {
+                            "queryKey": [
+                                "/api/contents/details/work",
+                                {"workCode": WORK_ID},
+                            ],
+                            "state": {
+                                "data": {
+                                    "work": {
+                                        "code": WORK_ID,
+                                        "id": str(UUID(int=900)),
+                                        "title": "Fixture Work",
+                                    },
+                                    "firstEpisodes": {
+                                        "total": len(episodes),
+                                        "result": episodes,
+                                    },
+                                    "latestEpisodes": {
+                                        "total": len(episodes),
+                                        "result": list(reversed(episodes)),
+                                    },
+                                }
+                            },
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    initial_rows = "" if expand else rendered
+    button = f'<button type="button">全{expand_count}話を表示</button>' if expand else ""
+    on_click = (
+        f"document.querySelector('button').addEventListener('click', () => "
+        f"{{ document.querySelector('ul').innerHTML = {rendered!r}; {post_click or ''} }});"
+        if expand
+        else ""
+    )
+    return f'''<!doctype html><html><head><meta charset="utf-8">
+      <meta property="og:title" content="Fixture Work{kadocomi_discovery._OG_TITLE_SUFFIX}">
+      <script id="__NEXT_DATA__" type="application/json">{json.dumps(data, ensure_ascii=False)}</script>
+      </head><body><h1>Fixture Work</h1>
+      <div class="EpisodesTabContents_root__fixture">{button}
+        <ul class="EpisodesTabContents_episodeList__fixture">{initial_rows}</ul>
+      </div><script>{on_click}</script></body></html>'''
+
+
+async def _route_native_listing(page, html: str) -> None:
+    async def fulfill(route) -> None:
+        parsed = urlsplit(route.request.url)
+        if parsed.path != f"/detail/{WORK_ID}":
+            await route.fulfill(status=404, body="")
+            return
+        await route.fulfill(body=html, content_type="text/html; charset=utf-8")
+
+    await page.route("https://comic-walker.com/**", fulfill)
+
+
+def _native_target(*, scope=None, archive_order: int | None = 1) -> WatchlistTarget:
+    return WatchlistTarget(
+        key="kadocomi-test",
+        work_key=f"kadocomi:{WORK_ID}",
+        site="kadocomi",
+        url=WORK_URL,
+        label="Fixture work",
+        discovery_scope=scope,
+        archive_order=archive_order,
+    )
+
+
+def _write_native_watchlist(path, target: WatchlistTarget, scope: DiscoveryScope) -> None:
+    path.write_text(
+        "targets:\n"
+        f"  - key: {target.key}\n"
+        f"    work_key: {target.work_key}\n"
+        f"    site: {target.site}\n"
+        f"    url: {target.url}\n"
+        f"    label: {target.label}\n"
+        f"    archive_order: {target.archive_order}\n"
+        "    discovery_scope:\n"
+        f"      from_url: {scope.from_url}\n"
+        f"      through_url: {scope.through_url}\n",
+        encoding="utf-8",
+    )
+
+
+async def test_kadocomi_archive_order_full_inventory_scope_sync_preserves_native_positions(
+    browser_page,
+    tmp_path,
+) -> None:
+    catalog, service = _services(tmp_path)
+    scope = DiscoveryScope(
+        from_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(5)}",
+        through_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(2)}",
+    )
+    target = _native_target(scope=scope)
+    watchlist_path = tmp_path / "watchlist.yaml"
+    _write_native_watchlist(watchlist_path, target, scope)
+    actual_target = WatchlistService(watchlist_path).list_targets()[0]
+    await _route_native_listing(browser_page, _native_page_html(expand=True))
+
+    result = await service.discover(browser_page, actual_target, "full")
+
+    assert result.complete is True
+    assert result.observed_count == 4
+    evidence = catalog.get_discovery_inventory_evidence(actual_target.key)
+    assert evidence is not None
+    assert evidence.listing_identity == f"kadocomi-native-work:{WORK_ID}"
+    assert [
+        (position.external_id, position.display_position, position.in_scope)
+        for position in evidence.positions
+    ] == [
+        (f"{WORK_ID}:{_episode_id(1)}", 1, False),
+        (f"{WORK_ID}:{_episode_id(2)}", 2, True),
+        (f"{WORK_ID}:{_episode_id(3)}", 6, True),
+        (f"{WORK_ID}:{_episode_id(4)}", 88, True),
+        (f"{WORK_ID}:{_episode_id(5)}", 89, True),
+        (f"{WORK_ID}:{_episode_id(6)}", 108, False),
+        (f"{WORK_ID}:{_episode_id(7)}", 125, False),
+    ]
+    sources = catalog.list_sources(site="kadocomi", discovery_key=actual_target.key)
+    assert len(sources) == 4
+    assert {
+        source.external_id: (source.display_position, source.available, source.access_mode)
+        for source in sources
+    } == {
+        f"{WORK_ID}:{_episode_id(2)}": (2, True, "free"),
+        f"{WORK_ID}:{_episode_id(3)}": (6, False, "unknown"),
+        f"{WORK_ID}:{_episode_id(4)}": (88, False, "unknown"),
+        f"{WORK_ID}:{_episode_id(5)}": (89, True, "free"),
+    }
+
+    reconciler = ScopeReconciler(WatchlistService(watchlist_path), catalog)
+    preview = reconciler.preview(target.work_key)
+    assert preview.ready
+    applied_sources = reconciler.apply(preview)
+    assert all(source.acquisition_enabled for source in applied_sources)
+    ordinal_rows = preview.archive_order_preview["positions"]
+    assert len(ordinal_rows) == 4
+    assert {row["archive_position"] for row in ordinal_rows} == {1, 2, 3, 4}
+
+    unavailable_source = catalog.find_source(
+        "kadocomi", f"{WORK_ID}:{_episode_id(3)}"
+    )
+    unavailable_item = catalog.get_item(unavailable_source.item_id)
+    unavailable_target = catalog.find_source_target(unavailable_source.id, "web")
+    crawl_run = catalog.create_crawl_run(
+        item_id=unavailable_item.id,
+        source_id=unavailable_source.id,
+        target_id=unavailable_target.id,
+        access_strategy="direct",
+    )
+    _, historical_artifact, completed_item = catalog.finalize_successful_crawl(
+        crawl_run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256="c" * 64,
+            byte_size=256,
+            storage_backend="local",
+            locator="isolated-native-test.zip",
+            state="present",
+        ),
+        page_count=1,
+    )
+    assert completed_item.status == "completed"
+    initial_source_ids = {
+        source.external_id: source.id
+        for source in catalog.list_sources(site="kadocomi", discovery_key=target.key)
+    }
+
+    narrow_scope = DiscoveryScope(
+        from_url=scope.from_url,
+        through_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(3)}",
+    )
+    _write_native_watchlist(watchlist_path, target, narrow_scope)
+    narrow_target = WatchlistService(watchlist_path).list_targets()[0]
+    assert not reconciler.preview(target.work_key).ready
+    narrowed = await service.discover(browser_page, narrow_target, "full")
+    assert narrowed.complete is True
+    assert narrowed.observed_count == 3
+    narrow_preview = reconciler.preview(target.work_key)
+    assert narrow_preview.ready
+    reconciler.apply(narrow_preview)
+    assert not catalog.get_source(initial_source_ids[f"{WORK_ID}:{_episode_id(2)}"]).acquisition_enabled
+
+    _write_native_watchlist(watchlist_path, target, scope)
+    reexpanded_target = WatchlistService(watchlist_path).list_targets()[0]
+    reexpanded = await service.discover(browser_page, reexpanded_target, "full")
+    assert reexpanded.complete is True
+    assert reexpanded.observed_count == 4
+    reexpanded_preview = reconciler.preview(target.work_key)
+    assert reexpanded_preview.ready
+    restored_sources = reconciler.apply(reexpanded_preview)
+    assert all(source.acquisition_enabled for source in restored_sources)
+    assert {
+        source.external_id: source.id
+        for source in catalog.list_sources(site="kadocomi", discovery_key=target.key)
+    } == initial_source_ids
+    assert catalog.get_item(unavailable_item.id).status == "completed"
+    assert catalog.get_crawl_run(crawl_run.id).status == "succeeded"
+    assert catalog.get_artifact(historical_artifact.id).locator == "isolated-native-test.zip"
+    assert catalog.get_source(initial_source_ids[f"{WORK_ID}:{_episode_id(3)}"]).available is False
+
+
+@pytest.mark.parametrize(
+    "scope,omit_marker,expand_count",
+    [
+        (
+            DiscoveryScope(from_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(9)}"),
+            False,
+            3,
+        ),
+        (
+            DiscoveryScope(
+                from_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(2)}",
+                through_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(5)}",
+            ),
+            False,
+            3,
+        ),
+        (
+            DiscoveryScope(
+                from_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(5)}",
+                through_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(2)}",
+            ),
+            True,
+            3,
+        ),
+        (
+            DiscoveryScope(
+                from_url="https://comic-walker.com/detail/KC_000001_S/episodes/KC_0000010000000001_E"
+            ),
+            False,
+            3,
+        ),
+        (
+            DiscoveryScope(
+                from_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(5)}",
+                through_url=f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(2)}",
+            ),
+            False,
+            4,
+        ),
+    ],
+    ids=["unknown-boundary", "reversed-boundaries", "missing-native-marker", "foreign-work", "expand-count-mismatch"],
+)
+async def test_kadocomi_opt_in_scope_errors_publish_no_sources_or_proof(
+    browser_page,
+    tmp_path,
+    monkeypatch,
+    scope,
+    omit_marker,
+    expand_count,
+) -> None:
+    monkeypatch.setattr(kadocomi_discovery, "SETTLEMENT_TIMEOUT_SECONDS", 0.03)
+    monkeypatch.setattr(kadocomi_discovery, "SETTLEMENT_INTERVAL_MS", 1)
+    catalog, service = _services(tmp_path)
+    await _route_native_listing(
+        browser_page,
+        _native_page_html(
+            expand=True,
+            expand_count=expand_count,
+            omit_marker=omit_marker,
+        ),
+    )
+
+    result = await service.discover(browser_page, _native_target(scope=scope), "full")
+
+    assert result.complete is False
+    assert result.observed_count == 0
+    assert catalog.list_sources(site="kadocomi") == []
+    assert catalog.get_discovery_inventory_evidence("kadocomi-test") is None
+
+
+@pytest.mark.parametrize("mutation", ["native-title", "foreign-route"])
+async def test_kadocomi_native_pre_emission_drift_yields_nothing(
+    browser_page,
+    tmp_path,
+    mutation,
+) -> None:
+    catalog, service = _services(tmp_path)
+    post_click = (
+        "const node = document.querySelector('#__NEXT_DATA__'); "
+        "const data = JSON.parse(node.textContent); "
+        "data.props.pageProps.dehydratedState.queries[0].state.data.work.title = 'Changed Work'; "
+        "node.textContent = JSON.stringify(data);"
+        if mutation == "native-title"
+        else "history.replaceState(null, '', '/detail/KC_000001_S');"
+    )
+    await _route_native_listing(
+        browser_page,
+        _native_page_html(expand=True, post_click=post_click),
+    )
+
+    result = await service.discover(browser_page, _native_target(), "full")
+
+    assert result.complete is False
+    assert result.observed_count == 0
+    assert catalog.list_sources(site="kadocomi") == []
+    assert catalog.get_discovery_inventory_evidence("kadocomi-test") is None
+
+
+async def test_kadocomi_final_access_guard_stop_yields_nothing(
+    browser_page,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    catalog, service = _services(tmp_path)
+    await _route_native_listing(browser_page, _native_page_html(expand=True))
+    original_check_page = kadocomi_discovery.AccessGuard.check_page
+    original_read_native_listing = kadocomi_discovery.KadocomiDiscoveryAdapter._read_native_listing
+    final_listing_read = False
+    native_listing_reads = 0
+
+    async def mark_final_listing_read(self, page, *, work_id):
+        nonlocal final_listing_read, native_listing_reads
+        listing = await original_read_native_listing(self, page, work_id=work_id)
+        native_listing_reads += 1
+        if native_listing_reads == 2:
+            final_listing_read = True
+        return listing
+
+    async def stop_on_final_check(self, page):
+        if final_listing_read:
+            raise AccessStopError(
+                reason="challenge_detected",
+                site="kadocomi",
+                url=page.url,
+            )
+        await original_check_page(self, page)
+
+    monkeypatch.setattr(
+        kadocomi_discovery.AccessGuard,
+        "check_page",
+        stop_on_final_check,
+    )
+    monkeypatch.setattr(
+        kadocomi_discovery.KadocomiDiscoveryAdapter,
+        "_read_native_listing",
+        mark_final_listing_read,
+    )
+
+    result = await service.discover(browser_page, _native_target(), "full")
+
+    assert result.complete is False
+    assert result.observed_count == 0
+    assert catalog.list_sources(site="kadocomi") == []
+    assert catalog.get_discovery_inventory_evidence("kadocomi-test") is None
+
+
+async def test_kadocomi_native_incremental_does_not_publish_complete_inventory(
+    browser_page,
+    tmp_path,
+) -> None:
+    catalog, service = _services(tmp_path)
+    await _route_native_listing(browser_page, _native_page_html())
+
+    result = await service.discover(browser_page, _native_target(), "incremental")
+
+    assert result.complete is None
+    assert result.observed_count == 7
+    assert catalog.get_discovery_inventory_evidence("kadocomi-test") is None
+    assert {
+        source.display_position
+        for source in catalog.list_sources(site="kadocomi", discovery_key="kadocomi-test")
+    } == {1, 2, 6, 88, 89, 108, 125}
 

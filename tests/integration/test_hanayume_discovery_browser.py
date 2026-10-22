@@ -462,6 +462,14 @@ async def test_hanayume_full_incremental_and_bounded_discovery(
 
     assert full.complete is True
     assert full.observed_count == TOTAL
+    inventory = catalog.get_discovery_inventory_evidence(_target().key)
+    assert inventory is not None
+    assert inventory.listing_identity == f"hanayume-work:{WORK_ID}"
+    assert inventory.source_count == TOTAL
+    assert [position.display_position for position in inventory.positions] == list(
+        range(1, TOTAL + 1)
+    )
+    assert all(position.in_scope for position in inventory.positions)
     assert pacing_waits == [(f"{BASE}/episodes/{SEED_ID}/1", 10)]
     sources = catalog.list_sources(site="hanayume")
     assert len(sources) == TOTAL
@@ -480,6 +488,9 @@ async def test_hanayume_full_incremental_and_bounded_discovery(
     pacing_waits.clear()
     incremental = await service.discover(browser_page, _target(), "incremental")
     assert incremental.complete is None
+    assert catalog.get_discovery_inventory_evidence(_target().key).inventory_digest == (
+        inventory.inventory_digest
+    )
     assert incremental.stopped_reason == "exhausted"
     assert incremental.observed_count == TOTAL
     assert pacing_waits == [(f"{BASE}/episodes/{SEED_ID}/1", 10)]
@@ -505,6 +516,15 @@ async def test_hanayume_full_incremental_and_bounded_discovery(
     assert bounded.observed_count == 3
     assert pacing_waits == [(f"{BASE}/episodes/{SEED_ID}/1", 10)]
     assert [source.display_position for source in bounded_sources] == [30, 29, 28]
+    bounded_inventory = bounded_catalog.get_discovery_inventory_evidence("hanayume-bounded")
+    assert bounded_inventory is not None
+    assert bounded_inventory.listing_identity == f"hanayume-work:{WORK_ID}"
+    assert bounded_inventory.source_count == TOTAL
+    assert [
+        position.display_position
+        for position in bounded_inventory.positions
+        if position.in_scope
+    ] == [28, 29, 30]
 
 
 @pytest.mark.parametrize("outside_preview", [False, True], ids=["in-preview", "outside-preview"])

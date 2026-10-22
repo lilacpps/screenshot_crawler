@@ -22,7 +22,7 @@ from screenshot_crawler.site_adapters.comicdays.live_access import (
     ComicDaysLiveAccessState,
     ComicDaysTicketState,
 )
-from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -1771,46 +1771,69 @@ async def test_comicdays_discovery_browser_success_marks_free_subset(
         lambda route: route.fulfill(status=200, content_type="text/html", body=page_html),
     )
     full = [
-        {"episode_id": "2", "url": "https://comic-days.com/episode/2", "title": "第２話"},
-        {"episode_id": "1", "url": "https://comic-days.com/episode/1", "title": "第１話"},
+        {"episode_id": "3", "url": "https://comic-days.com/episode/3", "title": "Chapter 3"},
+        {"episode_id": "2", "url": "https://comic-days.com/episode/2", "title": "Chapter 2"},
+        {"episode_id": "1", "url": "https://comic-days.com/episode/1", "title": "Chapter 1"},
     ]
-    free = [full[1]]
+    free = [full[2]]
 
     async def atom(_page, _series: str, *, free_only: bool):
         return free if free_only else full
 
     async def total(_page, _series: str, _episode: str) -> int:
-        return 2
+        return 3
 
     async def bulk(_page, _series: str, *, expected_total: int) -> list[dict]:
-        assert expected_total == 2
+        assert expected_total == 3
         return [
             {
-                "readable_product_id": "2",
-                "viewer_uri": "https://comic-days.com/episode/2",
-                "purchase_info": {"can_read": False, "is_free": False, "has_rented_via_ticket": False, "rentable_via_ticket": False, "unavailable": False, "has_purchased": False, "has_rented_via_point": False},
-                "status": {"is_support_ticket": False, "buy_price": 100, "rental_price": None, "rental_end_at": None, "rental_term": None},
-            },
-            {
-                "readable_product_id": "1",
-                "viewer_uri": "https://comic-days.com/episode/1",
-                "purchase_info": {"can_read": True, "is_free": True, "has_rented_via_ticket": False, "rentable_via_ticket": False, "unavailable": False, "has_purchased": False, "has_rented_via_point": False},
-                "status": {"is_support_ticket": False, "buy_price": None, "rental_price": None, "rental_end_at": None, "rental_term": None},
-            },
+                "readable_product_id": episode_id,
+                "viewer_uri": f"https://comic-days.com/episode/{episode_id}",
+                "purchase_info": {
+                    "can_read": episode_id == "1",
+                    "is_free": episode_id == "1",
+                    "has_rented_via_ticket": False,
+                    "rentable_via_ticket": False,
+                    "unavailable": False,
+                    "has_purchased": False,
+                    "has_rented_via_point": False,
+                },
+                "status": {
+                    "is_support_ticket": False,
+                    "buy_price": None if episode_id == "1" else 100,
+                    "rental_price": None,
+                    "rental_end_at": None,
+                    "rental_term": None,
+                },
+            }
+            for episode_id in ("3", "2", "1")
         ]
 
     monkeypatch.setattr(discovery_module, "fetch_comicdays_atom", atom)
     monkeypatch.setattr(discovery_module, "fetch_comicdays_listing_total", total)
     monkeypatch.setattr(discovery_module, "fetch_comicdays_readable_products", bulk)
-    target = WatchlistTarget("key", "work", "comicdays", "https://comic-days.com/episode/1", "Synthetic Work")
-    rows = [
-        row
-        async for row in discovery_module.ComicDaysDiscoveryAdapter().iter_records(
-            browser_page, target, "full"
-        )
-    ]
+    target = WatchlistTarget(
+        "key",
+        "work",
+        "comicdays",
+        "https://comic-days.com/episode/1",
+        "Synthetic Work",
+        discovery_scope=DiscoveryScope(
+            from_url="https://comic-days.com/episode/2",
+            through_url="https://comic-days.com/episode/1",
+        ),
+    )
+    adapter = discovery_module.ComicDaysDiscoveryAdapter()
+    rows = [row async for row in adapter.iter_records(browser_page, target, "full")]
     assert [row.source.external_id for row in rows] == ["2", "1"]
     assert [row.source.access_mode for row in rows] == ["paid", "free"]
+    assert [row.source.global_display_position for row in rows] == [2, 1]
+    inventory = adapter.complete_listing_inventory
+    assert inventory is not None
+    assert [
+        (position.external_id, position.display_position, position.in_scope)
+        for position in inventory.positions
+    ] == [("3", 3, False), ("2", 2, True), ("1", 1, True)]
 
 
 async def test_comicdays_discovery_browser_feed_identity_mismatch_yields_zero(

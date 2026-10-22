@@ -10,16 +10,34 @@ target enabled controls whether Discovery runs and is not an ownership flag.
 Batch requires a current synchronized Scope Reconciler snapshot and
 sources.acquisition_enabled state.
 
-This adapter does not currently provide the complete-listing inventory proof
-hook required for scoped or archive-ordered work. A site-local bounded
-Discovery implementation, where available, is not sufficient evidence for
-work-wide acquisition reconciliation. With either discovery_scope or
-archive_order set, Scope Reconciler must block; a successful Full alone cannot
-resolve that blocker. Do not keep repeating Full as a workaround. For a
-NEVER-MANAGED legacy work with neither discovery_scope nor archive_order,
-explicit preview/apply may bootstrap existing Sources only when their
-discovery_key, site, and work ownership all match the Watchlist. Newly
-discovered Sources still require a fresh sync before Batch.
+Kadocomi now provides a strict native-history inventory path when a target has
+`discovery_scope` or `archive_order`. It binds the requested work to the exact
+native query and validates both site-provided episode arrays, their counts,
+identities, UUIDs, types, explicit `episodeNo` order, and reverse ordering.
+`supports_bounded_discovery` uses those validated native identities and
+positions for inclusive boundaries. A normal Full publishes the complete
+observed inventory only after safe exhaustion; Incremental, failed, and
+early-closed runs do not publish proof. After Full, explicitly preview and
+apply `watch scope-sync` before Batch. Missing Catalog Sources remain blockers.
+For a NEVER-MANAGED legacy work with neither `discovery_scope` nor
+`archive_order`, explicit preview/apply may bootstrap existing Sources only
+when their discovery_key, site, and work ownership all match the Watchlist.
+Newly discovered Sources still require a fresh sync before Batch.
+
+This new proof is bounded by current site evidence: it covers the native lists
+observed for `KC_004915_S` (123 rows) and `KC_011605_S` (33 rows), not a claim
+that every episode ever published is represented. Native episode numbers have
+gaps (the first sample includes positions up to 127); missing numbers have no
+observed Source identity and must not be synthesized. Inactive native rows are
+retained as unavailable/unknown Sources with their observed positions. Existing
+Catalog Sources absent from the validated native list keep their historical
+position and cause scope sync to block. This position-retention statement does
+not override ordinary Full Discovery availability reconciliation. The old
+unconfigured unordered path remains current-public-only and does not infer
+global display positions. The native parser accepts at most 1,000 entries and
+a 2,000,000-byte response body.
+Leading or all-inactive placeholder patterns have not been established and
+remain fail-closed; no position or Source is inferred for them.
 
 A successful Full after a prior scope sync invalidates the sync marker. After
 Full, rerun preview and explicit apply with the same Watchlist before planning
@@ -34,9 +52,8 @@ validation; replace placeholders with paths under the same COPY_ROOT:
     python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --apply --json
     python -m screenshot_crawler.cli batch plan --site <site> --catalog <copy/catalog.sqlite> --watchlist <copy/watchlist.yaml> --library-dir <copy/Books>
 
-The scope-sync apply example is only for an eligible unbounded, unordered legacy
-work. For scoped or archive-ordered work on this adapter, expect a fail-closed
-preview until a complete-listing proof hook is implemented. Batch plan remains
+The scope-sync apply example can also follow a successful opt-in native-history
+Full Discovery for scoped or archive-ordered Kadocomi work. Batch plan remains
 read-only; use the same copy paths for any separately authorized execution.
 
 ## Status (2026-10-22)
@@ -370,17 +387,56 @@ the deliberately excluded Items in the dedicated Catalog; they are not test skip
 
 `src/screenshot_crawler/site_adapters/kadocomi/discovery.py` implements the site adapter. `screenshot_crawler.cli` registers it only for Discovery. It uses the connected Playwright `Page` and shared access guard; the adapter does not launch Chrome or select a browser profile.
 
-Supported input is an HTTPS work-detail route on `comic-walker.com` matching the strict `KC_<six digits>_S` work-ID shape and observed query forms. Live listing verification was performed for `KC_004915_S` and `KC_011605_S`; no-deadline free classification applies to validated public rows without access gates for all work IDs. Bounded `from_url` / `through_url` Discovery is unsupported. The adapter requires the unique work-scoped `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*` container and exact visible expansion control `\u5168{N}\u8a71\u3092\u8868\u793a` when present. It waits at most 12 seconds for two identical scoped snapshots 500 ms apart; the validated episode-row count must equal the declared total. Page-wide recommendations and teaser links do not count.
+Supported input is an HTTPS work-detail route on `comic-walker.com` matching the strict `KC_<six digits>_S` work-ID shape and observed query forms. Live listing verification was performed for `KC_004915_S` and `KC_011605_S`; no-deadline free classification applies to validated public rows without access gates for all work IDs. The unconfigured legacy path remains unbounded, current-public-only, and does not infer global positions. When `discovery_scope` or `archive_order` is configured, the adapter uses a separate strict native-history path that supports bounded `from_url` / `through_url` Discovery. The DOM path still requires the unique work-scoped `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*` container and exact visible expansion control `\u5168{N}\u8a71\u3092\u8868\u793a` when present. It waits at most 12 seconds for two identical scoped snapshots 500 ms apart; the active public-row count must match the native active IDs and any expansion count. Page-wide recommendations and teaser links do not count.
 
-Every row is validated before any record is yielded. A row must be a direct `LI` with exactly one episode link; the unique `EpisodeThumbnail_title__*` title node must be contained inside that link. The URL must identify the same work and a unique episode. Saved episode URLs are canonical query-free paths. Publication dates and deadline dates are separate from the title node and do not become the order label. Any malformed row, sibling title outside the link, duplicate ID, wrong-work identity, unsupported query, unknown deadline syntax, gate-like text, changed work metadata, missing title, or incomplete count fails closed. Valid records are buffered and emitted newest-first.
+Every public row is validated before any record is yielded. A row must be a direct `LI` with exactly one episode link; the unique `EpisodeThumbnail_title__*` title node must be contained inside that link. The URL must identify the same work and a unique episode. Saved episode URLs are canonical query-free paths. Publication dates and deadline dates are separate from the title node and do not become the order label. Any malformed row, sibling title outside the link, duplicate ID, wrong-work identity, unsupported query, unknown deadline syntax, gate-like text, changed work metadata, missing title, or incomplete count fails closed. Legacy records are buffered and emitted newest-first. The opt-in native path additionally binds one exact `/api/contents/details/work` query to the requested work and requires complete, unique `firstEpisodes` and reverse-ordered `latestEpisodes` arrays with matching totals. Each native row needs a matching work-prefixed code, canonical UUID, `serviceId=web`, a recognized `normal` / `extra` type matching `internal.episodetype`, strict boolean `isActive`, and positive unique ascending `internal.episodeNo`. It rejects missing, duplicated, reordered, cross-work, oversized, or inconsistent data before yielding.
 
-The observed ended-publication marker is `\u305d\u306e\u4ed6\u306e\u8a71\u306f\u516c\u958b\u7d42\u4e86\u3057\u307e\u3057\u305f`. Each marker must be one attribute-free direct `LI` with exactly one direct paragraph, no links, no episode title, and no other text. Multiple markers are accepted only in distinct internal gaps, each directly between two validated episode rows whose labels match its previous/next snapshot labels. With N declared episode rows, the marker count must be an integer in 0..N-1 (bool rejected). Adjacent markers, leading/trailing markers, malformed markers, and other non-episode children fail closed. Every marker's direct-child index, exact text, and adjacent episode labels participate in the two identical snapshots required for settlement. Markers are excluded from the declared episode count and do not become Sources, identify missing episode IDs, or establish lifetime ordering.
+For opted-in native history, active rows must match the settled public DOM IDs, labels and order exactly. Native inactive runs may correspond only to the observed internal and trailing ended-publication markers; expected marker groups are derived from actual `isActive=false` rows, never from gaps between `episodeNo` values. Leading or all-inactive histories remain unsupported and fail closed. Inactive observed rows are preserved as `available=false`, `access_mode=unknown`, with no invented expiry or grant and with their explicit native positions. Scope selection is inclusive and uses the latest-first validated native ID order. A final access guard and exact same-work route check run after all final listing/DOM reads before record emission.
+
+In the legacy public-list settlement path, the observed ended-publication marker is `\u305d\u306e\u4ed6\u306e\u8a71\u306f\u516c\u958b\u7d42\u4e86\u3057\u307e\u3057\u305f`. Each marker must be one attribute-free direct `LI` with exactly one direct paragraph, no links, no episode title, and no other text. Multiple markers are accepted only in distinct internal gaps, each directly between two validated episode rows whose labels match its previous/next snapshot labels. With N declared episode rows, the marker count must be an integer in 0..N-1 (bool rejected). Adjacent markers, leading/trailing markers, malformed markers, and other non-episode children fail closed in this legacy path. Every marker's direct-child index, exact text, and adjacent episode labels participate in the two identical snapshots required for settlement. Markers are excluded from the declared episode count and do not become Sources, identify missing episode IDs, or establish lifetime ordering. The opt-in native-history path uses a separate settlement validator: it permits only the observed internal-gap or trailing marker groups derived from actual inactive native rows; leading/all-inactive patterns remain unsupported.
 
 Live validation on 2026-10-15 confirmed two exact ended-publication markers on `KC_004915_S`, between 第3話その2 / 第27話その1 and 第43話 / 第78話. The visible expansion control declares 42 episodes; the scoped list has exactly 42 valid episode rows plus the two markers, with no malformed children. The old 0..1 marker restriction caused the reported zero-observation incomplete run; a new browser regression reproduced that failure before the fix. After the site-local fix, the normal CLI full Discovery with a dedicated Watchlist and online-backup Catalog completed with 42 observed / 35 new / 7 known, `complete=True`, `exhausted`, and zero failed targets. The copied Catalog held 88 Sources (42 available / 46 unavailable) and passed `quick_check`. All 53 pre-existing Source IDs, Item links and display positions, existing Item statuses/completion times/operator notes, CrawlRuns and Artifacts were preserved. Read-only comparison confirmed that the normal Catalog was unchanged. Metadata-only diagnostics, isolated Catalog/Watchlist, CLI log and audit are ignored under `work/kadocomi/discovery-diagnosis-20261015/`; no reader capture was performed. The shared Service still exposes adapter incomplete exceptions only as `incomplete` / `Discovery incomplete`; error-message propagation is unchanged.
 
 Validation for multiple ended-publication gaps: 95 affected unit tests (`test_kadocomi_discovery`, `test_kadocomi_policy`, `test_discovery`) and 11 browser-backed Discovery integration tests passed, with zero skipped. Existing history/republication tests are parameterized for zero, one and two markers; incremental checks use two markers, and negative fixtures cover adjacent, leading/trailing and malformed markers as well as unknown children, sibling titles and incomplete counts. `ruff check src tests` and `git diff --check` passed. Full suite, separate Research tests, live reader capture and Batch execution were not run because only site-local Discovery settlement changed; live CLI full Discovery and Catalog preservation auditing cover the affected operational boundary. Core/Runner and shared Discovery contracts are unchanged, so `note/00_core.md` does not require synchronization.
 
-Source external IDs are `work_id:episode_id`; saved targets are canonical query-free episode paths. The adapter sets `allow_inferred_display_positions=False`: existing positions are preserved, new positions remain NULL, and no global position hints are emitted. Full Discovery may mark absent Sources unavailable only after a complete validated list. Incomplete full runs do not reconcile missing Sources. Incremental Discovery leaves unseen Sources unchanged. Reusing the same external ID preserves the Source and its Item, Completed status, CrawlRuns, and Artifacts across disappearance and republication.
+Source external IDs are `work_id:episode_id`; saved targets are canonical query-free episode paths. The adapter sets `allow_inferred_display_positions=False`. The legacy unordered path preserves existing positions and leaves new positions NULL. The opt-in native path supplies explicit `episodeNo` positions for the verified native rows. Complete-listing proof refreshes positions only for rows present in the proof; absent Catalog Sources retain prior position/history and remain unresolved blockers in Scope Reconciler. Incomplete Full runs do not reconcile missing Sources or publish evidence. Incremental Discovery leaves unseen Sources unchanged and does not publish a complete-listing proof. Reusing the same external ID preserves the Source and its Item, status, CrawlRuns, and Artifacts across disappearance and republication.
+
+## Work-key native inventory follow-up (2026-10-22)
+
+The opt-in path was verified against two sanitized metadata-only observations.
+`KC_004915_S` supplied matching, reverse-ordered first/latest arrays of 123
+native rows (24 active and 99 inactive), with explicit `episodeNo` values up
+to 127 and gaps. `KC_011605_S` supplied 33 rows (3 active and 30 inactive)
+and exercised the observed settled DOM containing only the three public rows
+plus one trailing ended marker, with no expand control. These observations
+support the validated response shapes and strict parser for the tested works;
+they do not establish a site-wide guarantee that the endpoint always exposes
+every episode ever published. No Source is fabricated for an episode-number
+gap.
+
+The isolated-copy validation for `KC_004915_S` completed Full Discovery with
+123 observed / 18 new / 105 known, then scope sync enabled all 123 Sources.
+The copy retained 24 available and 99 unavailable rows; archive preview
+reserved 001–123 from actual Sources, not through native number 127. The
+`KC_011605_S` copy completed Full with 33 observed / 33 known and then enabled
+all 33; 3 were available and 30 unavailable, with ordinal range 001–033.
+Both copy audits preserved all seeded Source IDs, Item states, CrawlRuns,
+Artifacts, and quota-history digests, and did not open the Executor or perform
+capture, purchase, ticket, or quota actions. Evidence is under
+`output/acquisition-site-followup/kadocomi-copy-live-report.json` and
+`kadocomi-second-copy-live-report.json`; these are isolated working copies,
+not mutations to the operational Catalog, Watchlist, or Books.
+
+Targeted verification passed 63 Kadocomi unit/browser Discovery tests (five
+existing asyncio deprecation warnings, zero skips); Ruff passed. Parser
+corruption cases cover duplicate code/UUID, wrong query/work binding, totals,
+native order/type and extra rows. Unit tests cover inclusive from-only,
+through-only, both-boundary, and singleton slices. Browser cases cover full
+native inventory/scope synchronization, shrink/re-expand identity/history
+retention, unavailable ordinal reservation, Incremental without proof,
+pre-emission drift, and a final access-guard stop before any Catalog row is
+written. Full repository tests are run separately and recorded in the work-key
+runbook.
 
 An exact future row deadline is classified as free and recorded as `free_until`; a later observed NULL clears stale expiry. Following the user-confirmed Kadocomi convention, a validated public row without restriction flags or a deadline is free with NULL expiry, regardless of work ID. The previous single-work allowlist is removed. Expired/equal deadlines remain unknown. Purchase, paid (including bare `有料`), login, ticket, coin, point, rental and app text fails closed, as do malformed deadlines and list shapes. This changes site-local Discovery classification; the Policy still rejects unknown Sources and NULL expiry alone does not establish free access. The adapter reports `available=true` for validated public rows.
 

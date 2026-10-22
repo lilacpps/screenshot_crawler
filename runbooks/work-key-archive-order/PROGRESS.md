@@ -1,9 +1,9 @@
 # Work-key acquisition scope / archive ordering — Progress
 
-> Status: **P0-P5 COMPLETE** (2026-10-22; isolated-copy rollout verification only)
+> Status: **P0-P5 and 2026-10-22 adapter follow-ups implemented/reviewed; final full suite completed (4,991 passed, 2 failures: one config-dependent, one unresolved timing failure; 0 skipped)**
 > Main runbook: [README.md](README.md)
 > Branch: `feature/work-key-archive-order`. P0-P3 checkpoint: `b0a4a37`; P4 Reviewer approved.
-> No live site or paid access was used. P5 changed only isolated working copies and synthetic fixtures, not operational Catalog/Watchlist/Books.
+> Initial P0-P5 verification used isolated working copies and synthetic fixtures. Later adapter follow-up used bounded metadata-only public-page probes covering two Kadocomi works and verified the resulting flows only on isolated Catalog copies. No paid entitlement, reader/capture, ticket/quota action, or operational Catalog/Watchlist/Books write was performed.
 
 ## Phase gates
 
@@ -488,17 +488,13 @@ site notes, this runbook/progress, and `COPY_VALIDATION.md`.
 - The user-facing docs now include current P4 behavior, supported scope-sync /
   renumber commands, copy-first migration sequence, rollback handling, a
   locator/status remap recipe and resolved-path containment gate for isolated
-  renumber apply, and current notes for the six complete-listing proof adapters
+  renumber apply, and current notes for the complete-listing proof adapters
   available at initial P5 completion.
   `docs/DECISIONS.md` records the acquisition-scope / archive-order decision
   and why Full evidence refresh is separate from work-wide flag apply.
-  Hanayume, Younganimal, Kadocomi, and ComicFUZ notes state that they do not yet
-  supply the shared complete-listing proof hook: only unbounded/unordered
-  NEVER-MANAGED legacy bootstrap is available there, and Full alone cannot
-  unlock scoped or archive-ordered Batch. Comic DAYS now supplies an
-  inventory-only hook for its unbounded listing; bounded `discovery_scope`
-  remains unsupported there. Historical empty-Watchlist runs and site-phase
-  schema statements are qualified as historical.
+  At initial P5 close, the Hanayume, Younganimal, Kadocomi, and ComicFUZ hooks
+  had not yet been implemented, and Comic DAYS had inventory evidence only.
+  The site follow-ups below supersede that initial-coverage snapshot.
 
 ### Comic DAYS archive-order follow-up (2026-10-22)
 
@@ -506,11 +502,11 @@ site notes, this runbook/progress, and `COPY_VALIDATION.md`.
   its already validated full Atom/readable-product listing. The proof binds the
   validated native series identity (`comicdays-series:<id>`) and preserves the
   adapter's latest-first identities with Core-compatible positions `N..1`.
-- Inventory is published only after normal Full iterator exhaustion. Adapter
-  reuse resets prior inventory; incremental and early-closed runs do not
-  publish proof. DiscoveryService persists evidence only after successful
-  Catalog finalization. Comic DAYS remains unbounded-only; no
-  `discovery_scope` semantics were added.
+- At this follow-up checkpoint, Inventory is published only after normal Full
+  iterator exhaustion. Adapter reuse resets prior inventory; incremental and
+  early-closed runs do not publish proof. DiscoveryService persists evidence
+  only after successful Catalog finalization. At that checkpoint Comic DAYS
+  was still unbounded-only; the F2 follow-up below adds `discovery_scope`.
 - End-to-end synthetic test verified Comic DAYS plus BookWalker numbering,
   including paid and completed Comic DAYS rows reserving ordinals, failed Full
   invalidating scope sync, and Incremental not restoring proof.
@@ -529,17 +525,79 @@ site notes, this runbook/progress, and `COPY_VALIDATION.md`.
   and JUnit report are `tests/integration/test_comicdays_adapter_browser.py
   -k discovery_browser` and
   `output/comicdays-archive-order/browser-discovery.xml`.
-- The complete-listing inventory-hook count is now seven. Four notes remain
-  explicitly unsupported for scoped/archive-ordered sync: Hanayume,
-  Younganimal, Kadocomi, and ComicFUZ. This count concerns evidence hooks, not
-  bounded Discovery support; Comic DAYS has the hook but still rejects bounded
-  scopes.
+- At this point in the chronology, the complete-listing inventory-hook count
+  was seven; Comic DAYS still rejected bounded scopes. The subsequent follow-up
+  below adds four hooks and completes Comic DAYS bounded support.
 - Follow-up lint `.venv/Scripts/python.exe -m ruff check src tests
   scripts/renumber_archives.py` passed, as did `git diff --check` (Git emitted
   only existing LF/CRLF conversion notices for working-tree files).
 - Independent final follow-up review: **APPROVE, 0 blocking findings**.
 
-### Remaining
+### Remaining adapter coverage and inventory-history follow-up (2026-10-22)
+
+- **F1 — Hanayume, Younganimal, ComicFUZ:** added complete-listing inventory
+  capture from each adapter's already validated full listing and existing
+  global positions. Younganimal account-only rows remain outside the public
+  inventory. Evidence is published only after normal Full exhaustion and
+  successful Catalog finalization. Incremental, access-classification, and
+  incomplete-run behavior remains intact. Independent Reviewer approved the
+  material change with **0 blocking findings**. Routed browser Discovery for
+  the three site modules passed **121 tests, 13 warnings, 0 skipped**.
+- **F2 — Comic DAYS bounded Discovery:** added canonical same-series boundary
+  validation and inclusive range selection over its validated complete
+  Atom/readable-product listing. Full-list positions retain the latest-first
+  `N..1` Core contract; successful Full proof and explicit scope-sync remain
+  separate. The initial hook checkpoint passed a combined **111-test**
+  Comic DAYS / Discovery / Scope regression and **3 passed, 106 deselected**
+  routed-browser cases. The final boundary/scope selection passed **55 unit
+  tests and 17 selected browser tests**. These are separate checkpoint and
+  final-selection counts. Independent Reviewer approved with **0 blockers**.
+- **F2.5 — Kadocomi opt-in native inventory and bounded scope:** for a target
+  with `discovery_scope` or `archive_order`, the adapter validates the exact
+  work-bound native `firstEpisodes` and `latestEpisodes` arrays, counts,
+  identities/UUIDs/types, explicit positive `episodeNo`, active state, and
+  reverse order. The legacy unconfigured path remains public-list-only and
+  does not infer positions. Bounded metadata-only public-page probes covered
+  two works and observed 123 rows for `KC_004915_S` and 33 rows for
+  `KC_011605_S`; isolated
+  copy checks assigned positions 001–123 and 001–033 while retaining inactive
+  observed rows. Native episode-number gaps were not fabricated. This supports
+  the strict observed response contract, not a claim that every episode ever
+  published appears in the native catalogue. Unknown response/placeholder
+  shapes fail closed. Focused Kadocomi tests passed **63 tests**; independent
+  Reviewer approved with **0 blockers**.
+- **F2.6 — preserve positions and history for absent Sources:** review found
+  that replacing a complete inventory cleared positions of all existing
+  Sources before applying observed rows. Position writes now affect observed
+  identities only. An existing Source absent from the inventory keeps its
+  prior position and history, while Scope Reconciler still blocks with
+  `missing_listing`; a retained old position is not proof of membership. The
+  Catalog / Discovery / Scope / Kadocomi / routed-browser regression passed
+  **191 tests, 473 warnings, 0 skipped**. A downstream archive/Batch safety
+  regression passed **60 tests, 19 warnings, 0 skipped**. Independent review
+  approved with **0 blockers**.
+- Root's read-only copy harness verified both Kadocomi works on isolated
+  Catalog copies: pre-existing Source IDs, Item states and CrawlRun/Artifact/
+  quota history digests were preserved; native positions and availability
+  matched the observed lists; Scope preview was ready. The primary work's
+  Batch plan had zero candidates because its observed Sources were already
+  completed. The secondary work was checked for native ordering and scope
+  flags, but no Batch plan was run for it. These are not execution-success
+  claims. No capture, paid access, ticket/quota action, or operational Catalog
+  write occurred. Reports:
+  `output/acquisition-site-followup/kadocomi-copy-live-report.json` and
+  `output/acquisition-site-followup/kadocomi-second-copy-live-report.json`.
+- Current complete-listing inventory and bounded Discovery coverage is eleven
+  adapters: Zeblack, BookWalker, Magapoke, Jump+, MANGA ONE, Piccoma, Hanayume,
+  Younganimal, ComicFUZ, Kadocomi, and Comic DAYS. Kadocomi remains opt-in for
+  scoped/ordered targets; missing native IDs and unobserved leading/all-inactive
+  placeholder patterns cannot be inferred. Comic DAYS now supports bounded
+  `discovery_scope`.
+- Root completed the final full repository suite after F2.6. The exact result
+  and both failures are recorded below. The earlier 4,946-pass / 1 user-config
+  failure result below is a pre-adapter-follow-up run and remains historical.
+
+### Final verification and audit history
 
 The first full-suite attempt was stopped after 313 tests / 579.6 seconds when
 the ComicFuz browser stage showed no progress for roughly six minutes. The
@@ -565,31 +623,58 @@ weakened. Static AST parsing passed for the corrected ComicFuz module. The
 final full `pytest -vv` run with faulthandler diagnostics completed after these
 fixture corrections.
 
-The full suite for the shared P0-P5 implementation, completed before the
-Comic DAYS site-local follow-up above, had **4,946 passed, 1 failed, 0 skipped, and
-5,205 warnings** in 2,480.96 seconds. The sole failure was
+The final full suite after the Comic DAYS and subsequent adapter/history-safety
+follow-ups completed with **4,991 passed, 2 failed, 0 skipped, and 5,340 warnings**
+in 2,499.04 seconds (41:39). The first failure was
+`tests/integration/test_piccoma_adapter_browser.py::test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnostics[764-1200-700]`:
+it raised `UnknownPageStateError` because body canvas geometry did not stabilize
+within the test's 1,200 ms timeout (elapsed 1,422 ms). The exact parameter passed
+alone (**1 passed, 5 warnings, 4.04 seconds**) and all 12 parameters in that timing
+matrix passed on recheck (**12 passed, 5 warnings, 0 skipped, 40.49 seconds**).
+The timing failure did not reproduce, but its cause is undetermined; this remains
+a full-suite failure. The Piccoma test was outside the Catalog/Discovery/Scope
+code path and no related source or test changes were made. Evidence is in
+`output/acquisition-site-followup/full-pytest.xml`, `full-pytest.log`, and
+`piccoma-transition-matrix-recheck.xml`.
+
+The second failure was the existing
 `tests/unit/test_runtime_settings.py::test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_other_sites`:
-it expected the tracked baseline's BookWalker `page_turn_delay_ms` value of 200 but read 0 from the
-user's existing, unmodified `crawler.yaml`. Root reran the exact unchanged test
-file against an isolated copy of the tracked baseline config: **1 passed in
-0.09 seconds**. Independent Reviewer confirmed the tracked baseline value is
-200 ms, the user's current setting is 0 ms, and neither runtime source nor the
-test has a diff. The user's config was not edited. This is recorded as an
-environment-dependent failure, not a code regression; no lengthy full-suite
-repeat was warranted.
+it expected the tracked baseline BookWalker `page_turn_delay_ms` value of 200 but
+read 0 from the user's existing, unmodified `crawler.yaml`. Root reran the exact
+unchanged test file against an isolated copy of the tracked baseline config:
+**1 passed, 1 warning, 0.14 seconds**. Independent Reviewer confirmed the tracked
+baseline value is 200 ms, the user's current setting is 0 ms, and neither runtime
+source nor the test has a diff. The user's config was not edited. This remains an
+environment-dependent failure, not a code regression.
+
+Before these adapter/history-safety follow-ups, the shared P0-P5 implementation
+full suite had **4,946 passed, 1 failed, 0 skipped, and 5,205 warnings** in
+2,480.96 seconds. Its sole failure was the same runtime-settings test described
+above. The exact unchanged test file passed against an isolated copy of the
+tracked baseline config (**1 passed in 0.09 seconds**). That earlier run remains
+historical and is not substituted for the final full-suite result.
+
+The user's `crawler.yaml` remained unmodified throughout; its before/after hash
+was verified unchanged. The final test run did not alter
+source or test files. Documentation changed during the run, so a raw all-file
+hash comparison is not claimed.
 
 The final lint command, `.venv/Scripts/python.exe -m ruff check src tests
 scripts/renumber_archives.py`, passed with **All checks passed**. There were no
 skipped tests. The full run took about 41 minutes. The earlier interrupted run
 and its fixture failures remain documented above for audit history.
 
-Independent final review accepted P5 with the single full-suite failure
-attributed to the user-specific configuration; no code or test changes were
-requested. The phase is complete for isolated-copy verification. It does not
+Independent review approved the documentation and copy-only verification. The final full-suite
+result has two recorded failures; the isolated reruns support the user-config attribution for one,
+while the Piccoma timing failure remains unexplained. No code or test changes were requested.
+The phase is complete for isolated-copy verification. It does not
 mean production migration, scope apply, or renumber has been performed.
 
-No live or real Catalog/output operation was performed; production rollout
-remains an explicit operator step documented in the runbook.
+The Kadocomi follow-up used only bounded metadata reads of two public work
+pages, then copy-only Catalog validation. No paid entitlement, reader/capture,
+ticket/quota action, or operational Catalog/output mutation was performed.
+Production migration, scope apply, and renumber remain explicit operator steps
+documented in the runbook.
 
 ## Update contract
 

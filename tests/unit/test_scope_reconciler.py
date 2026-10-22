@@ -156,6 +156,52 @@ def test_full_proof_drives_scope_flags_and_stale_marker_keeps_binding(tmp_path: 
     assert json.loads(stale.configuration_json) == saved
 
 
+def test_missing_source_from_replacement_inventory_retains_position_but_blocks_sync(
+    tmp_path: Path,
+) -> None:
+    watchlist_path = tmp_path / "watchlist.yaml"
+    target = WatchlistTarget(
+        key="chapters",
+        work_key="series",
+        site="zeblack",
+        url="https://example.test/list",
+        label="Series",
+        discovery_scope=DiscoveryScope(through_url="https://example.test/ch/1"),
+        archive_order=1,
+    )
+    _write_target(watchlist_path, target)
+    catalog, work, sources = _catalog_with_sources(
+        tmp_path / "catalog.sqlite", ("ch-1", "ch-2")
+    )
+    catalog.update_source_external_state(
+        "zeblack", "ch-1", display_position=1
+    )
+    catalog.update_source_external_state(
+        "zeblack", "ch-2", display_position=2
+    )
+    prior_updated_at = catalog.get_source(sources[1].id).updated_at
+    catalog.record_discovery_inventory_evidence(
+        work_key=work.work_key,
+        discovery_key=target.key,
+        site=target.site,
+        target_url=target.url,
+        scope_fingerprint=target_scope_fingerprint(target),
+        listing_identity="listing-with-one-row",
+        positions=[DiscoveryInventoryPosition("ch-1", 1, in_scope=True)],
+    )
+
+    preview = ScopeReconciler(WatchlistService(watchlist_path), catalog).preview(
+        work.work_key
+    )
+
+    assert not preview.ready
+    assert any("ch-2" in blocker and "missing from Full listing" in blocker
+               for blocker in preview.blockers)
+    retained = catalog.get_source(sources[1].id)
+    assert retained.display_position == 2
+    assert retained.updated_at == prior_updated_at
+
+
 def test_archive_order_preview_compares_previous_binding_after_reordering_keys(
     tmp_path: Path,
 ) -> None:

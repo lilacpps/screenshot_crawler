@@ -1972,6 +1972,17 @@ plan or concurrent Catalog source change is rejected and must be replanned.
 
 ### Discovery display position contract (P2 implemented)
 
+Complete-listing inventory hooks and site-native bounded Discovery are
+currently implemented for BookWalker, Jump+, Magapoke, MANGA ONE, Piccoma,
+Zeblack, Hanayume, Younganimal, ComicFUZ, Kadocomi, and Comic DAYS. Kadocomi's
+native-history path is opt-in for scoped or archive-ordered targets; its legacy
+unordered path remains public-list-only and does not infer positions. The
+Kadocomi inventory represents the site-provided list observed for the work,
+not a guarantee that every episode ever published is present. Missing native
+episode numbers have no identity and are never synthesized. Existing Catalog
+Sources absent from a complete proof retain their prior positions but block
+scope synchronization as `missing_listing`.
+
 `DiscoveryService` is the sole persistence/finalization authority, but a
 bounded-capable Adapter supplies a run-local
 `global_display_position` hint after it has observed the site's complete

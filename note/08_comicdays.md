@@ -10,17 +10,19 @@ target enabled controls whether Discovery runs and is not an ownership flag.
 Batch requires a current synchronized Scope Reconciler snapshot and
 sources.acquisition_enabled state.
 
-Comic DAYS now supplies a complete-listing inventory hook for `archive_order`
-reconciliation. A successful Full binds the validated native series identity
-`comicdays-series:<id>` to the full unbounded Atom/readable-product listing;
-Core positions those latest-first rows as `N..1` (oldest first for numbering).
-This hook does not add `discovery_scope` or bounded Discovery support: any
-target with a scope is still rejected by the adapter. Full evidence is saved
-only after normal iterator exhaustion and successful Catalog finalization.
-Incremental, failed, or early-closed runs do not publish proof. After a
-successful Full, rerun Scope Reconciler preview and explicit apply before
-Batch; Full does not itself synchronize acquisition flags. A changed URL or
-listing still requires fresh proof. For a NEVER-MANAGED legacy work with
+Comic DAYS provides complete-listing evidence and site-native bounded
+`discovery_scope` for `archive_order` reconciliation. The adapter validates the
+requested canonical episode URLs against the same complete Atom/readable-
+product series listing used for Discovery. It uses the full listing's stable
+latest-first identities and positions `N..1` (oldest first for numbering),
+then emits only the inclusive selected range; positions remain whole-list
+positions. A successful Full binds the validated native series identity
+`comicdays-series:<id>` to the complete listing. Evidence is saved only after
+normal iterator exhaustion and successful Catalog finalization. Incremental,
+failed, or early-closed runs do not publish proof. After a successful Full,
+rerun Scope Reconciler preview and explicit apply before Batch; Full does not
+itself synchronize acquisition flags. A changed URL or listing still requires
+fresh proof. For a NEVER-MANAGED legacy work with
 neither `discovery_scope` nor `archive_order`, explicit preview/apply may
 bootstrap existing Sources only when their discovery_key, site, and work
 ownership all match the Watchlist. Newly discovered Sources still require a
@@ -40,11 +42,10 @@ validation; replace placeholders with paths under the same COPY_ROOT:
     python -m screenshot_crawler.cli batch plan --site <site> --catalog <copy/catalog.sqlite> --watchlist <copy/watchlist.yaml> --library-dir <copy/Books>
 
 These commands also apply to Comic DAYS `archive_order` work after a successful
-Full provides the complete unbounded listing proof. The apply is still a
-separate reviewed step. For scoped work, expect a fail-closed result because
-Comic DAYS does not support `discovery_scope`; repeating Full cannot resolve
-that limitation. Batch plan remains read-only; use the same copy paths for any
-separately authorized execution.
+Full provides the complete listing proof. For a scoped target, use a successful
+Full with the configured site-native boundary; emitted records retain their
+global positions. The apply remains a separate reviewed step. Batch plan is
+read-only; use the same copy paths for any separately authorized execution.
 
 ## Current implementation
 

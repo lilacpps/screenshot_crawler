@@ -360,22 +360,128 @@ async def test_discovery_rejects_readable_listing_order_disagreement_before_yiel
 
 
 @pytest.mark.asyncio
-async def test_archive_order_inventory_does_not_enable_bounded_discovery() -> None:
+@pytest.mark.parametrize(
+    ("from_url", "through_url", "expected_ids"),
+    [
+        (
+            "https://comic-days.com/episode/2",
+            "https://comic-days.com/episode/1",
+            ["2", "1"],
+        ),
+        ("https://comic-days.com:443/episode/2", None, ["2", "1"]),
+        (None, "https://www.comic-days.com/episode/2", ["3", "2"]),
+        (
+            "https://comic-days.com/episode/2",
+            "https://comic-days.com/episode/2",
+            ["2"],
+        ),
+    ],
+)
+async def test_bounded_discovery_keeps_full_positions_and_inventory_membership(
+    monkeypatch: pytest.MonkeyPatch,
+    from_url: str | None,
+    through_url: str | None,
+    expected_ids: list[str],
+) -> None:
+    full = [
+        {"episode_id": "3", "url": "https://comic-days.com/episode/3", "title": "Chapter 3"},
+        {"episode_id": "2", "url": "https://comic-days.com/episode/2", "title": "Chapter 2"},
+        {"episode_id": "1", "url": "https://comic-days.com/episode/1", "title": "Chapter 1"},
+    ]
+
+    async def atom(_page: object, _series: str, *, free_only: bool):
+        return full[1:] if free_only else full
+
+    async def total(_page: object, _series: str, _episode: str) -> int:
+        return len(full)
+
+    async def readable(_page: object, _series: str, *, expected_total: int):
+        assert expected_total == len(full)
+        return [_row("3", paid=True), _row("2", free=True), _row("1", free=True)]
+
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_atom", atom)
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_listing_total", total)
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_readable_products", readable)
     target = WatchlistTarget(
         "k",
         "w",
         "comicdays",
         "https://comic-days.com/episode/1",
         "x",
-        discovery_scope=DiscoveryScope(
-            from_url="https://comic-days.com/episode/3",
-            through_url="https://comic-days.com/episode/1",
-        ),
+        discovery_scope=DiscoveryScope(from_url=from_url, through_url=through_url),
         archive_order=10,
     )
     adapter = discovery_module.ComicDaysDiscoveryAdapter()
-    with pytest.raises(DiscoveryIncompleteError, match="unbounded canonical episode target"):
-        await anext(adapter.iter_records(_FakePage(), target, "full"))
+    assert adapter.supports_bounded_discovery is True
+    rows = [row async for row in adapter.iter_records(_FakePage(), target, "full")]
+    assert [row.source.external_id for row in rows] == expected_ids
+    assert [row.source.global_display_position for row in rows] == [
+        int(external_id) for external_id in expected_ids
+    ]
+    inventory = adapter.complete_listing_inventory
+    assert inventory is not None
+    assert inventory.listing_identity == "comicdays-series:42"
+    assert [
+        (position.external_id, position.display_position, position.in_scope)
+        for position in inventory.positions
+    ] == [
+        (external_id, int(external_id), external_id in expected_ids)
+        for external_id in ("3", "2", "1")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("from_url", "through_url", "message"),
+    [
+        (None, None, "no episode boundary"),
+        ("https://comic-days.com/episode/1", "https://comic-days.com/episode/3", "reversed"),
+        ("https://comic-days.com/episode/4", None, "not in the listing"),
+        ("https://example.test/episode/2", None, "URL is invalid"),
+        ("http://comic-days.com/episode/2", None, "URL is invalid"),
+        ("ftp://comic-days.com/episode/2", None, "URL is invalid"),
+        ("https://user@comic-days.com/episode/2", None, "URL is invalid"),
+        ("https://comic-days.com:9999/episode/2", None, "URL is invalid"),
+        ("https://comic-days.com/episode/2;ignored", None, "URL is invalid"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bounded_discovery_rejects_unresolved_boundaries_before_yield(
+    from_url: str | None,
+    through_url: str | None,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    full = [
+        {"episode_id": "3", "url": "https://comic-days.com/episode/3", "title": "Chapter 3"},
+        {"episode_id": "2", "url": "https://comic-days.com/episode/2", "title": "Chapter 2"},
+        {"episode_id": "1", "url": "https://comic-days.com/episode/1", "title": "Chapter 1"},
+    ]
+
+    async def atom(_page: object, _series: str, *, free_only: bool):
+        return full[1:] if free_only else full
+
+    async def total(_page: object, _series: str, _episode: str) -> int:
+        return len(full)
+
+    async def readable(_page: object, _series: str, *, expected_total: int):
+        return [_row("3", paid=True), _row("2", free=True), _row("1", free=True)]
+
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_atom", atom)
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_listing_total", total)
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_readable_products", readable)
+    target = WatchlistTarget(
+        "k",
+        "w",
+        "comicdays",
+        "https://comic-days.com/episode/1",
+        "x",
+        discovery_scope=DiscoveryScope(from_url=from_url, through_url=through_url),
+        archive_order=10,
+    )
+    adapter = discovery_module.ComicDaysDiscoveryAdapter()
+    iterator = adapter.iter_records(_FakePage(), target, "full")
+    with pytest.raises(DiscoveryIncompleteError, match=message):
+        await anext(iterator)
     assert adapter.complete_listing_inventory is None
 
 
@@ -410,14 +516,21 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
 
     catalog = CatalogService(tmp_path / "catalog.sqlite")
     watchlist = WatchlistService(tmp_path / "watchlist.yaml")
-    comic_target = watchlist.add(
-        key="comic-days",
-        work_key="shared-work",
-        site="comicdays",
-        url="https://comic-days.com/episode/101",
-        label="Comic DAYS",
-        archive_order=10,
+    watchlist.path.write_text(
+        "targets:\n"
+        "  - key: comic-days\n"
+        "    work_key: shared-work\n"
+        "    site: comicdays\n"
+        "    url: https://comic-days.com/episode/101\n"
+        "    label: Comic DAYS\n"
+        "    enabled: true\n"
+        "    archive_order: 10\n"
+        "    discovery_scope:\n"
+        "      from_url: https://comic-days.com/episode/102\n"
+        "      through_url: https://comic-days.com/episode/101\n",
+        encoding="utf-8",
     )
+    comic_target = watchlist.get("comic-days")
     bookwalker_target = watchlist.add(
         key="bookwalker",
         work_key="shared-work",
@@ -427,6 +540,27 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
         archive_order=20,
     )
 
+    work = catalog.create_work(WorkInput(work_key="shared-work", title="Synthetic Work"))
+    out_of_scope_item = catalog.create_item(
+        ItemInput(kind="episode", order_label="Chapter 3", status="completed"),
+        work_id=work.id,
+    )
+    out_of_scope_source = catalog.create_source(
+        SourceInput(
+            site="comicdays",
+            external_id="103",
+            discovery_key=comic_target.key,
+            access_mode="paid",
+            available=False,
+            display_position=99,
+        ),
+        item_id=out_of_scope_item.id,
+    )
+    catalog.create_source_target(
+        SourceTargetInput(backend="web", locator="https://comic-days.com/episode/103"),
+        source_id=out_of_scope_source.id,
+    )
+
     discovery_registry = DiscoveryAdapterRegistry()
     discovery_registry.register("comicdays", discovery_module.ComicDaysDiscoveryAdapter)
     discovery = DiscoveryService(catalog, discovery_registry)
@@ -434,7 +568,7 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
     page.url = comic_target.url
     result = await discovery.discover(page, comic_target, "full")
     assert result.complete is True
-    assert result.observed_count == 3
+    assert result.observed_count == 2
 
     comic_inventory = catalog.get_discovery_inventory_evidence(comic_target.key)
     assert comic_inventory is not None
@@ -442,7 +576,7 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
     assert [
         (position.external_id, position.display_position, position.in_scope)
         for position in comic_inventory.positions
-    ] == [("101", 1, True), ("102", 2, True), ("103", 3, True)]
+    ] == [("101", 1, True), ("102", 2, True), ("103", 3, False)]
 
     sources_by_external_id = {
         source.external_id: source
@@ -452,11 +586,16 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
         external_id: source.display_position
         for external_id, source in sources_by_external_id.items()
     } == {"101": 1, "102": 2, "103": 3}
+    refreshed_out_of_scope = sources_by_external_id["103"]
+    assert refreshed_out_of_scope.id == out_of_scope_source.id
+    assert refreshed_out_of_scope.access_mode == "paid"
+    assert refreshed_out_of_scope.available is False
+    assert refreshed_out_of_scope.acquisition_enabled is True
+    assert refreshed_out_of_scope.quota_started_at is None
+    assert catalog.get_item(out_of_scope_item.id).status == "completed"
     catalog.mark_item_completed(sources_by_external_id["102"].item_id)
     assert catalog.get_item(sources_by_external_id["102"].item_id).status == "completed"
 
-    work = catalog.find_work("shared-work")
-    assert work is not None
     book_item = catalog.create_item(
         ItemInput(kind="book", order_label="Volume 1"), work_id=work.id
     )
@@ -491,6 +630,7 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
     preview = reconciler.preview(work.work_key)
     assert preview.ready
     reconciler.apply(preview)
+    assert catalog.get_source(out_of_scope_source.id).acquisition_enabled is False
 
     policies = SitePolicyRegistry()
     policies.register("comicdays", ComicDaysSitePolicy)
@@ -513,7 +653,7 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
         book_source.id
     ]
     assert [candidate.artifact_prefix for candidate in bookwalker_plan.candidates] == [
-        "004"
+        "003"
     ]
     assert catalog.get_item(sources_by_external_id["102"].item_id).status == "completed"
     assert catalog.get_source(sources_by_external_id["103"].id).access_mode == "paid"

@@ -4,11 +4,15 @@
 >
 > The original Catalog v6 display-position/status plan below is historical implementation context.
 > Current Catalog schema is v7. The work-key scope and cross-site archive-order extension is
-> implemented through P4; P5 validated isolated copies and documents the operator rollout.
-> The full suite completed with 4,946 passed and one environment-dependent runtime-settings
+> implemented through P5 copy verification and the reviewed 2026-10-22 adapter follow-ups;
+> operational rollout remains a separate operator action.
+> The pre-adapter-follow-up full suite completed with 4,946 passed and one environment-dependent runtime-settings
 > failure: the existing user `crawler.yaml` sets BookWalker `page_turn_delay_ms` to 0 while
 > the test expects the tracked baseline value 200. The exact unchanged test passed against an isolated copy of
-> the tracked config, and independent review accepted this attribution. Ruff passed.
+> the tracked config.
+> The final post-follow-up full suite completed with 4,991 passed, 2 failed, 0 skipped and 5,340 warnings.
+> The failures were the same user-config-dependent runtime-settings test and a Piccoma timing test that
+> passed alone and across its 12-case matrix on rerun; its cause remains undetermined. Ruff passed.
 > No operational Catalog migration, scope apply, or ZIP renumber has been performed.
 >
 > Codex must keep this note synchronized while implementing the plan. When a phase is completed,
@@ -762,7 +766,7 @@ COPY-ONLY VERIFICATION AND INTEGRATED REVIEW COMPLETE.
   copy-first sequence in `runbooks/work-key-archive-order/README.md` and
   `runbooks/work-key-archive-order/COPY_VALIDATION.md` before any separate
   operator rollout.
-- Full suite: 4,946 passed, 1 failed, 0 skipped, 5,205 warnings in 2,480.96 s.
+- Pre-adapter-follow-up full suite: 4,946 passed, 1 failed, 0 skipped, 5,205 warnings in 2,480.96 s.
   The only failure reads the user's pre-existing `crawler.yaml` (BookWalker
   `page_turn_delay_ms` 0) where the test expects tracked baseline value 200. The unchanged
   test passed against an isolated copy of the tracked config (1 passed in
@@ -851,12 +855,17 @@ P1 currently provides:
   digest. Discovery refresh input omits the acquisition flag and preserves it.
 - Evidence invalidation on full inventory replacement and structural position
   or key changes. Access-state-only refresh does not force a new listing proof.
-- Complete-listing hooks are available for Zeblack, BookWalker, Magapoke,
-  Jump+, Manga ONE, Piccoma, and Comic DAYS. Comic DAYS captures its already
-  validated unbounded Full Atom/readable-product listing with native identity
-  `comicdays-series:<id>` and positions `N..1`, matching Core's oldest-first
-  numbering. It remains unsupported for `discovery_scope` and bounded
-  Discovery; inventory evidence alone does not add boundary semantics.
+- Complete-listing hooks and site-native bounded Discovery are available for
+  Zeblack, BookWalker, Magapoke, Jump+, Manga ONE, Piccoma, Hanayume,
+  Younganimal, ComicFUZ, Kadocomi, and Comic DAYS. Comic DAYS captures its
+  validated Atom/readable-product listing with native identity
+  `comicdays-series:<id>`, positions `N..1`, and strict same-listing boundary
+  validation. Kadocomi's native-history path is opt-in for scoped or ordered
+  targets; its observed native catalogue does not prove that every episode
+  ever published is represented, and missing numbers are not synthesized.
+  Sources missing from a proof keep their historical positions but block
+  reconciliation. Legacy unconfigured Kadocomi Discovery remains public-only
+  and does not infer positions.
 - Watchlist comment preservation for scalar enable changes; unsupported
   comment-bearing structural rewrites fail before writing. Commentless edits are
   parsed and compared with the requested target list before atomic replacement.
@@ -885,6 +894,15 @@ P5 copy verification confirmed the 7 legacy tables' old-column data digests
 survive v6-to-v7 migration, but does not authorize migration or renumber of a
 normal operational path. Follow the copy-first CLI procedure in the work-key
 runbook before any separate production rollout.
+
+The 2026-10-22 follow-up also corrected inventory position persistence: a
+successful proof refresh writes positions for identities present in that
+complete listing only. A previously known Source absent from the listing keeps
+its old position and history, while Scope Reconciler still blocks the Work as
+`missing_listing`; a retained old position is never treated as proof of current
+membership. F2.6 regression coverage passed in 191 Catalog, Discovery, Scope,
+Kadocomi, and routed-browser tests; independent review approved with no
+blocking findings.
 
 Old archive-maintenance notes that say Watchlist enablement is not a Batch
 source filter refer to the `enabled` Discovery execution flag. They do not

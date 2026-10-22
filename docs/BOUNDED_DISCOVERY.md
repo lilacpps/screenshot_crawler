@@ -2,13 +2,16 @@
 
 Status: **ADOPTED SPECIFICATION / CORE IMPLEMENTED; SITE COVERAGE VARIES**
 
-Current implementation note: bounded Discovery is implemented for BookWalker,
-Jump+, Magapoke, MANGA ONE, Piccoma, and Zeblack. Complete-listing inventory
-hooks cover those sites and Comic DAYS. Comic DAYS is inventory-only for
-unbounded Full and `archive_order`; it still rejects `discovery_scope` and does
-not implement bounded Discovery. Each bounded Adapter validates boundaries
-with its own stable listing identity; unsupported scoped synchronization fails
-closed. `discovery_scope` is also the acquisition-scope authority, but
+Current implementation note: bounded Discovery and complete-listing inventory
+hooks are implemented for BookWalker, Jump+, Magapoke, MANGA ONE, Piccoma,
+Zeblack, Hanayume, Younganimal, ComicFUZ, Kadocomi, and Comic DAYS. The
+Kadocomi inventory path is opt-in for `discovery_scope` or `archive_order` and
+uses the site's validated native work listing; its legacy unordered path stays
+public-list-only and does not infer positions. Comic DAYS boundary validation
+uses its validated series listing and canonical episode IDs. Each bounded
+Adapter validates boundaries with its own stable listing identity; unsupported
+scoped synchronization fails closed. `discovery_scope` is also the
+acquisition-scope authority, but
 Discovery does not itself apply acquisition flags: `watch scope-sync`
 separately reconciles the Catalog after complete evidence is available. The
 shared Catalog is schema v7 and Batch checks the synchronized
@@ -190,20 +193,38 @@ bounded fullでmissing-source reconciliationを行わないのは意図的な安
 ### Work-key acquisition proof
 
 Successful Full runs on BookWalker, MANGA ONE, Magapoke, Jump+, Zeblack,
-Piccoma, and Comic DAYS provide a target-bound complete listing
-identity/position inventory. Comic DAYS is inventory-only: it proves its fully
-validated unbounded Atom/readable-product listing and does not support
-`discovery_scope` or bounded Discovery.
+Piccoma, Comic DAYS, Hanayume, Younganimal, ComicFUZ, and opt-in Kadocomi
+provide a target-bound complete listing identity/position inventory. Comic
+DAYS validates its full Atom/readable-product listing before applying its
+inclusive site-native `discovery_scope` slice. Kadocomi opts into its native
+history path only when a target has `discovery_scope` or `archive_order`; the
+unconfigured legacy path remains current-public-only with no inferred
+positions.
 The proof is committed only after the iterator exhausts normally and Catalog
-finalization succeeds. The same inventory refreshes positions of known Sources
-in that listing, including known rows outside the selected slice; it never
-changes those rows' Item status, access/availability state, acquisition flag,
-or history. Scope synchronization is a separate `watch scope-sync` preview /
-apply. Incremental or failed/partial Full runs cannot authorize changed scope.
+finalization succeeds. The inventory position refresh applies to known Sources
+in that listing, including known rows outside the selected slice. The
+evidence/position write itself does not change Item status, access/availability
+state, acquisition flags, or history; ordinary Full Discovery keeps its
+existing classification and availability behavior. Scope synchronization is a
+separate `watch scope-sync` preview / apply. Incremental or failed/partial Full
+runs cannot authorize changed scope.
 Adapters without this inventory hook retain ordinary unbounded Discovery, but
 scoped or archive-ordered work fails closed at reconciliation until the adapter
 can establish site-native listing identity and complete positions. Bounded
-Discovery support alone does not supply this proof.
+Discovery support alone does not supply this proof. Kadocomi's native list is
+the currently observed site-provided catalogue for a work, not a claim that
+every episode ever published is represented. The parser is bounded to the
+observed native response shape (at most 1,000 entries and a 2,000,000-byte JSON
+body).
+Evidence was checked against two real work listings (123 and 33 rows); other
+response shapes fail closed until verified. Native episode numbers can contain
+gaps; missing numbers have no observed episode identity and must never be
+fabricated as Sources or ordinal reservations. Leading or all-inactive
+placeholder patterns not established by current evidence also fail closed.
+Any existing Catalog Source missing from the proof blocks scope synchronization.
+The inventory position writer preserves that Source's prior position and
+history; ordinary Full Discovery availability reconciliation keeps its normal
+site behavior.
 
 ## 8. Catalog / Batch semantics
 

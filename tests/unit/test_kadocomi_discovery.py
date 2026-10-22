@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
+from uuid import UUID
 
 import pytest
 
 from screenshot_crawler.catalog.service import JST
-from screenshot_crawler.discovery import DiscoveryIncompleteError
+from screenshot_crawler.discovery import (
+    DiscoveredItem,
+    DiscoveredRecord,
+    DiscoveredSource,
+    DiscoveryIncompleteError,
+)
 from screenshot_crawler.site_adapters.kadocomi.discovery import (
+    KadocomiDiscoveryAdapter,
     _canonical_work_title,
+    _native_inactive_runs,
     _parse_listing_rows,
+    _parse_native_work_listing,
     _read_expand_button,
     canonical_kadocomi_episode_url,
     canonical_kadocomi_work_url,
@@ -17,6 +27,7 @@ from screenshot_crawler.site_adapters.kadocomi.discovery import (
     parse_kadocomi_episode_url,
     parse_kadocomi_work_url,
 )
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 BASE = "https://comic-walker.com"
 WORK_ID = "KC_004915_S"
@@ -184,3 +195,194 @@ def test_kadocomi_expansion_label_requires_one_supported_total() -> None:
     ):
         with pytest.raises(DiscoveryIncompleteError):
             _read_expand_button(labels)
+
+
+def _native_entry(number: int, *, active: bool, title: str | None = None) -> dict:
+    code = _episode_id(number)
+    episode_type = "normal"
+    return {
+        "code": code,
+        "id": str(UUID(int=number)),
+        "title": title or f"Chapter {number}",
+        "serviceId": "web",
+        "type": episode_type,
+        "isActive": active,
+        "internal": {
+            "episodeNo": number,
+            "episodetype": episode_type,
+            "pageCount": 12,
+        },
+        # Unrelated first-party fields are deliberately not part of the proof.
+        "hasRead": True,
+        "deliveryPeriod": {"notAfter": "ignored"},
+    }
+
+
+def _native_payload() -> dict:
+    entries = [
+        _native_entry(1, active=True),
+        _native_entry(2, active=True),
+        _native_entry(5, active=False),
+        _native_entry(7, active=True),
+        _native_entry(9, active=False),
+    ]
+    return {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {
+                    "queries": [
+                        {
+                            "queryKey": [
+                                "/api/contents/details/work",
+                                {"workCode": WORK_ID},
+                            ],
+                            "state": {
+                                "data": {
+                                    "work": {
+                                        "code": WORK_ID,
+                                        "id": str(UUID(int=100)),
+                                        "title": "Fixture Work",
+                                    },
+                                    "firstEpisodes": {
+                                        "total": len(entries),
+                                        "result": entries,
+                                    },
+                                    "latestEpisodes": {
+                                        "total": len(entries),
+                                        "result": list(reversed(entries)),
+                                    },
+                                }
+                            },
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+
+def test_native_kadocomi_history_preserves_explicit_gapped_positions_and_runs() -> None:
+    listing = _parse_native_work_listing(_native_payload(), work_id=WORK_ID)
+
+    assert listing.work_id == WORK_ID
+    assert listing.work_title == "Fixture Work"
+    assert [episode.episode_no for episode in listing.episodes] == [1, 2, 5, 7, 9]
+    assert [episode.is_active for episode in listing.episodes] == [True, True, False, True, False]
+    runs = _native_inactive_runs(listing.episodes)
+    assert [
+        (
+            previous.title if previous else None,
+            tuple(episode.title for episode in inactive),
+            following.title if following else None,
+        )
+        for previous, inactive, following in runs
+    ] == [
+        ("Chapter 2", ("Chapter 5",), "Chapter 7"),
+        ("Chapter 7", ("Chapter 9",), None),
+    ]
+
+
+def test_native_kadocomi_history_accepts_explicit_extra_episode_type() -> None:
+    payload = _native_payload()
+    query = payload["props"]["pageProps"]["dehydratedState"]["queries"][0]
+    first = query["state"]["data"]["firstEpisodes"]["result"]
+    first[2]["type"] = "extra"
+    first[2]["internal"]["episodetype"] = "extra"
+    query["state"]["data"]["latestEpisodes"]["result"] = list(reversed(first))
+
+    listing = _parse_native_work_listing(payload, work_id=WORK_ID)
+
+    assert listing.episodes[2].episode_type == "extra"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"].update(total=6),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["latestEpisodes"]["result"].reverse(),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2]["internal"].update(episodeNo=2),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2].update(serviceId="app"),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2].update(isActive=1),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2].update(id="not-a-uuid"),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"].append(deepcopy(payload["props"]["pageProps"]["dehydratedState"]["queries"][0])),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["queryKey"][1].update(workCode="KC_011605_S"),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["work"].update(code="KC_011605_S"),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2].update(code=payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][0]["code"]),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][2].update(id=payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"][0]["id"]),
+        lambda payload: payload["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["firstEpisodes"]["result"].append(_native_entry(11, active=False)),
+    ],
+    ids=[
+        "total-mismatch",
+        "latest-order",
+        "duplicate-position",
+        "non-web",
+        "non-boolean-active",
+        "bad-uuid",
+        "duplicate-query",
+        "query-work-mismatch",
+        "work-identity-mismatch",
+        "duplicate-code",
+        "duplicate-uuid",
+        "extra-unaccounted-row",
+    ],
+)
+def test_native_kadocomi_history_rejects_incomplete_or_ambiguous_data(mutate) -> None:
+    payload = _native_payload()
+    mutate(payload)
+    with pytest.raises(DiscoveryIncompleteError):
+        _parse_native_work_listing(payload, work_id=WORK_ID)
+
+
+@pytest.mark.parametrize(
+    ("from_number", "through_number", "expected"),
+    [
+        (5, None, [5, 2, 1]),
+        (None, 5, [9, 7, 5]),
+        (7, 2, [7, 5, 2]),
+        (7, 7, [7]),
+    ],
+    ids=["from-only", "through-only", "both-inclusive", "singleton"],
+)
+def test_native_kadocomi_scope_selects_latest_first_inclusive_slice(
+    from_number: int | None,
+    through_number: int | None,
+    expected: list[int],
+) -> None:
+    listing = _parse_native_work_listing(_native_payload(), work_id=WORK_ID)
+    records = [
+        DiscoveredRecord(
+            item=DiscoveredItem(order_label=episode.title),
+            source=DiscoveredSource(
+                external_id=f"{WORK_ID}:{episode.episode_id}",
+                url=canonical_kadocomi_episode_url(
+                    f"{BASE}/detail/{WORK_ID}/episodes/{episode.episode_id}"
+                ),
+                global_display_position=episode.episode_no,
+            ),
+        )
+        for episode in reversed(listing.episodes)
+    ]
+
+    def boundary_url(number: int | None) -> str | None:
+        if number is None:
+            return None
+        return canonical_kadocomi_episode_url(
+            f"{BASE}/detail/{WORK_ID}/episodes/{_episode_id(number)}"
+        )
+
+    target = WatchlistTarget(
+        key="native-scope",
+        work_key=f"kadocomi:{WORK_ID}",
+        site="kadocomi",
+        url=f"{BASE}/detail/{WORK_ID}",
+        label="Fixture Work",
+        discovery_scope=DiscoveryScope(
+            from_url=boundary_url(from_number),
+            through_url=boundary_url(through_number),
+        ),
+        archive_order=1,
+    )
+
+    selected = KadocomiDiscoveryAdapter._select_native_scope(records, target, WORK_ID)
+
+    assert [record.source.global_display_position for record in selected] == expected

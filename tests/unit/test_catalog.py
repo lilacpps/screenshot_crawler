@@ -467,6 +467,84 @@ def test_scope_sync_and_full_inventory_evidence_are_transactional_and_refresh_sa
     assert stale_sync is not None and stale_sync.status == "stale"
 
 
+def test_inventory_refresh_preserves_unlisted_source_position_and_history(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work, _observed_item, observed_source, _observed_target = make_graph(service)
+    unlisted_item = service.create_item(
+        ItemInput(item_title="Historical", status="pending", note="keep note"),
+        work_id=work.id,
+    )
+    unlisted_source = service.create_source(
+        SourceInput(
+            site="mangaone",
+            external_id="chapter-historical",
+            discovery_key="target-a",
+            access_mode="unknown",
+            available=False,
+            display_position=9,
+        ),
+        item_id=unlisted_item.id,
+    )
+    unlisted_target = service.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/historical"),
+        source_id=unlisted_source.id,
+    )
+    service.apply_acquisition_scope_sync(
+        work_key=work.work_key,
+        fingerprint="watchlist-fingerprint",
+        source_flags={observed_source.id: False, unlisted_source.id: False},
+    )
+    run = service.create_crawl_run(
+        item_id=unlisted_item.id,
+        source_id=unlisted_source.id,
+        target_id=unlisted_target.id,
+        access_strategy="direct",
+    )
+    _, artifact, completed_item = service.finalize_successful_crawl(
+        run.id,
+        artifact=ArtifactInput(
+            kind="archive",
+            format="zip",
+            sha256=SHA,
+            byte_size=12,
+            storage_backend="filesystem",
+            locator="library/historical.zip",
+            state="present",
+        ),
+        page_count=1,
+    )
+    assert completed_item.status == "completed"
+    with service._connection() as connection:
+        connection.execute(
+            "UPDATE sources SET updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?",
+            (unlisted_source.id,),
+        )
+    source_before = service.get_source(unlisted_source.id)
+    item_before = service.get_item(unlisted_item.id)
+    run_before = service.get_crawl_run(run.id)
+    artifact_before = service.get_artifact(artifact.id)
+
+    service.record_discovery_inventory_evidence(
+        work_key=work.work_key,
+        discovery_key="target-a",
+        site="mangaone",
+        target_url="https://example.invalid/listing",
+        scope_fingerprint="a" * 64,
+        listing_identity="series-42",
+        positions=[DiscoveryInventoryPosition("chapter-1", 1, in_scope=True)],
+    )
+
+    source_after = service.get_source(unlisted_source.id)
+    assert source_after.display_position == source_before.display_position == 9
+    assert source_after.updated_at == source_before.updated_at
+    assert source_after.available == source_before.available is False
+    assert source_after.access_mode == source_before.access_mode == "unknown"
+    assert source_after.acquisition_enabled == source_before.acquisition_enabled is False
+    assert service.get_item(unlisted_item.id) == item_before
+    assert service.get_crawl_run(run.id) == run_before
+    assert service.get_artifact(artifact.id) == artifact_before
+
+
 def test_scope_sync_rejects_incomplete_source_flags_without_marker(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     work, _item, source, _target = make_graph(service)

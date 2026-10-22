@@ -172,25 +172,33 @@ Reviewer BLOCKING=0。未検証・サイト依存・失敗した原画像候補�
 
 `KadocomiDiscoveryAdapter` is registered in the Discovery CLI registry.
 `KadocomiAdapter` is separately registered for manual Crawl and Batch, with
-`KadocomiSitePolicy` in the Batch policy registry. Discovery accepts the
-verified work detail URL on `https://comic-walker.com`, reads
-the unique `DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*`
-container, and expands the exact `全{N}話を表示` control. It requires two
-identical scoped snapshots 500 ms apart, at the declared row count, within a
-12-second bound before yielding any record. Page-wide recommendations are
-outside scope. Rows are buffered and validated before newest-first emission.
-Bounded `from_url` / `through_url` Discovery is unsupported.
+`KadocomiSitePolicy` in the Batch policy registry. For a target with neither
+`discovery_scope` nor `archive_order`, the legacy Discovery path accepts the
+verified work detail URL on `https://comic-walker.com`, reads the unique
+`DIV.EpisodesTabContents_root__* > UL.EpisodesTabContents_episodeList__*`
+container, and requires exactly one visible `全{N}話を表示` control. It
+requires two identical scoped snapshots 500 ms apart, at the declared row
+count, within a 12-second bound before yielding any record. Page-wide
+recommendations are outside scope. Rows are buffered and validated before
+newest-first emission. This unconfigured path is unbounded and does not infer
+global positions. Targets with scope/order use the separate strict
+native-history path documented in `note/12_kadocomi.md` and
+`site_adapters/kadocomi/README.md`.
 
 Episode source identity is `work_id:episode_id`; persisted reader targets are
 canonical query-free episode URLs. The order label comes from the observed
-`EpisodeThumbnail_title__` descendant, not publication or deadline dates. No
-numeric display position is inferred: old positions stay unchanged and new
-positions stay NULL.
+`EpisodeThumbnail_title__` descendant, not publication or deadline dates. On
+the legacy unconfigured path no numeric display position is inferred: old
+positions stay unchanged and new positions stay NULL. The opt-in native path
+uses explicit `episodeNo` positions for observed rows; it does not infer missing
+IDs from numeric gaps.
 
 The exact row deadline marker is `配信期限：YYYY/MM/DD HH:MM`. A future explicit
 deadline is stored as `free_until`; a later NULL observation clears it. A
-no-deadline row is classified free only for the independently verified work
-`KC_004915_S`. Other no-deadline works and expired deadlines remain UNKNOWN.
+no-deadline row was initially classified free only for the independently
+verified work `KC_004915_S`; the current site-local policy follows the later
+validated public-row convention for works without restriction flags or
+deadlines. Expired deadlines remain UNKNOWN.
 Access-gate text, unknown deadline syntax, malformed identity, duplicates,
 wrong-work IDs, and incomplete counts fail closed. Full reconciliation runs
 only after a clean complete list; incremental Discovery leaves unseen Sources
@@ -211,4 +219,4 @@ Blob/canvas evidence; each member was byte-exact and pixel-equal.
 
 P0/P1 retain the exact public-list scope, 53 observed rows, and history/NULL-position safety contract. P3 selects only direct-only free Catalog Sources; current capture opens the exact canonical episode once and validates its main-document response, same-page identity/title metadata, dialog state, and native reader readiness without rechecking the work list. Earlier P4 CLI/ZIP audits for episodes 4.1, first episode, and Episode 79 passed byte/pixel/END review before this navigation follow-up. The direct-entry follow-up passed local Runner/Batch fixtures and independent code/test review. The Episode 22.2 extension passed its bounded anonymous native-source/END probe, local Runner/Batch fixtures, independent code/test review, and normal CLI/ZIP audit. The Episode 20.2 composite layout passed its bounded manual source/END probe, local Runner/Batch fixtures, and normal CLI ZIP; its current 11-page ZIP matched the P0 recorded source hashes and lengths. The existing Episode 4.1 CLI control, final post-Discovery/backup audits, final Reviewer gate, and Lead acceptance also passed. Full prior-suite baseline and current validation are in `PROGRESS.md`.
 
-The original seven observed reader layouts across six strict profiles were verified for their exact observed episode targets on the independently verified work `KC_004915_S`. The observed Episode 20.2 has five paired spreads. Its accepted profile requires the strict owned beginning-PR entry, at least one paired content slide (end index >=3), a final singleton owning main END n=2, the immediate empty paired END, and no trailing recommendation; arbitrary empty starts remain unsupported. The Episode 22.2 beginning-PR topology requires its exact owned marker and one verified ordinary advance; it does not generalize to arbitrary empty first slides. Its normal CLI/ZIP audit and the existing 21-slot Episode 4.1 CLI control passed, as did final post-Discovery/backup audits, Reviewer gate, and Lead acceptance. For the 21-slot control, no fresh per-page source-byte comparison was available; it was validated for ZIP CRC, dimensions, END, Completed, and Artifact. Works/layouts beyond the observed routes described here, exact lifetime episode gaps, no-deadline access on other works, and production archive renumbering are not inferred. The P4 CLI removes temporary source output after packaging, so audits cover ZIP pages, CrawlRun/status, and Catalog Artifact/Completed state, not a retained manifest file. See `PROGRESS.md` for current evidence and validation.
+The original seven observed reader layouts across six strict profiles were verified for their exact observed episode targets on the independently verified work `KC_004915_S`. The observed Episode 20.2 has five paired spreads. Its accepted profile requires the strict owned beginning-PR entry, at least one paired content slide (end index >=3), a final singleton owning main END n=2, the immediate empty paired END, and no trailing recommendation; arbitrary empty starts remain unsupported. The Episode 22.2 beginning-PR topology requires its exact owned marker and one verified ordinary advance; it does not generalize to arbitrary empty first slides. Its normal CLI/ZIP audit and the existing 21-slot Episode 4.1 CLI control passed, as did final post-Discovery/backup audits, Reviewer gate, and Lead acceptance. For the 21-slot control, no fresh per-page source-byte comparison was available; it was validated for ZIP CRC, dimensions, END, Completed, and Artifact. Reader capture evidence remains limited to the exact observed routes and layouts; no-deadline public-row classification follows the current Discovery policy described above and is not additional reader-capture proof. Exact lifetime episode gaps and production archive renumbering are not inferred. The P4 CLI removes temporary source output after packaging, so audits cover ZIP pages, CrawlRun/status, and Catalog Artifact/Completed state, not a retained manifest file. See `PROGRESS.md` for current evidence and validation.

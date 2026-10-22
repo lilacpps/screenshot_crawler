@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import yaml
 
+from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import ArtifactInput, CatalogService
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
 from screenshot_crawler.site_adapters.comicfuz import ComicFuzDiscoveryAdapter
+from screenshot_crawler.site_policies import ComicFuzSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -131,6 +137,18 @@ async def test_comicfuz_full_discovery_reconciles_catalog_and_global_positions(
     sources = catalog.list_sources(site="comicfuz")
     assert result.complete is True
     assert result.observed_count == 4
+    inventory = catalog.get_discovery_inventory_evidence(_target().key)
+    assert inventory is not None
+    assert inventory.listing_identity == f"comicfuz-work:{WORK_ID}"
+    assert [
+        (position.external_id, position.display_position, position.in_scope)
+        for position in inventory.positions
+    ] == [
+        ("1970:1", 1, True),
+        ("1970:10", 2, True),
+        ("1970:20", 3, True),
+        ("1970:30", 4, True),
+    ]
     assert [source.external_id for source in sources] == [
         "1970:30", "1970:20", "1970:10", "1970:1"
     ]
@@ -152,6 +170,7 @@ async def test_comicfuz_full_discovery_reconciles_catalog_and_global_positions(
     assert rerun.new_count == 0
     assert rerun.known_count == 4
     assert len(catalog.list_sources(site="comicfuz")) == 4
+    assert catalog.get_discovery_inventory_evidence(_target().key) is not None
 
 
 async def test_comicfuz_access_refresh_and_incomplete_full_preserve_catalog_history(
@@ -317,6 +336,148 @@ async def test_comicfuz_bounded_discovery_keeps_full_list_positions(
     assert result.complete is True
     assert [source.external_id for source in sources] == ["1970:3", "1970:2"]
     assert [source.display_position for source in sources] == [3, 2]
+    inventory = catalog.get_discovery_inventory_evidence(_target(scope).key)
+    assert inventory is not None
+    assert inventory.listing_identity == f"comicfuz-work:{WORK_ID}"
+    assert [
+        (position.external_id, position.display_position, position.in_scope)
+        for position in inventory.positions
+    ] == [
+        ("1970:1", 1, False),
+        ("1970:2", 2, True),
+        ("1970:3", 3, True),
+        ("1970:4", 4, False),
+    ]
+
+
+async def test_comicfuz_scope_sync_shrink_and_reexpand_preserves_history_and_ordinals(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    chapters = [("4", "第4話"), ("3", "第3話"), ("2", "第2話"), ("1", "第1話")]
+
+    async def fulfill(route) -> None:
+        await route.fulfill(
+            body=_listing_html(chapters, free_ids={"3"}),
+            content_type="text/html; charset=utf-8",
+        )
+
+    await browser_page.route(f"{BASE}/**", fulfill)
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    watchlist_path = tmp_path / "watchlist.yaml"
+    watchlist = WatchlistService(watchlist_path)
+    target = watchlist.add(
+        key="comicfuz-test",
+        work_key=f"comicfuz:{WORK_ID}",
+        site="comicfuz",
+        url=WORK_URL,
+        label="Fixture work",
+        archive_order=10,
+    )
+    registry = DiscoveryAdapterRegistry()
+    registry.register("comicfuz", ComicFuzDiscoveryAdapter)
+    discovery = DiscoveryService(catalog, registry)
+    reconciler = ScopeReconciler(watchlist, catalog)
+
+    first_full = await discovery.discover(browser_page, target, "full")
+    assert first_full.complete is True
+    first_evidence = catalog.get_discovery_inventory_evidence(target.key)
+    assert first_evidence is not None and first_evidence.source_count == 4
+    first_preview = reconciler.preview(target.work_key)
+    assert first_preview.ready
+    reconciler.apply(first_preview)
+
+    before = {source.external_id: source for source in catalog.list_sources(site="comicfuz")}
+    catalog.mark_item_completed(before["1970:1"].item_id)
+    catalog.mark_item_completed(before["1970:2"].item_id)
+    completed_times = {
+        external_id: catalog.get_item(before[external_id].item_id).completed_at
+        for external_id in ("1970:1", "1970:2")
+    }
+
+    watchlist_data = yaml.safe_load(watchlist_path.read_text(encoding="utf-8"))
+    watchlist_data["targets"][0]["discovery_scope"] = {
+        "from_url": f"{BASE}/manga/viewer/3",
+        "through_url": f"{BASE}/manga/viewer/2",
+    }
+    watchlist_path.write_text(
+        yaml.safe_dump(watchlist_data, sort_keys=False), encoding="utf-8"
+    )
+    narrowed_target = watchlist.get(target.key)
+    narrowed = await discovery.discover(browser_page, narrowed_target, "full")
+    assert narrowed.complete is True
+    assert narrowed.observed_count == 2
+    narrowed_evidence = catalog.get_discovery_inventory_evidence(target.key)
+    assert narrowed_evidence is not None
+    assert {
+        position.external_id
+        for position in narrowed_evidence.positions
+        if position.in_scope
+    } == {"1970:2", "1970:3"}
+    narrowed_preview = reconciler.preview(target.work_key)
+    assert narrowed_preview.ready
+    reconciler.apply(narrowed_preview)
+
+    after_shrink = {source.external_id: source for source in catalog.list_sources(site="comicfuz")}
+    assert {external_id: source.id for external_id, source in after_shrink.items()} == {
+        external_id: source.id for external_id, source in before.items()
+    }
+    assert {
+        external_id: after_shrink[external_id].acquisition_enabled
+        for external_id in after_shrink
+    } == {"1970:1": False, "1970:2": True, "1970:3": True, "1970:4": False}
+    assert {
+        external_id: catalog.get_item(after_shrink[external_id].item_id).status
+        for external_id in ("1970:1", "1970:2")
+    } == {"1970:1": "completed", "1970:2": "completed"}
+    assert {
+        external_id: catalog.get_item(after_shrink[external_id].item_id).completed_at
+        for external_id in completed_times
+    } == completed_times
+
+    policies = SitePolicyRegistry()
+    policies.register("comicfuz", ComicFuzSitePolicy)
+    planner = BatchPlanner(
+        catalog,
+        policies,
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+    )
+    narrowed_plan = planner.plan(
+        site="comicfuz", now=datetime(2026, 10, 22, tzinfo=UTC)
+    )
+    assert [candidate.source_id for candidate in narrowed_plan.candidates] == [
+        after_shrink["1970:3"].id
+    ]
+    assert [candidate.artifact_prefix for candidate in narrowed_plan.candidates] == ["002"]
+
+    watchlist_data["targets"][0].pop("discovery_scope")
+    watchlist_path.write_text(
+        yaml.safe_dump(watchlist_data, sort_keys=False), encoding="utf-8"
+    )
+    expanded_target = watchlist.get(target.key)
+    expanded = await discovery.discover(browser_page, expanded_target, "full")
+    assert expanded.complete is True
+    expanded_preview = reconciler.preview(target.work_key)
+    assert expanded_preview.ready
+    reconciler.apply(expanded_preview)
+
+    after_expand = {source.external_id: source for source in catalog.list_sources(site="comicfuz")}
+    assert {external_id: source.id for external_id, source in after_expand.items()} == {
+        external_id: source.id for external_id, source in before.items()
+    }
+    assert all(source.acquisition_enabled for source in after_expand.values())
+    assert {
+        external_id: catalog.get_item(after_expand[external_id].item_id).completed_at
+        for external_id in completed_times
+    } == completed_times
+    expanded_plan = planner.plan(
+        site="comicfuz", now=datetime(2026, 10, 22, tzinfo=UTC)
+    )
+    assert [candidate.source_id for candidate in expanded_plan.candidates] == [
+        after_expand["1970:3"].id
+    ]
+    assert [candidate.artifact_prefix for candidate in expanded_plan.candidates] == ["003"]
 
 
 async def test_comicfuz_incremental_uses_shared_known_streak_without_local_renumbering(

@@ -38,12 +38,16 @@ unbounded/unordered legacy sync may bootstrap only when all existing Sources
 have matching Watchlist key/site/work ownership. Removed Sources remain in the
 Catalog disabled, with the last key/URL binding retained for safe re-add.
 Batch enforces the fail-closed acquisition-scope gate described below.
-Current complete-listing inventory hooks are available for Zeblack, BookWalker,
-Magapoke, Jump+, Manga ONE, Piccoma, and Comic DAYS. Comic DAYS inventory is
-limited to its validated unbounded full listing, identified as
-`comicdays-series:<id>`; it does not support `discovery_scope` or bounded
-Discovery. Hanayume, Younganimal, Kadocomi, and ComicFUZ remain without the
-shared complete-listing hook.
+Current complete-listing inventory hooks and site-native bounded Discovery
+are available for Zeblack, BookWalker, Magapoke, Jump+, Manga ONE, Piccoma,
+Comic DAYS, Hanayume, Younganimal, Kadocomi, and ComicFUZ.
+Comic DAYS binds its validated Atom/readable-product series inventory as
+`comicdays-series:<id>`. Kadocomi opts into its native work-history inventory
+only for `discovery_scope` or `archive_order`; its unconfigured legacy path
+remains current-public-only and does not infer positions. Kadocomi's observed
+native list is not a claim that every episode ever published is represented;
+gapped episode numbers do not identify missing Sources and are never
+fabricated. An existing Source missing from a complete proof blocks sync.
 Cross-site `archive_order` numbering and existing-archive renumbering are
 implemented through P4. P5 validates the flows on synthetic fixtures and
 isolated working copies; operational Catalog/Books rollout remains a separate
@@ -268,7 +272,13 @@ CDP BrowserSession/Page without Core or schema changes. Current contracts and
 evidence are in `note/13_comicfuz.md` and
 `runbooks/comicfuz-free/PROGRESS.md`.
 
-## Kadocomi Discovery, direct capture, and Batch registration (2026-10-12)
+## Historical Kadocomi registration snapshot (2026-10-12)
+
+This section records the initial registration contract only. Current Kadocomi
+Discovery scope, native inventory, and position behavior is described in the
+2026-10-22 shared Catalog section above and `note/12_kadocomi.md`. The initial
+public-list-only, single-work no-deadline, and no-inferred-position statements
+below are superseded for opt-in scoped or archive-ordered targets.
 
 Kadocomi Discovery, manual Crawl, Batch adapter, and Batch Policy use the
 existing DiscoveryService, Catalog, CrawlerRunner, shared CDP BrowserSession /
@@ -1854,7 +1864,7 @@ and per-artifact capture fingerprint.
 - Watchlistの`DiscoveryScope(from_url / through_url)` model、YAML parse、mapping / boundary存在 / non-empty string validation: **IMPLEMENTED**
 - scope付きtargetのenable / disable等のWatchlist rewrite preservation: **IMPLEMENTED**
 - scopeなしtargetの既存load / rewrite互換: **IMPLEMENTED**。scopeなしtargetは従来どおりunboundedとして扱い、scope専用CLI optionは追加していない
-- common Discovery capability gate: **IMPLEMENTED**。`DiscoveryAdapter.supports_bounded_discovery` のdefaultは`False`で、明示的にopt-inしたAdapterだけboundedを受け付ける。Magapoke / BookWalker / Manga ONE / Jump+ / Zeblack / Piccomaはopt-in済みで、その他の未対応Adapterはdefault `False`のまま
+- common Discovery capability gate: **IMPLEMENTED**。`DiscoveryAdapter.supports_bounded_discovery` のdefaultは`False`で、明示的にopt-inしたAdapterだけboundedを受け付ける。Magapoke / BookWalker / Manga ONE / Jump+ / Zeblack / Piccoma / Hanayume / Younganimal / ComicFUZ / Kadocomi / Comic DAYSはopt-in済み。未対応Adapterはdefault `False`のまま
 - scope付きtargetを未対応Adapterへ渡した場合: **IMPLEMENTED**。Work作成前にincompleteとして停止し、`iter_records()`、unbounded fallback、Item / Source / SourceTarget同期を行わない
 - bounded full: **IMPLEMENTED**。対応Adapterがyieldしたrecordは通常どおり同期し、正常終了時は`complete=True` / `stopped_reason="exhausted"`とする。global missing-source reconciliationは実行しない。完全一覧を把握できるAdapterはscope slice前にglobal display-position hintを付与し、scope-local `1..N`へ再採番しない。hintなしbounded runはincompleteでfail closedとする
 - bounded incremental common semantics: **IMPLEMENTED**。generic known-streak（5件の連続distinct known identity）と`incremental_stop_decision()`のstop hookをscopeなしと同じ順序・契約で適用する。global hintがあればそれをauthorityとして使い、boundedでhintがなければincompleteとする
@@ -1869,7 +1879,11 @@ and per-artifact capture fingerprint.
 - Jump+ / bounded cross-site no-merge regression: **IMPLEMENTED**。bounded対応Fakeを使った共通回帰で、同じ`work_key`でもsiteをまたぐItem自動mergeを行わないことを確認している
 - Zeblack production Adapter bounded support: **IMPLEMENTED**。strict chapter-list / viewer parser、DOM/protobuf exact-set validation、latest-first canonical order、raw DOM oldest-first index由来のglobal position、chapter_id boundary slice、およびyield前bufferingを`ZeblackDiscoveryAdapter`で実装済み。Z4-1時点ではDiscovery registryのみ登録し、Z5でBatch Policy registryにも登録した
 - Piccoma bounded Discovery: **IMPLEMENTED**. Strictly parses canonical viewer URL product/episode identity, buffers and validates the complete product listing, then selects an inclusive latest-first range. Assigns whole-work `display_position` from oldest-first native DOM index + 1 before slicing. Free classification requires exactly the `PCM-epList_status_free` marker set across wrapper and descendants plus exact `¥0`. Fresh viewer preflight, horizontal viewer/capture, and the available+free-only direct Site Policy with local Batch integration are implemented. Phase 06-D code review and independent live Tester passed with BLOCKING 0: the standard two-product Batch-to-ZIP route produced 24 and 15 validated lossless WebP pages, explicit END, and completed Catalog artifacts. WebP requires exact JPEG-to-canvas provenance, verified white compositing, VP8L validation, and an exact RGB round-trip; encoding/provenance fallbacks remain PNG. Other layouts/resources and unobserved draw/backdrop variants remain unsupported.
-- 他siteのbounded range boundary parse / same-scope validation / canonical range extraction: **NOT YET IMPLEMENTED**
+- Hanayume / Younganimal / ComicFUZ bounded Discovery and listing proof: **IMPLEMENTED**。各Adapterは検証済みfull listingと既存global positionを使い、slice前にinventoryを保持する。Younganimalのaccount-only rowsはpublic inventoryやpositionに追加しない。Fullの正常exhaustion後のみ証拠を公開し、access semanticsを変えない
+- Comic DAYS bounded Discovery and listing proof: **IMPLEMENTED**。検証済みAtom/readable-product series listingからnative series identityとlatest-first positionsを確定し、canonical episode boundaryを同一listing内で検証してからinclusive sliceを返す。Full proofは正常exhaustion後のみ公開する
+- Kadocomi opt-in bounded Discovery and listing proof: **IMPLEMENTED**。`discovery_scope`または`archive_order`指定時のみ、work-bound native arrays、explicit `episodeNo`、UUID/type/active data、exact reverse orderをstrictに検証する。legacy unconfigured pathはpublic rowsのみでposition inferenceを行わない。番号gapはSourcesとして捏造せず、existing Catalog Source absent from proofは過去positionを保持したまま`missing_listing`としてscope syncをblockする
+- Listing inventory evidence is committed only after successful Full exhaustion and Catalog finalization. Incremental, failed, partial, or early-closed runs cannot publish proof. Position writes affect observed inventory identities only; absent Catalog Sources retain historical positions, but those are not current-listing evidence and do not unblock reconciliation.
+- 未対応Adapterでは `supports_bounded_discovery=False` を維持する。scope付きtargetはunbounded fallbackせずWork / Item / Source同期前にfail closed
 
 The following historical summary predates Z4-1; the current production
 bounded adapters include both Jump+ and Zeblack. Site Policy and Batch

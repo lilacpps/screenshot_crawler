@@ -129,7 +129,7 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
         target: WatchlistTarget,
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
-        del mode  # The service applies its standard latest-first known-streak rule.
+        self.reset_complete_listing_inventory()
         target_parts = parse_comicfuz_work_url(target.url)
         if target_parts is None:
             raise DiscoveryIncompleteError("Watchlist target must be a canonical ComicFUZ work URL")
@@ -160,7 +160,8 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
             settled = await self._wait_for_stable_snapshot(page, target_parts)
             if settled != initial:
                 raise DiscoveryIncompleteError("ComicFUZ chapter listing changed while settling")
-            records = self._records_from_snapshot(initial, target_parts)
+            all_records = self._records_from_snapshot(initial, target_parts)
+            records = all_records
             if target.discovery_scope is not None:
                 records = self._apply_scope(records, target_parts, target.discovery_scope)
             before_emission = await self._snapshot(page, target_parts)
@@ -177,6 +178,13 @@ class ComicFuzDiscoveryAdapter(DiscoveryAdapter):
         # until the complete current listing and any requested range validated.
         for record in records:
             yield record
+        if mode == "full":
+            self.capture_complete_listing_inventory(
+                target=target,
+                all_records=all_records,
+                selected_records=records,
+                listing_identity=f"comicfuz-work:{target_parts.work_id}",
+            )
 
     async def _validate_page_identity(
         self,

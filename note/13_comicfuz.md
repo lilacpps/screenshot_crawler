@@ -10,16 +10,18 @@ target enabled controls whether Discovery runs and is not an ownership flag.
 Batch requires a current synchronized Scope Reconciler snapshot and
 sources.acquisition_enabled state.
 
-This adapter does not currently provide the complete-listing inventory proof
-hook required for scoped or archive-ordered work. A site-local bounded
-Discovery implementation, where available, is not sufficient evidence for
-work-wide acquisition reconciliation. With either discovery_scope or
-archive_order set, Scope Reconciler must block; a successful Full alone cannot
-resolve that blocker. Do not keep repeating Full as a workaround. For a
-NEVER-MANAGED legacy work with neither discovery_scope nor archive_order,
-explicit preview/apply may bootstrap existing Sources only when their
-discovery_key, site, and work ownership all match the Watchlist. Newly
-discovered Sources still require a fresh sync before Batch.
+ComicFUZ now supplies target-bound complete-listing proof for its validated
+current public work listing (`comicfuz-work:<work_id>`) and supports native
+bounded `discovery_scope`. Existing latest-first listing order and global
+positions are retained before slicing. The page identity/list snapshot is
+rechecked before emission; proof is published only after a normal Full
+iterator exhaustion. Full only updates proof/observed positions, not
+acquisition flags. After Full, explicitly preview and apply `watch scope-sync`
+before Batch. Failed, partial, or Incremental runs do not unlock sync, and
+Catalog Sources absent from the proof still block. For a NEVER-MANAGED legacy
+work without scope/order, explicit bootstrap remains restricted to matching
+Watchlist key/site/work ownership. Newly discovered Sources require a fresh
+sync before Batch.
 
 A successful Full after a prior scope sync invalidates the sync marker. After
 Full, rerun preview and explicit apply with the same Watchlist before planning
@@ -34,10 +36,9 @@ validation; replace placeholders with paths under the same COPY_ROOT:
     python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --apply --json
     python -m screenshot_crawler.cli batch plan --site <site> --catalog <copy/catalog.sqlite> --watchlist <copy/watchlist.yaml> --library-dir <copy/Books>
 
-The scope-sync apply example is only for an eligible unbounded, unordered legacy
-work. For scoped or archive-ordered work on this adapter, expect a fail-closed
-preview until a complete-listing proof hook is implemented. Batch plan remains
-read-only; use the same copy paths for any separately authorized execution.
+The scope-sync apply example can also be used after a successful full scoped
+ComicFUZ Discovery. Batch plan remains read-only; use the same copy paths for
+any separately authorized execution.
 
 ## Work 3140 compatibility (2026-10-17)
 

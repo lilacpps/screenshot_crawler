@@ -23,7 +23,7 @@ from screenshot_crawler.discovery.models import (
     DiscoveryMode,
 )
 from screenshot_crawler.discovery.service import DiscoveryIncompleteError
-from screenshot_crawler.watchlist.models import WatchlistTarget
+from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 ALLOWED_HOSTS = frozenset({"comic-days.com", "www.comic-days.com"})
 ATOM_NS = "http://www.w3.org/2005/Atom"
@@ -352,11 +352,13 @@ async def fetch_comicdays_readable_products(
 class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
     """Yield a complete Atom listing classified by first-party access state."""
 
+    supports_bounded_discovery = True
+
     async def iter_records(self, page: Page, target: WatchlistTarget, mode: DiscoveryMode) -> AsyncIterator[DiscoveredRecord]:
         self.reset_complete_listing_inventory()
         target_id = parse_comicdays_episode_url(target.url)
-        if target_id is None or target.discovery_scope is not None:
-            raise DiscoveryIncompleteError("Comic DAYS requires an unbounded canonical episode target")
+        if target_id is None:
+            raise DiscoveryIncompleteError("Comic DAYS requires a canonical episode target")
         try:
             await page.goto(canonical_comicdays_episode_url(target.url), wait_until="domcontentloaded", timeout=15_000)
         except (PlaywrightTimeoutError, TimeoutError) as exc:
@@ -404,7 +406,8 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
         if await author_locator.count() == 1:
             author = " ".join((await author_locator.inner_text(timeout=2_000)).split()) or None
         records: list[DiscoveredRecord] = []
-        for entry in full_entries:
+        total = len(full_entries)
+        for index, entry in enumerate(full_entries):
             label = entry.get("title")
             order = None
             if label:
@@ -420,11 +423,17 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
                     access_granted_until=grant_until,
                     access_granted_until_observed=grant_observed,
                     available=True, access_checked_at=now, last_seen_at=now, published_at=None,
+                    global_display_position=total - index,
                 ),
             ))
+        selected_records = (
+            records
+            if target.discovery_scope is None
+            else self._apply_scope(records, target.discovery_scope)
+        )
         # Every network/listing invariant and every access classification must
         # pass before the first record is handed to the Catalog service.
-        for record in records:
+        for record in selected_records:
             yield record
         # Publish the unbounded listing only after normal iterator exhaustion.
         # DiscoveryService persists this inventory only after Catalog
@@ -434,6 +443,64 @@ class ComicDaysDiscoveryAdapter(DiscoveryAdapter):
             self.capture_complete_listing_inventory(
                 target=target,
                 all_records=records,
-                selected_records=records,
+                selected_records=selected_records,
                 listing_identity=f"comicdays-series:{series_id}",
             )
+
+    @staticmethod
+    def _apply_scope(
+        records: list[DiscoveredRecord], scope: DiscoveryScope
+    ) -> list[DiscoveredRecord]:
+        if scope.from_url is None and scope.through_url is None:
+            raise DiscoveryIncompleteError("Comic DAYS bounded scope has no episode boundary")
+
+        index_by_id = {
+            record.source.external_id: index for index, record in enumerate(records)
+        }
+        boundary_indices: dict[str, int] = {}
+        for name, url in (("from", scope.from_url), ("through", scope.through_url)):
+            if url is None:
+                continue
+            episode_id = ComicDaysDiscoveryAdapter._scope_boundary_episode_id(url)
+            if episode_id is None:
+                raise DiscoveryIncompleteError(
+                    f"Comic DAYS bounded Discovery {name} URL is invalid"
+                )
+            index = index_by_id.get(episode_id)
+            if index is None:
+                raise DiscoveryIncompleteError(
+                    f"Comic DAYS bounded Discovery {name} episode is not in the listing"
+                )
+            boundary_indices[name] = index
+
+        from_index = boundary_indices.get("from", 0)
+        through_index = boundary_indices.get("through", len(records) - 1)
+        if from_index > through_index:
+            raise DiscoveryIncompleteError(
+                "Comic DAYS bounded Discovery boundaries are reversed"
+            )
+        return records[from_index : through_index + 1]
+
+    @staticmethod
+    def _scope_boundary_episode_id(url: str) -> str | None:
+        """Accept only secure, credential-free native URLs as scope authority."""
+
+        try:
+            parsed = urlparse(url)
+            port = parsed.port
+        except ValueError:
+            return None
+        host = parsed.hostname
+        if (
+            parsed.scheme.lower() != "https"
+            or host is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.params
+            or port not in {None, 443}
+        ):
+            return None
+        normalized_authority = parsed.netloc.lower()
+        if normalized_authority not in {host, f"{host}:443"}:
+            return None
+        return parse_comicdays_episode_url(url)

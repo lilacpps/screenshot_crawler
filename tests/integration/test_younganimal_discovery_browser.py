@@ -290,6 +290,14 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
     full = await service.discover(browser_page, _target(), "full")
     assert full.complete is True
     assert full.observed_count == TOTAL
+    inventory = catalog.get_discovery_inventory_evidence(_target().key)
+    assert inventory is not None
+    assert inventory.listing_identity == f"younganimal-work:{WORK_ID}"
+    assert inventory.source_count == TOTAL
+    assert [position.display_position for position in inventory.positions] == list(
+        range(1, TOTAL + 1)
+    )
+    assert all(position.in_scope for position in inventory.positions)
     sources = catalog.list_sources(site="younganimal")
     assert len(sources) == TOTAL
     assert {source.external_id.split(":", 1)[0] for source in sources} == {WORK_ID}
@@ -328,6 +336,15 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
         29,
         28,
     ]
+    bounded_inventory = bounded_catalog.get_discovery_inventory_evidence(_target().key)
+    assert bounded_inventory is not None
+    assert bounded_inventory.listing_identity == f"younganimal-work:{WORK_ID}"
+    assert bounded_inventory.source_count == TOTAL
+    assert [
+        position.display_position
+        for position in bounded_inventory.positions
+        if position.in_scope
+    ] == [28, 29, 30]
     assert pacing_navigation_counts == [1, 2]
     assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(3)}").access_mode == "quota"
 
@@ -335,6 +352,9 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
     pacing_navigation_counts.clear()
     incremental = await service.discover(browser_page, _target(), "incremental")
     assert incremental.complete is None
+    assert catalog.get_discovery_inventory_evidence(_target().key).inventory_digest == (
+        inventory.inventory_digest
+    )
     assert incremental.stopped_reason == "exhausted"
     assert incremental.observed_count == TOTAL
     assert requested.count(f"/series/{WORK_ID}/1") == 1

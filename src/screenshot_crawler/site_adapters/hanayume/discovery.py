@@ -1325,7 +1325,7 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
         target: WatchlistTarget,
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
-        del mode  # Full and incremental both validate and buffer the whole range set first.
+        self.reset_complete_listing_inventory()
         target_identity = parse_hanayume_episode_url(target.url)
         if target_identity is None:
             raise DiscoveryIncompleteError(
@@ -1455,11 +1455,20 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
                 ),
                 listing_authenticated=listing_authenticated,
             )
-            records = _records_from_rows(
+            all_records = _records_from_rows(
                 rows_oldest_first=rows_oldest_first,
                 work_title=work_title,
                 seed_episode_id=target_identity.episode_id,
-                scope=target.discovery_scope,
+                scope=None,
+            )
+            records = (
+                all_records
+                if target.discovery_scope is None
+                else _apply_discovery_scope(
+                    all_records,
+                    scope=target.discovery_scope,
+                    work_id=work_id,
+                )
             )
         except DiscoveryIncompleteError:
             raise
@@ -1480,6 +1489,13 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
 
         for record in records:
             yield record
+        if mode == "full":
+            self.capture_complete_listing_inventory(
+                target=target,
+                all_records=all_records,
+                selected_records=records,
+                listing_identity=f"hanayume-work:{work_id}",
+            )
 
 
 __all__ = [

@@ -31,18 +31,19 @@ on long or actively changing works.
 
 ## Work-key archive-order inventory
 
-After a successful unbounded Full run, the adapter also supplies a complete
-listing inventory for the shared work-key archive-order feature. It uses the
-validated series identity `comicdays-series:<id>` and the complete latest-first
-episode list; Core maps it to display positions `N..1` so oldest content gets
-the first archive ordinal. Inventory is exposed only after normal iterator
-exhaustion and is committed by DiscoveryService only after Catalog
-finalization. A failed/partial Full or Incremental run does not publish proof,
-and adapter reuse clears the prior in-memory inventory before each run. This
-does not implement bounded Discovery: any target with `discovery_scope` remains
-rejected. After Full, operators must separately preview/apply `watch
-scope-sync` before Batch. See `runbooks/work-key-archive-order/README.md` and
-`note/08_comicdays.md` for the shared workflow and isolated-copy commands.
+The adapter supplies a complete listing inventory for the shared work-key
+archive-order feature and supports site-native bounded `discovery_scope`. It
+validates canonical episode boundary URLs against the same complete series
+listing, selects the inclusive latest-first slice, and keeps whole-list
+positions. The validated identity is `comicdays-series:<id>`; Core maps the
+latest-first list to positions `N..1` so oldest content gets the first archive
+ordinal. Inventory is exposed only after normal iterator exhaustion and
+committed by DiscoveryService only after Catalog finalization. A failed/partial
+Full or Incremental run does not publish proof, and adapter reuse clears the
+prior in-memory inventory before each run. After Full, operators must
+separately preview/apply `watch scope-sync` before Batch. See
+`runbooks/work-key-archive-order/README.md` and `note/08_comicdays.md` for the
+shared workflow and isolated-copy commands.
 
 The shared-CDP direct verification on 2026-10-08 for item `21804` completed
 from the initial page through packaging. It used the target-local Ticket/DOM

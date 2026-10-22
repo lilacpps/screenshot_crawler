@@ -1019,12 +1019,6 @@ class CatalogService:
                 [(discovery_key, site, item.external_id, item.display_position, int(item.in_scope))
                  for item in normalized],
             )
-            connection.execute(
-                "UPDATE sources SET display_position = NULL, updated_at = ? WHERE site = ? "
-                "AND discovery_key = ? AND display_position IS NOT NULL "
-                "AND item_id IN (SELECT id FROM items WHERE work_id = ?)",
-                (timestamp, site, discovery_key, work_id),
-            )
             for item in normalized:
                 connection.execute(
                     "UPDATE sources SET display_position = ?, updated_at = ? WHERE site = ? "

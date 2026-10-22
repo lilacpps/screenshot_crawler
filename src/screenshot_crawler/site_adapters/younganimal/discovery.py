@@ -1159,7 +1159,7 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
     async def iter_records(
         self, page: Page, target: WatchlistTarget, mode: DiscoveryMode
     ) -> AsyncIterator[DiscoveredRecord]:
-        del mode  # Both modes refresh the same fully validated requested scope.
+        self.reset_complete_listing_inventory()
         work_id = parse_younganimal_work_url(target.url)
         work_url = f"https://younganimal.com/series/{work_id}" if work_id else None
         if target.site != "younganimal" or work_url is None or target.url != work_url:
@@ -1247,10 +1247,15 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
                     native_access=native_access,
                     listing_authenticated=native_observer.listing_authenticated,
                 )
-            records = _records_from_rows(
+            all_records = _records_from_rows(
                 rows_oldest_first=rows_oldest_first,
                 work_title=work_title,
+                scope=None,
+            )
+            records = _apply_discovery_scope(
+                all_records,
                 scope=target.discovery_scope,
+                work_id=work_id,
             )
         except DiscoveryIncompleteError:
             raise
@@ -1267,6 +1272,13 @@ class YounganimalDiscoveryAdapter(DiscoveryAdapter):
 
         for record in records:
             yield record
+        if mode == "full":
+            self.capture_complete_listing_inventory(
+                target=target,
+                all_records=all_records,
+                selected_records=records,
+                listing_identity=f"younganimal-work:{work_id}",
+            )
 
 
 __all__ = [
