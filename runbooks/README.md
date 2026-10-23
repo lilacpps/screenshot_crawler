@@ -67,3 +67,8 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 - [Windows GUI — Inventory viewer P0/P1](gui-inventory-p1/README.md) —
   PySide6の閲覧専用Windows管理画面。サイト別/作品別ツリー、実Catalog v7の状態集計、
   話数/取得履歴の詳細、チェック選択。P1終了時にユーザーUIレビューで停止（planned）。
+
+- [Windows GUI — P2 execution + P3 job management](gui-execution-p2-p3/README.md) —
+  P1のチェック選択をDiscover/Batch/Grant-onlyへ安全に接続し、site別順次実行、
+  事前確認、永続ジョブ履歴、進捗、協調停止・再実行を実装する計画。
+  P2安全性レビューをゲートとし、P3完了後にユーザーUIレビューで停止（planned）。
