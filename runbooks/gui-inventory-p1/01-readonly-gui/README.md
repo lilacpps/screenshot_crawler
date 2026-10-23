@@ -1,6 +1,6 @@
 # P1 — Read-only Windows GUIの実装・検証
 
-> **Status: PLANNED / NOT IMPLEMENTED**
+> **Status: COMPLETE — USER UI REVIEW REQUIRED; see ../PROGRESS.md**
 >
 > **Prerequisites:** [main runbook](../README.md) と [P0 contract](../00-design/README.md) を満たし、`PROGRESS.md`にP0の決定・Reviewer結果を記録済みであること。
 >

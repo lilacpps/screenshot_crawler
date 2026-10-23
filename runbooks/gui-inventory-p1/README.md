@@ -1,6 +1,6 @@
 # Windows GUI / 作品管理 — P0・P1 実装Runbook
 
-> **Status: PLANNED / NOT IMPLEMENTED** (2026-10-23)
+> **Status: P0 / P1 COMPLETE — USER UI REVIEW REQUIRED** (2026-10-23)
 >
 > **Scope: P0 設計固定 → P1 閲覧専用GUI実装 → 人間によるUIレビューで停止**
 >

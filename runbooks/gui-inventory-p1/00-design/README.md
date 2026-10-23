@@ -1,6 +1,6 @@
 # P0 — Windows GUI / Inventory設計固定
 
-> **Status: PLANNED / NOT IMPLEMENTED**
+> **Status: COMPLETE — decisions in docs/GUI_INVENTORY.md and ../PROGRESS.md**
 >
 > **Prerequisite:** [workstream README](../README.md)。本Stage完了後はP1へ進み、P1末尾でユーザーのUIレビューを待つ。
 

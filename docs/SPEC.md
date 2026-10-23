@@ -518,7 +518,8 @@ Patternは必須frameworkではなく補助部品。2サイト以上で実際に
 - AI画像分類
 - CAPTCHA回避
 - 完全自動selector探索
-- GUI
+- Crawler Core内のGUI（独立したoptional閲覧GUIのP0/P1契約は
+  `runbooks/gui-inventory-p1/README.md` と `docs/GUI_INVENTORY.md` を参照）
 - 複数サイト並列実行
 - 独自DSL
 - 複雑なPlugin Framework

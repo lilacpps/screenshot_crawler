@@ -1,3 +1,40 @@
+## Windows read-only inventory GUI (P1, 2026-10-23)
+
+`screenshot-crawler-gui` / `python -m screenshot_crawler.gui` is an optional
+PySide6 management UI. Install `.[gui]`; the regular CLI has no Qt dependency.
+See [GUI usage](../docs/GUI_README.md) and
+[current contract](../docs/GUI_INVENTORY.md). P2 execution is out of scope.
+
+`management.catalog_reader.CatalogInventoryReader` validates existing v7 and
+reads a single `mode=ro`, query-only transaction. It creates no Catalog service,
+DB, schema, migration or operational output. `InventoryService` uses frozen DTOs,
+one JST evaluation time, existing Policy classes and an indexed in-memory
+ScopeReconciler facade. Missing inputs fail explicitly; a failed reload visibly
+marks the retained display stale. No network/CDP/browser or execution dispatch.
+WAL headers are rejected before SQLite opens because read-only SQLite can update
+`-shm` read marks; byte/hash verification found a mutation despite unchanged
+mtime. Use an externally prepared consistent rollback-journal backup. GUI does
+not checkpoint, switch journals or use immutable=1 to ignore WAL contents.
+
+The two projections are site/work/key and work/site/key. Checked Watchlist keys
+are independent of detail focus and survive filtering/view switching. Parent
+selection includes hidden descendants. The right pane reads source scope, access,
+recent Item Run and Artifact records. No ZIP existence checks or renumber preview.
+
+Counts deduplicate Item IDs, preserve completed/external/skipped separately and
+exclude acquisition_enabled=0 from assigned totals. Out-of-scope is a Source
+count. Multiple-source conflicting access is unknown. Missing/unproved empty
+inventory is —; stale observations are provisional, never certified success.
+Quota pool and site-wide local slots are separate. Grant retry estimates require
+Policy API and Catalog state, using runtime cooldown configuration.
+
+Latest Run per Item and latest Artifact per Item/kind/format/backend are loaded
+in the same transaction, not full historical rows. Artifact paths are DB facts,
+not physical verification. Detail and tree models do not write inputs. Read-only
+synthetic, Qt integration and Windows rendering verification are recorded in the
+[P1 progress](../runbooks/gui-inventory-p1/PROGRESS.md); no real-site verification
+is applicable. UI review is required before starting P2.
+
 ## Catalog v7 work-key scope foundation (2026-10-22)
 
 Catalog schema v7 adds `sources.acquisition_enabled` (`NOT NULL`, default `1`),
