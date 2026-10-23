@@ -63,3 +63,7 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 - [Work-key acquisition scope and cross-site archive ordering](work-key-archive-order/README.md) —
   既存discovery_scopeのCatalog取得担当フラグ同期、archive_orderによる複数key/サイト横断ZIP採番、
   grant-onlyを含むBatchフィルタ、安全な既存ZIP renumber（planned）。
+
+- [Windows GUI — Inventory viewer P0/P1](gui-inventory-p1/README.md) —
+  PySide6の閲覧専用Windows管理画面。サイト別/作品別ツリー、実Catalog v7の状態集計、
+  話数/取得履歴の詳細、チェック選択。P1終了時にユーザーUIレビューで停止（planned）。
