@@ -2256,6 +2256,53 @@ def test_grant_only_all_moves_to_next_policy_pass_after_resource_exhaustion(
     assert executions == [1, 2]
 
 
+@pytest.mark.parametrize("consumed", [False, None])
+def test_grant_result_without_confirmed_consumption_never_confirms_or_advances(
+    consumed: bool | None, tmp_path: Path
+) -> None:
+    events: list[str] = []
+    attempts: list[int] = []
+    candidate = SimpleNamespace(
+        item_id=1, source_id=101, metadata={}, access_strategy="quota",
+        quota_resource="resource_a", discovery_key="selected-key", consumes_quota=True,
+    )
+    second = SimpleNamespace(
+        item_id=2, source_id=102, metadata={}, access_strategy="quota",
+        quota_resource="resource_a", discovery_key="selected-key", consumes_quota=True,
+    )
+
+    class Session:
+        async def new_page(self) -> object:
+            return object()
+
+        async def close_page(self, _page: object) -> None:
+            return None
+
+    class Executor:
+        def grant_only_skip_reason(self, _candidate: object, **_kwargs: object) -> None:
+            return None
+
+        async def execute_grant_only_candidate(self, _page: object, item: object, **_kwargs: object) -> object:
+            attempts.append(item.item_id)
+            return SimpleNamespace(resource="resource_a", resource_consumed=consumed)
+
+    args = SimpleNamespace(
+        output_root=tmp_path / "output", library_dir=tmp_path / "Books",
+        max_pages=2, max_same_content=2, site="magapoke", keep_open=False,
+        event_sink=lambda event, **_fields: events.append(event),
+    )
+    with pytest.raises(cli.BatchExecutionError):
+        asyncio.run(
+            cli._execute_batch_candidates(
+                args, Session(), Executor(), [candidate, second],
+                phase="grant", grant_only=True, inter_candidate_delay_ms=0,
+            )
+        )
+    assert attempts == [1]
+    assert "grant_confirmed" not in events
+    assert "grant_unknown" in events
+
+
 async def test_batch_candidate_delay_runs_after_close_only_between_site_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

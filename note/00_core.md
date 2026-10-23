@@ -385,6 +385,16 @@ independently of capture/package completion: confirmed grants stay OK after a
 post-grant capture failure. Existing metrics now include normal `grant_result`
 records as well as entry attempts and observed consumption.
 
+For grant-only CLI results, only `resource_consumed is True` confirms a grant.
+`False` or `None` emits `grant_unknown`, raises the Batch error, emits no
+`grant_confirmed`, and stops before the next candidate. The dedicated CLI
+regression test covers both values with fake Session/Executor dependencies.
+Validation on 2026-10-24: these two cases and the adjacent resource-pass case
+passed (3 passed, 0 skipped, 103 unrelated cases deselected); Ruff passed.
+This test-only addition preserves production behavior. Integration, Research,
+live verification and the full suite were not rerun for this isolated coverage
+commit; no browser or real resource is used.
+
 The reporting follow-up on 2026-10-17 reuses `GrantOnlyReport` with a configurable
 heading; it does not change resolver/entry/capture order or consume additional
 resources. Normal reports cover only planned deferred Works, not all Watchlist
