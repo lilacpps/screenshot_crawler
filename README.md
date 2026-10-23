@@ -1,5 +1,13 @@
 # Screenshot Crawler
 
+## Windows 作品管理GUI（P1・閲覧専用）
+
+`.[gui]`をインストールし、`screenshot-crawler-gui`または
+`python -m screenshot_crawler.gui`で起動できます。Catalog v7 / Watchlistの
+サイト別・作品別一覧、取得状況、話数・履歴詳細を読み取り専用で表示します。
+[起動方法・合成データ・画面](docs/GUI_README.md)を参照してください。
+P1で停止し、UIレビュー後に実行機能のP2を別途検討します。
+
 ## Manga ONE Discovery (Phase 4A)
 
 Manga ONE Discovery starts from any chapter URL in the Watchlist and scans the

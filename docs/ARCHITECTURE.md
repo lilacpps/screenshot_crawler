@@ -1,5 +1,15 @@
 # Architecture
 
+## Optional read-only inventory GUI (P1)
+
+`gui/` contains the PySide6 application and Qt models; `management/` contains
+Qt-independent immutable inventory projections and a dedicated SQLite read-only
+snapshot reader. Existing Watchlist parsing, Site Policies, ScopeReconciler
+(through in-memory read-only facades) and archive-order planning are reused.
+The GUI has no execution path to Crawler/Batch/Discover, Scope apply, migrations
+or operational writes. See [GUI contract](GUI_INVENTORY.md) and
+[Windows launch instructions](GUI_README.md). P2 requires a separate UI review.
+
 ## Phase 4A status
 
 The Manga ONE Discovery adapter is implemented in
