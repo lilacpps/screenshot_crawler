@@ -35,7 +35,9 @@ class ExecutionPreviewDialog(QDialog):
             f"対象key: {', '.join(sorted(preview.selection.selected_keys)) or 'なし'}",
             f"候補数: {preview.candidate_count}",
             f"スキップ: {preview.skipped_count}",
-            f"最大件数: {preview.limit if preview.limit is not None else '無制限'}",
+            f"実行モード: {preview.mode or ('Grant-only' if preview.action == 'grant_only' else 'Batch')}",
+            f"最大試行数: {preview.limit if preview.action == 'grant_only' and preview.limit is not None else '無制限' if preview.action == 'grant_only' else '—'}",
+            f"最大取得数: {preview.limit if preview.action == 'batch' and preview.limit is not None else '無制限' if preview.action == 'batch' else '—'}",
             f"Resource: {preview.resource or 'per-site selection' if preview.resources_by_site else '—'}",
             f"Plan fingerprint: {preview.fingerprint[:16]}",
         ]

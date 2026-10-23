@@ -1574,6 +1574,7 @@ async def _execute_deferred_grants(
         report.prepare(candidates, resource)
     attempts = 0
     for group in group_grant_candidates(candidates):
+        _execution_checkpoint(args)
         if attempt_limit is not None and attempts >= attempt_limit:
             break
         selected: list[BatchCandidate] = []
@@ -1591,8 +1592,10 @@ async def _execute_deferred_grants(
             if not eligible:
                 _record_local_grant_skip(executor, group[0], reason, report)
                 continue
+            _execution_checkpoint(args)
             if previous_site_access:
                 await asyncio.sleep(inter_candidate_delay_ms / 1000)
+                _execution_checkpoint(args)
             site_operation_started = True
             page = await session.new_page()
             previous_site_access = True
@@ -1608,6 +1611,7 @@ async def _execute_deferred_grants(
                     grant_report=report,
                     selected_keys=selected_keys,
                 )
+                _execution_checkpoint(args)
                 print(f"Batch access-resource resolver: snapshot complete selected={len(selected)}")
                 if len(selected) > 1:
                     raise BatchPlanningError("Deferred grant-only resolver selected multiple targets for a work")
@@ -1761,6 +1765,12 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
         site=args.site,
         mode=metrics_mode,
     )
+    _execution_event(
+        args,
+        "metrics_started",
+        phase="metrics",
+        payload={"metrics_path": str(metrics.path)},
+    )
     if plan is not None:
         metrics.record_planned_skips(plan.skipped)
     print("Batch run:")
@@ -1799,6 +1809,14 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
     if not grant_only_all and not candidates and not has_deferred_normal_work:
         metrics.finish(stop_reason="no_candidates")
         metrics.close()
+        _execution_event(
+            args,
+            "batch_finished",
+            phase="batch",
+            result="succeeded",
+            reason="no_candidates",
+            payload={"metrics_path": str(metrics.path), "candidate_count": 0},
+        )
         print(f"  metrics: {metrics.path}")
         return
     if grant_only_all and not any(
@@ -1809,6 +1827,14 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             metrics.record_planned_skips(resource_plan.skipped)
         metrics.finish(stop_reason="no_candidates")
         metrics.close()
+        _execution_event(
+            args,
+            "batch_finished",
+            phase="batch",
+            result="succeeded",
+            reason="no_candidates",
+            payload={"metrics_path": str(metrics.path), "candidate_count": 0},
+        )
         print(f"  metrics: {metrics.path}")
         return
 
@@ -2118,6 +2144,14 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             metrics.close()
             raise cleanup_interruption
         metrics.finish()
+        _execution_event(
+            args,
+            "batch_finished",
+            phase="batch",
+            result="succeeded" if primary_error is None else "failed",
+            reason=(type(primary_error).__name__ if primary_error is not None else None),
+            payload={"metrics_path": str(metrics.path)},
+        )
         print(f"  metrics: {metrics.path}")
         metrics.close()
 
@@ -2147,6 +2181,37 @@ def _grant_only_resource_passes(policy: object) -> tuple[str, ...]:
     return ordered
 
 
+def _execution_event(args: argparse.Namespace, event_type: str, **fields: object) -> None:
+    sink = getattr(args, "event_sink", None)
+    if callable(sink):
+        fields.setdefault("site", getattr(args, "site", None))
+        if event_type == "candidate_finished" and fields.get("result") == "unknown":
+            sink("grant_unknown", **fields)
+        sink(event_type, **fields)
+
+
+def _execution_checkpoint(args: argparse.Namespace) -> None:
+    checker = getattr(args, "cancel_check", None)
+    if callable(checker) and checker():
+        raise BatchInterruptedError("cooperative stop requested")
+
+
+def _candidate_event_result(
+    candidate: BatchCandidate,
+    result: str,
+    resource_consumed: bool | None,
+) -> str:
+    """Preserve an unknown quota debit as an explicit event outcome."""
+
+    if (
+        result == "failed"
+        and resource_consumed is None
+        and (getattr(candidate, "consumes_quota", False) or getattr(candidate, "access_strategy", "") == "quota")
+    ):
+        return "unknown"
+    return result
+
+
 async def _execute_batch_candidates(
     args: argparse.Namespace,
     session: BrowserSession,
@@ -2167,6 +2232,7 @@ async def _execute_batch_candidates(
 
     attempts = 0
     for index, candidate in enumerate(candidates, start=1):
+        _execution_checkpoint(args)
         if attempt_limit is not None and attempts >= attempt_limit:
             break
         if grant_only:
@@ -2186,6 +2252,12 @@ async def _execute_batch_candidates(
                 )
                 if metrics is not None:
                     metrics.record_local_skip(candidate, reason=local_skip_reason)
+                _execution_event(
+                    args, "candidate_finished", key=getattr(candidate, "discovery_key", None),
+                    item_id=candidate.item_id, source_id=candidate.source_id,
+                    resource=candidate.quota_resource, result="skipped",
+                    reason=local_skip_reason,
+                )
                 continue
         elif getattr(candidate, "consumes_quota", False):
             resource_state_check = getattr(executor, "resource_state_skip_reason", None)
@@ -2201,9 +2273,16 @@ async def _execute_batch_candidates(
                     )
                     if metrics is not None:
                         metrics.record_local_skip(candidate, reason=local_skip_reason)
+                    _execution_event(
+                        args, "candidate_finished", key=getattr(candidate, "discovery_key", None),
+                        item_id=candidate.item_id, source_id=candidate.source_id,
+                        resource=candidate.quota_resource, result="skipped",
+                        reason=local_skip_reason,
+                    )
                     continue
         if attempts == 0 and delay_before_first_ms is not None:
             await asyncio.sleep(delay_before_first_ms / 1000)
+        _execution_checkpoint(args)
         attempts += 1
         order = candidate.metadata.get("order", "-")
         resource = f" resource={candidate.quota_resource}" if candidate.quota_resource else ""
@@ -2215,12 +2294,26 @@ async def _execute_batch_candidates(
         contacted_site = False
         continue_after_candidate = False
         primary_error: BaseException | None = None
+        _execution_event(
+            args, "candidate_started", key=getattr(candidate, "discovery_key", None),
+            item_id=candidate.item_id, source_id=candidate.source_id,
+            resource=candidate.quota_resource, phase=phase,
+            payload={
+                "consumes_quota": bool(getattr(candidate, "consumes_quota", False)),
+                "access_strategy": getattr(candidate, "access_strategy", None),
+            },
+        )
         if metrics is not None:
             metrics.start_candidate(candidate)
         try:
             page = prepared_access.page if prepared_access is not None else await session.new_page()
             contacted_site = True
             if grant_only:
+                _execution_event(
+                    args, "grant_attempted", key=getattr(candidate, "discovery_key", None),
+                    item_id=candidate.item_id, source_id=candidate.source_id,
+                    resource=candidate.quota_resource, phase=phase,
+                )
                 result = await executor.execute_grant_only_candidate(
                     page,
                     candidate,
@@ -2229,13 +2322,42 @@ async def _execute_batch_candidates(
                     max_same_content=args.max_same_content,
                     **({"prepared_access": prepared_access} if prepared_access is not None else {}),
                 )
-                print(f"  grant confirmed: {result.resource}")
-                if confirmed_grants is not None and result.resource_consumed is True:
+                consumed = getattr(result, "resource_consumed", None)
+                if consumed is not True:
+                    reason = "grant result did not confirm resource consumption"
+                    if grant_report is not None:
+                        grant_report.record(
+                            candidate,
+                            status="NG",
+                            reason=reason,
+                            resource_consumed=consumed,
+                        )
+                    error = BatchPlanningError(reason)
+                    error.resource_consumed = consumed
+                    _execution_event(
+                        args,
+                        "grant_unknown",
+                        key=getattr(candidate, "discovery_key", None),
+                        item_id=candidate.item_id,
+                        source_id=candidate.source_id,
+                        resource=result.resource,
+                        result="unknown",
+                        reason=reason,
+                        resource_consumed=consumed,
+                    )
+                    raise error
+                if confirmed_grants is not None:
                     confirmed_grants.append(candidate)
                 if grant_report is not None:
                     grant_report.record(
-                        candidate, status="OK", reason="チケット使用確認済み", resource_consumed=True
+                        candidate, status="OK", reason="チケット使用確認済み", resource_consumed=consumed
                     )
+                print(f"  grant confirmed: {result.resource}")
+                _execution_event(
+                    args, "grant_confirmed", key=getattr(candidate, "discovery_key", None),
+                    item_id=candidate.item_id, source_id=candidate.source_id,
+                    resource=result.resource, resource_consumed=consumed, phase=phase,
+                )
             else:
                 result = await executor.execute_candidate(
                     page,
@@ -2260,7 +2382,19 @@ async def _execute_batch_candidates(
                 # Keep this candidate successful; exhaustion only prevents the next attempt.
                 continue_after_candidate = False
                 print("  Stopping this resource pass after successful completion.")
+                _execution_event(
+                    args, "candidate_finished", key=getattr(candidate, "discovery_key", None),
+                    item_id=candidate.item_id, source_id=candidate.source_id,
+                    resource=candidate.quota_resource, result="succeeded",
+                    resource_consumed=getattr(result, "resource_consumed", None),
+                )
                 return attempts, False
+            _execution_event(
+                args, "candidate_finished", key=getattr(candidate, "discovery_key", None),
+                item_id=candidate.item_id, source_id=candidate.source_id,
+                resource=candidate.quota_resource, result="succeeded",
+                resource_consumed=getattr(result, "resource_consumed", None),
+            )
         except BatchInterruptedError as exc:
             primary_error = exc
             if grant_report is not None:
@@ -2274,6 +2408,14 @@ async def _execute_batch_candidates(
                     error_message="Batch interrupted by user",
                 )
             print("  Batch interrupted by user.", file=sys.stderr)
+            _execution_event(
+                args, "candidate_finished", key=getattr(candidate, "discovery_key", None),
+                item_id=candidate.item_id, source_id=candidate.source_id,
+                resource=candidate.quota_resource, result=_candidate_event_result(
+                    candidate, "failed", getattr(exc, "resource_consumed", None)
+                ),
+                reason="interrupted", resource_consumed=getattr(exc, "resource_consumed", None),
+            )
             consumption_note = _resource_consumption_failure_note(candidate, exc)
             if consumption_note is not None:
                 print(consumption_note, file=sys.stderr)
@@ -2294,6 +2436,14 @@ async def _execute_batch_candidates(
                     error_message=str(interruption),
                 )
             print("  Batch interrupted by user.", file=sys.stderr)
+            _execution_event(
+                args, "candidate_finished", key=getattr(candidate, "discovery_key", None),
+                item_id=candidate.item_id, source_id=candidate.source_id,
+                resource=candidate.quota_resource, result=_candidate_event_result(
+                    candidate, "failed", getattr(exc, "resource_consumed", None)
+                ),
+                reason="interrupted", resource_consumed=getattr(exc, "resource_consumed", None),
+            )
             consumption_note = _resource_consumption_failure_note(candidate, interruption)
             if consumption_note is not None:
                 print(consumption_note, file=sys.stderr)
@@ -2305,6 +2455,12 @@ async def _execute_batch_candidates(
                     candidate, status="NG", reason=reason, resource_consumed=False
                 )
             print(f"  SKIPPED item={candidate.item_id} reason={reason} ({exc})")
+            _execution_event(
+                args, "candidate_finished", key=getattr(candidate, "discovery_key", None),
+                item_id=candidate.item_id, source_id=candidate.source_id,
+                resource=candidate.quota_resource, result="skipped",
+                reason=reason, resource_consumed=False,
+            )
             if metrics is not None:
                 metrics.finish_candidate(result="skipped", stop_reason=reason)
             if exc.stop_resource_pass:
@@ -2328,6 +2484,15 @@ async def _execute_batch_candidates(
             print(f"  item={candidate.item_id}", file=sys.stderr)
             print(f"  source={candidate.source_id}", file=sys.stderr)
             print(f"  error={exc}", file=sys.stderr)
+            _execution_event(
+                args, "candidate_finished", key=getattr(candidate, "discovery_key", None),
+                item_id=candidate.item_id, source_id=candidate.source_id,
+                resource=candidate.quota_resource, result=_candidate_event_result(
+                    candidate, "failed", getattr(exc, "resource_consumed", None)
+                ),
+                reason=_candidate_failure_reason(exc), error_type=type(root).__name__,
+                resource_consumed=getattr(exc, "resource_consumed", None),
+            )
             consumption_note = _resource_consumption_failure_note(candidate, exc)
             if consumption_note is not None:
                 print(consumption_note, file=sys.stderr)
@@ -2354,6 +2519,16 @@ async def _execute_batch_candidates(
             print(f"  source={candidate.source_id}", file=sys.stderr)
             print(f"  strategy={candidate.access_strategy}", file=sys.stderr)
             print(f"  error={exc}", file=sys.stderr)
+            _execution_event(
+                args, "candidate_finished", key=getattr(candidate, "discovery_key", None),
+                item_id=candidate.item_id, source_id=candidate.source_id,
+                resource=candidate.quota_resource, result=_candidate_event_result(
+                    candidate, "failed", getattr(exc, "resource_consumed", None)
+                ),
+                reason=getattr(exc, "reason", None) or type(exc).__name__,
+                error_type=type(exc).__name__,
+                resource_consumed=getattr(exc, "resource_consumed", None),
+            )
             consumption_note = _resource_consumption_failure_note(candidate, exc)
             if consumption_note is not None:
                 print(consumption_note, file=sys.stderr)

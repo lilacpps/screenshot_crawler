@@ -10,6 +10,7 @@ from screenshot_crawler.batch.naming import archive_metadata_for_catalog
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.core.packaging import archive_stem
 from screenshot_crawler.execution_worker import (
+    _request_cdp_endpoint,
     _required_fingerprint,
     _run,
     _validated_resources,
@@ -23,6 +24,16 @@ from screenshot_crawler.management.execution import (
 )
 from screenshot_crawler.management.inventory import default_policy_registry
 from screenshot_crawler.watchlist.service import WatchlistService
+
+
+def test_worker_endpoint_resolution_uses_explicit_then_transient_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CRAWLER_CDP_ENDPOINT_OVERRIDE", "http://inherited.invalid")
+    assert _request_cdp_endpoint({"cdp_endpoint": "http://explicit.invalid"}) == "http://explicit.invalid"
+    assert _request_cdp_endpoint({}) == "http://inherited.invalid"
+    monkeypatch.delenv("CRAWLER_CDP_ENDPOINT_OVERRIDE")
+    assert _request_cdp_endpoint({}) is None
 
 
 def test_confirmed_request_payload_is_json_safe_and_preserves_selection() -> None:

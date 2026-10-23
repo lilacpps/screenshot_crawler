@@ -1,0 +1,15 @@
+{
+  "platform": "windows",
+  "screenshots": [
+    "p2-execution.png",
+    "p2-confirmation.png",
+    "p2-grant-confirmation.png",
+    "p3-jobs.png",
+    "p3-interrupted.png"
+  ],
+  "worker_started": false,
+  "inventory_size": [
+    1400,
+    850
+  ]
+}

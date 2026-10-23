@@ -273,7 +273,6 @@ class ExecutionPlanService:
             "output_root": str(output_root or "output/batch"),
             "library_dir": str(library_dir or "output/Books"),
             "metrics_root": str(metrics_root or "output/metrics"),
-            "cdp_endpoint": cdp_endpoint,
             "endpoint_identities": {
                 site: _effective_endpoint_hash(
                     site, env_file=env_file, cdp_endpoint=cdp_endpoint
@@ -390,9 +389,13 @@ class ExecutionPlanService:
         if not selection.selected_keys:
             blockers.append("no Watchlist keys selected")
         warnings = [warning for item in plans for warning in item.warnings]
-        quota_values = {item.quota_available for item in plans}
-        if quota_values != {None}:
-            warnings.append(f"site quota available: {next(iter(quota_values))}")
+        for current_resource, plan in zip(resources or (None,), plans):
+            if plan.quota_available is not None:
+                resource_label = current_resource or "default"
+                warnings.append(
+                    f"site={site} resource={resource_label} "
+                    f"quota available={plan.quota_available}"
+                )
         if resource is not None:
             warnings.append("Grant-only may consume a site entitlement or quota")
         if limit is not None and limit < 1:

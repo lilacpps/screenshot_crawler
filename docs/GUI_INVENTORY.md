@@ -1,6 +1,8 @@
-# Windows Inventory GUI (P0 / P1)
+# Windows Inventory GUI (P0 / P1 / P2 / P3)
 
-P1 is a local, read-only PySide6 application. P2 execution is out of scope.
+P1 is a local PySide6 application. P2 selected execution uses a read-only
+preview and a separate Catalog-locked worker. P3 persists queue state in a
+separate management SQLite database and never auto-resumes unfinished jobs.
 
 ## Data contract (P0)
 
@@ -93,7 +95,8 @@ counts; unsorted key order uses archive_order or Watchlist file order.
 
 Loading and all Policy/Scope calculations run on a worker. Snapshot replacement
 is atomic on the GUI thread. A failed reload keeps an explicitly stale display.
-No GUI settings persistence; no jobs, process launch, network, CDP or execution.
+The Jobs page is a separate history view; process launch, network, CDP and
+Catalog writes remain in the confirmed worker subprocess.
 
 ## Verification contract
 

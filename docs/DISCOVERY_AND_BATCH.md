@@ -2221,7 +2221,32 @@ schedules            # app内schedulerを採用する場合
 crawl_pages          # page単位履歴が本当に必要になった場合
 ```
 
-## 17. 初期実装の非対象
+## 17. Windows GUI P2/P3 selected execution and job management
+
+The Windows GUI reuses this Discovery/Catalog/Batch contract through a
+Qt-independent execution preview. A checked Watchlist key set is passed to
+`BatchPlanner.plan(selected_keys=...)` before candidate and quota allocation;
+`None` preserves legacy site-wide CLI behavior and an explicit empty set remains
+empty. Site-wide quota history and Work-wide archive numbering continue to use
+the complete Catalog state. Every resolver, deferred grant, additional-resource
+pass, and post-grant replan retains the same selector.
+
+Confirmed requests are persisted separately in versioned `management.sqlite` and
+run in a single worker subprocess, one site at a time. The worker performs a
+fresh multi-site preflight under the existing Catalog lock before browser access,
+then appends structured candidate/resource/task events to JSONL. The GUI does
+not parse stdout; it records the metrics writer's emitted path and sanitized
+stdout/stderr references. A stop request is cooperative at safe boundaries;
+force termination is `interrupted` with resource consumption unknown and never
+automatically retried. Incomplete event tails, management DB/event/log write
+failures, stale worker identity, or missing heartbeat are fail-closed. A queued
+job is never auto-started after GUI restart; Resume and rerun are explicit, with
+rerun creating a fresh preview from current Catalog and Watchlist.
+
+The implementation, tests, Windows screenshot command, and non-live limitations
+are recorded in [P2/P3 PROGRESS](../runbooks/gui-execution-p2-p3/PROGRESS.md).
+
+## 18. 初期実装の非対象
 
 - 全site・全作品の無制限Discovery
 - site横断automatic item merge
@@ -2239,7 +2264,7 @@ crawl_pages          # page単位履歴が本当に必要になった場合
 - BookWalkerの途中停止巻を翌日同じrunへresumeする機能
 
 
-## 18. Magapoke M3c1/M3c2 and Catalog schema v4
+## 19. Magapoke M3c1/M3c2 and Catalog schema v4
 
 Catalog schema v4 adds nullable `sources.published_at` as Source-specific observed publication metadata. Date-only Magapoke observations use the live-confirmed `YYYY/MM/DD` format and normalize to aware JST midnight for stable ordering. Missing or malformed dates do not make Discovery incomplete. The field never belongs to Item and never becomes `order_key`.
 

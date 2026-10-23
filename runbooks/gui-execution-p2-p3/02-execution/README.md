@@ -1,6 +1,6 @@
 # P2 — 選択キー単位の安全なDiscover / Batch / Grant-only実行
 
-> **PLANNED / NOT IMPLEMENTED** — P2完了時に独立Reviewerの安全ゲートを通過してからP3へ進む。
+> **IMPLEMENTED / SAFETY REVIEW PASS** — 2026-10-24。P2安全ゲートはP3開始前に独立Reviewerが通過させた。
 >
 > Prerequisite: [P2/P3 master runbook](../README.md)、現行P1 GUIの選択集合、既存Batch/Scope/Policy契約。
 

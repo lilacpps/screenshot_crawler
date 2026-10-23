@@ -1,6 +1,6 @@
 # Windows GUI: P2 実行操作 / P3 ジョブ管理 — 実装Runbook
 
-> **PLANNED / NOT IMPLEMENTED** — 2026-10-23
+> **IMPLEMENTED THROUGH P3 / FINAL REVIEW** — 2026-10-24
 >
 > 既存P1をベースに **P2 → 品質ゲート → P3 → 最終レビュー** まで実装するための実行契約。P2・P3をまとめて進めてよいが、P2の候補範囲とリソース消費安全性が証明されるまではP3へ進まない。
 >
@@ -27,7 +27,7 @@
 
 **読み物・権限順**: `AGENTS.md`、`docs/SPEC.md`、`docs/ARCHITECTURE.md`、`docs/DISCOVERY_AND_BATCH.md`、`docs/ACCESS_CONTROL_AND_PACING.md`、`docs/MAGAPOKE_BATCH_ACCESS.md`、`docs/TEST_STRATEGY.md`、`docs/CODEX_IMPLEMENTATION_GUIDE.md`、`docs/GUI_INVENTORY.md`、`docs/GUI_README.md`、`runbooks/gui-inventory-p1/PROGRESS.md`、`runbooks/work-key-archive-order/PROGRESS.md`、既存code/tests。
 
-本書はrunbookであり実装済みと混同しない。変更した契約が上位authorityと衝突する場合は記録し、同一変更でdocs/noteを更新する。
+本書は実装契約であり、現在の実装状況と検証結果は[PROGRESS.md](PROGRESS.md)に記録する。変更した契約が上位authorityと衝突する場合は記録し、同一変更でdocs/noteを更新する。
 
 ## 1. 画面・操作の要求
 

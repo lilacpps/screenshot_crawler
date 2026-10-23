@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -21,7 +21,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QStyle,
@@ -42,6 +44,7 @@ from screenshot_crawler.management.inventory import InventoryService, default_po
 
 from .details import DetailPane
 from .execution_dialog import ExecutionPreviewDialog
+from .jobs_page import JobsPage
 from .model import InventoryTreeModel, StatusFilter, ViewMode
 
 
@@ -165,17 +168,28 @@ class MainWindow(QMainWindow):
         runtime_path: str | Path = "crawler.yaml",
         *,
         auto_load: bool = True,
+        management_path: str | Path = "output/management/management.sqlite",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.catalog_path = str(catalog_path)
         self.watchlist_path = str(watchlist_path)
         self.runtime_path = str(runtime_path)
+        self.management_path = str(management_path)
         self._closed = False
         self._loading = False
         self._worker: _LoadWorker | None = None
+        self._job_store = None
+        self._job_controller = None
+        self._jobs_page: JobsPage | None = None
+        self._rerun_original_id: str | None = None
+        self._pending_rerun: tuple[str, frozenset[str], str] | None = None
+        self._session_job_ids: list[str] = []
         self._initial_expand_done = False
         self.thread_pool = QThreadPool.globalInstance()
+        self._job_poll_timer = QTimer(self)
+        self._job_poll_timer.setInterval(500)
+        self._job_poll_timer.timeout.connect(self._poll_jobs)
         # Keep the model owned by the window.  This gives Qt a GUI-thread
         # lifetime for all model resets while a worker may still be delivering
         # its queued load result.
@@ -270,6 +284,10 @@ class MainWindow(QMainWindow):
         self.reload_button = QPushButton("再読込")
         self.reload_button.clicked.connect(self.reload)
         toolbar.addWidget(self.reload_button)
+        self.jobs_button = QPushButton("ジョブ")
+        self.jobs_button.setObjectName("jobs_button")
+        self.jobs_button.clicked.connect(self._open_jobs)
+        toolbar.addWidget(self.jobs_button)
         self.expand_button = QPushButton("全展開")
         self.expand_button.clicked.connect(self.tree.expandAll)
         toolbar.addWidget(self.expand_button)
@@ -299,11 +317,6 @@ class MainWindow(QMainWindow):
         self.discover_mode_combo.addItem("Discover Incremental", "incremental")
         self.discover_mode_combo.setToolTip("Discoverのモード")
         bottom.addWidget(self.discover_mode_combo)
-        self.grant_resource_combo = QComboBox()
-        self.grant_resource_combo.setObjectName("grant_resource_combo")
-        self.grant_resource_combo.addItem("Grant all resources", "all")
-        self.grant_resource_combo.setToolTip("Grant-only Resource（allを含む）")
-        bottom.addWidget(self.grant_resource_combo)
         bottom.addWidget(QLabel("最大件数:"))
         self.execution_limit_spin = QSpinBox()
         self.execution_limit_spin.setObjectName("execution_limit_spin")
@@ -314,8 +327,16 @@ class MainWindow(QMainWindow):
         self.site_resource_controls = QWidget()
         self.site_resource_layout = QHBoxLayout(self.site_resource_controls)
         self.site_resource_layout.setContentsMargins(0, 0, 0, 0)
-        bottom.addWidget(self.site_resource_controls)
-        bottom.addStretch(1)
+        self.site_resource_scroll = QScrollArea()
+        self.site_resource_scroll.setWidgetResizable(True)
+        self.site_resource_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.site_resource_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.site_resource_scroll.setWidget(self.site_resource_controls)
+        self.site_resource_scroll.setMinimumWidth(180)
+        self.site_resource_scroll.setMaximumWidth(420)
+        self.site_resource_scroll.setFixedHeight(42)
+        self.site_resource_scroll.setToolTip("選択中サイトごとのGrant-only Resource（横スクロール可）")
+        bottom.addWidget(self.site_resource_scroll, 1)
         self.discover_button = QPushButton("Discover")
         self.discover_button.setObjectName("discover_button")
         self.discover_button.setToolTip("選択keyをDiscover")
@@ -386,6 +407,19 @@ class MainWindow(QMainWindow):
         self.set_snapshot(snapshot)
         self.error_label.clear()
         self.statusBar().showMessage(f"読み込み完了: {snapshot.loaded_at.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        pending = self._pending_rerun
+        self._pending_rerun = None
+        if pending is not None:
+            job_id, selected, action = pending
+            available = {key.identity for key in snapshot.keys}
+            if not selected.issubset(available):
+                missing = ", ".join(sorted(selected - available))
+                self.error_label.setText(f"再計画停止: keyが最新Watchlistにありません: {missing}")
+                self.statusBar().showMessage("再計画を停止しました")
+                return
+            self.model.set_checked_keys(set(selected))
+            self._rerun_original_id = job_id
+            self._show_execution_preview(action)
 
     @Slot(str)
     def _load_failed(self, message: str) -> None:
@@ -398,6 +432,10 @@ class MainWindow(QMainWindow):
         prefix = "読み込み失敗（前回の表示は古い可能性があります）: " if self.model.snapshot else "読み込み失敗: "
         self.error_label.setText(prefix + message)
         self.statusBar().showMessage("読み込みに失敗しました")
+        if self._pending_rerun is not None:
+            self._pending_rerun = None
+            self._rerun_original_id = None
+            self.error_label.setText(self.error_label.text() + " / 再計画は停止しました")
 
     def set_snapshot(self, snapshot: object) -> None:
         old_focus = self.model._nodes.get(self.model.focused_node_id or "")
@@ -417,25 +455,21 @@ class MainWindow(QMainWindow):
         if focus is not None:
             self.model.focus_node(focus)
         self._on_checked_changed(self.model.checked_keys)
-        self.grant_resource_combo.clear()
-        self.grant_resource_combo.addItem("Grant all resources", "all")
-        resources = sorted({
-            resource
-            for overview in snapshot.resources.values()
-            for resource in overview.grant_resources
-        })
-        for resource in resources:
-            self.grant_resource_combo.addItem(resource, resource)
         self._refresh_site_resource_controls()
 
     def _refresh_site_resource_controls(self) -> None:
         """Show resource selectors only for currently selected sites."""
 
+        previous = {
+            site: combo.currentData()
+            for site, combo in getattr(self, "_site_grant_resource_combos", {}).items()
+        }
         while self.site_resource_layout.count():
             child = self.site_resource_layout.takeAt(0)
             if child.widget() is not None:
                 child.widget().deleteLater()
         self._site_grant_resource_combos: dict[str, QComboBox] = {}
+        self._site_resource_invalid: dict[str, str] = {}
         snapshot = self.model.snapshot
         if snapshot is None:
             return
@@ -456,9 +490,30 @@ class MainWindow(QMainWindow):
             combo.addItem("all", "all")
             for resource in overview.grant_resources:
                 combo.addItem(resource, resource)
+            if site in previous:
+                prior = previous[site]
+                if combo.findData(prior) >= 0:
+                    combo.setCurrentIndex(combo.findData(prior))
+                elif prior:
+                    combo.insertItem(0, f"{prior} (unsupported)", prior)
+                    combo.setCurrentIndex(0)
+                    self._site_resource_invalid[site] = str(prior)
+            combo.currentIndexChanged.connect(
+                lambda _index, selected_site=site: self._on_site_resource_changed(selected_site)
+            )
             self.site_resource_layout.addWidget(label)
             self.site_resource_layout.addWidget(combo)
             self._site_grant_resource_combos[site] = combo
+
+    def _on_site_resource_changed(self, site: str) -> None:
+        """Clear a stale-resource blocker only after an explicit new choice."""
+
+        combo = self._site_grant_resource_combos.get(site)
+        if combo is None:
+            return
+        invalid = self._site_resource_invalid.get(site)
+        if invalid is not None and combo.currentData() != invalid:
+            self._site_resource_invalid.pop(site, None)
 
     def _expanded_node_ids(self) -> set[str]:
         expanded: set[str] = set()
@@ -556,9 +611,7 @@ class MainWindow(QMainWindow):
         if snapshot is None or not self.model.selected_keys:
             return
         service = ExecutionPlanService()
-        resource = (
-            self.grant_resource_combo.currentData() if action == "grant_only" else None
-        )
+        resource = None
         limit = self.execution_limit_spin.value() or None
         selection = ExecutionSelection(self.model.selected_keys)
         if action in {"batch", "grant_only"}:
@@ -567,12 +620,20 @@ class MainWindow(QMainWindow):
                 if key.identity in selection.selected_keys and key.target is not None:
                     by_site.setdefault(key.site, []).append(key.identity)
             previews = []
+            resource_blockers = tuple(
+                f"{site}: no supported Grant-only Resource selector"
+                for site in sorted(by_site)
+                if action == "grant_only" and site not in self._site_grant_resource_combos
+            ) + tuple(
+                f"{site}: selected Resource {value!r} is no longer supported"
+                for site, value in self._site_resource_invalid.items()
+                if site in by_site and action == "grant_only"
+            )
             try:
                 policies = default_policy_registry()
                 for site, keys in sorted(by_site.items()):
                     site_resource = (
-                        self._site_grant_resource_combos.get(site, self.grant_resource_combo)
-                        .currentData()
+                        self._site_grant_resource_combos[site].currentData()
                         if action == "grant_only"
                         else None
                     )
@@ -629,8 +690,16 @@ class MainWindow(QMainWindow):
                     candidate_count=sum(item.candidate_count for item in previews),
                     skipped_count=sum(item.skipped_count for item in previews),
                     skipped=tuple(value for item in previews for value in item.skipped),
-                    blockers=tuple(value for item in previews for value in item.blockers),
-                    warnings=tuple(value for item in previews for value in item.warnings),
+                    blockers=resource_blockers + tuple(
+                        f"{site}: {value}"
+                        for site, item in zip(sorted(by_site), previews)
+                        for value in item.blockers
+                    ),
+                    warnings=tuple(
+                        f"{site}: {value}"
+                        for site, item in zip(sorted(by_site), previews)
+                        for value in item.warnings
+                    ),
                     resources_by_site=tuple(
                         (site, item.resource or "all")
                         for site, item in sorted(zip(sorted(by_site), previews))
@@ -686,13 +755,13 @@ class MainWindow(QMainWindow):
     def _start_execution(self, request: object) -> None:
         if not isinstance(request, JobExecutionRequest):
             return
-        worker = _ExecutionWorker(request)
-        worker.signals.succeeded.connect(self._execution_succeeded, Qt.ConnectionType.QueuedConnection)
-        worker.signals.failed.connect(self._execution_failed, Qt.ConnectionType.QueuedConnection)
-        self._execution_worker = worker
-        for button in (self.discover_button, self.batch_run_button, self.grant_only_button):
-            button.setEnabled(False)
-        self.thread_pool.start(worker)
+        controller = self._ensure_jobs()
+        job_id = controller.queue(request, original_job_id=self._rerun_original_id)
+        self._session_job_ids.append(job_id)
+        self._rerun_original_id = None
+        if controller.active_job_id is None:
+            controller.start_job(job_id)
+        self.statusBar().showMessage(f"ジョブをキューしました: {job_id}")
 
     @Slot(str)
     def _execution_succeeded(self, output: str) -> None:
@@ -706,6 +775,65 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("実行失敗")
         self.error_label.setText("実行失敗: " + message)
 
+    def _ensure_jobs(self):
+        if self._job_controller is None:
+            from screenshot_crawler.management.job_controller import JobController
+            from screenshot_crawler.management.jobs import JobStore
+
+            self._job_store = JobStore(self.management_path)
+            self._job_controller = JobController(self._job_store)
+            self._job_controller.reconcile()
+            self._jobs_page = JobsPage(self._job_store, self._job_controller, self)
+            self._jobs_page.rerunRequested.connect(self._rerun_job)
+            self._job_poll_timer.start()
+        return self._job_controller
+
+    def _open_jobs(self) -> None:
+        self._ensure_jobs()
+        assert self._jobs_page is not None
+        self._jobs_page.refresh()
+        self._jobs_page.resize(900, 650)
+        self._jobs_page.show()
+        self._jobs_page.raise_()
+        self._jobs_page.activateWindow()
+
+    def _poll_jobs(self) -> None:
+        if self._job_controller is None:
+            return
+        state = self._job_controller.poll()
+        if self._jobs_page is not None:
+            self._jobs_page.refresh()
+        if state is not None:
+            self._on_checked_changed(self.model.selected_keys)
+            self.statusBar().showMessage(f"ジョブ終了: {state}")
+            self.reload()
+            # A failed/partial/interrupted job may have an unknown resource
+            # outcome. Never advance the session queue into an automatic retry;
+            # the operator must explicitly review and re-plan it.
+            if state != "succeeded":
+                self.statusBar().showMessage(f"ジョブ停止: {state}（自動再試行なし）")
+                return
+            if self._job_controller.active_job_id is None:
+                for queued_id in tuple(self._session_job_ids):
+                    try:
+                        if self._job_store is not None and self._job_store.get_job(queued_id)["state"] == "queued":
+                            self._job_controller.start_job(queued_id)
+                            break
+                    except (KeyError, RuntimeError):
+                        continue
+
+    def _rerun_job(self, job_id: str) -> None:
+        if self._job_store is None:
+            return
+        payload = self._job_store.request_for(job_id)
+        selected = payload.get("selected_keys")
+        action = payload.get("action")
+        if not isinstance(selected, list) or not isinstance(action, str):
+            self.error_label.setText("再実行できないジョブ要求です")
+            return
+        self._pending_rerun = (job_id, frozenset(selected), action)
+        self.reload()
+
     def _on_selection_removed(self, removed: object) -> None:
         self.statusBar().showMessage(f"再読込で {len(removed)} key の選択を解除しました")
 
@@ -714,20 +842,47 @@ class MainWindow(QMainWindow):
         self.model._emit_check_updates()
 
     def closeEvent(self, event: Any) -> None:
-        self._closed = True
+        if self._job_controller is not None and self._job_controller.active_job_id is not None:
+            answer = QMessageBox.warning(
+                self,
+                "実行中ジョブ",
+                "実行中のworkerがあります。協調停止を要求してGUIを閉じますか？",
+                QMessageBox.StandardButton.Close | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Close:
+                event.ignore()
+                return
+            self._job_controller.request_stop()
+            self._closed = True
+            # Keep the OS lease while the child is draining.  A newly opened
+            # GUI will inspect the persisted identity and refuse a second
+            # worker, even if this window is already gone.
+        elif self._job_controller is not None:
+            self._closed = True
+            self._job_controller.close()
+        else:
+            self._closed = True
         # QThreadPool owns the runnable; waiting here would make closing a
         # large catalog block the GUI.  Its queued signals are ignored above.
         event.accept()
 
 
 def run(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Open the read-only Screenshot Crawler inventory GUI")
+    parser = argparse.ArgumentParser(
+        description="Open the Screenshot Crawler inventory, execution, and job-management GUI"
+    )
     parser.add_argument("--catalog", default="catalog.sqlite", help="Catalog v7 SQLite path")
     parser.add_argument("--watchlist", default="watchlist.yaml", help="Watchlist YAML path")
     parser.add_argument("--runtime", default="crawler.yaml", help="Runtime policy configuration path")
+    parser.add_argument(
+        "--management",
+        default="output/management/management.sqlite",
+        help="Separate persistent GUI job database path",
+    )
     args = parser.parse_args(argv)
     app = QApplication.instance() or QApplication(sys.argv[:1])
-    window = MainWindow(args.catalog, args.watchlist, args.runtime)
+    window = MainWindow(args.catalog, args.watchlist, args.runtime, management_path=args.management)
     window.show()
     return app.exec()
 

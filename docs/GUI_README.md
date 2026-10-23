@@ -1,4 +1,4 @@
-# Windows 作品管理GUI（P2・選択実行）
+# Windows 作品管理GUI（P2・選択実行 / P3・ジョブ管理）
 
 Python 3.12以上とPySide6を使うローカルアプリです。Catalog v7とWatchlistを表示し、
 チェックしたWatchlist keyだけを実行対象に
@@ -19,6 +19,8 @@ screenshot-crawler-gui --catalog catalog.sqlite --watchlist watchlist.yaml --run
 ```powershell
 .\.venv\Scripts\python.exe -m screenshot_crawler.gui --catalog catalog.sqlite --watchlist watchlist.yaml
 ```
+
+管理DBの保存先を変える場合は`--management path\to\management.sqlite`を追加します。
 
 pipのないuv環境では `uv pip install --python .venv/Scripts/python.exe -e ".[gui,dev]"`
 を使えます。起動引数を省略するとルートのcatalog.sqlite/watchlist.yaml/crawler.yamlを
@@ -64,11 +66,16 @@ keyを1つ以上チェックすると下部のDiscover、Batch Run、Grant-only�
 Plan fingerprintが表示されます。空選択はサイト全件として扱いません。
 下部の最大件数は0（無制限）または候補数の上限を指定できます。Grant-onlyのResourceは
 選択中のサイトごとに表示されるセレクタで`all`またはサイト対応Resourceを選びます。
+key追加や再読込でもサイト別の指定値を保持します。以前のResourceが未対応になった場合は
+旧値を表示して確認を停止し、利用者が対応Resourceを明示的に選び直すまで実行しません。
+多数サイトのResource欄は横スクロールできます。
 
-確認後はGUIスレッド外で既存CLIを起動します。複数サイトはサイトごとに順番に処理し、
-専用workerプロセスがCatalog job lockを取得したまま全サイトを再Planし、確認時fingerprintと
+確認後は独立したJobとして管理DBへ登録し、専用workerプロセスが既存CLIを起動します。
+複数サイトはサイトごとに順番に処理し、workerがCatalog job lockを取得したまま全サイトを再Planし、確認時fingerprintと
 一致することを確認してからサイトへ接続します。CatalogやWatchlistに重大な差異、
 未知key、未対応Resource、出力衝突がある場合はブラウザ接続前に停止します。
+入力ファイルのfingerprintは保守的に照合します。先行ジョブなどがCatalogを更新した場合も、
+待機ジョブの確認内容との差異で停止することがあります。その場合は履歴から再計画します。
 
 CLIからは次のようにkeyを繰り返し指定できます。
 
@@ -80,10 +87,36 @@ screenshot-crawler batch run --site magapoke --key series-a --grant-only all
 
 `--key`を省略した従来の`--site`全件動作は維持されます。
 
-## P2の制約
+## ジョブキューと履歴（P3）
+
+「ジョブ」を開くと、`output/management/management.sqlite` と
+`output/management/logs/<job_id>/` の履歴を表示します。確認済みJobはキューへ入り、
+サイトTaskは1つずつ実行されます。候補・skip・失敗・Resource消費状態はworkerの構造化
+`events.jsonl`から取り込み、metrics writerが実際に作成したファイルパスとstdout/stderrログも
+Task詳細から確認できます。履歴詳細には実行モード・最大件数・サイト別Resourceと、イベントごとの
+site/key/item/source、Resource消費のyes/no/unknownも表示されます。候補0件のTaskは`no_candidates`として表示され、取得成功件数0と
+サイト接続・消費成功を混同しません。
+イベントの末尾が未完成でも次回pollで無視して再読込します。
+
+実行中は「停止要求」で協調停止を依頼します。候補間やサイト境界で停止し、処理中の
+Resource消費を強制中断しません。強制停止は別の非常操作で、状態は`interrupted`、
+消費状態は不明として自動再試行しません。GUI再起動時にqueued Jobは自動実行せず、
+前回workerの同一性を確認できない実行中Jobも再接続・再実行しません。
+再起動後に残ったqueued Jobは自動開始せず、履歴画面の「選択ジョブを開始」で明示的に開始します。
+workerはPIDだけでなくtoken・OS開始identity・heartbeatを記録します。heartbeatが欠落・古い場合は
+「要確認」として二重起動を許可せず、実行結果を成功へ補正しません。
+終了済みJobの「最新状態で再計画」は現在のCatalog/Watchlistを再Previewして新しいJobを作成します。
+古い候補をそのまま再利用しません。
+
+管理DBはschema v1です。未知のschemaや破損DBを自動移行・上書きしません。
+バックアップはアプリとworkerの終了後に管理DBと同じ場所の`logs/`を保存してください。
+標準配置では`output/management/`全体を保存します。プログラムからは既存ファイルを
+上書きしない`JobStore.backup_to()`も利用できます。
+
+## P2/P3の制約
 
 実行前確認は読み取り専用です。実行開始後は既存のCrawler、Chrome/CDP、Catalog job lock、
-Site Policyに従ってCLIを動かします。P3の永続ジョブキュー・履歴画面は別段階です。
+Site Policyに従ってworkerを動かします。management DBはCatalogとは別に管理されます。
 Watchlist編集、Scope apply、Rename、スケジューラは対象外です。
 
 直近履歴はItemごとの最大Run ID、ArtifactはItem/種別/形式/backendごとの最新記録です。
@@ -95,8 +128,8 @@ WAL形式のCatalogはP1ではエラーにします。SQLiteはread-only接続�
 通常journal形式のバックアップを選んでください。GUIはcheckpointやjournal変更を
 行いません。通常のCatalogServiceはWAL設定を要求していません。
 
-設計は[GUI_INVENTORY.md](GUI_INVENTORY.md)、測定・テスト・独立レビュー結果は
-[PROGRESS](../runbooks/gui-inventory-p1/PROGRESS.md)を参照してください。
+設計は[GUI_INVENTORY.md](GUI_INVENTORY.md)、P2/P3の測定・テスト・独立レビュー結果は
+[P2/P3 PROGRESS](../runbooks/gui-execution-p2-p3/PROGRESS.md)を参照してください。
 10万SourceのWindows非同期読込の測定は[性能結果](gui-performance.json)にあります。
 初期ロード約3.9秒、表示切替約53ms、検索約32msでした。ロード中には最大約0.58秒の
 タイマー遅延があり、大量データの初期処理に短い待ちが生じます。
@@ -109,5 +142,20 @@ WAL形式のCatalogはP1ではエラーにします。SQLiteはread-only接続�
 - [作品別](gui-screenshots/work.png)
 - [作品詳細](gui-screenshots/work-detail.png)
 - [話数詳細](gui-screenshots/item-detail.png)
+- [P2 選択実行](gui-screenshots/p2-execution.png)
+- [P2 実行前確認](gui-screenshots/p2-confirmation.png)
+- [P2 Grant-only確認](gui-screenshots/p2-grant-confirmation.png)
+- [P3 ジョブ履歴](gui-screenshots/p3-jobs.png)
+- [P3 中断・要確認](gui-screenshots/p3-interrupted.png)
+
+P2/P3画面のWindowsキャプチャは、認証情報・実サイト接続・worker起動を含まない
+合成データ専用ツールで再生成できます。出力先は毎回新しいディレクトリを指定します。
+
+```powershell
+.\.venv\Scripts\python.exe tools/gui_execution_screenshots.py --sample-output .tmp/gui-execution-screenshots --screenshots docs/gui-screenshots
+```
+
+このツールはInventory、確認ダイアログ、Jobs画面をネイティブWindowsウィジェットとして
+保存します。実際のworker実行確認は、別途隔離Catalogを使うテストで行います。
 
 Windows上でGUIを起動し、一覧の列幅、情報量、詳細レイアウト、チェック操作をご確認ください。

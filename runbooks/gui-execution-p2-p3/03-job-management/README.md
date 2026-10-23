@@ -1,6 +1,6 @@
 # P3 — ジョブ履歴・単一worker・安全な停止／再実行
 
-> **PLANNED / NOT IMPLEMENTED**
+> **IMPLEMENTED / FINAL REVIEW** — 2026-10-24
 >
 > Prerequisite: [P2 reviewer-approved gate](../02-execution/README.md)、[master runbook](../README.md) の契約を満たした実装。P2ブロッカー解消なしにP3開始不可。
 >

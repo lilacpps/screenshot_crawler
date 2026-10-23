@@ -1,16 +1,31 @@
-## Windows inventory GUI and selected execution (P2, 2026-10-24)
+## Windows inventory GUI, execution, and jobs (P2/P3, 2026-10-24)
 
 `screenshot-crawler-gui` / `python -m screenshot_crawler.gui` is an optional
-PySide6 management UI. Install `.[gui]`; the regular CLI has no Qt dependency.
+PySide6 inventory, selected-execution, and job-management UI. Install `.[gui]`;
+the regular CLI has no Qt dependency.
 See [GUI usage](../docs/GUI_README.md) and
 [current contract](../docs/GUI_INVENTORY.md). P2 adds an explicit selected-key
 execution boundary. `BatchPlanner.plan(selected_keys=...)` filters the candidate
 Source pool before Policy allocation while calculating shared site Quota from all
 site Sources. `None` keeps legacy whole-site CLI behavior; an explicit empty
 selection produces no candidates. The GUI preview is read-only and the confirmed
-request launches the existing CLI outside the Qt event loop. Grant-only is shown
-as potentially entitlement-consuming. P3 job persistence and queue management are
-separate work.
+request is queued in a separate management SQLite DB and launches a Qt-free
+worker subprocess outside the GUI event loop. The worker appends structured
+JSONL events, runs selected sites sequentially under the existing Catalog lock,
+and the GUI imports events idempotently. Metrics writer paths are emitted as
+structured events and stored on the site task; a zero-candidate task carries a
+`no_candidates` reason rather than implying acquisition success. Grant-only is
+shown as potentially entitlement-consuming. The GUI exposes one Resource selector
+per selected site and serializes the exact mapping in the request; there is no
+global selector that can override a heterogeneous site selection. If a reload no
+longer supports the previously chosen Resource, the old value remains visible as
+unsupported and preview is blocked until the operator explicitly chooses a
+supported value. Queued jobs never auto-resume after
+GUI restart; a cooperative stop is distinct from force termination, and an
+interrupted worker leaves resource consumption unknown without automatic retry.
+The history detail shows request mode/max-count, per-site Resource, and event
+site/key/item/source fields with Resource consumption as yes/no/unknown.
+Re-run creates a new job after a fresh current preview.
 
 `management.catalog_reader.CatalogInventoryReader` validates existing v7 and
 reads a single `mode=ro`, query-only transaction. It creates no Catalog service,
@@ -39,8 +54,17 @@ Latest Run per Item and latest Artifact per Item/kind/format/backend are loaded
 in the same transaction, not full historical rows. Artifact paths are DB facts,
 not physical verification. Detail and tree models do not write inputs. Read-only
 synthetic, Qt integration and Windows rendering verification are recorded in the
-[P1 progress](../runbooks/gui-inventory-p1/PROGRESS.md); no real-site verification
-is applicable. UI review is required before starting P2.
+[P2/P3 progress](../runbooks/gui-execution-p2-p3/PROGRESS.md). The P3 worker stores
+jobs outside Catalog in versioned `management.sqlite`, appends structured JSONL
+events, records exact metrics/log paths, and uses PID/token/OS-start-identity plus
+heartbeat checks. SQLite/event/log failures are fail-closed; a filesystem cancel
+sentinel remains usable when management SQLite is unavailable. Partial event tails,
+forced termination, and uncertain resource consumption become `interrupted`/unknown
+and are never auto-retried. The Jobs page uses explicit Resume and fresh-preview
+rerun after restart. Native synthetic Windows captures are in
+`docs/gui-screenshots/`; generation uses `tools/gui_execution_screenshots.py` and
+does not start a worker or connect to a site. No real-site or paid-resource
+verification is applicable.
 
 ## Catalog v7 work-key scope foundation (2026-10-22)
 

@@ -1,14 +1,21 @@
 # Architecture
 
-## Optional read-only inventory GUI (P1)
+## Optional inventory, execution, and job-management GUI (P1-P3)
 
 `gui/` contains the PySide6 application and Qt models; `management/` contains
 Qt-independent immutable inventory projections and a dedicated SQLite read-only
 snapshot reader. Existing Watchlist parsing, Site Policies, ScopeReconciler
 (through in-memory read-only facades) and archive-order planning are reused.
-The GUI has no execution path to Crawler/Batch/Discover, Scope apply, migrations
-or operational writes. See [GUI contract](GUI_INVENTORY.md) and
-[Windows launch instructions](GUI_README.md). P2 requires a separate UI review.
+P1 inventory reads remain strictly read-only. P2 adds a Qt-independent preview and
+selected-key execution request; P3 queues each confirmed request in a separate,
+versioned `management.sqlite` and runs it in one serial worker subprocess. The
+worker writes structured JSONL events while the GUI imports them idempotently;
+Catalog job locks, Scope/Quota/ZIP preflight, and fail-closed drift checks remain
+authoritative. Cooperative stop, force interruption with unknown consumption,
+heartbeat/OS-start identity checks, and explicit post-restart Resume are distinct
+operations. See [GUI contract](GUI_INVENTORY.md),
+[Windows launch instructions](GUI_README.md), and
+[P2/P3 progress](../runbooks/gui-execution-p2-p3/PROGRESS.md).
 
 ## Phase 4A status
 

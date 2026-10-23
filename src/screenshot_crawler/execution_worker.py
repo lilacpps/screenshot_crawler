@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 from argparse import Namespace
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 from screenshot_crawler.auth.env import read_env_file
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.cli import (
+    BatchInterruptedError,
     _batch_policy_registry,
     _discover_target,
     _discovery_registry,
@@ -24,6 +26,10 @@ from screenshot_crawler.cli import (
 from screenshot_crawler.management.execution import ExecutionPlanService
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.watchlist.service import WatchlistService
+
+
+class WorkerCancelled(RuntimeError):
+    """Cooperative cancellation reached a safe boundary."""
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -41,7 +47,7 @@ def _request_namespace(request: dict[str, object], *, site: str, keys: tuple[str
         watchlist=Path(request.get("watchlist_path") or "watchlist.yaml"),
         crawler_config=Path(request.get("runtime_path") or "crawler.yaml"),
         env_file=Path(request.get("env_file") or ".env"),
-        cdp_endpoint=request.get("cdp_endpoint"),
+        cdp_endpoint=_request_cdp_endpoint(request),
         output_root=Path(request.get("output_root") or root / "output" / "batch"),
         library_dir=Path(request.get("library_dir") or root / "output" / "Books"),
         metrics_root=Path(request.get("metrics_root") or root / "output" / "metrics"),
@@ -51,6 +57,16 @@ def _request_namespace(request: dict[str, object], *, site: str, keys: tuple[str
         max_same_content=3,
         keep_open=False,
     )
+
+
+def _request_cdp_endpoint(request: dict[str, object]) -> str | None:
+    """Resolve an explicit endpoint override transported only in child env."""
+
+    value = request.get("cdp_endpoint")
+    if isinstance(value, str) and value:
+        return value
+    override = os.environ.get("CRAWLER_CDP_ENDPOINT_OVERRIDE")
+    return override or None
 
 
 def _validated_selection(request: dict[str, object]) -> tuple[tuple[str, ...], dict[str, tuple[str, ...]]]:
@@ -142,11 +158,7 @@ def _aggregate_fingerprint(request: dict[str, object], policies) -> str:
             output_root=str(request.get("output_root") or ""),
             metrics_root=str(request.get("metrics_root") or ""),
             env_file=str(request.get("env_file") or ".env"),
-            cdp_endpoint=(
-                str(request["cdp_endpoint"])
-                if request.get("cdp_endpoint") is not None
-                else None
-            ),
+            cdp_endpoint=_request_cdp_endpoint(request),
         )
         if preview.blockers:
             raise RuntimeError("preflight blocked: " + "; ".join(preview.blockers))
@@ -156,7 +168,12 @@ def _aggregate_fingerprint(request: dict[str, object], policies) -> str:
     return hashlib.sha256(json.dumps(fingerprints, separators=(",", ":")).encode()).hexdigest()
 
 
-async def _run(request: dict[str, object]) -> None:
+async def _run(
+    request: dict[str, object],
+    *,
+    event_sink=None,
+    cancel_check=None,
+) -> None:
     action = str(request["action"])
     if action not in {"discover", "batch", "grant_only"}:
         raise RuntimeError(f"unsupported execution action: {action}")
@@ -165,6 +182,16 @@ async def _run(request: dict[str, object]) -> None:
     policies = _batch_policy_registry()
     _selected, keys_by_site = _validated_selection(request)
     resources = _validated_resources(request, keys_by_site)
+
+    def emit(event_type: str, **fields: object) -> None:
+        if event_sink is not None:
+            event_sink(event_type, **fields)
+
+    def checkpoint() -> None:
+        if cancel_check is not None and cancel_check():
+            emit("cancellation_checkpoint", reason="cooperative stop requested")
+            raise WorkerCancelled("cooperative stop requested")
+
     # All selected sites are planned before opening any BrowserSession.  The
     # same lock remains held while the actual site operation runs.
     with CatalogService(catalog_path).job_lock():
@@ -185,11 +212,7 @@ async def _run(request: dict[str, object]) -> None:
                 mode=mode,
                 runtime_path=str(request.get("runtime_path") or "crawler.yaml"),
                 env_file=str(request.get("env_file") or ".env"),
-                cdp_endpoint=(
-                    str(request["cdp_endpoint"])
-                    if request.get("cdp_endpoint") is not None
-                    else None
-                ),
+                cdp_endpoint=_request_cdp_endpoint(request),
                 output_root=str(request.get("output_root") or ""),
                 library_dir=str(request.get("library_dir") or ""),
                 metrics_root=str(request.get("metrics_root") or ""),
@@ -213,24 +236,34 @@ async def _run(request: dict[str, object]) -> None:
             env_path = Path(str(request.get("env_file") or ".env"))
             values = read_env_file(env_path) if env_path.is_file() else {}
             registry = _discovery_registry()
-            for target in selected:
-                assert target is not None
-                if not target.enabled:
-                    print(f"Discovery skipped disabled key: {target.key}")
-                    continue
-                result = await _discover_target(
-                    target=target,
-                    mode=mode,
-                    catalog=CatalogService(catalog_path),
-                    registry=registry,
-                    values=values,
-                    cli_endpoint=request.get("cdp_endpoint"),
-                )
-                if result.complete is False or result.stopped_reason == "incomplete":
-                    raise RuntimeError(
-                        f"Discovery incomplete for key {target.key}: "
-                        f"{result.stopped_reason}"
+            for site, site_keys in sorted(keys_by_site.items()):
+                checkpoint()
+                emit("task_started", phase=f"discover:{mode}", payload={"site": site})
+                for key in site_keys:
+                    checkpoint()
+                    target = targets.get(key)
+                    assert target is not None
+                    if not target.enabled:
+                        emit("candidate_finished", key=target.key, result="skipped", reason="disabled")
+                        print(f"Discovery skipped disabled key: {target.key}")
+                        continue
+                    emit("candidate_started", key=target.key, phase=f"discover:{mode}")
+                    result = await _discover_target(
+                        target=target,
+                        mode=mode,
+                        catalog=CatalogService(catalog_path),
+                        registry=registry,
+                        values=values,
+                        cli_endpoint=_request_cdp_endpoint(request),
                     )
+                    if result.complete is False or result.stopped_reason == "incomplete":
+                        emit("candidate_finished", key=target.key, result="failed", reason="incomplete")
+                        raise RuntimeError(
+                            f"Discovery incomplete for key {target.key}: "
+                            f"{result.stopped_reason}"
+                        )
+                    emit("candidate_finished", key=target.key, result="succeeded")
+                emit("task_finished", phase=f"discover:{mode}", result="succeeded", payload={"site": site})
             return
 
         expected = _required_fingerprint(request)
@@ -239,14 +272,56 @@ async def _run(request: dict[str, object]) -> None:
             raise RuntimeError("Catalog/Watchlist changed after confirmation")
         catalog = CatalogService(catalog_path)
         for site, keys in sorted(keys_by_site.items()):
+            checkpoint()
+            emit("task_started", phase="site", payload={"site": site, "keys": list(keys)})
             args = _request_namespace(
                 {**request, "resource": resources.get(site)},
                 site=site,
                 keys=tuple(keys),
             )
+            batch_summary: dict[str, object] = {}
+
+            def batch_event(
+                event_type: str,
+                _summary: dict[str, object] = batch_summary,
+                **fields: object,
+            ) -> None:
+                if event_type == "batch_finished":
+                    _summary.update(fields)
+                emit(event_type, **fields)
+
+            args.event_sink = batch_event
+            args.cancel_check = cancel_check
             from screenshot_crawler.cli import _run_batch_run_locked
 
-            await _run_batch_run_locked(args, catalog)
+            try:
+                await _run_batch_run_locked(args, catalog)
+            except WorkerCancelled:
+                raise
+            except BatchInterruptedError as exc:
+                emit(
+                    "task_failed",
+                    phase="site",
+                    result="cancelled",
+                    reason=str(exc),
+                    resource_consumed=None,
+                    payload={"site": site},
+                )
+                raise WorkerCancelled(str(exc)) from exc
+            except BaseException as exc:
+                emit("task_failed", phase="site", result="failed", error_type=type(exc).__name__,
+                     reason=str(exc)[:1000], payload={"site": site})
+                raise
+            summary_payload = {"site": site}
+            if isinstance(batch_summary.get("payload"), dict):
+                summary_payload.update(batch_summary["payload"])
+            emit(
+                "task_finished",
+                phase="site",
+                result=str(batch_summary.get("result") or "succeeded"),
+                reason=batch_summary.get("reason"),
+                payload=summary_payload,
+            )
 
 
 def main() -> None:
