@@ -23,10 +23,8 @@ from screenshot_crawler.archive_order import (
 )
 from screenshot_crawler.batch.archive_guard import (
     ArchiveHistoryWarning,
-    ArchiveNameGuardError,
     CandidateOutputPathError,
     CandidateOutputPreflight,
-    inspect_existing_archive_names,
     validate_candidate_output_paths,
 )
 from screenshot_crawler.batch.models import (
@@ -941,20 +939,6 @@ class BatchExecutor:
             raise BatchExecutionError(
                 "stale batch candidate: archive metadata no longer matches the Catalog"
             )
-        try:
-            archive_warnings = inspect_existing_archive_names(
-                self.catalog,
-                work=work,
-                items=work_items,
-                sources=list(snapshot.sources),
-                archive_positions_by_source=(
-                    dict(position_plan.positions_by_source_id)
-                    if position_plan is not None
-                    else {}
-                ),
-            )
-        except ArchiveNameGuardError as exc:
-            raise BatchExecutionError(str(exc)) from exc
         output_preflight = None
         if check_output_paths:
             try:
@@ -965,8 +949,6 @@ class BatchExecutor:
                 )
             except CandidateOutputPathError as exc:
                 raise BatchExecutionError(str(exc)) from exc
-        for message in archive_warnings:
-            self._warn_archive_history(message)
         if output_preflight is not None and output_preflight.stale_status is not None:
             self._warn_archive_history(
                 f"Candidate output for item={candidate.item_id}, source={candidate.source_id} "

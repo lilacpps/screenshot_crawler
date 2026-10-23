@@ -492,7 +492,7 @@ def test_batch_metadata_uses_source_display_position_for_archive_order(
     "history_issue",
     ["wrong_status", "malformed_status", "multiple_latest_artifacts"],
 )
-def test_existing_legacy_archive_name_is_a_plan_warning_not_a_blocker(
+def test_existing_legacy_archive_does_not_add_batch_plan_warnings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, history_issue: str,
 ) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
@@ -560,59 +560,35 @@ def test_existing_legacy_archive_name_is_a_plan_warning_not_a_blocker(
             encoding="utf-8",
         )
 
+    def forbidden_history_scan(*_args, **_kwargs):
+        pytest.fail("Batch must not inspect historical archives")
+
+    monkeypatch.setattr(service, "read_work_archive_artifacts", forbidden_history_scan)
     plan = plan_for(service)
 
     assert [candidate.source_id for candidate in plan.candidates] == [source.id]
-    if history_issue == "multiple_latest_artifacts":
-        assert any("multiple current ZIP Artifacts" in warning for warning in plan.warnings)
-    else:
-        assert any("current expected name" in warning for warning in plan.warnings)
-        if history_issue == "malformed_status":
-            assert any(
-                "is unreadable" in warning for warning in plan.warnings
-            ), plan.warnings
-        else:
-            assert any(
-                "status repair is separate maintenance" in warning
-                for warning in plan.warnings
-            )
+    assert plan.warnings == []
     assert archive_path.read_bytes() == archive_bytes
     assert service.get_item(item.id).status == "pending"
 
-    if history_issue == "multiple_latest_artifacts":
-        return
-
-    original_stat = Path.stat
-
-    def inaccessible_archive(path: Path, *args: object, **kwargs: object):
-        if path == archive_path:
-            raise PermissionError("archive inspection denied")
-        return original_stat(path, *args, **kwargs)
-
-    with monkeypatch.context() as context:
-        context.setattr(Path, "stat", inaccessible_archive)
-        unreadable_archive_plan = plan_for(service)
-    assert unreadable_archive_plan.candidates
-    assert any(
-        "locator cannot be inspected" in warning
-        for warning in unreadable_archive_plan.warnings
+@pytest.mark.parametrize("output_mode", ["capture", "grant_only"])
+def test_planning_without_candidates_never_reads_historical_archives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output_mode: str,
+) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    item, _source = add_source(
+        service, item=ItemInput(item_title="completed"), external_id="completed",
+        access_mode="free",
     )
+    watchlist = synchronized_legacy_watchlist(service)
+    service.mark_item_completed(item.id)
 
-    original_stat = Path.stat
+    def forbidden_history_scan(*_args, **_kwargs):
+        pytest.fail("Empty Batch must not inspect historical archives")
 
-    def inaccessible_status(path: Path, *args: object, **kwargs: object):
-        if path == status_path:
-            raise PermissionError("status inspection denied")
-        return original_stat(path, *args, **kwargs)
-
-    with monkeypatch.context() as context:
-        context.setattr(Path, "stat", inaccessible_status)
-        unreadable_status_plan = plan_for(service)
-    assert unreadable_status_plan.candidates
-    assert any(
-        "status path cannot be inspected" in warning
-        for warning in unreadable_status_plan.warnings
-    )
+    monkeypatch.setattr(service, "read_work_archive_artifacts", forbidden_history_scan)
+    planner = BatchPlanner(service, make_registry(), watchlist=watchlist)
+    assert not planner.plan(site="mangaone", now=NOW, output_mode=output_mode).candidates
 
 
 def test_position_resolves_repeated_label_without_disambiguator(tmp_path: Path) -> None:

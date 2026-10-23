@@ -657,7 +657,11 @@ preview/applyで担当としてbootstrapできる。全既存作品にproof目�
 2026-10-23 user-requested refinement: separating archive numbering from access rights reserves
 numbers for future in-scope paid sources and excludes out-of-scope sources. Batch and renumber
 still share the same pure work-wide plan. Historical ZIP naming drift, old status mismatches,
-and ambiguous old Artifacts are maintenance warnings and do not alone stop acquisition. A
+and ambiguous old Artifacts are inspected only by the explicit read-only
+`scripts/check_archives.py` maintenance command. Batch does not traverse old ZIP/status
+files at planning, candidate entry or replanning, avoiding repeated filesystem I/O.
+The audit supports explicit work/site/all selection; site selection includes whole Works
+across sites. Current numbering and acquisition-scope validation remain in Batch. A
 candidate ZIP collision or unproven candidate status sidecar, stale current naming/scope/identity, access-policy failures,
 and other safety errors remain blocking conditions. The candidate ZIP must be absent. A completed
 status sidecar is reusable only when its exact `archive_path`, valid page count, and same-Source

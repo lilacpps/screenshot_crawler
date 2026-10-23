@@ -2091,10 +2091,28 @@ operation across sites.
 
 Before Batch creates an archive, a work-wide preflight still validates the current
 Watchlist/scope snapshot, source identity, metadata, and candidate output paths.
-Historical ZIP stems, expected ordinal differences, old status mismatches, and
-ambiguous historical Artifact records are maintenance warnings; they do not by
-themselves block planning or acquisition. Batch never renames, deletes, or repairs
-historical files or Catalog rows.
+Batch does not traverse historical ZIPs/status files at planning, candidate
+execution, grant-only/resolver entry, or replanning. Historical ZIP stems,
+ordinal differences, old status mismatches and ambiguous Artifact records are
+inspected only by the explicit read-only `scripts/check_archives.py` command.
+Batch never renames, deletes, or repairs historical files or Catalog rows.
+
+The audit requires exactly one of `--work-key KEY`, `--site SITE`, or `--all`,
+an existing `--catalog` (default `catalog.sqlite`) and an existing `--watchlist`
+(default `watchlist.yaml`). Site selection audits every site of each Work that
+has a Catalog Source on the selected site. Managed Works require current scope
+sync before expected names can be reported; unmanaged, unordered Works use
+their site-local positions. `--json` emits one report with `work_keys`,
+`findings`, `errors`, and summary counts. Exit codes are 0 for no findings,
+1 for findings or inspection errors, and 2 for invalid selectors. Missing
+Catalog/Watchlist files are errors and are never created. The audit checks the
+same historical names/sidecars previously observed by Batch; it does not read
+ZIP contents, validate ZIP hashes, or repair files. Disabled Sources retain
+the prior exclusion from this historical audit.
+
+```powershell
+python scripts/check_archives.py --catalog catalog.sqlite --watchlist watchlist.yaml --site jumpplus --json
+```
 
 The candidate ZIP path must be absent. A candidate status sidecar normally must
 also be absent, except when it is a completed JSON record whose `archive_path`

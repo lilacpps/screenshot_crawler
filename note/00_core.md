@@ -69,7 +69,8 @@ For a fully ordered work, the shared archive plan sorts Watchlist keys by
 `archive_order`, then all `acquisition_enabled=1` Sources by `display_position`.
 Assigned Sources reserve ordinals regardless of access mode, availability or
 Item status; excluded Sources do not. No-order works retain legacy site-local
-naming. Batch reports historical cross-site ZIP/status naming drift as a maintenance warning.
+naming. Batch does not traverse historical ZIP/status files. The read-only
+`scripts/check_archives.py` command reports historical cross-site naming/status drift.
 The current candidate ZIP path must be absent. A sidecar may remain only when its
 completed state, exact planned `archive_path`, valid page count, and same-Source Catalog
 history are proven: either a matching structured output-directory identity plus at least
@@ -90,6 +91,59 @@ an occupied candidate ZIP, and access-policy failures remain hard stops before s
 --work-key KEY --dry-run --json` previews all sites; managed work requires a
 whole-work `--apply --json`. ZIP hashes/sizes, sidecars and Catalog locators
 are preflighted, and failed apply verifies rollback or reports recovery state.
+
+## Explicit historical archive audit (2026-10-23)
+
+Historical ZIP/name/status inspection lives in
+`maintenance/archive_audit.py`, exposed by `scripts/check_archives.py`.
+Planner and Executor do not invoke it, including no-candidate planning,
+grant-only, resolver and capture replans. Current numbering/scope validation
+and exact candidate ZIP/status collision protection remain in Batch, including
+same-Source stale-sidecar proof and the final pre-package recheck.
+
+Select exactly one of `--work-key KEY`, `--site SITE`, or `--all`; `--catalog`
+and `--watchlist` default to the operational filenames and must exist.
+`--site` selects complete Works across all their sites. Managed Works require
+current synchronized scope; legacy unordered/unmanaged Works can use their
+stored site-local positions. Disabled Sources are skipped as before. The
+audit only reads Catalog history and existing file metadata/status JSON; it
+does not hash ZIPs, repair files, apply scope, or update Catalog. `--json`
+returns one report with Work keys, findings, errors and counts. Exit codes:
+0 clean, 1 findings/inspection errors, 2 invalid selectors. Example:
+`python scripts/check_archives.py --site jumpplus --json`.
+Renaming remains the separate strict `scripts/renumber_archives.py` operation.
+
+An isolated comparison against the pre-change Planner (`64d8f57`) used 12 synthetic
+historical ZIP/status pairs and one pending Source. Per plan, history reads
+fell from 1 to 0, ZIP stat calls from 12 to 0, and historical status stat/JSON
+reads from 12 each to 0; both plans retained one candidate. Three-run medians
+were 17.129 ms before and 11.453 ms after, which are small-sample observations,
+not real-library speed guarantees. The standalone CLI reported all 12 naming
+findings and a byte snapshot confirmed that every fixture file was unchanged.
+No operational Catalog, ZIP or real-site browser was used for this verification.
+
+Validation: the affected audit/Batch/Executor/CLI/renumber/acquisition-scope
+tests passed (300 tests, 0 skipped). Independent review passed with no blockers.
+`ruff check src tests scripts/check_archives.py` and `git diff --check` passed.
+The full suite, including Integration and Research, completed with 5,045 passed,
+9 failed, 0 skipped in 2,916.91 seconds. Five Hanayume/packaging cases passed
+with shorter test output paths after the long `--basetemp` caused Windows path
+length failures (some surfaced as secondary assertions). Comic DAYS, ComicFUZ
+and the second-process Catalog lock test passed individually after full-run
+timeouts; their full-run timing cause remains undetermined. The remaining
+distributed-config assertion expects BookWalker delay 200 while the user's
+existing `crawler.yaml` sets 0; the unchanged test passed against an isolated
+copy of the Git-managed config. The full invocation is therefore not reported
+as green. No user config or site capture code was changed to clear these failures.
+Live verification was not run because this change only separates offline
+history inspection from Batch; no real-site entry/capture contract changed.
+
+Changed files: `batch/planner.py`, `batch/executor.py`, `batch/archive_guard.py`,
+`maintenance/archive_audit.py`, `maintenance/__init__.py`,
+`scripts/check_archives.py`; tests `test_archive_audit.py`, `test_batch.py`,
+`test_batch_executor.py`; specifications `DISCOVERY_AND_BATCH.md`,
+`BOOK_NAMING_RULES.md`, `DECISIONS.md`; current notes `00_core.md` and
+`07_catalog_position_archive_plan.md`.
 
 # 00. Core 現行実装ノート
 
@@ -1287,7 +1341,7 @@ filename要素がすべて空の場合は`archive`をfallbackにする。status�
 `output/crawl-status/<genre>/<title>/<stem>.json`へ保存し、Work間の同じstemでも衝突しないようにする。destination存在時の
 `FileExistsError`と自動連番なしの安全性を維持する。既存archive/status/Artifact
 locator is not changed by an ordinary Batch. Historical naming/status inconsistencies are
-warnings; actual candidate-path occupancy remains a hard stop and is checked again after
+inspected only by `scripts/check_archives.py`; actual candidate-path occupancy remains a hard stop and is checked again after
 crawl immediately before packaging. Explicit renumber remains a separate strict maintenance
 operation for updating existing names and Catalog locators.
 

@@ -426,8 +426,8 @@ async def test_stale_archive_prefix_is_rejected_before_run_creation(
     assert service.get_item(candidate.item_id).status == "pending"
 
 
-async def test_historical_archive_name_warns_but_executor_continues(
-    tmp_path: Path,
+async def test_historical_archive_name_is_ignored_by_executor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = add_candidate(service, access_mode="free")
@@ -461,14 +461,18 @@ async def test_historical_archive_name_warns_but_executor_continues(
     service.mark_item_pending(candidate.item_id)
     executor = make_executor(service)
 
-    with pytest.warns(ArchiveHistoryWarning, match="current expected name"):
-        result = await executor.execute_candidate(
-            object(),
-            candidate,
-            output_root=tmp_path / "batch",
-            library_dir=tmp_path / "Books",
-            now=NOW,
-        )
+    def forbidden_history_scan(*_args, **_kwargs):
+        pytest.fail("Batch must not inspect historical archives")
+
+    monkeypatch.setattr(service, "read_work_archive_artifacts", forbidden_history_scan)
+
+    result = await executor.execute_candidate(
+        object(),
+        candidate,
+        output_root=tmp_path / "batch",
+        library_dir=tmp_path / "Books",
+        now=NOW,
+    )
 
     assert result.archive_path.exists()
     assert old_archive.read_bytes() == old_bytes
@@ -509,7 +513,7 @@ def _record_historical_archive(
 
 
 @pytest.mark.parametrize("entrypoint", ["grant_only", "resolver"])
-async def test_historical_name_warning_is_kept_on_grant_and_resolver_paths(
+async def test_historical_name_is_ignored_on_grant_and_resolver_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     entrypoint: str,
@@ -523,6 +527,10 @@ async def test_historical_name_warning_is_kept_on_grant_and_resolver_paths(
         service,
         AccessConsumption(True, "work_ticket", consumed_at),
     )
+    def forbidden_history_scan(*_args, **_kwargs):
+        pytest.fail("Grant/resolver must not inspect historical archives")
+
+    monkeypatch.setattr(service, "read_work_archive_artifacts", forbidden_history_scan)
     stem, title, genre, _order, _author = archive_stem(candidate.metadata)
     planned_archive = executor.library_dir / genre / title / f"{stem}.zip"
     planned_status = (
@@ -536,10 +544,9 @@ async def test_historical_name_warning_is_kept_on_grant_and_resolver_paths(
     planned_status_bytes = planned_status.read_bytes()
 
     if entrypoint == "grant_only":
-        with pytest.warns(ArchiveHistoryWarning, match="current expected name"):
-            result = await executor.execute_grant_only_candidate(
-                object(), candidate, output_root=tmp_path / "batch", now=NOW
-            )
+        result = await executor.execute_grant_only_candidate(
+            object(), candidate, output_root=tmp_path / "batch", now=NOW
+        )
         assert result.resource_consumed is True
         assert service.get_source(candidate.source_id).quota_started_at == consumed_at.isoformat()
         assert service.get_item(candidate.item_id).status == "pending"
@@ -565,10 +572,9 @@ async def test_historical_name_warning_is_kept_on_grant_and_resolver_paths(
             "from_profile",
             staticmethod(lambda **_kwargs: ImmediateStopGuard(None)),
         )
-        with pytest.warns(ArchiveHistoryWarning, match="current expected name"):
-            resolution = await executor.resolve_access_resource_candidates(
-                object(), [candidate], "work_ticket"
-            )
+        resolution = await executor.resolve_access_resource_candidates(
+            object(), [candidate], "work_ticket"
+        )
         assert resolution.selected_source_ids == (candidate.source_id,)
         assert service.get_source(candidate.source_id).quota_started_at is None
         assert service.get_item(candidate.item_id).status == "pending"

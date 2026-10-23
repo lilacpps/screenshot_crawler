@@ -387,8 +387,9 @@ CrawlerのZIPでは、Watchlistの同じ`work_key`に複数key/siteを明示し�
 When every key omits `archive_order`, existing site-local naming is retained. Partial
 ordering, duplicate orders, unknown positions, and unsynchronized scope remain
 fail-closed. Batch uses the current pure naming plan for new candidates. Existing ZIP
-stems, historical status mismatches, and ambiguous old Artifact records are reported as
-maintenance warnings and do not alone stop planning or acquisition. The candidate ZIP
+stems, historical status mismatches, and ambiguous old Artifact records are inspected
+only by the read-only `scripts/check_archives.py` command. Batch does not traverse
+historical ZIP/status files at planning, execution, or replanning. The candidate ZIP
 must be absent. A status sidecar is normally also required to be absent; Batch may reuse
 only a completed sidecar whose normalized `archive_path` is the exact candidate ZIP,
 whose page count is valid, and whose same-Source history is proven. A structured
@@ -405,9 +406,13 @@ crawl or pre-package failure preserves its old bytes. If packaging has generated
 new ZIP/status pair but subsequent hashing or Catalog finalization fails, the new pair
 remains for inspection; Batch does not restore the stale status over it. Grant-only and resolver passes
 create no ZIP/status output and skip occupancy checks; a later normal capture replan
-restores them. These historical warnings do not modify old files, Artifact locators, or
+restores them. The explicit audit does not modify old files, Artifact locators, or
 Item status; a successful new acquisition still finalizes normally.
-Use the separate strict renumber workflow when you choose to
+Use `python scripts/check_archives.py --work-key my-work --json` to inspect historical
+names/statuses explicitly (`--site` selects complete Works across sites; `--all` scans
+all Works). Catalog and Watchlist must exist; managed Work scope must be synchronized.
+The audit makes no changes and exits 0 when clean, 1 for findings/errors, 2 for selector
+usage errors. Use the separate strict renumber workflow when you choose to
 align historical archives and Catalog metadata with current numbering.
 
 既存workの変更後に明示renumberする例:

@@ -1,5 +1,12 @@
 """Safety-first maintenance operations for existing crawler output."""
 
+from screenshot_crawler.maintenance.archive_audit import (
+    ArchiveAuditReport,
+    ArchiveAuditUsageError,
+    ArchiveNameGuardError,
+    audit_existing_archives,
+    inspect_existing_archive_names,
+)
 from screenshot_crawler.maintenance.archive_renumber import (
     ArchiveRenumberPlan,
     ArchiveRenumberResult,
@@ -9,9 +16,14 @@ from screenshot_crawler.maintenance.archive_renumber import (
 )
 
 __all__ = [
+    "ArchiveAuditReport",
+    "ArchiveAuditUsageError",
+    "ArchiveNameGuardError",
     "ArchiveRenumberPlan",
     "ArchiveRenumberResult",
     "RenumberEntry",
     "apply_archive_renumber_plan",
+    "audit_existing_archives",
     "build_archive_renumber_plan",
+    "inspect_existing_archive_names",
 ]

@@ -13,9 +13,7 @@ from typing import Literal
 
 from screenshot_crawler.archive_order import build_work_archive_position_plan
 from screenshot_crawler.batch.archive_guard import (
-    ArchiveNameGuardError,
     CandidateOutputPathError,
-    inspect_existing_archive_names,
     validate_candidate_output_paths,
 )
 from screenshot_crawler.batch.models import (
@@ -84,7 +82,6 @@ class BatchPlanner:
             raise BatchPlanningError(f"Unsupported output mode: {output_mode!r}")
         current = _normalize_now(now_jst() if now is None else now)
         archive_positions_by_source: dict[int, int] = {}
-        archive_warnings: list[str] = []
         unmanaged_source_ids: set[int] = set()
         try:
             policy = self.policies.create(site)
@@ -110,7 +107,6 @@ class BatchPlanner:
                     targets_by_work[target.work_key].append(target)
                 work_keys: set[str] = set()
                 sources_by_work_key: dict[str, dict[int, Source]] = defaultdict(dict)
-                validated_sources_by_work_key: dict[str, list[Source]] = {}
                 for source in sources:
                     item = items_by_id.get(source.item_id)
                     work = works_by_id.get(item.work_id) if item is not None else None
@@ -140,7 +136,6 @@ class BatchPlanner:
                             f"Catalog Sources changed across sites while validating "
                             f"acquisition scope for {work_key!r}; retry Batch planning"
                         )
-                    validated_sources_by_work_key[work_key] = list(validated.sources)
                     validated_sources = {
                         source.id: source
                         for source in validated.sources
@@ -168,18 +163,6 @@ class BatchPlanner:
                         archive_positions_by_source.update(
                             archive_plan.positions_by_source_id
                         )
-                archive_warnings = self._validate_existing_archive_names(
-                    works=works,
-                    items=items,
-                    sources=[
-                        source
-                        for work_key in work_keys
-                        for source in validated_sources_by_work_key.get(work_key, [])
-                    ],
-                    targets_by_work=targets_by_work,
-                    work_keys=work_keys,
-                    archive_positions_by_source=archive_positions_by_source,
-                )
         except (CatalogError, SitePolicyError, ScopeReconciliationError, ValueError) as exc:
             raise BatchPlanningError(str(exc)) from exc
 
@@ -192,7 +175,7 @@ class BatchPlanner:
         collision_source_ids = _collision_source_ids(items, sources, works_by_id)
         # A site-scoped plan only considers items with at least one source for that site.
         site_item_ids = set(sources_by_item)
-        plan = BatchPlan(warnings=archive_warnings)
+        plan = BatchPlan()
         try:
             quota_available = policy.available_quota(sources, current)
             plan.quota_available = quota_available
@@ -344,50 +327,6 @@ class BatchPlanner:
         except SitePolicyError as exc:
             raise BatchPlanningError(str(exc)) from exc
         return plan
-
-    def _validate_existing_archive_names(
-        self,
-        *,
-        works: list[Work],
-        items: list[Item],
-        sources: list[Source],
-        targets_by_work: dict[str, list[WatchlistTarget]],
-        work_keys: set[str],
-        archive_positions_by_source: dict[int, int],
-    ) -> list[str]:
-        """Collect historical-name warnings; output occupancy has its own hard gate."""
-
-        works_by_id = {work.id: work for work in works}
-        items_by_id = {item.id: item for item in items}
-        sources_by_work: dict[str, list[Source]] = defaultdict(list)
-        for source in sources:
-            item = items_by_id.get(source.item_id)
-            work = works_by_id.get(item.work_id) if item is not None else None
-            if work is not None and work.work_key in work_keys:
-                sources_by_work[work.work_key].append(source)
-
-        warnings: list[str] = []
-        for work_key in sorted(work_keys):
-            if not targets_by_work.get(work_key):
-                continue
-            work_sources = sources_by_work.get(work_key, [])
-            if not work_sources:
-                continue
-            work = works_by_id.get(items_by_id[work_sources[0].item_id].work_id)
-            assert work is not None
-            try:
-                warnings.extend(
-                    inspect_existing_archive_names(
-                        self.catalog,
-                        work=work,
-                        items=[item for item in items if item.work_id == work.id],
-                        sources=work_sources,
-                        archive_positions_by_source=archive_positions_by_source,
-                    )
-                )
-            except ArchiveNameGuardError as exc:
-                raise BatchPlanningError(str(exc)) from exc
-        return warnings
 
     @staticmethod
     def _select_source(
