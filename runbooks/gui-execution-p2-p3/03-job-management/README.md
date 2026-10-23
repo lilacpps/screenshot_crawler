@@ -1,6 +1,6 @@
 # P3 — ジョブ履歴・単一worker・安全な停止／再実行
 
-> **IMPLEMENTED / FINAL REVIEW** — 2026-10-24
+> **IMPLEMENTED / INDEPENDENT REVIEW PASS / READY FOR WINDOWS UI REVIEW** — 2026-10-24。フルスイートの結果と既存・環境依存の失敗は[PROGRESS](../PROGRESS.md)に記載。
 >
 > Prerequisite: [P2 reviewer-approved gate](../02-execution/README.md)、[master runbook](../README.md) の契約を満たした実装。P2ブロッカー解消なしにP3開始不可。
 >

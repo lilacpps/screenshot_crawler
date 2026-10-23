@@ -1,8 +1,8 @@
 # Windows GUI P2/P3 — Implementation Progress
 
-> **P2/P3 IMPLEMENTED / INDEPENDENT SAFETY REVIEW PASS / FULL TEST RUNNING** (2026-10-24).
+> **P2/P3 IMPLEMENTED / INDEPENDENT SAFETY REVIEW PASS / READY FOR WINDOWS UI REVIEW** (2026-10-24).
 >
-> [Master runbook](README.md). P2 gate has passed before P3. Stop after P3 for user GUI review. All execution verification uses isolated fixtures and mock site entry.
+> [Master runbook](README.md). P2 gate passed before P3. Work stops after P3. Clean committed affected tests pass; the broad worktree full suite completed with six failures, analyzed below. All execution verification uses isolated fixtures and mock site entry.
 
 ## Baseline
 
@@ -26,8 +26,8 @@
 | P3.1 Subprocess worker / Queue | PASS | Single controller claim, start barrier, site-serial worker, structured events |
 | P3.2 Cancellation and recovery | PASS | Cooperative/force distinction, identity gate, interrupted/unknown consumption, no auto-retry |
 | P3.3 JobsPage | PASS | Queue/history/tasks/events/log paths, stop/cancel, fresh-preview rerun |
-| P3.4 Tests/Windows QA/review | FULL TEST RUNNING | Latest affected tests 255 passed; native Windows captures and final independent review PASS |
-| **User UI review** | **WAITING FOR FULL TEST RESULT** | Stop after P3; P4/P5 remain out of scope |
+| P3.4 Tests/Windows QA/review | PASS WITH FULL-SUITE CAVEATS | Clean commit 249 passed; worktree affected 255 passed; full suite 5444 passed / 6 failed / 0 skipped, failure analysis below; final independent review BLOCKING=0 |
+| **User UI review** | **READY** | Native Windows screenshots supplied; implementation stops after P3; P4/P5 unstarted |
 
 ## Non-negotiable rules
 
@@ -51,7 +51,7 @@
 - Non-Live testing and real-site limitations:
 - Outstanding issues / next gate:
 
-**Current status:** P2 independently approved (BLOCKING=0, checkpoint `cc7a4bb`). P3 and the final Resource-selection corrections independently passed (BLOCKING=0). Latest affected tests and native Windows screenshot inspection passed; the broad full suite is still running. P4/P5 remain excluded.
+**Current status:** P2 independently approved before P3 (BLOCKING=0, checkpoint `cc7a4bb`). Final P3 code checkpoint `b0467b2` passed independent review (BLOCKING=0), clean-checkout affected tests (249 passed), source compilation, Ruff, and native Windows screenshot inspection. The worktree full suite completed: 5444 passed, six failures, no skips; this is not an all-green full-suite result. The failures and successful focused checks are documented below. P4/P5 remain unstarted. Windows manual operation review is now possible.
 
 ## Implementer checkpoint — P2 selected execution (2026-10-24)
 
@@ -251,14 +251,95 @@
   Watchlist/runtime inputs and Books; child tests use explicit isolated paths.
   Ruff (`src tests tools/gui_execution_screenshots.py`) and diff whitespace
   checks pass.
-- Windows native captures were regenerated after the final UI correction:
-  `.tmp/p3-native-release2`, Qt platform `windows`, Inventory 1400x850, all five
+- Windows native captures were regenerated after the final UI corrections and
+  JobsPage metadata display: `.tmp/p3-native-handoff`, Qt platform `windows`, Inventory 1400x850, all five
   images in `docs/gui-screenshots/`, screenshot helper exit 0. The helper starts
   no worker. Its Qt widgets are explicitly deleted on the GUI thread before
   interpreter exit. Production worker execution is verified separately by the
   shipped real-Preview/worker/Qt E2E and isolated two-site, 13-event subprocess
   runs, including transient endpoint priority and non-persistence checks.
-- Full-suite run is still in progress (5,450 tests collected at launch).
-  Final counts and failure/skip analysis will be recorded before handoff.
-  No live site, paid purchase, or real ticket/Quota consumption was tested.
-  P4/P5 remain unstarted; user Windows operation review is the next phase.
+- Final committed source `b0467b2` was exported to a separate checkout at
+  `.tmp/p3-reviewed-b0467b2` to exclude concurrent unrelated worktree changes.
+  All `src` Python files compile. The same affected modules pass with
+  **249 passed, 0 skipped**, 433 warnings, 70.11 seconds; Ruff also passes.
+  The six-case count difference from the worktree's 255 is external Discovery
+  coverage absent from this commit. Evidence: `.tmp/root-p3-committed.xml`
+  and `.tmp/p3-committed-checkout.log`.
+- The guarded full worktree suite completed with **5444 passed, 6 failed,
+  0 skipped**, 5601 warnings, 3395.01 seconds. Command:
+  `.venv/Scripts/python.exe .tmp/root_guarded_pytest.py -q --basetemp=.tmp/root-full-p3-final-1 -o cache_dir=.tmp/root-pytest-cache --tb=short -ra --junitxml=.tmp/root-p3-final.xml`.
+  The full run began before the final GUI display/Resource-control refinements;
+  the clean committed affected run above includes those refinements. Full-suite
+  evidence: `.tmp/root-p3-final.xml` and `.tmp/root-p3-full.log`.
+- Full-suite failure analysis (no failures hidden or marked skipped):
+  - Comic DAYS hidden ticket-control case: DOM snapshot timeout. Its unchanged
+    test function passed both cases on focused rerun (2 passed, 3.40 seconds)
+    and both cases on the clean P2 baseline (2 passed, 4.11 seconds). One earlier
+    focused attempt also timed out, so browser timing instability remains.
+  - Hanayume existing-grant cases: two Windows path-length failures, including
+    `WinError 206`. Two duplicate-current-latch cases observed
+    `window.ticketClicks is None`. All four passed together on focused rerun
+    using the short isolated basetemp `.tmp/hf1` (4 passed, 25.96 seconds).
+    The latter two failure causes are not established beyond the failed DOM
+    observation and passing rerun. Concurrent Hanayume code/test changes remain
+    outside the P2/P3 commit. Evidence: `.tmp/root-hanayume-recheck.log`.
+  - Distributed runtime settings test: the user's dirty `crawler.yaml` has
+    BookWalker `page_turn_delay_ms: 0`, while the test expects the tracked
+    distributed default `200`. The same test passed against the clean tracked
+    configuration (1 passed). The user's operational setting was preserved.
+- The independent reviewer assessed these full-suite results after the run
+  completed and confirmed no remaining P2/P3 BLOCKING finding. No unrelated
+  adapter or user configuration was changed to make these tests green.
+- Final behavior choices: complete input fingerprints conservatively stop an
+  old queued request after relevant files change, including changes made by an
+  earlier job; the user must create a fresh preview. A removed/invalid selected
+  key stops rerun rather than silently executing a smaller selection. Restarted
+  queued jobs never auto-start; uncertain consumption never auto-retries.
+- No live site, paid purchase, or real ticket/Quota consumption was tested.
+  Real-site/paid Live verification was intentionally excluded. All requested
+  unit, local browser integration, Qt offscreen, subprocess and full-suite
+  categories were exercised; zero tests were skipped. P4/P5 remain unstarted.
+
+## Final changed files
+
+Relative to implementation baseline `b556ec9`; concurrent worktree changes are
+not included. `note/00_core.md` is synchronized with the implementation.
+
+```text
+docs/ARCHITECTURE.md
+docs/DISCOVERY_AND_BATCH.md
+docs/GUI_INVENTORY.md
+docs/GUI_README.md
+docs/gui-screenshots/p2-confirmation.png
+docs/gui-screenshots/p2-execution.png
+docs/gui-screenshots/p2-grant-confirmation.png
+docs/gui-screenshots/p3-interrupted.png
+docs/gui-screenshots/p3-jobs.png
+docs/gui-screenshots/p3-render.json
+note/00_core.md
+runbooks/gui-execution-p2-p3/02-execution/README.md
+runbooks/gui-execution-p2-p3/03-job-management/README.md
+runbooks/gui-execution-p2-p3/PROGRESS.md
+runbooks/gui-execution-p2-p3/README.md
+src/screenshot_crawler/batch/executor.py
+src/screenshot_crawler/batch/models.py
+src/screenshot_crawler/batch/planner.py
+src/screenshot_crawler/cli.py
+src/screenshot_crawler/execution_worker.py
+src/screenshot_crawler/gui/__init__.py
+src/screenshot_crawler/gui/execution_dialog.py
+src/screenshot_crawler/gui/jobs_page.py
+src/screenshot_crawler/gui/main_window.py
+src/screenshot_crawler/management/execution.py
+src/screenshot_crawler/management/job_controller.py
+src/screenshot_crawler/management/job_worker.py
+src/screenshot_crawler/management/jobs.py
+src/screenshot_crawler/management/process_identity.py
+tests/integration/test_gui_smoke.py
+tests/unit/test_batch_selected_keys.py
+tests/unit/test_cli.py
+tests/unit/test_cli_job_events.py
+tests/unit/test_execution_worker.py
+tests/unit/test_management_jobs.py
+tools/gui_execution_screenshots.py
+```

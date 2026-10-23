@@ -1,6 +1,6 @@
 # Windows GUI: P2 実行操作 / P3 ジョブ管理 — 実装Runbook
 
-> **IMPLEMENTED THROUGH P3 / FINAL REVIEW** — 2026-10-24
+> **IMPLEMENTED THROUGH P3 / INDEPENDENT REVIEW PASS / READY FOR WINDOWS UI REVIEW** — 2026-10-24
 >
 > 既存P1をベースに **P2 → 品質ゲート → P3 → 最終レビュー** まで実装するための実行契約。P2・P3をまとめて進めてよいが、P2の候補範囲とリソース消費安全性が証明されるまではP3へ進まない。
 >
