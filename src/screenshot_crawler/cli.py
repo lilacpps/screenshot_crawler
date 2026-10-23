@@ -380,6 +380,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     batch_plan.add_argument("--site", required=True)
     batch_plan.add_argument(
+        "--key", dest="selected_keys", action="append", default=None,
+        help="Restrict planning to Watchlist key(s); repeat for multiple keys",
+    )
+    batch_plan.add_argument(
         "--catalog",
         type=Path,
         default=Path("catalog.sqlite"),
@@ -401,6 +405,10 @@ def _parser() -> argparse.ArgumentParser:
         "run", help="Execute the planned candidates sequentially"
     )
     batch_run.add_argument("--site", required=True)
+    batch_run.add_argument(
+        "--key", dest="selected_keys", action="append", default=None,
+        help="Restrict execution to Watchlist key(s); repeat for multiple keys",
+    )
     batch_run.add_argument(
         "--watchlist", type=Path, default=Path("watchlist.yaml"),
         help="Watchlist labels for deferred grant-only results (default: watchlist.yaml)",
@@ -1256,6 +1264,57 @@ def _print_batch_candidate(candidate: BatchCandidate) -> None:
     )
 
 
+def _selected_keys(args: argparse.Namespace) -> tuple[str, ...] | None:
+    """Return the explicit selector while preserving legacy ``None`` semantics."""
+
+    values = getattr(args, "selected_keys", None)
+    return None if values is None else tuple(values)
+
+
+def _require_selected_scope_sync(
+    catalog: CatalogService,
+    watchlist: WatchlistService,
+    *,
+    site: str,
+    selected_keys: tuple[str, ...] | None,
+) -> None:
+    """Validate selected Work scopes before opening a site browser session."""
+
+    if selected_keys is None:
+        return
+    targets = {target.key: target for target in watchlist.list_targets()}
+    missing = [key for key in selected_keys if key not in targets]
+    if missing:
+        raise BatchPlanningError(
+            "Unknown Watchlist key(s): " + ", ".join(sorted(missing))
+        )
+    wrong_site = [key for key in selected_keys if targets[key].site != site]
+    if wrong_site:
+        raise BatchPlanningError(
+            f"Selected Watchlist key(s) do not belong to site {site!r}: "
+            + ", ".join(sorted(wrong_site))
+        )
+    reconciler = ScopeReconciler(watchlist, catalog)
+    for work_key in sorted({targets[key].work_key for key in selected_keys}):
+        try:
+            reconciler.require_synchronized(work_key)
+        except ScopeReconciliationError as exc:
+            raise BatchPlanningError(str(exc)) from exc
+
+
+def _planner_plan(
+    planner: BatchPlanner,
+    args: argparse.Namespace,
+    **kwargs: object,
+) -> BatchPlan:
+    """Call the planner while keeping legacy test/integration doubles valid."""
+
+    selected_keys = _selected_keys(args)
+    if selected_keys is not None:
+        kwargs["selected_keys"] = selected_keys
+    return planner.plan(site=args.site, **kwargs)
+
+
 def _run_batch_plan(args: argparse.Namespace) -> None:
     policies = _batch_policy_registry()
     planner = BatchPlanner(
@@ -1264,7 +1323,7 @@ def _run_batch_plan(args: argparse.Namespace) -> None:
         watchlist=WatchlistService(args.watchlist),
         library_dir=args.library_dir,
     )
-    plan = planner.plan(site=args.site)
+    plan = _planner_plan(planner, args)
     policy = policies.create(args.site)
     warning_seen: set[str] = set()
     _print_batch_plan(
@@ -1274,7 +1333,7 @@ def _run_batch_plan(args: argparse.Namespace) -> None:
         warning_seen=warning_seen,
     )
     for resource in _additional_access_resource_passes(policy):
-        resource_plan = planner.plan(site=args.site, quota_resource=resource)
+        resource_plan = _planner_plan(planner, args, quota_resource=resource)
         print(f"Potential resource pass ({resource}):")
         print(f"  candidates: {len(resource_plan.candidates)}")
         print("  availability: checked during batch run")
@@ -1352,6 +1411,7 @@ async def _resolve_access_resource_candidates(
     delay_before_first_ms: int | None = None,
     metrics: BatchMetricsWriter | None = None,
     grant_report: GrantOnlyReport | None = None,
+    selected_keys: frozenset[str] | None = None,
 ) -> list[BatchCandidate]:
     """Resolve site-native candidates without counting the snapshot as an attempt."""
 
@@ -1388,13 +1448,19 @@ async def _resolve_access_resource_candidates(
         await _best_effort_cleanup(session.close_page(page))
 
     return _apply_access_resolution(
-        candidates, resolution, metrics=metrics, grant_report=grant_report
+        candidates,
+        resolution,
+        metrics=metrics,
+        grant_report=grant_report,
+        selected_keys=selected_keys,
     )
 
 
 def _apply_access_resolution(
     candidates: list[BatchCandidate], resolution: object, *,
-    metrics: BatchMetricsWriter | None, grant_report: GrantOnlyReport | None = None,
+    metrics: BatchMetricsWriter | None,
+    grant_report: GrantOnlyReport | None = None,
+    selected_keys: frozenset[str] | None = None,
 ) -> list[BatchCandidate]:
     if metrics is not None:
         for source_id, reason in resolution.skipped_source_reasons:
@@ -1408,6 +1474,16 @@ def _apply_access_resolution(
         {candidate.source_id for candidate in candidates}
     ):
         raise BatchPlanningError("Deferred grant-only resolver selected a source outside its work")
+    if selected_keys is not None:
+        allowed_ids = {
+            candidate.source_id
+            for candidate in candidates
+            if candidate.discovery_key in selected_keys
+        }
+        if not selected_ids.issubset(allowed_ids):
+            raise BatchPlanningError(
+                "Deferred grant-only resolver selected a source outside the selected keys"
+            )
     if grant_report is not None and not selected_ids:
         reasons = dict.fromkeys(reason for _source_id, reason in resolution.skipped_source_reasons)
         grant_report.record(
@@ -1490,6 +1566,7 @@ async def _execute_deferred_grants(
     previous_site_access: bool = False,
     confirmed_grants: list[BatchCandidate] | None = None,
     phase: str | None = None,
+    selected_keys: frozenset[str] | None = None,
 ) -> tuple[int, bool]:
     """Resolve and grant one work before contacting the next work."""
 
@@ -1525,7 +1602,11 @@ async def _execute_deferred_grants(
             )
             async with executor.prepare_access_resource_candidates(page, eligible, resource) as prepared:
                 selected = _apply_access_resolution(
-                    eligible, prepared.resolution, metrics=metrics, grant_report=report
+                    eligible,
+                    prepared.resolution,
+                    metrics=metrics,
+                    grant_report=report,
+                    selected_keys=selected_keys,
                 )
                 print(f"Batch access-resource resolver: snapshot complete selected={len(selected)}")
                 if len(selected) > 1:
@@ -1624,15 +1705,23 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
     deferred_resource: str | None = None
     grant_only_all_preflight: dict[str, BatchPlan] = {}
     warning_seen: set[str] = set()
+    selected_keys = _selected_keys(args)
+    # An explicit key selection is a managed execution boundary. Validate the
+    # complete Work scope while the Catalog job lock is held, before planning,
+    # metrics, endpoint resolution, or any early no-candidate return.
+    _require_selected_scope_sync(
+        catalog,
+        watchlist,
+        site=args.site,
+        selected_keys=selected_keys,
+    )
     if grant_only_all:
         grant_only_resources = _grant_only_resource_passes(policy)
         # Establish that at least one currently eligible source exists before
         # connecting the browser. Each pass still replans after prior grants.
         grant_only_all_preflight = {
-            resource: planner.plan(
-                site=args.site,
-                quota_resource=resource,
-                output_mode="grant_only",
+            resource: _planner_plan(
+                planner, args, quota_resource=resource, output_mode="grant_only"
             )
             for resource in grant_only_resources
         }
@@ -1646,10 +1735,8 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             policy.validate_grant_only_resource(grant_only)
         except SitePolicyError as exc:
             raise BatchPlanningError(str(exc)) from exc
-        plan = planner.plan(
-            site=args.site,
-            quota_resource=grant_only,
-            output_mode="grant_only",
+        plan = _planner_plan(
+            planner, args, quota_resource=grant_only, output_mode="grant_only"
         )
         candidates = plan.candidates
         if defer_quota:
@@ -1658,7 +1745,7 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
             )
         metrics_mode = "grant-only"
     else:
-        plan = planner.plan(site=args.site)
+        plan = _planner_plan(planner, args)
         if defer_quota:
             direct_candidates, deferred_candidates, deferred_resource = (
                 _partition_deferred_candidates(plan.candidates, defer_quota=True)
@@ -1669,7 +1756,11 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
         metrics_mode = "normal"
     if plan is not None:
         _print_batch_warnings(plan, warning_seen=warning_seen)
-    metrics = BatchMetricsWriter("output/metrics", site=args.site, mode=metrics_mode)
+    metrics = BatchMetricsWriter(
+        getattr(args, "metrics_root", Path("output/metrics")),
+        site=args.site,
+        mode=metrics_mode,
+    )
     if plan is not None:
         metrics.record_planned_skips(plan.skipped)
     print("Batch run:")
@@ -1765,10 +1856,8 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 remaining_limit = None if limit is None else max(0, limit - attempts)
                 if remaining_limit == 0:
                     break
-                resource_plan = planner.plan(
-                    site=args.site,
-                    quota_resource=resource,
-                    output_mode="grant_only",
+                resource_plan = _planner_plan(
+                    planner, args, quota_resource=resource, output_mode="grant_only"
                 )
                 _print_batch_warnings(resource_plan, warning_seen=warning_seen)
                 metrics.record_planned_skips(resource_plan.skipped)
@@ -1796,6 +1885,9 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                         inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
                         metrics=metrics, report=grant_report, attempt_limit=remaining_limit,
                         previous_site_access=previous_phase_had_site_access,
+                        selected_keys=(
+                            None if selected_keys is None else frozenset(selected_keys)
+                        ),
                     )
                     attempts += pass_attempts
                     grant_attempts = attempts
@@ -1838,6 +1930,9 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                     args, session, executor, candidates, resource=grant_only,
                     inter_candidate_delay_ms=runtime_settings.inter_candidate_delay_ms,
                     metrics=metrics, report=grant_report, attempt_limit=limit,
+                    selected_keys=(
+                        None if selected_keys is None else frozenset(selected_keys)
+                    ),
                 )
                 grant_attempts = processed
             else:
@@ -1877,11 +1972,14 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                     metrics=metrics, report=grant_report, attempt_limit=remaining_limit,
                     previous_site_access=_phase_a_processed > 0,
                     confirmed_grants=confirmed_grants, phase=f"{args.site} grant-access",
+                    selected_keys=(
+                        None if selected_keys is None else frozenset(selected_keys)
+                    ),
                 )
                 grant_attempts = _grant_processed
                 if confirmed_grants:
                     granted_source_ids = {candidate.source_id for candidate in confirmed_grants}
-                    post_plan = planner.plan(site=args.site)
+                    post_plan = _planner_plan(planner, args)
                     _print_batch_warnings(post_plan, warning_seen=warning_seen)
                     post_candidates = [
                         candidate
@@ -1941,9 +2039,8 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
                 if remaining_limit == 0:
                     break
                 # Re-plan from Catalog after direct and Work Ticket execution.
-                resource_plan = planner.plan(
-                    site=args.site,
-                    quota_resource=quota_resource,
+                resource_plan = _planner_plan(
+                    planner, args, quota_resource=quota_resource
                 )
                 _print_batch_warnings(resource_plan, warning_seen=warning_seen)
                 resource_candidates = resource_plan.candidates

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +15,14 @@ from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QStyle,
     QStyleOptionViewItem,
@@ -26,9 +32,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from screenshot_crawler.management.inventory import InventoryService
+from screenshot_crawler.management.execution import (
+    ExecutionPlanService,
+    ExecutionSelection,
+    JobExecutionRequest,
+    execution_request_payload,
+)
+from screenshot_crawler.management.inventory import InventoryService, default_policy_registry
 
 from .details import DetailPane
+from .execution_dialog import ExecutionPreviewDialog
 from .model import InventoryTreeModel, StatusFilter, ViewMode
 
 
@@ -57,6 +70,45 @@ class _LoadWorker(QRunnable):
             self.signals.failed.emit(str(exc) or exc.__class__.__name__)
         else:
             self.signals.succeeded.emit(snapshot)
+
+
+class _ExecutionSignals(QObject):
+    succeeded = Signal(str)
+    failed = Signal(str)
+
+
+class _ExecutionWorker(QRunnable):
+    """Run the existing CLI in a worker thread after GUI confirmation."""
+
+    def __init__(self, request: JobExecutionRequest) -> None:
+        super().__init__()
+        self.request = request
+        self.signals = _ExecutionSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            if not self.request.selected_keys:
+                raise ValueError("no Watchlist keys selected")
+            command = [
+                sys.executable,
+                "-m",
+                "screenshot_crawler.execution_worker",
+                "--request-json",
+                json.dumps(execution_request_payload(self.request), ensure_ascii=False),
+            ]
+            completed = subprocess.run(
+                command, capture_output=True, text=True, check=False
+            )
+            output = completed.stdout + completed.stderr
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    f"execution failed (exit={completed.returncode}): {output.strip()}"
+                )
+            self.signals.succeeded.emit(output)
+        except Exception as exc:  # noqa: BLE001 - user-facing worker boundary
+            self.signals.failed.emit(str(exc) or type(exc).__name__)
+
 
 
 class InventoryTreeView(QTreeView):
@@ -241,13 +293,46 @@ class MainWindow(QMainWindow):
         self.clear_selection_button = QPushButton("選択解除")
         self.clear_selection_button.clicked.connect(self._clear_selection)
         bottom.addWidget(self.clear_selection_button)
+        self.discover_mode_combo = QComboBox()
+        self.discover_mode_combo.setObjectName("discover_mode_combo")
+        self.discover_mode_combo.addItem("Discover Full", "full")
+        self.discover_mode_combo.addItem("Discover Incremental", "incremental")
+        self.discover_mode_combo.setToolTip("Discoverのモード")
+        bottom.addWidget(self.discover_mode_combo)
+        self.grant_resource_combo = QComboBox()
+        self.grant_resource_combo.setObjectName("grant_resource_combo")
+        self.grant_resource_combo.addItem("Grant all resources", "all")
+        self.grant_resource_combo.setToolTip("Grant-only Resource（allを含む）")
+        bottom.addWidget(self.grant_resource_combo)
+        bottom.addWidget(QLabel("最大件数:"))
+        self.execution_limit_spin = QSpinBox()
+        self.execution_limit_spin.setObjectName("execution_limit_spin")
+        self.execution_limit_spin.setRange(0, 1_000_000)
+        self.execution_limit_spin.setSpecialValueText("無制限")
+        self.execution_limit_spin.setToolTip("Batch / Grant-only の最大候補数。0は無制限")
+        bottom.addWidget(self.execution_limit_spin)
+        self.site_resource_controls = QWidget()
+        self.site_resource_layout = QHBoxLayout(self.site_resource_controls)
+        self.site_resource_layout.setContentsMargins(0, 0, 0, 0)
+        bottom.addWidget(self.site_resource_controls)
         bottom.addStretch(1)
-        for name in ("Discover", "Batch Run", "Grant-only"):
-            button = QPushButton(name)
-            button.setObjectName(name.lower().replace(" ", "_") + "_button")
+        self.discover_button = QPushButton("Discover")
+        self.discover_button.setObjectName("discover_button")
+        self.discover_button.setToolTip("選択keyをDiscover")
+        self.discover_button.clicked.connect(lambda: self._show_execution_preview("discover"))
+        bottom.addWidget(self.discover_button)
+        self.batch_run_button = QPushButton("Batch Run")
+        self.batch_run_button.setObjectName("batch_run_button")
+        self.batch_run_button.setToolTip("選択keyをBatch実行")
+        self.batch_run_button.clicked.connect(lambda: self._show_execution_preview("batch"))
+        bottom.addWidget(self.batch_run_button)
+        self.grant_only_button = QPushButton("Grant-only")
+        self.grant_only_button.setObjectName("grant-only_button")
+        self.grant_only_button.setToolTip("選択keyのGrant-only（権利消費の可能性あり）")
+        self.grant_only_button.clicked.connect(lambda: self._show_execution_preview("grant_only"))
+        bottom.addWidget(self.grant_only_button)
+        for button in (self.discover_button, self.batch_run_button, self.grant_only_button):
             button.setEnabled(False)
-            button.setToolTip("P1では実行できません（閲覧専用）")
-            bottom.addWidget(button)
         outer.addLayout(bottom)
         self.error_label = QLabel()
         self.error_label.setWordWrap(True)
@@ -332,6 +417,48 @@ class MainWindow(QMainWindow):
         if focus is not None:
             self.model.focus_node(focus)
         self._on_checked_changed(self.model.checked_keys)
+        self.grant_resource_combo.clear()
+        self.grant_resource_combo.addItem("Grant all resources", "all")
+        resources = sorted({
+            resource
+            for overview in snapshot.resources.values()
+            for resource in overview.grant_resources
+        })
+        for resource in resources:
+            self.grant_resource_combo.addItem(resource, resource)
+        self._refresh_site_resource_controls()
+
+    def _refresh_site_resource_controls(self) -> None:
+        """Show resource selectors only for currently selected sites."""
+
+        while self.site_resource_layout.count():
+            child = self.site_resource_layout.takeAt(0)
+            if child.widget() is not None:
+                child.widget().deleteLater()
+        self._site_grant_resource_combos: dict[str, QComboBox] = {}
+        snapshot = self.model.snapshot
+        if snapshot is None:
+            return
+        selected_sites = sorted(
+            {
+                key.site
+                for key in snapshot.keys
+                if key.identity in self.model.selected_keys
+            }
+        )
+        for site in selected_sites:
+            overview = snapshot.resources.get(site)
+            if overview is None:
+                continue
+            label = QLabel(f"{site}:")
+            combo = QComboBox()
+            combo.setObjectName(f"grant_resource_{site}")
+            combo.addItem("all", "all")
+            for resource in overview.grant_resources:
+                combo.addItem(resource, resource)
+            self.site_resource_layout.addWidget(label)
+            self.site_resource_layout.addWidget(combo)
+            self._site_grant_resource_combos[site] = combo
 
     def _expanded_node_ids(self) -> set[str]:
         expanded: set[str] = set()
@@ -418,6 +545,166 @@ class MainWindow(QMainWindow):
 
     def _on_checked_changed(self, checked: object) -> None:
         self.selection_label.setText(f"{len(checked)} key選択中")
+        if self.model.snapshot is not None:
+            self._refresh_site_resource_controls()
+        enabled = bool(checked) and self.model.snapshot is not None and not self._loading
+        for button in (self.discover_button, self.batch_run_button, self.grant_only_button):
+            button.setEnabled(enabled)
+
+    def _show_execution_preview(self, action: str) -> None:
+        snapshot = self.model.snapshot
+        if snapshot is None or not self.model.selected_keys:
+            return
+        service = ExecutionPlanService()
+        resource = (
+            self.grant_resource_combo.currentData() if action == "grant_only" else None
+        )
+        limit = self.execution_limit_spin.value() or None
+        selection = ExecutionSelection(self.model.selected_keys)
+        if action in {"batch", "grant_only"}:
+            by_site: dict[str, list[str]] = {}
+            for key in snapshot.keys:
+                if key.identity in selection.selected_keys and key.target is not None:
+                    by_site.setdefault(key.site, []).append(key.identity)
+            previews = []
+            try:
+                policies = default_policy_registry()
+                for site, keys in sorted(by_site.items()):
+                    site_resource = (
+                        self._site_grant_resource_combos.get(site, self.grant_resource_combo)
+                        .currentData()
+                        if action == "grant_only"
+                        else None
+                    )
+                    previews.append(
+                        service.preview_batch(
+                            snapshot.catalog_path,
+                            snapshot.watchlist_path,
+                            policies,
+                            site=site,
+                            selected_keys=keys,
+                            resource=site_resource,
+                            runtime_path=self.runtime_path,
+                            library_dir=str(Path("output/Books").resolve()),
+                            limit=limit,
+                            output_root=str(Path("output/batch").resolve()),
+                            metrics_root=str(Path("output/metrics").resolve()),
+                            env_file=str(Path(".env").resolve()),
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001 - render a blocking preview
+                preview = service.preview(
+                    snapshot,
+                    selection,
+                    action=action,
+                    resource=resource,
+                    limit=limit,
+                    runtime_path=self.runtime_path,
+                    env_file=str(Path(".env").resolve()),
+                    output_root=str(Path("output/batch").resolve()),
+                    library_dir=str(Path("output/Books").resolve()),
+                    metrics_root=str(Path("output/metrics").resolve()),
+                )
+                preview = replace(
+                    preview,
+                    blockers=(*preview.blockers, f"preflight failed: {exc}"),
+                )
+            else:
+                base = previews[0] if previews else service.preview(
+                    snapshot,
+                    selection,
+                    action=action,
+                    resource=resource,
+                    limit=limit,
+                    runtime_path=self.runtime_path,
+                    env_file=str(Path(".env").resolve()),
+                    output_root=str(Path("output/batch").resolve()),
+                    library_dir=str(Path("output/Books").resolve()),
+                    metrics_root=str(Path("output/metrics").resolve()),
+                )
+                preview = replace(
+                    base,
+                    selection=selection,
+                    sites=tuple(sorted(by_site)),
+                    candidate_count=sum(item.candidate_count for item in previews),
+                    skipped_count=sum(item.skipped_count for item in previews),
+                    skipped=tuple(value for item in previews for value in item.skipped),
+                    blockers=tuple(value for item in previews for value in item.blockers),
+                    warnings=tuple(value for item in previews for value in item.warnings),
+                    resources_by_site=tuple(
+                        (site, item.resource or "all")
+                        for site, item in sorted(zip(sorted(by_site), previews))
+                    )
+                    if action == "grant_only"
+                    else (),
+                    work_names=tuple(
+                        sorted({value for item in previews for value in item.work_names})
+                    ),
+                    fingerprint=(
+                        previews[0].fingerprint
+                        if len(previews) == 1
+                        else hashlib.sha256(
+                            json.dumps(
+                                [item.fingerprint for item in previews],
+                                separators=(",", ":"),
+                            ).encode()
+                        ).hexdigest()
+                    ),
+                )
+        else:
+            preview = service.preview(
+                snapshot,
+                selection,
+                action="discover",
+                mode=self.discover_mode_combo.currentData(),
+                limit=limit,
+                runtime_path=self.runtime_path,
+                env_file=str(Path(".env").resolve()),
+                output_root=str(Path("output/batch").resolve()),
+                library_dir=str(Path("output/Books").resolve()),
+                metrics_root=str(Path("output/metrics").resolve()),
+            )
+        request = (
+            replace(
+                preview.request(snapshot),
+                runtime_path=self.runtime_path,
+                env_file=str(Path(".env").resolve()),
+                cdp_endpoint=None,
+                output_root=str(Path("output/batch").resolve()),
+                library_dir=str(Path("output/Books").resolve()),
+                metrics_root=str(Path("output/metrics").resolve()),
+            )
+            if preview.can_confirm
+            else None
+        )
+        dialog = ExecutionPreviewDialog(preview, request, self)
+        dialog.requestConfirmed.connect(self._start_execution)
+        if dialog.exec() == QDialog.DialogCode.Accepted and request is not None:
+            self.statusBar().showMessage("実行を開始しました")
+
+    @Slot(object)
+    def _start_execution(self, request: object) -> None:
+        if not isinstance(request, JobExecutionRequest):
+            return
+        worker = _ExecutionWorker(request)
+        worker.signals.succeeded.connect(self._execution_succeeded, Qt.ConnectionType.QueuedConnection)
+        worker.signals.failed.connect(self._execution_failed, Qt.ConnectionType.QueuedConnection)
+        self._execution_worker = worker
+        for button in (self.discover_button, self.batch_run_button, self.grant_only_button):
+            button.setEnabled(False)
+        self.thread_pool.start(worker)
+
+    @Slot(str)
+    def _execution_succeeded(self, output: str) -> None:
+        self._on_checked_changed(self.model.selected_keys)
+        self.statusBar().showMessage("実行完了")
+        self.error_label.setText(output[-4000:] if output else "")
+
+    @Slot(str)
+    def _execution_failed(self, message: str) -> None:
+        self._on_checked_changed(self.model.selected_keys)
+        self.statusBar().showMessage("実行失敗")
+        self.error_label.setText("実行失敗: " + message)
 
     def _on_selection_removed(self, removed: object) -> None:
         self.statusBar().showMessage(f"再読込で {len(removed)} key の選択を解除しました")

@@ -180,3 +180,80 @@ def test_worker_does_not_block_event_loop_and_closed_window_receives_no_result(q
     assert window.model.snapshot is None
     assert window.error_label.text() == old_error
 
+
+def test_selected_multi_site_preview_keeps_hidden_key_and_serializes_resources(
+    qt_app, monkeypatch, tmp_path
+):
+    from PySide6.QtCore import QObject, Signal
+    from PySide6.QtWidgets import QDialog, QTextEdit
+
+    from screenshot_crawler.gui.execution_dialog import ExecutionPreviewDialog
+    from screenshot_crawler.management.execution import (
+        ExecutionPlanPreview,
+        ExecutionSelection,
+        execution_request_payload,
+    )
+    from screenshot_crawler.management.inventory import InventoryService
+    from tools.gui_sample import create_sample
+
+    db, watchlist = create_sample(tmp_path / "inputs")
+    runtime = tmp_path / "inputs" / "sample-runtime.yaml"
+    snapshot = InventoryService().load(db, watchlist, runtime_path=runtime)
+    window = MainWindow(db, watchlist, runtime, auto_load=False)
+    window.set_snapshot(snapshot)
+    window.model.set_checked_keys({"sample-0000", "sample-0001"})
+    window.model.set_search("sample-0001")
+    assert window.model.checked_keys == {"sample-0000", "sample-0001"}
+
+    def fake_preview(self, catalog_path, watchlist_path, policies, *, site,
+                     selected_keys, resource, **kwargs):
+        return ExecutionPlanPreview(
+            action="grant_only",
+            selection=ExecutionSelection.from_keys(selected_keys),
+            sites=(site,),
+            mode=None,
+            resource=resource,
+            limit=None,
+            candidate_count=1,
+            skipped_count=0,
+            skipped=(),
+            blockers=(),
+            warnings=(),
+            fingerprint=site,
+            resources_by_site=((site, resource or "all"),),
+            work_names=(site,),
+        )
+
+    captured = []
+
+    class FakeDialog(QObject):
+        requestConfirmed = Signal(object)
+
+        def __init__(self, preview, request, parent=None):
+            super().__init__(parent)
+            captured.append((preview, request))
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(
+        "screenshot_crawler.management.execution.ExecutionPlanService.preview_batch",
+        fake_preview,
+    )
+    monkeypatch.setattr("screenshot_crawler.gui.main_window.ExecutionPreviewDialog", FakeDialog)
+    window._show_execution_preview("grant_only")
+    assert len(captured) == 1
+    preview, request = captured[0]
+    assert preview.sites == ("magapoke", "mangaone")
+    assert set(request.selected_keys) == {"sample-0000", "sample-0001"}
+    assert dict(request.resources_by_site) == {"magapoke": "all", "mangaone": "all"}
+    dialog = ExecutionPreviewDialog(preview, request, window)
+    assert "Site Resource: magapoke=all, mangaone=all" in dialog.findChild(QTextEdit).toPlainText()
+    dialog.close()
+    payload = execution_request_payload(request)
+    assert payload["keys_by_site"] == {
+        "magapoke": ["sample-0001"],
+        "mangaone": ["sample-0000"],
+    }
+    window.close()
+

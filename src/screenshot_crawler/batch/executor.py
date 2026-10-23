@@ -845,6 +845,8 @@ class BatchExecutor:
                 raise BatchExecutionError("stale batch candidate: external_id")
             if source.site != candidate.site:
                 raise BatchExecutionError("stale batch candidate: source.site")
+            if candidate.discovery_key is not None and source.discovery_key != candidate.discovery_key:
+                raise BatchExecutionError("stale batch candidate: source.discovery_key")
             if target.source_id != source.id:
                 raise BatchExecutionError("stale batch candidate: target.source_id")
             if target.backend != candidate.backend:

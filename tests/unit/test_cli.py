@@ -1542,6 +1542,8 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     post_candidate = SimpleNamespace(
         **{**vars(quota_candidate), "access_strategy": "direct", "consumes_quota": False, "quota_resource": None}
     )
+    for planned_candidate in [*direct_candidates, quota_candidate, post_candidate]:
+        planned_candidate.discovery_key = "selected-key"
     initial_plan = SimpleNamespace(
         candidates=[*direct_candidates, quota_candidate],
         skipped=[],
@@ -1561,8 +1563,15 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-        def plan(self, *, site: str, quota_resource: str | None = None) -> object:
+        def plan(
+            self,
+            *,
+            site: str,
+            quota_resource: str | None = None,
+            selected_keys: tuple[str, ...] | None = None,
+        ) -> object:
             assert site == "zeblack"
+            assert selected_keys == ("selected-key",)
             plans.append(quota_resource)
             return initial_plan if len(plans) == 1 else post_plan
 
@@ -1679,6 +1688,7 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
     monkeypatch.setattr(cli, "BatchMetricsWriter", lambda *_args, **_kwargs: FakeMetrics())
     monkeypatch.setattr(cli, "BrowserSession", FakeSession)
     monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_require_selected_scope_sync", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli, "_batch_adapter_registry", lambda _values: object())
     monkeypatch.setattr(cli, "resolve_cdp_endpoint", lambda **_kwargs: "http://example.test:9222")
     monkeypatch.setattr(cli.asyncio, "sleep", fake_sleep)
@@ -1694,6 +1704,8 @@ async def test_zeblack_batch_runs_direct_grant_and_post_grant_phases(
         "run",
         "--site",
         "zeblack",
+        "--key",
+        "selected-key",
         "--catalog",
         str(tmp_path / "catalog.sqlite"),
         "--watchlist", str(tmp_path / "missing-watchlist.yaml"),
@@ -2034,6 +2046,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
             metadata={},
             access_strategy="quota",
             quota_resource=resource,
+            discovery_key="selected-key",
         )
 
     class FakePlanner:
@@ -2046,9 +2059,11 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
             site: str,
             quota_resource: str | None = None,
             output_mode: str = "capture",
+            selected_keys: tuple[str, ...] | None = None,
         ) -> object:
             assert site == "magapoke"
             assert output_mode == "grant_only"
+            assert selected_keys == ("selected-key",)
             plans.append(quota_resource)
             if quota_resource == "resource_a":
                 candidates = [candidate("resource_a", 1), candidate("resource_a", 2)]
@@ -2104,6 +2119,7 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
     monkeypatch.setattr(cli, "BatchPlanner", FakePlanner)
     monkeypatch.setattr(cli, "BrowserSession", FakeSession)
     monkeypatch.setattr(cli, "BatchExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_require_selected_scope_sync", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli, "_registry", lambda: object())
     monkeypatch.setattr(
         cli, "resolve_cdp_endpoint", lambda **_kwargs: "http://example.test:9222"
@@ -2119,6 +2135,8 @@ def test_grant_only_all_uses_policy_order_replans_and_shares_limit(
             "magapoke",
             "--grant-only",
             "all",
+            "--key",
+            "selected-key",
             "--limit",
             "3",
         ],

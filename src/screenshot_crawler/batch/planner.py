@@ -68,6 +68,7 @@ class BatchPlanner:
         self,
         *,
         site: str,
+        selected_keys: Iterable[str] | None = None,
         now: datetime | None = None,
         quota_resource: str | None = None,
         output_mode: Literal["capture", "grant_only"] = "capture",
@@ -84,7 +85,48 @@ class BatchPlanner:
             works, items, all_sources, all_targets = (
                 self.catalog.read_works_items_sources_and_targets()
             )
-            sources = [source for source in all_sources if source.site == site]
+            # Keep the complete site snapshot for policy/quota accounting and
+            # collision checks.  Selection is applied only to the candidate
+            # pool below, before any source or quota allocation takes place.
+            site_sources = [source for source in all_sources if source.site == site]
+            sources = site_sources
+            selected_key_values = (
+                None if selected_keys is None else tuple(selected_keys)
+            )
+            if selected_key_values is not None:
+                if any(not isinstance(key, str) or not key for key in selected_key_values):
+                    raise BatchPlanningError("selected_keys must contain non-empty strings")
+                if len(set(selected_key_values)) != len(selected_key_values):
+                    raise BatchPlanningError("selected_keys contains duplicate keys")
+                watchlist_targets_for_selection = (
+                    self.watchlist.list_targets() if self.watchlist is not None else ()
+                )
+                watchlist_by_key = {
+                    target.key: target for target in watchlist_targets_for_selection
+                }
+                unknown_keys = [
+                    key for key in selected_key_values if key not in watchlist_by_key
+                ]
+                if unknown_keys:
+                    raise BatchPlanningError(
+                        "Unknown Watchlist key(s): " + ", ".join(sorted(unknown_keys))
+                    )
+                wrong_site = [
+                    key for key in selected_key_values
+                    if watchlist_by_key[key].site != site
+                ]
+                if wrong_site:
+                    raise BatchPlanningError(
+                        f"Selected Watchlist key(s) do not belong to site {site!r}: "
+                        + ", ".join(sorted(wrong_site))
+                    )
+                selected_set = set(selected_key_values)
+                sources = [
+                    source for source in site_sources
+                    if source.discovery_key in selected_set
+                ]
+            else:
+                selected_set = None
             site_source_ids = {source.id for source in sources}
             targets = [target for target in all_targets if target.source_id in site_source_ids]
             if sources and self.watchlist is None:
@@ -157,12 +199,18 @@ class BatchPlanner:
         targets_by_source: dict[int, list[SourceTarget]] = defaultdict(list)
         for target in targets:
             targets_by_source[target.source_id].append(target)
-        collision_source_ids = _collision_source_ids(items, sources, works_by_id)
+        # Collision identity is a property of the complete site/work, not of
+        # the currently selected subset.  A selected source therefore keeps
+        # the same disambiguated archive name as a whole-site plan.
+        collision_source_ids = _collision_source_ids(items, site_sources, works_by_id)
         # A site-scoped plan only considers items with at least one source for that site.
         site_item_ids = set(sources_by_item)
         plan = BatchPlan()
         try:
-            quota_available = policy.available_quota(sources, current)
+            # Quota is site-wide state.  It must be calculated from every
+            # source on the site even when the selected candidate pool is
+            # narrowed to one or more Watchlist keys.
+            quota_available = policy.available_quota(site_sources, current)
             plan.quota_available = quota_available
             selections: list[_Selection] = []
             for item in items:
@@ -410,6 +458,7 @@ def _candidate_from_selection(
         quota_commit_mode=decision.quota_commit_mode,
         external_id=source.external_id,
         work_id=item.work_id,
+        discovery_key=source.discovery_key,
     )
 
 

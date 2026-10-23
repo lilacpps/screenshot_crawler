@@ -1,9 +1,16 @@
-## Windows read-only inventory GUI (P1, 2026-10-23)
+## Windows inventory GUI and selected execution (P2, 2026-10-24)
 
 `screenshot-crawler-gui` / `python -m screenshot_crawler.gui` is an optional
 PySide6 management UI. Install `.[gui]`; the regular CLI has no Qt dependency.
 See [GUI usage](../docs/GUI_README.md) and
-[current contract](../docs/GUI_INVENTORY.md). P2 execution is out of scope.
+[current contract](../docs/GUI_INVENTORY.md). P2 adds an explicit selected-key
+execution boundary. `BatchPlanner.plan(selected_keys=...)` filters the candidate
+Source pool before Policy allocation while calculating shared site Quota from all
+site Sources. `None` keeps legacy whole-site CLI behavior; an explicit empty
+selection produces no candidates. The GUI preview is read-only and the confirmed
+request launches the existing CLI outside the Qt event loop. Grant-only is shown
+as potentially entitlement-consuming. P3 job persistence and queue management are
+separate work.
 
 `management.catalog_reader.CatalogInventoryReader` validates existing v7 and
 reads a single `mode=ro`, query-only transaction. It creates no Catalog service,

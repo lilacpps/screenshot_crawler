@@ -62,6 +62,10 @@ class BatchCandidate:
     artifact_disambiguator: str | None = None
     external_id: str = ""
     work_id: int | None = None
+    # Stable Watchlist ownership, retained so later resolver/revalidation
+    # stages can enforce the original selection boundary without guessing from
+    # display metadata.
+    discovery_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

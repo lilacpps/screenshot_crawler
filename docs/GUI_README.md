@@ -1,7 +1,9 @@
-# Windows 作品管理GUI（P1・閲覧専用）
+# Windows 作品管理GUI（P2・選択実行）
 
-Python 3.12以上とPySide6を使うローカルアプリです。Catalog v7とWatchlistを
-読み取り専用で表示します。P1完了後は **USER UI REVIEW REQUIRED** です。
+Python 3.12以上とPySide6を使うローカルアプリです。Catalog v7とWatchlistを表示し、
+チェックしたWatchlist keyだけを実行対象に
+Discover / Batch Run / Grant-onlyできます。確認ダイアログは実行前に表示され、
+Grant-onlyでは権利・チケット・Quotaを消費する可能性を明示します。
 
 ## インストール・起動
 
@@ -54,11 +56,35 @@ pipのないuv環境では `uv pip install --python .venv/Scripts/python.exe -e 
   消費記録・設定に根拠がある場合だけ表示します。値は再読込時に更新されます。
 - WatchlistのDiscovery無効とSourceの担当外は別概念です。無効keyもチェックできます。
 
-## P1の制約
+## 選択実行
 
-Discover / Batch Run / Grant-onlyは無効です。Crawler、Chrome/CDP、外部サイトには
-接続しません。Catalog・Watchlist・ZIP・status JSON・metricsを変更しません。
-ジョブ、スケジューラ、Watchlist編集、Scope apply、Renameは未実装です。
+keyを1つ以上チェックすると下部のDiscover、Batch Run、Grant-onlyが有効になります。
+検索・表示モード・フォーカスを変えても選択集合はkey単位で保持されます。確認画面には
+対象サイト・作品・key、候補数、最大件数、Quota、Resource、スキップ理由、警告と
+Plan fingerprintが表示されます。空選択はサイト全件として扱いません。
+下部の最大件数は0（無制限）または候補数の上限を指定できます。Grant-onlyのResourceは
+選択中のサイトごとに表示されるセレクタで`all`またはサイト対応Resourceを選びます。
+
+確認後はGUIスレッド外で既存CLIを起動します。複数サイトはサイトごとに順番に処理し、
+専用workerプロセスがCatalog job lockを取得したまま全サイトを再Planし、確認時fingerprintと
+一致することを確認してからサイトへ接続します。CatalogやWatchlistに重大な差異、
+未知key、未対応Resource、出力衝突がある場合はブラウザ接続前に停止します。
+
+CLIからは次のようにkeyを繰り返し指定できます。
+
+```powershell
+screenshot-crawler batch plan --site mangaone --key series-a --key series-b
+screenshot-crawler batch run --site mangaone --key series-a --key series-b
+screenshot-crawler batch run --site magapoke --key series-a --grant-only all
+```
+
+`--key`を省略した従来の`--site`全件動作は維持されます。
+
+## P2の制約
+
+実行前確認は読み取り専用です。実行開始後は既存のCrawler、Chrome/CDP、Catalog job lock、
+Site Policyに従ってCLIを動かします。P3の永続ジョブキュー・履歴画面は別段階です。
+Watchlist編集、Scope apply、Rename、スケジューラは対象外です。
 
 直近履歴はItemごとの最大Run ID、ArtifactはItem/種別/形式/backendごとの最新記録です。
 過去のrunning記録を現在実行中とは判断しません。物理ファイル検証はしません。
