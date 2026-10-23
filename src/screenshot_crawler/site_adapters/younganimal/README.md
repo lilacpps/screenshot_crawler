@@ -160,6 +160,72 @@ and B=15 evidence and synthetic B=9 coverage do not authorize arbitrary odd
 layouts. The narrow CI exception applies only to observed class pairs with the
 existing geometry, identity, and active-body proof.
 
+## Odd body plus one trailing PR (2026-10-23)
+
+Item/Source 36832 (`a35f2207af39f`, ペンと手錠と事実婚 / 第65話➀)
+failed before capture with `Younganimal PR-tail body mapping changed` inside
+the existing 20-second readiness bound. Metrics
+`c9f6da25cbca46adb359affa1417a1eb` and saved diagnostic roles show sixteen
+wrappers: top PR 0, body 1-11, CI 12, one PR 13, Good 14 and Last 15, with
+seek min=1/max=15/step=2. The previous single-PR profile required even body
+count and rejected this stable odd-body combination; increasing the wait
+would not resolve it.
+
+`standard_single_pr_odd_body` now supports this exact structural family:
+horizontal/spread/RTL, positive PR/CI/Good capabilities, no top-empty,
+vertical or single flags, exact canvas-free top PR and CI/PR/Good/Last roles,
+contiguous known odd body B=N-5>=5, and min=1/max=N-1/step=2. Counts and IDs
+are derived, not allowlisted. Unobserved shorter odd-body single-PR shapes (B<5), an
+extra initial blank with one PR, arbitrary PR counts, body gaps, wrong
+capabilities/ranges/centers and non-body canvases remain rejected. Existing
+even-body single-PR and both three-PR parity profiles retain their contracts.
+
+All eight live public seeks were checked and rewound to the start:
+
+| Seek | Centered wrappers | Phase | State |
+|---|---|---|---|
+| 15 | 0, 1 | first + top-PR | first body |
+| 13..5 by -2 | 2/3..10/11 | none | body pairs |
+| 3 | 12, 13 | CI + PR | CI + single PR |
+| 1 | 14, 15 | Last + PR | Good + unique visible/centered Last |
+
+Python parsing, native JavaScript layout proof and CI mutation geometry use
+the same odd single-PR mapping. Existing public seek, frozen role/coverage,
+source/replay/pixel, identity/generation/write, final-center, post-encode and
+complete-body-before-END guards remain mandatory. Native lossless WebP and
+atomic rendered PNG fallback are unchanged. No CLI/config, access/resource,
+pacing, timeout, shared Core, Batch or schema change is introduced, so
+`note/00_core.md` needs no update. Use the normal `batch run --site younganimal`
+command; normal Catalog state remains pending for an ordinary rerun.
+
+The bounded baseline shared-CDP probe reproduced the original rejection at
+every seek, blocked 31 mutating requests and observed zero checkout attempts.
+Production Batch for the current free Source, using an online-backup Catalog
+and explicit copied matching Watchlist, then completed all eleven bodies
+through END with max_pages=11 (CrawlRun 14121). Every ordered ZIP member is native 848x1200 lossless VP8L
+WebP, with unique hashes, no rendered PNG fallback and all eleven frozen
+body slots covered. The retained manifest, full decode, ZIP CRC, Artifact
+SHA-256/size and isolated Item completion checks passed; archive size is
+5,742,540 bytes. Thirty mutating requests were blocked, no checkout was
+attempted, and normal Item/Source/runs/artifacts were checked unchanged.
+Metrics `dfdf132302704781bdbf5c486f7104d9` show one completion and zero
+failure/retry/403/429/5xx/challenge/CAPTCHA. p1/p6/p11 were visually checked
+without viewer chrome or missing regions. This live audit verifies the
+production proof/output path; no separate live source-RGBA equality is claimed.
+Evidence is ignored under `output/younganimal-fix-36832/`; no real-site fixture,
+cookie or signed source is committed. Other episodes/layouts remain unverified.
+
+Validation: 49 targeted Unit/browser tests passed (0 skipped), including all
+observed phases, structural/phase/terminal/native selection rejection, B=11
+and boundary B=5 native Runner/END/ZIP source-RGBA equality, disjoint CI-widget
+mutation handling, and forced rendered PNG pixel equality. The complete
+affected capture Unit/browser Integration/packaging selection passed 838 tests
+(0 failed, 0 skipped, 656.67s; five existing asyncio deprecation warnings).
+Global Ruff and scoped diff checks passed. Full repository and separate
+Research/Discovery/Policy/access suites were not run for this site-local layout
+change. The first isolated CLI invocation hit CP932 output encoding
+before starting a candidate; its UTF-8 rerun completed without a code change.
+
 ## Earlier live verification (2026-10-18; historical)
 
 The supplied rental episode `37d94ac0d8242` passed full work Discovery (six
@@ -697,7 +763,8 @@ centered Last marker. Every body is still mandatory before END. Python/native/
 CI geometry use this same map. An isolated normal Batch verified all eleven
 native 960x1364 WebP pages against independent source RGBA through END/ZIP/
 Catalog, with zero checkout attempts and no changes to the normal Catalog or
-archives. Odd-body single-PR and arbitrary PR counts remain unsupported.
+archives. Odd-body single-PR is supported by the separate profile above;
+arbitrary PR counts remain unsupported.
 
 A separate horizontal no-CI profile was observed on already-granted episode
 `8d92e88ab93ec`. Its metadata had 15 wrappers and seek `min=1`, `max=15`,

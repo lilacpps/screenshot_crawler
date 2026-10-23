@@ -529,26 +529,32 @@ def test_younganimal_three_pr_maps_all_observed_phases(seek, state, active) -> N
 
 
 @pytest.mark.parametrize(
-    ("seek", "state", "active"),
-    [(17, "content", (1,)), (15, "content", (2, 3)), (13, "content", (4, 5)),
-     (11, "content", (6, 7)), (9, "content", (8, 9)), (7, "content", (10, 11)),
-     (5, "ad", ()), (3, "ad", ()), (1, "end", (17,))],
+    ("pr_count", "seek", "state", "active"),
+    [(3, 17, "content", (1,)), (3, 15, "content", (2, 3)), (3, 13, "content", (4, 5)),
+     (3, 11, "content", (6, 7)), (3, 9, "content", (8, 9)), (3, 7, "content", (10, 11)),
+     (3, 5, "ad", ()), (3, 3, "ad", ()), (3, 1, "end", (17,)),
+     (1, 15, "content", (1,)), (1, 13, "content", (2, 3)), (1, 11, "content", (4, 5)),
+     (1, 9, "content", (6, 7)), (1, 7, "content", (8, 9)), (1, 5, "content", (10, 11)),
+     (1, 3, "ad", ()), (1, 1, "end", (15,))],
 )
-def test_younganimal_three_pr_odd_body_maps_all_observed_phases(seek, state, active) -> None:
+def test_younganimal_odd_body_pr_tail_maps_all_observed_phases(pr_count, seek, state, active) -> None:
     observed = _parse_viewer_observation(
-        _snapshot(seek, pr_tail_body_count=11, tail_pr_count=3), expected_url=EPISODE_URL,
+        _snapshot(seek, pr_tail_body_count=11, tail_pr_count=pr_count), expected_url=EPISODE_URL,
     )
-    assert observed.layout_variant == "standard_three_pr_odd_body"
+    assert observed.layout_variant == ("standard_single_pr_odd_body" if pr_count == 1 else "standard_three_pr_odd_body")
     assert observed.body_slots == tuple(range(1, 12))
-    assert (observed.ci_slot, observed.pr_slots, observed.good_slot, observed.last_slot) == (12, (13, 14, 15), 16, 17)
+    assert (observed.ci_slot, observed.pr_slots, observed.good_slot, observed.last_slot) == (
+        12, tuple(range(13, 13 + pr_count)), 13 + pr_count, 14 + pr_count)
     assert observed.page_state == state and observed.active_slots == active
     if state == "content":
         assert observed.ready_slots == active
 
 
-@pytest.mark.parametrize("mutation", ["capability", "blank", "range", "body", "tail", "canvas", "ci_phase", "end_phase", "end_marker", "end_hidden", "center", "single_pr"])
-def test_three_pr_odd_body_rejects_unobserved_or_changed_profile(mutation: str) -> None:
-    raw = _snapshot(1 if mutation.startswith("end_") else 5, pr_tail_body_count=11, tail_pr_count=3)
+@pytest.mark.parametrize("pr_count", [1, 3])
+@pytest.mark.parametrize("mutation", ["capability", "blank", "range", "body", "tail", "canvas", "ci_phase", "end_phase", "end_marker", "end_hidden", "center", "short_single_pr"])
+def test_odd_body_pr_tail_rejects_unobserved_or_changed_profile(mutation: str, pr_count: int) -> None:
+    raw = _snapshot(1 if mutation.startswith("end_") else pr_count + 2,
+                    pr_tail_body_count=11, tail_pr_count=pr_count)
     if mutation == "capability":
         raw["viewerClasses"].remove("mode-has-comic-info")
     elif mutation == "blank":
@@ -571,7 +577,7 @@ def test_three_pr_odd_body_rejects_unobserved_or_changed_profile(mutation: str) 
     elif mutation == "center":
         raw["slots"][4]["wrapperCenterInViewport"] = True
     else:
-        raw = _snapshot(15, pr_tail_body_count=11, tail_pr_count=1)
+        raw = _snapshot(7, pr_tail_body_count=3, tail_pr_count=1)
     with pytest.raises(UnknownPageStateError):
         _parse_viewer_observation(raw, expected_url=EPISODE_URL)
 

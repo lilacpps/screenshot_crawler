@@ -338,6 +338,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   };
   const exactPrTailLayout = (viewer, pages, children, seek, prCount) => {
     // Prove the observed PR-tail families, including blank and body-parity variants.
+    // Odd single-PR bodies start at B>=5; unobserved short shapes stay closed.
     const topEmpty = viewer.classList.contains('mode-has-top-emptypage');
     const bodyStart = topEmpty ? 2 : 1, ci = children.length - prCount - 3;
     const bodyCount = ci - bodyStart;
@@ -346,7 +347,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const ciSeek = prCount + (oddBody ? 2 : 4);
     if (![1, 3].includes(prCount) ||
         (topEmpty ? prCount !== 3 || bodyCount < 3 || bodyCount % 2 !== 1
-          : oddBody ? prCount !== 3 || bodyCount < 3 : bodyCount < 4) ||
+          : oddBody ? bodyCount < (prCount === 1 ? 5 : 3) : bodyCount < 4) ||
         !viewer.contains(pages) || !viewer.contains(seek) ||
         !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
           'mode-has-comic-info', 'mode-has-good-page'].every(name => viewer.classList.contains(name)) ||
@@ -1110,7 +1111,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         layout_variant = "standard_one_body" if one_body_standard else "standard_two_body"
     pr_tail_count = 0
     pr_tail_sets = ()
-    # Recognize the exact tail before checking seek range: odd-body three-PR
+    # Recognize the exact tail before checking seek range: odd-body one/three-PR
     # layouts use max=N-1, while the even-body and top-empty variants use max=N.
     if layout_variant in {"standard", "top_emptypage"}:
         for count in ((3,) if layout_variant == "top_emptypage" else (1, 3)):
@@ -1133,6 +1134,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
             raise UnknownPageStateError("Younganimal PR-tail capability markers changed")
         layout_variant = (
             "top_empty_three_pr" if pr_tail_top_empty
+            else "standard_single_pr_odd_body" if pr_tail_odd_body and pr_tail_count == 1
             else "standard_three_pr_odd_body" if pr_tail_odd_body
             else "standard_single_pr" if pr_tail_count == 1 else "standard_three_pr"
         )
@@ -1275,7 +1277,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     body_slots = tuple(range(body_start, body_end))
     if pr_tail_profile and (
         (pr_tail_top_empty and (body_start != 2 or len(body_slots) < 3 or len(body_slots) % 2 != 1))
-        or (pr_tail_odd_body and (pr_tail_count != 3 or body_start != 1 or len(body_slots) < 3 or len(body_slots) % 2 != 1))
+        or (pr_tail_odd_body and (body_start != 1 or len(body_slots) < (5 if pr_tail_count == 1 else 3) or len(body_slots) % 2 != 1))
         or (not pr_tail_top_empty and not pr_tail_odd_body and (body_start != 1 or len(body_slots) < 4 or len(body_slots) % 2 != 0))
     ):
         raise UnknownPageStateError("Younganimal PR-tail body mapping changed")

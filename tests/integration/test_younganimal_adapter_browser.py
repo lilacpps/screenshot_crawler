@@ -2146,8 +2146,8 @@ async def test_younganimal_tail_profile_post_encoding_mutation_saves_no_artifact
 
 
 @pytest.mark.parametrize("mutation", ["capability", "phase", "tail", "center", "premature_end"])
-@pytest.mark.parametrize(("standard_body_count", "tail_pr_count", "pr_body_count"), [(None, 1, 6), (None, 3, 6), (1, 1, None), (2, 1, None), (None, 3, 11)],
-                         ids=["single_pr", "three_pr", "one_body", "two_body", "three_pr_odd_body"])
+@pytest.mark.parametrize(("standard_body_count", "tail_pr_count", "pr_body_count"), [(None, 1, 6), (None, 3, 6), (1, 1, None), (2, 1, None), (None, 3, 11), (None, 1, 11)],
+                         ids=["single_pr", "three_pr", "one_body", "two_body", "three_pr_odd_body", "single_pr_odd_body"])
 async def test_younganimal_small_native_layout_rejects_profile_drift(
     browser_page, monkeypatch: pytest.MonkeyPatch, mutation: str, standard_body_count: int | None, tail_pr_count: int,
     pr_body_count: int | None,
@@ -2521,6 +2521,9 @@ async def test_younganimal_capture_rejects_valid_profile_mapping_drift_after_det
         pytest.param(None, None, None, 4, False, False, 3, id="three_pr_4"),
         pytest.param(None, None, None, 11, False, False, 3, id="three_pr_odd_11"),
         pytest.param(None, None, None, 3, False, False, 3, id="three_pr_odd_3"),
+        pytest.param(None, None, None, 11, False, False, 1, id="single_pr_odd_11"),
+        pytest.param(None, None, None, 5, False, False, 1, id="single_pr_odd_5"),
+        pytest.param(None, None, None, 11, True, False, 1, id="single_pr_odd_rendered"),
     ],
 )
 async def test_younganimal_runner_uses_lossless_native_spreads_after_pixel_proof(
