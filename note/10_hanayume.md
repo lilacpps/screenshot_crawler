@@ -70,6 +70,49 @@ The natural first-party `GET /api/series/access` response is reduced to exact `s
 
 The saved reports have distinct scope: `output/hanayume_experiment/tester/login-nowfree-metadata-20261010T210447Z-86b4f281.json` includes series row/auth metadata and an `episode_route.reader` pilot at counter 1/17 with one 828x1329 canvas for target `90868f4de278f`. The later `output/hanayume_experiment/tester/r3-auth-marker-20261010T214015Z-6fc6ccb8.json` records series auth/listing markers only; it contains no viewer-entry result. Neither is a logged-in Batch artifact. Logged-out gated samples showed signup/login CTAs with zero canvases; a ready Viewer overlapping an entry dialog has not been observed, so universal overlay detection is not claimed. No account, ticket, coin, purchase, or quota action is performed.
 
+### Rental-expiry display formats
+
+Discovery accepts the exact `レンタル中 閲覧期限 ` prefix followed by either
+`N日+H時間` or `H時間` in the single episode-local `eliRentStat` marker, with
+`mode-read` still required. The hours-only form is the live-observed display
+below one day. Unsupported units and trailing text remain unrecognized. This
+marker does not calculate expiry or prove access by itself: fresh authentication,
+exact work/episode native `waitAndFree`, `hasAccess=true`, and strictly positive
+bounded remaining seconds are still required to accept a public/history badge
+difference. Expiry continues to use the native request timestamp and seconds.
+No CLI, pacing, retry, source identity, or resource-consumption behavior changes.
+
+On 2026-10-23 both user-reported works failed after complete range enumeration:
+Colette episode `085170c091205` and Soredemo episode `1fa3ff2c23d27` had a
+`7時間` rental marker and positive native access, but the old days-plus-hours-only
+pattern rejected their history proof. Investigation evidence is retained at
+`.tmp/hanayume-discovery-exact-snapshots-20261023.json`.
+
+The existing browser-backed public/history test is parameterized across full
+and incremental modes for days-plus-hours, hours-only, unsupported minutes,
+trailing text, native denial, and zero native remaining seconds. Both hours-only
+positive cases failed before the fix. The affected Unit/browser selection passed
+86 cases and failed two separate Batch duplicate-native-response cases; seven
+additional grant-refresh/auth cases passed. No cases were skipped. Restoring the
+old production regex in an isolated test process reproduced those same two Batch
+failures (`window.ticketClicks` was `None`, expected `1`); their root cause remains
+unresolved and this fix does not modify Batch. `ruff check src tests` passed.
+Research tests and the full suite were not run for this site-local parser change.
+
+Post-fix shared-CDP full Discovery through `DiscoveryService` and a dedicated
+Catalog completed Colette's 313 rows and Soredemo's 328 rows. The affected
+episodes were stored as `quota` with a future native-derived grant expiry. The
+normal Catalog was untouched, mutating requests were blocked, and the Colette
+request audit recorded no checkout request. The first Soredemo verification
+attempt returned no affected Source; the verification harness raised
+`StopIteration` before saving its Discovery result or inner error, so that
+attempt's cause is unknown. A bounded follow-up using the production adapter
+with exception logging completed all 328 rows without an adapter error. This
+does not introduce a production retry or establish universal repeatability.
+Evidence: `output/hanayume-discovery-hours-fix-20261023-0690b772/report.json`
+(Colette) and `soredemo-report.json` in the same directory. Live incremental,
+Viewer capture, and consuming Batch were not run for this Discovery-only fix.
+
 ## Access guard and CLI
 
 The local profile marks `hanayume.com`, `www.hanayume.com`, and the observed image host `viewer.hanayume.com` as relevant. The shared AccessGuard stops on relevant HTTP 403/429, an explicit `cf-mitigated: challenge` header, or the shared conservative visible-provider CAPTCHA UI check. No broad page-body text detector or speculative host is configured. Page evaluation and access-state observations have site-local timeouts. The shared guard now propagates cancellation from a pending visible-provider locator check so its monitor can close cleanly.

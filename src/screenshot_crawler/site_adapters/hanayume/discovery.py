@@ -1205,12 +1205,17 @@ async def _read_range_rows(
         if public_labels_for_copy is not None and tuple(raw["labels"]) != public_labels_for_copy:
             history_label_conflict_ids.add(identity.episode_id)
         rental_texts = raw["rentalStatText"]
+        # Below one day the site omits the day component (e.g. "7時間").
+        # This marker still requires the exact native active-grant proof later.
         if (
             "mode-read" in raw["classNames"]
             and raw["rentalStatCount"] == 1
             and len(rental_texts) == 1
             and rental_texts[0].startswith(RENTAL_HISTORY_PREFIX)
-            and re.fullmatch(r"[0-9]+日\+[0-9]+時間", rental_texts[0][len(RENTAL_HISTORY_PREFIX) :])
+            and re.fullmatch(
+                r"(?:[0-9]+日\+)?[0-9]+時間",
+                rental_texts[0][len(RENTAL_HISTORY_PREFIX) :],
+            )
         ):
             manual_rental_history_ids.add(identity.episode_id)
     parsed_rows = [

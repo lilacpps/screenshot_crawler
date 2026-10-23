@@ -1926,6 +1926,20 @@ override an exact free label or active rental. The live listing
 observation confirmed this schema and positive auth; no ticket was used during
 Discovery.
 
+The 2026-10-23 hours-only audit confirmed a remaining display-parser limitation:
+`レンタル中 閲覧期限 7時間` alone remains unknown because the rental-label
+pattern requires days plus hours. A bounded shared-CDP check of Holyland episode
+`51213d19d6ea3` and Peliliu episode `a93f6d01d1a78` observed that exact label;
+both were recovered as `quota` with a future grant by the existing authenticated
+native access join. Unlike Hanayume's rejected public/history label conflict,
+this unrecognized label alone does not raise DiscoveryIncompleteError. Without
+usable native proof it cannot establish a grant from the hours-only display;
+previous stored grants retain the existing preservation behavior. This audit
+did not change the parser or run complete Discovery. Mutating requests were
+blocked and the normal Catalog was read only. All 62 Younganimal Discovery Unit
+cases passed with zero skips. Evidence:
+`.tmp/younganimal-rental-hours-audit-20261023.json`.
+
 The Younganimal Policy exposes one `work_ticket` resource pass scoped to a work,
 with quota limit one and a local minimum 23-hour cooldown after observed
 consumption. A longer configured cooldown is honored. The adapter supports only

@@ -10,6 +10,13 @@ Watchlist targets use the strict episode URL `https://hanayume.com/episodes/<13-
 
 Only exact row-scoped labels are classification evidence. One exact `無料` maps to `access_mode=free`. One exact `今なら無料` maps to `free` only when the current Discovery attempt verifies the observed account markers on the canonical `/series/<work-id>` route; otherwise it remains `unknown`. Missing/duplicate/other labels remain `unknown` unless an exact natural native `waitAndFree` row for the same work and episode promotes the row to a nominal `quota` candidate. This native type does not authorize entry. A conflicting public/account badge row is accepted only under the exact active-grant proof described below; other conflicts fail closed. Catalog stores only `access_mode`, not the raw label. Auth is attempt-local and never persisted. On an exact route/listing, a missing positive marker set is polled for at most five seconds at 150 ms intervals; deadline means no proof and keeps `今なら無料` unknown. Discovery follows the seed's observed work link, reads auth on the canonical series route, returns to the exact seed, and revalidates work/title/ranges before enumeration.
 
+Rental history accepts the observed exact `レンタル中 閲覧期限 N日+H時間`
+and `レンタル中 閲覧期限 H時間` formats, so an active rental below one day
+does not make Discovery incomplete. The exact authenticated native work/episode
+grant, positive bounded remaining seconds, `mode-read`, and single rental marker
+remain required for a public/history badge difference. The displayed hours never
+determine the grant expiry. Unsupported units and malformed text still fail closed.
+
 ## Viewer capture
 
 Manual Viewer entry validates the exact episode URL and scoped work link, then checks the canonical same-work series listing, auth, and target row. `無料` remains eligible regardless of auth markers; `今なら無料` requires fresh verified series auth. If the target is absent from the episode page, its episode preview must match the nonempty, unselected fresh bare-series preview by complete ordered ID/label signature or exact reverse; target-present entry continues to require the exact matching row. Unknown branches, history-only target copies, conflicts, duplicates, and preview drift fail closed.

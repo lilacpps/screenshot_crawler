@@ -72,7 +72,10 @@ def _title(position: int) -> str:
     return f"第{position}話"
 
 
-def _row(position: int, label: str, *, manual_rental: bool = False) -> str:
+def _row(
+    position: int, label: str, *, manual_rental: bool = False,
+    rental_period: str = "2日+23時間",
+) -> str:
     episode_id = _episode_id(position)
     row_class = (
         "series-eplist-item mode-read mode-current mode-store-item-start"
@@ -82,7 +85,7 @@ def _row(position: int, label: str, *, manual_rental: bool = False) -> str:
     rental_stat = (
         '<span data-e2e="eliRentStat">'
         '\u30ec\u30f3\u30bf\u30eb\u4e2d \u95b2\u89a7\u671f\u9650'
-        '<br>2\u65e5+23\u6642\u9593</span>'
+        f'<br>{rental_period}</span>'
         if manual_rental
         else ""
     )
@@ -152,6 +155,7 @@ def _page_html(
     all_badge: str | None = None,
     manual_rental_ids: set[str] | None = None,
     manual_history_label_diff: bool = False,
+    rental_period: str = "2日+23時間",
     series_auth_state: str | None = None,
     work_id_override: str | None = None,
     history_conflict: bool = False,
@@ -226,6 +230,7 @@ def _page_html(
                 else label
             ),
             manual_rental=_episode_id(position) in manual_rental_ids,
+            rental_period=rental_period,
         )
         for position, label in row_details
         if history_preview_ids is None or _episode_id(position) in history_preview_ids
@@ -336,6 +341,7 @@ async def _install_pages(
     all_badge: str | None = None,
     manual_rental_ids: set[str] | None = None,
     manual_history_label_diff: bool = False,
+    rental_period: str = "2日+23時間",
     native_access_response: dict[str, object] | None = None,
     series_auth_state: str = "logged-out",
     history_conflict: bool = False,
@@ -375,6 +381,7 @@ async def _install_pages(
                     all_badge=all_badge,
                     manual_rental_ids=manual_rental_ids,
                     manual_history_label_diff=manual_history_label_diff,
+                    rental_period=rental_period,
                     series_auth_state=series_auth_state,
                     wrong_outer=wrong_series_outer,
                 ),
@@ -420,6 +427,7 @@ async def _install_pages(
                 all_badge=all_badge,
                 manual_rental_ids=manual_rental_ids,
                 manual_history_label_diff=manual_history_label_diff,
+                rental_period=rental_period,
                 history_conflict=history_conflict,
                 unknown_root=unknown_root,
                 nested_user_root=nested_user_root,
@@ -693,8 +701,20 @@ async def test_hanayume_delayed_account_history_still_refreshes_manual_ticket_gr
 
 
 @pytest.mark.parametrize("refresh_mode", ["full", "incremental"])
+@pytest.mark.parametrize(
+    ("rental_period", "has_access", "remaining_seconds", "accepted"),
+    [
+        pytest.param("2日+23時間", True, 172800, True, id="days-hours"),
+        pytest.param("7時間", True, 25200, True, id="hours-only"),
+        pytest.param("7分", True, 25200, False, id="unsupported-minutes"),
+        pytest.param("7時間 extra", True, 25200, False, id="malformed-hours"),
+        pytest.param("7時間", False, 25200, False, id="hours-denied"),
+        pytest.param("7時間", True, 0, False, id="hours-expired"),
+    ],
+)
 async def test_hanayume_active_manual_grant_allows_exact_history_label_difference(
-    browser_page, tmp_path: Path, refresh_mode: str
+    browser_page, tmp_path: Path, refresh_mode: str,
+    rental_period: str, has_access: bool, remaining_seconds: int, accepted: bool,
 ) -> None:
     episode_id = _episode_id(TARGET_POSITION)
     native_payload: dict[str, object] = {
@@ -704,8 +724,8 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
                 {
                     "episodeId": episode_id,
                     "accessType": "waitAndFree",
-                    "hasAccess": True,
-                    "timeRemainingInSeconds": 172800,
+                    "hasAccess": has_access,
+                    "timeRemainingInSeconds": remaining_seconds,
                 }
             ],
         }
@@ -715,6 +735,7 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
         all_badge="",
         manual_rental_ids={episode_id},
         manual_history_label_diff=True,
+        rental_period=rental_period,
         native_access_response=native_payload,
         series_auth_state="authenticated",
     )
@@ -724,6 +745,12 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
     )
 
     source = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
+    if not accepted:
+        assert result.stopped_reason == "incomplete"
+        assert result.observed_count == 0
+        assert result.complete is (False if refresh_mode == "full" else None)
+        assert source is None
+        return
     assert result.observed_count == TOTAL
     assert result.complete is (True if refresh_mode == "full" else None)
     assert source is not None and source.access_mode == "quota"
