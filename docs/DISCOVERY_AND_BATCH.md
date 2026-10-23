@@ -56,6 +56,29 @@ The existing direct-entry route and strict body, identity, capture, and END proo
 remain required. No shared Catalog schema, Core access strategy, or resource
 rules change.
 
+## Hanayume premium-ticket rentals (2026-10-24)
+
+The API name `purchased` can represent an already active premium-ticket rental;
+it does not establish permanent ownership. Discovery accepts its public/history
+badge difference only with fresh series authentication, an exact same-work/episode
+native `purchased` row with `hasAccess=true` and no explicit zero timer, and a
+unique matching-title account row with `mode-read` and one `eliRentStat` marker
+that is also its sole access label. The exact displayed `D日+H時間` or `H時間`
+countdown supplies `access_granted_until`: observation start plus the displayed
+duration minus one hour, matching the display granularity conservatively.
+Days are bounded to 0..14 and hours to 0..23; zero/one-hour lower bounds,
+unsupported units and malformed text establish no grant. The native 72-hour
+Work Ticket timer limit remains unchanged and is not used to calculate this
+premium-ticket expiry. Exact free labels keep precedence; other verified premium
+rentals use `access_mode=paid` with the display-derived expiry, never `owned`.
+
+Hanayume SitePolicy selects an available paid source as non-consuming `direct`
+only before its stored expiry. A paid source without a future expiry is skipped
+and never falls back to a Work Ticket. Discovery records no ticket use or work
+cooldown and introduces no premium-ticket consumption operation. Existing
+`waitAndFree` grants retain their native-second expiry calculation. No CLI,
+shared runtime, Catalog schema or resource-selection change is needed.
+
 ## Piccoma observed manual unlocks (2026-10-10)
 
 Piccoma Discovery records already active manual unlocks as `access_mode=quota`

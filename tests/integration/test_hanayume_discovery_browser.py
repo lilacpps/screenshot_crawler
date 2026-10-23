@@ -89,12 +89,17 @@ def _row(
         if manual_rental
         else ""
     )
+    badge = f'<span class="series-eplist-item-access-text" data-e2e="eliFreeBadge">{label}</span>'
+    if manual_rental and label == "レンタル中":
+        # In the observed account row the rental marker is the access label.
+        rental_stat = rental_stat.replace('<span ', '<span class="series-eplist-item-access-text" ', 1)
+        badge = ""
     return f"""<div class="{row_class}" data-e2e="eli">
       <a class="series-eplist-item-link" href="/episodes/{episode_id}">
         <h2 class="series-eplist-item-h">
           <span class="series-eplist-item-h-text" data-e2e="eliTitle">{_title(position)}</span>
         </h2>
-        <span class="series-eplist-item-access-text" data-e2e="eliFreeBadge">{label}</span>
+        {badge}
         {rental_stat}
       </a>
     </div>"""
@@ -710,11 +715,14 @@ async def test_hanayume_delayed_account_history_still_refreshes_manual_ticket_gr
         pytest.param("7時間 extra", True, 25200, False, id="malformed-hours"),
         pytest.param("7時間", False, 25200, False, id="hours-denied"),
         pytest.param("7時間", True, 0, False, id="hours-expired"),
+        pytest.param("12日+1時間", True, 1042674, True, id="premium-twelve-days"),
     ],
 )
+@pytest.mark.parametrize("access_type", ["waitAndFree", "purchased"])
 async def test_hanayume_active_manual_grant_allows_exact_history_label_difference(
     browser_page, tmp_path: Path, refresh_mode: str,
     rental_period: str, has_access: bool, remaining_seconds: int, accepted: bool,
+    access_type: str,
 ) -> None:
     episode_id = _episode_id(TARGET_POSITION)
     native_payload: dict[str, object] = {
@@ -723,7 +731,7 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
             "episodeAccesses": [
                 {
                     "episodeId": episode_id,
-                    "accessType": "waitAndFree",
+                    "accessType": access_type,
                     "hasAccess": has_access,
                     "timeRemainingInSeconds": remaining_seconds,
                 }
@@ -740,11 +748,15 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
         series_auth_state="authenticated",
     )
     catalog = CatalogService(tmp_path / "history-label-difference.sqlite")
+    started = datetime.now(UTC)
     result = await DiscoveryService(catalog, _registry()).discover(
         browser_page, _target(), refresh_mode
     )
+    finished = datetime.now(UTC)
 
     source = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
+    if access_type == "waitAndFree" and remaining_seconds > 259200:
+        accepted = False
     if not accepted:
         assert result.stopped_reason == "incomplete"
         assert result.observed_count == 0
@@ -753,8 +765,18 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
         return
     assert result.observed_count == TOTAL
     assert result.complete is (True if refresh_mode == "full" else None)
-    assert source is not None and source.access_mode == "quota"
-    assert source.access_granted_until is not None
+    assert source is not None
+    if access_type == "purchased":
+        assert source.access_mode == "paid"
+        duration = {"2日+23時間": 70, "7時間": 6, "12日+1時間": 288}[rental_period]
+        expiry = datetime.fromisoformat(source.access_granted_until)
+        assert started + timedelta(hours=duration) <= expiry <= finished + timedelta(hours=duration)
+        decision = HanayumeSitePolicy().evaluate(source, now=finished, quota_available=0)
+        assert decision.eligible and decision.access_strategy == "direct"
+        assert not decision.consumes_quota and decision.quota_resource is None
+    else:
+        assert source.access_mode == "quota"
+        assert source.access_granted_until is not None
 
 
 @pytest.mark.parametrize("conflicting_duplicate", [False, True])
@@ -2151,14 +2173,24 @@ async def test_hanayume_grant_only_work_ticket_confirms_without_capture_or_compl
 
 
 @pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("access_mode", ["quota", "paid"])
 async def test_hanayume_discovery_active_manual_grant_uses_direct_batch_without_ticket(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, access_mode: str
 ) -> None:
     catalog, source, candidate, _plan, executor, requested = await _batch_fixture(
         browser_page, tmp_path, active_grant_candidate=True
     )
     assert candidate.access_strategy == "direct" and not candidate.consumes_quota
     assert source.access_granted_until is not None
+    if access_mode == "paid":
+        catalog.update_source_external_state("hanayume", source.external_id, access_mode="paid")
+        policies = SitePolicyRegistry()
+        policies.register("hanayume", HanayumeSitePolicy)
+        plan = BatchPlanner(
+            catalog, policies, watchlist=WatchlistService(tmp_path / "watchlist.yaml")
+        ).plan(site="hanayume", now=BATCH_NOW)
+        candidate = next(c for c in plan.candidates if c.source_id == source.id)
+        assert candidate.access_strategy == "direct" and not candidate.consumes_quota
 
     result = await executor.execute_candidate(
         browser_page,

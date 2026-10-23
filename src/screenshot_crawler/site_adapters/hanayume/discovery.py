@@ -173,6 +173,7 @@ SERIES_ACCESS_PATH = "/api/series/access"
 FREE_LABEL = "\u7121\u6599"
 NOW_FREE_LABEL = "\u4eca\u306a\u3089\u7121\u6599"
 WAIT_AND_FREE_ACCESS_TYPE = "waitAndFree"
+PREMIUM_RENTAL_ACCESS_TYPE = "purchased"
 RENTAL_HISTORY_PREFIX = "レンタル中 閲覧期限 "
 
 
@@ -229,6 +230,7 @@ class HanayumeListingRow:
     history_label_conflict: bool = False
     access_granted_until: datetime | None = None
     access_granted_until_observed: bool = False
+    rental_history_until: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -501,7 +503,15 @@ def _apply_native_access(
                 or row.manual_rental_history_present is False
             )
         )
-        if row.history_label_conflict and not native_manual_grant:
+        premium_rental_grant = (
+            listing_authenticated is True
+            and native is not None
+            and native.access_type == PREMIUM_RENTAL_ACCESS_TYPE
+            and native.has_access is True
+            and native.remaining_seconds != 0
+            and row.rental_history_until is not None
+        )
+        if row.history_label_conflict and not (native_manual_grant or premium_rental_grant):
             raise DiscoveryIncompleteError(
                 "Hanayume public/history access-label conflict lacks an exact active grant"
             )
@@ -528,6 +538,11 @@ def _apply_native_access(
                     seconds=max(0, native.remaining_seconds - ACCESS_EXPIRY_SAFETY_SECONDS)
                 )
                 grant_observed = True
+        if premium_rental_grant:
+            if access_mode != "free":
+                access_mode = "paid"
+            grant_until = row.rental_history_until
+            grant_observed = True
         updated.append(
             replace(
                 row,
@@ -1112,6 +1127,25 @@ def _validate_initial_latest_marker(
         raise DiscoveryIncompleteError("Hanayume initial latest-range URL is invalid")
 
 
+def _rental_history_expiry(label: str, *, observed_at: datetime) -> datetime | None:
+    """Use the displayed countdown's conservative lower bound, not ownership."""
+
+    match = re.fullmatch(
+        re.escape(RENTAL_HISTORY_PREFIX)
+        + r"(?:(?P<days>[0-9]{1,2})日\+)?(?P<hours>[0-9]{1,2})時間",
+        label,
+    )
+    if match is None:
+        return None
+    days, hours = int(match["days"] or 0), int(match["hours"])
+    remaining = timedelta(days=days, hours=hours) - timedelta(hours=1)
+    if days > 14 or hours > 23 or remaining <= timedelta():
+        return None
+    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        raise ValueError("Hanayume rental observation requires an aware timestamp")
+    return observed_at + remaining
+
+
 async def _read_range_rows(
     page: Page,
     *,
@@ -1119,6 +1153,7 @@ async def _read_range_rows(
     first_position: int,
     listing_authenticated: bool,
 ) -> list[HanayumeListingRow]:
+    observed_at = datetime.now(UTC)
     try:
         snapshot = await asyncio.wait_for(
             page.evaluate(RANGE_ROWS_SNAPSHOT_SCRIPT),
@@ -1180,6 +1215,8 @@ async def _read_range_rows(
     public_labels = {
         row.identity.episode_id: row.access.raw_labels for row in parsed_rows
     }
+    public_titles = {row.identity.episode_id: row.title for row in parsed_rows}
+    rental_history_until: dict[str, datetime] = {}
     history_ids: set[str] = set()
     manual_rental_history_ids: set[str] = set()
     history_label_conflict_ids: set[str] = set()
@@ -1218,12 +1255,21 @@ async def _read_range_rows(
             )
         ):
             manual_rental_history_ids.add(identity.episode_id)
+            if (
+                raw.get("titleCount") == 1
+                and raw.get("title") == public_titles.get(identity.episode_id)
+                and raw["labels"] == rental_texts
+            ):
+                expires_at = _rental_history_expiry(rental_texts[0], observed_at=observed_at)
+                if expires_at is not None:
+                    rental_history_until[identity.episode_id] = expires_at
     parsed_rows = [
         replace(
             row,
             manual_rental_history=row.identity.episode_id in manual_rental_history_ids,
             manual_rental_history_present=row.identity.episode_id in history_ids,
             history_label_conflict=row.identity.episode_id in history_label_conflict_ids,
+            rental_history_until=rental_history_until.get(row.identity.episode_id),
         )
         for row in parsed_rows
     ]

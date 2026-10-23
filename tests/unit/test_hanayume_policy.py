@@ -61,7 +61,6 @@ def test_hanayume_policy_allows_only_available_free_directly() -> None:
     [
         ("unknown", "unknown"),
         ("quota", "work_ticket_candidate"),
-        ("paid", "paid"),
         ("owned", "owned_not_verified"),
         ("grant", "grant_not_supported"),
         ("rental", "rental_not_supported"),
@@ -110,6 +109,22 @@ def test_hanayume_policy_active_grant_direct_and_work_ticket_expiry() -> None:
     boundary = _source("quota", grant_until=NOW.isoformat())
     expired = policy.evaluate(boundary, now=NOW, quota_available=None)
     assert expired.eligible and expired.access_strategy == "quota"
+
+
+@pytest.mark.parametrize("remaining_hours", [None, -1, 0, 1, 288])
+def test_hanayume_premium_rental_is_direct_only_before_display_expiry(remaining_hours) -> None:
+    expiry = NOW + timedelta(hours=remaining_hours) if remaining_hours is not None else None
+    decision = HanayumeSitePolicy().evaluate(
+        _source("paid", grant_until=expiry.isoformat() if expiry else None),
+        now=NOW, quota_available=100,
+    )
+    active = remaining_hours is not None and remaining_hours > 0
+    assert decision.eligible is active
+    assert decision.access_strategy == ("direct" if active else None)
+    assert not decision.consumes_quota and decision.quota_resource is None
+    assert decision.reason == (
+        "active_rental" if active else "paid" if remaining_hours is None else "expired_rental"
+    )
 
 
 def test_hanayume_policy_rejects_unavailable_free_and_unknown_resource_paths() -> None:

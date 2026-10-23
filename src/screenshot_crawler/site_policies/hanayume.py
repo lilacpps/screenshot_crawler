@@ -1,4 +1,4 @@
-"""Hanayume free and work-ticket Batch access policy."""
+"""Hanayume free, active rental, and work-ticket Batch access policy."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from screenshot_crawler.site_policies.base import (
 
 
 class HanayumeSitePolicy(SitePolicy):
-    """Select free sources, active grants, and one ticket attempt per work."""
+    """Select free sources, active rentals/grants, and one ticket attempt per work."""
 
     site = "hanayume"
 
@@ -99,6 +99,11 @@ class HanayumeSitePolicy(SitePolicy):
         if source.access_mode == "unknown":
             return PolicyDecision(False, None, "unknown")
         if source.access_mode == "paid":
+            grant_until = self._parse_grant_until(source.access_granted_until)
+            if grant_until is not None:
+                if grant_until > now:
+                    return PolicyDecision(True, "direct", "active_rental")
+                return PolicyDecision(False, None, "expired_rental")
             return PolicyDecision(False, None, "paid")
         if source.access_mode == "owned":
             return PolicyDecision(False, None, "owned_not_verified")

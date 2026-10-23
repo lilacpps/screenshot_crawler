@@ -18,6 +18,7 @@ from screenshot_crawler.site_adapters.hanayume.discovery import (
     _parse_range_links,
     _parse_series_access_snapshot,
     _records_from_rows,
+    _rental_history_expiry,
     _validate_range_navigation,
     canonical_hanayume_episode_url,
     classify_hanayume_access,
@@ -451,6 +452,59 @@ def test_hanayume_native_remaining_seconds_must_be_a_bounded_strict_integer(rema
     )
     assert snapshot is not None
     assert snapshot.rows[0].remaining_seconds is None
+
+
+@pytest.mark.parametrize(
+    ("display", "hours"),
+    [
+        ("12日+1時間", 288), ("2日+23時間", 70), ("7時間", 6),
+        ("14日+0時間", 335), ("1時間", None), ("0時間", None),
+        ("15日+1時間", None), ("12日+24時間", None),
+        ("7分", None), ("7時間 extra", None), ("-1日+1時間", None),
+    ],
+)
+def test_hanayume_premium_rental_display_uses_bounded_lower_expiry(display, hours) -> None:
+    observed_at = datetime(2026, 10, 24, tzinfo=UTC)
+    expiry = _rental_history_expiry(
+        "レンタル中 閲覧期限 " + display, observed_at=observed_at
+    )
+    assert expiry == (observed_at + timedelta(hours=hours) if hours is not None else None)
+
+
+@pytest.mark.parametrize(
+    ("authenticated", "access_type", "has_access", "history", "public_label", "accepted"),
+    [
+        (True, "purchased", True, True, "", True),
+        (True, "purchased", True, True, "無料", True),
+        (False, "purchased", True, True, "", False),
+        (True, "purchased", False, True, "", False),
+        (True, "purchased", None, True, "", False),
+        (True, "purchased", True, False, "", False),
+        (True, "other", True, True, "", False),
+    ],
+)
+def test_hanayume_premium_rental_conflict_requires_authenticated_native_and_history(
+    authenticated, access_type, has_access, history, public_label, accepted,
+) -> None:
+    observed_at = datetime(2026, 10, 24, tzinfo=UTC)
+    expiry = observed_at + timedelta(days=12)
+    row = HanayumeListingRow(
+        identity=HanayumeEpisodeIdentity(WORK_ID, SEED_ID), title="Episode",
+        access=classify_hanayume_access((public_label,) if public_label else ()),
+        global_position=1, history_label_conflict=True,
+        rental_history_until=expiry if history else None,
+    )
+    native = HanayumeNativeEpisodeAccess(SEED_ID, access_type, has_access, None, observed_at)
+    if not accepted:
+        with pytest.raises(DiscoveryIncompleteError):
+            _apply_native_access([row], native_access={SEED_ID: native}, listing_authenticated=authenticated)
+        return
+    updated = _apply_native_access(
+        [row], native_access={SEED_ID: native}, listing_authenticated=authenticated
+    )[0]
+    assert updated.access.access_mode == ("free" if public_label == "無料" else "paid")
+    assert updated.access_granted_until == expiry
+    assert updated.access_granted_until_observed is True
 
 
 def test_hanayume_native_inactive_clears_and_incomplete_or_unproven_grant_preserves() -> None:

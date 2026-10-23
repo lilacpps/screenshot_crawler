@@ -66,20 +66,65 @@ Each range must contain its declared number of unique episode IDs. All ranges ar
 
 Access badges are read only from each exact episode row. One exact `無料` label maps to `access_mode=free` regardless of login state. One exact `今なら無料` label maps to `free` only when the current attempt has verified authentication on the exact canonical `/series/<work-id>` route. That check requires one `#xHeader.h` with the observed `hUserMenu` link, nested `hUserIcon`, `signoutBtn` under `.h-usermenu`, and no login anchor. Missing or ambiguous auth markers mean there is no authentication proof for `今なら無料`; missing, duplicate, conflicting, or unsupported row labels remain `unknown`. If the route and listing structure are already exact, the adapter polls for the complete positive marker set for at most five seconds at 150 ms intervals; route or listing drift still fails immediately. Authentication is not persisted or cached across attempts. Catalog stores `access_mode` only; raw badge labels remain site-local diagnostic/helper values.
 
-The natural first-party `GET /api/series/access` response is reduced to exact `seriesId` / `episodeId` access rows; Discovery does not issue an extra API request. A matching `accessType=waitAndFree` promotes an otherwise unknown row to a nominal `quota` candidate (an exact free badge remains direct free). This status never authorizes Batch entry. Full and incremental Discovery reconcile all already-buffered rows, so old grants are refreshed beyond the generic known-row streak without adding range pages. Each authenticated range waits up to five seconds for the episode-local account root to reach its observed ready state before taking the history snapshot. A positive manual grant requires current authenticated series markers and the exact work/episode native row with `hasAccess=true`, `accessType=waitAndFree`, and strict integer `timeRemainingInSeconds` from 1 through 259200. If the exact episode row is present in the account preview, it must also show `mode-read` and one `eliRentStat` rental-expiry marker; a present row without these markers does not grant access. If the exact episode is absent from the preview, absence is not negative evidence and the exact native active row may prove the grant. Unknown, loading, no-user, malformed, or contradictory account state fails Discovery closed or preserves the prior grant. The overall series-auth hydration deadline means authentication was not established; if one observation times out at that deadline, the exact work route is rechecked and the result is unauthenticated/unknown. An earlier observation timeout and any route drift remain incomplete; this does not affirm authentication or weaken the entry proof. Expiry is conservatively anchored at the natural request start plus `remainingSeconds - 1`; an exact matching wait-and-free row with zero remaining seconds clears stale `access_granted_until`. Missing, malformed, mismatched, unauthenticated, or history-unconfirmed access data leaves the existing grant unchanged. No history label or class by itself creates a grant. A public/history badge mismatch is accepted only for that exact episode when this full authenticated active-grant proof is present; other mismatches make Discovery incomplete.
+The natural first-party `GET /api/series/access` response is reduced to exact `seriesId` / `episodeId` access rows; Discovery does not issue an extra API request. A matching `accessType=waitAndFree` promotes an otherwise unknown row to a nominal `quota` candidate (an exact free badge remains direct free). This status never authorizes Batch entry. Full and incremental Discovery reconcile all already-buffered rows, so old grants are refreshed beyond the generic known-row streak without adding range pages. Each authenticated range waits up to five seconds for the episode-local account root to reach its observed ready state before taking the history snapshot. A positive manual grant requires current authenticated series markers and the exact work/episode native row with `hasAccess=true`, `accessType=waitAndFree`, and strict integer `timeRemainingInSeconds` from 1 through 259200. If the exact episode row is present in the account preview, it must also show `mode-read` and one `eliRentStat` rental-expiry marker; a present row without these markers does not grant access. If the exact episode is absent from the preview, absence is not negative evidence and the exact native active row may prove the grant. Unknown, loading, no-user, malformed, or contradictory account state fails Discovery closed or preserves the prior grant. The overall series-auth hydration deadline means authentication was not established; if one observation times out at that deadline, the exact work route is rechecked and the result is unauthenticated/unknown. An earlier observation timeout and any route drift remain incomplete; this does not affirm authentication or weaken the entry proof. Expiry is conservatively anchored at the natural request start plus `remainingSeconds - 1`; an exact matching wait-and-free row with zero remaining seconds clears stale `access_granted_until`. Missing, malformed, mismatched, unauthenticated, or history-unconfirmed access data leaves the existing grant unchanged. No history label or class by itself creates a grant. A public/history badge mismatch requires this exact authenticated active Work Ticket grant or the verified premium-ticket rental described below; other mismatches make Discovery incomplete.
 
 The saved reports have distinct scope: `output/hanayume_experiment/tester/login-nowfree-metadata-20261010T210447Z-86b4f281.json` includes series row/auth metadata and an `episode_route.reader` pilot at counter 1/17 with one 828x1329 canvas for target `90868f4de278f`. The later `output/hanayume_experiment/tester/r3-auth-marker-20261010T214015Z-6fc6ccb8.json` records series auth/listing markers only; it contains no viewer-entry result. Neither is a logged-in Batch artifact. Logged-out gated samples showed signup/login CTAs with zero canvases; a ready Viewer overlapping an entry dialog has not been observed, so universal overlay detection is not claimed. No account, ticket, coin, purchase, or quota action is performed.
 
-### Rental-expiry display formats
+### Premium-ticket rental expiry
+
+The API name `purchased` can represent an already active premium-ticket rental;
+it does not establish permanent ownership. Discovery accepts its public/history
+badge difference only with fresh series authentication, an exact same-work/episode
+native `purchased` row with `hasAccess=true` and no explicit zero timer, and a
+unique matching-title account row with `mode-read` and one `eliRentStat` marker
+that is also its sole access label. The exact displayed `D日+H時間` or `H時間`
+countdown supplies `access_granted_until`: observation start plus the displayed
+duration minus one hour, matching the display granularity conservatively.
+Days are bounded to 0..14 and hours to 0..23; zero/one-hour lower bounds,
+unsupported units and malformed text establish no grant. The native 72-hour
+Work Ticket timer limit remains unchanged and is not used to calculate this
+premium-ticket expiry. Exact free labels keep precedence; other verified premium
+rentals use `access_mode=paid` with the display-derived expiry, never `owned`.
+
+Hanayume SitePolicy selects an available paid source as non-consuming `direct`
+only before its stored expiry. A paid source without a future expiry is skipped
+and never falls back to a Work Ticket. Discovery records no ticket use or work
+cooldown and introduces no premium-ticket consumption operation. Existing
+`waitAndFree` grants retain their native-second expiry calculation. No CLI,
+shared runtime, Catalog schema or resource-selection change is needed.
+
+On 2026-10-24 a read-only shared-CDP observation found S・A's account rows
+showing `12日+1時間` while natural native `purchased` rows contained about
+1,042,000 remaining seconds. The old 72-hour parser reduced those seconds to
+`None`; the API did not omit the timer. The user identified these as premium-ticket
+rentals. Reduced evidence: `.tmp/hanayume-purchased-20261024.json`.
+Post-fix full and incremental Discovery through `DiscoveryService` and a dedicated
+Catalog both exhausted all 296 records. Each produced 18 paid premium rentals
+with display-derived expiry, and Policy selected all 18 as non-consuming direct.
+No work-ticket resource state was created. The normal Catalog was untouched;
+non-read requests were blocked throughout. Evidence:
+`.tmp/hanayume-premium-live-20261024-4d2581e7/verification.json`.
+
+Validation for this change: Discovery Unit/Policy plus the focused synthetic
+browser selection passed 147 cases (59 unrelated cases deselected); Batch
+Planner/Executor Unit plus both quota/paid direct-browser cases passed 140 cases.
+Zero tests were skipped. `ruff check src tests` and `git diff --check` passed.
+Synthetic paid direct Batch reached END with four pages, no ticket click, and no
+work-ticket resource state. Actual premium-rental Batch capture, all 26 live
+Watchlist works, Research tests and the full suite were not run; this change is
+site-local and live verification covers Discovery/Policy only.
+
+### Work Ticket rental-expiry display formats
 
 Discovery accepts the exact `レンタル中 閲覧期限 ` prefix followed by either
 `N日+H時間` or `H時間` in the single episode-local `eliRentStat` marker, with
 `mode-read` still required. The hours-only form is the live-observed display
 below one day. Unsupported units and trailing text remain unrecognized. This
-marker does not calculate expiry or prove access by itself: fresh authentication,
+marker does not prove access by itself. Work Ticket grants require fresh authentication,
 exact work/episode native `waitAndFree`, `hasAccess=true`, and strictly positive
-bounded remaining seconds are still required to accept a public/history badge
-difference. Expiry continues to use the native request timestamp and seconds.
+bounded remaining seconds are still required for the Work Ticket public/history
+badge exception. Premium-ticket rentals use the separate display-derived proof above.
+Work Ticket expiry continues to use the native request timestamp and seconds.
 No CLI, pacing, retry, source identity, or resource-consumption behavior changes.
 
 On 2026-10-23 both user-reported works failed after complete range enumeration:
