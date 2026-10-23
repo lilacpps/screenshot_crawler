@@ -109,7 +109,7 @@ Qt非依存`ExecutionPlanService`を提供。**読取・事前確認だけ**でs
 
 - `preview()`は構造化DTOを返す（site/work/key breakdown、候補・skipped reason・Resource、quota slot、blocker/warning、確認時指紋／revision、時刻・Catalog/Watchlist path、snapshot identity）。
 - `confirm`で作る要求は操作種別とkey集合を固定。実行プロセスで開始直前に**同一条件で再Plan**し、消費開始前のcritical changed candidate set、Scope/URL/permission/resource/path差異はabort/再確認。期限の自然経過やサイト固有変動の設計は丁寧に整理し、観測値が変わっただけで安全とは限らない。
-- Previewで不明、Scope未同期、異site key、読取DBと実行DBの不一致があれば実行しない。単なるArchive历史warningとhard collisionを区別し、現行Batchの警告／ブロック規則を保持する。
+- Previewで不明、Scope未同期、異site key、読取DBと実行DBの不一致があれば実行しない。単なるArchive履歴warningとhard collisionを区別し、現行Batchの警告／ブロック規則を保持する。
 - live resolver実行後の変化は既存の正当な`replan`として許可し、**選択集合の維持は再検証**。完全一致のCandidateが永遠に変わらないことを期待しない。
 
 ## 3. P3の基盤: 実行・Job DB・進捗
