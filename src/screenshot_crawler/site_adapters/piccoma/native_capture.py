@@ -18,14 +18,15 @@ from playwright.async_api import Page, Response
 
 from screenshot_crawler.core.capture import CaptureResult
 
-MAX_TARGET_EVENTS = 1152
+# 1441x2048 uses exactly three setup events plus a 29x41 draw grid.
+MAX_TARGET_EVENTS = 1192
 MAX_RETAINED_CANVASES = 16
 # Bound simultaneously retained events, including prefetch; retired pages release
 # their budget. A lifetime counter would disable native capture on long episodes.
 MAX_TRACE_EVENTS = 32_768
 MAX_SOURCE_BYTES = 8_000_000
 # Keep the existing transport/traversal ceilings independent of the larger
-# observed 1056-event trace. Neither ceiling truncates a snapshot.
+# observed 1192-event trace. Neither ceiling truncates a snapshot.
 MAX_NATIVE_SNAPSHOT_BYTES = 8 * 1024 * 1024
 MAX_NATIVE_SNAPSHOT_NODES = 131_072
 MAX_REPLAY_MS = 10_000
@@ -36,13 +37,27 @@ _SOURCE_PATH = re.compile(r"^/dna/[^/?#]+/[^/?#]+/[^/?#]+/i[^/?#]+\.jpg$")
 _OBSERVED_TILE_GRIDS = {(763, 1200): (16, 24), (764, 1200): (16, 24),
                         (773, 1200): (16, 24), (777, 1200): (16, 24), (842, 1200): (17, 24),
                         (844, 1200): (17, 24), (1350, 1920): (27, 39),
-                        (1125, 1600): (23, 32)}
+                        (1125, 1600): (23, 32), (1441, 2048): (29, 41)}
 # Ordinary 1200px pages use the same observed 50px tile protocol across this
 # live-measured width envelope. Size only selects the candidate grid; complete
 # trace/source/paint/generation proof still determines capture eligibility.
 _ORDINARY_NATIVE_WIDTH_BOUNDS = (757, 844)
-SCALED_NATIVE_SIZES = frozenset({(1350, 1920), (1125, 1600)})
-SCALED_DISPLAY_SIZE = (843.046875, 1199)
+
+
+@dataclass(frozen=True, slots=True)
+class ScaledDisplayProfile:
+    display_size: tuple[float, int]
+    frame_width: int
+    top_offset: float
+
+
+SCALED_NATIVE_ONLY_SIZE = (1441, 2048)
+SCALED_DISPLAY_PROFILES = {
+    (1350, 1920): ScaledDisplayProfile((843.046875, 1199), 843, 0.5),
+    (1125, 1600): ScaledDisplayProfile((843.046875, 1199), 843, 0.5),
+    SCALED_NATIVE_ONLY_SIZE: ScaledDisplayProfile((844 + 1 / 3, 1200), 844, 0),
+}
+SCALED_NATIVE_SIZES = frozenset(SCALED_DISPLAY_PROFILES)
 OVERSCAN_NATIVE_SIZE = (763, 1200)
 OVERSCAN_DISPLAY_SIZE = (764.265625, 1202)
 _ALLOWED_CONTEXT_ATTRIBUTES = frozenset(
@@ -1178,8 +1193,14 @@ def _validate_paint_path(
     first_opaque = snapshot.get("firstOpaqueIndex")
     color = snapshot.get("firstOpaqueColor")
     overscan = (width, height) == OVERSCAN_NATIVE_SIZE and preserve_alpha
+    scaled_profile = SCALED_DISPLAY_PROFILES.get((width, height))
     display_width, display_height = (OVERSCAN_DISPLAY_SIZE if overscan else
-        SCALED_DISPLAY_SIZE if (width, height) in SCALED_NATIVE_SIZES else (width, height))
+        scaled_profile.display_size if scaled_profile else (width, height))
+    frame_width = 764 if overscan else scaled_profile.frame_width if scaled_profile else width
+    # Preserve RGBA instead of claiming a white composite covers the observed
+    # fractional overhang. Exact node sizes/roles and raw continuity still bind it.
+    right_overhang = (0.27 if overscan else
+                     max(0.05, display_width - frame_width + 0.01) if scaled_profile else 0.01)
     # Additional ordinary widths must prove a 1:1 presentation. Preserve the
     # existing discrete profiles' tolerances and alpha/overscan paint contracts.
     new_ordinary_width = is_additional_ordinary_size(width, height)
@@ -1213,7 +1234,7 @@ def _validate_paint_path(
                 or row.get("tag") != ("CANVAS" if index == 0 else "DIV")
                 or (role and role not in row.get("classes", "").split())
                 or abs(box[0] - rect[0]) > 0.01 or abs(box[1] - rect[1]) > 0.01
-                or abs(box[2] - (display_width if index == 0 else 764 if overscan else 843)) > 0.01
+                or abs(box[2] - (display_width if index == 0 else frame_width)) > 0.01
                 or abs(box[3] - display_height) > 0.01
             ):
                 return False
@@ -1261,7 +1282,7 @@ def _validate_paint_path(
             node_rect[0] > rect[0] + 0.01
             or node_rect[1] > rect[1] + 0.01
             or node_rect[0] + node_rect[2] < rect[0] + rect[2] - (
-                0.27 if overscan and preserve_alpha else 0.05 if preserve_alpha else 0.01
+                right_overhang if preserve_alpha else 0.01
             )
             or node_rect[1] + node_rect[3] < rect[1] + rect[3] - 0.01
         ):

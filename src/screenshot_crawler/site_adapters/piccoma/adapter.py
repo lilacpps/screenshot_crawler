@@ -37,7 +37,8 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
 from screenshot_crawler.site_adapters.piccoma.native_capture import (
     OVERSCAN_DISPLAY_SIZE,
     OVERSCAN_NATIVE_SIZE,
-    SCALED_DISPLAY_SIZE,
+    SCALED_DISPLAY_PROFILES,
+    SCALED_NATIVE_ONLY_SIZE,
     SCALED_NATIVE_SIZES,
     NativeCaptureUnavailable,
     capture_native_tile_replay,
@@ -291,7 +292,7 @@ class PiccomaAdapter(SiteAdapter):
         return max(default_ms, INITIALIZE_TIMEOUT_MS)
 
     async def prepare_page(self, page: Page) -> None:
-        # Both observed 1:1 and high-resolution scaled readers use this viewport.
+        # Observed 1:1 and high-resolution scaled readers use this viewport.
         await page.set_viewport_size({"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT})
         await install_native_trace(page)
         self._capture_page = page
@@ -767,10 +768,12 @@ class PiccomaAdapter(SiteAdapter):
         if not self._canvas_renderability_is_valid(row):
             raise UnknownPageStateError("Piccoma active canvas is not visibly rendered")
         width, height = canvas.get("width"), canvas.get("height")
-        scaled = (width, height) in SCALED_NATIVE_SIZES
+        scaled_profile = SCALED_DISPLAY_PROFILES.get((width, height))
         overscan = self._overscan_geometry_is_valid(snapshot, row)
         display_width, display_height = (OVERSCAN_DISPLAY_SIZE if overscan else
-                                        SCALED_DISPLAY_SIZE if scaled else (width, height))
+                                        scaled_profile.display_size if scaled_profile else (width, height))
+        frame_width = (764 if overscan else
+                       scaled_profile.frame_width if scaled_profile else width)
         if (
             not isinstance(width, int)
             or isinstance(width, bool)
@@ -787,11 +790,11 @@ class PiccomaAdapter(SiteAdapter):
             or (float(rect[1]) < 0 and not overscan)
             or float(rect[0]) + float(rect[2]) > viewport[0] + 0.5
             or (float(rect[1]) + float(rect[3]) > viewport[1] + 0.5 and not overscan)
-            or abs(float(frame_rect[2]) - (764 if overscan else 843 if scaled else width)) > 0.5
-            or abs(float(frame_rect[3]) - (1200 if scaled else height)) > 0.5
-            or (scaled and (
+            or abs(float(frame_rect[2]) - frame_width) > 0.5
+            or abs(float(frame_rect[3]) - (1200 if scaled_profile else height)) > 0.5
+            or (scaled_profile and (
                 abs(rect[2] - display_width) > 0.01 or abs(rect[3] - display_height) > 0.01
-                or abs(frame_rect[2] - 843) > 0.01 or abs(frame_rect[3] - 1200) > 0.01
+                or abs(frame_rect[2] - frame_width) > 0.01 or abs(frame_rect[3] - 1200) > 0.01
                 # Live scaled pages use either aligned left edges or a -1/3
                 # CSS-pixel offset (13565:664249). Keep both discrete profiles;
                 # raw geometry must still remain identical across capture.
@@ -799,7 +802,7 @@ class PiccomaAdapter(SiteAdapter):
                     abs(rect[0] - frame_rect[0] - offset) <= 0.01
                     for offset in (0, -1 / 3)
                 )
-                or abs(rect[1] - frame_rect[1] - 0.5) > 0.01
+                or abs(rect[1] - frame_rect[1] - scaled_profile.top_offset) > 0.01
             ))
         ):
             raise UnknownPageStateError("Piccoma canvas does not match the supported viewport")
@@ -958,14 +961,17 @@ class PiccomaAdapter(SiteAdapter):
         )
 
     async def get_capture_targets(self, page: Page) -> tuple[Locator, ...]:
-        # Core may request fallback targets after an adapter timeout. Overscan
-        # and additional ordinary widths still require verified native capture.
+        # Core may request fallback targets after an adapter timeout. Native-only
+        # scaled/overscan profiles and additional ordinary widths still need proof.
         snapshot = await self._reader_snapshot(page)
         active = snapshot.get("activeIds")
         if active != [self._expected_page_id] or self._expected_page_id is None:
             raise UnknownPageStateError("Piccoma fallback target is not the expected body page")
         row = self._page_row(snapshot, self._expected_page_id)
         canvas = row.get("canvas")
+        if isinstance(canvas, dict) and (canvas.get("width"), canvas.get("height")) == SCALED_NATIVE_ONLY_SIZE:
+            self._validate_canvas_geometry(snapshot, row)
+            raise UnknownPageStateError("Piccoma scaled page requires verified native capture")
         if isinstance(canvas, dict) and (canvas.get("width"), canvas.get("height")) == OVERSCAN_NATIVE_SIZE:
             self._validate_canvas_geometry(snapshot, row)
             if self._overscan_geometry_is_valid(snapshot, row):
@@ -1000,8 +1006,9 @@ class PiccomaAdapter(SiteAdapter):
             raise UnknownPageStateError("Piccoma active canvas is not visibly rendered")
         expected_size = self._validate_canvas_geometry(before, row)
         overscan = self._overscan_geometry_is_valid(before, row)
-        requires_native = overscan or is_additional_ordinary_size(*expected_size)
-        native_profile = "overscan" if overscan else "ordinary-width"
+        native_only_scaled = expected_size == SCALED_NATIVE_ONLY_SIZE
+        requires_native = overscan or native_only_scaled or is_additional_ordinary_size(*expected_size)
+        native_profile = "overscan" if overscan else "scaled" if native_only_scaled else "ordinary-width"
         if (
             row.get("canvasCount") != 1
             or row.get("loadedCount") != 1

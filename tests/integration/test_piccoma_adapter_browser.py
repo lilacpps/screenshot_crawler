@@ -286,10 +286,12 @@ def _native_viewer_html(
 ) -> str:
     columns = (width + 49) // 50
     draw_count = columns * ((height + 49) // 50)
-    scaled = (width, height) in {(1350, 1920), (1125, 1600)}
+    scaled = (width, height) in {(1350, 1920), (1125, 1600), (1441, 2048)}
     overscan = (width, height) == (763, 1200) if overscan is None else overscan
     frame_width, frame_height = (764, 1200) if overscan else (843, 1200) if scaled else (width, height)
     display_width, display_height = (764.265625, 1202) if overscan else (843.046875, 1199) if scaled else (width, height)
+    if (width, height) == (1441, 2048):
+        frame_width, display_width, display_height = 844, 844.328125, 1200
     canvas_markup = '<canvas width="300" height="150"></canvas>'
     if scaled or overscan:
         canvas_markup = '<div class="PCM-viewer2_zoomPageContent"><div class="PCM-viewer2_canvas_wrap">' + canvas_markup + '</div></div>'
@@ -313,7 +315,7 @@ def _native_viewer_html(
       .PCM-viewer2_pageWrapper {{ position:absolute; inset:0; display:none; }}
       .PCM-viewer2_pageWrapper.current {{ display:block; }}
       .PCM-viewer2_canvasWrapper {{ position:absolute; inset:0; width:{frame_width}px; height:{frame_height}px; }}
-      .PCM-viewer2_zoomPageWrap {{ position:absolute;left:0;top:{-1 if overscan else 0.5 if scaled else 0}px; width:{frame_width}px; height:{display_height}px; background:rgb(255,255,255); }}
+      .PCM-viewer2_zoomPageWrap {{ position:absolute;left:0;top:{-1 if overscan else 0.5 if scaled and height != 2048 else 0}px; width:{frame_width}px; height:{display_height}px; background:rgb(255,255,255); }}
       .PCM-viewer2_zoomPageContent,.PCM-viewer2_canvas_wrap {{ width:{frame_width}px;height:{display_height}px; }}
       .PCM-viewer2_canvasWrapper canvas {{ display:block; width:{display_width}px; height:{display_height}px; }}
       .fixtureOverlay {{ position:absolute; inset:0; z-index:2; background:rgb(255,0,0); }}
@@ -511,7 +513,7 @@ async def _override_device_pixel_ratio(page: Page, value: float) -> None:
 
 
 @pytest.mark.parametrize("delay", [700, -1])
-@pytest.mark.parametrize(("width", "height"), [(763, 1200), (764, 1200), (842, 1200), (844, 1200), (1350, 1920), (1125, 1600)])
+@pytest.mark.parametrize(("width", "height"), [(763, 1200), (764, 1200), (842, 1200), (844, 1200), (1350, 1920), (1125, 1600), (1441, 2048)])
 async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnostics(
     browser_page: Page, tmp_path: Path, delay: int, width: int, height: int
 ) -> None:
@@ -567,19 +569,21 @@ async def test_piccoma_transition_waits_in_frame_and_preserves_failure_diagnosti
 
 @pytest.mark.parametrize(("width", "height", "fault"), [
     (width, height, fault)
-    for width, height in ((1350, 1920), (1125, 1600), (763, 1200))
+    for width, height in ((1350, 1920), (1125, 1600), (1441, 2048), (763, 1200))
     for fault in (None, "observed_left_offset", "unknown_left_offset", "async_left_offset", "unknown_paint_role", "paint_gap", "wrong_scale", "async_paint_change", "encoder_failure", "source_budget_exhausted")
     if width != 763 or fault not in {"observed_left_offset", "async_left_offset"}
-] + [(763, 1200, "missing_source"), (763, 1200, "late_source_ambiguity")])
+] + [(width, height, fault) for width, height in ((763, 1200), (1441, 2048))
+     for fault in ("missing_source", "late_source_ambiguity")] + [(1441, 2048, "extra_paint")])
 async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
     browser_page: Page, monkeypatch: pytest.MonkeyPatch, fault: str | None,
     width: int, height: int,
 ) -> None:
     adapter = PiccomaAdapter()
-    await _start_native_fixture(adapter, browser_page, width=width, height=height)
-    if width == 763 and fault not in {None, "encoder_failure"}:
+    await _start_native_fixture(adapter, browser_page, width=width, height=height,
+                                extra_paint=fault == "extra_paint")
+    if width in {763, 1441} and fault not in {None, "encoder_failure"}:
         async def forbidden_screenshot(_target):
-            raise AssertionError("overscan pages must never use screenshot fallback")
+            raise AssertionError("native-only pages must never use screenshot fallback")
         monkeypatch.setattr(piccoma_adapter_module, "capture_locator", forbidden_screenshot)
     if fault in {"observed_left_offset", "unknown_left_offset", "async_left_offset"}:
         await browser_page.locator(".PCM-viewer2_zoomPageWrap").evaluate(
@@ -633,6 +637,8 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
             assert adapter._capture_fallback_reason == "episode_source_byte_budget_exhausted"
             assert "native_fallback=episode_source_byte_budget_exhausted" in str(error.value)
             assert f"expected={width}x{height}" in str(error.value)
+        if fault == "extra_paint":
+            assert adapter._capture_fallback_reason == "trace_missing_or_overflow"
         return
     captures = await adapter.capture_page(browser_page)
     assert captures is not None and len(captures) == 1
@@ -674,14 +680,14 @@ async def test_piccoma_scaled_high_resolution_preserves_canvas_rgba(
 
 
 @pytest.mark.parametrize("timed_out", [False, True])
-@pytest.mark.parametrize("width", [763, 775])
+@pytest.mark.parametrize(("width", "height"), [(763, 1200), (775, 1200), (1441, 2048)])
 async def test_piccoma_native_only_core_fallback_never_saves_a_screenshot(
-    browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timed_out: bool, width: int
+    browser_page: Page, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timed_out: bool, width: int, height: int
 ) -> None:
     import screenshot_crawler.core.runner as runner_module
     from screenshot_crawler.core.models import RunConfig
 
-    await _start_native_fixture(PiccomaAdapter(), browser_page, width=width, height=1200)
+    await _start_native_fixture(PiccomaAdapter(), browser_page, width=width, height=height)
     adapter = PiccomaAdapter()
     await adapter.configure_target_identity(f"{PRODUCT_ID}:{EPISODE_ID}", WORK_KEY)
 
