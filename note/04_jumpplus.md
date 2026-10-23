@@ -14,9 +14,11 @@ and login automation remain out of scope.
 
 Jump+ Full Discovery provides a complete listing identity/position inventory
 for supported listing traversals. Scope proof is stored only after complete
-Full finalization; a partial traversal or Incremental run cannot authorize a
-scope change. `watch scope-sync` applies Watchlist-derived acquisition flags
-separately. Work-key ordinals reserve assigned Sources without changing
+Full finalization. Successful Discovery automatically reflects its key's
+classified acquisition flags; Incremental enables observed rows and failures
+preserve prior flags. `watch scope-sync` is optional strict maintenance, and
+Batch uses current flags without its marker, permitting provisional numbering.
+Work-key ordinals reserve assigned Sources without changing
 Jump+ access or rental policy. This common change was not live-verified.
 For split older/latest keys within one Work, Full inventory may include the
 other key's episodes outside the selected scope. Shared Catalog validation

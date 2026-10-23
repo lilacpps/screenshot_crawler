@@ -287,6 +287,24 @@ class DiscoveryService:
                     for item in inventory.positions
                 ],
             )
+        # Apply only after successful finalization. Other keys, and rows not
+        # classified by this run, retain their last acquisition flags.
+        flags = {external_id: True for external_id in observed_external_ids}
+        if mode == "full" and inventory is not None:
+            flags.update({row.external_id: row.in_scope for row in inventory.positions})
+        try:
+            self.catalog.apply_discovery_acquisition_flags(
+                work_id=work.id,
+                site=target.site,
+                discovery_key=target.key,
+                flags_by_external_id=None if mode == "full" and not bounded else flags,
+            )
+        except BaseException:
+            # A failed flag transaction must not leave Full proof usable by
+            # strict maintenance as if the whole Discovery had succeeded.
+            if mode == "full" and inventory is not None:
+                self.catalog.invalidate_discovery_inventory_evidence(target.key)
+            raise
         return DiscoveryResult(
             mode=mode,
             target_key=target.key,

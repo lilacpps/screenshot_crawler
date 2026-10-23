@@ -1910,8 +1910,8 @@ identity/position evidence. The v6-to-v7 migration does not establish a scope
 sync or alter existing access, Item status, runs, Artifacts or ZIP locators.
 Watchlist `archive_order` is positive, unique and all-or-none within a
 `work_key`. The P2 Scope Reconciler is implemented as a service and explicit
-CLI preview/apply operation. A successful Full Discovery updates complete-
-listing evidence only; it does not silently synchronize work flags. Batch
+CLI preview/apply operation. Successful Discovery automatically reflects the
+current key's acquisition flags after Catalog finalization. Batch
 filtering and work-key archive naming remain tracked by
 [`runbooks/work-key-archive-order/README.md`](../runbooks/work-key-archive-order/README.md).
 
@@ -1944,22 +1944,39 @@ the selected site's target list stayed unchanged. Hand edits outside the lock
 require a fresh preview. Site selection comes only from current Watchlist
 targets; a Catalog-only Source for a removed key does not select its Work.
 
-Scoped or archive-ordered works require fresh complete Full evidence for every
+The optional explicit reconciler requires fresh complete Full evidence for every
 required key. A first unbounded, unordered legacy sync can bootstrap only when
 all existing Sources have matching current Watchlist key/site/work ownership;
 every existing Source is enabled. Removed keys are retained disabled and their
 last URL binding is kept to detect unsafe URL changes on later re-add. Migration
 alone does not create a sync marker or change existing acquisition behavior.
 
-### Batch acquisition-scope gate (work-key P3 implemented)
+### Discovery acquisition flags and Batch selection
 
-`batch plan` and `batch run` accept `--watchlist` (default `watchlist.yaml`) and
-require every Work represented in the selected site's Catalog sources to have
-a current, successful Scope Reconciler marker. The active Watchlist
-fingerprint, saved owner/URL bindings, and the complete current Source-flag
-snapshot must agree. A hand edit, changed binding, incomplete sync, stale
-snapshot, or missing Watchlist fails closed before a candidate is emitted.
-Batch does not revisit episode URLs or resolve scope boundaries online.
+`batch plan` and `batch run` accept `--watchlist` (default `watchlist.yaml`).
+They use the current Catalog acquisition flags without requiring a Scope
+Reconciler marker, fresh complete-listing evidence, or a matching Watchlist
+fingerprint. A stale/missing marker, another key's incomplete Discovery, or a
+Watchlist scope edit alone must not stop Batch. An explicit Watchlist is still
+required; Works with no current Watchlist targets are skipped as
+`acquisition_unmanaged`. Batch does not resolve scope boundaries online.
+
+After successful Full Discovery, unbounded keys enable all their own Sources;
+bounded keys apply inventory `in_scope` flags to their own classified Sources.
+Successful incremental Discovery enables observed Sources, including newly
+discovered ones, while unobserved rows keep their prior flags. A bounded Full
+without inventory can enable observed rows but cannot exclude unclassified
+ones. A failed/incomplete Discovery preserves existing flags; any new rows
+already materialized retain the schema default (enabled). Rows belonging to
+other keys/sites/Works remain untouched. Complete evidence still invalidates
+on failed Full runs and structural changes for precise maintenance operations.
+No work-wide sync marker is claimed by this per-key automatic update.
+
+Acquisition scope is eventually reflected: temporary extra acquisitions and
+temporary archive-number drift are accepted. Removing a key alone keeps its
+Catalog flags until optional explicit reconciliation; changing a scope is
+reflected by the next successful Discovery or explicit scope apply. Item
+status, crawl history, quota history and existing files are preserved.
 
 Planner excludes `acquisition_enabled=0` before Site Policy evaluation and
 quota-candidate allocation, with skip reason `acquisition_disabled`. Quota
@@ -1969,11 +1986,11 @@ the acquisition scope. Existing Item status, source availability, Site Policy,
 access guards, and resource selection retain their independent meanings.
 
 Normal, explicit grant-only, deferred resolver, replan, and additional resource
-passes all use the same gate. Before creating an adapter or preparing a
+passes all use the same flag-based selection. Before creating an adapter or preparing a
 resource resolver, Executor rechecks the exact Catalog Work/Item/Source/Target
 identity, target locator, pending Item status, source availability and current
-access mode, acquisition flag, and requested resource. This prevents stale or
-forged candidate objects from sending an out-of-scope URL to a site. CLI Batch
+access mode, acquisition flag, and requested resource. Disabled flags and
+forged candidate identities remain rejected. CLI Batch
 run holds the shared Catalog job lock across planning and execution. For
 `--grant-only all`, each resource pass is planned before shared Chrome/CDP
 connection; if no pass contains an eligible candidate, the command finishes
@@ -1991,11 +2008,13 @@ python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --c
 python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --catalog catalog.sqlite --site comicdays --apply --json
 ```
 
-Scope apply is an explicit operation separate from successful Discovery. After
-editing scope, URL, key membership, or order, operators should inspect
-`scope-sync --dry-run`; changed/unsupported scoped targets need a successful
-complete Full listing proof for each required key before apply. A stale Batch
-plan or concurrent Catalog source change is rejected and must be replanned.
+`scope-sync` is optional maintenance for inspecting/applying an entire Work
+without running Discovery, including removed keys. Its strict preview/apply
+contract still requires complete matching proof for the necessary keys.
+Archive audit/renumber can require this strict synchronized state to compute
+precise final names. Ordinary Discovery-to-Batch operation needs no scope-sync
+command. A stale candidate identity or a prefix changed since planning still
+requires replanning.
 
 ### Discovery display position contract (P2 implemented)
 
@@ -2079,9 +2098,8 @@ not resolved by the Planner and remain fail-closed through packaging's existing
 `FileExistsError` behavior. Existing ZIPs, Artifact locators, and existing
 crawl-status JSON are outside P3 and are not renamed.
 
-The work-key Batch scope gate is an additional precondition: Batch requires a
-Watchlist-backed synchronized Source-flag snapshot and rejects acquisition-
-disabled rows before policy evaluation. This does not change legacy
+Batch uses the last Catalog Source flags and rejects acquisition-disabled
+rows before policy evaluation; it does not validate synchronization markers.
 For a work whose every Watchlist key has `archive_order`, the shared naming
 plan orders keys by `archive_order`, then enabled Sources by site
 `display_position`. It reserves an ordinal regardless of Item status, access
@@ -2089,8 +2107,17 @@ mode, availability or paid state. Unordered works retain the prior site-local
 `display_position` naming. Existing ZIP renumber is implemented as a work-wide
 operation across sites.
 
+Batch uses provisional numbering when the Catalog is incomplete: known
+positions sort first, duplicate positions tie-break by Source ID, and unknown
+positions follow in Source ID order. Enabled Sources with removed/unbound keys
+follow current ordered keys (key then position/ID). Missing rows on another key
+do not reserve invented positions. These temporary ordinals are not written to
+`display_position`. Audit, scope preview and renumber retain strict numbering;
+existing files are repaired only by explicit maintenance. Invalid Watchlist
+orders and actual Work/site identity mismatches are still errors.
+
 Before Batch creates an archive, a work-wide preflight still validates the current
-Watchlist/scope snapshot, source identity, metadata, and candidate output paths.
+Catalog flags, provisional numbering, source identity, metadata, and candidate output paths.
 Batch does not traverse historical ZIPs/status files at planning, candidate
 execution, grant-only/resolver entry, or replanning. Historical ZIP stems,
 ordinal differences, old status mismatches and ambiguous Artifact records are

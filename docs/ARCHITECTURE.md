@@ -152,6 +152,7 @@ Watchlist targetからitem/source候補を列挙する。
 - Discovery Adapter contract / registry
 - site-specific discovery Adapterを受け入れるcontract
 - full / incremental traversal orchestration
+- successful Discoveryごとの取得担当flagの自動反映（key単位）。Batchは現在のCatalog flagsを使い、work全体のscope-sync完了を必須にしない。厳密な全体同期は任意の保守操作として提供する。
 - default known-streak incremental stop
 - site固有のstable boundaryが必要な場合に小さいincremental stop policyを受け入れる拡張点（BookWalkerが利用）
 - duplicate candidate warningのためのCatalog query coordination

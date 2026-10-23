@@ -17,7 +17,8 @@ before atomic replacement. A comment-bearing file allows safe scalar
 writing so users can edit the YAML directly without losing comments.
 
 `SourceInput` deliberately has no acquisition flag. New Sources use the schema
-default; Discovery refreshes do not overwrite an existing flag. Catalog services
+default; record refresh itself preserves existing flags, then successful
+Discovery finalization reflects acquisition scope for that key. Catalog services
 now expose atomic work-wide flag/sync-marker writes and complete-listing evidence
 read/write APIs. Evidence binds work/key/site, target URL, adapter-provided
 listing identity, ordered identities/positions and a deterministic digest. A
@@ -44,12 +45,13 @@ The P2 Scope Reconciler is implemented as a service and explicit CLI
 the Watchlist and revalidates the Catalog snapshot under a stable per-Catalog
 job lock before atomically updating every work Source flag and its sync marker.
 Discovery writes complete listing evidence only after successful Full
-finalization; it does not implicitly apply the scope. Scoped or
-archive-ordered works require current proof for every required key. A first
+finalization and automatically updates the successful key's classified flags.
+The optional explicit reconciler requires current proof for every required
+scoped/archive-ordered key. A first
 unbounded/unordered legacy sync may bootstrap only when all existing Sources
 have matching Watchlist key/site/work ownership. Removed Sources remain in the
 Catalog disabled, with the last key/URL binding retained for safe re-add.
-Batch enforces the fail-closed acquisition-scope gate described below.
+Batch uses current Catalog flags without requiring the scope-sync marker.
 Current complete-listing inventory hooks and site-native bounded Discovery
 are available for Zeblack, BookWalker, Magapoke, Jump+, Manga ONE, Piccoma,
 Comic DAYS, Hanayume, Younganimal, Kadocomi, and ComicFUZ.
@@ -69,7 +71,8 @@ For a fully ordered work, the shared archive plan sorts Watchlist keys by
 `archive_order`, then all `acquisition_enabled=1` Sources by `display_position`.
 Assigned Sources reserve ordinals regardless of access mode, availability or
 Item status; excluded Sources do not. No-order works retain legacy site-local
-naming. Batch does not traverse historical ZIP/status files. The read-only
+naming. Batch permits provisional ordinals for incomplete Catalog positions;
+strict maintenance still requires complete evidence. Batch does not traverse historical ZIP/status files. The read-only
 `scripts/check_archives.py` command reports historical cross-site naming/status drift.
 The current candidate ZIP path must be absent. A sidecar may remain only when its
 completed state, exact planned `archive_path`, valid page count, and same-Source Catalog
@@ -85,12 +88,92 @@ refreshed as part of successful packaging; crawl or pre-package failure keeps it
 bytes. If packaging has generated the new ZIP/status pair but hashing or Catalog
 finalization then fails, keep the new pair for inspection rather than restoring the old
 sidecar. Grant-only and resolver passes do not produce archives and skip output
-occupancy checks; a later capture replan checks them. Stale current naming/scope/identity,
+occupancy checks; a later capture replan checks them. Stale candidate naming/identity,
 an occupied candidate ZIP, and access-policy failures remain hard stops before site access.
 `scripts/renumber_archives.py --watchlist watchlist.yaml --catalog catalog.sqlite
 --work-key KEY --dry-run --json` previews all sites; managed work requires a
 whole-work `--apply --json`. ZIP hashes/sizes, sidecars and Catalog locators
 are preflighted, and failed apply verifies rollback or reports recovery state.
+
+## Automatic Discovery scope reflection (2026-10-23)
+
+Successful Discovery applies flags through
+`CatalogService.apply_discovery_acquisition_flags`: one transaction, restricted
+to the exact Work/site/Discovery key. Full unbounded runs enable all owned
+Sources; bounded Full runs apply inventory `in_scope` flags, retaining
+unclassified rows. Incremental runs enable observed Sources and retain
+unobserved flags. An incomplete/failed run does not reflect new classifications;
+existing flags remain, while already materialized new Sources retain their
+enabled schema default. Other keys are never updated from an out-of-scope
+inventory reference. This step does not scan artifacts or historical files and
+does not claim a work-wide successful sync marker. Proof invalidation still
+protects strict maintenance; an automatic flag change marks any prior sync stale.
+If the flag transaction fails, any Full proof just captured by that run is
+invalidated before propagating the failure; strict maintenance cannot use it
+as evidence of a successful Discovery.
+
+Planner/Executor no longer instantiate ScopeReconciler or read scope evidence,
+fingerprints or sync markers. They use current Catalog flags. Scope/URL edits
+and another key's failed Full do not block retrieval; the next successful
+Discovery reflects known rows. Removing a key alone can leave extra enabled
+history; optional `watch scope-sync --dry-run/--apply` can reconcile the whole
+Work without Discovery. Works absent from Watchlist remain unmanaged/skipped.
+An explicit Watchlist, matching actual Work/site identity for bound keys,
+pending/available state, access policy, resource rules, and output ownership
+checks are still required. Capture, grant-only, resolver and replan share this
+behavior. Candidate identity/current computed prefix changes require replanning.
+
+`build_work_archive_position_plan(..., provisional=True)` is Batch-only.
+Current keys follow `archive_order`; known display positions sort first,
+duplicates tie-break by Source ID, then missing positions use Source ID.
+Enabled removed/unbound keys follow current keys in key/position/ID order.
+Unknown Sources are never invented. These ordinals are temporary and never
+persisted as display positions or applied to old ZIPs. Strict scope preview,
+archive audit and renumber keep their previous evidence requirements, so final
+repair may use scope-sync before `scripts/renumber_archives.py`.
+
+Changed production files: `catalog/service.py`, `discovery/service.py`,
+`archive_order.py`, `batch/planner.py`, `batch/executor.py`. Regression coverage
+extends Discovery, Batch acquisition scope, planner and executor tests. No
+operational Catalog, Watchlist, runtime settings or Books files are changed by
+this implementation. Site adapters/browser/capture logic are unchanged; this
+is verified with synthetic local data, not a live site run.
+
+Validation:
+
+- Final broad Unit/Research run (`--ignore=tests/integration`): **3,362 passed,
+  1 deselected, 0 skipped** in 189.45s. The sole deselection is the distributed
+  runtime-settings test: the user's existing `crawler.yaml` sets BookWalker
+  delay to 0, while the tracked configuration test expects 200. The unchanged
+  test passes using an isolated copy of HEAD's distributed configuration;
+  the user's settings were preserved.
+- Final Discovery/scope regression run: **68 passed, 0 skipped**, including
+  failure of the new flag transaction after Full proof persistence. The
+  additional parameter case for this cleanup was added after broad collection.
+  Comic DAYS Discovery plus the isolated config check: **56 passed**.
+- Selected local browser Integration: **7 passed, 0 skipped** across the
+  BookWalker Discovery-to-Batch case, five ComicFUZ Batch cases, and the
+  ComicFUZ spread-to-END runner case. The old mandatory-sync expectations
+  were updated; rediscovery now permits immediate replanning.
+- `ruff check --no-cache src tests` and `git diff --check` pass.
+- A full pytest invocation was started, then interrupted after progress had
+  reported 576 cases because it had already imported the old mandatory-sync
+  expectations. It reported five such failures and one additional ComicFUZ
+  runner failure. Updated expectations and that runner pass individually;
+  the latter failure's original cause is undetermined. **No completed/full
+  suite pass is claimed.** Remaining browser Integration was not rerun after
+  stopping that invocation. Live verification was not performed: no adapter,
+  browser/session, site entry or capture contract changed.
+
+Validation artifacts are under ignored `output/scope-auto-*.log` and the
+isolated config fixture `output/qscfg1/`. Updated tests are
+`test_discovery.py`, `test_comicdays_discovery.py`, `test_batch.py`,
+`test_batch_acquisition_scope.py`, `test_batch_executor.py`, and the BookWalker
+Discovery / ComicFUZ adapter browser files. Authorities updated:
+`docs/ARCHITECTURE.md`, `docs/DISCOVERY_AND_BATCH.md`, `docs/DECISIONS.md`.
+The current plan note (`07_catalog_position_archive_plan.md`) and all affected
+site notes (`01`–`04`, `06`, `08`–`13`) now describe automatic reflection and
+optional strict maintenance rather than mandatory pre-Batch scope-sync.
 
 ## Explicit historical archive audit (2026-10-23)
 
@@ -1788,19 +1871,19 @@ CrawlRun(failed)へ記録し、Itemはpending、Artifactは作成しない。
   --output-root output\batch --library-dir output\Books --limit 1
 ```
 
-### 取得担当範囲とBatch同期ゲート（P3 implemented）
+### 取得担当範囲の自動反映とBatch選択
 
-Batch Plannerはsite sourcesを取得する前に、source→item→workを解決し、各WorkのScope
-Reconciler snapshotがactive Watchlist fingerprint、sync marker、Source flagsと一致することを
-確認する。入力source poolと検証済みsnapshot間のSource追加/削除/position/owner/flag変更も拒否し、
-scope applyとplanningの間に起きた変更からstale candidateが生じることを防ぐ。Watchlist省略時に
-Catalog sourcesがあればfail-closedする。scope境界をBatch実行中にサイトへ問い合わせない。
+Batch Plannerはsource→item→workを解決し、現在のCatalog flagsから候補を選ぶ。
+Scope Reconciler snapshot、fingerprint、sync marker、listing proofはBatchでは読まない。
+Watchlist scope編集直後や他keyのDiscovery失敗後でも、最後に反映したflagsで取得を続ける。
+Watchlist省略時にCatalog sourcesがあればfail-closedする。WatchlistにないWorkはskipする。
+実Work/site identity不一致は拒否し、scope境界をBatch実行中にサイトへ問い合わせない。
 
 `acquisition_enabled=0`はSite Policy評価前に除外され、skip reasonは`acquisition_disabled`。
 ただしquota availabilityは候補絞り込み前の全Source履歴から計算し、以前の消費履歴を保持する。
 有料/無料やavailable、Item status、Site Policyのaccess decisionと取得担当範囲は独立した判定である。
 
-Normal、grant-only、deferred resolver、replan、追加resource passは同じscope gateを通る。
+Normal、grant-only、deferred resolver、replan、追加resource passは同じflag判定を使う。
 Executorはresolver/adapterを作る前にcandidateと実CatalogのWork/Item/Source/Target ID・external ID・
 locator・enabledを照合し、Itemがpending、Sourceがavailableでcurrent access mode一致、flagが有効、
 requested resourceが同一であることを確認する。`batch run`はCatalog job lockをplanningから終了まで
@@ -1832,9 +1915,10 @@ list. After
 per-Work synchronization checks, one final Watchlist snapshot compares both site
 membership and each selected Work's complete key/scope/order fingerprint.
 
-Watchlist編集後はscope previewを確認し、必要なFull listing proofを得てから明示的にapplyする。
-Discovery成功はlisting証拠を更新するが、work-wide Source flagsを自動同期しない。Stale configは
-scope-sync再実行、Catalog poolの競合変更はbatch plan/runの再実行で解消する。
+通常運用はDiscovery成功時に自keyのflagsを自動反映し、そのままBatchを実行する。
+Discoveryなしの設定反映や全Workの厳密な整備には任意でscope preview/applyを使う。
+保守操作のapplyは従来どおり必要なFull listing proofを要求する。Batch candidateのidentityや
+現在計算したprefixが変化した場合はbatch plan/runを再実行する。
 
 `batch plan`はCatalog flagsやquotaを変更せずread-onlyであり、`batch run`だけがquota local stateと
 CrawlRun / Artifact / Item statusを書き換える。Manga ONEとBookWalkerのquota policyは既存挙動を
@@ -2074,9 +2158,9 @@ from entering this scan. The 2026-10-18 real dry-run found 20 FALLBACK_INCLUDED 
 no missing/broken/ambiguous artifacts, and made no Catalog/file changes. The policy/classifier
 and backup/apply tests passed 24 cases (0 skipped); synthetic apply verifies that moved ZIP
 bytes are preserved. `batch run --site hanayume` has no `--work` filter and may consider
-pending Items across all synchronized Hanayume works. Watchlist `enabled` controls Discovery
+pending Items across all managed Hanayume works. Watchlist `enabled` controls Discovery
 execution only; Batch ownership uses the independent `discovery_scope` →
-`sources.acquisition_enabled` sync gate. A Source assigned out of scope is retained but skipped
+`sources.acquisition_enabled` flags reflected by Discovery or optional maintenance. A Source assigned out of scope is retained but skipped
 before Site Policy evaluation.
 
 Younganimal usage: `python scripts/prepare_recrawl.py --site younganimal --catalog

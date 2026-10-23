@@ -850,6 +850,53 @@ class CatalogService:
             ).fetchall()
         return tuple(self._source_from_row(row) for row in rows)
 
+    def apply_discovery_acquisition_flags(
+        self,
+        *,
+        work_id: int,
+        site: str,
+        discovery_key: str,
+        flags_by_external_id: Mapping[str, bool] | None,
+    ) -> None:
+        """Reflect one successful Discovery key without requiring other keys.
+
+        None enables all Sources owned by this unbounded key. A mapping changes
+        only classified rows; unobserved/other-key history keeps its prior flag.
+        This does not claim that a complete Work scope sync has been performed.
+        """
+        self._validate_nonempty(site, "site")
+        self._validate_nonempty(discovery_key, "discovery_key")
+        if flags_by_external_id is not None:
+            for external_id, enabled in flags_by_external_id.items():
+                self._validate_nonempty(external_id, "external_id")
+                if not isinstance(enabled, bool):
+                    raise CatalogValidationError("acquisition_enabled must be a boolean")
+        timestamp = format_timestamp(now_jst())
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_row(connection, "works", work_id, "work")
+            rows = connection.execute(
+                "SELECT s.id, s.external_id, s.acquisition_enabled FROM sources s "
+                "JOIN items i ON i.id = s.item_id "
+                "WHERE i.work_id = ? AND s.site = ? AND s.discovery_key = ?",
+                (work_id, site, discovery_key),
+            ).fetchall()
+            changed = False
+            for row in rows:
+                desired = (
+                    True if flags_by_external_id is None
+                    else flags_by_external_id.get(row["external_id"])
+                )
+                if desired is None or bool(row["acquisition_enabled"]) == desired:
+                    continue
+                connection.execute(
+                    "UPDATE sources SET acquisition_enabled = ?, updated_at = ? WHERE id = ?",
+                    (int(desired), timestamp, row["id"]),
+                )
+                changed = True
+            if changed:
+                self._mark_acquisition_scope_stale(connection, work_id)
+
     def get_discovery_inventory_evidence(
         self, discovery_key: str
     ) -> DiscoveryInventoryEvidence | None:

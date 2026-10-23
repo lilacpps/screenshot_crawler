@@ -1,14 +1,17 @@
 # 12. Kadocomi current implementation
 
-## Shared Catalog v7 / acquisition-scope gate (2026-10-22)
+## Shared Catalog v7 / automatic acquisition scope (2026-10-23)
 
-The site behavior documented below runs through the shared Catalog v7,
-Watchlist, Scope Reconciler, and Batch gate. Run the explicit v6-to-v7
-migration on an isolated Catalog copy first; Discovery never migrates a Catalog
-implicitly. Watchlist discovery_scope is the acquisition-scope authority, while
-target enabled controls whether Discovery runs and is not an ownership flag.
-Batch requires a current synchronized Scope Reconciler snapshot and
-sources.acquisition_enabled state.
+The site behavior below uses Catalog v7 and an explicit matching Watchlist.
+Discovery never migrates Catalog implicitly. Successful Discovery automatically
+reflects the current key's acquisition flags; Incremental enables observed
+Sources, while failed runs preserve existing flags. Batch uses current flags
+without requiring a sync marker, matching fingerprint, or complete evidence.
+Temporary extra acquisitions and provisional ordinals are accepted. Target
+`enabled` controls Discovery only. `watch scope-sync` remains optional strict
+whole-Work maintenance; access/resource and output guards are unchanged.
+See `note/00_core.md` for the current shared contract. This common change has
+synthetic/local-browser coverage; it has not been live-verified on this site.
 
 Kadocomi now provides a strict native-history inventory path when a target has
 `discovery_scope` or `archive_order`. It binds the requested work to the exact
@@ -17,12 +20,9 @@ identities, UUIDs, types, explicit `episodeNo` order, and reverse ordering.
 `supports_bounded_discovery` uses those validated native identities and
 positions for inclusive boundaries. A normal Full publishes the complete
 observed inventory only after safe exhaustion; Incremental, failed, and
-early-closed runs do not publish proof. After Full, explicitly preview and
-apply `watch scope-sync` before Batch. Missing Catalog Sources remain blockers.
-For a NEVER-MANAGED legacy work with neither `discovery_scope` nor
-`archive_order`, explicit preview/apply may bootstrap existing Sources only
-when their discovery_key, site, and work ownership all match the Watchlist.
-Newly discovered Sources still require a fresh sync before Batch.
+early-closed runs do not publish proof. Successful Full also reflects classified
+flags for its key, while Incremental enables observed Sources. Missing Sources
+remain blockers for strict optional reconciliation, not ordinary Batch.
 
 This new proof is bounded by current site evidence: it covers the native lists
 observed for `KC_004915_S` (123 rows) and `KC_011605_S` (33 rows), not a claim
@@ -39,13 +39,13 @@ a 2,000,000-byte response body.
 Leading or all-inactive placeholder patterns have not been established and
 remain fail-closed; no position or Source is inferred for them.
 
-A successful Full after a prior scope sync invalidates the sync marker. After
-Full, rerun preview and explicit apply with the same Watchlist before planning
-Batch. Scope changes also require review and apply. No Source is moved between
-keys or deleted.
+A Full run still invalidates strict maintenance proof/sync state as appropriate,
+but Batch does not use that marker. Continue from Discovery to Batch directly;
+optional scope preview/apply can reconcile an entire Work without Discovery.
+No Source is moved between keys or deleted.
 
-Use one isolated Catalog, Watchlist, and library path throughout copy
-validation; replace placeholders with paths under the same COPY_ROOT:
+Optional strict maintenance examples (scope-sync is not required for Batch).
+Use the same isolated Catalog, Watchlist and library paths under COPY_ROOT:
 
     python -m screenshot_crawler.cli catalog migrate --catalog <copy/catalog.sqlite> --backup-dir <copy/backups>
     python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --dry-run --json

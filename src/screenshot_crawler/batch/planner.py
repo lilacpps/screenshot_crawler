@@ -40,10 +40,6 @@ from screenshot_crawler.core.packaging import archive_stem
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import PolicyDecision, SitePolicy
 from screenshot_crawler.watchlist.models import WatchlistTarget
-from screenshot_crawler.watchlist.reconcile import (
-    ScopeReconciler,
-    ScopeReconciliationError,
-)
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
@@ -60,9 +56,7 @@ class BatchPlanner:
     ) -> None:
         self.catalog = catalog
         self.policies = policies
-        self.scope_reconciler = (
-            ScopeReconciler(watchlist, catalog) if watchlist is not None else None
-        )
+        self.watchlist = watchlist
         # Non-CLI callers commonly pair an isolated Catalog with a planner in
         # tests and maintenance services. Keep their filesystem checks beside
         # that Catalog unless the real runtime output root is explicitly passed.
@@ -93,18 +87,19 @@ class BatchPlanner:
             sources = [source for source in all_sources if source.site == site]
             site_source_ids = {source.id for source in sources}
             targets = [target for target in all_targets if target.source_id in site_source_ids]
-            if sources and self.scope_reconciler is None:
+            if sources and self.watchlist is None:
                 raise BatchPlanningError(
-                    "Batch requires an explicit Watchlist for acquisition-scope validation"
+                    "Batch requires an explicit Watchlist for managed Work selection"
                 )
             works_by_id = {work.id: work for work in works}
             items_by_id = {item.id: item for item in items}
-            assert self.scope_reconciler is not None or not sources
-            if self.scope_reconciler is not None:
-                watchlist_targets = self.scope_reconciler.watchlist.list_targets()
+            assert self.watchlist is not None or not sources
+            if self.watchlist is not None:
+                watchlist_targets = self.watchlist.list_targets()
                 targets_by_work: dict[str, list[WatchlistTarget]] = defaultdict(list)
                 for target in watchlist_targets:
                     targets_by_work[target.work_key].append(target)
+                target_by_key = {target.key: target for target in watchlist_targets}
                 work_keys: set[str] = set()
                 sources_by_work_key: dict[str, dict[int, Source]] = defaultdict(dict)
                 for source in sources:
@@ -114,13 +109,20 @@ class BatchPlanner:
                         raise BatchPlanningError(
                             f"Cannot resolve Work for source {source.id}; refusing Batch"
                         )
+                    binding = target_by_key.get(source.discovery_key)
+                    if binding is not None and (
+                        binding.work_key != work.work_key or binding.site != source.site
+                    ):
+                        raise BatchPlanningError(
+                            f"Source {source.id} Work/site identity does not match "
+                            f"Watchlist key {binding.key!r}"
+                        )
                     work_keys.add(work.work_key)
                     sources_by_work_key[work.work_key][source.id] = source
                 for work_key in sorted(work_keys):
                     if not targets_by_work.get(work_key):
                         unmanaged_source_ids.update(sources_by_work_key[work_key])
                         continue
-                    validated = self.scope_reconciler.require_synchronized_snapshot(work_key)
                     initial_work_sources = {
                         source.id: source
                         for source in all_sources
@@ -128,24 +130,6 @@ class BatchPlanner:
                         and works_by_id[items_by_id[source.item_id].work_id].work_key
                         == work_key
                     }
-                    validated_work_sources = {
-                        source.id: source for source in validated.sources
-                    }
-                    if validated_work_sources != initial_work_sources:
-                        raise BatchPlanningError(
-                            f"Catalog Sources changed across sites while validating "
-                            f"acquisition scope for {work_key!r}; retry Batch planning"
-                        )
-                    validated_sources = {
-                        source.id: source
-                        for source in validated.sources
-                        if source.site == site
-                    }
-                    if validated_sources != sources_by_work_key[work_key]:
-                        raise BatchPlanningError(
-                            f"Catalog sources changed while validating acquisition scope for "
-                            f"{work_key!r}; retry Batch planning"
-                        )
                     work = next(
                         (value for value in works if value.work_key == work_key), None
                     )
@@ -157,13 +141,14 @@ class BatchPlanner:
                         work,
                         targets_by_work.get(work_key, []),
                         items,
-                        validated.sources,
+                        initial_work_sources.values(),
+                        provisional=True,
                     )
                     if archive_plan is not None:
                         archive_positions_by_source.update(
                             archive_plan.positions_by_source_id
                         )
-        except (CatalogError, SitePolicyError, ScopeReconciliationError, ValueError) as exc:
+        except (CatalogError, SitePolicyError, ValueError) as exc:
             raise BatchPlanningError(str(exc)) from exc
 
         sources_by_item: dict[int, list[Source]] = defaultdict(list)

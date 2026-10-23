@@ -9,6 +9,10 @@ import pytest
 import yaml
 
 from screenshot_crawler import cli
+from screenshot_crawler.archive_order import (
+    ArchiveOrderPlanningError,
+    build_work_archive_position_plan,
+)
 from screenshot_crawler.batch import (
     BatchExecutionError,
     BatchExecutor,
@@ -38,6 +42,48 @@ from screenshot_crawler.watchlist.reconcile import ScopeReconciler
 from screenshot_crawler.watchlist.service import WatchlistService
 
 NOW = datetime(2026, 9, 17, 15, 0, tzinfo=JST)
+
+
+def test_batch_provisional_order_accepts_missing_duplicate_and_removed_key_positions(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="series", title="Series"))
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    target = watchlist.add(
+        key="current", work_key=work.work_key, site="mangaone",
+        url="https://example.invalid/list", label="Series", archive_order=1,
+    )
+    sources = []
+    for key, position in (("current", None), ("current", 2), ("current", 2), ("removed", 1)):
+        item = catalog.create_item(ItemInput(), work_id=work.id)
+        source = catalog.create_source(
+            SourceInput(
+                site="mangaone", external_id=f"episode-{item.id}", discovery_key=key,
+                access_mode="free", display_position=position,
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(backend="web", locator=f"https://example.invalid/{item.id}"),
+            source_id=source.id,
+        )
+        sources.append(source)
+    policies = SitePolicyRegistry()
+    policies.register("mangaone", MangaOneSitePolicy)
+    planner = BatchPlanner(catalog, policies, watchlist=watchlist)
+    before = catalog.path.read_bytes()
+    plan = planner.plan(site="mangaone", now=NOW)
+    assert {row.source_id: row.artifact_prefix for row in plan.candidates} == {
+        sources[1].id: "001", sources[2].id: "002",
+        sources[0].id: "003", sources[3].id: "004",
+    }
+    executor = BatchExecutor(catalog, policies, AdapterRegistry(), watchlist=watchlist)
+    for candidate in plan.candidates:
+        executor._require_candidate_scope(candidate, check_output_paths=False)
+    assert catalog.path.read_bytes() == before
+    with pytest.raises(ArchiveOrderPlanningError):
+        build_work_archive_position_plan(work, [target], catalog.list_items(), sources)
 
 
 def test_cross_site_archive_order_assigns_zeblack_100_then_bookwalker_2(
@@ -111,9 +157,6 @@ def test_cross_site_archive_order_assigns_zeblack_100_then_bookwalker_2(
 
     _record_inventory(catalog, zeblack_target, tuple(zeblack_positions))
     _record_inventory(catalog, bookwalker_target, tuple(bookwalker_positions))
-    reconciler = ScopeReconciler(watchlist, catalog)
-    reconciler.apply(reconciler.preview(work.work_key))
-
     policies = SitePolicyRegistry()
     policies.register("zeblack", ZeblackSitePolicy)
     policies.register("bookwalker", BookWalkerSitePolicy)
@@ -254,7 +297,7 @@ def test_batch_requires_watchlist_for_existing_sources(tmp_path: Path) -> None:
         BatchPlanner(catalog, policies).plan(site="mangaone", now=NOW)
 
 
-def test_planner_resolves_source_work_via_item_and_blocks_unsynced_actual_work(
+def test_planner_resolves_source_work_via_item_without_scope_sync(
     tmp_path: Path,
 ) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
@@ -289,10 +332,11 @@ def test_planner_resolves_source_work_via_item_and_blocks_unsynced_actual_work(
 
     policies = SitePolicyRegistry()
     policies.register("mangaone", MangaOneSitePolicy)
-    with pytest.raises(BatchPlanningError, match="missing or stale"):
-        BatchPlanner(catalog, policies, watchlist=watchlist).plan(
-            site="mangaone", now=NOW
-        )
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="mangaone", now=NOW
+    )
+    assert [candidate.source_id for candidate in plan.candidates] == [source.id]
+    assert plan.candidates[0].work_id == actual.id
 
 
 def test_acquisition_exclusion_precedes_policy_but_keeps_quota_history(
@@ -368,7 +412,7 @@ def test_acquisition_exclusion_precedes_policy_but_keeps_quota_history(
     )
 
 
-def test_planner_rejects_scope_change_between_source_read_and_validation(
+def test_planner_uses_last_flags_after_watchlist_edit_without_reading_scope_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     catalog = CatalogService(tmp_path / "catalog.sqlite")
@@ -412,41 +456,29 @@ def test_planner_rejects_scope_change_between_source_read_and_validation(
     policies = SitePolicyRegistry()
     policies.register("mangaone", MangaOneSitePolicy)
     planner = BatchPlanner(catalog, policies, watchlist=watchlist)
-    assert planner.scope_reconciler is not None
-    original_snapshot = planner.scope_reconciler.require_synchronized_snapshot
+    narrowed = replace(
+        target,
+        discovery_scope=DiscoveryScope(through_url="https://example.invalid/chapter-1"),
+    )
+    _write_target(watchlist_path, narrowed)
+    catalog.invalidate_discovery_inventory_evidence(target.key)
 
-    def apply_narrower_scope_during_validation(work_key: str):
-        narrowed = replace(
-            target,
-            discovery_scope=DiscoveryScope(
-                through_url="https://example.invalid/chapter-1"
-            ),
-        )
-        _write_target(watchlist_path, narrowed)
-        _record_inventory(
-            catalog,
-            narrowed,
-            (
-                DiscoveryInventoryPosition("chapter-1", 1, in_scope=True),
-                DiscoveryInventoryPosition("chapter-2", 2, in_scope=False),
-            ),
-        )
-        changed = planner.scope_reconciler.preview(work_key)
-        assert changed.ready
-        planner.scope_reconciler.apply(changed)
-        return original_snapshot(work_key)
+    def unexpected_proof_read(*_args, **_kwargs):
+        pytest.fail("Batch must not read scope proofs or require a synced marker")
 
     monkeypatch.setattr(
-        planner.scope_reconciler,
-        "require_synchronized_snapshot",
-        apply_narrower_scope_during_validation,
+        catalog,
+        "read_acquisition_scope_snapshot",
+        unexpected_proof_read,
     )
 
-    with pytest.raises(BatchPlanningError, match="while validating"):
-        planner.plan(site="mangaone", now=NOW)
+    plan = planner.plan(site="mangaone", now=NOW)
+    assert {candidate.source_id for candidate in plan.candidates} == {
+        row.id for row in sources
+    }
 
     assert catalog.get_source(sources[0].id).acquisition_enabled is True
-    assert catalog.get_source(sources[1].id).acquisition_enabled is False
+    assert catalog.get_source(sources[1].id).acquisition_enabled is True
 
 
 async def test_resolver_rejects_forged_target_before_adapter_creation(tmp_path: Path) -> None:

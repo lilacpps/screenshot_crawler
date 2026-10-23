@@ -1,35 +1,35 @@
 # 13. ComicFUZ 現行実装ノート
 
-## Shared Catalog v7 / acquisition-scope gate (2026-10-22)
+## Shared Catalog v7 / automatic acquisition scope (2026-10-23)
 
-The site behavior documented below runs through the shared Catalog v7,
-Watchlist, Scope Reconciler, and Batch gate. Run the explicit v6-to-v7
-migration on an isolated Catalog copy first; Discovery never migrates a Catalog
-implicitly. Watchlist discovery_scope is the acquisition-scope authority, while
-target enabled controls whether Discovery runs and is not an ownership flag.
-Batch requires a current synchronized Scope Reconciler snapshot and
-sources.acquisition_enabled state.
+The site behavior below uses Catalog v7 and an explicit matching Watchlist.
+Discovery never migrates Catalog implicitly. Successful Discovery automatically
+reflects the current key's acquisition flags; Incremental enables observed
+Sources, while failed runs preserve existing flags. Batch uses current flags
+without requiring a sync marker, matching fingerprint, or complete evidence.
+Temporary extra acquisitions and provisional ordinals are accepted. Target
+`enabled` controls Discovery only. `watch scope-sync` remains optional strict
+whole-Work maintenance; access/resource and output guards are unchanged.
+See `note/00_core.md` for the current shared contract. This common change has
+synthetic/local-browser coverage; it has not been live-verified on this site.
 
 ComicFUZ now supplies target-bound complete-listing proof for its validated
 current public work listing (`comicfuz-work:<work_id>`) and supports native
 bounded `discovery_scope`. Existing latest-first listing order and global
 positions are retained before slicing. The page identity/list snapshot is
 rechecked before emission; proof is published only after a normal Full
-iterator exhaustion. Full only updates proof/observed positions, not
-acquisition flags. After Full, explicitly preview and apply `watch scope-sync`
-before Batch. Failed, partial, or Incremental runs do not unlock sync, and
-Catalog Sources absent from the proof still block. For a NEVER-MANAGED legacy
-work without scope/order, explicit bootstrap remains restricted to matching
-Watchlist key/site/work ownership. Newly discovered Sources require a fresh
-sync before Batch.
+iterator exhaustion. Successful Full also reflects classified acquisition
+flags for its key. Incremental enables observed rows; failed/partial runs keep
+existing flags. Missing proof rows still block strict optional reconciliation,
+but do not block Batch merely because proof/sync state is incomplete.
 
-A successful Full after a prior scope sync invalidates the sync marker. After
-Full, rerun preview and explicit apply with the same Watchlist before planning
-Batch. Scope changes also require review and apply. No Source is moved between
-keys or deleted.
+A Full run still invalidates strict maintenance proof/sync state as appropriate,
+but Batch does not use that marker. Continue from Discovery to Batch directly;
+optional scope preview/apply can reconcile an entire Work without Discovery.
+No Source is moved between keys or deleted.
 
-Use one isolated Catalog, Watchlist, and library path throughout copy
-validation; replace placeholders with paths under the same COPY_ROOT:
+Optional strict maintenance examples (scope-sync is not required for Batch).
+Use the same isolated Catalog, Watchlist and library paths under COPY_ROOT:
 
     python -m screenshot_crawler.cli catalog migrate --catalog <copy/catalog.sqlite> --backup-dir <copy/backups>
     python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --dry-run --json
@@ -98,6 +98,6 @@ Chapter 80641 (global position 33) initially had multiple normal-CLI failures af
 
 `ComicFuzSitePolicy` admits only sources where `site=comicfuz`, `available=true`, and `access_mode=free`; its only strategy is `direct`. Unavailable rows are skipped first. `unknown`, `quota`, `paid`, `owned`, `grant`, `rental`, and unrecognized modes are skipped. ComicFUZ exposes no quota resources or grant-only pass, and policy evaluation never reads a balance, grant, purchase, or resource state. The existing Catalog model accepts only its established access modes; grant/rental are covered at the policy boundary as unsupported inputs rather than persisted values.
 
-The CLI Batch adapter and Site Policy registries now include ComicFUZ. Batch reads optional `COMICFUZ_WORK_URL` from the selected environment file and otherwise derives the canonical same-work listing from the validated composite Catalog identity; any supplied URL must match the target work. The adapter validates the same-work public listing and exact current free row before opening the viewer. `batch plan` uses normal Catalog position and archive naming; `batch run` uses the standard BatchExecutor, Runner, ZIP packager, Artifact, and Completed lifecycle. The original site-specific Phase 04 did not change shared Core or Catalog schema; the subsequently adopted global Catalog v7 migration and synchronized acquisition-scope gate now apply to this adapter.
+The CLI Batch adapter and Site Policy registries now include ComicFUZ. Batch reads optional `COMICFUZ_WORK_URL` from the selected environment file and otherwise derives the canonical same-work listing from the validated composite Catalog identity; any supplied URL must match the target work. The adapter validates the same-work public listing and exact current free row before opening the viewer. `batch plan` uses Catalog position and provisional archive numbering; `batch run` uses the standard BatchExecutor, Runner, ZIP packager, Artifact, and Completed lifecycle. The original site-specific Phase 04 did not change shared Core or Catalog schema; shared Catalog v7 now automatically reflects acquisition scope through Discovery, without a mandatory sync gate.
 
 Synthetic policy/planner and browser-backed Batch integration cover the allowed/rejected access states, direct-only resource contract, global display-position prefixes, Discovery-to-Catalog-to-Plan-to-Runner-to-ZIP completion, rediscovery/replan retention of the completed artifact, loss of free proof before reader entry, route drift, unknown END, and packaging failure. Failed Batch attempts leave the Item pending with a failed CrawlRun and no Artifact. Reviewer selected 20 tests and reported 20 passed, 0 skipped, BLOCKING=0. Phase 05 isolated E2E is complete; the final overall Reviewer gate passed with BLOCKING=0 and the Lead accepted Phases 01-05. The original implementation commit `4b64a3c` is now included in `main`.

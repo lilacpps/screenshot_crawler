@@ -590,7 +590,7 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
     assert refreshed_out_of_scope.id == out_of_scope_source.id
     assert refreshed_out_of_scope.access_mode == "paid"
     assert refreshed_out_of_scope.available is False
-    assert refreshed_out_of_scope.acquisition_enabled is True
+    assert refreshed_out_of_scope.acquisition_enabled is False
     assert refreshed_out_of_scope.quota_started_at is None
     assert catalog.get_item(out_of_scope_item.id).status == "completed"
     catalog.mark_item_completed(sources_by_external_id["102"].item_id)
@@ -674,6 +674,13 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
     assert incremental.complete is None
     assert catalog.get_discovery_inventory_evidence(comic_target.key) is None
     assert not reconciler.preview(work.work_key).ready
+    # Strict maintenance remains unresolved, while ordinary Batch continues
+    # with the last classified flags after failed Full / successful Incremental.
+    continued = planner.plan(site="comicdays", now=datetime(2026, 10, 3, tzinfo=UTC))
+    assert [row.source_id for row in continued.candidates] == [
+        sources_by_external_id["101"].id
+    ]
+    assert catalog.get_source(out_of_scope_source.id).acquisition_enabled is False
 
 
 @pytest.mark.asyncio

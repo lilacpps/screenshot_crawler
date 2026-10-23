@@ -7,8 +7,11 @@
 Zeblack Full Discovery supplies the complete chapter-list identity/position
 inventory used by the shared Scope Reconciler. Evidence is written only after
 the Full run and Catalog finalization succeed; Batch does not reopen the
-chapter list to re-check scope. `watch scope-sync` separately applies the
-Watchlist range to `acquisition_enabled`, preserving excluded Source IDs,
+chapter list to re-check scope. Successful Discovery automatically reflects its
+key's classified flags; Incremental enables observed Sources and failures keep
+existing flags. `watch scope-sync` is optional strict maintenance. Batch uses
+current flags without requiring its marker and permits provisional ordinals,
+preserving excluded Source IDs,
 status, access state and history. This shared feature was not live-verified and
 does not alter Zeblack's entry or ticket behavior.
 

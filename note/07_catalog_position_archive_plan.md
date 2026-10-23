@@ -590,7 +590,7 @@ P1 implementation details:
   sets/replaces a note, and `catalog item-note <item_id> --clear` clears it.
 - CSV export includes `items.note` and `sources.display_position`.
 - Historical phase note: P1 alone did not assign positions during Discovery.
-  The current work-key implementation below adds the v7 scope gate, cross-key
+  The current work-key implementation below adds automatic v7 scope reflection, cross-key
   naming, and strict renumbering. Read the current Work-key section below and
   `docs/DISCOVERY_AND_BATCH.md` for the active contract.
 
@@ -852,7 +852,8 @@ P1 currently provides:
   changes no acquisition behavior or ZIP locator.
 - Atomic Catalog APIs for applying a complete Source-flag snapshot with its
   fingerprint, and storing/retrieving listing identity plus ordered inventory
-  digest. Discovery refresh input omits the acquisition flag and preserves it.
+  digest. Discovery refresh input omits the acquisition flag; successful
+  finalization now automatically reflects the current key's classified flags.
 - Evidence invalidation on full inventory replacement and structural position
   or key changes. Access-state-only refresh does not force a new listing proof.
 - Complete-listing hooks and site-native bounded Discovery are available for
@@ -870,23 +871,32 @@ P1 currently provides:
   comment-bearing structural rewrites fail before writing. Commentless edits are
   parsed and compared with the requested target list before atomic replacement.
 
-Scope sync can be previewed/applied through the current service/CLI. Batch now
-requires the synchronized active fingerprint and current Source flags for
-every Work represented in its candidate source pool. `acquisition_enabled=0`
+Scope sync can be previewed/applied through the optional maintenance service/CLI.
+Successful Discovery now reflects acquisition flags per key: Full unbounded
+enables all owned rows, bounded Full applies known inventory classifications,
+and incremental enables observed rows. Unobserved/other-key flags remain;
+failed runs preserve existing flags, and materialized new Sources remain enabled
+by default. Batch no longer requires a synchronized fingerprint or complete
+listing proof. Temporary extra acquisition and ordinal drift are accepted.
+`acquisition_enabled=0`
 is excluded before Site Policy evaluation; all source rows still contribute
 historical quota usage. Normal, grant-only, deferred resolver, replan, and
-additional resource passes share the same gate. Resolver entry validates
+additional resource passes share the same flag-based selection. Resolver entry validates
 Catalog Work/Item/Source/Target identity and current pending/available/access
 state before creating the site adapter. The CLI run holds the Catalog job lock;
 `--grant-only all` plans all resource passes before CDP connection and skips
-browser setup when every pass is empty. A stale Watchlist/configuration or
-Catalog source snapshot fails closed and requires scope sync or replanning.
-For an all-ordered work, Batch and renumber share the cross-site archive plan.
+browser setup when every pass is empty. A stale candidate identity/current
+prefix requires replanning, but stale/missing scope-sync markers do not block
+Batch. For an all-ordered work, Batch uses the shared cross-site archive plan
+with `provisional=True`: duplicate positions tie-break by Source ID, missing
+positions follow known ones, and enabled removed keys follow current keys.
+These temporary ordinals do not modify stored display positions or old files.
+Scope preview, archive audit and renumber retain strict complete evidence.
 All enabled Sources reserve a number regardless of access/status; all-disabled
 Sources are excluded. No-order works retain the legacy site-local naming.
 Historical ZIP stem/ordinal drift, old status mismatches, and ambiguous historical
 Artifacts are inspected by the explicit read-only `scripts/check_archives.py` command;
-Batch does not traverse old ZIP/status files at planning, execution or replanning. Current scope and
+Batch does not traverse old ZIP/status files at planning, execution or replanning. Catalog flags and
 candidate naming/identity must still be valid. The candidate ZIP must be absent; a status
 file must be absent or pass the proven same-Source stale-sidecar check above. Both are
 checked before site access and immediately before packaging; a detected collision fails
@@ -934,6 +944,6 @@ blocking findings.
 
 Old archive-maintenance notes that say Watchlist enablement is not a Batch
 source filter refer to the `enabled` Discovery execution flag. They do not
-describe the new independent `discovery_scope` → `acquisition_enabled` gate.
+describe the independent `discovery_scope` → `acquisition_enabled` selection.
 Discovery enablement remains independent: `enabled: false` does not disable a
-Source for Batch if its last explicit Scope Reconciler sync assigned it.
+Source for Batch if its last successful Discovery or optional scope apply assigned it.

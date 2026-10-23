@@ -631,10 +631,9 @@ CrawlRun/Artifact等の長期履歴を正本として持つため、それ以降
 ### 決定
 
 既存Watchlistの `discovery_scope` をDiscovery範囲と取得担当範囲の両方の正本とし、
-Catalogの `sources.acquisition_enabled` は明示Scope Reconcilerが同期する派生状態とする。
-Discovery成功はlisting proofを更新するだけで、取得担当flagを自動同期しない。複数keyの
-workは、必要なkeyの証拠が揃った後にwork単位でpreview/applyし、未同期・不一致のBatchは
-fail closedとする。
+Catalogの `sources.acquisition_enabled` は成功したDiscoveryがkeyごとに自動反映する
+派生状態とする。Batchは現在のflagを使い、未同期・古いfingerprint・他keyのDiscovery失敗
+だけでは停止しない。`scope-sync` はDiscoveryを伴わない厳密なwork単位の保守操作として残す。
 
 `archive_order` は同一 `work_key` の全keyへ指定するか、全keyで省略する。指定作品のZIP
 番号はarchive_order順、次に各keyのsite `display_position` 順で連結する。取得担当flagが
@@ -647,12 +646,13 @@ Scope同期や既存ZIPの変更を起こさない。同一siteのSourceを別ke
 
 ### 理由 / 仕様調整
 
-Bounded Full Discoveryはlisting全体のfresh position/evidenceを安全に返せても、Watchlistの
-手編集を原子的にCatalog flagsへ反映するのとは別操作である。自動同期すると一部keyのFull
-成功後にmulti-key workの半分だけを有効化する窓が生じるため、明示applyを採用した。
-一方、scopeもarchive_orderもない既存Workは、owner/site/workが一致する既存Sourceを初回
-preview/applyで担当としてbootstrapできる。全既存作品にproof目的のFull Discoveryを強制する
-と従来のunbounded Batch運用へ不要な退行を生むためである。
+2026-10-23: ユーザーの運用方針に合わせ、全keyの証拠が揃うまでBatchを停止する設計を変更。
+一時的な担当外取得と番号ずれを許容し、取得を続けて後から保守する。成功Fullは自keyの
+inventory分類（unboundedは全自key Source）を反映し、incrementalは観測Sourceを有効化。
+失敗keyの既存flagと他keyのflagは保持する。新規Sourceは従来どおり有効をdefaultとする。
+Batchのordered numberingは未確定positionをSource IDで安定整列する暫定値を許容する。
+`display_position`や既存ファイルは推測で書き換えない。明示scope-sync/audit/renumberの
+厳密な証拠検証は維持し、アクセス権・resource消費・identity・保存先衝突の検査も維持する。
 
 2026-10-23 user-requested refinement: separating archive numbering from access rights reserves
 numbers for future in-scope paid sources and excludes out-of-scope sources. Batch and renumber
@@ -661,8 +661,8 @@ and ambiguous old Artifacts are inspected only by the explicit read-only
 `scripts/check_archives.py` maintenance command. Batch does not traverse old ZIP/status
 files at planning, candidate entry or replanning, avoiding repeated filesystem I/O.
 The audit supports explicit work/site/all selection; site selection includes whole Works
-across sites. Current numbering and acquisition-scope validation remain in Batch. A
-candidate ZIP collision or unproven candidate status sidecar, stale current naming/scope/identity, access-policy failures,
+across sites. Current provisional numbering and Catalog acquisition flags remain in Batch. A
+candidate ZIP collision or unproven candidate status sidecar, stale candidate naming/identity, access-policy failures,
 and other safety errors remain blocking conditions. The candidate ZIP must be absent. A completed
 status sidecar is reusable only when its exact `archive_path`, valid page count, and same-Source
 Catalog run/Artifact history are proven. Structured proof needs a matching output identity and at

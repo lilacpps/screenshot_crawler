@@ -30,14 +30,18 @@ def build_work_archive_position_plan(
     sources: Iterable[Source],
     *,
     acquisition_flags: Mapping[int, bool] | None = None,
+    provisional: bool = False,
 ) -> WorkArchivePositionPlan | None:
     """Assign one ordinal stream across every current key/site in a Work.
 
-    The caller must first validate Watchlist sync and complete listing evidence
-    through ``ScopeReconciler``. This pure layer then rejects incomplete key
+    Maintenance callers validate complete listing evidence through
+    ``ScopeReconciler``. This pure layer then rejects incomplete key
     ordering, unknown Source ownership, stale Work membership, null positions,
     and duplicate within-key display positions. Item status, access mode and
     source availability deliberately do not affect ordinal membership.
+    Batch opts into provisional numbering: missing/duplicate positions sort
+    deterministically by Source ID, and removed keys follow current keys.
+    No inferred display positions are persisted to Catalog.
     """
 
     work_targets = [target for target in targets if target.work_key == work.work_key]
@@ -88,9 +92,11 @@ def build_work_archive_position_plan(
         )
         if target is None:
             if enabled:
-                raise ArchiveOrderPlanningError(
-                    f"Source {source.id} has unknown active Watchlist ownership"
-                )
+                if not provisional:
+                    raise ArchiveOrderPlanningError(
+                        f"Source {source.id} has unknown active Watchlist ownership"
+                    )
+                sources_by_key[key or ""].append(source)
             continue
         if source.site != target.site:
             raise ArchiveOrderPlanningError(
@@ -101,23 +107,39 @@ def build_work_archive_position_plan(
 
     positions: dict[int, int] = {}
     ordered_source_ids: list[int] = []
-    for target in sorted(work_targets, key=lambda value: (value.archive_order, value.key)):
-        rows = sources_by_key.get(target.key, [])
+    ordered_keys = [
+        target.key for target in sorted(
+            work_targets, key=lambda value: (value.archive_order, value.key)
+        )
+    ]
+    if provisional:
+        ordered_keys.extend(sorted(set(sources_by_key) - set(ordered_keys)))
+    for key in ordered_keys:
+        rows = sources_by_key.get(key, [])
         seen_positions: dict[int, int] = {}
         for source in rows:
             position = source.display_position
             if isinstance(position, bool) or not isinstance(position, int) or position < 1:
+                if provisional:
+                    continue
                 raise ArchiveOrderPlanningError(
-                    f"Source {source.id} has an unknown display_position for key {target.key!r}"
+                    f"Source {source.id} has an unknown display_position for key {key!r}"
                 )
             previous = seen_positions.get(position)
-            if previous is not None:
+            if previous is not None and not provisional:
                 raise ArchiveOrderPlanningError(
                     f"Sources {previous} and {source.id} share display_position {position} "
-                    f"for key {target.key!r}"
+                    f"for key {key!r}"
                 )
             seen_positions[position] = source.id
-        for source in sorted(rows, key=lambda value: value.display_position):
+        for source in sorted(
+            rows,
+            key=lambda value: (
+                value.display_position is None,
+                value.display_position or 0,
+                value.id,
+            ),
+        ):
             ordinal = len(ordered_source_ids) + 1
             ordered_source_ids.append(source.id)
             positions[source.id] = ordinal

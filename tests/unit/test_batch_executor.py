@@ -356,12 +356,19 @@ async def test_piccoma_batch_yaml_delay_reaches_runner_config(tmp_path: Path) ->
 
 @pytest.mark.parametrize("access_mode", ["free", "owned"])
 async def test_direct_candidate_runs_and_completes_without_quota_state(
-    tmp_path: Path, access_mode: str
+    tmp_path: Path, access_mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = add_candidate(service, access_mode=access_mode)
     configs: list[RunConfig] = []
     executor = make_executor(service, configs=configs)
+    source = service.get_source(candidate.source_id)
+    service.invalidate_discovery_inventory_evidence(source.discovery_key)
+
+    def unexpected_scope_read(*_args, **_kwargs):
+        pytest.fail("Executor must not require scope-sync after Discovery")
+
+    monkeypatch.setattr(service, "read_acquisition_scope_snapshot", unexpected_scope_read)
 
     result = await executor.execute_candidate(
         object(),

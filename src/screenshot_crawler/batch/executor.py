@@ -59,7 +59,6 @@ from screenshot_crawler.site_adapters.base import AccessResourceResolution, Site
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import SitePolicy
-from screenshot_crawler.watchlist.reconcile import ScopeReconciler, ScopeReconciliationError
 from screenshot_crawler.watchlist.service import WatchlistService
 
 RunnerFactory = Callable[[RunConfig], CrawlerRunner]
@@ -200,9 +199,7 @@ class BatchExecutor:
         self.runtime_settings = runtime_settings
         self.access_event_sink = access_event_sink
         self.library_dir = Path(library_dir) if library_dir is not None else Path("output/Books")
-        self.scope_reconciler = (
-            ScopeReconciler(watchlist, catalog) if watchlist is not None else None
-        )
+        self.watchlist = watchlist
         self._reported_archive_warnings: set[str] = set()
 
     @_catalog_job_locked
@@ -830,10 +827,10 @@ class BatchExecutor:
         library_dir: Path | None = None,
         check_output_paths: bool = True,
     ) -> CandidateOutputPreflight | None:
-        """Validate Catalog identity and scope before policy or site access."""
-        if self.scope_reconciler is None:
+        """Validate Catalog identity and current flags before policy or site access."""
+        if self.watchlist is None:
             raise BatchExecutionError(
-                "Batch execution requires an explicit Watchlist for acquisition-scope validation"
+                "Batch execution requires an explicit Watchlist for managed Work selection"
             )
         try:
             item = item or self.catalog.get_item(candidate.item_id)
@@ -871,38 +868,44 @@ class BatchExecutor:
                 and candidate.quota_resource != expected_quota_resource
             ):
                 raise BatchExecutionError("stale batch candidate: quota_resource")
-            snapshot = self.scope_reconciler.require_synchronized_snapshot(work.work_key)
         except CatalogError as exc:
             raise BatchExecutionError(f"stale batch candidate: {exc}") from exc
-        except ScopeReconciliationError as exc:
-            raise BatchExecutionError(str(exc)) from exc
-        current_source = next(
-            (record for record in snapshot.sources if record.id == source.id), None
-        )
-        if current_source is None or current_source != source:
-            raise BatchExecutionError(
-                "Catalog source changed while validating acquisition scope; retry Batch"
-            )
-        source = current_source
         if not source.acquisition_enabled:
             raise BatchExecutionError(
-                f"Source {source.id} is outside the synchronized acquisition scope"
+                f"Source {source.id} is acquisition_disabled"
             )
         try:
-            _works, all_items, _all_sources, _all_targets = (
+            _works, all_items, all_sources, _all_targets = (
                 self.catalog.read_works_items_sources_and_targets()
             )
             work_items = [row for row in all_items if row.work_id == work.id]
+            work_item_ids = {row.id for row in work_items}
+            work_sources = [row for row in all_sources if row.item_id in work_item_ids]
+            if source not in work_sources:
+                raise BatchExecutionError(
+                    "Catalog source changed while validating acquisition scope; retry Batch"
+                )
+            watchlist_targets = self.watchlist.list_targets()
+            binding = next(
+                (row for row in watchlist_targets if row.key == source.discovery_key), None
+            )
+            if binding is not None and (
+                binding.work_key != work.work_key or binding.site != source.site
+            ):
+                raise BatchExecutionError("stale batch candidate: Watchlist Work/site identity")
             current_targets = [
                 row
-                for row in self.scope_reconciler.watchlist.list_targets()
+                for row in watchlist_targets
                 if row.work_key == work.work_key
             ]
+            if not current_targets:
+                raise BatchExecutionError("stale batch candidate: acquisition_unmanaged")
             position_plan = build_work_archive_position_plan(
                 work,
                 current_targets,
                 work_items,
-                snapshot.sources,
+                work_sources,
+                provisional=True,
             )
             position = (
                 position_plan.positions_by_source_id.get(source.id)
@@ -911,7 +914,7 @@ class BatchExecutor:
             )
             expected_prefix = archive_position_prefix(position)
             same_site_sources = [
-                row for row in snapshot.sources if row.site == source.site
+                row for row in work_sources if row.site == source.site
             ]
             disambiguated_ids = shared_collision_source_ids(
                 [work], work_items, same_site_sources

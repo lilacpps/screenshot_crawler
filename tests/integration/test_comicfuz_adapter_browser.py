@@ -15,7 +15,6 @@ from PIL import Image
 from screenshot_crawler.batch import (
     BatchExecutor,
     BatchPlanner,
-    BatchPlanningError,
     CandidateExecutionError,
 )
 from screenshot_crawler.catalog import CatalogService
@@ -529,15 +528,6 @@ async def test_comicfuz_discovery_to_batch_zip_completes_and_rerun_preserves_art
     planner = BatchPlanner(catalog, executor.policies, watchlist=watchlist)
     assert rediscovered.complete is True
     assert rediscovered.new_count == 0 and rediscovered.known_count == 3
-    with pytest.raises(BatchPlanningError, match="missing or stale"):
-        planner.plan(site="comicfuz", now=NOW)
-
-    from screenshot_crawler.watchlist.reconcile import ScopeReconciler
-
-    reconciler = ScopeReconciler(watchlist, catalog)
-    preview = reconciler.preview(target.work_key)
-    assert preview.ready, preview.blockers
-    reconciler.apply(preview)
     replanned = planner.plan(site="comicfuz", now=NOW)
     assert catalog.get_item(candidate.item_id).status == "completed"
     assert len(catalog.list_artifacts(item_id=candidate.item_id)) == 1

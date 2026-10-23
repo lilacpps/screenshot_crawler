@@ -1093,7 +1093,7 @@ def test_new_item_is_kept_in_its_existing_discovery_group(tmp_path: Path) -> Non
     ] == ["A-01", "A-02", "A-03"]
 
 
-def test_null_discovery_key_cannot_be_batch_owned(tmp_path: Path) -> None:
+def test_null_discovery_key_can_use_last_flags_in_a_managed_work(tmp_path: Path) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     work = service.create_work(WorkInput(work_key="null-key-work", title="Work"))
     add_source(
@@ -1127,10 +1127,11 @@ def test_null_discovery_key_cannot_be_batch_owned(tmp_path: Path) -> None:
     )
     reconciler = ScopeReconciler(watchlist, service)
     assert not reconciler.preview(work.work_key).ready
-    with pytest.raises(BatchPlanningError, match="cannot be classified|unbound|unknown"):
-        BatchPlanner(service, make_registry(), watchlist=watchlist).plan(
-            site="mangaone", now=NOW
-        )
+    plan = BatchPlanner(service, make_registry(), watchlist=watchlist).plan(
+        site="mangaone", now=NOW
+    )
+    assert {candidate.external_id for candidate in plan.candidates} == {"null-old", "explicit"}
+    assert plan.quota_available == 3
 
 
 def test_numeric_episode_order_is_not_lexicographic(tmp_path: Path) -> None:

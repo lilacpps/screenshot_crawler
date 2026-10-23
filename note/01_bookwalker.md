@@ -4,14 +4,17 @@
 
 共通Runner / Browser Session / output / packagingの詳細は `note/00_core.md` を参照。
 
-最終同期: 2026-10-22
+最終同期: 2026-10-23
 
 ## Shared work-key scope inventory (2026-10-22)
 
 BookWalker Discovery exposes a complete site-listing identity/position inventory
 for successful Full runs. Core stores it only after iterator exhaustion and
 Catalog finalization; a partial/error run does not create fresh proof. Scope
-flags are applied separately by `watch scope-sync`, and Batch does not revisit
+flags are automatically reflected per successful Discovery key. Incremental
+enables observed Sources; failed runs preserve prior flags. `watch scope-sync`
+is optional strict maintenance, and Batch uses current Catalog flags without
+requiring its marker. Batch permits provisional ordinals and does not revisit
 the site to re-evaluate a boundary. This shared Catalog feature did not change
 BookWalker viewer/access behavior and was not live-verified as part of the
 work-key change; see the runbook for the copy-first rollout.

@@ -8,36 +8,36 @@ details and validation are in the fractional-destination section below.
 
 Updated: 2026-10-18. Phases 01-04 are complete at source/test checkpoint `467dc69a1ca093ac07e6024b5bddb6575d6cf24c`; implementation, tests, and live verification passed independent review; the focused Hanayume adapter Unit suite plus explicitly selected adapter-browser cases at this checkpoint passed 103 tests, 0 failed, 0 skipped/deselected (266 pytest-asyncio deprecation warnings; 7.36s). The two-class ungranted account-row correction passed independent review with 0 blockers. This result is a separate current snapshot; earlier 342-, 333-, 147-selected-plus-3, and 92-case results are not additive. The pre-guard full-repository snapshot at `1256d3b` remains 3718 passed and 2 failed (0 skipped/deselected; 4737 warnings; 1581.78s), predating later guard/adapter changes: Kadocomi's test-only redirect fixture repair passed its focused check, while the Younganimal cause remains unknown. No changed-source full-repository pass is claimed. Stage 5ca6372 live serial Batch validation passed on existing-grant `49b7e11049871` and free `8c6`; the route-guard error-code follow-up passed independent review. The 9a grant-only run confirmed a second ticket use. The first 0699 normal attempt confirmed checkout and a native grant but failed to persist it; its original reconciliation branch is unknown. A later native-first correction passed review. Full/incremental Discovery and normal direct Batch on existing-grant 0699 then preserved its future episode expiry, reached END with a 30-page PNG ZIP, and used no new checkout or work cooldown backfill. The prior `1d10701c05629` attempt is independently confirmed pre-click by source order: its exact current API was `waitAndFree/hasAccess=false` with null remaining time, a valid ungranted state; checkout/read POSTs were 0. Offline HTML plus a bounded read-only probe showed the exact target row as `mode-current mode-store-item-start` without rental markers. The narrow two-class recognition change passed the 103-case suite and independent review; exact button-label/actionability checks are unchanged. The fresh normal consuming Batch on 1d107 passed the Tester audit with one checkout, a fresh exact current-episode native grant, source/work persistence, END, and a verified 30-page PNG ZIP. Confirmed live ticket use is four on distinct works; the final independent live Reviewer gate passed with 0 blockers, completing Phase 04. Earlier direct Batch and R9 evidence remains historical below.
 
-## Shared Catalog v7 / acquisition-scope gate (2026-10-22)
+## Shared Catalog v7 / automatic acquisition scope (2026-10-23)
 
-The site behavior documented below runs through the shared Catalog v7,
-Watchlist, Scope Reconciler, and Batch gate. Run the explicit v6-to-v7
-migration on an isolated Catalog copy first; Discovery never migrates a Catalog
-implicitly. Watchlist discovery_scope is the acquisition-scope authority, while
-target enabled controls whether Discovery runs and is not an ownership flag.
-Batch requires a current synchronized Scope Reconciler snapshot and
-sources.acquisition_enabled state.
+The site behavior below uses Catalog v7 and an explicit matching Watchlist.
+Discovery never migrates Catalog implicitly. Successful Discovery automatically
+reflects the current key's acquisition flags; Incremental enables observed
+Sources, while failed runs preserve existing flags. Batch uses current flags
+without requiring a sync marker, matching fingerprint, or complete evidence.
+Temporary extra acquisitions and provisional ordinals are accepted. Target
+`enabled` controls Discovery only. `watch scope-sync` remains optional strict
+whole-Work maintenance; access/resource and output guards are unchanged.
+See `note/00_core.md` for the current shared contract. This common change has
+synthetic/local-browser coverage; it has not been live-verified on this site.
 
 Hanayume now supplies a target-bound complete-listing proof for its validated
 full range inventory (`hanayume-work:<work_id>`) and supports native bounded
 `discovery_scope`. Its existing oldest-first global positions are retained
 before the inclusive scope slice; account user rows do not become public
 inventory Sources. Only a normal Full iterator exhaustion publishes proof,
-and Full only updates evidence/observed positions, not acquisition flags. After
-Full, explicitly preview and apply `watch scope-sync` before Batch. A failed,
-partial, or Incremental run does not unlock synchronization. Catalog Sources
-absent from the proof still block reconciliation. For a NEVER-MANAGED legacy
-work without scope/order, explicit bootstrap remains restricted to matching
-Watchlist key/site/work ownership. Newly discovered Sources require a fresh
-sync before Batch.
+and successful Full also reflects classified acquisition flags for this key.
+Incremental enables observed Sources. Failed/partial runs keep existing flags.
+Catalog Sources absent from proof still block strict optional reconciliation,
+but do not block Batch merely because proof/sync state is incomplete.
 
-A successful Full after a prior scope sync invalidates the sync marker. After
-Full, rerun preview and explicit apply with the same Watchlist before planning
-Batch. Scope changes also require review and apply. No Source is moved between
-keys or deleted.
+A Full run still invalidates strict maintenance proof/sync state as appropriate,
+but Batch does not use that marker. Continue from Discovery to Batch directly;
+optional scope preview/apply can reconcile an entire Work without Discovery.
+No Source is moved between keys or deleted.
 
-Use one isolated Catalog, Watchlist, and library path throughout copy
-validation; replace placeholders with paths under the same COPY_ROOT:
+Optional strict maintenance examples (scope-sync is not required for Batch).
+Use the same isolated Catalog, Watchlist and library paths under COPY_ROOT:
 
     python -m screenshot_crawler.cli catalog migrate --catalog <copy/catalog.sqlite> --backup-dir <copy/backups>
     python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --dry-run --json
@@ -370,8 +370,9 @@ are retained. Merely resetting status would leave the existing ZIP at its destin
 cause a packaging name collision. Normal Batch, without `--grant-only`, performs the later
 recrawl. Its `--site hanayume` scope includes other pending Hanayume Items; `--work` is supported
 by this preparation script only. This statement describes the historical
-pre-v7 preparation helper: current Batch always requires the shared Watchlist
-scope-sync gate, and target enabled controls Discovery execution only.
+pre-v7 preparation helper: current Batch requires an explicit matching
+Watchlist and uses Catalog acquisition flags automatically reflected by
+Discovery. Scope-sync is optional; target enabled controls Discovery only.
 
 Changed files for preparation support: `scripts/prepare_recrawl.py`, its existing Unit tests,
 and the Core/site notes. All 24 preparation tests passed, zero skipped, plus Ruff on the script

@@ -1,35 +1,35 @@
 # 11. Younganimal current implementation
 
-## Shared Catalog v7 / acquisition-scope gate (2026-10-22)
+## Shared Catalog v7 / automatic acquisition scope (2026-10-23)
 
-The site behavior documented below runs through the shared Catalog v7,
-Watchlist, Scope Reconciler, and Batch gate. Run the explicit v6-to-v7
-migration on an isolated Catalog copy first; Discovery never migrates a Catalog
-implicitly. Watchlist discovery_scope is the acquisition-scope authority, while
-target enabled controls whether Discovery runs and is not an ownership flag.
-Batch requires a current synchronized Scope Reconciler snapshot and
-sources.acquisition_enabled state.
+The site behavior below uses Catalog v7 and an explicit matching Watchlist.
+Discovery never migrates Catalog implicitly. Successful Discovery automatically
+reflects the current key's acquisition flags; Incremental enables observed
+Sources, while failed runs preserve existing flags. Batch uses current flags
+without requiring a sync marker, matching fingerprint, or complete evidence.
+Temporary extra acquisitions and provisional ordinals are accepted. Target
+`enabled` controls Discovery only. `watch scope-sync` remains optional strict
+whole-Work maintenance; access/resource and output guards are unchanged.
+See `note/00_core.md` for the current shared contract. This common change has
+synthetic/local-browser coverage; it has not been live-verified on this site.
 
 Younganimal now supplies target-bound complete-listing proof for its validated
 full work-range inventory (`younganimal-work:<work_id>`) and supports native
 bounded `discovery_scope`. Existing global positions are assigned from the
 complete public work listing before slicing; authenticated account user rows
 are excluded from this inventory. Only normal Full exhaustion publishes
-proof, and Full only updates evidence/observed positions, not acquisition
-flags. After Full, explicitly preview and apply `watch scope-sync` before
-Batch. Failed, partial, or Incremental runs do not unlock synchronization;
-Catalog Sources absent from the proof still block. For a NEVER-MANAGED legacy
-work without scope/order, explicit bootstrap remains restricted to matching
-Watchlist key/site/work ownership. Newly discovered Sources require a fresh
-sync before Batch.
+proof, and successful Full also reflects classified acquisition flags for this
+key. Incremental enables observed Sources; failed/partial runs keep existing
+flags. Missing proof rows still block strict optional reconciliation, but
+incomplete proof/sync state alone does not block Batch.
 
-A successful Full after a prior scope sync invalidates the sync marker. After
-Full, rerun preview and explicit apply with the same Watchlist before planning
-Batch. Scope changes also require review and apply. No Source is moved between
-keys or deleted.
+A Full run still invalidates strict maintenance proof/sync state as appropriate,
+but Batch does not use that marker. Continue from Discovery to Batch directly;
+optional scope preview/apply can reconcile an entire Work without Discovery.
+No Source is moved between keys or deleted.
 
-Use one isolated Catalog, Watchlist, and library path throughout copy
-validation; replace placeholders with paths under the same COPY_ROOT:
+Optional strict maintenance examples (scope-sync is not required for Batch).
+Use the same isolated Catalog, Watchlist and library paths under COPY_ROOT:
 
     python -m screenshot_crawler.cli catalog migrate --catalog <copy/catalog.sqlite> --backup-dir <copy/backups>
     python -m screenshot_crawler.cli watch scope-sync --watchlist <copy/watchlist.yaml> --catalog <copy/catalog.sqlite> --work-key <work-key> --dry-run --json
@@ -44,7 +44,7 @@ The older isolated Batch receipts later in this note that used an empty
 Watchlist predate the shared v7 gate. They verify the site adapter/capture
 behavior for those historical runs, not current Batch eligibility or a current
 operational procedure. Current verification must use an explicit matching
-Watchlist and the scope-sync flow above.
+Watchlist; scope-sync is optional maintenance.
 
 ## Current verification snapshot (2026-10-22)
 

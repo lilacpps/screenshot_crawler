@@ -209,6 +209,43 @@ class InventoryDiscoveryAdapter(BoundedFakeDiscoveryAdapter):
         return generate()
 
 
+@pytest.mark.parametrize("mode", ["full", "incremental"])
+@pytest.mark.parametrize("incomplete", [False, True])
+async def test_discovery_updates_only_successfully_classified_acquisition_flags(
+    tmp_path: Path, mode: str, incomplete: bool,
+) -> None:
+    adapter = FakeDiscoveryAdapter([record("observed"), record("unobserved")])
+    service, catalog, watch_target = setup_service(tmp_path, adapter)
+    await service.discover(FakePage(), watch_target, "full")
+    observed, unobserved = (
+        catalog.find_source(watch_target.site, external_id)
+        for external_id in ("observed", "unobserved")
+    )
+    work = catalog.find_work(watch_target.work_key)
+    other_item = catalog.create_item(work_id=work.id)
+    other = catalog.create_source(
+        SourceInput(site=watch_target.site, external_id="other", discovery_key="other-key"),
+        item_id=other_item.id,
+    )
+    catalog.apply_acquisition_scope_sync(
+        work_key=work.work_key,
+        fingerprint="last-manual-sync",
+        source_flags={observed.id: False, unobserved.id: False, other.id: False},
+    )
+    adapter.records = [record("observed"), record("new")]
+    adapter.failure = DiscoveryIncompleteError("partial listing") if incomplete else None
+
+    result = await service.discover(FakePage(), watch_target, mode)
+
+    assert (result.stopped_reason == "incomplete") is incomplete
+    assert catalog.get_source(observed.id).acquisition_enabled is (not incomplete)
+    assert catalog.get_source(unobserved.id).acquisition_enabled is (
+        mode == "full" and not incomplete
+    )
+    assert catalog.get_source(other.id).acquisition_enabled is False
+    assert catalog.find_source(watch_target.site, "new").acquisition_enabled is True
+
+
 def target(
     *,
     key: str = "scope-a",
@@ -770,10 +807,12 @@ async def test_full_inventory_proof_persists_only_after_normal_exhaustion(
     ]
     if outside_key == watch_target.key:
         assert catalog.get_source(outside.id).display_position == 1
+        assert catalog.get_source(outside.id).acquisition_enabled is False
     else:
         assert catalog.get_source(outside.id) == outside_before
     inside = catalog.find_source(watch_target.site, "inside")
     assert inside is not None and inside.display_position == 2
+    assert inside.acquisition_enabled is True
     catalog.apply_acquisition_scope_sync(
         work_key=work.work_key,
         fingerprint="test-fingerprint",
@@ -788,10 +827,14 @@ async def test_full_inventory_proof_persists_only_after_normal_exhaustion(
     assert catalog.get_discovery_inventory_evidence(watch_target.key) is None
     sync = catalog.get_acquisition_scope_sync(work.work_key)
     assert sync is not None and sync.status == "stale"
+    assert catalog.get_source(outside.id).acquisition_enabled is False
 
 
+@pytest.mark.parametrize(
+    "failing_method", ["set_source_display_positions", "apply_discovery_acquisition_flags"]
+)
 async def test_full_inventory_proof_is_not_persisted_when_catalog_finalization_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing_method: str,
 ) -> None:
     adapter = InventoryDiscoveryAdapter([record("one", global_display_position=1)])
     service, catalog, watch_target = setup_service(tmp_path, adapter)
@@ -807,7 +850,7 @@ async def test_full_inventory_proof_is_not_persisted_when_catalog_finalization_f
         del kwargs
         raise RuntimeError("injected finalization failure")
 
-    monkeypatch.setattr(catalog, "set_source_display_positions", fail_assignments)
+    monkeypatch.setattr(catalog, failing_method, fail_assignments)
 
     with pytest.raises(RuntimeError, match="injected finalization failure"):
         await service.discover(FakePage(), watch_target, "full")

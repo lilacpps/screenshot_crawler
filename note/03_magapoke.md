@@ -4,8 +4,11 @@
 
 Magapoke Discovery supplies complete site-listing identity/position evidence
 after a successful Full run completes. Catalog records the evidence only after
-normal iterator exhaustion and finalization; scope changes still require an
-explicit `watch scope-sync` preview/apply. In-scope paid episodes reserve an
+normal iterator exhaustion and finalization. Successful Discovery automatically
+reflects its key's acquisition flags; Incremental enables observed rows and
+failed runs preserve prior flags. `watch scope-sync` is optional strict
+maintenance; Batch needs no sync marker and permits provisional ordinals.
+See `note/00_core.md` for the 2026-10-23 contract. In-scope paid episodes reserve an
 archive number independently of access mode; out-of-scope Sources are
 excluded without changing their access or history. This change did not perform
 ticket, quota or paid access operations and was not live-verified.
