@@ -88,7 +88,7 @@ Reviewerは次の点をコード/テストで確認:
 - Site全件計画の最後で単純filterしていないか。
 - `planner.plan`のどのコールサイトもselector伝播漏れがないか。
 - 同一siteに複数Workがある場合のquota allocation・work_resource stateの保持。
-- 途中でresource consumo unknownとなった後のreplan/再試行を黙認していないか。
+- 途中でresource consumption unknownとなった後のreplan/再試行を黙認していないか。
 - Site跨ぎの同一WorkもArchive採番・Scope gateを正しく維持。
 - P1 GUIのcheck/nonfocus/detail/disabled selectionが壊れていないか。
 - 確認前にブラウザへアクセス・quota消費・本番Catalogへの予期せぬ変更が起きないか。
