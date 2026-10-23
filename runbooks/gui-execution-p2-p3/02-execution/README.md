@@ -58,7 +58,7 @@
 3. all resourcesの連続replanでselectorが保存。
 4. after-observed-consumptionの例外時に追加消費/自動再試行をしない。
 5. shared site quotaを選択Work数でリセットしない。
-6. Existing ``test_batch_acquisition_scope.py`、`test_deferred_grants.py`、`test_batch_executor.py` 等の関連回帰を維持。
+6. Existing `test_batch_acquisition_scope.py`、`test_deferred_grants.py`、`test_batch_executor.py` 等の関連回帰を維持。
 
 ## 5. P2.3 — Discover / ExecutionPlanService
 
