@@ -338,15 +338,16 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   };
   const exactPrTailLayout = (viewer, pages, children, seek, prCount) => {
     // Prove the observed PR-tail families, including blank and body-parity variants.
-    // Odd single-PR bodies start at B>=5; unobserved short shapes stay closed.
+    // Without an initial blank, odd single-PR bodies start at B>=5.
     const topEmpty = viewer.classList.contains('mode-has-top-emptypage');
     const bodyStart = topEmpty ? 2 : 1, ci = children.length - prCount - 3;
     const bodyCount = ci - bodyStart;
     const oddBody = !topEmpty && bodyCount % 2 === 1;
-    const value = Number(seek.value), max = children.length - (oddBody ? 1 : 0);
-    const ciSeek = prCount + (oddBody ? 2 : 4);
+    const compactEnd = children.length % 2 === 0;
+    const value = Number(seek.value), max = children.length - (compactEnd ? 1 : 0);
+    const ciSeek = prCount + (compactEnd ? 2 : 4);
     if (![1, 3].includes(prCount) ||
-        (topEmpty ? prCount !== 3 || bodyCount < 3 || bodyCount % 2 !== 1
+        (topEmpty ? (prCount === 1 ? bodyCount < 4 || bodyCount % 2 !== 0 : bodyCount < 3 || bodyCount % 2 !== 1)
           : oddBody ? bodyCount < (prCount === 1 ? 5 : 3) : bodyCount < 4) ||
         !viewer.contains(pages) || !viewer.contains(seek) ||
         !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
@@ -357,7 +358,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         !Number.isInteger(value) || value < 1 || value > max || (max - value) % 2 !== 0) return false;
     const phase = value === max ? ['mode-first-page', 'mode-top-pr-page']
       : value === ciSeek ? ['mode-ci-page', 'mode-pr-page']
-      : value === 1 ? (oddBody ? ['mode-last-page', 'mode-pr-page'] : ['mode-last-page'])
+      : value === 1 ? (compactEnd ? ['mode-last-page', 'mode-pr-page'] : ['mode-last-page'])
         : value < ciSeek ? ['mode-pr-page'] : [];
     const flags = ['mode-first-page', 'mode-top-pr-page', 'mode-ci-page', 'mode-pr-page', 'mode-last-page']
       .filter(name => viewer.classList.contains(name));
@@ -501,7 +502,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const standardOddBody = !noLeadCi && !topEmpty && !noTopPr && oddBodyCandidate(viewer, children, seek);
     const noTopPrOddBody = noTopPr && oddBodyCandidate(viewer, children, seek, true);
     const oddBody = standardOddBody || noTopPrOddBody;
-    const shortTopEmpty = topEmpty && children.length % 2 === 0 && max === children.length - 1 &&
+    const shortTopEmpty = !prCount && topEmpty && children.length % 2 === 0 && max === children.length - 1 &&
       ['mode-h', 'mode-has-pr', 'mode-has-comic-info', 'mode-has-good-page'].every(name => viewer.classList.contains(name)) &&
       !['mode-v', 'mode-single'].some(name => viewer.classList.contains(name));
     if (ciIndex <= bodyStart || min !== 1 || step !== 2 ||
@@ -1111,10 +1112,10 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         layout_variant = "standard_one_body" if one_body_standard else "standard_two_body"
     pr_tail_count = 0
     pr_tail_sets = ()
-    # Recognize the exact tail before checking seek range: odd-body one/three-PR
-    # layouts use max=N-1, while the even-body and top-empty variants use max=N.
+    # Recognize the exact tail before checking range. The supported profiles use
+    # max=N or N-1 according to physical pairing, including any initial blank.
     if layout_variant in {"standard", "top_emptypage"}:
-        for count in ((3,) if layout_variant == "top_emptypage" else (1, 3)):
+        for count in (1, 3):
             candidate_tail = (
                 frozenset({"-cv-page", "mode-ci"}),
                 *(frozenset({"-cv-page", "mode-empty", "mode-pr"}) for _ in range(count)),
@@ -1128,12 +1129,16 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     pr_tail_profile = pr_tail_count != 0
     pr_tail_top_empty = pr_tail_profile and layout_variant == "top_emptypage"
     pr_tail_odd_body = pr_tail_profile and not pr_tail_top_empty and len(slots) % 2 == 0
+    # Even physical totals end on a Good/Last spread, including the observed
+    # initial-blank + even-body + single-PR family. Body parity alone is insufficient.
+    pr_tail_compact_end = pr_tail_profile and len(slots) % 2 == 0
     if pr_tail_profile:
         required = {"mode-h", "mode-has-pr", "mode-has-comic-info", "mode-has-good-page"}
         if required.difference(viewer_classes) or {"mode-v", "mode-single"}.intersection(viewer_classes):
             raise UnknownPageStateError("Younganimal PR-tail capability markers changed")
         layout_variant = (
-            "top_empty_three_pr" if pr_tail_top_empty
+            "top_empty_single_pr_even_body" if pr_tail_top_empty and pr_tail_count == 1
+            else "top_empty_three_pr" if pr_tail_top_empty
             else "standard_single_pr_odd_body" if pr_tail_odd_body and pr_tail_count == 1
             else "standard_three_pr_odd_body" if pr_tail_odd_body
             else "standard_single_pr" if pr_tail_count == 1 else "standard_three_pr"
@@ -1162,7 +1167,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         layout_variant = "top_empty_no_pr_odd_body"
     odd_body_profile = standard_odd_body or no_top_pr_odd_body
     expected_seek_max = (
-        len(slots) - 1 if pr_tail_odd_body
+        len(slots) - 1 if pr_tail_compact_end
         else len(slots) if one_body_standard or pr_tail_profile or odd_body_profile or layout_variant == "top_emptypage"
         else len(slots) - 1
     )
@@ -1276,7 +1281,11 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         raise UnknownPageStateError("Younganimal viewer has no contiguous body region")
     body_slots = tuple(range(body_start, body_end))
     if pr_tail_profile and (
-        (pr_tail_top_empty and (body_start != 2 or len(body_slots) < 3 or len(body_slots) % 2 != 1))
+        (pr_tail_top_empty and (
+            body_start != 2
+            or (pr_tail_count == 1 and (len(body_slots) < 4 or len(body_slots) % 2 != 0))
+            or (pr_tail_count == 3 and (len(body_slots) < 3 or len(body_slots) % 2 != 1))
+        ))
         or (pr_tail_odd_body and (body_start != 1 or len(body_slots) < (5 if pr_tail_count == 1 else 3) or len(body_slots) % 2 != 1))
         or (not pr_tail_top_empty and not pr_tail_odd_body and (body_start != 1 or len(body_slots) < 4 or len(body_slots) % 2 != 0))
     ):
@@ -1321,12 +1330,12 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     if no_lead_ci and len(body_slots) < 5:
         raise UnknownPageStateError("Younganimal no-lead CI body mapping changed")
     if short_top_empty or pr_tail_profile or two_body_standard or one_body_standard or no_lead_ci:
-        ci_seek = pr_tail_count + (2 if pr_tail_odd_body else 4) if pr_tail_profile else 5
+        ci_seek = pr_tail_count + (2 if pr_tail_compact_end else 4) if pr_tail_profile else 5
         expected_flags = (
             ({"mode-first-page"} if no_lead_ci else {"mode-first-page", "mode-top-pr-page"}) if seek_value == seek_max
             else {"mode-ci-page", "mode-pr-page"} if seek_value == ci_seek
             else {"mode-pr-page"} if 1 < seek_value < ci_seek
-            else ({"mode-last-page"} if no_lead_ci_even_body or (pr_tail_profile and not pr_tail_odd_body) or one_body_standard else {"mode-last-page", "mode-pr-page"}) if seek_value == 1
+            else ({"mode-last-page"} if no_lead_ci_even_body or (pr_tail_profile and not pr_tail_compact_end) or one_body_standard else {"mode-last-page", "mode-pr-page"}) if seek_value == 1
             else set()
         )
         observed_flags = viewer_classes.intersection({
@@ -1412,7 +1421,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
                 raise UnknownPageStateError("Younganimal PR-tail terminal marker changed")
             state = "end"
             active_slots = (last_slot,)
-        elif 1 < seek_value < pr_tail_count + (3 if pr_tail_odd_body else 4):
+        elif 1 < seek_value < pr_tail_count + (3 if pr_tail_compact_end else 4):
             if active_slots:
                 raise UnknownPageStateError("Younganimal PR-tail interstitial overlaps body")
             state = "ad"

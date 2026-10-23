@@ -41,10 +41,10 @@ def _snapshot(
     seek_max = 7 if standard_body_count in {1, 2} else body_count + tail_pr_count + 4 if pr_tail_body_count is not None else body_count + 5 if standard_body_count is not None else body_count + 6 if odd_body_profile else 21
     if top_empty_pr:
         seek_max += 1
-    pr_tail_odd = pr_tail_body_count is not None and not top_empty_pr and body_count % 2 == 1
-    if pr_tail_odd:
+    pr_tail_compact = pr_tail_body_count is not None and seek_max % 2 == 0
+    if pr_tail_compact:
         seek_max -= 1
-    ci_seek = tail_pr_count + (2 if pr_tail_odd else 4) if pr_tail_body_count is not None else 5
+    ci_seek = tail_pr_count + (2 if pr_tail_compact else 4) if pr_tail_body_count is not None else 5
     if odd_body_profile or pr_tail_body_count is not None or standard_body_count in {1, 2}:
         viewer_classes.update({"mode-has-pr", "mode-has-comic-info", "mode-has-good-page"})
     if pr_tail_body_count is not None or standard_body_count in {1, 2}:
@@ -66,7 +66,7 @@ def _snapshot(
     body_slots = tuple(range(2, body_count + 2)) if top_empty_pr else tuple(range(1, body_count + 1))
     ci_slot = body_slots[-1] + 1
     wrapper_count = ci_slot + (tail_pr_count + 3 if pr_tail_body_count is not None else 5)
-    if (odd_body_profile or (pr_tail_body_count is not None and not pr_tail_odd) or standard_body_count == 1) and seek_value == 1:
+    if (odd_body_profile or (pr_tail_body_count is not None and not pr_tail_compact) or standard_body_count == 1) and seek_value == 1:
         viewer_classes.discard("mode-pr-page")
     slots: list[dict[str, object]] = []
     for index in range(wrapper_count):
@@ -600,13 +600,43 @@ def test_younganimal_top_empty_three_pr_maps_all_observed_phases(seek, state, ac
     assert observed.initial_blank is (seek == 17)
 
 
+@pytest.mark.parametrize("body_count", [44, 4])
+def test_younganimal_top_empty_single_pr_even_body_maps_every_phase(body_count: int) -> None:
+    maximum = body_count + 5
+    seen = []
+    for seek in range(maximum, 0, -2):
+        row = _parse_viewer_observation(
+            _snapshot(seek, pr_tail_body_count=body_count, tail_pr_count=1, top_empty_pr=True),
+            expected_url=EPISODE_URL,
+        )
+        assert row.layout_variant == "top_empty_single_pr_even_body"
+        assert row.body_slots == tuple(range(2, body_count + 2))
+        assert (row.ci_slot, row.pr_slots, row.good_slot, row.last_slot) == (
+            body_count + 2, (body_count + 3,), body_count + 4, body_count + 5)
+        assert row.seek_max == maximum
+        if seek == maximum:
+            assert row.page_state == "initial_blank" and row.active_slots == (1,)
+        elif seek == 3:
+            assert row.page_state == "ad" and row.active_slots == ()
+        elif seek == 1:
+            assert row.page_state == "end" and row.active_slots == (body_count + 5,)
+        else:
+            assert row.page_state == "content" and len(row.active_slots) == 2
+            assert row.ready_slots == row.active_slots
+            seen.extend(row.active_slots)
+    assert seen == list(range(2, body_count + 2))
+
+
+@pytest.mark.parametrize("pr_count", [1, 3])
 @pytest.mark.parametrize("mutation", ["blank", "blank_canvas", "capability", "phase", "center", "tail", "tail_canvas", "range", "end_marker", "end_hidden", "unsupported_pr"])
-def test_top_empty_three_pr_rejects_unknown_or_incomplete_layout(mutation: str) -> None:
-    raw = _snapshot(1 if mutation.startswith("end_") else 17, pr_tail_body_count=9, tail_pr_count=3, top_empty_pr=True)
+def test_top_empty_pr_tail_rejects_unknown_or_incomplete_layout(mutation: str, pr_count: int) -> None:
+    body_count, maximum = (44, 49) if pr_count == 1 else (9, 17)
+    raw = _snapshot(1 if mutation.startswith("end_") else maximum, pr_tail_body_count=body_count,
+                    tail_pr_count=pr_count, top_empty_pr=True)
     if mutation == "blank":
         raw["slots"][1]["classes"].append("mode-pr")
     elif mutation in {"blank_canvas", "tail_canvas"}:
-        index = 1 if mutation == "blank_canvas" else 12
+        index = 1 if mutation == "blank_canvas" else body_count + 3
         raw["slots"][index]["canvasCount"] = 1
         raw["slots"][index]["canvas"] = raw["slots"][2]["canvas"]
     elif mutation == "capability":
@@ -616,7 +646,7 @@ def test_top_empty_three_pr_rejects_unknown_or_incomplete_layout(mutation: str) 
     elif mutation == "center":
         raw["slots"][2]["wrapperCenterInViewport"] = True
     elif mutation == "tail":
-        raw["slots"][14]["classes"] = ["-cv-page", "mode-good"]
+        raw["slots"][body_count + 3]["classes"] = ["-cv-page", "mode-good"]
     elif mutation == "range":
         raw["seek"]["max"] = "15"
     elif mutation == "end_marker":

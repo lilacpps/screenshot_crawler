@@ -48,6 +48,81 @@ Watchlist; scope-sync is optional maintenance.
 
 ## Current verification snapshot (2026-10-23)
 
+### Initial blank plus one trailing PR: Item/Source 36943
+
+Item/Source 36943 (`9537ccc6e3c6e`, ペンと手錠と事実婚 / 第1話)
+failed before capture with `Younganimal PR/Good/Last tail roles changed` inside
+the existing 20-second readiness bound. Failure metrics
+`17c11ed2fe1b463ab3f61e68617aff29` and a bounded shared-CDP probe show fifty
+wrappers: top PR 0, exact empty lead 1, body 2-45 (44 pages), CI 46, one PR
+47, Good 48 and Last 49; seek min=1/max=49/step=2. This differs from 36832's
+no-extra-blank odd-body single-PR profile. The prior top-empty PR-tail branch
+recognized only three PRs and fell through to the two-PR tail check.
+
+`top_empty_single_pr_even_body` supports this observed structural family:
+positive top-empty/horizontal/spread/RTL and PR/CI/Good capabilities, no
+vertical/single modes, exact canvas-free top PR/blank/CI/PR/Good/Last roles,
+and contiguous known even body B=N-6>=4. The exact public range is
+min=1/max=N-1/step=2. Counts and IDs are derived, not allowlisted. Odd body
+with this blank/single-PR combination, shorter unobserved shapes, arbitrary
+PR counts, missing roles, wrong ranges/phases/centers and non-body canvases
+remain rejected. Previous single-PR/three-PR and two-PR profiles are retained.
+
+All 25 live public seeks were checked and rewound:
+
+| Seek | Centered wrappers | Phase | State |
+|---|---|---|---|
+| 49 | 0, 1 | first + top-PR | exact initial blank |
+| 47..5 by -2 | 2/3..44/45 | none | body pairs |
+| 3 | 46, 47 | CI + PR | CI + single PR |
+| 1 | 48, 49 | Last + PR | Good + unique visible/centered Last |
+
+The existing single public step skips only the proven initial blank; resumed
+entry explicitly rewinds to that blank before the first body pair. Python,
+native JavaScript and CI mutation geometry use the same exact mapping.
+PR-tail seek/phase arithmetic now distinguishes the even physical total's
+Good/Last terminal spread from a Last-only terminal wrapper; body parity
+alone cannot identify it when an initial blank is present. The legacy shorter
+two-PR top-empty validator no longer revalidates an already proven PR-tail
+as its different layout. Frozen coverage, exact selected centers, native
+source/replay/pixel equality, identity/generation/write, post-encode proof and
+complete-body-before-END guards remain. Native lossless WebP and atomic PNG
+fallback are unchanged. There is no CLI/config, access/resource, pacing,
+timeout, shared Core, Batch or schema change; `note/00_core.md` is unchanged.
+Use the normal `batch run --site younganimal` command.
+
+The baseline probe reproduced rejection at every public seek, blocked 31
+mutating requests and observed zero checkout attempts. Production Batch for
+the current free Source, with an online-backup Catalog and explicit copied
+matching Watchlist, completed all 44 bodies and END with max_pages=44
+(CrawlRun 14126). All members of the 22,945,884-byte ZIP are ordered, unique,
+single-frame native 848x1200 lossless VP8L WebPs without rendered fallback.
+Retained manifest slot coverage, full decode, fingerprints, CRC, Artifact
+SHA-256/size and isolated Item completion checks passed. Thirty mutating
+requests were blocked and no checkout was attempted. Normal Item/Source/
+runs/artifacts were checked unchanged and the Item remains pending for a
+normal rerun. Metrics `2fccdc621bbb400fba968126946228a8` show one completion
+and zero failure/retry/403/429/5xx/challenge/CAPTCHA. p1/p22/p44 were visually
+checked without missing regions or viewer chrome. This is production-proof/
+output verification, not a separate live source-RGBA equality measurement.
+Evidence/scripts remain ignored under `output/younganimal-fix-36943/`; no
+real-site fixture, authentication state or signed source is committed.
+Other episodes/layouts remain unverified.
+
+Validation: all 465 capture Unit cases and all 26 packaging cases pass with
+zero skipped. The 54-case focused browser selection passed, including B=44
+and boundary B=4, resumed END entry, draw-before-translation, full native
+source-RGBA/PNG fallback equality, disjoint CI-widget mutations, profile drift
+and post-encoding replacement/seek rejection. The final affected browser
+selection passed 140 cases (0 failed/skipped, 240 unrelated cases deselected,
+301.09s; five existing asyncio deprecation warnings), including the corrected
+test-only expected seek value. The selection covers top-empty/single-PR/three-PR,
+tail post-encoding mutation guards and all native spread Runner profiles.
+Combined with Unit and packaging, 631 distinct selected cases passed. Global
+Ruff and scoped diff checks passed. Full repository and unrelated browser,
+Discovery/Policy/access/Research suites were not run for this site-local
+capture/layout change.
+
 ### Odd body plus one trailing PR: Item/Source 36832
 
 Item/Source 36832 (`a35f2207af39f`, ペンと手錠と事実婚 / 第65話➀)
@@ -64,7 +139,7 @@ horizontal/spread/RTL, positive PR/CI/Good capabilities, no top-empty,
 vertical or single flags, exact canvas-free top PR and CI/PR/Good/Last roles,
 contiguous known odd body B=N-5>=5, and min=1/max=N-1/step=2. Counts and IDs
 are derived, not allowlisted. Unobserved shorter odd-body single-PR shapes (B<5), an
-extra initial blank with one PR, arbitrary PR counts, body gaps, wrong
+unproven blank/single-PR combinations, arbitrary PR counts, body gaps, wrong
 capabilities/ranges/centers and non-body canvases remain rejected. Existing
 even-body single-PR and both three-PR parity profiles retain their contracts.
 
@@ -801,7 +876,7 @@ step=2, horizontal/spread/RTL and PR/CI/Good capabilities, and no vertical or
 single mode. Selected centers and phase flags must match at every seek.
 Initialization/rewind recognizes only this positively proven blank and uses
 one public seek step to the first body pair. Python parsing, native JS layout
-proof and CI mutation geometry share the role map. P=1 plus a separate blank,
+proof and CI mutation geometry share the role map. Unproven P=1/blank/body-parity combinations,
 arbitrary PR counts, changed roles/ranges, wrong Last and premature END remain
 fail-closed. Every body slot is still required before END; source/replay,
 node/write/generation, final geometry, post-encoding proof and size guards stay
@@ -2059,6 +2134,11 @@ unsupported; neither counts nor episode IDs are allowlisted.
 with CI/PR at seek 3 and Good/Last at seek 1 (Last+PR). All exact roles,
 phase/center, native/CI proof and full body coverage gates remain; see the
 36832 verification above. Shorter odd single-PR shapes remain unsupported.
+
+`top_empty_single_pr_even_body` separately supports an exact extra blank at
+slot 1, even B=N-6>=4, and max=N-1: the first ordinary seek step selects
+body 2/3, seek 3 is CI/PR, and seek 1 is Good/Last with Last+PR. The
+36943 section above records all phase, proof, coverage and live checks.
 
 ### Horizontal layout with three trailing PRs
 

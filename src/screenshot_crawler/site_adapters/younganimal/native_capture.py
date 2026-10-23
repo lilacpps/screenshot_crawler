@@ -293,15 +293,16 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   };
   const exactPrTailLayout = (viewer, pages, children, seek, prCount, forDraw) => {
     // Prove the observed PR-tail families, including blank and body-parity variants.
-    // Odd single-PR bodies start at B>=5; unobserved short shapes stay closed.
+    // Without an initial blank, odd single-PR bodies start at B>=5.
     const topEmpty = viewer.classList.contains('mode-has-top-emptypage');
     const bodyStart = topEmpty ? 2 : 1, ci = children.length - prCount - 3;
     const bodyCount = ci - bodyStart;
     const oddBody = !topEmpty && bodyCount % 2 === 1;
-    const value = Number(seek.value), max = children.length - (oddBody ? 1 : 0);
-    const ciSeek = prCount + (oddBody ? 2 : 4);
+    const compactEnd = children.length % 2 === 0;
+    const value = Number(seek.value), max = children.length - (compactEnd ? 1 : 0);
+    const ciSeek = prCount + (compactEnd ? 2 : 4);
     if (![1, 3].includes(prCount) ||
-        (topEmpty ? prCount !== 3 || bodyCount < 3 || bodyCount % 2 !== 1
+        (topEmpty ? (prCount === 1 ? bodyCount < 4 || bodyCount % 2 !== 0 : bodyCount < 3 || bodyCount % 2 !== 1)
           : oddBody ? bodyCount < (prCount === 1 ? 5 : 3) : bodyCount < 4) ||
         !viewer.contains(pages) || !viewer.contains(seek) ||
         !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
@@ -312,7 +313,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
         !Number.isInteger(value) || value < 1 || value > max || (max - value) % 2 !== 0) return false;
     const phase = value === max ? ['mode-first-page', 'mode-top-pr-page']
       : value === ciSeek ? ['mode-ci-page', 'mode-pr-page']
-      : value === 1 ? (oddBody ? ['mode-last-page', 'mode-pr-page'] : ['mode-last-page'])
+      : value === 1 ? (compactEnd ? ['mode-last-page', 'mode-pr-page'] : ['mode-last-page'])
         : value < ciSeek ? ['mode-pr-page'] : [];
     const flags = ['mode-first-page', 'mode-top-pr-page', 'mode-ci-page', 'mode-pr-page', 'mode-last-page']
       .filter(name => viewer.classList.contains(name));
@@ -418,7 +419,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const standardOddBody = !noLeadCi && !prCount && !topEmptyNoCi && !hasTopEmptyPage && !noTopPr && oddBodyCandidate(viewer, children, seek);
     const noTopPrOddBody = noTopPr && oddBodyCandidate(viewer, children, seek, true);
     const oddBody = standardOddBody || noTopPrOddBody;
-    const shortTopEmpty = hasTopEmptyPage && children.length % 2 === 0 && max === children.length - 1;
+    const shortTopEmpty = !prCount && hasTopEmptyPage && children.length % 2 === 0 && max === children.length - 1;
     if (shortTopEmpty) {
       if (!['mode-h', 'mode-has-pr', 'mode-has-comic-info', 'mode-has-good-page'].every(name => viewer.classList.contains(name)) ||
           ['mode-v', 'mode-single'].some(name => viewer.classList.contains(name)) ||
@@ -463,7 +464,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       ? [null, bodyEnd, bodyEnd + 1, bodyEnd + 2, bodyEnd + 3]
       : [ci, ci + 1, ci + 2, ci + 3, ci + 4];
     return {viewer, pages, seek, children, ci, bodyStart, bodyEnd, roles,
-      variant: noLeadCi ? (bodyEnd % 2 === 0 ? 'no_lead_ci_even_body' : 'no_lead_ci_odd_body') : oneBody ? 'standard_one_body' : twoBody ? 'standard_two_body' : prCount === 3 ? (hasTopEmptyPage ? 'top_empty_three_pr' : children.length % 2 === 0 ? 'standard_three_pr_odd_body' : 'standard_three_pr') : prCount === 1 ? (children.length % 2 === 0 ? 'standard_single_pr_odd_body' : 'standard_single_pr') : topEmptyNoCi ? (bodyStart === 0 ? (noCiEvenWrappers ? 'no_lead_no_ci_even_body' : 'no_lead_no_ci') : noCiEvenWrappers ? 'top_empty_no_ci_odd_body' : 'top_empty_no_ci') : noTopPrOddBody ? 'top_empty_no_pr_odd_body' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
+      variant: noLeadCi ? (bodyEnd % 2 === 0 ? 'no_lead_ci_even_body' : 'no_lead_ci_odd_body') : oneBody ? 'standard_one_body' : twoBody ? 'standard_two_body' : prCount === 3 ? (hasTopEmptyPage ? 'top_empty_three_pr' : children.length % 2 === 0 ? 'standard_three_pr_odd_body' : 'standard_three_pr') : prCount === 1 ? (hasTopEmptyPage ? 'top_empty_single_pr_even_body' : children.length % 2 === 0 ? 'standard_single_pr_odd_body' : 'standard_single_pr') : topEmptyNoCi ? (bodyStart === 0 ? (noCiEvenWrappers ? 'no_lead_no_ci_even_body' : 'no_lead_no_ci') : noCiEvenWrappers ? 'top_empty_no_ci_odd_body' : 'top_empty_no_ci') : noTopPrOddBody ? 'top_empty_no_pr_odd_body' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
       path: location.pathname, dom: mutationState.domGeneration,
       captureDom: mutationState.captureDomGeneration,
       viewport: {width: innerWidth, height: innerHeight, dpr: devicePixelRatio}};

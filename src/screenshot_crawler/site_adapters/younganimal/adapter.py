@@ -1178,7 +1178,7 @@ class YounganimalAdapter(SiteAdapter):
             await asyncio.wait_for(seek.press("End", timeout=1_500), timeout=2.0)
         except (PlaywrightError, TimeoutError) as exc:
             raise UnknownPageStateError("Younganimal public seek could not rewind to maximum") from exc
-        if observation.layout_variant in {"top_emptypage", "top_empty_three_pr"}:
+        if observation.layout_variant in {"top_emptypage", "top_empty_three_pr", "top_empty_single_pr_even_body"}:
             predicate = lambda row: (
                 row.page_state == "initial_blank"
                 and row.layout_variant == observation.layout_variant
