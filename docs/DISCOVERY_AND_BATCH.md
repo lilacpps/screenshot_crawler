@@ -2020,6 +2020,22 @@ connection; if no pass contains an eligible candidate, the command finishes
 without creating a browser session. Each resource is still replanned before
 its execution pass.
 
+Candidate revalidation reads only the current Work's Items and Sources, including
+all of its sites and Item statuses; it does not reread the entire Catalog for
+each candidate. The synchronous resolver-pool validation shares one such
+snapshot per Work, discarded before the async resolver/entry. Each subsequent
+execution or resolver call reads fresh Work rows. Pure archive numbering and
+same-site collision results are reused only while their complete naming inputs
+match (Work metadata, Item identity/order labels, Source identity/ownership,
+position/acquisition flags, and current Watchlist targets). Completion and grant
+updates do not alter naming. Current candidate identity, status, access decision,
+resource state and capture output paths are still checked at entry; changed
+naming or Watchlist ownership still rejects stale plans. This applies to normal
+Batch, explicit grant-only, deferred grants and later resource passes. Watchlist
+content is reread each time; unchanged content reuses validated immutable rows
+instead of reparsing YAML. No persistent cache, schema, CLI or pacing change is
+introduced.
+
 Examples:
 
 ```powershell

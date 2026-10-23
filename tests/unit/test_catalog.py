@@ -44,6 +44,29 @@ def make_graph(service: CatalogService):
     return work, item, source, target
 
 
+def test_work_read_is_read_only_and_includes_all_sites_and_statuses(tmp_path: Path) -> None:
+    service = CatalogService(tmp_path / "catalog.sqlite")
+    work, item, source, _target = make_graph(service)
+    other = service.create_work(WorkInput(work_key="other", title="Other"))
+    service.create_item(ItemInput(), work_id=other.id)
+    completed = service.create_item(ItemInput(status="completed"), work_id=work.id)
+    second = service.create_source(
+        SourceInput(site="bookwalker", external_id="other-site", access_mode="paid"),
+        item_id=completed.id,
+    )
+    before = service.path.read_bytes()
+    items, sources = service.read_work_items_and_sources(work.id)
+    assert items == [item, completed]
+    assert sources == [source, second]
+    assert service.path.read_bytes() == before
+    with pytest.raises(CatalogNotFoundError):
+        service.read_work_items_and_sources(999)
+    missing = CatalogService(tmp_path / "missing.sqlite")
+    with pytest.raises(CatalogNotFoundError):
+        missing.read_work_items_and_sources(work.id)
+    assert not missing.path.exists()
+
+
 def test_initialize_creates_v7_tables_indexes_and_foreign_keys(tmp_path: Path) -> None:
     path = tmp_path / "catalog.sqlite"
     service = CatalogService(path)

@@ -418,6 +418,7 @@ async def test_stale_archive_prefix_is_rejected_before_run_creation(
     candidate = replace(add_candidate(service, access_mode="free"), artifact_prefix="999")
     configs: list[RunConfig] = []
     executor = make_executor(service, configs=configs)
+    executor._require_candidate_scope(replace(candidate, artifact_prefix=None))
 
     with pytest.raises(BatchExecutionError, match="archive prefix"):
         await executor.execute_candidate(
@@ -1371,6 +1372,9 @@ async def test_stale_candidate_does_not_start_crawler(
 ) -> None:
     service = CatalogService(tmp_path / "catalog.sqlite")
     candidate = add_candidate(service, access_mode="free")
+    configs: list[RunConfig] = []
+    executor = make_executor(service, configs=configs)
+    executor._require_candidate_scope(candidate)
     expected_status = "pending"
     if stale_state == "completed":
         service.mark_item_completed(candidate.item_id)
@@ -1401,9 +1405,6 @@ async def test_stale_candidate_does_not_start_crawler(
             f"chapter-{candidate.item_id}",
             access_mode="owned",
         )
-    configs: list[RunConfig] = []
-    executor = make_executor(service, configs=configs)
-
     with pytest.raises(BatchExecutionError, match="stale batch candidate"):
         await executor.execute_candidate(object(), candidate, now=NOW)
 

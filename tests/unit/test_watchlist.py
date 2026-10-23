@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import screenshot_crawler.watchlist.service as watchlist_module
 from screenshot_crawler.watchlist import (
     DiscoveryScope,
     DuplicateWatchlistKeyError,
@@ -54,6 +55,34 @@ def test_existing_scope_less_yaml_loads_as_unbounded(tmp_path: Path) -> None:
     loaded = WatchlistService(path).get("one")
 
     assert loaded.discovery_scope is None
+
+
+def test_unchanged_watchlist_reuses_parsing_but_observes_edits_and_invalid_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    add_target(service)
+    content = service.path.read_text(encoding="utf-8")
+    parse = watchlist_module.yaml.safe_load
+    calls = []
+
+    def counted_parse(value):
+        calls.append(value)
+        return parse(value)
+
+    monkeypatch.setattr(watchlist_module.yaml, "safe_load", counted_parse)
+    first = service.list_targets()
+    first.clear()  # Caller mutation must not corrupt the cached rows.
+    assert len(service.list_targets()) == 1
+    assert len(calls) == 1
+    service.path.write_text(content.replace("作品A", "作品B"), encoding="utf-8")
+    assert service.list_targets()[0].label == "作品B"
+    assert len(calls) == 2
+    service.path.write_text("targets: [", encoding="utf-8")
+    with pytest.raises(InvalidWatchlistError, match="Malformed YAML"):
+        service.list_targets()
+    service.path.unlink()
+    assert service.list_targets() == []
 
 
 def test_flow_empty_targets_and_omitted_enabled_remain_writable(tmp_path: Path) -> None:

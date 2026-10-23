@@ -1714,6 +1714,10 @@ authority:
 
 `WatchlistService`（`src/screenshot_crawler/watchlist/`）がhuman-managed `watchlist.yaml`を扱う。既定pathはcurrent directoryの`watchlist.yaml`で、CLIの`watch`配下では`--watchlist`でoverrideできる。schemaは`targets` listとrequired `key` / `work_key` / `site` / `url` / `label`、optional `enabled`（default `true`）である。required textは空文字を許さず、keyはlist内で一意で、duplicate・malformed YAML・不正targetは明示エラーにする。
 
+同一Serviceでは内容が同じ間だけ検証済みtargetを再利用する。呼び出しごとにファイル本文を
+読み、mtime/sizeだけでは判定しない。変更時は通常どおりparse/validateし、不正YAMLや
+読み取り失敗時に古い結果へfallbackしない。返すlistは毎回別で、immutableなrowだけを共有する。
+
 CLIは`watch list`、`watch add`、`watch remove`、`watch enable`、`watch disable`を提供する。書き込みは同一directory内のtemporary fileをfsyncして`os.replace`する。Watchlist操作はCatalogを読み書きせず、remove/disableでもCatalog rowを削除しない。
 
 ### 22.2 Catalog（Schema v7 P1実装済み）
@@ -1957,6 +1961,36 @@ locator・enabledを照合し、Itemがpending、Sourceがavailableでcurrent ac
 requested resourceが同一であることを確認する。`batch run`はCatalog job lockをplanningから終了まで
 保持する。`--grant-only all`は全resource passをCDP接続前にpreflightし、全passが空ならBrowser/loginを
 開始せず、execution直前にも各passをreplanする。
+
+候補の再検証は`CatalogService.read_work_items_and_sources(work_id)`のread-only transactionで
+対象Workの全site・全statusのItem/Sourceだけを読み、全Catalog/Target一覧を候補ごとに再取得しない。
+resolver前のawaitを挟まない検証loopではWork単位で1 snapshotを共有し、async resolver/entryへ
+そのsnapshotを持ち越さない。通常capture/grant-onlyの各entryと次のresolver呼び出しでは再取得する。
+採番・同site内の命名衝突はExecutor内で直近1 Workの結果を保持し、Work metadata、Item ID/
+Work ID/order_label、Source ID/Item ID/site/external_id/discovery_key/display_position/
+acquisition_enabled、現Watchlist targetの完全一致時だけ再利用する。兄弟Sourceの追加・除外、
+他siteの変更、採番/label/Watchlist変更は再計算する。status・grant更新は命名に影響しないため
+再計算を起こさないが、candidateのpending/available/flag、identity/URL、Policy/resource stateと
+capture保存先の衝突検査は毎回維持する。CLI/config/schema/pacingや権利消費契約の変更はない。
+
+検証用Catalogコピーでの2026-10-24計測（Work 112、236候補、通信・保存先検査を除いた
+entry前の検証部分）では、旧処理5候補3.87秒から全候補約182.8秒相当、修正後の全候補は
+通常entry方式4.54秒、resolver pool方式2.59秒。旧全候補時間は推計であり、実サイトの所要時間
+ではない。専用コピーと集計は`output/batch-validation-benchmark-20261024/report.json`。
+通常captureでの連続成功後の再利用、resolverのWork単位読み込み、warm cache後のstale入力拒否、
+cross-site兄弟変更、Watchlist編集/不正YAMLは人工fixtureで検証する。実サイトの権利消費は
+この性能修正では未検証。
+
+検証結果: Batch/Planner/Executor、Catalog、Watchlist、selected keys、deferred grants、CLIの
+関連選択は**429 passed / 0 skipped**。最後のcache更新後のWatchlist/再利用回帰選択も
+**57 passed / 0 skipped**。フルは**5,471 passed / 7 failed / 0 skipped**
+（`output/pytest-batch-reuse-full.log`）。7件のうちHanayume 4件とpackaging 1件は長い
+test出力pathでファイル作成に失敗し、短いworkspace内`--basetemp`で全5件PASS。
+Comic DAYSの100ms deadline testはcancel event未観測のassertionで失敗したが、単独再実行は
+PASS（全体実行時の原因は未確定）。残り1件は既存`crawler.yaml`のBookWalker delay=0msと
+配布設定を期待するtestの200msとの差で、ユーザー設定を変更せず、HEAD配布設定の隔離コピーで
+同一testがPASS。Ruffと変更差分のwhitespace検査はPASS。Integration/Researchはフルに含み、
+実サイトの権利消費・live verificationはローカル検証処理だけの修正のため実行していない。
 
 実行例:
 

@@ -1,6 +1,6 @@
 # Zebrack Z0/Z1/Z2 viewer probe と production adapter 現行ノート
 
-## Current implementation snapshot (updated 2026-10-17)
+## Current implementation snapshot (updated 2026-10-24)
 
 ## Shared work-key scope inventory (2026-10-22)
 
@@ -157,6 +157,19 @@ ticket set returns `work_ticket_unavailable`. The selected candidate retains
 the bounded modal/direct-viewer guards. Explicit grant-only and the normal Batch
 grant phase reuse the observation on that same Page; manual quota retains its
 existing preflight.
+
+Before resolver/entry, shared Batch candidate validation now reads only the
+current Catalog Work and shares that snapshot across the synchronous candidate
+pool check. Normal Batch capture and explicit grant-only also reuse pure naming
+results while all current naming inputs match; later entries read fresh Work
+rows and keep current identity/status/flag, access-policy and output-path guards.
+Watchlist contents are still read on each call, with unchanged YAML parsing
+reused. This removes repeated whole-Catalog reads per chapter without changing
+Zeblack's live protobuf selection, one-Page prepared entry, cooldown or ticket
+consumption contract. A local Catalog-copy benchmark on 2026-10-24 measured
+236-candidate resolver prevalidation at 2.59 seconds (old five-candidate timing
+extrapolated to 182.8 seconds); network/entry time is excluded. Synthetic tests
+cover the shared change; this optimization has not been live-verified.
 
 Normal Zeblack Batch runs `direct -> grant-access -> one replan direct`.
 Grant-access uses the existing grant-only executor and creates no capture,

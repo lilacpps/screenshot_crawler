@@ -1962,6 +1962,25 @@ class CatalogService:
                 [self._source_from_row(row) for row in sources],
                 [self._source_target_from_row(row) for row in targets])
 
+    def read_work_items_and_sources(self, work_id: int) -> tuple[list[Item], list[Source]]:
+        """Read all sites/statuses of one Work for current archive validation."""
+
+        with self._read_only_connection() as connection:
+            # Membership and naming must use the same database snapshot.
+            connection.execute("BEGIN")
+            self._require_row(connection, "works", work_id, "work")
+            items = connection.execute(
+                "SELECT * FROM items WHERE work_id = ? ORDER BY id", (work_id,)
+            ).fetchall()
+            sources = connection.execute(
+                "SELECT s.* FROM sources s JOIN items i ON i.id = s.item_id "
+                "WHERE i.work_id = ? ORDER BY s.id", (work_id,)
+            ).fetchall()
+        return (
+            [self._item_from_row(row) for row in items],
+            [self._source_from_row(row) for row in sources],
+        )
+
     def read_works_items_sources_and_targets(
         self, *, site: str | None = None
     ) -> tuple[list[Work], list[Item], list[Source], list[SourceTarget]]:

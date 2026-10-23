@@ -43,6 +43,7 @@ from screenshot_crawler.batch.naming import (
     collision_source_ids as shared_collision_source_ids,
 )
 from screenshot_crawler.catalog import ArtifactInput, CatalogError, CatalogService
+from screenshot_crawler.catalog.models import Item, Source, Work
 from screenshot_crawler.catalog.service import JST, now_jst
 from screenshot_crawler.core.access_guard import AccessEvent, AccessGuard
 from screenshot_crawler.core.errors import AccessResourceUnavailableError, AccessStopError
@@ -59,6 +60,7 @@ from screenshot_crawler.site_adapters.base import AccessResourceResolution, Site
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import SitePolicyError, SitePolicyRegistry
 from screenshot_crawler.site_policies.base import SitePolicy
+from screenshot_crawler.watchlist.models import WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 
 RunnerFactory = Callable[[RunConfig], CrawlerRunner]
@@ -201,6 +203,9 @@ class BatchExecutor:
         self.library_dir = Path(library_dir) if library_dir is not None else Path("output/Books")
         self.watchlist = watchlist
         self._reported_archive_warnings: set[str] = set()
+        self._naming_signature: tuple[object, ...] | None = None
+        self._naming_prefixes: dict[int, str | None] = {}
+        self._naming_collisions: set[int] = set()
 
     @_catalog_job_locked
     async def execute_candidate(
@@ -534,6 +539,9 @@ class BatchExecutor:
         sites = {candidate.site for candidate in pending_candidates}
         if len(sites) != 1:
             raise BatchExecutionError("access-resource resolution requires one site")
+        # This loop has no await: one current Work snapshot can validate the
+        # whole pool before any adapter or network operation is started.
+        work_snapshots: dict[int, tuple[list[Item], list[Source]]] = {}
         for candidate in pending_candidates:
             if candidate.quota_resource != quota_resource:
                 raise BatchExecutionError(
@@ -544,7 +552,10 @@ class BatchExecutor:
                 expected_quota_resource=quota_resource,
                 library_dir=self.library_dir,
                 check_output_paths=False,
+                work_snapshots=work_snapshots,
             )
+        # Entry after an await must read fresh rows, including newly observed grants.
+        work_snapshots.clear()
         adapter = self.adapters.create(next(iter(sites)))
         guard = AccessGuard.from_profile(
             site=next(iter(sites)),
@@ -816,6 +827,42 @@ class BatchExecutor:
                 resource_consumed=resource_consumed,
             ) from exc
 
+    def _current_work_naming(
+        self, work: Work, items: list[Item], sources: list[Source],
+        targets: list[WatchlistTarget],
+    ) -> tuple[dict[int, str | None], set[int]]:
+        """Reuse pure naming only while all of its current inputs match.
+
+        Status, availability and grant timestamps do not affect naming. They
+        remain fresh per-candidate checks, including after earlier successes.
+        Keep only the latest Work to bound the cache for long-lived executors.
+        """
+        signature = (
+            work, tuple(targets),
+            tuple((row.id, row.work_id, row.order_label) for row in items),
+            tuple((row.id, row.item_id, row.site, row.external_id, row.discovery_key,
+                   row.display_position, row.acquisition_enabled) for row in sources),
+        )
+        if signature != self._naming_signature:
+            plan = build_work_archive_position_plan(
+                work, targets, items, sources, provisional=True,
+            )
+            prefixes = {
+                row.id: archive_position_prefix(
+                    plan.positions_by_source_id.get(row.id) if plan else row.display_position
+                )
+                for row in sources
+            }
+            collisions: set[int] = set()
+            for site in {row.site for row in sources}:
+                collisions.update(shared_collision_source_ids(
+                    [work], items, [row for row in sources if row.site == site],
+                ))
+            self._naming_signature = signature
+            self._naming_prefixes = prefixes
+            self._naming_collisions = collisions
+        return self._naming_prefixes, self._naming_collisions
+
     def _require_candidate_scope(
         self,
         candidate: BatchCandidate,
@@ -826,6 +873,7 @@ class BatchExecutor:
         expected_quota_resource: str | None = None,
         library_dir: Path | None = None,
         check_output_paths: bool = True,
+        work_snapshots: dict[int, tuple[list[Item], list[Source]]] | None = None,
     ) -> CandidateOutputPreflight | None:
         """Validate Catalog identity and current flags before policy or site access."""
         if self.watchlist is None:
@@ -877,12 +925,12 @@ class BatchExecutor:
                 f"Source {source.id} is acquisition_disabled"
             )
         try:
-            _works, all_items, all_sources, _all_targets = (
-                self.catalog.read_works_items_sources_and_targets()
-            )
-            work_items = [row for row in all_items if row.work_id == work.id]
-            work_item_ids = {row.id for row in work_items}
-            work_sources = [row for row in all_sources if row.item_id in work_item_ids]
+            snapshot = work_snapshots.get(work.id) if work_snapshots is not None else None
+            if snapshot is None:
+                snapshot = self.catalog.read_work_items_and_sources(work.id)
+                if work_snapshots is not None:
+                    work_snapshots[work.id] = snapshot
+            work_items, work_sources = snapshot
             if source not in work_sources:
                 raise BatchExecutionError(
                     "Catalog source changed while validating acquisition scope; retry Batch"
@@ -902,25 +950,10 @@ class BatchExecutor:
             ]
             if not current_targets:
                 raise BatchExecutionError("stale batch candidate: acquisition_unmanaged")
-            position_plan = build_work_archive_position_plan(
-                work,
-                current_targets,
-                work_items,
-                work_sources,
-                provisional=True,
+            prefixes, disambiguated_ids = self._current_work_naming(
+                work, work_items, work_sources, current_targets,
             )
-            position = (
-                position_plan.positions_by_source_id.get(source.id)
-                if position_plan is not None
-                else source.display_position
-            )
-            expected_prefix = archive_position_prefix(position)
-            same_site_sources = [
-                row for row in work_sources if row.site == source.site
-            ]
-            disambiguated_ids = shared_collision_source_ids(
-                [work], work_items, same_site_sources
-            )
+            expected_prefix = prefixes[source.id]
             expected_disambiguator = (
                 f"{source.site}-{source.external_id}"
                 if source.id in disambiguated_ids

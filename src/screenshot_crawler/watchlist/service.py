@@ -39,6 +39,7 @@ class WatchlistService:
 
     def __init__(self, path: str | Path = "watchlist.yaml") -> None:
         self.path = Path(path)
+        self._cached_document: tuple[str, tuple[WatchlistTarget, ...]] | None = None
 
     def list_targets(self) -> list[WatchlistTarget]:
         """Return targets in file order."""
@@ -131,13 +132,19 @@ class WatchlistService:
         if not self.path.exists():
             return []
         try:
-            raw = yaml.safe_load(self.path.read_text(encoding="utf-8"))
+            content = self.path.read_text(encoding="utf-8")
+            # Content comparison also catches same-size edits and atomic replacements.
+            cached = self._cached_document
+            if cached is not None and content == cached[0]:
+                return list(cached[1])
+            raw = yaml.safe_load(content)
         except (OSError, UnicodeError) as exc:
             raise InvalidWatchlistError(f"Cannot read watchlist {self.path}: {exc}") from exc
         except yaml.YAMLError as exc:
             raise InvalidWatchlistError(f"Malformed YAML in {self.path}: {exc}") from exc
 
         if raw is None:
+            self._cached_document = (content, ())
             return []
         if not isinstance(raw, dict):
             raise InvalidWatchlistError("Watchlist root must be a mapping")
@@ -156,6 +163,9 @@ class WatchlistService:
             keys.add(target.key)
             targets.append(target)
         self._validate_archive_orders(targets)
+        # Read the file on every call; only parsing unchanged content is shared.
+        # Rows are immutable and callers receive a fresh list.
+        self._cached_document = (content, tuple(targets))
         return targets
 
     def _parse_target(self, raw_target: Any, index: int) -> WatchlistTarget:
