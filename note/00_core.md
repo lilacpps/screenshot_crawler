@@ -1,3 +1,29 @@
+## Discovery incomplete reasons (2026-10-24)
+
+`DiscoveryResult.error` is an optional run-local string (default `None`).
+`DiscoveryService` preserves the message of a caught `DiscoveryIncompleteError`;
+an unsupported bounded adapter reports an explicit scope-support reason. Empty
+exception messages use `Discovery incomplete`. Success, disabled targets, counters,
+full/incremental completion rules, and Catalog reconciliation remain unchanged.
+No schema migration or retry is added. CLI single-key output shows the specific
+error with an incomplete heading; `--all`/`--site` show the reason per target and
+in the final failure summary, falling back to `Discovery incomplete` when absent.
+Other consumers may read the optional field without changing their stop policy.
+Tests extend the existing service acquisition/scope and CLI continuation cases.
+The affected suite covered specific and absent failure reasons, both Discovery
+modes, single-key output and multi-target continuation. Initial validation had
+385 passes and four nested Batch path failures; the four passed with a short
+Windows basetemp. Both the changed Python files and whole-tree `ruff check src tests`
+pass; `git diff --check` reports no whitespace errors.
+
+Full repository run: 5,428 passed, 2 failed, 0 skipped; evidence is
+`.tmp/hanayume-minutes-full.xml`. The BookWalker pending-original timing case
+passed an isolated rerun (full-run cause unproven). The other case reproduces
+the pre-existing user config `bookwalker.page_turn_delay_ms=0` against the
+distributed-config expectation of 200; the user setting is retained. Isolated
+reruns: 1 passed/1 failed (`.tmp/hanayume-minutes-full-reruns.xml`). Six focused
+CLI reason/continuation cases pass with an explicitly isolated Catalog path.
+
 ## Windows inventory GUI, execution, and jobs (P2/P3, 2026-10-24)
 
 `screenshot-crawler-gui` / `python -m screenshot_crawler.gui` is an optional

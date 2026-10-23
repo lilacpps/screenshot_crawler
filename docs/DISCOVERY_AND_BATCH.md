@@ -56,6 +56,18 @@ The existing direct-entry route and strict body, identity, capture, and END proo
 remain required. No shared Catalog schema, Core access strategy, or resource
 rules change.
 
+## Hanayume Work Ticket minute countdowns (2026-10-24)
+
+Authenticated Work Ticket rental history accepts the exact `レンタル中 閲覧期限 `
+prefix with `N日+H時間`, `H時間`, or `1分` through `59分`. Minute countdowns
+were observed on NG Life, Boku no Chikyuu wo Mamotte, and Souryuu no Sobayounin.
+The unique episode-local `mode-read` row and single rental marker remain required;
+the display alone never establishes access. The exact native work/episode
+`waitAndFree`, `hasAccess=true`, and strictly positive bounded remaining seconds
+are still required, and expiry still uses the native request start plus seconds
+minus one. Zero/out-of-range minutes and malformed labels remain unrecognized.
+Premium-ticket display-derived expiry retains its existing hours-based contract.
+
 ## Hanayume premium-ticket rentals (2026-10-24)
 
 The API name `purchased` can represent an already active premium-ticket rental;
@@ -1797,6 +1809,10 @@ Crawler Chromeは事前起動が必要であり、BatchはDiscoveryとは別コ�
 `stopped_reason=incomplete`もtarget failureとして扱う。後続targetは続行し、
 1件以上失敗した場合はCLI全体がnon-zero exitとなる。全成功またはenabled target
 0件は正常終了する。`--site` の0件時は site名を含むメッセージを表示する。
+DiscoveryResultのoptional `error` は捕捉した `DiscoveryIncompleteError` の
+具体的な理由を保持する（成功時は `None`）。単一keyと複数targetのCLIはこの理由を
+表示し、理由がない複数targetのfailureでは `Discovery incomplete` にfallbackする。
+このfieldはrun-localであり、Catalog schemaやmissing-source判定を変更しない。
 `--site --keep-open` と `--all --keep-open`
 はtarget単位で接続を閉じるlifecycleと両立しないためCLI validationで拒否する。
 

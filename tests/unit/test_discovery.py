@@ -238,6 +238,7 @@ async def test_discovery_updates_only_successfully_classified_acquisition_flags(
     result = await service.discover(FakePage(), watch_target, mode)
 
     assert (result.stopped_reason == "incomplete") is incomplete
+    assert result.error == ("partial listing" if incomplete else None)
     assert catalog.get_source(observed.id).acquisition_enabled is (not incomplete)
     assert catalog.get_source(unobserved.id).acquisition_enabled is (
         mode == "full" and not incomplete
@@ -712,6 +713,7 @@ async def test_bounded_scope_fails_closed_before_adapter_iteration_or_catalog_mu
 
     assert result.complete is expected_complete
     assert result.stopped_reason == "incomplete"
+    assert result.error == "Discovery adapter does not support bounded scope"
     assert result.observed_count == 0
     assert result.new_count == 0
     assert result.known_count == 0

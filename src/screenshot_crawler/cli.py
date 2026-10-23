@@ -872,6 +872,7 @@ def _print_discovery_result(
     status: str = "OK",
     error: str | None = None,
 ) -> None:
+    error = error or result.error
     if all_targets:
         print(f"  observed: {result.observed_count}")
         print(f"  new: {result.new_count}")
@@ -885,7 +886,7 @@ def _print_discovery_result(
             print(f"  error: {error}")
         return
 
-    print("Discovery completed:")
+    print("Discovery incomplete:" if result.stopped_reason == "incomplete" else "Discovery completed:")
     print(f"  target: {result.target_key}")
     print(f"  mode: {result.mode}")
     print(f"  observed: {result.observed_count}")
@@ -893,6 +894,8 @@ def _print_discovery_result(
     print(f"  known: {result.known_count}")
     print(f"  complete: {result.complete}")
     print(f"  stopped_reason: {result.stopped_reason}")
+    if error is not None:
+        print(f"  error: {error}")
     for warning in result.warnings:
         print(f"Warning: {warning}")
 
@@ -956,7 +959,7 @@ async def _run_discover(args: argparse.Namespace) -> None:
             continue
 
         if result.stopped_reason == "incomplete":
-            error = "Discovery incomplete"
+            error = result.error or "Discovery incomplete"
             failures.append((target.key, error))
             _print_discovery_result(
                 result,

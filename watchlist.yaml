@@ -1272,3 +1272,10 @@ targets:
     url: https://comic-days.com/episode/3269754496607127115
     enabled: true
     label: "税金で買った本"
+
+  - key: ng-life
+    work_key: ng-life
+    site: hanayume
+    url: https://hanayume.com/episodes/5fa301a1e55e3
+    enabled: true
+    label: "NGライフ"

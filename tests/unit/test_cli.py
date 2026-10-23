@@ -2833,6 +2833,7 @@ class FakeDiscoveryService:
     calls: ClassVar[list[tuple[str, str, object]]] = []
     failures: ClassVar[set[str]] = set()
     result_overrides: ClassVar[dict[str, tuple[str, bool | None]]] = {}
+    incomplete_error: ClassVar[str | None] = "listing did not exhaust"
 
     def __init__(self, _catalog: object, _registry: object) -> None:
         pass
@@ -2854,6 +2855,7 @@ class FakeDiscoveryService:
             complete=complete,
             stopped_reason=stopped_reason,
             warnings=(),
+            error=self.incomplete_error if stopped_reason == "incomplete" else None,
         )
 
 
@@ -3111,6 +3113,7 @@ async def test_discover_all_continues_after_failure_and_exits_as_failure(
     assert "B: failure for B" in output
 
 
+@pytest.mark.parametrize("error_detail", [None, "listing did not exhaust"])
 @pytest.mark.parametrize(
     ("mode", "incomplete_complete", "success_result"),
     [
@@ -3125,6 +3128,7 @@ async def test_discover_all_treats_incomplete_result_as_failure_and_continues(
     mode: str,
     incomplete_complete: bool | None,
     success_result: tuple[str, bool | None],
+    error_detail: str | None,
 ) -> None:
     watchlist = tmp_path / "watchlist.yaml"
     _write_discover_watchlist(
@@ -3141,10 +3145,12 @@ async def test_discover_all_treats_incomplete_result_as_failure_and_continues(
     }
     monkeypatch.setattr(cli, "BrowserSession", FakeDiscoverySession)
     monkeypatch.setattr(cli, "DiscoveryService", FakeDiscoveryService)
+    monkeypatch.setattr(FakeDiscoveryService, "incomplete_error", error_detail)
     monkeypatch.setattr(cli, "_discovery_registry", lambda: object())
 
     args = _parser().parse_args(
-        ["discover", "--all", "--mode", mode, "--watchlist", str(watchlist)]
+        ["discover", "--all", "--mode", mode, "--watchlist", str(watchlist),
+         "--catalog", str(tmp_path / "catalog.sqlite")]
     )
     with pytest.raises(cli.DiscoveryAllError):
         await cli._run_discover(args)
@@ -3153,10 +3159,31 @@ async def test_discover_all_treats_incomplete_result_as_failure_and_continues(
     output = capsys.readouterr().out
     assert "stopped_reason: incomplete" in output
     assert "status: FAILED" in output
-    assert "error: Discovery incomplete" in output
+    assert f"error: {error_detail or 'Discovery incomplete'}" in output
     assert "status: OK" in output
     assert "succeeded: 1" in output
     assert "failed: 1" in output
+
+
+@pytest.mark.parametrize("mode", ["full", "incremental"])
+def test_single_discovery_prints_specific_incomplete_reason(
+    capsys: pytest.CaptureFixture[str], mode: str,
+) -> None:
+    cli._print_discovery_result(DiscoveryResult(
+        mode=mode,
+        target_key="failed-key",
+        observed_count=0,
+        new_count=0,
+        known_count=0,
+        complete=False if mode == "full" else None,
+        stopped_reason="incomplete",
+        warnings=(),
+        error="listing did not exhaust",
+    ))
+    output = capsys.readouterr().out
+    assert "Discovery incomplete:" in output
+    assert "error: listing did not exhaust" in output
+    assert "Discovery completed:" not in output
 
 
 async def test_discover_all_success_is_normal_and_empty_enabled_is_noop(

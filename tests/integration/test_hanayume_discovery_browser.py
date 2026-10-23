@@ -711,7 +711,12 @@ async def test_hanayume_delayed_account_history_still_refreshes_manual_ticket_gr
     [
         pytest.param("2日+23時間", True, 172800, True, id="days-hours"),
         pytest.param("7時間", True, 25200, True, id="hours-only"),
-        pytest.param("7分", True, 25200, False, id="unsupported-minutes"),
+        pytest.param("7分", True, 420, True, id="minutes-only"),
+        pytest.param("0分", True, 420, False, id="zero-minutes"),
+        pytest.param("60分", True, 420, False, id="invalid-minutes"),
+        pytest.param("7分 extra", True, 420, False, id="malformed-minutes"),
+        pytest.param("7分", False, 420, False, id="minutes-denied"),
+        pytest.param("7分", True, 0, False, id="minutes-expired"),
         pytest.param("7時間 extra", True, 25200, False, id="malformed-hours"),
         pytest.param("7時間", False, 25200, False, id="hours-denied"),
         pytest.param("7時間", True, 0, False, id="hours-expired"),
@@ -756,6 +761,10 @@ async def test_hanayume_active_manual_grant_allows_exact_history_label_differenc
 
     source = catalog.find_source("hanayume", f"{WORK_ID}:{episode_id}")
     if access_type == "waitAndFree" and remaining_seconds > 259200:
+        accepted = False
+    # Minute displays are observed for Work Tickets only. Premium rentals still
+    # require the existing conservative hours-based display expiry.
+    if access_type == "purchased" and rental_period.endswith("分"):
         accepted = False
     if not accepted:
         assert result.stopped_reason == "incomplete"

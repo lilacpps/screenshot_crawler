@@ -87,3 +87,4 @@ class DiscoveryResult:
     complete: bool | None
     stopped_reason: str
     warnings: tuple[str, ...]
+    error: str | None = None

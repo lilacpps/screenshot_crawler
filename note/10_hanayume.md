@@ -116,16 +116,69 @@ site-local and live verification covers Discovery/Policy only.
 
 ### Work Ticket rental-expiry display formats
 
-Discovery accepts the exact `レンタル中 閲覧期限 ` prefix followed by either
-`N日+H時間` or `H時間` in the single episode-local `eliRentStat` marker, with
-`mode-read` still required. The hours-only form is the live-observed display
-below one day. Unsupported units and trailing text remain unrecognized. This
+Work Ticket Discovery accepts the exact `レンタル中 閲覧期限 ` prefix followed by
+`N日+H時間`, `H時間`, or `M分` (M=1..59) in the single episode-local
+`eliRentStat` marker, with `mode-read` still required. The hours-only and minutes-only
+forms are live-observed below one day and one hour respectively. Zero/out-of-range
+minutes, other units and trailing text remain unrecognized. This
 marker does not prove access by itself. Work Ticket grants require fresh authentication,
 exact work/episode native `waitAndFree`, `hasAccess=true`, and strictly positive
 bounded remaining seconds are still required for the Work Ticket public/history
 badge exception. Premium-ticket rentals use the separate display-derived proof above.
 Work Ticket expiry continues to use the native request timestamp and seconds.
-No CLI, pacing, retry, source identity, or resource-consumption behavior changes.
+Pacing, retry, source identity and resource consumption remain unchanged. The shared
+Discovery result now carries the specific incomplete reason to the CLI (see `00_core.md`).
+
+On 2026-10-24 shared-CDP investigation reproduced failure after all 161/144/125
+rows were enumerated for `ng-life`, `boku-no-chikyuu-wo-mamotte` and
+`souryuu-no-sobayounin`. Each had one minutes-only Work Ticket rental rejected
+despite authenticated exact native active access. Separate exact-row observations
+at 05:47 JST recorded `5分`/`6分`/`6分` with native remaining seconds
+327/381/376. Evidence: `.tmp/hanayume-failed-before-minutes-fix-20261024.json` and
+`.tmp/hanayume-minute-rows-20261024.json`. Mutating requests were blocked and
+the normal Catalog was untouched. The minute recognition fix keeps native expiry;
+premium-ticket display expiry still rejects minutes. The existing synthetic full/
+incremental public/history test reproduced two failures before this fix and now
+covers minute support, zero/out-of-range minutes, malformed text, denial and expiry.
+
+The post-fix NG Life run exposed a second independent failure: the old Watchlist
+seed `90fac353b1178` was absent from the fully validated 161-row public listing.
+The seed-membership guard remains unchanged. The same-work first numbered range
+showed exact free `scene1` at `5fa301a1e55e3`; only the `ng-life` Watchlist URL
+was changed to that observed episode, preserving key/work identity and all other
+entries. The old seed's absence is confirmed; its publication/removal reason is
+unknown. Evidence: `.tmp/hanayume-seed-investigation-20261024.json`.
+
+With the corrected seed, isolated shared-CDP `DiscoveryService` full runs exhausted
+161/144/125 records and stored exactly those source counts for the three works.
+All returned `complete=true`, `stopped_reason=exhausted`, `error=None`, with no
+observed first-party HTTP errors. The normal Catalog was untouched and non-read
+requests were blocked. Evidence:
+`.tmp/hanayume-minutes-live-20261023T210025Z/report.json` (2026-10-24 JST).
+The original minute rentals had expired by these final runs: live evidence proves
+the original display shape and final full synchronization, while synthetic tests
+verify the minute recognition with still-positive native seconds. This does not
+claim a post-fix live minute grant, all 26 works, live incremental, or Batch capture.
+
+The affected Discovery/CLI/Hanayume Unit/Policy/browser run initially had 385
+passes and four Batch failures under a long Windows temporary path (0 skips).
+The same four failed with the pre-fix row parser; two exposed WinError 206/3
+directly and two stopped before their expected click. All four passed when
+rerun with short `--basetemp=.hm` (4 passed, 139 unrelated cases deselected),
+without any production change. Use a short workspace-relative basetemp for
+these nested Batch artifact tests. Reports: `.tmp/hanayume-minutes-affected.xml`
+and `.tmp/hanayume-minutes-short-path.xml`.
+
+Final whole-repository verification used short `--basetemp=.hf`: 5,428 passed,
+2 failed, 0 skipped (3,317.30 seconds). The BookWalker late-original-candidate
+timing case passed its isolated rerun; its full-run failure cause is unproven.
+The runtime-settings case still fails because the pre-existing user edit sets
+BookWalker `page_turn_delay_ms=0`, while the distributed-config test expects 200.
+That user setting and BookWalker code/tests were not changed. Isolated reruns
+were 1 passed/1 failed. Both whole-tree Ruff and whitespace checks pass. Reports:
+`.tmp/hanayume-minutes-full.xml` and `.tmp/hanayume-minutes-full-reruns.xml`.
+The six CLI reason-display/continuation cases also pass after explicitly isolating
+the extended CLI test's Catalog path.
 
 On 2026-10-23 both user-reported works failed after complete range enumeration:
 Colette episode `085170c091205` and Soredemo episode `1fa3ff2c23d27` had a
@@ -133,8 +186,8 @@ Colette episode `085170c091205` and Soredemo episode `1fa3ff2c23d27` had a
 pattern rejected their history proof. Investigation evidence is retained at
 `.tmp/hanayume-discovery-exact-snapshots-20261023.json`.
 
-The existing browser-backed public/history test is parameterized across full
-and incremental modes for days-plus-hours, hours-only, unsupported minutes,
+The browser-backed public/history test is parameterized across full
+and incremental modes for days-plus-hours, hours-only, Work Ticket minutes,
 trailing text, native denial, and zero native remaining seconds. Both hours-only
 positive cases failed before the fix. The affected Unit/browser selection passed
 86 cases and failed two separate Batch duplicate-native-response cases; seven

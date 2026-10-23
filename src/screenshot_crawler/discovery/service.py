@@ -85,6 +85,7 @@ class DiscoveryService:
                     complete=False if mode == "full" else None,
                     stopped_reason="incomplete",
                     warnings=(),
+                    error="Discovery adapter does not support bounded scope",
                 )
 
         # The Watchlist label is only the initial title for a new Work.
@@ -225,7 +226,7 @@ class DiscoveryService:
                 raise DiscoveryIncompleteError(
                     "Bounded Discovery did not provide global display positions"
                 )
-        except DiscoveryIncompleteError:
+        except DiscoveryIncompleteError as exc:
             return DiscoveryResult(
                 mode=mode,
                 target_key=target.key,
@@ -235,6 +236,7 @@ class DiscoveryService:
                 complete=False if mode == "full" else None,
                 stopped_reason="incomplete",
                 warnings=tuple(warnings),
+                error=str(exc) or "Discovery incomplete",
             )
 
         if mode == "full":
