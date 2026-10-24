@@ -923,7 +923,7 @@ Discovery opens the matching `/web/product/{product_id}/episodes` listing. It bu
 
 ## Access classification
 
-Unconditional free requires exactly one `PCM-epList_status_free` marker across the status wrapper and descendants plus exact visible `¥0`. Conflicting markers map to unknown. A recognized wait-free status maps to quota, a positive point price maps to paid, and ambiguous/missing signals remain unknown. Personal readability and generic status labels do not prove unconditional free access.
+Unconditional free requires exactly one `PCM-epList_status_free` marker across the status wrapper and descendants plus exact visible `¥0`. Conflicting markers map to unknown. The exact observed sets `{waitfree}`, `{waitfree, zeroPlus}` and `{waitfree, bingefree}` (all with the `PCM-epList_status_` prefix) classify 待てば¥0, ¥0＋ and 爆読み as quota, without establishing access or a grant. Standalone zeroPlus/bingefree, their unobserved three-marker combination, and free/point/grant/unknown conflicts remain unknown. A positive point price maps to paid; ambiguous/missing signals remain unknown. Personal readability and generic status labels do not prove unconditional free access.
 
 Manual unlock evidence requires the sole prefixed marker `PCM-epList_status_waitfreeRead` and normalized text `閲覧期限 残りN時間` (positive whole hours, at most three digits). Discovery keeps `access_mode=quota` and records `access_granted_until` as the observation start plus `N-1` hours, reserving one hour because display rounding is unverified. This is a conservative eligibility bound, not an exact site expiry; `free_until` is unused. All validated rows set `access_checked_at` and explicitly observe the grant field, clearing previous grants when a valid countdown disappears. Unknown/conflicting markers, zero hours, minutes, and other unobserved countdown forms establish no grant. A one-hour display is excluded from Batch.
 
@@ -932,6 +932,22 @@ Both full and incremental Discovery refresh every row in the requested scope. Ma
 At viewer initialization, the adapter opens the product listing again and requires the unique target to remain exact-free or to have valid manual-unlock evidence with a future conservative bound. It then requires HTTP 200 and matching product/episode identity; `/web/viewer/s/{product}/{episode}` is accepted only after fresh manual-grant evidence. The accepted final URL must remain unchanged during reader operations/capture. Canonical Catalog and manifest source URLs stay `/web/viewer/{product}/{episode}`. `auto` and `direct` share this route; quota and other unsupported strategies stop without fallback. The caller's work key remains opaque metadata.
 
 ## Batch policy
+
+Point-priced rows require the sole `PCM-epList_status_point` access marker
+and one positive integer current-price `.js_point` inside it. Campaign text
+and `PCM-prdEp_point_off` old prices are excluded. Missing current-price nodes
+retain the exact positive-integer whole-label fallback; duplicate/empty/zero/
+negative/malformed current prices and conflicting access markers remain unknown.
+Discovery and reader preflight both extract the price, and Policy returns an
+ineligible `paid` decision for GUI 有償未取得 counts. Rediscover after upgrading;
+no price amount is persisted and no purchase or point-consumption path is added.
+
+Inventory counts available quota sources without active manual grants in
+Quota対象残 via the Policy's display-only `pending_quota` flag. They remain
+ineligible for execution, with no access strategy, consumption or resource.
+Active manual grants count as direct; unavailable and completed/external/skipped
+items retain their own categories. Rerun Discovery to refresh stored ¥0＋
+classifications, then reload the GUI. No database backfill or new option is needed.
 
 The registered `PiccomaSitePolicy` admits available free sources as `direct` (`free`), and available quota sources with an aware future `access_granted_until` as `direct` (`active_manual_grant`). Neither consumes quota. Missing/expired grants and unsupported modes are excluded; malformed/naive timestamps fail closed. The policy exposes no quota/access resources, grant-only support, or additional passes. The generic Planner retains Catalog ordering, composite identity, display position, and metadata. Standard Batch execution performs stale-candidate validation and fresh free/manual-unlock checks before viewer entry. No automatic ticket, point, coin, waiting, or purchase operation is implemented. Existing `discover` and `batch run` commands need no new flags; rerun Discover after manually unlocking episodes.
 

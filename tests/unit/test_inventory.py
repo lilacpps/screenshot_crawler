@@ -132,6 +132,8 @@ def test_existing_policy_classification_matrix(inventory_inputs, site):
                 decision = policy.evaluate(candidate, now=NOW, quota_available=None)
                 if decision.eligible:
                     assert result.category == decision.access_strategy
+                elif decision.pending_quota:
+                    assert result.category == "quota"
                 elif decision.reason in {"paid", "expired_rental"}:
                     assert result.category == "paid"
                 elif decision.reason in {"unavailable", "expired_free"}:

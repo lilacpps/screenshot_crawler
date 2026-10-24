@@ -1,3 +1,28 @@
+## Policy-owned pending quota inventory (2026-10-25)
+
+`PolicyDecision.pending_quota` is an optional in-memory bool (default false)
+for known quota inventory whose acquisition is unsupported or unavailable to
+the executor. Inventory maps it to Quota対象残 after the existing eligible,
+paid and unavailable branches. It never changes eligibility, access strategy,
+resource support, quota consumption or Batch selection. Completed/external/
+skipped Item status and ambiguity handling retain precedence; exceptions remain
+unknown. Site-specific rules stay in SitePolicy; no shared site-name branch,
+Catalog schema, persistence field, CLI/config or runtime access change is added.
+Piccoma opts in only for available quota sources without an active manual grant;
+active manual grants remain non-consuming direct. Other policies retain false.
+See `note/09_piccoma.md` for observed badge sets and live verification. Ordinary
+GUI reload applies the policy projection; newly recognized badges need Discover
+to refresh stored access_mode. No operational Catalog/config/library is changed
+by validation.
+
+The cross-site Policy classification matrix and synthetic inventory invariants
+pass with the default flag preserving other policies. Piccoma's synthetic
+Discovery-to-Catalog-to-GUI/Planner tests verify quota counts without an
+executable quota candidate or resource. Targeted validation and shared-CDP
+read-only/copy evidence are detailed in `note/09_piccoma.md`.
+An initially over-broad full-suite attempt was stopped before completion; no
+full-suite pass is claimed for this bounded default-false display extension.
+
 ## Minimal acquisition and numbering contract (2026-10-24)
 
 Current DB stays v7; no schema/migration or JSON field is added. Normal GUI,

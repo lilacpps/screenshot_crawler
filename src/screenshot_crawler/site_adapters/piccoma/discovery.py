@@ -43,10 +43,15 @@ STATUS_SELECTOR = ".PCM-epList_status"
 FREE_MARKER = "PCM-epList_status_free"
 WAIT_FREE_MARKER = "PCM-epList_status_waitfree"
 BINGE_FREE_MARKER = "PCM-epList_status_bingefree"
+ZERO_PLUS_MARKER = "PCM-epList_status_zeroPlus"
 POINT_MARKER = "PCM-epList_status_point"
 GRANTED_MARKER = "PCM-epList_status_waitfreeRead"
 _GRANTED_HOURS = re.compile(r"閲覧期限 残り([1-9][0-9]{0,2})時間")
-WAIT_MARKERS = frozenset({WAIT_FREE_MARKER, BINGE_FREE_MARKER})
+QUOTA_MARKER_SETS = (
+    {WAIT_FREE_MARKER},
+    {WAIT_FREE_MARKER, BINGE_FREE_MARKER},
+    {WAIT_FREE_MARKER, ZERO_PLUS_MARKER},
+)
 
 WAIT_TIMEOUT_MS = 15_000
 MAX_EPISODE_ROWS = 10_000
@@ -132,7 +137,9 @@ def parse_piccoma_listing_url(url: str) -> str | None:
     return match.group("product_id") if match is not None else None
 
 
-def classify_piccoma_access(markers: Iterable[str], status_label: str) -> str:
+def classify_piccoma_access(
+    markers: Iterable[str], status_label: str, *, point_prices: list[str] | None = None
+) -> str:
     """Map only observed, unambiguous listing badges to Catalog access modes."""
 
     observed = {marker for marker in markers if marker.startswith("PCM-epList_status_")}
@@ -144,10 +151,20 @@ def classify_piccoma_access(markers: Iterable[str], status_label: str) -> str:
         return "free"
     if FREE_MARKER in observed:
         return "unknown"
-    if observed and observed.issubset(WAIT_MARKERS) and WAIT_FREE_MARKER in observed:
+    if observed in QUOTA_MARKER_SETS:
         return "quota"
-    if observed == {POINT_MARKER} and re.fullmatch(r"[1-9][0-9]*", label):
-        return "paid"
+    if observed == {POINT_MARKER}:
+        # Read the current price only; campaign copy and crossed-out prices
+        # share the status wrapper but do not establish the payable amount.
+        if point_prices is not None:
+            if not isinstance(point_prices, list) or len(point_prices) > 1:
+                return "unknown"
+            if point_prices:
+                if not isinstance(point_prices[0], str):
+                    return "unknown"
+                label = " ".join(point_prices[0].split())
+        if re.fullmatch(r"[1-9][0-9]*", label):
+            return "paid"
     return "unknown"
 
 
@@ -202,6 +219,7 @@ def _parse_listing_rows(
         status_count = raw.get("status_count")
         status_markers = raw.get("status_markers")
         status_label = raw.get("status_label")
+        point_prices = raw.get("point_prices")
         if (
             row_product_id != product_id
             or not isinstance(episode_id, str)
@@ -212,6 +230,10 @@ def _parse_listing_rows(
             or not isinstance(status_markers, list)
             or not all(isinstance(marker, str) for marker in status_markers)
             or not isinstance(status_label, str)
+            or (point_prices is not None and (
+                not isinstance(point_prices, list)
+                or not all(isinstance(price, str) for price in point_prices)
+            ))
         ):
             raise DiscoveryIncompleteError(
                 "Piccoma episode listing contains an incomplete or foreign row"
@@ -225,7 +247,9 @@ def _parse_listing_rows(
             PiccomaListingRow(
                 identity=identity,
                 title=" ".join(title.split()),
-                access_mode=classify_piccoma_access(status_markers, status_label),
+                access_mode=classify_piccoma_access(
+                    status_markers, status_label, point_prices=point_prices
+                ),
                 dom_index=dom_index,
                 access_granted_until=piccoma_manual_grant_until(
                     status_markers, status_label, observed_at
@@ -402,6 +426,12 @@ class PiccomaDiscoveryAdapter(DiscoveryAdapter):
                     status_count: statuses.length,
                     status_markers: [...new Set(markers)],
                     status_label: status?.innerText?.trim() || '',
+                    point_prices: status ? [
+                      ...(status.matches('.PCM-epList_status_point.js_point') ? [status] : []),
+                      ...status.querySelectorAll(
+                        '.PCM-epList_status_point.js_point, .PCM-epList_status_point .js_point'
+                      ),
+                    ].map(node => node.innerText.trim()) : [],
                   };
                 })"""
             )

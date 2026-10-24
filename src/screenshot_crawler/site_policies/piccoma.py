@@ -31,8 +31,10 @@ class PiccomaSitePolicy(SitePolicy):
             grant_until = self._parse_grant_until(source.access_granted_until)
             if grant_until is not None and grant_until > now:
                 return PolicyDecision(True, "direct", "active_manual_grant")
-            return PolicyDecision(False, None, "no_active_manual_grant")
-        if source.access_mode in {"paid", "owned", "grant", "rental"}:
+            return PolicyDecision(False, None, "no_active_manual_grant", pending_quota=True)
+        if source.access_mode == "paid":
+            return PolicyDecision(False, None, "paid")
+        if source.access_mode in {"owned", "grant", "rental"}:
             return PolicyDecision(False, None, "unsupported_access_mode")
         return PolicyDecision(False, None, "unknown")
 

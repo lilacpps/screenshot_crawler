@@ -1,5 +1,117 @@
 # Piccoma current implementation snapshot
 
+## Point-priced campaign episodes are paid (2026-10-25)
+
+Product 11191's complete 411-row list contained 42 point-priced episodes with
+the exact current price `.js_point` = 18, an old
+`.PCM-prdEp_point_off` = 60 and `PCM-reductionBalloon` campaign copy in the
+same status wrapper. The previous whole-label numeric check classified that
+multi-line text as unknown. A bounded shared-CDP inspection confirmed the
+sole `PCM-epList_status_point` access marker and price structure, with 29
+mutating requests blocked and zero clicks.
+
+Discovery and fresh viewer preflight now extract current-price nodes from
+inside `PCM-epList_status_point` (including a node that also carries js_point).
+Exactly one positive integer current price plus the sole point access marker
+maps to paid. Old prices and campaign labels are not price evidence. Multiple,
+empty, zero, negative and malformed current prices remain unknown and never
+fall back to the wrapper text. If there is no current-price node, the existing
+exact positive-integer whole-label form remains supported. Conflicting access
+markers still fail closed. No current or old price amount is stored in Catalog.
+
+Piccoma Policy now returns reason `paid` for paid Sources, still ineligible
+with no strategy, quota resource or consumption. The existing generic inventory
+projection therefore counts pending Items as 有償未取得. Active manual grants
+remain quota/direct under their existing proof; point badges create no grants.
+Completed/external/skipped status retains precedence. There is no purchase,
+point/ticket consumption, schema migration, CLI/config or shared projection
+change in this follow-up. Rerun Full or Incremental Discovery and reload the
+GUI after restarting it to refresh existing unknown Sources. Normal Catalog,
+Watchlist, runtime settings and library are not modified by verification.
+
+Production Full Discovery on an online-backup Catalog and copied matching
+Watchlist verified 11191: 411 Sources = 5 free + 364 quota + 42 paid, with no
+unknown. Inventory counts are 25 completed, 7 direct, 337 pending quota and
+42 有償未取得. Product 28600's 44 campaign-price Sources likewise become paid;
+all are already completed, so its pending paid count stays zero. The selected
+Planner admits only 11 active manual grants across the two keys, all direct
+and non-consuming. There were zero viewer requests/clicks and all 63 mutating
+requests were blocked. Selected operational Source/Item state was unchanged
+before/after; only the owned Page closed. These are snapshot counts, not rules.
+Sanitized evidence and scripts are ignored under `output/piccoma-paid-20261025/`
+(`evidence.json` for the initial structure and `verification/evidence.json` for
+the production Discovery/GUI/Planner result).
+
+Validation: 144 Discovery/Policy/Inventory Unit cases and 37 selected Discovery/
+entry/Batch browser Integration cases passed (181 total, zero skipped), including
+Full/Incremental unknown-to-paid refresh, promotional/old-price separation,
+duplicate/invalid price rejection, paid inventory counts and no paid viewer
+entry. Ruff (`src tests`) and scoped diff checks pass. Full repository and
+standalone Research tests were not run for this site-local follow-up; consuming
+live entry is outside the implementation. The shared projection already maps
+reason `paid`, so no new Core behavior or `note/00_core.md` update is needed
+for the point-price follow-up itself.
+
+## 待てば¥0 / ¥0＋ / 爆読み quota inventory (2026-10-25)
+
+Discovery recognizes exactly `{waitfree}`, `{waitfree, zeroPlus}` and
+`{waitfree, bingefree}` across the status wrapper and descendants (all marker
+names use the `PCM-epList_status_` prefix) as quota, never unconditional free.
+The latter two were observed on products 15876 and 28600 respectively. A
+campaign annotation such as `エントリーしたら還元!` does not change that marker
+classification or prove a grant. Standalone auxiliary badges, unobserved
+three-marker combinations and conflicting/unknown markers remain unknown.
+The existing manual-unlock badge/countdown is still the only grant evidence.
+
+Available quota without a future manual grant now counts in Quota対象残 via
+the policy's display-only `pending_quota` flag. Batch still rejects it with
+`no_active_manual_grant`, no strategy, consumption or named resource. Active
+manual grants remain non-consuming direct. Completed/external/skipped Items
+retain precedence; unavailable and malformed state do not become quota.
+There is no automatic work_ticket, ¥0＋/爆読み acquisition, grant-only, price
+heuristic, DB migration, runtime setting or CLI option. Restart/reload the GUI
+for the new projection and rerun ordinary Full or Incremental Discovery to
+refresh previously unknown ¥0＋ sources. No manual DB backfill is needed.
+
+Bounded shared-CDP inspection confirmed complete lists (15876: 168 rows,
+28600: 432 rows), blocking every mutating request with zero clicks. Production
+Full Discovery then refreshed both keys in an online-backup Catalog and an
+explicit copied matching Watchlist. The resulting read-only GUI projection and
+selected-key Planner agree: 15876 has 3 free/165 quota Sources and Item counts
+141 completed, 18 direct, 9 pending quota, 0 unknown; 28600 has 31 free/357
+quota/44 unknown Sources and Item counts 373 completed, 4 direct, 55 pending
+quota, 0 unknown. At that quota-only checkpoint the 44 point-priced campaign
+badges on 28600 were unknown and already completed. The point-price follow-up
+above now recognizes their current-price structure as paid; Item status stays
+completed and they do not inflate 有償未取得.
+
+All 22 planned candidates are existing manual grants, non-consuming direct
+with no named resource. No viewer request, click, capture, checkout or Batch
+execution occurred; 52 mutating requests were blocked. Selected operational
+Source/Item rows were checked unchanged before/after. Only owned Pages closed.
+Counts are this verification snapshot, not constants. Sanitized scripts/evidence
+are ignored under `output/piccoma-diagnose-15876/` and
+`output/piccoma-quota-20261025/` (`verification/evidence.json` contains the
+production result). Normal Catalog, Watchlist, runtime settings and library
+are unchanged. See `note/00_core.md` for the additive inventory flag contract.
+
+Targeted validation: 131 Discovery/Policy/Inventory Unit cases, 18 Discovery
+browser Integration cases and 16 entry/Batch browser cases pass with zero
+skipped. Coverage includes all three badge sets, ambiguous/conflicting marker
+rejection, Full/Incremental refresh and grant clearing, completed-item retention,
+GUI quota counts, active-grant direct classification and unavailable/expired
+state. The Planner still omits ungranted quota; fresh zeroPlus/bingefree
+preflight refuses viewer entry. Global Ruff and scoped diff checks pass.
+
+A full-suite attempt was started for the shared decision-field change, then
+stopped during unrelated site browser modules after reassessing the bounded
+default-false display extension. It is incomplete and is not reported as a
+full-suite pass. The isolated ComicFUZ module passed 69 cases; partial broad
+runs observed no failures. Standalone Research and consuming live entry are
+not required for this classification/projection change and were not performed.
+The completed 165 targeted/affected cases and non-consuming two-product live
+copy verification above are the acceptance evidence.
+
 ## Shared work-key scope inventory (2026-10-22)
 
 Piccoma Discovery exposes complete product-listing identity/position evidence
@@ -967,7 +1079,7 @@ The native listing is oldest-to-newest (`#js_episodeList.PCM-list_asc`); Discove
 
 ## Access classification
 
-Status markers are collected from both `.PCM-epList_status` and its descendants. Free requires the exact marker set `PCM-epList_status_free` and exact visible `¥0`. A conflicting wait/point/other prefixed marker produces unknown. Observed wait-free is quota; a positive integer point price is paid; ambiguous or missing evidence is unknown. The generic wrapper label, `data-user_access`, and personal readability do not prove unconditional free access.
+Status markers are collected from both `.PCM-epList_status` and its descendants. Free requires the exact marker set `PCM-epList_status_free` and exact visible `¥0`. A conflicting wait/point/other prefixed marker produces unknown. The exact observed marker sets `{waitfree}`, `{waitfree, zeroPlus}` and `{waitfree, bingefree}` (all prefixed `PCM-epList_status_`) classify 待てば¥0, ¥0＋ and 爆読み as quota. These badges establish no grant. Standalone zeroPlus/bingefree, the unobserved three-marker combination and free/point/grant/unknown conflicts remain unknown. A positive integer point price is paid; ambiguous or missing evidence is unknown. The generic wrapper label, `data-user_access`, and personal readability do not prove unconditional free access.
 
 Manual unlock evidence is the sole prefixed marker `PCM-epList_status_waitfreeRead` with normalized text `閲覧期限 残りN時間`, where N is a positive integer of at most three digits. It maps to quota, never free. Discovery records `access_granted_until = observation_start + (N-1) hours` and `access_checked_at = observation_start`; `free_until` stays null. Display rounding is unverified, so one hour is reserved. This is a conservative eligibility bound, not an exact expiry. One-hour countdowns are not future grants. Zero/minutes/other forms and contradictory markers establish no grant; every validated row explicitly clears previous grants when valid evidence disappears.
 
@@ -979,7 +1091,7 @@ On the 2026-10-09 snapshot, product 28600 exposed 432/432 exact-free rows. Produ
 
 ## Batch policy
 
-The policy admits available free sources as `direct` (`free`), and available quota sources with an aware `access_granted_until > now` as `direct` (`active_manual_grant`). Both have `consumes_quota=False` and no resource. Missing/expired grants are rejected (`no_active_manual_grant`), malformed/naive timestamps raise SitePolicyError, and paid/owned/grant/rental/unknown states remain unsupported. Piccoma declares no access resource, resource pass, or grant-only resource. Catalog ordering, composite identity, display-position prefix, and Work/Item metadata remain generic Planner responsibilities.
+The policy admits available free sources as `direct` (`free`), and available quota sources with an aware `access_granted_until > now` as `direct` (`active_manual_grant`). Both have `consumes_quota=False` and no resource. Available quota without an active grant sets display-only `pending_quota=True` and counts in Quota対象残; execution stays rejected (`no_active_manual_grant`) with no access strategy or resource. Paid sources stay ineligible with reason `paid` and count as 有償未取得 while pending. Malformed/naive timestamps raise SitePolicyError; unavailable sources stay unavailable, and owned/grant/rental/unknown states remain unsupported. Completed/external/skipped Item status retains precedence in inventory. Piccoma declares no access resource, resource pass, or grant-only resource. Catalog ordering, composite identity, display-position prefix, and Work/Item metadata remain generic Planner responsibilities.
 
 The standard `BatchExecutor` revalidates Catalog state. Before viewer entry, `PiccomaAdapter` independently checks fresh free/manual-grant evidence and matching composite identity. It does not consume a resource or fall back to acquisition. Existing normal `discover` and `batch run` commands need no new flags; rerun Discover after manually unlocking episodes. Completed Items stay excluded by the generic Planner.
 

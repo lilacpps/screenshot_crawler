@@ -9,6 +9,7 @@ import pytest
 from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.discovery import DiscoveryAdapterRegistry, DiscoveryService
+from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.site_adapters.piccoma import PiccomaDiscoveryAdapter
 from screenshot_crawler.site_policies import PiccomaSitePolicy, SitePolicyRegistry
 from screenshot_crawler.watchlist import DiscoveryScope, WatchlistTarget
@@ -29,10 +30,12 @@ def _listing_html(
     first_marker: str = "PCM-epList_status_free",
     first_label: str = "¥0",
     extra_known_rows: bool = False,
+    quota_markers: str = "PCM-epList_status_waitfree PCM-epList_status_bingefree",
+    point_status: str | None = None,
 ) -> str:
     rows = (
         ("101", "第1話 Alpha", first_marker, first_label),
-        ("102", "第2話 Beta", "PCM-epList_status_waitfree PCM-epList_status_bingefree", ""),
+        ("102", "第2話 Beta", quota_markers, ""),
         ("103", "第3話 Gamma", "PCM-epList_status_point js_point", "69"),
         (
             "103" if duplicate_last_id else "104",
@@ -44,11 +47,15 @@ def _listing_html(
     if extra_known_rows:
         rows += tuple((str(n), f"Chapter {n}", "PCM-epList_status_other", "公開終了")
                       for n in (105, 106))
+    status_html = [f'<p class="{marker}"><span>{label}</span></p>'
+                   for _, _, marker, label in rows]
+    if point_status is not None:
+        status_html[2] = point_status
     cards = "\n".join(
         f"""<a href="#" data-user_access="require" data-product_id="{foreign_last_product_id if index == 3 and foreign_last_product_id else product_id}" data-episode_id="{episode_id}">
           <div class="PCM-epList_ep">
             <div class="PCM-epList_title">{title}</div>
-            <div class="PCM-epList_status{(' ' + free_wrapper_marker) if index == 0 and free_wrapper_marker else ''}"><p class="{marker}"><span>{label}</span></p></div>
+            <div class="PCM-epList_status{(' ' + free_wrapper_marker) if index == 0 and free_wrapper_marker else ''}">{status_html[index]}</div>
           </div>
         </a>"""
         for index, (episode_id, title, marker, label) in enumerate(rows)
@@ -94,10 +101,15 @@ def _registry() -> DiscoveryAdapterRegistry:
     return registry
 
 
+@pytest.mark.parametrize("quota_markers", [
+    "PCM-epList_status_waitfree",
+    "PCM-epList_status_waitfree PCM-epList_status_zeroPlus",
+    "PCM-epList_status_waitfree PCM-epList_status_bingefree",
+])
 async def test_piccoma_full_discovery_validates_and_syncs_complete_latest_first_listing(
-    browser_page, tmp_path: Path
+    browser_page, tmp_path: Path, quota_markers: str
 ) -> None:
-    await _install_listing(browser_page, _listing_html())
+    await _install_listing(browser_page, _listing_html(quota_markers=quota_markers))
     catalog = CatalogService(tmp_path / "catalog.sqlite")
 
     result = await DiscoveryService(catalog, _registry()).discover(
@@ -130,6 +142,58 @@ async def test_piccoma_full_discovery_validates_and_syncs_complete_latest_first_
         for episode_id in ("101", "102", "103", "104")
     }
     assert all(source.discovery_key == "piccoma-fixture" for source in sources)
+    quota_source = next(source for source in sources if source.external_id == "900:102")
+    assert quota_source.access_granted_until is None
+    assert quota_source.quota_started_at is None
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    target = _target()
+    watchlist.add(key=target.key, work_key=target.work_key, site=target.site,
+                  url=target.url, label=target.label)
+    snapshot = InventoryService().load(
+        tmp_path / "catalog.sqlite", tmp_path / "watchlist.yaml",
+        now=datetime.fromisoformat(quota_source.access_checked_at), runtime_path="missing-runtime",
+    )
+    summary = snapshot.keys[0].summary
+    assert (summary.counts.direct, summary.counts.quota,
+            summary.counts.paid, summary.counts.unknown) == (1, 1, 1, 1)
+    assert snapshot.resources["piccoma"].supported_resources == ()
+    policies = SitePolicyRegistry()
+    policies.register("piccoma", PiccomaSitePolicy)
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="piccoma", now=datetime.fromisoformat(quota_source.access_checked_at)
+    )
+    assert [candidate.external_id for candidate in plan.candidates] == ["900:101"]
+    assert all(candidate.access_strategy == "direct" for candidate in plan.candidates)
+
+
+@pytest.mark.parametrize("mode", ["full", "incremental"])
+async def test_piccoma_campaign_point_price_refreshes_unknown_and_counts_paid(
+    browser_page, tmp_path: Path, mode: str
+) -> None:
+    current = {"body": _listing_html(point_status='''
+      <div class="PCM-epList_status_point">エントリーしたら還元! 18 60</div>''')}
+    await _install_listing(browser_page, lambda: current["body"])
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    service = DiscoveryService(catalog, _registry())
+    await service.discover(browser_page, _target(), "full")
+    source = catalog.find_source("piccoma", "900:103")
+    assert source.access_mode == "unknown"
+    current["body"] = _listing_html(point_status='''
+      <div class="PCM-reductionBalloon">エントリーしたら還元!</div>
+      <div class="PCM-epList_status_point">
+        <p class="js_point">18</p><p class="PCM-prdEp_point_off">60</p>
+      </div>''')
+    result = await service.discover(browser_page, _target(), mode)
+    assert result.observed_count == 4
+    refreshed = catalog.get_source(source.id)
+    assert refreshed.access_mode == "paid"
+    assert refreshed.access_granted_until is None
+    assert catalog.get_item(source.item_id).status == "pending"
+    policy = PiccomaSitePolicy()
+    decision = policy.evaluate(refreshed, now=datetime.fromisoformat(refreshed.access_checked_at),
+                               quota_available=None)
+    assert not decision.eligible and decision.reason == "paid"
+    assert not decision.consumes_quota and decision.quota_resource is None
 
 
 @pytest.mark.parametrize(
@@ -180,6 +244,8 @@ async def test_piccoma_full_rediscovery_updates_access_state_and_preserves_compl
             "",
             "quota",
         ),
+        ("PCM-epList_status_waitfree PCM-epList_status_zeroPlus", "", "quota"),
+        ("PCM-epList_status_waitfree", "", "quota"),
         ("PCM-epList_status_unknown", "公開終了", "unknown"),
     ):
         current_html["body"] = _listing_html(

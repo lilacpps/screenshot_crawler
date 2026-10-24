@@ -11,6 +11,7 @@ from screenshot_crawler.site_adapters.piccoma.discovery import (
     GRANTED_MARKER,
     POINT_MARKER,
     WAIT_FREE_MARKER,
+    ZERO_PLUS_MARKER,
     PiccomaEpisodeIdentity,
     _parse_listing_rows,
     canonical_piccoma_viewer_url,
@@ -79,6 +80,15 @@ def test_piccoma_final_listing_url_parser_accepts_target_canonical_url() -> None
         ([FREE_MARKER], "¥0+", "unknown"),
         ([WAIT_FREE_MARKER, BINGE_FREE_MARKER], "", "quota"),
         ([WAIT_FREE_MARKER], "", "quota"),
+        ([WAIT_FREE_MARKER, ZERO_PLUS_MARKER], "", "quota"),
+        ([WAIT_FREE_MARKER, BINGE_FREE_MARKER], "エントリーしたら還元!", "quota"),
+        ([ZERO_PLUS_MARKER], "", "unknown"),
+        ([BINGE_FREE_MARKER], "", "unknown"),
+        ([WAIT_FREE_MARKER, ZERO_PLUS_MARKER, BINGE_FREE_MARKER], "", "unknown"),
+        ([WAIT_FREE_MARKER, ZERO_PLUS_MARKER, POINT_MARKER], "33", "unknown"),
+        ([WAIT_FREE_MARKER, ZERO_PLUS_MARKER, FREE_MARKER], "¥0", "unknown"),
+        ([WAIT_FREE_MARKER, ZERO_PLUS_MARKER, GRANTED_MARKER], "閲覧期限 残り71時間", "unknown"),
+        ([WAIT_FREE_MARKER, ZERO_PLUS_MARKER, "PCM-epList_status_other"], "", "unknown"),
         ([POINT_MARKER], "69", "paid"),
         ([POINT_MARKER], "", "unknown"),
         ([POINT_MARKER, FREE_MARKER], "69", "unknown"),
@@ -98,6 +108,32 @@ def test_piccoma_access_requires_exact_free_marker_and_price(
     markers: list[str], label: str, expected: str
 ) -> None:
     assert classify_piccoma_access(markers, label) == expected
+
+
+@pytest.mark.parametrize(("markers", "prices", "label", "expected"), [
+    ([POINT_MARKER], ["18"], "エントリーしたら還元!\n18\n60", "paid"),
+    ([POINT_MARKER], [" 33 "], "キャンペーン\n33\n110", "paid"),
+    ([POINT_MARKER], [], "69", "paid"),
+    ([POINT_MARKER], [], "エントリーしたら還元!\n18\n60", "unknown"),
+    ([POINT_MARKER], [""], "69", "unknown"),
+    ([POINT_MARKER], ["0"], "69", "unknown"),
+    ([POINT_MARKER], ["-1"], "69", "unknown"),
+    ([POINT_MARKER], ["18.5"], "69", "unknown"),
+    ([POINT_MARKER], ["18", "60"], "69", "unknown"),
+    ([POINT_MARKER, WAIT_FREE_MARKER], ["18"], "18", "unknown"),
+    ([POINT_MARKER, FREE_MARKER], ["18"], "¥0", "unknown"),
+    ([POINT_MARKER, GRANTED_MARKER], ["18"], "閲覧期限 残り71時間", "unknown"),
+    ([], ["18"], "18", "unknown"),
+])
+def test_piccoma_point_price_uses_only_one_positive_current_price(
+    markers, prices, label, expected
+) -> None:
+    record, = _parse_listing_rows(
+        rows=[_row("101", markers=markers, label=label) | {"point_prices": prices}],
+        product_id="900", canonical_title="Fixture", declared_count=1, scope=None,
+    )
+    assert record.source.access_mode == expected
+    assert record.source.access_granted_until is None
 
 
 def _row(

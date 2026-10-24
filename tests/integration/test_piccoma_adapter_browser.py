@@ -84,6 +84,14 @@ def _listing_html(*, status: str = "free") -> str:
         marker, label = "PCM-epList_status_free", "&#165;0"
     elif status == "quota":
         marker, label = "PCM-epList_status_waitfree", "&#165;0"
+    elif status in {"zero_plus", "binge"}:
+        suffix = "zeroPlus" if status == "zero_plus" else "bingefree"
+        marker, label = f"PCM-epList_status_waitfree PCM-epList_status_{suffix}", ""
+    elif status == "campaign_paid":
+        marker = "PCM-epList_status_point"
+        label = ('<span class="PCM-reductionBalloon">Campaign</span>'
+                 '<span class="js_point">18</span>'
+                 '<span class="PCM-prdEp_point_off">60</span>')
     elif status in {"granted", "expiring_grant", "malformed_grant"}:
         marker = "PCM-epList_status_waitfreeRead"
         label = {"granted": "閲覧期限 残り71時間",
@@ -1720,7 +1728,9 @@ async def test_piccoma_near_miss_last_page_resume_prompt_fails_closed(
     assert await browser_page.evaluate("window.forbiddenClicks") == 0
 
 
-@pytest.mark.parametrize("status", ["quota", "paid", "expiring_grant"])
+@pytest.mark.parametrize(
+    "status", ["quota", "zero_plus", "binge", "paid", "campaign_paid", "expiring_grant"]
+)
 async def test_piccoma_stale_nonfree_listing_never_enters_viewer(
     browser_page: Page, status: str
 ) -> None:

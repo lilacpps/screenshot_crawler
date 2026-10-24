@@ -492,6 +492,12 @@ class PiccomaAdapter(SiteAdapter):
                       .filter(name => name.startsWith('PCM-epList_status_'))
                   : [];
                 return {statusCount: statuses.length, markers: [...new Set(markers)],
+                  pointPrices: status ? [
+                    ...(status.matches('.PCM-epList_status_point.js_point') ? [status] : []),
+                    ...status.querySelectorAll(
+                      '.PCM-epList_status_point.js_point, .PCM-epList_status_point .js_point'
+                    ),
+                  ].map(node => node.innerText.trim()) : [],
                   label: (status?.innerText || '').trim()};
               })""",
             {"product": identity.product_id, "episode": identity.episode_id},
@@ -501,7 +507,10 @@ class PiccomaAdapter(SiteAdapter):
         row = matches[0]
         if row.get("statusCount") != 1:
             return "unknown", title, None
-        access_mode = classify_piccoma_access(row.get("markers", []), row.get("label", ""))
+        access_mode = classify_piccoma_access(
+            row.get("markers", []), row.get("label", ""),
+            point_prices=row.get("pointPrices"),
+        )
         grant_until = piccoma_manual_grant_until(
             row.get("markers", []), row.get("label", ""), observed_at
         )

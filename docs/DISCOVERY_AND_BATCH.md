@@ -148,6 +148,23 @@ shared runtime, Catalog schema or resource-selection change is needed.
 
 ## Piccoma observed manual unlocks (2026-10-10)
 
+Piccoma's observed listing marker sets `{waitfree}`, `{waitfree, zeroPlus}`,
+and `{waitfree, bingefree}` (each with the `PCM-epList_status_` prefix) classify
+as `quota`: 待てば¥0, ¥0＋, and 爆読み. This is inventory classification,
+not unconditional free access or permission to consume a resource. Standalone
+zeroPlus/bingefree, conflicting free/point/grant markers and unknown marker
+combinations remain unknown. These badges alone establish no access grant.
+
+For point-priced episodes, the sole `PCM-epList_status_point` access marker
+plus one positive integer current-price `.js_point` within that marker proves
+`paid`, even when the status wrapper also contains campaign copy or an old
+`PCM-prdEp_point_off` price. Old prices and campaign text are not parsed as
+current prices. Multiple, empty, zero, negative or malformed current prices
+remain unknown. Without a current-price node, the previously supported exact
+positive-integer whole label is retained. Discovery and fresh viewer preflight
+use the same rule. Piccoma Policy returns an ineligible `paid` decision, so
+pending Items count as 有償未取得 without enabling purchase or resource use.
+
 Piccoma Discovery records already active manual unlocks as `access_mode=quota`
 with the existing `access_granted_until` field, never as unconditional free.
 Evidence requires the sole `PCM-epList_status_waitfreeRead` marker and normalized
@@ -171,6 +188,14 @@ accepted URL must remain unchanged. Catalog and manifest source URLs remain
 canonical. Missing/expired grants do not trigger access acquisition. Automatic
 ticket/resource use and grant-only remain unsupported. No shared schema, Core,
 or Batch orchestration change is required.
+
+For inventory only, an available quota source without an active manual grant
+sets `PolicyDecision.pending_quota=true` while remaining ineligible, with no
+access strategy, resource, or consumption. The GUI counts it in Quota対象残;
+active grants are direct, unavailable sources remain unavailable, and completed,
+external and skipped Item status retains precedence. The flag defaults to false
+for all policies and never authorizes Batch execution. Rediscovery refreshes
+previously unknown ¥0＋ sources; no Catalog backfill is required.
 
 ## Z6 Zeblack site-native Work Ticket orchestration (2026-09-30)
 

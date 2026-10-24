@@ -30,6 +30,8 @@ class PolicyDecision:
     quota_scope: Literal["site", "work"] = "site"
     quota_limit: int | None = None
     quota_commit_mode: Literal["before_run", "after_observed_consumption"] = "before_run"
+    # Display-only quota inventory; never authorizes Batch or resource use.
+    pending_quota: bool = False
 
 
 class SitePolicy(ABC):

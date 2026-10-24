@@ -94,6 +94,8 @@ def _access(policy, source, now):
             category = "paid"
         elif decision.reason in {"unavailable", "expired_free"}:
             category = "unavailable"
+        elif decision.pending_quota:
+            category = "quota"
         else:
             category = "unknown"
         resources = policy.supported_access_resources() if category == "quota" else ()

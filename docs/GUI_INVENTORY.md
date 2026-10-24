@@ -43,6 +43,7 @@ aggregate totals partial (display —); stored observations remain in details.
 | pending, Policy eligible quota with quota_available=None | quota pool |
 | Policy paid / expired_rental | paid |
 | Policy unavailable / expired_free | unavailable |
+| Policy pending_quota=true, ineligible | quota pool (inventory only) |
 | unsupported, Policy exception, ambiguous | unknown + reason |
 
 The Policy owns expiry/grant semantics, including cases where a free_until field
@@ -50,6 +51,12 @@ is not used by that site's existing policy. The GUI does not invent expiry rules
 An expired paid rental is paid; an active rental is direct only if Policy says so.
 Site quota slots use all Sources of that site once and are separate from the
 quota pool. Named resources are metadata, never additional Item counts.
+`PolicyDecision.pending_quota` defaults to false. A site policy can explicitly
+identify known, non-executable quota inventory with this flag; it changes no
+Batch eligibility, strategy or resource support. Paid/unavailable decisions
+retain precedence. Piccoma uses it for available quota sources awaiting manual
+unlock, including 待てば¥0, ¥0＋ and 爆読み. No site-name or badge rules are
+embedded in the shared inventory projection.
 Grant retry timestamps use Policy APIs and runtime configuration only; absent
 API support or absent consumed-state evidence remains unknown.
 
@@ -73,7 +80,7 @@ Policy evidence reviewed: BookWalker owned/direct and quota/site slot; Manga ONE
 free/owned/direct, active quota grant/direct and quota/site slots; Magapoke
 quota/work_ticket with premium_ticket metadata; Zeblack, Hanayume, Comic DAYS,
 YoungAnimal free/direct and quota/work ticket; YoungAnimal and Jump+ active paid
-rental/direct; Piccoma active manual quota grant/direct, other quota/unknown;
+rental/direct; Piccoma active manual quota grant/direct, pending quota/quota pool;
 Kadocomi valid unexpired free/direct, expired free/unavailable; ComicFUZ free/direct
 and paid/paid. All eleven reject unavailable; unsupported modes stay unknown.
 The existing registry membership is tested against CLI to detect registration drift.

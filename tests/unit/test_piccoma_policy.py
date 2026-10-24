@@ -13,6 +13,7 @@ from screenshot_crawler.catalog import (
 )
 from screenshot_crawler.catalog.models import Source
 from screenshot_crawler.catalog.service import JST
+from screenshot_crawler.management.inventory import _access
 from screenshot_crawler.site_policies import PiccomaSitePolicy, SitePolicyError, SitePolicyRegistry
 from tests.helpers.acquisition_scope import synchronized_legacy_planner
 
@@ -61,6 +62,7 @@ def test_piccoma_policy_allows_only_available_free_as_direct() -> None:
     assert decision.reason == "free"
     assert decision.consumes_quota is False
     assert decision.quota_resource is None
+    assert decision.pending_quota is False
 
 
 @pytest.mark.parametrize(
@@ -77,11 +79,12 @@ def test_piccoma_policy_allows_only_available_free_as_direct() -> None:
         ("unrecognized", None),
     ],
 )
+@pytest.mark.parametrize("available", [True, False])
 def test_piccoma_policy_rejects_unsupported_modes_and_inactive_grants(
-    mode: str, grant_until: str | None
+    mode: str, grant_until: str | None, available: bool
 ) -> None:
     decision = PiccomaSitePolicy().evaluate(
-        _source(mode, access_granted_until=grant_until),
+        _source(mode, available=available, access_granted_until=grant_until),
         now=NOW,
         quota_available=10,
     )
@@ -90,6 +93,16 @@ def test_piccoma_policy_rejects_unsupported_modes_and_inactive_grants(
     assert decision.access_strategy is None
     assert decision.consumes_quota is False
     assert decision.quota_resource is None
+    assert decision.pending_quota is (available and mode == "quota")
+    classification = _access(
+        PiccomaSitePolicy(),
+        _source(mode, available=available, access_granted_until=grant_until), NOW,
+    )
+    assert classification.category == (
+        "unavailable" if not available else
+        "quota" if mode == "quota" else "paid" if mode == "paid" else "unknown"
+    )
+    assert classification.resources == ()
 
 
 @pytest.mark.parametrize("available", [True, False])
@@ -103,6 +116,12 @@ def test_piccoma_policy_allows_only_available_active_manual_grant(available: boo
     assert decision.access_strategy == ("direct" if available else None)
     assert decision.consumes_quota is False
     assert decision.quota_resource is None
+    assert decision.pending_quota is False
+    assert _access(
+        PiccomaSitePolicy(),
+        _source("quota", available=available,
+                access_granted_until=(NOW + timedelta(hours=1)).isoformat()), NOW,
+    ).category == ("direct" if available else "unavailable")
 
 
 @pytest.mark.parametrize("value", ["bad", "2026-10-10T12:00:00"])
@@ -207,6 +226,7 @@ def test_piccoma_planner_keeps_free_and_active_grants_with_catalog_positions(
         "unsupported_access_mode",
         "unknown",
         "no_active_manual_grant",
+        "paid",
     }
 
 
