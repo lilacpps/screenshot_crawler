@@ -8,7 +8,25 @@ Full, incremental, and bounded Discovery wait a fixed 2,500 ms after reading eac
 
 Watchlist targets use the strict episode URL `https://hanayume.com/episodes/<13-lowercase-hex-id>`. Discovery reads rows only from the unique public `epList` under the route-specific observed ancestry. Episode pages use `div.ep-main.series-safe-filter-target[data-e2e="pageEpisode"] > div.series.mode-ep` (the child has no `data-e2e`) > `.series-eplist-wrap` > `.series-eplist-main`; canonical work pages use `div.series.mode-series-top.series-safe-filter-target[data-e2e="pageSeries"]` directly above the wrapper. The public root is direct under main; `eli` rows are descendants inside `.series-eplist-default.has-store-item.mode-last`. The observed direct `epListUser` history sibling is not enumerated; overlapping copies must agree on exact labels except when the exact episode has a fully proven authenticated active Work Ticket grant or premium-ticket rental. Unknown/nested/duplicate roots and every other conflict fail closed. Full range/count/identity validation, global oldest-first positions, buffering, and latest-first/bounded output remain unchanged.
 
-Only exact row-scoped labels are classification evidence. One exact `無料` maps to `access_mode=free`. One exact `今なら無料` maps to `free` only when the current Discovery attempt verifies the observed account markers on the canonical `/series/<work-id>` route; otherwise it remains `unknown`. Missing/duplicate/other labels remain `unknown` unless an exact natural native `waitAndFree` row for the same work and episode promotes the row to a nominal `quota` candidate. This native type does not authorize entry. A conflicting public/account badge row requires the exact Work Ticket grant or premium-ticket rental proof described below; other conflicts fail closed. Catalog stores only `access_mode`, not the raw label. Auth is attempt-local and never persisted. On an exact route/listing, a missing positive marker set is polled for at most five seconds at 150 ms intervals; deadline means no proof and keeps `今なら無料` unknown. Discovery follows the seed's observed work link, reads auth on the canonical series route, returns to the exact seed, and revalidates work/title/ranges before enumeration.
+Access badges are interpreted only within their exact row. One exact `無料` maps to `access_mode=free`. One exact `今なら無料` maps to `free` only when the current Discovery attempt verifies the observed account markers on the canonical `/series/<work-id>` route; otherwise it remains `unknown`. Missing/duplicate/other labels remain `unknown` unless exact natural native evidence establishes a nominal `quota` candidate or the coin-only `paid` state described below. A matching `waitAndFree` native type does not authorize entry. A conflicting public/account badge row requires the exact Work Ticket grant or premium-ticket rental proof described below; other conflicts fail closed. Catalog stores only `access_mode`, not the raw label. Auth is attempt-local and never persisted. On an exact route/listing, a missing positive marker set is polled for at most five seconds at 150 ms intervals; deadline means no proof and keeps `今なら無料` unknown. Discovery follows the seed's observed work link, reads auth on the canonical series route, returns to the exact seed, and revalidates work/title/ranges before enumeration.
+
+An otherwise unknown row becomes coin-only `paid` only with fresh positive series
+authentication and an exact same-work/episode natural access row with
+`accessType=paidContent`, strict `hasAccess=false`, and no
+`timeRemainingInSeconds` field. The parser records omission separately from
+null or malformed timers. Any timer field, missing/duplicate/foreign native row,
+or unavailable authentication leaves this state unknown and preserves stored
+grants. Proven denial clears stale grant metadata. Exact free classifications
+retain precedence; existing active premium-ticket rentals keep their own grant
+proof. No extra API request or resource use is added. Rediscover the work after
+restarting the GUI to refresh its stored classifications.
+
+On 2026-10-25, read-only shared-CDP Full and incremental Discovery of Fruits
+Basket another (`efb306158cdd3`) through an isolated Catalog both produced
+7 free, 20 quota, 3 paid, and zero unknown. The three previously unknown rows
+were the exact coin-only denial above. Incremental cleared seeded stale grants
+and Policy excluded the three paid Sources. Evidence and limits are recorded
+in `note/10_hanayume.md`; normal Catalog writes and resource use were excluded.
 
 Work Ticket rental history accepts the observed exact `レンタル中 閲覧期限 N日+H時間`,
 `レンタル中 閲覧期限 H時間`, and `レンタル中 閲覧期限 M分` formats

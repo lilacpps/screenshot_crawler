@@ -242,6 +242,7 @@ class HanayumeNativeEpisodeAccess:
     has_access: bool | None
     remaining_seconds: int | None
     requested_at: datetime
+    remaining_seconds_omitted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +309,7 @@ def _parse_series_access_snapshot(
                     else None
                 ),
                 requested_at=requested_at,
+                remaining_seconds_omitted="timeRemainingInSeconds" not in raw,
             )
         )
     return HanayumeSeriesAccessSnapshot(work_id=work_id, rows=tuple(rows))
@@ -534,6 +536,18 @@ def _apply_native_access(
             )
         grant_until: datetime | None = None
         grant_observed = False
+        if (
+            access_mode == "unknown"
+            and listing_authenticated is True
+            and native is not None
+            and native.access_type == "paidContent"
+            and native.has_access is False
+            and native.remaining_seconds_omitted is True
+        ):
+            # Live coin-only denial omits the timer. Null/malformed timers
+            # collapse to None in the legacy parser but are not this proof.
+            access_mode = "paid"
+            grant_observed = True
         if (
             listing_authenticated is True
             and native is not None

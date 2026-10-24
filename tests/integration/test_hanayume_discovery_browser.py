@@ -630,6 +630,24 @@ async def test_hanayume_manual_ticket_grants_refresh_in_full_and_incremental_dis
     assert cleared is not None and cleared.access_granted_until is None
     assert catalog.get_item(cleared.item_id).status == "completed"
 
+    # A later exact coin-only denial must replace stale quota/grant metadata
+    # even beyond the newest-known boundary, without altering local completion.
+    stale = catalog.record_quota_access(
+        cleared.id, quota_started_at=full_started, access_granted_until=first_expiry,
+    )
+    native_row["accessType"] = "paidContent"
+    del native_row["timeRemainingInSeconds"]
+    coin_result = await service.discover(browser_page, _target(), refresh_mode)
+    coin = catalog.get_source(cleared.id)
+    assert coin_result.observed_count == TOTAL
+    assert coin_result.complete is (True if refresh_mode == "full" else None)
+    assert coin.access_mode == "paid" and coin.access_granted_until is None
+    assert coin.quota_started_at == stale.quota_started_at
+    assert catalog.get_item(coin.item_id).status == "completed"
+    decision = HanayumeSitePolicy().evaluate(coin, now=datetime.now(UTC), quota_available=1)
+    assert not decision.eligible and not decision.consumes_quota
+    assert decision.quota_resource is None
+
 
 async def test_hanayume_present_account_preview_row_without_rental_does_not_mint_grant(
     browser_page, tmp_path: Path

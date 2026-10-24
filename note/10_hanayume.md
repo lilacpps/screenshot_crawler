@@ -118,6 +118,57 @@ The natural first-party `GET /api/series/access` response is reduced to exact `s
 
 The saved reports have distinct scope: `output/hanayume_experiment/tester/login-nowfree-metadata-20261010T210447Z-86b4f281.json` includes series row/auth metadata and an `episode_route.reader` pilot at counter 1/17 with one 828x1329 canvas for target `90868f4de278f`. The later `output/hanayume_experiment/tester/r3-auth-marker-20261010T214015Z-6fc6ccb8.json` records series auth/listing markers only; it contains no viewer-entry result. Neither is a logged-in Batch artifact. Logged-out gated samples showed signup/login CTAs with zero canvases; a ready Viewer overlapping an entry dialog has not been observed, so universal overlay detection is not claimed. No account, ticket, coin, purchase, or quota action is performed.
 
+### Coin-only episode classification
+
+An otherwise unknown public row becomes `paid` only with fresh canonical-series
+authentication and an exact same-work/episode natural `GET /api/series/access`
+row with `accessType=paidContent`, strict `hasAccess=false`, and an omitted
+`timeRemainingInSeconds` field. `HanayumeNativeEpisodeAccess` records positive
+omission separately from the existing bounded seconds value, because explicit
+null, malformed and out-of-range timer values also reduce to None. Such timer
+fields never prove this coin-only denial; missing, duplicate, foreign,
+unauthenticated and unsupported native evidence preserves stored grants. An
+exact denial sets `access_granted_until_observed=true` with no expiry, clearing
+stale Catalog grants. Exact free classifications retain precedence and the
+existing public/history conflict gate still applies. Active premium-ticket
+rentals retain the separate `purchased` proof below. Existing SitePolicy excludes
+paid Sources without a future grant and does not substitute a Work Ticket.
+
+No CLI, shared Core, Catalog schema, browser, capture, or resource-consumption
+code changes are needed. Restart a running GUI and rediscover the work to update
+stored access modes. Full and incremental both refresh the already-buffered
+listing, including old known rows.
+
+On 2026-10-25 the read-only shared-CDP probe for Fruits Basket another work
+`efb306158cdd3` reproduced 30 episodes: 7 free, 20 quota, and 3 unknown. The
+three unknown rows at positions 28..30 were exactly `paidContent`, false access,
+with the timer omitted. Reduced shape evidence is
+`.tmp/hanayume-coin-shape.json`; the original full report is
+`.tmp/hanayume-coin-before.json`. The fixed adapter Full probe produced 7 free,
+20 quota, 3 paid and zero unknown. These probes blocked all non-read requests
+and did not write the normal Catalog or Watchlist, click a reader control,
+consume a ticket/coin, or capture images. This evidence establishes Discovery
+classification only; it does not verify all Hanayume works or full capture.
+Isolated `DiscoveryService` verification then exhausted 30 records in both Full
+and incremental with 7 free, 20 quota, 3 paid, and zero unknown. Between passes,
+the isolated Catalog was seeded with stale quota/grant state on the three paid
+rows; incremental restored paid, cleared the grants, and Policy excluded all
+three without any live resource operation. Evidence:
+`.tmp/hanayume-coin-verify-71853c5e/report.json`. The normal Catalog remains
+unchanged; the operator must rediscover to refresh it.
+
+Validation: the affected Discovery/identity/Policy/Adapter Unit group passed
+218 cases. Browser regression coverage passed 113 cases across the affected
+selection and targeted rerun, with zero skipped. The initial selection had four
+failures in the newly extended fixture's stale-grant setup because it used an
+unsupported Catalog keyword; the fixture now uses `record_quota_access`, and
+all four Full/incremental plus in/out-of-preview cases passed on rerun. Logs:
+`.tmp/hanayume-coin-unit-final3.log`, `.tmp/hanayume-coin-tests.log`, and
+`.tmp/hanayume-coin-refresh-tests.log`. `ruff check src tests` and diff whitespace
+checks passed. Research, full repository suite, all-work live Discovery, and
+capture/END/ZIP live checks were not run: this is a site-local classification
+change, and live verification covers Discovery persistence and Policy only.
+
 ### Premium-ticket rental expiry
 
 The API name `purchased` can represent an already active premium-ticket rental;

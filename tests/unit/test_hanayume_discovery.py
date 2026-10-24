@@ -374,17 +374,21 @@ def test_hanayume_native_access_requires_exact_work_and_episode_and_sets_conserv
     assert _latest_native_access_by_episode([snapshot], work_id="9000000000001") == {}
 
 
+@pytest.mark.parametrize("access_type", ["waitAndFree", "paidContent"])
 @pytest.mark.parametrize("conflicting_duplicate", [False, True])
 def test_hanayume_native_duplicate_episode_rows_are_ambiguous_even_when_identical(
-    conflicting_duplicate: bool,
+    conflicting_duplicate: bool, access_type: str,
 ) -> None:
     requested_at = datetime(2026, 10, 17, 1, 2, 3, tzinfo=UTC)
+    coin = access_type == "paidContent"
     first = HanayumeNativeEpisodeAccess(
-        SEED_ID, "waitAndFree", True, 3600, requested_at
+        SEED_ID, access_type, not coin, None if coin else 3600, requested_at,
+        remaining_seconds_omitted=coin,
     )
     second = (
         HanayumeNativeEpisodeAccess(
-            SEED_ID, "waitAndFree", True, 1800, requested_at
+            SEED_ID, access_type, True, None if coin else 1800, requested_at,
+            remaining_seconds_omitted=coin,
         )
         if conflicting_duplicate
         else first
@@ -452,6 +456,56 @@ def test_hanayume_native_remaining_seconds_must_be_a_bounded_strict_integer(rema
     )
     assert snapshot is not None
     assert snapshot.rows[0].remaining_seconds is None
+    assert snapshot.rows[0].remaining_seconds_omitted is False
+
+
+_OMITTED = object()
+
+
+@pytest.mark.parametrize(
+    ("authenticated", "has_access", "timer", "label", "expected", "cleared"),
+    [
+        (True, False, _OMITTED, "", "paid", True),
+        (False, False, _OMITTED, "", "unknown", False),
+        (True, True, _OMITTED, "", "unknown", False),
+        (True, None, _OMITTED, "", "unknown", False),
+        (True, "false", _OMITTED, "", "unknown", False),
+        (True, False, None, "", "unknown", False),
+        (True, False, 0, "", "unknown", False),
+        (True, False, 3600, "", "unknown", False),
+        (True, False, 1042674, "", "unknown", False),
+        (True, False, "3600", "", "unknown", False),
+        (True, False, True, "", "unknown", False),
+        (True, False, -1, "", "unknown", False),
+        (True, False, _OMITTED, "無料", "free", False),
+        (True, False, _OMITTED, "今なら無料", "free", False),
+    ],
+)
+def test_hanayume_coin_denial_requires_authenticated_access_and_omitted_timer(
+    authenticated, has_access, timer, label, expected, cleared,
+) -> None:
+    raw = {"episodeId": SEED_ID, "accessType": "paidContent", "hasAccess": has_access}
+    if timer is not _OMITTED:
+        raw["timeRemainingInSeconds"] = timer
+    snapshot = _parse_series_access_snapshot(
+        {"seriesAccess": {"seriesId": WORK_ID, "episodeAccesses": [raw]}},
+        requested_at=datetime(2026, 10, 25, tzinfo=UTC),
+    )
+    assert snapshot is not None
+    assert snapshot.rows[0].remaining_seconds_omitted is (timer is _OMITTED)
+    row = HanayumeListingRow(
+        identity=HanayumeEpisodeIdentity(WORK_ID, SEED_ID), title="Episode",
+        access=classify_hanayume_access((label,) if label else (), listing_authenticated=True),
+        global_position=1,
+    )
+    native = _latest_native_access_by_episode([snapshot], work_id=WORK_ID)
+    updated = _apply_native_access(
+        [row], native_access=native, listing_authenticated=authenticated,
+    )[0]
+    assert updated.access.access_mode == expected
+    assert updated.access_granted_until is None
+    assert updated.access_granted_until_observed is cleared
+    assert _latest_native_access_by_episode([snapshot], work_id="9000000000001") == {}
 
 
 @pytest.mark.parametrize(
@@ -480,6 +534,7 @@ def test_hanayume_premium_rental_display_uses_bounded_lower_expiry(display, hour
         (True, "purchased", False, True, "", False),
         (True, "purchased", None, True, "", False),
         (True, "purchased", True, False, "", False),
+        (True, "paidContent", False, True, "", False),
         (True, "other", True, True, "", False),
     ],
 )
@@ -494,7 +549,10 @@ def test_hanayume_premium_rental_conflict_requires_authenticated_native_and_hist
         global_position=1, history_label_conflict=True,
         rental_history_until=expiry if history else None,
     )
-    native = HanayumeNativeEpisodeAccess(SEED_ID, access_type, has_access, None, observed_at)
+    native = HanayumeNativeEpisodeAccess(
+        SEED_ID, access_type, has_access, None, observed_at,
+        remaining_seconds_omitted=access_type == "paidContent",
+    )
     if not accepted:
         with pytest.raises(DiscoveryIncompleteError):
             _apply_native_access([row], native_access={SEED_ID: native}, listing_authenticated=authenticated)

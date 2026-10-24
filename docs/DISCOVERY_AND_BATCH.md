@@ -1,5 +1,21 @@
 # Discovery / Catalog / Batch Design
 
+## Hanayume coin-only episode classification (2026-10-25)
+
+During its existing listing traversal, Hanayume Discovery classifies an otherwise
+unknown row as `paid` only with fresh canonical-series authentication and an
+exact same-work/episode natural `GET /api/series/access` observation with
+`accessType=paidContent`, strict `hasAccess=false`, and an omitted
+`timeRemainingInSeconds` field. This positively observed denial clears a stale
+`access_granted_until`. Null, malformed, zero, positive or out-of-range timer
+fields are distinct from omission and do not prove this state. Missing,
+duplicate, foreign, unauthenticated or unsupported native rows remain unknown
+and preserve stored grants. Exact free classifications retain precedence;
+the existing public/history conflict gate and premium-ticket rental expiry
+rules remain required. The adapter issues no extra API request. Existing
+Policy excludes a paid Source without a future grant from Batch, with no
+ticket or coin consumption.
+
 ## Hanayume episode identity changes
 
 The Hanayume adapter can report a candidate only after an exhausted unbounded
