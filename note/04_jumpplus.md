@@ -27,6 +27,13 @@ overlapping in-scope ownership and cross-Work identities still fail closed.
 The split-target regression is covered with synthetic Discovery/Catalog tests;
 the corrected Full traversal has not been live-verified.
 
+Current shared simplification (2026-10-24): GUI/Batch/audit/renumber use current
+acquisition flags and key order directly, with archive_order applied at ZIP naming.
+No sync stamp or complete-listing proof gates ordinary operation or final renumber;
+intermediate numbers may be provisional. Explicit scope-sync remains for deletions
+and repair. DB stays v7 and no JSON fields are added. File/identity safeguards and
+site-specific access/capture behavior are retained; no new live claim is made.
+
 このファイルのJ0 probe記録はviewer構造を調査した時点の履歴であり、現在の
 production Discovery / Site Policy / Batchの挙動を置き換えない。通常のBatchは
 Discoveryの取得順を変更せず、Batch PlannerのWork内orderingだけを変更する。

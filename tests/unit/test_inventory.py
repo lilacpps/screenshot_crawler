@@ -17,6 +17,7 @@ from screenshot_crawler.management.inventory import (
     display_time,
 )
 from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.service import WatchlistService
 from tools.gui_sample import create_sample
 
 NOW = datetime(2026, 10, 23, 12, tzinfo=JST)
@@ -45,7 +46,7 @@ def test_snapshot_invariants_scope_unmanaged_and_immutable(inventory_inputs):
     assert keys["not-discovered"].summary.counts is None
     assert keys["not-discovered"].summary.sync_status == "missing_work"
     assert keys["sample-0004"].summary.sync_status == "synced"
-    assert keys["sample-0000"].summary.sync_status == "stale"
+    assert keys["sample-0000"].summary.sync_status == "synced"
     assert keys["sample-0003"].target.enabled is False
     assert any(key.target is None and key.summary.sync_status == "unmanaged"
                for key in snapshot.keys)
@@ -194,8 +195,13 @@ def test_scope_never_fakes_success(inventory_inputs, mutation):
             connection.execute("DELETE FROM acquisition_scope_sync WHERE work_id=2")
         else:
             connection.execute("UPDATE sources SET site='magapoke' WHERE id=49")
-    key = next(k for k in load((db, watchlist)).keys if k.identity == "sample-0004")
-    assert key.summary.sync_status != "synced" and key.summary.diagnostics
+    snapshot = load((db, watchlist))
+    key = next(k for k in snapshot.keys if k.identity == "sample-0004")
+    if mutation in {"flag", "binding"}:
+        assert key.summary.sync_status != "synced" and key.summary.diagnostics
+    else:
+        assert key.summary.sync_status == "synced"
+    assert not any("削除した登録" in note for row in snapshot.keys for note in row.summary.diagnostics)
 
 
 def test_ambiguous_sources_dedup_and_not_discovered(inventory_inputs):
@@ -291,3 +297,52 @@ def test_wal_is_rejected_without_mutating_shared_memory(inventory_inputs):
         with pytest.raises(InventoryLoadError, match="WAL"):
             load(inventory_inputs)
         assert fingerprints(files) == before
+
+
+@pytest.mark.parametrize("change", ["range", "order", "removed", "identity"])
+def test_pending_range_is_key_local_and_numbering_never_requires_scope_sync(inventory_inputs, change):
+    from screenshot_crawler.cli import _require_selected_scope_sync
+    from screenshot_crawler.management.execution import ExecutionPlanService
+
+    db, watchlist = inventory_inputs
+    raw = yaml.safe_load(watchlist.read_text("utf-8"))
+    if change == "range":
+        raw["targets"][4]["discovery_scope"] = {"through_url": "https://example.invalid/new-end"}
+    elif change == "order":
+        raw["targets"][4]["archive_order"], raw["targets"][5]["archive_order"] = 2, 1
+    elif change == "removed":
+        raw["targets"] = [t for t in raw["targets"] if t["key"] != "sample-0004"]
+    else:
+        with sqlite3.connect(db) as connection:
+            connection.execute("UPDATE sources SET site='magapoke' WHERE discovery_key='sample-0004'")
+    watchlist.write_text(yaml.safe_dump(raw), "utf-8")
+    before = fingerprints((db, watchlist))
+    loaded = load(inventory_inputs)
+    keys = {key.identity: key for key in loaded.keys}
+    assert keys["sample-0005"].summary.sync_status == "synced"
+    if change == "removed":
+        removed = [key for key in loaded.keys if key.target is None and "scope-sync" in " ".join(key.summary.diagnostics)]
+        assert len(removed) == 1 and removed[0].summary.sync_status == "stale"
+        assert "削除した登録" in removed[0].summary.diagnostics[0]
+    elif change == "identity":
+        from screenshot_crawler.batch.models import BatchPlanningError
+
+        assert keys["sample-0004"].summary.sync_status == "binding_mismatch"
+        with pytest.raises(BatchPlanningError, match="Work/site identity"):
+            _require_selected_scope_sync(
+                CatalogService(db), WatchlistService(watchlist),
+                site="mangaone", selected_keys=("sample-0004",),
+            )
+    else:
+        assert keys["sample-0004"].summary.sync_status == ("stale" if change == "range" else "synced")
+        if change == "range":
+            assert "取得範囲" in keys["sample-0004"].summary.diagnostics[0]
+        preview = ExecutionPlanService().preview(
+            loaded, ["sample-0004"], action="batch", runtime_path="missing-runtime",
+        )
+        assert preview.can_confirm
+        _require_selected_scope_sync(
+            CatalogService(db), WatchlistService(watchlist),
+            site="mangaone", selected_keys=("sample-0004",),
+        )
+    assert fingerprints((db, watchlist)) == before

@@ -891,7 +891,9 @@ Batch. For an all-ordered work, Batch uses the shared cross-site archive plan
 with `provisional=True`: duplicate positions tie-break by Source ID, missing
 positions follow known ones, and enabled removed keys follow current keys.
 These temporary ordinals do not modify stored display positions or old files.
-Scope preview, archive audit and renumber retain strict complete evidence.
+Explicit scope preview retains its own strict evidence checks. GUI, archive
+audit and renumber now calculate from current flags/order without requiring
+that proof or a scope-sync checkpoint; final renumber retains file/identity safety.
 All enabled Sources reserve a number regardless of access/status; all-disabled
 Sources are excluded. No-order works retain the legacy site-local naming.
 Historical ZIP stem/ordinal drift, old status mismatches, and ambiguous historical

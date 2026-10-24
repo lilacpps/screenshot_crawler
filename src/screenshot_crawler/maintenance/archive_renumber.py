@@ -25,7 +25,7 @@ from screenshot_crawler.catalog import (
 )
 from screenshot_crawler.core.packaging import safe_component
 from screenshot_crawler.core.progress import atomic_write_json
-from screenshot_crawler.watchlist.reconcile import ScopeReconciler, ScopeReconciliationError
+from screenshot_crawler.watchlist.reconcile import ScopeReconciliationError
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
@@ -251,10 +251,9 @@ def build_archive_renumber_plan(
     if strict_work_keys:
         if watchlist is None:
             strict_blockers.append(
-                "Watchlist-managed Work requires --watchlist and a synchronized acquisition scope"
+                "Watchlist-managed Work requires --watchlist for current acquisition flags and numbering"
             )
         else:
-            reconciler = ScopeReconciler(watchlist, catalog)
             for ordered_work_key in strict_work_keys:
                 current_targets = [
                     target for target in targets_by_work[ordered_work_key]
@@ -268,7 +267,20 @@ def build_archive_renumber_plan(
                     )
                     continue
                 try:
-                    snapshot = reconciler.require_synchronized_snapshot(ordered_work_key)
+                    snapshot = catalog.read_acquisition_scope_snapshot(
+                        ordered_work_key, discovery_keys=[target.key for target in current_targets],
+                    )
+                    if not current_targets:
+                        raise ScopeReconciliationError("Watchlist has no targets for this work_key")
+                    if snapshot is None:
+                        raise ScopeReconciliationError("Catalog Work is missing")
+                    target_by_key = {target.key: target for target in current_targets}
+                    if any(
+                        owned.work_key != ordered_work_key
+                        or owned.source.site != target_by_key[owned.source.discovery_key].site
+                        for owned in snapshot.key_sources
+                    ):
+                        raise ScopeReconciliationError("Discovery key has mismatched Work/site ownership")
                     catalog_work_sources = {
                         source.id: source
                         for source in sources
@@ -295,6 +307,7 @@ def build_archive_renumber_plan(
                             current_targets,
                             items,
                             snapshot.sources,
+                            provisional=True,
                         )
                         if position_plan is None:
                             raise ArchiveOrderPlanningError(

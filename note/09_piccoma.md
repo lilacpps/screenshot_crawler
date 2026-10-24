@@ -11,6 +11,13 @@ Batch uses current flags without its marker, permits provisional numbering,
 and does not resolve boundaries online. No paid, ticket, quota, or live-site action
 was performed for this shared change.
 
+Current shared simplification (2026-10-24): GUI/Batch/audit/renumber use current
+acquisition flags and key order directly, with archive_order applied at ZIP naming.
+No sync stamp or complete-listing proof gates ordinary operation or final renumber;
+intermediate numbers may be provisional. Explicit scope-sync remains for deletions
+and repair. DB stays v7 and no JSON fields are added. File/identity safeguards and
+site-specific access/capture behavior are retained; no new live claim is made.
+
 Updated: 2026-10-23. Phases 01-05 remain accepted. Phase 06-B's source-derived PNG replay and Phase 06-C's bounded p1-only JPEG coefficient feasibility work are historical accepted checkpoints. For the 1:1 display profiles, Phase 06-D defaults verified replay pixels to lossless WebP, retaining native PNG if encoding/round-trip proof fails and Core PNG if native provenance is unavailable. Phase 06-D code review and independent live Tester both passed with BLOCKING 0. Local Piccoma tests passed 99, packaging tests 26, and Ruff/diff checks passed; the full suite was not rerun after final site-local adjustments. The current two-product live route verified all 39 WebP pages through ZIP and Catalog completion. Phase 07 Stage A/B passed independent review. Stage C's interleaved manual comparison, 24-page Batch END/ZIP/Catalog run, and fresh per-page manifest audit passed; final Stage C Reviewer review passed with BLOCKING 0. Evidence and limits are in the [Phase 07 live profile](../research/piccoma-performance/PHASE07_PROFILE.md) and [Tester report](../research/piccoma-performance/PHASE07_TESTER.md).
 
 

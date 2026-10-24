@@ -1,8 +1,10 @@
 import hashlib
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
+import yaml
 
 from screenshot_crawler.catalog import (
     ArtifactInput,
@@ -87,7 +89,9 @@ def test_audit_reports_historical_findings_without_writes(tmp_path: Path, issue:
     assert before == {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
 
-@pytest.mark.parametrize("change", ["synced", "unsynced", "removed_binding"])
+@pytest.mark.parametrize("change", [
+    "synced", "unsynced", "removed_binding", "site_mismatch_legacy", "foreign_work_legacy",
+])
 def test_site_audit_uses_whole_work_numbering_and_requires_current_scope(
     tmp_path: Path, change: str,
 ):
@@ -111,18 +115,38 @@ def test_site_audit_uses_whole_work_numbering_and_requires_current_scope(
         reconciler.apply(reconciler.preview(work.work_key))
     if change == "removed_binding":
         watchlist.path.write_text("targets: []\n", encoding="utf-8")
+    if change in {"site_mismatch_legacy", "foreign_work_legacy"}:
+        with sqlite3.connect(catalog.path) as connection:
+            if change == "site_mismatch_legacy":
+                connection.execute("UPDATE sources SET site='magapoke' WHERE id=?", (first.id,))
+        raw = yaml.safe_load(watchlist.path.read_text("utf-8"))
+        for target in raw["targets"]:
+            target.pop("archive_order", None)
+        watchlist.path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+        if change == "foreign_work_legacy":
+            foreign = catalog.create_work(WorkInput(work_key="foreign", title="Foreign"))
+            foreign_item = catalog.create_item(ItemInput(), work_id=foreign.id)
+            catalog.create_source(
+                SourceInput(site=first.site, external_id="foreign", discovery_key=first.discovery_key),
+                item_id=foreign_item.id,
+            )
     # Correct work-wide ordinals differ from the second site's local position 1.
     for path, row, prefix in [(archive, artifact, "001"), (archive2, artifact2, "002")]:
         updated = path.rename(path.with_name(f"{prefix}-Series-{1 if prefix == '001' else 2}.zip"))
         catalog.update_artifact_locators({row.id: (row.locator, str(updated))})
 
-    report = audit_existing_archives(catalog, site="mangaone", watchlist=watchlist)
+    selector = {"work_key": work.work_key} if change in {
+        "site_mismatch_legacy", "foreign_work_legacy",
+    } else {"site": "mangaone"}
+    report = audit_existing_archives(catalog, watchlist=watchlist, **selector)
 
     assert report.work_keys == ("series",)
-    if change == "synced":
+    if change in {"synced", "unsynced"}:
         assert not report.errors and not report.findings
     else:
         assert report.errors and not report.findings
+        if change != "removed_binding":
+            assert "Work/site ownership" in report.errors[0]
 
 
 @pytest.mark.parametrize("args", [[], ["--all", "--site", "mangaone"],

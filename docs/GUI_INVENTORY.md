@@ -53,20 +53,21 @@ quota pool. Named resources are metadata, never additional Item counts.
 Grant retry timestamps use Policy APIs and runtime configuration only; absent
 API support or absent consumed-state evidence remains unknown.
 
-Scope uses the existing ScopeReconciler over an indexed, read-only in-memory
-facade. Its real binding/evidence/digest/position/flag checks remain authoritative;
-no apply, Catalog write, archive stat or per-Work DB query is needed. Ordered
-archive positions use the existing pure archive-order planner only after scope
-has been proved. Last full proof and last access observation have separate labels.
+Normal inventory uses saved acquisition flags and per-key ordering directly.
+The old work-wide sync marker is maintenance history, not a GUI/Batch gate.
+Existing listing fingerprints and saved bindings can reveal pending range edits;
+known deleted keys show explicit scope-sync as the needed action. These warnings
+are key-local and do not prevent using saved flags. Invalid ownership remains
+blocking. Proof freshness, position changes and archive_order alone never cause
+an acquisition warning. No schema, JSON field, per-key sync record or digest is added.
 
-The facade exposes only `read_acquisition_scope_snapshot`,
-`read_works_items_sources_and_targets`, `read_work_archive_artifacts` and frozen
-Watchlist `list_targets`; the first two return indexed memory, the last Catalog
-method returns no archives. It has no connection, job_lock or apply capability.
-P1 does not verify physical archive existence or preview renaming. Scope states
-include synced/stale/missing_work/not_discovered/unmanaged/binding_mismatch/error;
-missing proof and invalid position/digest are stale with the exact blocker reason.
-`out_of_scope` always means out-of-scope Source count in the DTO and UI.
+Archive positions use the same provisional pure numbering plan as Batch. Keys are
+ordered by archive_order, their enabled Sources by existing display_position;
+missing/duplicate positions retain deterministic Batch fallback. Intermediate
+numbering need not be final. Operators can renumber once after acquisition, without
+first applying scope-sync or obtaining fresh complete listing proof. Actual file
+and identity safety checks remain in maintenance. GUI never stats/renames ZIPs.
+Read-only/single-snapshot and no-SQLite-sidecar-mutation contracts are unchanged.
 
 Policy evidence reviewed: BookWalker owned/direct and quota/site slot; Manga ONE
 free/owned/direct, active quota grant/direct and quota/site slots; Magapoke

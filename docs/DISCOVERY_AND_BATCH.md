@@ -2013,6 +2013,26 @@ alone does not create a sync marker or change existing acquisition behavior.
 
 ### Discovery acquisition flags and Batch selection
 
+The normal authority is existing acquisition flags, per-key display order and
+Watchlist archive_order. Discovery updates its key; packaging concatenates keys
+in archive_order and calculates ordinals. Intermediate numbers may be provisional;
+one final explicit renumber can align existing ZIPs. DB stays v7: no schema,
+JSON fields, per-key sync records or membership digests are added.
+
+GUI and selected Batch do not gate on work-wide sync stamps or full-listing proof.
+Existing evidence/binding data may reveal a pending range edit or known deletion;
+show the affected key/action, warn, and use current flags. Numbering alone does
+not require review. Proof refresh/expiry and position-only changes do not stale
+saved acquisition bindings. Explicit scope-sync remains for deletion/offline
+repair, including removal of a Work's last target. Unknown ownership is never
+silently reassigned.
+
+Audit and renumber calculate from the same flags/order as Batch without a prior
+scope-sync or fresh Full proof. Whole-work selection, Work/site/key ownership,
+preview revision checks, collisions, hash/size, sidecars, aliases and rollback
+remain enforced. Preview is read-only and renumber apply is explicit. Ordinary
+Discovery/Batch never rename existing archives.
+
 `batch plan` and `batch run` accept `--watchlist` (default `watchlist.yaml`).
 They use the current Catalog acquisition flags without requiring a Scope
 Reconciler marker, fresh complete-listing evidence, or a matching Watchlist
@@ -2087,8 +2107,8 @@ python -m screenshot_crawler.cli watch scope-sync --watchlist watchlist.yaml --c
 `scope-sync` is optional maintenance for inspecting/applying an entire Work
 without running Discovery, including removed keys. Its strict preview/apply
 contract still requires complete matching proof for the necessary keys.
-Archive audit/renumber can require this strict synchronized state to compute
-precise final names. Ordinary Discovery-to-Batch operation needs no scope-sync
+Archive audit/renumber compute current names from saved acquisition flags and
+Watchlist ordering without requiring this synchronization marker or listing proof. Ordinary Discovery-to-Batch operation needs no scope-sync
 command. A stale candidate identity or a prefix changed since planning still
 requires replanning.
 
@@ -2188,8 +2208,8 @@ positions sort first, duplicate positions tie-break by Source ID, and unknown
 positions follow in Source ID order. Enabled Sources with removed/unbound keys
 follow current ordered keys (key then position/ID). Missing rows on another key
 do not reserve invented positions. These temporary ordinals are not written to
-`display_position`. Audit, scope preview and renumber retain strict numbering;
-existing files are repaired only by explicit maintenance. Invalid Watchlist
+`display_position`. Audit and renumber use the same current ordering as Batch; scope preview retains
+its explicit proof checks. Existing files are repaired only by explicit maintenance. Invalid Watchlist
 orders and actual Work/site identity mismatches are still errors.
 
 Before Batch creates an archive, a work-wide preflight still validates the current

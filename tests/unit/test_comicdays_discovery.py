@@ -666,7 +666,7 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
     incomplete = await discovery.discover(page, comic_target, "full")
     assert incomplete.complete is False
     assert catalog.get_discovery_inventory_evidence(comic_target.key) is None
-    assert catalog.get_acquisition_scope_sync(work.work_key).status == "stale"
+    assert catalog.get_acquisition_scope_sync(work.work_key).status == "synced"
 
     listing_total[0] = 3
     page.url = comic_target.url
@@ -674,7 +674,7 @@ async def test_comicdays_full_inventory_syncs_into_cross_site_archive_order(
     assert incremental.complete is None
     assert catalog.get_discovery_inventory_evidence(comic_target.key) is None
     assert not reconciler.preview(work.work_key).ready
-    # Strict maintenance remains unresolved, while ordinary Batch continues
+    # Explicit scope maintenance lacks listing proof, while ordinary Batch continues
     # with the last classified flags after failed Full / successful Incremental.
     continued = planner.plan(site="comicdays", now=datetime(2026, 10, 3, tzinfo=UTC))
     assert [row.source_id for row in continued.candidates] == [

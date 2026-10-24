@@ -517,6 +517,12 @@ class InventoryTreeModel(QAbstractItemModel):
     def _status_label(summary: InventorySummary | None, counts: InventoryCounts | None) -> str:
         if summary is None:
             return "未確認"
+        if summary.sync_status.startswith("stale"):
+            reason = " / ".join(summary.diagnostics)
+            if "削除した登録" in reason:
+                return "削除反映待ち"
+            if "取得範囲" in reason:
+                return "取得範囲未反映"
         if counts is None:
             if summary.sync_status.startswith("stale"):
                 return "要確認（stale）"

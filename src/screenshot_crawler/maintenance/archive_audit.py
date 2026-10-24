@@ -26,7 +26,7 @@ from screenshot_crawler.catalog import (
     Work,
 )
 from screenshot_crawler.core.packaging import safe_component
-from screenshot_crawler.watchlist.reconcile import ScopeReconciler, ScopeReconciliationError
+from screenshot_crawler.watchlist.reconcile import ScopeReconciliationError
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
@@ -225,16 +225,29 @@ def audit_existing_archives(
                 or any(not source.acquisition_enabled for source in snapshot.sources)
             ))
             if managed:
-                validated = ScopeReconciler(watchlist, catalog).require_synchronized_snapshot(
-                    work.work_key
+                if not targets:
+                    raise ArchiveNameGuardError("Watchlist has no targets for this work_key")
+                if {source.discovery_key for source in work_sources if source.acquisition_enabled} - {t.key for t in targets}:
+                    raise ArchiveNameGuardError("Watchlist does not cover every acquisition-enabled Source")
+                validated = catalog.read_acquisition_scope_snapshot(
+                    work.work_key, discovery_keys=[target.key for target in targets],
                 )
+                if validated is None:
+                    raise ArchiveNameGuardError("Catalog Work is missing")
+                target_by_key = {target.key: target for target in targets}
+                if any(
+                    owned.work_key != work.work_key
+                    or owned.source.site != target_by_key[owned.source.discovery_key].site
+                    for owned in validated.key_sources
+                ):
+                    raise ArchiveNameGuardError("Discovery key has mismatched Work/site ownership")
                 if {row.id: row for row in validated.sources} != {
                     row.id: row for row in work_sources
                 }:
                     raise ArchiveNameGuardError("Catalog Sources changed during audit; retry")
             if targets:
                 position_plan = build_work_archive_position_plan(
-                    work, targets, work_items, work_sources
+                    work, targets, work_items, work_sources, provisional=True
                 )
                 if position_plan is not None:
                     positions.update(position_plan.positions_by_source_id)

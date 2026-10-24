@@ -651,8 +651,16 @@ Scope同期や既存ZIPの変更を起こさない。同一siteのSourceを別ke
 inventory分類（unboundedは全自key Source）を反映し、incrementalは観測Sourceを有効化。
 失敗keyの既存flagと他keyのflagは保持する。新規Sourceは従来どおり有効をdefaultとする。
 Batchのordered numberingは未確定positionをSource IDで安定整列する暫定値を許容する。
-`display_position`や既存ファイルは推測で書き換えない。明示scope-sync/audit/renumberの
-厳密な証拠検証は維持し、アクセス権・resource消費・identity・保存先衝突の検査も維持する。
+`display_position`や既存ファイルは推測で書き換えない。明示scope-sync自体の範囲証拠検証は
+維持する。audit/renumberは現在のflagsと順序を使い、同期済みstampや完全一覧証拠を
+前提にしない。アクセス権・resource消費・identity・保存先衝突の検査は維持する。
+
+2026-10-24 simplification: normal GUI/Batch/audit/renumber use existing flags,
+per-key order and archive_order directly. Intermediate numbers may be temporary;
+one final explicit renumber aligns existing ZIPs. Sync stamps/full listing proof
+are not execution or renumber prerequisites. DB stays v7, with no new tables,
+JSON fields or per-key sync/digest state. Explicit scope-sync remains for known
+deletions and offline repair; identity/file/hash/sidecar/CAS/rollback checks stay.
 
 2026-10-23 user-requested refinement: separating archive numbering from access rights reserves
 numbers for future in-scope paid sources and excludes out-of-scope sources. Batch and renumber

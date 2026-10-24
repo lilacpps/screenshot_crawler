@@ -13,6 +13,13 @@ whole-Work maintenance; access/resource and output guards are unchanged.
 See `note/00_core.md` for the current shared contract. This common change has
 synthetic/local-browser coverage; it has not been live-verified on this site.
 
+Current shared simplification (2026-10-24): GUI/Batch/audit/renumber use current
+acquisition flags and key order directly, with archive_order applied at ZIP naming.
+No sync stamp or complete-listing proof gates ordinary operation or final renumber;
+intermediate numbers may be provisional. Explicit scope-sync remains for deletions
+and repair. DB stays v7 and no JSON fields are added. File/identity safeguards and
+site-specific access/capture behavior are retained; no new live claim is made.
+
 Younganimal now supplies target-bound complete-listing proof for its validated
 full work-range inventory (`younganimal-work:<work_id>`) and supports native
 bounded `discovery_scope`. Existing global positions are assigned from the

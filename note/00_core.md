@@ -1,3 +1,43 @@
+## Minimal acquisition and numbering contract (2026-10-24)
+
+Current DB stays v7; no schema/migration or JSON field is added. Normal GUI,
+selected/whole-site Batch, audit and renumber use existing acquisition flags,
+per-key display order and Watchlist archive_order. Discovery's existing key-local
+flag/position updates remain authoritative. Provisional intermediate ZIP numbers
+are accepted; one final explicit renumber can align existing archives. Normal
+operations do not require a scope-sync stamp or complete-listing proof. GUI no
+longer propagates a work-wide stale checkpoint/proof failure into every key.
+Known range edits and removed bindings still show an actionable key-local warning,
+while saved flags remain executable. Identity/configuration errors stay blocking.
+
+Listing-proof refresh/expiry and position-only updates do not stale the saved
+scope binding. Explicit scope-sync remains for deletion/offline repair and can
+handle removal of a Work's last target. Its own strict preview remains separate.
+Renumber reads current flags/ordering, retaining Work-wide selection, membership,
+CAS/revision, collision, hash/size, sidecar, alias and rollback checks. GUI stays
+strictly read-only, including SQLite sidecars. No operational Catalog, archive,
+Watchlist or user runtime setting is changed by verification. No new site live or
+paid-resource verification is part of this shared simplification.
+
+Validation: the affected Catalog/Discovery/scope/Batch/GUI/maintenance suite plus
+Piccoma Discovery and GUI browser integration passed 433 cases. The final selected
+CLI/worker/identity checks passed 161; the updated Comic DAYS regression file
+passed 55. Ruff (`src tests`) and `git diff --check` pass.
+
+Full-suite coverage was split into disjoint selections after a single-process
+ComicFUZ stall; the isolated ComicFUZ module passed all 69 cases. All 5,523 current
+node IDs are accounted for, with no uncovered or skipped tests. After reruns and
+updating the remaining old Comic DAYS stale assertion, results are 5,522 passed
+and one configuration-dependent failure: `test_distributed_crawler_yaml_resolves_piccoma_settings_without_changing_other_sites`
+expects BookWalker page-turn delay 200ms, while the operator's existing
+`crawler.yaml` sets 0ms. That setting is preserved. The Hanayume long-path failure
+passes using a shorter isolated basetemp. Evidence is in `.tmp/simple-part-*.xml`,
+`.tmp/simple-fuz-module.xml`, `.tmp/simple-hana-short.xml`,
+`.tmp/simple-comicdays-final.xml` and `.tmp/simple_validation_summary.py`.
+Local browser integration and local Research tests ran; no real-site, paid-resource
+or operational Catalog/ZIP maintenance was performed. Verification used an audit
+hook rejecting writes to operational Catalog/configuration/output paths.
+
 ## Discovery incomplete reasons (2026-10-24)
 
 `DiscoveryResult.error` is an optional run-local string (default `None`).
@@ -56,8 +96,8 @@ Re-run creates a new job after a fresh current preview.
 `management.catalog_reader.CatalogInventoryReader` validates existing v7 and
 reads a single `mode=ro`, query-only transaction. It creates no Catalog service,
 DB, schema, migration or operational output. `InventoryService` uses frozen DTOs,
-one JST evaluation time, existing Policy classes and an indexed in-memory
-ScopeReconciler facade. Missing inputs fail explicitly; a failed reload visibly
+one JST evaluation time, existing Policy classes and the current flag-based
+provisional numbering plan. Missing inputs fail explicitly; a failed reload visibly
 marks the retained display stale. No network/CDP/browser or execution dispatch.
 WAL headers are rejected before SQLite opens because read-only SQLite can update
 `-shm` read marks; byte/hash verification found a mutation despite unchanged
@@ -116,8 +156,8 @@ Discovery finalization reflects acquisition scope for that key. Catalog services
 now expose atomic work-wide flag/sync-marker writes and complete-listing evidence
 read/write APIs. Evidence binds work/key/site, target URL, adapter-provided
 listing identity, ordered identities/positions and a deterministic digest. A
-full inventory replacement invalidates the prior scope-sync marker. Structural
-position or key changes invalidate listing evidence and the sync marker;
+full inventory replacement and position-only updates affect listing evidence,
+not the saved scope marker. Key/ownership changes can invalidate scope bindings;
 metadata-only access refreshes preserve them. The evidence write updates only
 existing Sources already owned by that key and changes no availability, access,
 Item status, run, Artifact or acquisition flag.
@@ -165,8 +205,9 @@ For a fully ordered work, the shared archive plan sorts Watchlist keys by
 `archive_order`, then all `acquisition_enabled=1` Sources by `display_position`.
 Assigned Sources reserve ordinals regardless of access mode, availability or
 Item status; excluded Sources do not. No-order works retain legacy site-local
-naming. Batch permits provisional ordinals for incomplete Catalog positions;
-strict maintenance still requires complete evidence. Batch does not traverse historical ZIP/status files. The read-only
+naming. GUI, Batch, audit and renumber permit provisional ordinals for incomplete
+Catalog positions; only explicit scope reconciliation requires its listing proof.
+Batch does not traverse historical ZIP/status files. The read-only
 `scripts/check_archives.py` command reports historical cross-site naming/status drift.
 The current candidate ZIP path must be absent. A sidecar may remain only when its
 completed state, exact planned `archive_path`, valid page count, and same-Source Catalog
@@ -201,7 +242,7 @@ existing flags remain, while already materialized new Sources retain their
 enabled schema default. Other keys are never updated from an out-of-scope
 inventory reference. This step does not scan artifacts or historical files and
 does not claim a work-wide successful sync marker. Proof invalidation still
-protects strict maintenance; an automatic flag change marks any prior sync stale.
+protects explicit scope maintenance; current flags remain the normal acquisition authority.
 If the flag transaction fails, any Full proof just captured by that run is
 invalidated before propagating the failure; strict maintenance cannot use it
 as evidence of a successful Discovery.
@@ -2055,7 +2096,7 @@ membership and each selected Work's complete key/scope/order fingerprint.
 
 通常運用はDiscovery成功時に自keyのflagsを自動反映し、そのままBatchを実行する。
 Discoveryなしの設定反映や全Workの厳密な整備には任意でscope preview/applyを使う。
-保守操作のapplyは従来どおり必要なFull listing proofを要求する。Batch candidateのidentityや
+scope-syncのapplyは従来どおり必要なFull listing proofを要求する。renumberは現在のflagsと順序を使う。Batch candidateのidentityや
 現在計算したprefixが変化した場合はbatch plan/runを再実行する。
 
 `batch plan`はCatalog flagsやquotaを変更せずread-onlyであり、`batch run`だけがquota local stateと

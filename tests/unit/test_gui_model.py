@@ -141,6 +141,18 @@ def test_numeric_columns_and_stale_counts_are_safe(qt_app):
     assert model.rowCount() == 2
 
 
+@pytest.mark.parametrize("reason,label", [
+    ("取得範囲の変更が未反映：Full Discoveryを実行してください", "取得範囲未反映"),
+    ("削除した登録の反映待ち：scope-syncで取得対象外にしてください", "削除反映待ち"),
+])
+def test_scope_warning_labels_describe_required_work(qt_app, reason, label):
+    from screenshot_crawler.gui.details import _sync_label
+
+    summary = InventorySummary(InventoryCounts(total_assigned=1), "stale", (reason,), None, ("k",), (1,))
+    assert InventoryTreeModel._status_label(summary, summary.counts) == label
+    assert _sync_label(summary.sync_status, summary.diagnostics) == label
+
+
 def test_qt_model_contract(qt_app):
     model = InventoryTreeModel(_snapshot())
     tester = QAbstractItemModelTester(model, QAbstractItemModelTester.FailureReportingMode.Warning)

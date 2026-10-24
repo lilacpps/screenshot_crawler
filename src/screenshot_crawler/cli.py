@@ -1353,7 +1353,7 @@ def _require_selected_scope_sync(
     site: str,
     selected_keys: tuple[str, ...] | None,
 ) -> None:
-    """Validate selected Work scopes before opening a site browser session."""
+    """Validate selected key/site identities before opening a browser session."""
 
     if selected_keys is None:
         return
@@ -1369,12 +1369,19 @@ def _require_selected_scope_sync(
             f"Selected Watchlist key(s) do not belong to site {site!r}: "
             + ", ".join(sorted(wrong_site))
         )
-    reconciler = ScopeReconciler(watchlist, catalog)
-    for work_key in sorted({targets[key].work_key for key in selected_keys}):
-        try:
-            reconciler.require_synchronized(work_key)
-        except ScopeReconciliationError as exc:
-            raise BatchPlanningError(str(exc)) from exc
+    works, items, sources, _ = catalog.read_works_items_sources_and_targets()
+    work_keys = {work.id: work.work_key for work in works}
+    item_works = {item.id: work_keys.get(item.work_id) for item in items}
+    selected = set(selected_keys)
+    for source in sources:
+        if source.discovery_key in selected:
+            target = targets[source.discovery_key]
+            if source.site != target.site or item_works.get(source.item_id) != target.work_key:
+                raise BatchPlanningError(
+                    f"Source {source.id} Work/site identity does not match Watchlist key {target.key!r}"
+                )
+    # Scope-sync is optional maintenance, not a selected-execution gate.
+    # Planner/Executor validate actual identity and use saved acquisition flags.
 
 
 def _planner_plan(
@@ -1785,8 +1792,8 @@ async def _run_batch_run_locked(args: argparse.Namespace, catalog: CatalogServic
     grant_only_all_preflight: dict[str, BatchPlan] = {}
     warning_seen: set[str] = set()
     selected_keys = _selected_keys(args)
-    # An explicit key selection is a managed execution boundary. Validate the
-    # complete Work scope while the Catalog job lock is held, before planning,
+    # An explicit key selection is a managed execution boundary. Validate key/site
+    # membership while the Catalog job lock is held, before planning,
     # metrics, endpoint resolution, or any early no-candidate return.
     _require_selected_scope_sync(
         catalog,

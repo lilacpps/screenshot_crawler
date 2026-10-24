@@ -30,8 +30,13 @@ def _short(value: object | None, limit: int = 300) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _sync_label(value: str) -> str:
+def _sync_label(value: str, diagnostics: tuple[str, ...] = ()) -> str:
     if value.startswith("stale"):
+        reason = " / ".join(diagnostics)
+        if "削除した登録" in reason:
+            return "削除反映待ち"
+        if "取得範囲" in reason:
+            return "取得範囲未反映"
         return "要確認（stale）"
     if "not_discovered" in value:
         return "未Discover"
@@ -160,7 +165,7 @@ class MembershipTableModel(QAbstractTableModel):
             key.label,
             _text(target.archive_order if target else None),
             f"{counts.completed}/{counts.total_assigned}" if counts is not None else "—",
-            _sync_label(key.summary.sync_status),
+            _sync_label(key.summary.sync_status, key.summary.diagnostics),
             _short(scope.from_url, 100) if scope else "—",
             _short(scope.through_url, 100) if scope else "—",
         )
@@ -248,7 +253,7 @@ class DetailPane(QWidget):
         else:
             fields.update({name: "—" for name in ("取得済 / 対象", "直取候補", "Quota対象残", "有償未取得", "外部取得", "スキップ", "利用不可", "要確認", "担当外 Source")})
         if summary is not None:
-            fields["Scope同期"] = _sync_label(summary.sync_status)
+            fields["Scope同期"] = _sync_label(summary.sync_status, summary.diagnostics)
             fields["最終確認"] = display_time(summary.last_access)
             if summary.diagnostics:
                 fields["診断"] = " / ".join(item[:300] for item in summary.diagnostics[:5])

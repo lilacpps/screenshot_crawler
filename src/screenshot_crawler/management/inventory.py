@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +10,6 @@ from time import perf_counter
 from types import MappingProxyType
 
 from screenshot_crawler.archive_order import build_work_archive_position_plan
-from screenshot_crawler.catalog.models import AcquisitionScopeSnapshot, DiscoveryKeySource
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.management.catalog_reader import CatalogInventoryReader, InventoryLoadError
 from screenshot_crawler.management.models import (
@@ -23,7 +23,10 @@ from screenshot_crawler.management.models import (
 )
 from screenshot_crawler.runtime_settings import load_runtime_settings
 from screenshot_crawler.site_policies import SitePolicyRegistry
-from screenshot_crawler.watchlist.reconcile import ScopeReconciler
+from screenshot_crawler.watchlist.fingerprints import (
+    target_scope_definition,
+    target_scope_fingerprint,
+)
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
@@ -56,32 +59,30 @@ def display_time(value: str | datetime | None) -> str:
         return "不明（日時不正）"
 
 
-class _WatchlistMemory:
-    def __init__(self, targets):
-        self.targets = targets
-
-    def list_targets(self):
-        return self.targets
-
-
-class _CatalogMemory:
-    """Capability-limited facade for ScopeReconciler; never touches files."""
-
-    def __init__(self, scope, work, items, targets):
-        self.scope = scope
-        self.work = work
-        self.items = items
-        self.targets = targets
-
-    def read_acquisition_scope_snapshot(self, work_key, *, discovery_keys=()):
-        assert work_key == self.scope.work_key
-        return self.scope
-
-    def read_works_items_sources_and_targets(self):
-        return (self.work,), self.items, self.scope.sources, self.targets
-
-    def read_work_archive_artifacts(self, work_key):
-        return ()  # No physical ZIP inspection/renumber preview in P1.
+def _scope_change_reason(target, proof, sync, sources=()) -> str:
+    """Warn about actual pending range edits, never about numbering/sync stamps."""
+    if proof is not None:
+        if (proof.site != target.site or proof.target_url != target.url
+                or proof.scope_fingerprint != target_scope_fingerprint(target)):
+            return "取得範囲の変更が未反映：Full Discoveryを実行してください"
+        flags = {row.external_id: row.in_scope for row in proof.positions}
+        if any(source.external_id in flags and source.acquisition_enabled != flags[source.external_id]
+               for source in sources):
+            return "取得範囲の変更が未反映：Discoveryまたはscope-syncで反映してください"
+        return ""
+    if sync is not None:
+        try:
+            previous = json.loads(sync.configuration_json)
+            if not isinstance(previous, list):
+                raise TypeError("Saved configuration is not a list")
+            prior = next((row for row in previous if row.get("key") == target.key), None)
+            if prior is not None and {
+                key: value for key, value in prior.items() if key != "archive_order"
+            } != target_scope_definition(target):
+                return "取得範囲の設定が以前の記録と異なります：Full Discoveryで反映を確認してください"
+        except (ValueError, AttributeError, TypeError):
+            return "以前の登録情報を確認できません：取得範囲を確認してください"
+    return ""
 
 
 def _access(policy, source, now):
@@ -125,6 +126,7 @@ class InventoryService:
         by_work, items_by_work, by_site, by_key, target_by_work = (
             defaultdict(list) for _ in range(5)
         )
+        current_keys = {target.key for target in targets}
         for target in targets:
             target_by_work[target.work_key].append(target)
         for item in data.items:
@@ -134,10 +136,7 @@ class InventoryService:
             by_site[source.site].append(source)
             by_key[source.discovery_key].append(source)
         syncs = {value.work_key: value for value in data.syncs}
-        evidence_by_work = defaultdict(list)
         evidence_by_key = {value.discovery_key: value for value in data.evidence}
-        for evidence in data.evidence:
-            evidence_by_work[evidence.work_key].append(evidence)
         source_targets = defaultdict(list)
         for target in data.targets:
             source_targets[target.source_id].append(target)
@@ -165,35 +164,29 @@ class InventoryService:
                     classifications[source.id] = AccessClassification("unknown", str(exc))
 
         scope_status, scope_diagnostics, archive_positions = {}, {}, {}
+        for target in targets:
+            work = works_by_key.get(target.work_key)
+            if work is None:
+                scope_status[target.key] = "missing_work"
+                scope_diagnostics[target.key] = ("Catalog Work未登録・未Discover",)
+                continue
+            reason = _scope_change_reason(
+                target, evidence_by_key.get(target.key), syncs.get(target.work_key), by_key[target.key],
+            )
+            scope_status[target.key] = "stale" if reason else "synced"
+            scope_diagnostics[target.key] = (reason,) if reason else ()
         for work_key, work_targets in target_by_work.items():
             work = works_by_key.get(work_key)
             if work is None:
-                scope_status[work_key] = "missing_work"
-                scope_diagnostics[work_key] = ("Catalog Work未登録・未Discover",)
                 continue
-            work_sources = tuple(by_work[work.id])
-            key_sources = tuple(
-                DiscoveryKeySource(source, works[items[source.item_id].work_id].work_key)
-                for target in work_targets for source in by_key[target.key]
-            )
-            scope = AcquisitionScopeSnapshot(
-                work_key, work.id, work_sources, tuple(evidence_by_work[work_key]),
-                syncs.get(work_key), key_sources, "immutable-inventory-snapshot",
-            )
-            memory = _CatalogMemory(scope, work, tuple(items_by_work[work.id]), ())
-            reconciler = ScopeReconciler(_WatchlistMemory(tuple(work_targets)), memory)
             try:
-                reconciler.require_synchronized_snapshot(work_key)
-                scope_status[work_key] = "synced"
-                scope_diagnostics[work_key] = ()
                 plan = build_work_archive_position_plan(
-                    work, work_targets, items_by_work[work.id], work_sources
+                    work, work_targets, items_by_work[work.id], by_work[work.id], provisional=True,
                 )
-                if plan:
-                    archive_positions.update(plan.positions_by_source_id)
-            except Exception as exc:  # noqa: BLE001 - fail closed with reason
-                scope_status[work_key] = "stale"
-                scope_diagnostics[work_key] = (str(exc),)
+            except ValueError:
+                continue  # Actual Planner rejects invalid identities/order before execution.
+            if plan:
+                archive_positions.update(plan.positions_by_source_id)
 
         def summarize(source_ids, key_ids, status, diagnostics=(), *, missing=False):
             selected = [sources[source_id] for source_id in sorted(set(source_ids))]
@@ -252,7 +245,7 @@ class InventoryService:
                     mismatches.append(f"Source {source.id}: keyのWork/site所属が不一致")
             managed_source_ids.update(matching)
             proof = evidence_by_key.get(target.key)
-            status = scope_status[target.work_key]
+            status = scope_status[target.key]
             missing = not matching and not (
                 proof is not None and proof.source_count == 0 and status == "synced"
             )
@@ -260,7 +253,7 @@ class InventoryService:
                 status = "missing_work" if work is None else "not_discovered"
             if mismatches:
                 status = "binding_mismatch"
-            diagnostics = (*scope_diagnostics[target.work_key], *mismatches)
+            diagnostics = (*scope_diagnostics[target.key], *mismatches)
             if missing:
                 diagnostics = (*diagnostics, "このkeyは未Discover（0件とは確定できません）")
             summary = summarize(
@@ -277,8 +270,19 @@ class InventoryService:
                 work = works[items[source.item_id].work_id]
                 unmanaged[(source.site, work.work_key)].append(source.id)
         for (site, work_key), ids in sorted(unmanaged.items()):
+            sync = syncs.get(work_key)
+            try:
+                known = {row["key"] for row in json.loads(sync.configuration_json)} if sync else set()
+            except (ValueError, TypeError, KeyError):
+                known = set()
+            pending = any(
+                sources[source_id].discovery_key in known - current_keys
+                and sources[source_id].acquisition_enabled for source_id in ids
+            )
             summary = summarize(
-                ids, (), "unmanaged", ("Watchlistへの一致する所属なし（未管理）",)
+                ids, (), "stale" if pending else "unmanaged",
+                ("削除した登録の反映待ち：scope-syncで取得対象外にしてください",)
+                if pending else ("Watchlistに一致する所属なし（未管理）",),
             )
             # Tuple group identities in Qt distinguish this from an actual key.
             identity = f"unmanaged:{site}:{work_key}"

@@ -226,7 +226,7 @@ class ExecutionPlanService:
                 continue
             if not key.target.enabled:
                 skipped.append((identity, "disabled"))
-            if action != "discover" and key.summary.sync_status not in {"synced", "not_discovered"}:
+            if action != "discover" and key.summary.sync_status in {"binding_mismatch", "error"}:
                 blockers.append(
                     f"{identity}: Scope/Watchlist state is {key.summary.sync_status}"
                 )
@@ -359,7 +359,7 @@ class ExecutionPlanService:
             key = key_map.get(identity)
             if key is None:
                 sync_blockers.append(f"unknown Watchlist key: {identity}")
-            elif key.summary.sync_status != "synced":
+            elif key.summary.sync_status in {"binding_mismatch", "error"}:
                 sync_blockers.append(
                     f"{identity}: Scope/Watchlist state is {key.summary.sync_status}"
                 )
@@ -389,6 +389,11 @@ class ExecutionPlanService:
         if not selection.selected_keys:
             blockers.append("no Watchlist keys selected")
         warnings = [warning for item in plans for warning in item.warnings]
+        warnings.extend(
+            f"{identity}: {note}; using saved acquisition flags"
+            for identity in selection.selected_keys if identity in key_map
+            for note in key_map[identity].summary.diagnostics
+        )
         for current_resource, plan in zip(resources or (None,), plans):
             if plan.quota_available is not None:
                 resource_label = current_resource or "default"

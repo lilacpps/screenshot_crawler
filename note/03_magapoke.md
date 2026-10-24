@@ -13,6 +13,13 @@ archive number independently of access mode; out-of-scope Sources are
 excluded without changing their access or history. This change did not perform
 ticket, quota or paid access operations and was not live-verified.
 
+Current shared simplification (2026-10-24): GUI/Batch/audit/renumber use current
+acquisition flags and key order directly, with archive_order applied at ZIP naming.
+No sync stamp or complete-listing proof gates ordinary operation or final renumber;
+intermediate numbers may be provisional. Explicit scope-sync remains for deletions
+and repair. DB stays v7 and no JSON fields are added. File/identity safeguards and
+site-specific access/capture behavior are retained; no new live claim is made.
+
 ## Purpose and scope
 
 `MagapokeAdapter` crawls one episode through the shared Crawler Chrome/CDP

@@ -152,7 +152,7 @@ def test_full_proof_drives_scope_flags_and_stale_marker_keeps_binding(tmp_path: 
 
     catalog.invalidate_discovery_inventory_evidence(target.key)
     stale = catalog.get_acquisition_scope_sync(work.work_key)
-    assert stale is not None and stale.status == "stale"
+    assert stale is not None and stale.status == "synced"
     assert json.loads(stale.configuration_json) == saved
 
 
@@ -508,7 +508,8 @@ def test_watchlist_edit_after_preview_requires_a_new_preview(tmp_path: Path) -> 
         raise AssertionError("Watchlist edits after preview must be rejected")
 
 
-def test_removed_discovery_key_is_disabled_and_readded_key_is_enabled(tmp_path: Path) -> None:
+@pytest.mark.parametrize("remove_all", [False, True])
+def test_removed_discovery_key_is_disabled_and_readded_key_is_enabled(tmp_path: Path, remove_all: bool) -> None:
     watchlist_path = tmp_path / "watchlist.yaml"
     zeblack = WatchlistTarget("chapters", "series", "zeblack", "https://example.test/list",
                               "Series")
@@ -532,11 +533,12 @@ def test_removed_discovery_key_is_disabled_and_readded_key_is_enabled(tmp_path: 
     reconciler = ScopeReconciler(WatchlistService(watchlist_path), catalog)
     reconciler.apply(reconciler.preview(work.work_key))
 
-    _write_target(watchlist_path, zeblack)
+    _write_targets(watchlist_path, () if remove_all else (zeblack,))
     removed = reconciler.preview(work.work_key)
     assert removed.ready and dict(removed.source_flags)[sources[1].id] is False
     reconciler.apply(removed)
     assert catalog.get_source(sources[1].id).acquisition_enabled is False
+    assert catalog.get_source(sources[0].id).acquisition_enabled is (not remove_all)
 
     _write_targets(watchlist_path, (zeblack, bookwalker))
     restored = reconciler.preview(work.work_key)

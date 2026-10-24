@@ -15,6 +15,13 @@ preserving excluded Source IDs,
 status, access state and history. This shared feature was not live-verified and
 does not alter Zeblack's entry or ticket behavior.
 
+Current shared simplification (2026-10-24): GUI/Batch/audit/renumber use current
+acquisition flags and key order directly, with archive_order applied at ZIP naming.
+No sync stamp or complete-listing proof gates ordinary operation or final renumber;
+intermediate numbers may be provisional. Explicit scope-sync remains for deletions
+and repair. DB stays v7 and no JSON fields are added. File/identity safeguards and
+site-specific access/capture behavior are retained; no new live claim is made.
+
 ### Final-chapter END card (2026-10-16)
 
 The viewer now recognizes the observed no-next-story final-chapter card as

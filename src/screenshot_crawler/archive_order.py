@@ -34,12 +34,12 @@ def build_work_archive_position_plan(
 ) -> WorkArchivePositionPlan | None:
     """Assign one ordinal stream across every current key/site in a Work.
 
-    Maintenance callers validate complete listing evidence through
-    ``ScopeReconciler``. This pure layer then rejects incomplete key
+    Explicit scope reconciliation can validate complete listing evidence.
+    This pure layer rejects incomplete key
     ordering, unknown Source ownership, stale Work membership, null positions,
     and duplicate within-key display positions. Item status, access mode and
     source availability deliberately do not affect ordinal membership.
-    Batch opts into provisional numbering: missing/duplicate positions sort
+    GUI, Batch, audit and renumber use provisional numbering: missing/duplicate positions sort
     deterministically by Source ID, and removed keys follow current keys.
     No inferred display positions are persisted to Catalog.
     """

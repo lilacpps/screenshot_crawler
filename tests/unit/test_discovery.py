@@ -828,7 +828,7 @@ async def test_full_inventory_proof_persists_only_after_normal_exhaustion(
     assert incomplete.complete is False
     assert catalog.get_discovery_inventory_evidence(watch_target.key) is None
     sync = catalog.get_acquisition_scope_sync(work.work_key)
-    assert sync is not None and sync.status == "stale"
+    assert sync is not None and sync.status == "synced"
     assert catalog.get_source(outside.id).acquisition_enabled is False
 
 

@@ -446,7 +446,7 @@ def test_scope_sync_and_full_inventory_evidence_are_transactional_and_refresh_sa
     assert evidence.source_count == 2
     assert evidence.positions[0].external_id == "chapter-1"
     stale_sync = service.get_acquisition_scope_sync(work.work_key)
-    assert stale_sync is not None and stale_sync.status == "stale"
+    assert stale_sync is not None and stale_sync.status == "synced"
     assert service.get_source(source.id).display_position == 1
     assert service.get_source(source.id).acquisition_enabled is False
     assert service.get_item(item.id).status == item.status
@@ -487,7 +487,7 @@ def test_scope_sync_and_full_inventory_evidence_are_transactional_and_refresh_sa
     assert service.get_source(source.id).acquisition_enabled is False
     assert service.get_discovery_inventory_evidence("target-a") is None
     stale_sync = service.get_acquisition_scope_sync(work.work_key)
-    assert stale_sync is not None and stale_sync.status == "stale"
+    assert stale_sync is not None and stale_sync.status == "synced"
 
 
 @pytest.mark.parametrize(

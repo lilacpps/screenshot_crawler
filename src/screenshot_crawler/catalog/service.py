@@ -506,11 +506,6 @@ class CatalogService:
                     "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
                     (discovery_key,),
                 )
-                for work_id in {int(row["item_id"]) for row in rows}:
-                    item = connection.execute(
-                        "SELECT work_id FROM items WHERE id = ?", (work_id,)
-                    ).fetchone()
-                    self._mark_acquisition_scope_stale(connection, int(item["work_id"]))
 
             updated_rows = [
                 connection.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
@@ -929,32 +924,13 @@ class CatalogService:
         return DiscoveryInventoryEvidence(**values)
 
     def invalidate_discovery_inventory_evidence(self, discovery_key: str) -> None:
-        """Invalidate one listing proof while retaining the last applied binding."""
-
+        """Invalidate listing proof without changing the saved acquisition binding."""
         self._validate_nonempty(discovery_key, "discovery_key")
         with self._connection() as connection:
-            work_ids = {
-                int(row["work_id"])
-                for row in connection.execute(
-                    "SELECT work_id FROM discovery_inventory_evidence "
-                    "WHERE discovery_key = ?",
-                    (discovery_key,),
-                )
-            }
-            work_ids.update(
-                int(row["work_id"])
-                for row in connection.execute(
-                    "SELECT DISTINCT i.work_id FROM sources s JOIN items i ON i.id = s.item_id "
-                    "WHERE s.discovery_key = ?",
-                    (discovery_key,),
-                )
-            )
             connection.execute(
                 "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
                 (discovery_key,),
             )
-            for work_id in work_ids:
-                self._mark_acquisition_scope_stale(connection, work_id)
 
     def record_discovery_inventory_evidence(
         self,
@@ -1022,7 +998,6 @@ class CatalogService:
             if work is None:
                 raise CatalogNotFoundError(f"Catalog work not found: {work_key}")
             work_id = int(work["id"])
-            self._mark_acquisition_scope_stale(connection, work_id)
             existing = connection.execute(
                 "SELECT s.external_id, s.discovery_key, i.work_id FROM sources s "
                 "JOIN items i ON i.id = s.item_id WHERE s.site = ? AND s.external_id IN ("
@@ -1145,12 +1120,11 @@ class CatalogService:
                             "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
                             (invalidated_key,),
                         )
-                    work_id_row = connection.execute(
-                        "SELECT work_id FROM items WHERE id = ?", (row["item_id"],)
-                    ).fetchone()
-                    self._mark_acquisition_scope_stale(
-                        connection, int(work_id_row["work_id"])
-                    )
+                    if old_discovery_key != new_discovery_key:
+                        work_id_row = connection.execute(
+                            "SELECT work_id FROM items WHERE id = ?", (row["item_id"],)
+                        ).fetchone()
+                        self._mark_acquisition_scope_stale(connection, int(work_id_row["work_id"]))
             updated = connection.execute(
                 "SELECT * FROM sources WHERE site = ? AND external_id = ?", (site, external_id)
             ).fetchone()
@@ -1433,7 +1407,8 @@ class CatalogService:
                         "DELETE FROM discovery_inventory_evidence WHERE discovery_key = ?",
                         (invalidated_key,),
                     )
-                self._mark_acquisition_scope_stale(connection, work_id)
+                if source.discovery_key != existing_key:
+                    self._mark_acquisition_scope_stale(connection, work_id)
             assignments = [
                 "discovery_key = ?",
                 "access_mode = ?",

@@ -733,8 +733,34 @@ def test_strict_renumber_blocks_duplicate_namespaced_and_flat_status_files(
     assert catalog.get_artifact(artifact.id).locator == old_path.as_posix()
 
 
-def test_strict_renumber_accepts_one_matching_namespaced_status_file(tmp_path: Path) -> None:
+@pytest.mark.parametrize("checkpoint", [
+    "synced", "missing", "stale_without_proof", "site_mismatch_legacy", "foreign_work_legacy",
+])
+def test_renumber_uses_current_flags_and_preserves_identity_guards(tmp_path: Path, checkpoint: str) -> None:
     catalog, work, item, source, target, watchlist = _synced_ordered_source(tmp_path)
+    with sqlite3.connect(catalog.path) as connection:
+        if checkpoint == "missing":
+            connection.execute("DELETE FROM acquisition_scope_sync")
+        elif checkpoint == "stale_without_proof":
+            connection.execute("UPDATE acquisition_scope_sync SET status='stale'")
+            connection.execute("DELETE FROM discovery_inventory_positions")
+            connection.execute("DELETE FROM discovery_inventory_evidence")
+    invalid_owner = checkpoint in {"site_mismatch_legacy", "foreign_work_legacy"}
+    if invalid_owner:
+        raw = yaml.safe_load(watchlist.path.read_text("utf-8"))
+        for row in raw["targets"]:
+            row.pop("archive_order", None)
+        watchlist.path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+        if checkpoint == "site_mismatch_legacy":
+            with sqlite3.connect(catalog.path) as connection:
+                connection.execute("UPDATE sources SET site='mangaone' WHERE id=?", (source.id,))
+        else:
+            foreign = catalog.create_work(WorkInput(work_key="foreign-work", title="Foreign"))
+            foreign_item = catalog.create_item(ItemInput(), work_id=foreign.id)
+            catalog.create_source(
+                SourceInput(site=source.site, external_id="foreign", discovery_key=source.discovery_key),
+                item_id=foreign_item.id,
+            )
     old_path = tmp_path / "old.zip"
     artifact = _add_real_archive(catalog, item.id, source.id, target.id, old_path)
     status_dir = tmp_path / "status"
@@ -748,6 +774,13 @@ def test_strict_renumber_accepts_one_matching_namespaced_status_file(tmp_path: P
         watchlist=watchlist,
     )
 
+    if invalid_owner:
+        assert any("Work/site ownership" in reason for reason in plan.strict_blockers)
+        before = old_path.read_bytes(), namespaced.read_bytes()
+        assert apply_archive_renumber_plan(plan).error is not None
+        assert (old_path.read_bytes(), namespaced.read_bytes()) == before
+        assert catalog.get_artifact(artifact.id).locator == old_path.as_posix()
+        return
     assert plan.strict_blockers == ()
     assert plan.entries[0].status_path == namespaced
     result = apply_archive_renumber_plan(plan)

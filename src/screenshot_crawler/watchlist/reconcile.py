@@ -86,9 +86,6 @@ class ScopeReconciler:
             target for target in self.watchlist.list_targets() if target.work_key == work_key
         ]
         targets.sort(key=lambda target: target.key)
-        if not targets:
-            return self._blocked(work_key, "Watchlist has no targets for this work_key")
-
         fingerprint = work_scope_fingerprint(targets)
         definition = work_definition_fingerprint(targets)
         current_configuration = configuration_json(targets)
@@ -169,6 +166,8 @@ class ScopeReconciler:
     def _require_synchronized_state(
         self, work_key: str
     ) -> tuple[ScopeSyncPreview, AcquisitionScopeSnapshot]:
+        if not any(t.work_key == work_key for t in self.watchlist.list_targets()):
+            raise ScopeReconciliationError("Watchlist has no targets for this work_key")
         preview = self.preview(work_key)
         if not preview.ready:
             raise ScopeReconciliationError(
