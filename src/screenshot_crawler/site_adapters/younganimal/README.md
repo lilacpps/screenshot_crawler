@@ -974,6 +974,13 @@ attribution remains UNKNOWN; this does not generalize to every page.
   `observation start + D days + H hours - 1 hour` (days 0..14, hours 0..23,
   positive remaining bound). Free takes precedence; malformed/near-expiry or
   unobserved formats stay unknown.
+- Exact public row-local 今なら無料 maps to free only with fresh positive
+  authentication and an exact work/episode native row with `accessType=trial`
+  or `memberOnlyFree`, `hasAccess=true`, and no `timeRemainingInSeconds`
+  field. The badge alone and contradictory or missing native evidence stay
+  unknown and preserve stored grants. Proven free clears stale grant metadata;
+  the campaign expiry is unknown (`free_until=NULL`). No extra API request is
+  issued. Existing direct entry checks the current episode gate before reading.
 - During the existing listing traversal, the adapter observes only natural
   `GET /api/series/access` and `GET /api/auth/session` responses. It makes no
   additional request. A positive integer session user and an exact
@@ -1013,6 +1020,13 @@ Incremental refreshes every validated row in the requested scope because rental
 rights can change on old episodes beyond a newest-known boundary. The listing
 is already buffered, so this adds no browser requests. Incremental does not
 reconcile unseen sources as unavailable.
+
+On 2026-10-25, shared-CDP Full Discovery of work `2a1c114334a86` observed 114
+episodes. Before this campaign-badge support it yielded 4 free, 82 quota, 2 paid,
+and 26 unknown. Afterward it yielded 30 free, 82 quota, 2 paid, and no unknown.
+The 26 campaign episodes were 4 native `trial` and 22 `memberOnlyFree` entries.
+Evidence is under `.tmp/younganimal-nowfree-*.json`; normal Catalog/Watchlist
+were not written. All non-read request methods were blocked during the probes.
 
 ## Verification status (2026-10-19)
 

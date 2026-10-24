@@ -297,6 +297,43 @@ def test_younganimal_native_access_requires_verified_type_authentication_and_tim
 
 
 @pytest.mark.parametrize(
+    ("labels", "access_type", "has_access", "timer_state", "authenticated", "expected"),
+    [
+        (("今なら無料",), "trial", True, "missing", True, "free"),
+        (("今なら無料",), "memberOnlyFree", True, "missing", True, "free"),
+        (("今なら無料",), "memberOnlyFree", True, "missing", False, "unknown"),
+        (("今なら無料",), "trial", False, "missing", True, "unknown"),
+        (("今なら無料",), "memberOnlyFree", None, "missing", True, "unknown"),
+        (("今なら無料",), "paidContent", False, "missing", True, "unknown"),
+        (("今なら無料",), "waitAndFree", False, "missing", True, "unknown"),
+        (("今なら無料",), "memberOnlyFree", True, "null", True, "unknown"),
+        (("今なら無料",), "memberOnlyFree", True, "valid", True, "unknown"),
+        (("今なら無料",), "memberOnlyFree", True, "malformed", True, "unknown"),
+        (("今なら無料",), None, None, "missing", True, "unknown"),
+        ((), "memberOnlyFree", True, "missing", True, "unknown"),
+        (("今なら無料", "今なら無料"), "memberOnlyFree", True, "missing", True, "unknown"),
+        (("無料", "今なら無料"), "trial", True, "missing", True, "unknown"),
+    ],
+)
+def test_younganimal_now_free_requires_exact_badge_and_native_permission(
+    labels, access_type, has_access, timer_state, authenticated, expected
+) -> None:
+    native = YounganimalNativeEpisodeAccess(
+        SEED_ID, access_type, has_access,
+        300 if timer_state == "valid" else None, NATIVE_NOW, timer_state,
+    ) if access_type is not None else None
+    row = _apply_native_access(
+        [_listing_row(labels=labels)],
+        native_access={SEED_ID: native},
+        listing_authenticated=authenticated,
+        now=NATIVE_NOW,
+    )[0]
+    assert row.access.access_mode == expected
+    assert row.access.access_granted_until is None
+    assert row.access.access_granted_until_observed is (expected == "free")
+
+
+@pytest.mark.parametrize(
     ("access_type", "has_access", "remaining", "remaining_state", "mode", "cleared"),
     [
         ("waitAndFree", True, 0, "valid", "unknown", False),

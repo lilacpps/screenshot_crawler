@@ -1949,12 +1949,47 @@ One exact row-local 無料 label maps to free. A matching user's exact normalize
 `access_granted_until = observation time + D days + H hours - 1 hour`.
 This is a conservative lower bound, not exact expiry; days 0..14, hours 0..23
 and a positive lower-bound duration are required. Other countdown formats,
-near-expiry durations, 今なら無料, 待つと無料, blank, repeated and unrecognized
+near-expiry durations, 待つと無料, blank, repeated and unrecognized
 labels remain unknown. Free takes precedence over rental on the same identity.
 Unknown observations preserve a stored grant; a positively observed exact
 denial or valid grant refreshes it. Policy selects only a strictly future,
 timezone-aware paid grant as non-consuming `direct` / `active_rental`;
 unavailable, expired and malformed grants are excluded.
+
+An exact public row-local `今なら無料` label is initially unknown and becomes
+free only after the existing natural-response observer supplies fresh positive
+authentication and a unique same-work/episode native permission: `trial` or
+`memberOnlyFree`, `hasAccess=true`, with the timer field omitted. This includes
+both ordinary campaign and member-only campaign free episodes. No native type
+alone makes an unrecognized/blank/duplicate badge free. Missing, foreign,
+duplicate, unauthenticated, denied, unsupported or timer-bearing native evidence
+leaves this badge unknown and preserves stored grants. A proven campaign free
+observation clears stale grant metadata. No expiry is inferred: `free_until`
+remains NULL. Existing Policy selects this free Source as non-consuming direct;
+the adapter still checks the current exact episode header and reader gate.
+Both Full and incremental use this rule; restart a running GUI and rediscover
+the work to refresh its stored access modes.
+
+The 2026-10-25 shared-CDP work `2a1c114334a86` Full probe reproduced 114 rows:
+4 free, 82 quota, 2 paid, 26 unknown before the fix. All 26 unknown rows had the
+exact campaign badge, with 4 native `trial` and 22 native `memberOnlyFree`
+positive permissions and no timer. Fixed Full Discovery produced 30 free,
+82 quota, 2 paid, zero unknown. Reduced evidence is in
+`.tmp/younganimal-nowfree-before.json`, `.tmp/younganimal-nowfree-row.json`,
+and `.tmp/younganimal-nowfree-live.json`; no normal Catalog or Watchlist write,
+capture, ticket click or purchase occurred. The probes blocked all non-read
+request methods. This verifies access classification, not all-page capture.
+The same shared-CDP read-only check opened campaign episodes `5fef69b018bd0`
+(`trial`) and `e5d35b742b4ba` (`memberOnlyFree`). Both passed the existing
+exact episode/work header and direct reader gate, with viewer canvases present,
+without a reader-control click or image readback. Reduced entry evidence is
+`.tmp/younganimal-nowfree-entry.json`. No full capture/END/ZIP was attempted.
+Validation: Discovery Unit, Policy Unit, Batch Unit, and browser-backed
+Discovery Integration passed together (123 passed, zero failed/skipped).
+`ruff check src tests` passed. The final pytest log is
+`.tmp/younganimal-nowfree-final-tests.log`. Full suite and Research tests were
+not run because this is a site-local Discovery classification change; shared
+Core, Policy/resource rules, viewer and capture code are unchanged.
 
 During the existing canonical work-listing traversal, Discovery observes the
 site's natural `GET /api/series/access` and `GET /api/auth/session` responses;

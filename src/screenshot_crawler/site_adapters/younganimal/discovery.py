@@ -56,6 +56,7 @@ MAX_NATIVE_RESPONSE_BYTES = 1_048_576
 RANGE_PACING_MS = 3_000
 GUARD_CLEANUP_TIMEOUT_SECONDS = 5
 FREE_LABEL = "無料"
+NOW_FREE_LABEL = "今なら無料"
 RENTAL_LABEL = re.compile(r"^レンタル中 閲覧期限 (?P<days>[0-9]{1,2})日\+(?P<hours>[0-9]{1,2})時間$")
 LATEST_LABEL = "最新話から"
 ELLIPSIS_LABEL = "..."
@@ -512,6 +513,25 @@ def _apply_native_access(
     for row in rows:
         native = native_access.get(row.identity.episode_id)
         access = row.access
+        if access.raw_labels == (NOW_FREE_LABEL,):
+            # The campaign badge also covers member-only free episodes. Require
+            # fresh authenticated, exact-identity native permission, without a
+            # rental timer; the badge alone cannot establish direct access.
+            if (
+                listing_authenticated is True
+                and native is not None
+                and native.access_type in {"trial", "memberOnlyFree"}
+                and native.has_access is True
+                and native.remaining_seconds_state == "missing"
+            ):
+                access = replace(
+                    access,
+                    access_mode="free",
+                    access_granted_until=None,
+                    access_granted_until_observed=True,
+                )
+            updated.append(replace(row, access=access))
+            continue
         if (
             listing_authenticated is not True
             or native is None

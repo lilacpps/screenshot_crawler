@@ -243,6 +243,11 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
 ) -> None:
     native_access = [
         {
+            "episodeId": _episode_id(2),
+            "accessType": "memberOnlyFree",
+            "hasAccess": True,
+        },
+        {
             "episodeId": _episode_id(3),
             "accessType": "waitAndFree",
             "hasAccess": False,
@@ -264,10 +269,11 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
             "timeRemainingInSeconds": 3600,
         },
     ]
+    labels = {4: "購入", 5: "試読", 6: "作品チケット"}
     requested = await _install_pages(
         browser_page,
         native_access=native_access,
-        labels_by_position={4: "購入", 5: "試読", 6: "作品チケット"},
+        labels_by_position=labels,
     )
     pacing_navigation_counts: list[int] = []
     original_pacing = younganimal_discovery._pace_before_range_navigation
@@ -304,7 +310,10 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
     assert {source.display_position for source in sources} == set(range(1, TOTAL + 1))
     assert catalog.find_source("younganimal", f"{WORK_ID}:{SEED_ID}").display_position == 1
     assert catalog.find_source("younganimal", f"{WORK_ID}:{SEED_ID}").access_mode == "free"
-    assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(2)}").access_mode == "unknown"
+    now_free = catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(2)}")
+    assert now_free.access_mode == "free"
+    assert now_free.free_until is None
+    assert now_free.access_granted_until is None
     assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(3)}").access_mode == "quota"
     coin_source = catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(4)}")
     assert coin_source.access_mode == "paid"
@@ -352,9 +361,10 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
 
     requested.clear()
     pacing_navigation_counts.clear()
-    native_access.append(
-        {"episodeId": _episode_id(2), "accessType": "paidContent", "hasAccess": False}
-    )
+    native_access[0] = {
+        "episodeId": _episode_id(2), "accessType": "paidContent", "hasAccess": False
+    }
+    labels[2] = "購入"
     incremental = await service.discover(browser_page, _target(), "incremental")
     assert incremental.complete is None
     assert catalog.get_discovery_inventory_evidence(_target().key).inventory_digest == (
@@ -375,6 +385,11 @@ async def test_younganimal_native_ticket_access_requires_positive_authentication
         browser_page,
         native_access=[
             {
+                "episodeId": _episode_id(2),
+                "accessType": "trial",
+                "hasAccess": True,
+            },
+            {
                 "episodeId": _episode_id(3),
                 "accessType": "waitAndFree",
                 "hasAccess": False,
@@ -389,6 +404,9 @@ async def test_younganimal_native_ticket_access_requires_positive_authentication
 
     assert result.complete is True
     assert "/api/auth/session" in requested
+    assert service.catalog.find_source(
+        "younganimal", f"{WORK_ID}:{_episode_id(2)}"
+    ).access_mode == "unknown"
     assert service.catalog.find_source(
         "younganimal", f"{WORK_ID}:{_episode_id(3)}"
     ).access_mode == "unknown"
@@ -448,6 +466,7 @@ async def test_younganimal_rental_history_joins_public_identity_and_clears_stale
         native_access=[
             {"episodeId": _episode_id(2), "accessType": "paidContent", "hasAccess": False}
         ],
+        labels_by_position={2: "購入"},
     )
     await service.discover(browser_page, target, "incremental")
     source = catalog.get_source(source.id)

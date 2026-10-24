@@ -33,6 +33,17 @@ duration. Exact free remains free and takes precedence. Unrecognized or
 ambiguous observations preserve a previously stored grant; a positively
 observed denial or valid grant may refresh it.
 
+An exact public row-local `今なら無料` badge maps to `free` only with fresh
+authenticated natural-response evidence for the same work and episode:
+`accessType=trial` or `memberOnlyFree`, `hasAccess=true`, and an omitted
+`timeRemainingInSeconds` field. The badge alone, a native permission alone,
+missing/duplicate/foreign native rows, unsupported types, contradictory access,
+or any timer field do not prove free access. Such badge observations remain
+unknown and preserve stored grants. A proven free observation clears a stale
+grant; no campaign expiry is inferred (`free_until=NULL`). The existing
+non-consuming direct reader entry still rechecks the live episode access gate.
+This site-local contract was verified on 2026-10-25; it adds no API requests.
+
 During ordinary canonical work-listing traversal, the adapter may observe the
 site's natural `GET /api/series/access` and `GET /api/auth/session` responses.
 It issues no additional API requests. An authenticated, exact work-bound
