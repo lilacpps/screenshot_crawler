@@ -53,7 +53,46 @@ behavior for those historical runs, not current Batch eligibility or a current
 operational procedure. Current verification must use an explicit matching
 Watchlist; scope-sync is optional maintenance.
 
-## Current verification snapshot (2026-10-23)
+## Current verification snapshot (2026-10-24)
+
+### Coin-only paid classification (2026-10-24)
+
+Discovery recognizes the authenticated, canonical work/episode-bound native
+`paidContent` + `hasAccess=false` state with an omitted
+`timeRemainingInSeconds` field as `paid`. A positively observed denial clears
+a stored grant. Exact free and active rental labels retain precedence; no
+paid-content timer creates or shortens a grant. Null/zero/positive/malformed
+timers, true/unknown access, absent/conflicting rows, foreign work and missing
+authentication cannot establish an unpaid coin episode and preserve stored
+grants. Unknown values remain fail-closed. There is no price/text heuristic,
+new API request, setting, CLI option, Core/Policy/schema or capture change.
+The existing Policy excludes paid rows without active rentals from Batch;
+the GUI counts them as paid rather than unknown after the next Discovery.
+Existing stored states are refreshed by normal Full or Incremental Discovery,
+not by a database backfill. No normal Catalog/library was changed in this work.
+
+Shared-CDP inspection on 2026-10-24 verified coin icon/70-coin DOM prices and
+matching `paidContent` denials on Asobi Asobase range 5. A production adapter
+Full traversal then returned all 154 episodes: 3 free, 133 quota, and 18 paid
+(including two active rental observations). All sixteen previously unknown
+Sources became paid without grants. The dedicated Page blocked 140 mutating
+POSTs and no ticket/purchase control was clicked. Only natural listing GETs
+were observed; the normal Catalog was read-only. The earlier one-range probe
+blocked nine POSTs. Reduced evidence and the bounded verification script are
+ignored under `output/younganimal-paid-20261024/`; no account identifier,
+cookies, signed URL or comic content is retained. This verifies this work's
+observed coin-denial shape, not every paid/owned access state or all works.
+
+Validation: 93 Discovery/Policy Unit cases and all nine Discovery browser
+Integration cases passed with zero skipped. The final Full/Incremental refresh
+and rental-to-denial browser selection was rerun (two passed). Coverage includes
+unknown-to-paid refresh, stale-grant clearing, paid exclusion from Batch,
+free/rental precedence, unavailable authentication and contradictory timers.
+Global `ruff check src tests` and scoped `git diff --check` passed. An initial
+Unit run passed 90 cases but hit a temporary-directory permission error in one
+fixture; the complete rerun with an isolated writable basetemp passed. Research
+and full repository suites were not run for this site-local classification
+change. Shared Core behavior is unchanged, so `note/00_core.md` is unchanged.
 
 ### Initial blank plus one trailing PR: Item/Source 36943
 
@@ -1921,12 +1960,16 @@ During the existing canonical work-listing traversal, Discovery observes the
 site's natural `GET /api/series/access` and `GET /api/auth/session` responses;
 it issues no additional request. A positive integer session user and an exact
 response `seriesAccess.seriesId` matching the canonical work are required
-before joining episode rows by ID. Only `accessType=waitAndFree` is classified:
+before joining episode rows by ID. `accessType=waitAndFree` is classified:
 `hasAccess=false` with a missing or exact zero timer is a `quota` candidate;
 null, positive, or malformed timers remain unknown. An exact active row with a
 valid positive `timeRemainingInSeconds` is a manually used ticket grant; its
 conservative expiry is request-start plus timer seconds minus one, shortened
-when the account rental label provides an earlier lower bound. Other access
+when the account rental label provides an earlier lower bound. An exact
+`accessType=paidContent`, `hasAccess=false` row with an omitted timer maps to
+`paid` and clears a stored grant as a positive denial. Other paid-content
+access/timer combinations remain unknown and preserve a stored grant;
+paid-content timers do not create or shorten a rental grant. Other access
 types, contradictory timer states, foreign/duplicate or missing rows, and
 unavailable authentication remain unknown. Native observations do not
 override an exact free label or active rental. The live listing

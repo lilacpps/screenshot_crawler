@@ -4,8 +4,8 @@ The adapter provides Discovery, direct manual episode Crawl, and Batch support
 for free sources, active rentals, and explicit `quota + work_ticket` entry. It
 reuses the shared CDP BrowserSession / Playwright Page, AccessGuard, Runner,
 manifest, and packager. Discovery recognizes authenticated work-bound wait-free
-candidates and active manual grants from naturally emitted listing responses;
-it does not click or consume tickets.
+candidates, active manual grants, and coin-only paid episodes from naturally
+emitted listing responses; it does not click or consume tickets.
 
 The `standard_odd_body` native observer accepts incoming draws before their CSS
 centers settle, including a rewind to the first body. Structural capabilities,
@@ -978,12 +978,16 @@ attribution remains UNKNOWN; this does not generalize to every page.
   `GET /api/series/access` and `GET /api/auth/session` responses. It makes no
   additional request. A positive integer session user and an exact
   `seriesAccess.seriesId` matching the canonical work are required before
-  joining `episodeAccesses` by canonical episode ID. Only `waitAndFree` is
+  joining `episodeAccesses` by canonical episode ID. `waitAndFree` is
   interpreted: exact `hasAccess=false` with a missing or zero timer is a
   work-ticket candidate; null, positive, or malformed timers stay unknown.
   Exact `hasAccess=true` with a valid positive timer is a manually active ticket
   grant. Its conservative expiry uses request start plus timer seconds minus one;
-  a recognized rental-label lower bound can shorten it. Other access types,
+  a recognized rental-label lower bound can shorten it. Exact `paidContent`
+  with `hasAccess=false` and an omitted `timeRemainingInSeconds` field maps to
+  `paid`, clearing any stored grant as an observed denial. Other paid-content
+  access/timer states remain unknown and preserve stored grants. Paid-content
+  timers do not create or shorten rental grants. Other access types,
   contradictory timer states, duplicate or absent rows, foreign work, and
   unavailable authentication stay unknown and preserve a stored grant. Native
   observations do not override an exact free label or active rental.

@@ -515,7 +515,7 @@ def _apply_native_access(
         if (
             listing_authenticated is not True
             or native is None
-            or native.access_type != "waitAndFree"
+            or native.access_type not in {"waitAndFree", "paidContent"}
             or native.has_access is None
         ):
             updated.append(row)
@@ -532,7 +532,7 @@ def _apply_native_access(
             updated.append(replace(row, access=access))
             continue
         if access.access_mode == "paid" and access.access_granted_until is not None:
-            if native.has_access is True:
+            if native.access_type == "waitAndFree" and native.has_access is True:
                 native_until = _native_grant_until(native, now=current)
                 if native_until is not None:
                     access = replace(
@@ -540,6 +540,21 @@ def _apply_native_access(
                         access_granted_until=min(access.access_granted_until, native_until),
                         access_granted_until_observed=True,
                     )
+            updated.append(replace(row, access=access))
+            continue
+
+        if native.access_type == "paidContent":
+            # Observed coin-only rows deny access and omit the rental timer.
+            # Other timer/access combinations do not prove an unpaid episode.
+            if native.has_access is False and native.remaining_seconds_state == "missing":
+                access = replace(
+                    access,
+                    access_mode="paid",
+                    access_granted_until=None,
+                    access_granted_until_observed=True,
+                )
+            else:
+                access = replace(access, access_mode="unknown")
             updated.append(replace(row, access=access))
             continue
 

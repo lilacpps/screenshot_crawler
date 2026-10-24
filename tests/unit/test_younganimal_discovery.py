@@ -266,7 +266,15 @@ def test_younganimal_active_manual_ticket_grant_uses_native_timer_and_rental_low
     ("native", "authenticated", "mode", "observed"),
     [
         (YounganimalNativeEpisodeAccess(SEED_ID, "trial", True, 500, NATIVE_NOW, "valid"), True, "unknown", False),
-        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", False, None, NATIVE_NOW), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", False, None, NATIVE_NOW), True, "paid", True),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", False, None, NATIVE_NOW), False, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", None, None, NATIVE_NOW), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", True, None, NATIVE_NOW), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", True, 300, NATIVE_NOW, "valid"), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", False, 0, NATIVE_NOW, "valid"), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", False, 300, NATIVE_NOW, "valid"), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", False, None, NATIVE_NOW, "null"), True, "unknown", False),
+        (YounganimalNativeEpisodeAccess(SEED_ID, "paidContent", False, None, NATIVE_NOW, "malformed"), True, "unknown", False),
         (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", False, None, NATIVE_NOW), False, "unknown", False),
         (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", True, None, NATIVE_NOW), True, "unknown", False),
         (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", True, 0, NATIVE_NOW, "valid"), True, "unknown", False),
@@ -275,7 +283,7 @@ def test_younganimal_active_manual_ticket_grant_uses_native_timer_and_rental_low
         (YounganimalNativeEpisodeAccess(SEED_ID, "waitAndFree", False, None, NATIVE_NOW, "malformed"), True, "unknown", False),
     ],
 )
-def test_younganimal_unverified_native_access_never_becomes_a_ticket_candidate(
+def test_younganimal_native_access_requires_verified_type_authentication_and_timer(
     native, authenticated, mode, observed
 ) -> None:
     row = _apply_native_access(
@@ -288,7 +296,18 @@ def test_younganimal_unverified_native_access_never_becomes_a_ticket_candidate(
     assert row.access.access_granted_until_observed is observed
 
 
-def test_younganimal_contradictory_native_state_does_not_clear_an_existing_grant() -> None:
+@pytest.mark.parametrize(
+    ("access_type", "has_access", "remaining", "remaining_state", "mode", "cleared"),
+    [
+        ("waitAndFree", True, 0, "valid", "unknown", False),
+        ("paidContent", True, 0, "valid", "unknown", False),
+        ("paidContent", False, None, "null", "unknown", False),
+        ("paidContent", False, None, "missing", "paid", True),
+    ],
+)
+def test_younganimal_only_verified_denial_clears_an_existing_grant(
+    access_type, has_access, remaining, remaining_state, mode, cleared
+) -> None:
     previous_until = NATIVE_NOW + timedelta(hours=4)
     row = _listing_row()
     row = YounganimalListingRow(
@@ -302,20 +321,36 @@ def test_younganimal_contradictory_native_state_does_not_clear_an_existing_grant
         ),
         global_position=row.global_position,
     )
-    contradictory = YounganimalNativeEpisodeAccess(
-        SEED_ID, "waitAndFree", True, 0, NATIVE_NOW, "valid"
+    native = YounganimalNativeEpisodeAccess(
+        SEED_ID, access_type, has_access, remaining, NATIVE_NOW, remaining_state
     )
 
     result = _apply_native_access(
         [row],
-        native_access={SEED_ID: contradictory},
+        native_access={SEED_ID: native},
         listing_authenticated=True,
         now=NATIVE_NOW,
     )[0]
 
-    assert result.access.access_mode == "unknown"
-    assert result.access.access_granted_until == previous_until
-    assert result.access.access_granted_until_observed is False
+    assert result.access.access_mode == mode
+    assert result.access.access_granted_until == (None if cleared else previous_until)
+    assert result.access.access_granted_until_observed is cleared
+
+
+@pytest.mark.parametrize("labels", [("無料",), ("レンタル中 閲覧期限 2日+23時間",)])
+@pytest.mark.parametrize("has_access,remaining,state", [(False, None, "missing"), (True, 300, "valid")])
+def test_younganimal_coin_state_preserves_free_and_active_rental_labels(
+    labels, has_access, remaining, state
+) -> None:
+    row = _listing_row(labels=labels)
+    native = YounganimalNativeEpisodeAccess(
+        SEED_ID, "paidContent", has_access, remaining, NATIVE_NOW, state
+    )
+    result = _apply_native_access(
+        [row], native_access={SEED_ID: native}, listing_authenticated=True, now=NATIVE_NOW
+    )[0]
+    assert result.access.access_mode == row.access.access_mode
+    assert result.access.access_granted_until == row.access.access_granted_until
 
 
 def test_younganimal_missing_or_ambiguous_native_row_preserves_unknown_grant_state() -> None:

@@ -35,13 +35,20 @@ observed denial or valid grant may refresh it.
 
 During ordinary canonical work-listing traversal, the adapter may observe the
 site's natural `GET /api/series/access` and `GET /api/auth/session` responses.
-It issues no additional API requests. Only an authenticated, exact work-bound
+It issues no additional API requests. An authenticated, exact work-bound
 `seriesAccess.episodeAccesses` row with `accessType=waitAndFree` is classified:
 `hasAccess=false` with a missing or exact zero timer is a `quota` candidate;
 null, positive, or malformed timers leave that state unknown. `hasAccess=true`
 with a valid positive `timeRemainingInSeconds` is a quota access grant using
 the conservative request-start-plus-seconds-minus-one bound. An exact
-rental-label bound may shorten that grant. Other access types, contradictory
+rental-label bound may shorten that grant.
+For coin-only episodes, an exact `accessType=paidContent`, `hasAccess=false`
+row with no `timeRemainingInSeconds` field maps to `paid` and clears a stored
+grant as a positively observed denial. This is the live-observed unpaid
+coin state (2026-10-24); no price/text heuristic or additional request is used.
+Other paid-content access/timer combinations remain unknown and preserve a
+stored grant. Exact free and active rental labels retain precedence; paid-content
+timers never create or shorten a grant. Other access types, contradictory
 timers, missing or duplicate rows, foreign work IDs, and unavailable
 authentication remain unknown. These native observations do not override an
 exact free label or an active rental classification. Manual grants therefore

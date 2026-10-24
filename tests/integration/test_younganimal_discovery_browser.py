@@ -306,7 +306,9 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
     assert catalog.find_source("younganimal", f"{WORK_ID}:{SEED_ID}").access_mode == "free"
     assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(2)}").access_mode == "unknown"
     assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(3)}").access_mode == "quota"
-    assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(4)}").access_mode == "unknown"
+    coin_source = catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(4)}")
+    assert coin_source.access_mode == "paid"
+    assert coin_source.access_granted_until is None
     assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(5)}").access_mode == "unknown"
     manual_grant = catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(6)}")
     assert manual_grant.access_mode == "quota"
@@ -350,6 +352,9 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
 
     requested.clear()
     pacing_navigation_counts.clear()
+    native_access.append(
+        {"episodeId": _episode_id(2), "accessType": "paidContent", "hasAccess": False}
+    )
     incremental = await service.discover(browser_page, _target(), "incremental")
     assert incremental.complete is None
     assert catalog.get_discovery_inventory_evidence(_target().key).inventory_digest == (
@@ -357,6 +362,7 @@ async def test_younganimal_full_incremental_and_bounded_discovery(
     )
     assert incremental.stopped_reason == "exhausted"
     assert incremental.observed_count == TOTAL
+    assert catalog.find_source("younganimal", f"{WORK_ID}:{_episode_id(2)}").access_mode == "paid"
     assert requested.count(f"/series/{WORK_ID}/1") == 1
     assert requested.count(f"/series/{WORK_ID}/2") == 1
     assert pacing_navigation_counts == [1, 2]
@@ -435,6 +441,20 @@ async def test_younganimal_rental_history_joins_public_identity_and_clears_stale
     source = catalog.get_source(source.id)
     assert source.access_mode == "unknown"
     assert source.access_granted_until is not None
+
+    await browser_page.unroute("https://younganimal.com/**")
+    await _install_pages(
+        browser_page,
+        native_access=[
+            {"episodeId": _episode_id(2), "accessType": "paidContent", "hasAccess": False}
+        ],
+    )
+    await service.discover(browser_page, target, "incremental")
+    source = catalog.get_source(source.id)
+    assert source.access_mode == "paid"
+    assert source.access_granted_until is None
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(site="younganimal")
+    assert all(row.source_id != source.id for row in plan.candidates)
 
 
 async def test_younganimal_navigation_retry_budget_is_shared_across_work(
