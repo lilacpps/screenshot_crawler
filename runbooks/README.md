@@ -72,3 +72,7 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
   P1のチェック選択をDiscover/Batch/Grant-onlyへ安全に接続し、site別順次実行、
   事前確認、永続ジョブ履歴、進捗、協調停止・再実行を実装する計画。
   P2安全性レビューをゲートとし、P3完了後にユーザーUIレビューで停止（planned）。
+
+- [Windows GUI — 常設実行モニターとサマリ](gui-live-monitor/README.md) —
+  既存GUI上部を維持しつつ、CUI同等のログ逐次表示、スクロール固定、
+  Discover/Batch/Grant-onlyの共通サマリ、ジョブ履歴表示の改善を段階実装（planned）。
