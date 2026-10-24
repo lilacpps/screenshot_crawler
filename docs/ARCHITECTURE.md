@@ -621,3 +621,15 @@ navigation. This lets a site adapter bind Catalog identity to target-local live
 checks without giving Core Catalog access or site-specific identity rules.
 Work-scoped local resource cooldown checks run before opening a consuming
 candidate page; local skips do not count as site attempts or pacing events.
+
+## Hanayume Source identity maintenance
+
+Hanayume Full Discovery may observe a site native identity proof that an old
+episode URL now resolves to a new episode ID. The site adapter is responsible
+for the bounded API proof; Core never merges by title, position, content ID,
+or neighboring rows. A proven change is applied through the common Catalog
+maintenance transaction, which retains the existing Item/Source IDs and all
+historical CrawlRun, Artifact, quota, and ZIP state while updating the current
+external ID and web target locator. Existing Catalog schema/version contracts
+are unchanged. When proof is unavailable, the maintenance CLI provides the
+same dry-run/token/apply path for explicit human confirmation.

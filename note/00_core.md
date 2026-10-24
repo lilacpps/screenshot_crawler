@@ -2308,6 +2308,7 @@ scanned eight completed Items: six PREFERRED_ONLY and two FALLBACK_INCLUDED (Ite
 six PNGs from `スピカ～羽海野チカ初期短編集～`; Item 33083, ten PNGs from `ホーリーランド`).
 Unexpected, broken, missing, and ambiguous counts were zero. Report:
 `output/younganimal-recrawl-dry-run-20261019.txt`. No real `--apply` or re-crawl was performed.
+
 Adding `--apply` uses the same backup/Artifact-locator/pending path and retains source grants,
 quota state, and historical runs. Normal Batch still considers site-wide pending Items, including
 unrelated pending Younganimal Items. The policy classifies PNG format, including native-size
@@ -2317,6 +2318,32 @@ deprecation warning), including Younganimal upper-case/mixed extensions and synt
 with exact ZIP-byte, source, and historical-run preservation. Ruff (`scripts/prepare_recrawl.py
 src tests`) and changed-file diff checks passed. Browser Integration, Research/Probe, live
 re-crawl/apply, and the full repository suite were not rerun for this static site-policy addition.
+
+Hanayume Source identity maintenance is a common Catalog v7 transaction with
+an explicit Hanayume-only operator entry point. It preserves the retained
+Item/Source graph and historical CrawlRun snapshots, rejects non-pristine
+donors, invalidates listing proof, and never changes ZIP paths. No schema
+version or alias table is added; the old external ID remains in each historical
+snapshot. The required dry-run token and apply procedure are in
+`docs/HANAYUME_SOURCE_IDENTITY.md`.
+Isolated copy validation also covered the proven `ng-life` replacement from
+`ca6472995ecea:90fac353b1178` to `ca6472995ecea:5fa301a1e55e3`: Full listing
+recovered Scope Sync, retained the completed Item/Source and all run, artifact,
+and quota rows, and performed zero ZIP operations. The separate CLI copy
+verified dry-run byte stability and transactional apply; the operational
+Catalog and ZIPs were not used.
+The affected Discovery/Catalog/Batch/Scope/Archive suite passed 477 tests with
+no failures or skips, and the existing Hanayume browser enumeration suite
+passed 15 tests with no skips. An isolated Batch plan left the retained
+completed Source unscheduled, preserved archive stem `001-NGライフ-scene1`,
+and performed zero ZIP operations.
+The final repository run collected 5,508 tests: 5,506 passed, 2 failed, and
+0 skipped. One Piccoma frame-geometry failure passed on an isolated rerun; the
+other is the pre-existing runtime-settings expectation that assumes
+bookwalker200 while the user `crawler.yaml` has 0, and the tracked config
+injection check passes. This is not an all-green exact-head run. Independent
+review approved the identity change, and the final operational compare found
+schema v7 and both original Source/Item graphs unchanged.
 
 B1/B2/B3/B4/B5/B6ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、BookWalker、Magapoke、Manga ONE以外ではJump+だけproduction bounded Discoveryを実装している。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 

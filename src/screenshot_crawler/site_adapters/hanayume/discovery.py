@@ -250,6 +250,23 @@ class HanayumeSeriesAccessSnapshot:
     rows: tuple[HanayumeNativeEpisodeAccess, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class HanayumeIdentityChange:
+    """A strictly proven old-to-new episode identity replacement."""
+
+    old_external_id: str
+    new_external_id: str
+    new_url: str
+    reason: str
+    body_revision_possible: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class HanayumeIdentityResolution:
+    changes: tuple[HanayumeIdentityChange, ...] = ()
+    diagnostics: tuple[str, ...] = ()
+
+
 def _parse_series_access_snapshot(
     payload: object, *, requested_at: datetime
 ) -> HanayumeSeriesAccessSnapshot | None:
@@ -594,6 +611,56 @@ def parse_hanayume_work_url(url: str) -> str | None:
 
     match = _parse_https_site_url(url, WORK_PATH)
     return match.group("work_id") if match is not None else None
+
+
+def parse_hanayume_episode_api_identity(
+    payload: object, *, expected_work_id: str
+) -> tuple[str, int] | None:
+    """Parse the strict native identity tuple from an episode API response.
+
+    The site has returned HTTP 200 for unknown IDs, so status alone is never
+    evidence.  All four observed identity fields must be typed, non-empty and
+    mutually consistent; ``indexId`` is retained as the stable episode key.
+    """
+
+    if not isinstance(payload, dict):
+        return None
+    episode = payload.get("episode")
+    summary = episode.get("summary") if isinstance(episode, dict) else None
+    if not isinstance(episode, dict) or not isinstance(summary, dict):
+        return None
+    access = episode.get("access")
+    series = episode.get("series")
+    episode_id = episode.get("id")
+    summary_id = summary.get("id")
+    access_id = access.get("episodeId") if isinstance(access, dict) else None
+    work_id = series.get("id") if isinstance(series, dict) else None
+    index_id = episode.get("indexId")
+    summary_index_id = summary.get("indexId")
+    if not all(
+        isinstance(value, str) and bool(value.strip())
+        for value in (episode_id, summary_id, access_id, work_id)
+    ):
+        return None
+    if (
+        isinstance(index_id, bool)
+        or not isinstance(index_id, int)
+        or index_id <= 0
+        or isinstance(summary_index_id, bool)
+        or not isinstance(summary_index_id, int)
+        or summary_index_id <= 0
+    ):
+        return None
+    if (
+        re.fullmatch(r"[0-9a-f]{13}", episode_id) is None
+        or re.fullmatch(r"[0-9a-f]{13}", work_id) is None
+        or work_id != expected_work_id
+        or episode_id != summary_id
+        or episode_id != access_id
+        or index_id != summary_index_id
+    ):
+        return None
+    return episode_id, index_id
 
 
 def classify_hanayume_access(
@@ -1359,6 +1426,222 @@ class HanayumeDiscoveryAdapter(DiscoveryAdapter):
 
     supports_bounded_discovery = True
 
+    async def resolve_identity_changes(
+        self,
+        page: Page,
+        target: WatchlistTarget,
+        missing_external_ids: tuple[str, ...],
+        observed_records: tuple[DiscoveredRecord, ...],
+    ) -> HanayumeIdentityResolution:
+        """Resolve only strict, native API aliases after an unbounded Full listing."""
+
+        if target.discovery_scope is not None or not missing_external_ids:
+            return HanayumeIdentityResolution()
+        if len(missing_external_ids) > 16:
+            return HanayumeIdentityResolution(
+                diagnostics=(
+                    "identity probe skipped because the missing-ID set exceeded its bounded limit",
+                )
+            )
+        work_id = next(
+            (record.source.external_id.split(":", 1)[0] for record in observed_records
+             if ":" in record.source.external_id),
+            None,
+        )
+        if work_id is None or re.fullmatch(r"[0-9a-f]{13}", work_id) is None:
+            return HanayumeIdentityResolution(diagnostics=("missing-source identity probe lacked a valid work ID",))
+        records_by_id = {
+            record.source.external_id: record
+            for record in observed_records
+            if record.source.external_id.startswith(f"{work_id}:")
+        }
+        if any(
+            not isinstance(record.source.external_id, str)
+            or not record.source.external_id.startswith(f"{work_id}:")
+            for record in observed_records
+        ):
+            return HanayumeIdentityResolution(
+                diagnostics=("identity probe rejected a foreign observed work identity",)
+            )
+        inventory = self.complete_listing_inventory
+        if inventory is None:
+            return HanayumeIdentityResolution(
+                diagnostics=("identity probe skipped because Full listing proof was unavailable",)
+            )
+        inventory_ids = {position.external_id for position in inventory.positions}
+        if inventory_ids != set(records_by_id):
+            return HanayumeIdentityResolution(
+                diagnostics=("identity probe skipped because Full listing proof did not match records",)
+            )
+        old_ids: list[str] = []
+        for external_id in missing_external_ids:
+            if (
+                not isinstance(external_id, str)
+                or not external_id.startswith(f"{work_id}:")
+                or external_id.count(":") != 1
+            ):
+                return HanayumeIdentityResolution(
+                    diagnostics=("identity probe rejected a foreign or malformed missing identity",)
+                )
+            episode_id = external_id.split(":", 1)[1]
+            if re.fullmatch(r"[0-9a-f]{13}", episode_id) is None:
+                return HanayumeIdentityResolution(
+                    diagnostics=("identity probe rejected a malformed missing episode ID",)
+                )
+            old_ids.append(episode_id)
+        if not old_ids:
+            return HanayumeIdentityResolution()
+        expected_page_origin = "https://hanayume.com"
+        if urlsplit(page.url).scheme != "https" or urlsplit(page.url).netloc.lower() not in ALLOWED_HOSTS:
+            return HanayumeIdentityResolution(diagnostics=("identity probe page was outside Hanayume",))
+        api_results = await asyncio.wait_for(
+            page.evaluate(
+                """async (ids) => {
+                  const out = [];
+                  for (const id of ids) {
+                    const url = `https://hanayume.com/api/episodes/${id}`;
+                    let timer = null;
+                    try {
+                      const controller = new AbortController();
+                      timer = setTimeout(() => controller.abort(), 3500);
+                      const response = await fetch(url, {
+                        credentials: 'include', cache: 'no-store', method: 'GET',
+                        signal: controller.signal
+                      });
+                      let metadata = null;
+                      try {
+                        const payload = await response.json();
+                        const e = payload?.episode, s = e?.summary;
+                        const a = e?.access, series = e?.series;
+                        metadata = {episode: {id: e?.id, indexId: e?.indexId,
+                          series: {id: series?.id}, access: {episodeId: a?.episodeId},
+                          summary: {id: s?.id, indexId: s?.indexId}}};
+                      } catch (_) {}
+                      out.push({id, url, status: response.status,
+                        responseUrl: response.url, redirected: response.redirected, payload: metadata});
+                      if (timer !== null) clearTimeout(timer);
+                    } catch (error) {
+                      if (timer !== null) clearTimeout(timer);
+                      out.push({id, url, error: String(error)});
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 150));
+                  }
+                  return out;
+                }""",
+                old_ids,
+            ),
+            timeout=OBSERVATION_TIMEOUT_SECONDS,
+        )
+        if not isinstance(api_results, list):
+            return HanayumeIdentityResolution(diagnostics=("identity probe returned malformed results",))
+        candidates: list[tuple[str, str, str]] = []
+        diagnostics: list[str] = []
+        for result in api_results:
+            if not isinstance(result, dict):
+                diagnostics.append("identity probe returned a malformed row")
+                continue
+            old_id = result.get("id")
+            if (
+                not isinstance(old_id, str)
+                or result.get("status") != 200
+                or result.get("url") != f"{expected_page_origin}/api/episodes/{old_id}"
+                or result.get("responseUrl") != result.get("url")
+                or result.get("redirected") is not False
+            ):
+                diagnostics.append(f"identity proof unavailable for old episode {old_id!r}")
+                continue
+            parsed = parse_hanayume_episode_api_identity(
+                result.get("payload"), expected_work_id=work_id
+            )
+            if parsed is None:
+                diagnostics.append(f"identity proof payload was invalid for old episode {old_id}")
+                continue
+            new_id, index_id = parsed
+            new_external_id = f"{work_id}:{new_id}"
+            record = records_by_id.get(new_external_id)
+            if record is None:
+                diagnostics.append(f"proved new episode {new_external_id} was absent from Full listing")
+                continue
+            new_api = await asyncio.wait_for(
+                page.evaluate(
+                    """async (id) => {
+                      const url = `https://hanayume.com/api/episodes/${id}`;
+                      let timer = null;
+                      try {
+                        const controller = new AbortController();
+                        timer = setTimeout(() => controller.abort(), 3500);
+                        const response = await fetch(url, {
+                          credentials: 'include', cache: 'no-store', method: 'GET',
+                          signal: controller.signal
+                        });
+                        let metadata = null;
+                        try {
+                          const payload = await response.json();
+                          const e = payload?.episode, s = e?.summary;
+                          const a = e?.access, series = e?.series;
+                          metadata = {episode: {id: e?.id, indexId: e?.indexId,
+                            series: {id: series?.id}, access: {episodeId: a?.episodeId},
+                            summary: {id: s?.id, indexId: s?.indexId}}};
+                        } catch (_) {}
+                        const result = {url, status: response.status, responseUrl: response.url,
+                          redirected: response.redirected, payload: metadata};
+                        if (timer !== null) clearTimeout(timer);
+                        return result;
+                      } catch (error) {
+                        if (timer !== null) clearTimeout(timer);
+                        return {url, error: String(error)};
+                      }
+                    }""",
+                    new_id,
+                ),
+                timeout=OBSERVATION_TIMEOUT_SECONDS,
+            )
+            expected_new_url = f"{expected_page_origin}/api/episodes/{new_id}"
+            if (
+                not isinstance(new_api, dict)
+                or new_api.get("status") != 200
+                or new_api.get("url") != expected_new_url
+                or new_api.get("responseUrl") != expected_new_url
+                or new_api.get("redirected") is not False
+            ):
+                diagnostics.append(f"independent new-episode proof failed for {new_external_id}")
+                continue
+            new_parsed = parse_hanayume_episode_api_identity(
+                new_api.get("payload"), expected_work_id=work_id
+            )
+            if new_parsed != (new_id, index_id):
+                diagnostics.append(f"independent identity fields disagreed for {new_external_id}")
+                continue
+            candidates.append((old_id, new_external_id, record.source.url))
+        candidate_groups: dict[str, list[tuple[str, str]]] = {}
+        for old_id, new_external_id, new_url in candidates:
+            candidate_groups.setdefault(new_external_id, []).append((old_id, new_url))
+        seen_new: set[str] = set()
+        changes: list[HanayumeIdentityChange] = []
+        for new_external_id, group in candidate_groups.items():
+            if len(group) != 1:
+                diagnostics.append(f"identity mapping was not one-to-one for {new_external_id}")
+        # A single ambiguous mapping makes the complete Full result unsafe to
+        # apply.  Do not carry forward unrelated unique candidates from the
+        # same probe: the operator must review the whole replacement set.
+        if any(len(group) != 1 for group in candidate_groups.values()):
+            return HanayumeIdentityResolution((), tuple(diagnostics))
+        for new_external_id, group in candidate_groups.items():
+            old_id, new_url = group[0]
+            if new_external_id in seen_new:
+                diagnostics.append(f"identity mapping was not one-to-one for {new_external_id}")
+                return HanayumeIdentityResolution((), tuple(diagnostics))
+            seen_new.add(new_external_id)
+            changes.append(
+                HanayumeIdentityChange(
+                    old_external_id=f"{work_id}:{old_id}",
+                    new_external_id=new_external_id,
+                    new_url=new_url,
+                    reason="Hanayume API exact identity proof; body revision remains possible",
+                )
+            )
+        return HanayumeIdentityResolution(tuple(changes), tuple(diagnostics))
+
     def incremental_stop_decision(
         self,
         record: DiscoveredRecord,
@@ -1554,9 +1837,12 @@ __all__ = [
     "HanayumeDiscoveryAdapter",
     "HanayumeEpisodeIdentity",
     "HanayumeEpisodeUrl",
+    "HanayumeIdentityChange",
+    "HanayumeIdentityResolution",
     "HanayumeRange",
     "canonical_hanayume_episode_url",
     "classify_hanayume_access",
+    "parse_hanayume_episode_api_identity",
     "parse_hanayume_episode_url",
     "parse_hanayume_work_url",
 ]

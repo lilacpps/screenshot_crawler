@@ -9,6 +9,7 @@ import pytest
 import screenshot_crawler.batch.executor as executor_module
 from screenshot_crawler.batch import BatchExecutionError, BatchExecutor, BatchPlanner
 from screenshot_crawler.catalog import CatalogService, ItemInput, SourceInput, SourceTargetInput
+from screenshot_crawler.maintenance.source_identity import SourceIdentityMaintenance
 from screenshot_crawler.site_adapters.base import AccessResourceResolution
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import MangaOneSitePolicy
@@ -168,3 +169,24 @@ def test_work_numbering_refreshes_for_cross_site_sibling_changes(
     with pytest.raises(BatchExecutionError, match="archive prefix"):
         executor._require_candidate_scope(candidates[second.source_id], check_output_paths=False)
     assert naming.call_count == 2
+
+
+def test_identity_change_rejects_batch_candidate_with_old_current_id(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    candidate = add_candidate(catalog, access_mode="free")
+    executor = make_executor(catalog)
+    maintenance = SourceIdentityMaintenance(catalog)
+    plan = maintenance.plan(
+        site=candidate.site,
+        work_key="work-free",
+        old_external_id=candidate.external_id,
+        new_external_id="episode-renumbered",
+        new_locator="https://example.invalid/episode-renumbered",
+        reason="synthetic identity proof",
+    )
+    maintenance.apply(plan)
+
+    with pytest.raises(BatchExecutionError, match="external_id"):
+        executor._require_candidate_scope(candidate, check_output_paths=False)

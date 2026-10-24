@@ -247,13 +247,20 @@ def _run_output_timestamp(value: str) -> str | None:
     return parsed.strftime("%Y%m%dT%H%M%S%f%z")
 
 
-def _run_matches_source(run: CrawlRun, *, item: Item, source: Source) -> bool:
+def _run_matches_source(
+    run: CrawlRun,
+    *,
+    item: Item,
+    source: Source,
+) -> bool:
+    # CrawlRun.external_id_snapshot is an immutable historical record.  Once
+    # the Source identity is explicitly updated, source_id/item_id/site remain
+    # the authoritative ownership proof for that historical run.
     return (
         run.status == "succeeded"
         and run.item_id == item.id
         and run.source_id == source.id
         and run.site_snapshot == source.site
-        and run.external_id_snapshot == source.external_id
     )
 
 

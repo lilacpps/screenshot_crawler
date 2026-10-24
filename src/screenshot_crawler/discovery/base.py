@@ -149,3 +149,20 @@ class DiscoveryAdapter(ABC):
 
         del record, previous, target
         return IncrementalStopDecision.DEFAULT
+
+    async def resolve_identity_changes(
+        self,
+        page: Page,
+        target: WatchlistTarget,
+        missing_external_ids: tuple[str, ...],
+        observed_records: tuple[DiscoveredRecord, ...],
+    ) -> object:
+        """Optionally prove site-native identity replacements after Full listing.
+
+        The default is deliberately empty. Site-specific adapters may return
+        an object with ``changes`` and ``diagnostics`` attributes; Core never
+        derives equivalence from titles or display order.
+        """
+
+        del page, target, missing_external_ids, observed_records
+        return ()

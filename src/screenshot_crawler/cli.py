@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 from collections import Counter
 from collections.abc import Awaitable
@@ -57,8 +58,10 @@ from screenshot_crawler.discovery import (
     DiscoveryService,
 )
 from screenshot_crawler.discovery.models import DiscoveredRecord, DiscoveryResult
+from screenshot_crawler.maintenance.source_identity import SourceIdentityMaintenance
 from screenshot_crawler.probe.collector import ProbeCollector
 from screenshot_crawler.runtime_settings import load_runtime_settings
+from screenshot_crawler.site_adapters.hanayume.discovery import parse_hanayume_episode_url
 from screenshot_crawler.site_adapters.registry import AdapterRegistry
 from screenshot_crawler.site_policies import (
     BookWalkerSitePolicy,
@@ -372,6 +375,31 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("catalog.sqlite"),
         help="Catalog SQLite path (default: catalog.sqlite)",
     )
+    catalog_identity = catalog_subparsers.add_parser(
+        "source-identity",
+        help="Plan or apply a manually confirmed Hanayume Source identity change",
+    )
+    catalog_identity.add_argument("--site", default="hanayume")
+    catalog_identity.add_argument("--work-key", required=True)
+    catalog_identity.add_argument("--old-external-id", required=True)
+    catalog_identity.add_argument("--new-external-id", required=True)
+    catalog_identity.add_argument("--new-url", required=True)
+    catalog_identity.add_argument("--reason", required=True)
+    catalog_identity.add_argument(
+        "--body-revision-possible", action=argparse.BooleanOptionalAction, default=True,
+        help="Record that the episode body may have changed (default: true)",
+    )
+    identity_mode = catalog_identity.add_mutually_exclusive_group(required=True)
+    identity_mode.add_argument("--dry-run", action="store_true", help="Read-only plan")
+    identity_mode.add_argument("--apply", action="store_true", help="Apply a reviewed plan")
+    catalog_identity.add_argument(
+        "--plan-token", help="Token printed by a prior dry-run; required for apply",
+    )
+    catalog_identity.add_argument(
+        "--catalog", type=Path, default=Path("catalog.sqlite"),
+        help="Catalog SQLite path (default: catalog.sqlite)",
+    )
+    catalog_identity.add_argument("--json", action="store_true", help="Print JSON")
 
     batch = subparsers.add_parser("batch", help="Plan or execute Catalog crawl candidates")
     batch_subparsers = batch.add_subparsers(dest="batch_action", required=True)
@@ -1192,6 +1220,50 @@ def _run_catalog(args: argparse.Namespace) -> None:
         else:
             item = service.get_item(args.item_id)
         print(f"item={item.id} note={item.note}")
+    elif args.catalog_action == "source-identity":
+        if args.site != "hanayume":
+            raise CatalogError("catalog source-identity currently supports --site hanayume only")
+        old_parts = args.old_external_id.split(":", 1)
+        new_parts = args.new_external_id.split(":", 1)
+        parsed_url = parse_hanayume_episode_url(args.new_url)
+        if (
+            len(old_parts) != 2 or len(new_parts) != 2
+            or old_parts[0] != new_parts[0]
+            or re.fullmatch(r"[0-9a-f]{13}", old_parts[0]) is None
+            or re.fullmatch(r"[0-9a-f]{13}", old_parts[1]) is None
+            or re.fullmatch(r"[0-9a-f]{13}", new_parts[1]) is None
+            or parsed_url is None or parsed_url.episode_id != new_parts[1]
+        ):
+            raise CatalogError(
+                "Hanayume identity changes require work-prefixed IDs and a matching canonical episode URL"
+            )
+        service = SourceIdentityMaintenance(args.catalog)
+        plan = service.plan(
+            site=args.site,
+            work_key=args.work_key,
+            old_external_id=args.old_external_id,
+            new_external_id=args.new_external_id,
+            new_locator=args.new_url,
+            reason=args.reason,
+            body_revision_possible=args.body_revision_possible,
+        )
+        if args.apply:
+            if not args.plan_token:
+                raise CatalogError("--plan-token from a prior --dry-run is required with --apply")
+            service.apply(plan, expected_token=args.plan_token)
+        payload = plan.to_dict()
+        payload["applied"] = bool(args.apply)
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            action = "Applied" if args.apply else "Dry-run plan"
+            print(f"{action}: {plan.site}/{plan.old_external_id} -> {plan.new_external_id}")
+            print(f"  work: {plan.work_key}")
+            print(f"  retained_source: {plan.old_source_id}")
+            print(f"  donor_source: {plan.donor_source_id or '-'}")
+            print(f"  donor_pristine: {'yes' if plan.donor_pristine else 'no'}")
+            print(f"  body_revision_possible: {'yes' if plan.body_revision_possible else 'no'}")
+            print(f"  plan_token: {plan.token}")
 
 
 def _print_batch_plan(

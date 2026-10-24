@@ -48,6 +48,47 @@ The scope-sync apply example can also be used after a successful full scoped
 Hanayume Discovery. Batch plan remains read-only; use the same copy paths for
 any separately authorized execution.
 
+## Episode identity changes
+
+Hanayume native API evidence can prove an old episode URL now resolves to a
+new stable episode identity, but it does not prove body bytes are unchanged.
+Automatic carry-forward is restricted to an exhausted unbounded Full listing and
+strict typed payload checks: exact old URL HTTP 200 without redirect, new
+`episode.id`, `summary.id`, and `access.episodeId`, consistent `indexId`, and
+matching work/series. A separate GET of the new endpoint and injective mapping
+are required. Title, position, contentId, and neighboring rows are never
+enough. The common explicit maintenance fallback is documented in
+`docs/HANAYUME_SOURCE_IDENTITY.md`; it uses a dry-run token and transactional
+apply, preserving Item/Source history and invalidating listing proof. No
+schema version change or alias table is used; historical CrawlRun snapshots
+already retain the old external ID.
+
+Copy-only live validation for `ng-life` confirmed the old/new API identity
+relation above. An exhausted Full run retained the completed old Item/Source,
+removed only the empty donor, preserved every CrawlRun/Artifact/quota row,
+recovered Scope Sync, and performed zero ZIP operations. A separate CLI
+dry-run/apply copy confirmed plan-token binding and byte-stable dry-run behavior;
+the operational Catalog and ZIPs were not touched. This proof covers native
+identity metadata, not equality of episode body bytes.
+The observed old endpoint `90fac353b1178` returned
+`episode.id=5fa301a1e55e3`, `series.id=ca6472995ecea`, and
+`indexId=summary.indexId=609597`, with matching summary/access IDs; an
+independent new-endpoint GET returned the same tuple without redirect.
+The affected shared suite passed 477 tests with no failures or skips, the
+existing Hanayume browser enumeration suite passed 15 tests with no skips, and
+an isolated Batch plan kept the retained completed source unscheduled with
+archive stem `001-NGライフ-scene1` and zero ZIP operations.
+The focused identity/maintenance regression set passed 45 tests with no
+failures or skips; its 118 warnings are existing pytest-asyncio deprecations.
+An existing donor with a manual `Item.item_title` is treated as non-pristine
+and is refused, preserving that operator metadata.
+The final repository run collected 5,508 tests: 5,506 passed, 2 failed, and
+0 skipped. The Piccoma geometry failure passed on an isolated rerun; the other
+failure is the pre-existing runtime-settings expectation for bookwalker200
+against the user `crawler.yaml` value 0. No identity test failed, and the
+independent final compare confirmed schema v7 plus unchanged original
+Source/Item graphs for both NG Life entries.
+
 ## Registration and browser use
 
 `HanayumeDiscoveryAdapter` is registered in the CLI Discovery registry. `HanayumeAdapter` is registered in the manual Viewer and Batch adapter registries; `HanayumeSitePolicy` is registered in the Batch policy registry. All paths use the shared Crawler Chrome through the existing CDP `BrowserSession` and Playwright `Page`; none launches Chrome or selects a profile. Discovery writes through the existing `DiscoveryService` and Catalog schema. Batch uses the existing Planner/Executor/Runner/Packager; no site-specific Core branch or Catalog schema was added.

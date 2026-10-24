@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from playwright.async_api import Error as PlaywrightError
+
 from screenshot_crawler.catalog import (
     CatalogService,
     CatalogValidationError,
@@ -15,12 +17,17 @@ from screenshot_crawler.catalog import (
 )
 from screenshot_crawler.catalog.models import CatalogRecord, Item
 from screenshot_crawler.discovery.models import (
+    DiscoveredRecord,
     DiscoveryMode,
     DiscoveryResult,
     DiscoverySourceSnapshot,
     IncrementalStopDecision,
 )
 from screenshot_crawler.discovery.registry import DiscoveryAdapterRegistry
+from screenshot_crawler.maintenance.source_identity import (
+    SourceIdentityError,
+    SourceIdentityMaintenance,
+)
 from screenshot_crawler.watchlist.fingerprints import target_scope_fingerprint
 
 if TYPE_CHECKING:
@@ -120,6 +127,7 @@ class DiscoveryService:
         known_streak = 0
         previous_known_identity: tuple[str, str] | None = None
         observed_source_ids: list[int] = []
+        processed_records: list[DiscoveredRecord] = []
         global_position_hints: dict[int, int] = {}
         source_ids_by_global_position: dict[int, int] = {}
         stopped_reason: str | None = None
@@ -127,6 +135,7 @@ class DiscoveryService:
 
         try:
             async for record in adapter.iter_records(page, target, mode):
+                processed_records.append(record)
                 existing = self.catalog.find_source(target.site, record.source.external_id)
                 previous = initial_sources.get(record.source.external_id)
                 if existing is None:
@@ -240,6 +249,99 @@ class DiscoveryService:
             )
 
         if mode == "full":
+            resolver = getattr(adapter, "resolve_identity_changes", None)
+            if callable(resolver) and target.discovery_scope is None:
+                missing_external_ids = tuple(
+                    external_id
+                    for external_id, snapshot in initial_sources.items()
+                    if snapshot.discovery_key == target.key
+                    and external_id not in observed_external_ids
+                )
+                try:
+                    resolution = await resolver(
+                        page,
+                        target,
+                        missing_external_ids,
+                        tuple(processed_records),
+                    )
+                except (PlaywrightError, TimeoutError, ValueError) as exc:
+                    resolution = None
+                    warnings.append(f"Site identity probe failed closed: {exc}")
+                if resolution is not None:
+                    warnings.extend(
+                        str(message)
+                        for message in getattr(resolution, "diagnostics", ())
+                        if isinstance(message, str) and message
+                    )
+                    maintenance = SourceIdentityMaintenance(self.catalog)
+                    for change in getattr(resolution, "changes", ()):
+                        try:
+                            plan = maintenance.plan(
+                                site=target.site,
+                                work_key=target.work_key,
+                                old_external_id=change.old_external_id,
+                                new_external_id=change.new_external_id,
+                                new_locator=change.new_url,
+                                reason=change.reason,
+                                body_revision_possible=change.body_revision_possible,
+                            )
+                            maintenance.apply(plan, expected_token=plan.token)
+                        except SourceIdentityError as exc:
+                            warnings.append(
+                                f"Identity change {change.old_external_id} -> "
+                                f"{change.new_external_id} was not applied: {exc}"
+                            )
+                            continue
+                        new_source = self.catalog.find_source(
+                            target.site, change.new_external_id
+                        )
+                        if new_source is None:
+                            raise DiscoveryIncompleteError(
+                                "Identity change removed its retained Source"
+                            )
+                        record = next(
+                            (
+                                candidate
+                                for candidate in processed_records
+                                if candidate.source.external_id == change.new_external_id
+                            ),
+                            None,
+                        )
+                        if record is None:
+                            raise DiscoveryIncompleteError(
+                                "Identity change has no Full-list record"
+                            )
+                        self._refresh_identity_record(
+                            work_id=work.id,
+                            source_id=new_source.id,
+                            site=target.site,
+                            discovery_key=target.key,
+                            record=record,
+                        )
+                        retained_item = self.catalog.get_item(new_source.item_id)
+                        warnings.append(
+                            f"Identity change applied: {change.old_external_id} -> "
+                            f"{change.new_external_id}; retained Source {new_source.id}, "
+                            f"Item status {retained_item.status} preserved; body revision remains possible"
+                        )
+                        donor_ids = {
+                            source_id
+                            for source_id in observed_source_ids
+                            if source_id != new_source.id
+                            and source_id == plan.donor_source_id
+                        }
+                        observed_source_ids[:] = [
+                            new_source.id if source_id in donor_ids else source_id
+                            for source_id in observed_source_ids
+                        ]
+                        if plan.donor_source_id is not None:
+                            if plan.donor_source_id in global_position_hints:
+                                global_position_hints[new_source.id] = global_position_hints.pop(
+                                    plan.donor_source_id
+                                )
+                            for position, source_id in list(source_ids_by_global_position.items()):
+                                if source_id == plan.donor_source_id:
+                                    source_ids_by_global_position[position] = new_source.id
             if target.discovery_scope is None:
                 self.catalog.mark_sources_unavailable_except(
                     site=target.site,
@@ -316,6 +418,45 @@ class DiscoveryService:
             complete=complete,
             stopped_reason=stopped_reason or "exhausted",
             warnings=tuple(warnings),
+        )
+
+    def _refresh_identity_record(
+        self,
+        *,
+        work_id: int,
+        source_id: int,
+        site: str,
+        discovery_key: str,
+        record: DiscoveredRecord,
+    ) -> None:
+        """Refresh the retained Source with the current Full-list observation."""
+
+        source = record.source
+        self.catalog.refresh_discovered_source(
+            work_id=work_id,
+            source_id=source_id,
+            item_input=ItemInput(
+                kind=record.item.kind,
+                order_key=record.item.order_key,
+                order_label=record.item.order_label,
+            ),
+            source_input=SourceInput(
+                site=site,
+                external_id=source.external_id,
+                discovery_key=discovery_key,
+                access_mode=source.access_mode,
+                free_until=source.free_until,
+                published_at=source.published_at,
+                access_granted_until=source.access_granted_until,
+                available=source.available,
+                access_checked_at=source.access_checked_at,
+                last_seen_at=source.last_seen_at,
+            ),
+            web_target_input=SourceTargetInput(
+                backend="web", target_key="default", locator=source.url,
+                priority=100, enabled=True,
+            ),
+            access_granted_until_observed=source.access_granted_until_observed,
         )
 
     def _assign_full_display_positions(

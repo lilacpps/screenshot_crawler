@@ -1,5 +1,26 @@
 # Discovery / Catalog / Batch Design
 
+## Hanayume episode identity changes
+
+The Hanayume adapter can report a candidate only after an exhausted unbounded
+Full listing. It probes a bounded set of missing old IDs and requires exact,
+non-redirecting old and new API responses with mutually consistent native
+episode, summary, access, series, and index identifiers. Title, display order,
+content ID, and neighboring rows are diagnostic signals only. Any malformed,
+foreign, ambiguous, or incomplete result remains unresolved and is surfaced
+to the operator.
+
+The common maintenance transaction updates the current Source external ID and
+web/default locator while retaining Item/Source IDs, status, CrawlRuns,
+Artifacts, quota records, and archive paths. Historical
+`crawl_runs.external_id_snapshot` values remain unchanged. It rejects a donor
+with any acquisition history or a running old CrawlRun, invalidates the old
+listing proof, and marks acquisition scope stale. Automatic carry-forward
+rebuilds the proof after that same exhausted Full; a manual CLI apply requires
+a subsequent successful Full Discovery. Catalog schema/version is unchanged.
+The explicit CLI procedure and dry-run token are in
+`docs/HANAYUME_SOURCE_IDENTITY.md`.
+
 ## Younganimal active rentals, manual ticket grants, and direct reader entry (2026-10-18)
 
 Younganimal Discovery joins settled `epListUser` account rows to canonical

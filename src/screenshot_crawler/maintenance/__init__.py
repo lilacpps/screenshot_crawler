@@ -14,6 +14,11 @@ from screenshot_crawler.maintenance.archive_renumber import (
     apply_archive_renumber_plan,
     build_archive_renumber_plan,
 )
+from screenshot_crawler.maintenance.source_identity import (
+    SourceIdentityError,
+    SourceIdentityMaintenance,
+    SourceIdentityPlan,
+)
 
 __all__ = [
     "ArchiveAuditReport",
@@ -22,6 +27,9 @@ __all__ = [
     "ArchiveRenumberPlan",
     "ArchiveRenumberResult",
     "RenumberEntry",
+    "SourceIdentityError",
+    "SourceIdentityMaintenance",
+    "SourceIdentityPlan",
     "apply_archive_renumber_plan",
     "audit_existing_archives",
     "build_archive_renumber_plan",
