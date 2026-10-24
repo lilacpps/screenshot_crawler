@@ -14,7 +14,9 @@ EPISODE_ID = "856137d88753b"
 EPISODE_URL = f"https://younganimal.com/episodes/{EPISODE_ID}"
 
 
-@pytest.mark.parametrize("path", ["/store_items/1888", "/category/manga/day/2/1"])
+@pytest.mark.parametrize(
+    "path", ["/store_items/1888", "/category/manga/day/2/1", "/category/manga/day/1/1"]
+)
 @pytest.mark.parametrize(
     ("changes", "expected"),
     [

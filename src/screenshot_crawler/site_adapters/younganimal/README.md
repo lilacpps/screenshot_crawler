@@ -393,11 +393,13 @@ Stripe controller/m-outer and Facebook `/tr/` third-party subframe requests.
 The later Item/Source 33083 read-only trace also observed
 `/store_items/<positive-id>` RSC GET fetches. Item/Source 33403's failure and
 bounded read-only reproduction on 2026-10-22 additionally identified the exact
-`/category/manga/day/2/1` RSC GET fetch. These use the same abort-only
+`/category/manga/day/2/1` RSC GET fetch. Item/Source 36914's failure and
+read-only reproduction on 2026-10-25 additionally identified the exact
+`/category/manga/day/1/1` RSC GET fetch. These use the same abort-only
 known-page predicate: exact same-site origin, main-frame fetch, no navigation,
 and both `_rsc` query and `rsc` header markers. The product prefetch is blocked
 without failing the selected episode; other signatures remain fatal.
-Only that observed category path is recognized; other category paths, suffixes
+Only those two observed category paths are recognized; other category paths, suffixes
 and trailing-slash variants remain unknown. The 33403 diagnostics recorded
 `ticket_action_attempted=false`, and its metrics contain no rental-checkout
 request. The fixed production guard was checked on the exact episode with one
@@ -405,6 +407,13 @@ main document, unchanged canonical URL, zero click/checkout attempts and all
 26 mutating requests blocked. It recorded/aborted the category prefetch with no
 fatal reason. Evidence: `output/younganimal-error-33403/baseline.json` and
 `fixed.json`. No consuming grant-only retry was performed.
+The 36914 baseline reproduced the fatal day/1/1 route with both RSC markers;
+the fixed guard recorded and aborted it without a fatal reason. Each shared-CDP
+probe used one owned Page, one main document, an unchanged canonical episode
+URL, zero click/checkout attempts, and blocked every mutating request (26
+baseline, 24 fixed). Evidence: `output/younganimal-error-36914/baseline.json`
+and `fixed.json`. This verifies route handling, not a fresh consuming grant;
+no Catalog/library write or consuming grant-only retry was performed.
 The adapter recognizes only these observed route families with their reviewed
 origin, method, resource, navigation, and query constraints, then aborts them
 before any downstream handler. Stripe matching ignores URL fragments. The

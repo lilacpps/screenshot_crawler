@@ -343,9 +343,11 @@ def guarded_route_reason(
             return "non_target_main_document"
         if not is_main_frame:
             return "unexpected_subframe_navigation"
-    # The category path is the exact natural prefetch observed on Item 33403;
+    # These category paths are exact natural prefetches observed on Items 33403/36914;
     # other category routes remain unknown. Recognition only authorizes abort.
-    known_page_rsc_path = path in {"/", "/category/manga/day/2/1"} or re.fullmatch(
+    known_page_rsc_path = path in {
+        "/", "/category/manga/day/2/1", "/category/manga/day/1/1",
+    } or re.fullmatch(
         r"/store_items/(?:[1-9][0-9]*|series/[1-9][0-9]*/[1-9][0-9]*)", path
     ) is not None
     if not valid:

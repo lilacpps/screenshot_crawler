@@ -237,7 +237,7 @@ before starting a candidate; its UTF-8 rerun completed without a code change.
 
 
 
-### Ticket-entry category prefetch: Item/Source 33403
+### Ticket-entry category prefetch: Items/Sources 33403 and 36914
 
 The 2026-10-22 06:01:52 JST grant-only attempt on episode `c54c96563dfb3`
 / work `94d9f27c19815` failed before any ticket action. Its diagnostic
@@ -249,7 +249,15 @@ confirmed both `_rsc` query and `rsc` header markers. The same error reason
 alone did not identify this path; diagnosis used the retained first-failure
 request and the live trace.
 
-`live_access.guarded_route_reason()` now recognizes that exact path under the
+The 2026-10-25 07:36:21 JST grant-only attempt on Item/Source 36914
+(episode `261961fc76595`, work `2a1c114334a86`, 第24話①) failed on the
+different exact path `/category/manga/day/1/1`. Its retained diagnostic also
+shows `ticket_action_attempted=false`; metrics run
+`37f1bed5905849ce9a9d656d01d19116` contains zero rental-checkout requests and
+zero HTTP 403/429/5xx. A bounded shared-CDP baseline reproduced that natural
+non-navigation main-frame GET fetch and confirmed both RSC markers.
+
+`live_access.guarded_route_reason()` now recognizes those two exact paths under the
 existing known-page predicate: exact HTTPS site origin, GET, fetch, main frame,
 no navigation, and both RSC markers. The route is recorded and aborted before
 downstream dispatch while the selected episode operation continues. Recognition
@@ -268,15 +276,29 @@ category path, with no failure and the canonical URL unchanged. No ticket use,
 normal Catalog/library write, capture or consuming grant-only retry was made.
 The fix verifies route handling; fresh consuming entry remains unverified here.
 
-Validation covers 112 live-access/policy/batch Unit cases and 24 real-browser
+36914 evidence is ignored under `output/younganimal-error-36914/`: the bounded
+`probe.py`, `baseline.json`, and `fixed.json`. Each probe used one owned Page,
+one exact episode main document, unchanged canonical URL, zero click events
+and zero checkout attempts. All mutating requests were blocked (26 baseline,
+24 fixed). The fixed production guard recorded three known-page prefetches,
+including day/1/1, with no fatal reason. Only the owned Page was closed; no
+normal Catalog/library write, capture or consuming grant-only retry was made.
+There is no new CLI/configuration, generic access/resource or shared Core
+behavior, so `note/00_core.md` needs no update. Rerun the existing Batch
+command to use the fix; unknown routes still fail closed.
+
+Validation covers 128 live-access/policy/batch Unit cases and 24 real-browser
 ticket-entry Integration cases, including normal Capture/END and grant-only
 continuation with zero downstream category dispatch, malformed signatures,
 unknown-route diagnostics before click and consumption persistence after a
-later failure. All selected tests pass with zero skipped. Ruff passes for
-`src tests`. The initial Unit selection encountered one default temporary-dir
-setup error; the complete selection passes with an isolated short workspace
-basetemp. Full repository pytest, unrelated Discovery/Viewer Integration and
-standalone Research tests are outside this small site-local routing change.
+later failure. The expanded day/1/1 signature regression failed on the original
+code and passes after the fix. All selected tests pass with zero skipped, using
+isolated workspace basetemps (356 unrelated browser cases deselected).
+Existing pytest-asyncio deprecation warnings remain. Global `ruff check src tests`
+and scoped `git diff --check` pass. Full repository pytest, unrelated
+Discovery/Viewer Integration and standalone Research tests are outside this
+small site-local routing change; live verification is the non-consuming route
+probe above, not a consuming entry run.
 
 ### Remaining PNG fallback correction after recrawl: 36225 / 35454
 
