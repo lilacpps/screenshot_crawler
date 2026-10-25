@@ -264,6 +264,7 @@ class JobController:
         token = "worker-" + secrets.token_urlsafe(24)
         command = [
             self.python_executable,
+            "-u",
             "-m",
             self.worker_module,
             "--job-id",
@@ -282,6 +283,10 @@ class JobController:
         stdout_log = (job_dir / "stdout.log").open("a", encoding="utf-8")
         stderr_log = (job_dir / "stderr.log").open("a", encoding="utf-8")
         worker_env = os.environ.copy()
+        # Only the child worker is made unbuffered.  The GUI/controller and
+        # unrelated CLI invocations retain their existing environment.
+        worker_env["PYTHONUNBUFFERED"] = "1"
+        worker_env["PYTHONIOENCODING"] = "utf-8"
         # A previous controller or shell must not silently provide an
         # endpoint when this request has no explicit transient override.
         worker_env.pop("CRAWLER_CDP_ENDPOINT_OVERRIDE", None)
@@ -295,6 +300,8 @@ class JobController:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             shell=False,
             env=worker_env,
         )

@@ -625,6 +625,36 @@ class JobStore:
                 "SELECT * FROM job_events WHERE job_id=? ORDER BY sequence LIMIT ?", (job_id, limit)
             ).fetchall())
 
+    def list_events_after(
+        self, job_id: str, *, after_sequence: int = 0, limit: int = 500
+    ) -> tuple[sqlite3.Row, ...]:
+        """Read a bounded keyset page after a known sequence cursor."""
+
+        if limit <= 0:
+            return ()
+        with self._connect() as connection:
+            return tuple(connection.execute(
+                """SELECT * FROM job_events
+                   WHERE job_id=? AND sequence>?
+                   ORDER BY sequence LIMIT ?""",
+                (job_id, int(after_sequence), int(limit)),
+            ).fetchall())
+
+    def list_events_latest(
+        self, job_id: str, *, limit: int = 100
+    ) -> tuple[sqlite3.Row, ...]:
+        """Read the newest bounded event window in chronological order."""
+
+        if limit <= 0:
+            return ()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM job_events
+                   WHERE job_id=? ORDER BY sequence DESC LIMIT ?""",
+                (job_id, int(limit)),
+            ).fetchall()
+        return tuple(reversed(rows))
+
     def terminal_event_summary(self, job_id: str) -> dict[str, Any]:
         """Reduce terminal facts in SQL without loading an unbounded event log."""
 

@@ -159,3 +159,47 @@ P2/P3画面のWindowsキャプチャは、認証情報・実サイト接続・wo
 保存します。実際のworker実行確認は、別途隔離Catalogを使うテストで行います。
 
 Windows上でGUIを起動し、一覧の列幅、情報量、詳細レイアウト、チェック操作をご確認ください。
+
+## Live execution monitor and job history (Phase 04)
+
+The lower execution monitor and the Jobs history page share the same
+`JobStore`, `JobController`, bounded fixed-path `LogTailReader`, and immutable
+`JobResultPresenter`. The existing upper path/toolbar/tree/detail/action/error
+layout and control meanings remain unchanged. The upper content now lives in
+a scrollable viewport, so the user can enlarge the lower monitor without
+squeezing the existing form/table minimums. A real vertical splitter drag can
+reserve at least 400px for the monitor at 1400x850; resize, polling, and
+follow preserve the selected ratio, and collapse/expand restores the prior
+expanded size. History list/detail selection and scroll state are independent
+from monitor job/stream selection; unchanged rows are not rebuilt, and changed
+summary/detail text preserves a manual scroll anchor. Latest-event SQL keeps
+terminal context beyond the old first-500 window.
+
+The monitor exposes bounded stdout/stderr logs, omission metadata, structured
+Discover/Batch/Grant summaries, and structured problems. Child execution uses
+UTF-8 only at the child boundary; parent CLI encoding is unchanged. View
+initialization/refresh failures are isolated from queue and safety state
+handling, while controller/database failures remain fail-closed.
+
+Phase 04 evidence is synthetic/offscreen plus native Windows captures under
+`gui-screenshots/phase4-live-monitor-*.png` and
+`gui-screenshots/phase4-live-monitor.actual.json`. Earlier native captures
+record the pre-follow-up 980x600 request as actual 980x628; the follow-up
+targeted geometry tests validate the scrollable 980x600 viewport behavior.
+The report also records actual 1400x850 and history 1150x850 captures, with
+worker/browser startup disabled. Root's follow-up native helper records
+Windows/DPR 1.5, actual 980x600, a 230px monitor, a 326px upper viewport,
+bounded header widths, a collapsed tree, Japanese log text, and no startup
+QSplitter warning. Stress fixtures cover 50,000 Events and
+50,000 log lines over
+5 MiB, timer responsiveness, bounded rendering, manual anchor/follow, history,
+rerun, and input-hash preservation. No operational Catalog, Watchlist, Books,
+quota, ticket, real site, or CDP access was used.
+
+Reproduce the synthetic captures with:
+
+```powershell
+.\.venv\Scripts\python.exe tools/gui_live_monitor_phase4_screenshots.py `
+  --sample-output .tmp/glm-phase4-content-inputs `
+  --screenshots .tmp/glm-phase4-content-shots
+```

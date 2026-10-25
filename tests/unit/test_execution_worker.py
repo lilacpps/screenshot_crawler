@@ -9,6 +9,7 @@ from screenshot_crawler.batch import BatchPlanner
 from screenshot_crawler.batch.naming import archive_metadata_for_catalog
 from screenshot_crawler.catalog import CatalogService
 from screenshot_crawler.core.packaging import archive_stem
+from screenshot_crawler.discovery.models import DiscoveryResult
 from screenshot_crawler.execution_worker import (
     _request_cdp_endpoint,
     _required_fingerprint,
@@ -140,7 +141,11 @@ def test_worker_does_not_treat_incomplete_discovery_as_success(
     monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry", lambda: object())
     monkeypatch.setattr("screenshot_crawler.execution_worker.read_env_file", lambda path: {})
     async def incomplete(*args, **kwargs):
-        return SimpleNamespace(complete=False, stopped_reason="incomplete")
+        return DiscoveryResult(
+            mode="full", target_key="key-a", observed_count=3, new_count=2,
+            known_count=1, complete=False, stopped_reason="incomplete",
+            warnings=("listing warning",), error="listing incomplete",
+        )
     monkeypatch.setattr("screenshot_crawler.execution_worker._discover_target", incomplete)
     request = {
         "action": "discover",
@@ -151,8 +156,148 @@ def test_worker_does_not_treat_incomplete_discovery_as_success(
         "watchlist_path": str(watchlist_path),
         "plan_fingerprint": "confirmed",
     }
+    events: list[tuple[str, dict[str, object]]] = []
     with pytest.raises(RuntimeError, match="Discovery incomplete"):
-        asyncio.run(_run(request))
+        asyncio.run(
+            _run(
+                request,
+                event_sink=lambda event_type, **fields: events.append((event_type, fields)),
+            )
+        )
+    assert any(
+        event_type == "discovery_result"
+        and fields["key"] == "key-a"
+        and fields["payload"]["observed"] == 3  # type: ignore[index]
+        and fields["payload"]["warnings"] == ["listing warning"]  # type: ignore[index]
+        for event_type, fields in events
+    )
+    assert any(
+        event_type == "candidate_finished"
+        and fields["key"] == "key-a"
+        and fields["result"] == "failed"
+        for event_type, fields in events
+    )
+
+
+def test_worker_discovery_result_event_and_stdout_match_cui_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from screenshot_crawler.catalog import CatalogService
+    from screenshot_crawler.management.models import InventorySnapshot
+    from screenshot_crawler.watchlist.service import WatchlistService
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    CatalogService(catalog_path)
+    watchlist_path = tmp_path / "watchlist.yaml"
+    WatchlistService(watchlist_path).add(
+        key="key-a", work_key="work-a", site="mangaone",
+        url="https://example.invalid/a", label="A",
+    )
+    monkeypatch.setattr(
+        "screenshot_crawler.execution_worker.InventoryService.load",
+        lambda *args, **kwargs: InventorySnapshot.__new__(InventorySnapshot),
+    )
+    monkeypatch.setattr(
+        "screenshot_crawler.execution_worker.ExecutionPlanService.preview",
+        lambda *args, **kwargs: SimpleNamespace(blockers=(), fingerprint="confirmed"),
+    )
+    monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry", lambda: object())
+    monkeypatch.setattr("screenshot_crawler.execution_worker.read_env_file", lambda path: {})
+
+    async def complete(*args, **kwargs):
+        return DiscoveryResult(
+            mode="full", target_key="key-a", observed_count=4, new_count=3,
+            known_count=1, complete=True, stopped_reason="exhausted",
+            warnings=("one warning",),
+        )
+
+    monkeypatch.setattr("screenshot_crawler.execution_worker._discover_target", complete)
+    request = {
+        "action": "discover", "selected_keys": ["key-a"], "sites": ["mangaone"],
+        "keys_by_site": {"mangaone": ["key-a"]}, "catalog_path": str(catalog_path),
+        "watchlist_path": str(watchlist_path), "plan_fingerprint": "confirmed",
+    }
+    events: list[tuple[str, dict[str, object]]] = []
+    asyncio.run(
+        _run(request, event_sink=lambda event_type, **fields: events.append((event_type, fields)))
+    )
+    result_event = next(fields for event_type, fields in events if event_type == "discovery_result")
+    assert result_event["key"] == "key-a"
+    assert result_event["result"] == "succeeded"
+    assert result_event["payload"] == {
+        "target": "key-a", "mode": "full", "observed": 4, "new": 3,
+        "known": 1, "complete": True, "stopped_reason": "exhausted",
+        "warnings": ["one warning"],
+    }
+    output = capsys.readouterr().out
+    assert "Discovery completed:" in output
+    assert "  target: key-a" in output
+    assert "  observed: 4" in output
+    assert "  new: 3" in output
+    assert "  known: 1" in output
+    assert "  complete: True" in output
+    assert "  stopped_reason: exhausted" in output
+    assert "Warning: one warning" in output
+
+
+def test_worker_discovery_exception_is_redacted_keyed_and_fail_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from screenshot_crawler.catalog import CatalogService
+    from screenshot_crawler.management.models import InventorySnapshot
+    from screenshot_crawler.watchlist.service import WatchlistService
+
+    catalog_path = tmp_path / "catalog.sqlite"
+    CatalogService(catalog_path)
+    watchlist_path = tmp_path / "watchlist.yaml"
+    service = WatchlistService(watchlist_path)
+    for key in ("key-a", "key-b"):
+        service.add(
+            key=key, work_key="work-a", site="mangaone",
+            url=f"https://example.invalid/{key}", label=key,
+        )
+    monkeypatch.setattr(
+        "screenshot_crawler.execution_worker.InventoryService.load",
+        lambda *args, **kwargs: InventorySnapshot.__new__(InventorySnapshot),
+    )
+    monkeypatch.setattr(
+        "screenshot_crawler.execution_worker.ExecutionPlanService.preview",
+        lambda *args, **kwargs: SimpleNamespace(blockers=(), fingerprint="confirmed"),
+    )
+    monkeypatch.setattr("screenshot_crawler.execution_worker._discovery_registry", lambda: object())
+    monkeypatch.setattr("screenshot_crawler.execution_worker.read_env_file", lambda path: {})
+    called: list[str] = []
+
+    async def fail(*args, **kwargs):
+        called.append(kwargs["target"].key)
+        raise RuntimeError(
+            "Authorization: Bearer secret https://user:pass@example.test/?token=abc"
+        )
+
+    monkeypatch.setattr("screenshot_crawler.execution_worker._discover_target", fail)
+    request = {
+        "action": "discover", "selected_keys": ["key-a", "key-b"],
+        "sites": ["mangaone"], "keys_by_site": {"mangaone": ["key-a", "key-b"]},
+        "catalog_path": str(catalog_path), "watchlist_path": str(watchlist_path),
+        "plan_fingerprint": "confirmed",
+    }
+    events: list[tuple[str, dict[str, object]]] = []
+    with pytest.raises(RuntimeError, match="Authorization"):
+        asyncio.run(
+            _run(request, event_sink=lambda event_type, **fields: events.append((event_type, fields)))
+        )
+    assert called == ["key-a"]
+    failure = next(
+        fields for event_type, fields in events
+        if event_type == "candidate_finished" and fields.get("result") == "failed"
+    )
+    assert failure["key"] == "key-a"
+    assert "secret" not in str(failure["reason"])
+    assert "pass" not in str(failure["reason"])
+    assert "abc" not in str(failure["reason"])
+    output = capsys.readouterr().out
+    assert "Discovery failed for key key-a" in output
+    assert "secret" not in output and "pass" not in output and "abc" not in output
 
 
 @pytest.mark.parametrize(

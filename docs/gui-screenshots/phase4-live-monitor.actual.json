@@ -1,0 +1,59 @@
+{
+  "platform": "windows",
+  "device_pixel_ratio": 1.5,
+  "logical_sizes": [
+    [
+      980,
+      600
+    ],
+    [
+      1400,
+      850
+    ],
+    [
+      1150,
+      850
+    ]
+  ],
+  "capture_sizes": {
+    "window_1400": [
+      1400,
+      850
+    ],
+    "history_1150": [
+      1150,
+      850
+    ]
+  },
+  "geometry_980": {
+    "logical_size": [
+      980,
+      628
+    ],
+    "window_minimum_height": 628,
+    "upper_height": 558,
+    "upper_minimum_hint": 548,
+    "upper_minimum_height": 548,
+    "monitor_height": 26,
+    "monitor_collapsed": true,
+    "action_width": 110,
+    "state_width": 180,
+    "location_width": 228,
+    "device_pixel_ratio": 1.5
+  },
+  "screenshots": [
+    "phase4-live-monitor-980-failed.png",
+    "phase4-live-monitor-1400-discover.png",
+    "phase4-live-monitor-1400-batch.png",
+    "phase4-live-monitor-1400-grant-failed.png",
+    "phase4-live-monitor-history.png"
+  ],
+  "actions": [
+    "discover",
+    "batch",
+    "grant_only"
+  ],
+  "worker_started": false,
+  "browser_connected": false,
+  "synthetic_input_sha256": "6fa7a16589225e2da7e66b242146e4751f79cbaa3a55647f890fb84214f8055d"
+}

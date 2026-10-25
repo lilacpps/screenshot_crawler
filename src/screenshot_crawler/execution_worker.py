@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import os
+import sys
 from argparse import Namespace
 from collections.abc import Mapping
 from pathlib import Path
@@ -25,6 +26,7 @@ from screenshot_crawler.cli import (
 )
 from screenshot_crawler.management.execution import ExecutionPlanService
 from screenshot_crawler.management.inventory import InventoryService
+from screenshot_crawler.management.jobs import sanitize_text
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
@@ -245,18 +247,73 @@ async def _run(
                     assert target is not None
                     if not target.enabled:
                         emit("candidate_finished", key=target.key, result="skipped", reason="disabled")
-                        print(f"Discovery skipped disabled key: {target.key}")
+                        print(f"Discovery skipped disabled key: {target.key}", flush=True)
                         continue
                     emit("candidate_started", key=target.key, phase=f"discover:{mode}")
-                    result = await _discover_target(
-                        target=target,
-                        mode=mode,
-                        catalog=CatalogService(catalog_path),
-                        registry=registry,
-                        values=values,
-                        cli_endpoint=_request_cdp_endpoint(request),
+                    try:
+                        result = await _discover_target(
+                            target=target,
+                            mode=mode,
+                            catalog=CatalogService(catalog_path),
+                            registry=registry,
+                            values=values,
+                            cli_endpoint=_request_cdp_endpoint(request),
+                        )
+                    except BaseException as exc:
+                        reason = sanitize_text(str(exc)[:1000])
+                        emit("candidate_finished", key=target.key, result="failed", reason=reason)
+                        print(f"Discovery failed for key {target.key}: {reason}", flush=True)
+                        raise
+                    observed = getattr(result, "observed_count", None)
+                    new = getattr(result, "new_count", None)
+                    known = getattr(result, "known_count", None)
+                    complete = getattr(result, "complete", None)
+                    stopped_reason = getattr(result, "stopped_reason", None)
+                    warnings = tuple(getattr(result, "warnings", ()) or ())
+                    discovery_payload = {
+                        "target": getattr(result, "target_key", target.key),
+                        "mode": getattr(result, "mode", mode),
+                        "observed": observed,
+                        "new": new,
+                        "known": known,
+                        "complete": complete,
+                        "stopped_reason": stopped_reason,
+                        "warnings": list(warnings),
+                    }
+                    error = getattr(result, "error", None)
+                    if error is not None:
+                        discovery_payload["error"] = error
+                    emit(
+                        "discovery_result",
+                        key=target.key,
+                        result="succeeded" if complete is not False else "failed",
+                        payload=discovery_payload,
                     )
-                    if result.complete is False or result.stopped_reason == "incomplete":
+                    from screenshot_crawler.cli import _print_discovery_result
+
+                    if all(hasattr(result, name) for name in (
+                        "target_key", "mode", "observed_count", "new_count", "known_count",
+                        "complete", "stopped_reason", "warnings", "error",
+                    )):
+                        _print_discovery_result(result)
+                    else:
+                        print(
+                            "Discovery incomplete:" if stopped_reason == "incomplete"
+                            else "Discovery completed:"
+                        )
+                        print(f"  target: {discovery_payload['target']}")
+                        print(f"  mode: {discovery_payload['mode']}")
+                        print(f"  observed: {observed}")
+                        print(f"  new: {new}")
+                        print(f"  known: {known}")
+                        print(f"  complete: {complete}")
+                        print(f"  stopped_reason: {stopped_reason}")
+                        if error is not None:
+                            print(f"  error: {error}")
+                        for warning in warnings:
+                            print(f"Warning: {warning}")
+                    sys.stdout.flush()
+                    if complete is False or stopped_reason == "incomplete":
                         emit("candidate_finished", key=target.key, result="failed", reason="incomplete")
                         raise RuntimeError(
                             f"Discovery incomplete for key {target.key}: "

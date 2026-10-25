@@ -486,9 +486,11 @@ def test_start_gate_failure_kills_child_and_marks_interrupted(
             return -9
 
     fake = FakeProcess()
+    popen_args: list[object] = []
     popen_kwargs: dict[str, object] = {}
     monkeypatch.setenv("CRAWLER_CDP_ENDPOINT_OVERRIDE", "http://inherited.invalid")
     def fake_popen(*args: object, **kwargs: object) -> FakeProcess:
+        popen_args.extend(args)
         popen_kwargs.update(kwargs)
         return fake
     monkeypatch.setattr(
@@ -499,6 +501,13 @@ def test_start_gate_failure_kills_child_and_marks_interrupted(
     with pytest.raises(OSError, match="gate failure"):
         controller.start_job(job_id)
     assert fake.returncode == -9
+    command = popen_args[0]
+    assert isinstance(command, list)
+    assert command[1:3] == ["-u", "-m"]
+    assert popen_kwargs["env"]["PYTHONUNBUFFERED"] == "1"  # type: ignore[index]
+    assert popen_kwargs["env"]["PYTHONIOENCODING"] == "utf-8"  # type: ignore[index]
+    assert popen_kwargs["encoding"] == "utf-8"
+    assert popen_kwargs["errors"] == "replace"
     assert "CRAWLER_CDP_ENDPOINT_OVERRIDE" not in popen_kwargs["env"]  # type: ignore[operator]
     assert controller.process is None
     assert store.get_job(job_id)["state"] == "interrupted"

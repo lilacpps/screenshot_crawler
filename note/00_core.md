@@ -2414,3 +2414,83 @@ schema v7 and both original Source/Item graphs unchanged.
 B1/B2/B3/B4/B5/B6ではtitle、order、episode number、漢数字変換、cross-site fuzzy matchをscope判定に使わない。Catalog schema、Batch Planner / Executor、CrawlerRunner、BookWalker、Magapoke、Manga ONE以外ではJump+だけproduction bounded Discoveryを実装している。bounded scope内recordは通常のItem / Sourceとして同期するが、cross-site Itemのautomatic mergeやcompleted伝播は行わず、重複crawlは安全側の挙動として許容する。
 
 将来cross-site dedupeが必要になった場合はphysical Item mergeより先にhuman approval付きnon-destructive equivalence mappingを検討する。physical mergeは現計画の対象外である。
+### GUI live monitor Phase 01 (2026-10-25)
+
+The management GUI worker is launched with Python ``-u`` and
+``PYTHONUNBUFFERED=1``. This applies only to the child worker; controller
+start gates, identity checks, cancellation, and log sink failure handling are
+unchanged. Separate ``stdout.log`` and ``stderr.log`` files remain sanitized
+and flushed by the controller.
+
+``management.log_tail.LogTailReader`` is Qt-free and reads only the fixed
+``stdout.log``/``stderr.log`` names under ``JobStore.job_dir(job_id)``. It
+keeps independent byte offsets and incremental UTF-8 decoders, bounds initial
+history and each read, and safely reinitializes after a missing or truncated
+file. It does not open paths supplied by event payloads or merge the streams.
+
+GUI Discover emits a ``discovery_result`` event containing observed, new,
+known, complete, stopped_reason, and warnings facts from the returned
+``DiscoveryResult`` and prints the same fields as the CUI. A target exception
+emits keyed ``candidate_finished`` with ``result=failed`` before the existing
+fail-stop propagation. Missing result numbers remain unknown rather than
+being fabricated as zero.
+Phase 01 review correction: LogTailReader file identity uses device/inode and
+immutable creation time where available; POSIX metadata-change time is not
+used, so ordinary append does not replay a stream. Missing or recreated files
+reset offsets and decoder state, including same-size replacements. Initial
+tail omission is exposed per stream through ``metadata(stream)``. UTF-8 tail
+boundary skipping is limited to the maximum three continuation bytes in one
+code point.
+## GUI live monitor (current implementation, 2026-10-25)
+
+The MainWindow keeps the existing path row, toolbar, horizontal tree/detail
+splitter, action row, and error label. A vertical splitter adds a lower
+ExecutionMonitor; its body can be collapsed while its heading remains visible.
+The existing upper content is wrapped in a QScrollArea viewport, preserving
+the form/table minimums while allowing the user to enlarge the monitor. At
+1400x850 the real splitter handle can reserve at least 400px for the monitor;
+resize, polling, and follow do not reset the chosen ratio, and collapse/expand
+restores the previous expanded size. The first snapshot fully collapses the
+inventory tree; later reloads preserve the user's manual expansion state. The
+vertical splitter adds both children before configuring `setCollapsible`, so the
+startup out-of-range warning is not emitted. Root's final synthetic native helper
+confirmed Windows/DPR 1.5, actual 980x600, a 230px monitor, a 326px upper
+viewport, bounded headers, collapsed tree, Japanese log text, and no warning.
+The independent follow-up review is approved with BLOCKING 0. The monitor and
+JobsPage are passive observers of the single JobController and
+JobStore. View refresh or initialization failures are isolated from queue,
+start, stop, force-stop, reconcile, and safety state handling.
+
+LogTailReader is Qt-free and opens only the fixed stdout.log/stderr.log files
+under the selected JobStore job directory. Each stream has bounded incremental
+reads, UTF-8 decoder/file-identity reset, omission metadata, and independent
+view/cache state. QPlainTextEdit appends use an independent QTextCursor so a
+manual selection or viewport anchor is retained. Raw streams remain separate;
+cross-stream wall-clock order is explicitly unavailable.
+
+JobResultPresenter is an immutable Qt-free DTO boundary. Controller/DB state
+remains authoritative; Events and metrics add observed facts only. Events use
+bounded keyset/latest reads, preserving current task/site context and selected
+Discover facts after raw history trimming. Authorized metrics JSONL is read
+incrementally with partial-line, truncation, scope, malformed-input, and
+redaction handling. Batch summaries are the primary evidence, and missing or
+partial metrics stay unknown. Discover keeps per-site/key success, failure,
+disabled, unstarted, and unknown states. Grant results deduplicate by strong
+site/work/resource identity, retain tri-state consumption, and never treat
+consumed OK as post-processing success without aligned candidate evidence.
+
+Summary and problem panes are bounded, scrollable, copyable, and explicitly
+mark omitted content. Jobs history keeps list/detail selection and viewport
+independent from the monitor and uses latest-event SQL, so terminal context
+remains available beyond the old first-500 window. Child execution subprocesses
+use UTF-8 only at the child boundary; parent CLI encoding is unchanged.
+
+Phase 04 verification is synthetic/offscreen and native Windows capture only.
+Earlier native captures record the pre-follow-up 980x600 request as actual
+980x628. The follow-up geometry tests validate a scrollable 980x600 viewport,
+plus 1400x850 and additional high-DPI
+logical sizes with host DPR 1.5; worker/browser startup is disabled. The durable
+checks cover 50,000 Events, 50,000 log lines over 5 MiB, timer responsiveness,
+bounded rendering, manual anchor/follow, history, rerun, and input-hash
+preservation. No real site or CDP was accessed, and no operational Catalog,
+Watchlist, Books, quota, or ticket input was used; all fixtures were synthetic.

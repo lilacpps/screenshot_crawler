@@ -639,3 +639,15 @@ historical CrawlRun, Artifact, quota, and ZIP state while updating the current
 external ID and web target locator. Existing Catalog schema/version contracts
 are unchanged. When proof is unavailable, the maintenance CLI provides the
 same dry-run/token/apply path for explicit human confirmation.
+
+
+## GUI live monitor and history (Phase 04)
+
+The lower execution monitor and JobsPage are passive views over the existing
+JobController and JobStore. They share the bounded fixed-path LogTailReader and
+Qt-free result Presenter; controller/DB state remains authoritative. View
+initialization and refresh failures are isolated from queue advancement and
+safety operations, while controller/database failures remain fail-closed.
+Events use bounded latest/keyset reads and metrics use authorized incremental
+JSONL reads. Raw stdout/stderr remain separate, and the upper inventory layout
+and execution controls retain their existing order and meaning.

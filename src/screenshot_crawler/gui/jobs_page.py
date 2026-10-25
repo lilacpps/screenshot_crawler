@@ -20,6 +20,8 @@ from screenshot_crawler.management.inventory import display_time
 from screenshot_crawler.management.job_controller import JobController
 from screenshot_crawler.management.jobs import TERMINAL_JOB_STATES, JobStore
 
+from .execution_monitor import ExecutionMonitor
+
 
 def _format_limit(value: object) -> str:
     """Use the same visible convention as the execution controls."""
@@ -65,6 +67,11 @@ class JobsPage(QWidget):
         self.details = QTextEdit()
         self.details.setReadOnly(True)
         root.addWidget(self.details, 2)
+        # History and the embedded monitor share the same store, Presenter,
+        # and fixed-path LogTailReader.  The list/detail selection remains
+        # independent from the monitor's own job/stream selection.
+        self.execution_monitor = ExecutionMonitor(store, self)
+        root.addWidget(self.execution_monitor, 3)
         controls = QHBoxLayout()
         self.refresh_button = QPushButton("更新")
         self.refresh_button.clicked.connect(self.refresh)
@@ -86,6 +93,9 @@ class JobsPage(QWidget):
         controls.addWidget(self.rerun_button)
         controls.addStretch(1)
         root.addLayout(controls)
+        self._rows: tuple[object, ...] = ()
+        self._row_signature: tuple[tuple[object, ...], ...] = ()
+        self._details_text = ""
         self.refresh()
 
     def refresh(self) -> None:
@@ -114,22 +124,37 @@ class JobsPage(QWidget):
         current = self.list_widget.currentRow()
         if 0 <= current < len(getattr(self, "_rows", ())):
             current_job_id = self._rows[current]["job_id"]
-        self.list_widget.blockSignals(True)
-        self.list_widget.clear()
-        for row in rows:
-            self.list_widget.addItem(
-                f"{row['state']}  {row['action']}  {display_time(row['requested_at'])}  "
-                f"keys={len(json.loads(row['selected_keys_json']))}"
-            )
-        self.list_widget.blockSignals(False)
-        self._rows = rows
-        selected_index = next(
-            (index for index, row in enumerate(rows) if row["job_id"] == current_job_id),
-            0,
+        signature = tuple(
+            (row["job_id"], row["state"], row["action"], row["requested_at"], row["selected_keys_json"])
+            for row in rows
         )
-        if rows:
-            self.list_widget.setCurrentRow(selected_index)
+        if signature != self._row_signature:
+            scroll = self.list_widget.verticalScrollBar().value()
+            self.list_widget.blockSignals(True)
+            self.list_widget.clear()
+            for row in rows:
+                self.list_widget.addItem(
+                    f"{row['state']}  {row['action']}  {display_time(row['requested_at'])}  "
+                    f"keys={len(json.loads(row['selected_keys_json']))}"
+                )
+            self.list_widget.blockSignals(False)
+            self._row_signature = signature
+            self._rows = rows
+            selected_index = next(
+                (index for index, row in enumerate(rows) if row["job_id"] == current_job_id),
+                0,
+            )
+            if rows:
+                self.list_widget.setCurrentRow(selected_index)
+            self.list_widget.verticalScrollBar().setValue(scroll)
+        else:
+            self._rows = rows
         self._show_selected(self.list_widget.currentRow())
+        try:
+            self.execution_monitor.refresh_jobs()
+            self.execution_monitor.refresh()
+        except Exception:  # noqa: BLE001 - history must remain available
+            self.health_label.setText(self.health_label.text() + " / monitor unavailable")
 
     def _show_selected(self, index: int) -> None:
         if index < 0 or index >= len(getattr(self, "_rows", ())):
@@ -137,7 +162,7 @@ class JobsPage(QWidget):
             return
         row = self._rows[index]
         tasks = self.store.list_tasks(row["job_id"])
-        events = self.store.list_events(row["job_id"])
+        events = self.store.list_events_latest(row["job_id"], limit=100)
         request = json.loads(row["request_json"])
         lines = [
             f"Job: {row['job_id']}",
@@ -190,7 +215,17 @@ class JobsPage(QWidget):
             )
         if row["state"] == "interrupted":
             lines.append("消費状態不明の可能性があります。自動再試行は行いません。")
-        self.details.setPlainText("\n".join(lines))
+        text = "\n".join(lines)
+        if text != self._details_text:
+            bar = self.details.verticalScrollBar()
+            was_bottom = bar.value() >= bar.maximum() - 1
+            old_value = bar.value()
+            self.details.setPlainText(text)
+            if was_bottom:
+                bar.setValue(bar.maximum())
+            else:
+                bar.setValue(min(old_value, bar.maximum()))
+            self._details_text = text
         active = row["state"] in {"planning", "running"}
         self.stop_button.setEnabled(active)
         self.force_button.setEnabled(active)

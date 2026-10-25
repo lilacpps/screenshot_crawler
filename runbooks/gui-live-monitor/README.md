@@ -1,10 +1,16 @@
-# Windows GUI — 常設実行モニター・CUI同等ログ・共通サマリ Runbook
+# Windows GUI Live Execution Monitor: CUI-equivalent Logs and Shared Summaries Runbook
+> **IMPLEMENTED - APPROVED (2026-10-25)**
 
-> **PLANNED / DOCUMENTATION ONLY — 2026-10-25**
 >
-> 本Runbookは既存P1/P2/P3 GUIの機能追加を段階実装する契約である。実装はまだ開始していない。着手時はmain/HEAD、`AGENTS.md`、`docs/SPEC.md`、`docs/GUI_README.md`、`runbooks/gui-execution-p2-p3/PROGRESS.md` と現行コードを再確認する。
+> Phases 01-04 are implemented on `feat/gui-live-monitor`; the follow-up
+> geometry/interaction fix is validated by isolated/offscreen tests and a
+> synthetic native helper. The follow-up independent review is approved;
+> optional Windows user-operation review remains. No real site or CDP session
+> is used, and no operational Catalog, Watchlist, Books, ticket, quota, or
+> other operational input is accessed here.
 >
-> **最優先の制約**: 実行モニター「より上」の既存GUI構成を変えない。サイト別／作品別ツリー、検索・絞り込み、既存横方向splitterと詳細ペイン、checkbox、選択操作、Discoverモード／limit／site resource／Discover・Batch Run・Grant-onlyボタン、実行前確認の順序と挙動を維持する。モニターを追加するためのwidgetコンテナの組み替えは可だが、既存部品の配置順・設定・操作意味を変えない。
+> Historical phase contracts below remain normative acceptance criteria; the
+> current implementation and verification state are maintained in PROGRESS.md.
 
 ## 0. 目的と現状証拠
 
@@ -33,7 +39,9 @@
 
 - 主画面上部: path行とtoolbarを変更せず保持。既存横splitter（tree:detail = 7:3）と、その**下**のaction行、error labelを「既存領域」として保持。
 - 既存領域の**下**に `ExecutionMonitor` を追加。既存領域とmonitorを縦`QSplitter`に収め、上側が縮む以外の配置順を維持。既存QMainWindow statusBarも変更しない。幅980px・高さ600pxで操作が欠けないか検証する。
+- The upper content is wrapped in a scrollable `QScrollArea` viewport without changing its existing minimums. A vertical splitter handle can give the monitor at least 400px at 1400x850; resize, polling, and follow keep the user-selected ratio, while the upper controls remain reachable through scrolling.
 - モニター見出し: action / job state / site（実行siteまたは直近） /「進行中」「停止要求中」など。既定は小さな進捗帯＋ログ欄（GUIサイズに応じ初期高さ約220-250px）。未実行時は薄い待機表示。手動で畳めるが実行中は見出しを残す。高さ変更は上部の表示構造を崩さない。
+- The initial inventory tree is fully collapsed. Later reloads restore the user expansion state, and existing mode-switch focus expansion remains unchanged.
 - 進捗: current site/key/item、観測済attempt・success・failed・skipped・unknown、elapsed。source/itemが不明なら空欄/不明にし推定しない。percentは総対象数が確定し観測対象と一致する場合のみ。progress不確定時はindeterminateと観測数。
 - 詳細: `詳細ログ`（`stdout`/ `stderr` の切替と全文ファイルを開く）、`サマリ`、`問題のみ`（既知のwarning/error/消費不明を構造化イベントから列挙）。stderrをstdoutの末尾に機械的に連結して時系列原文だと偽らない。単一時系列表示が必要になれば後続課題。
 - 自動表示: 新しいJobをユーザーが実行確定した際、monitorを展開してそのjobに切替。session queueの次Jobが本当に開始された時点で追従（`queued`を`running`と偽装しない）。手動で履歴閲覧中の明示選択は勝手に切替えない。終了Jobは次Job開始まで残す。再起動時の履歴は従来「ジョブ」から選択可。
@@ -81,3 +89,17 @@
 4. [04-history-and-qa/README.md](04-history-and-qa/README.md) — JobsPage共通化、負荷・回帰・Windows検証、docs更新。
 
 各PhaseにLead/Implementer/Reviewerの独立役割。実装レビューは必ず「見た目」より安全性、重複計数、スクロール、回帰、機密漏洩、UI性能を優先。合否・テストと未実施項目は[PROGRESS.md](PROGRESS.md)へ記録。UIの実機レビュー（Windows）で止め、これを契機にP4/P5やSite Adapterを実装しない。
+
+Current implementation status: Phases 01-04 are implemented on `feat/gui-live-monitor` and the follow-up geometry/interaction fix is validated with isolated/offscreen tests. The follow-up independent review is approved; optional Windows user-operation review remains. This runbook uses no real site, CDP session, ticket, quota, operational Catalog, or operational Watchlist input.
+
+
+## Current implementation status (2026-10-25)
+Phase 01 through Phase 04 are implemented and approved on
+`feat/gui-live-monitor`. The follow-up geometry/interaction fix is
+implemented and validated by 29 GUI smoke tests, 37 related model/management
+tests, the isolated native helper, and Root's final 89-test affected run
+(0 skipped, 1 existing pytest-asyncio warning, 56.76s). The independent
+follow-up review is approved; optional Windows user-operation review remains.
+No real site, CDP,
+operational Catalog/Watchlist/Books, quota, or ticket access was used.
+Verification state is recorded in `PROGRESS.md`.

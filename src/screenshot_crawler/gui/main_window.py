@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
+import os
 import subprocess
 import sys
 from dataclasses import replace
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,6 +27,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QStyle,
@@ -44,8 +48,11 @@ from screenshot_crawler.management.inventory import InventoryService, default_po
 
 from .details import DetailPane
 from .execution_dialog import ExecutionPreviewDialog
+from .execution_monitor import ExecutionMonitor
 from .jobs_page import JobsPage
 from .model import InventoryTreeModel, StatusFilter, ViewMode
+
+LOGGER = logging.getLogger(__name__)
 
 
 class _LoadSignals(QObject):
@@ -101,7 +108,13 @@ class _ExecutionWorker(QRunnable):
                 json.dumps(execution_request_payload(self.request), ensure_ascii=False),
             ]
             completed = subprocess.run(
-                command, capture_output=True, text=True, check=False
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             )
             output = completed.stdout + completed.stderr
             if completed.returncode != 0:
@@ -185,6 +198,7 @@ class MainWindow(QMainWindow):
         self._rerun_original_id: str | None = None
         self._pending_rerun: tuple[str, frozenset[str], str] | None = None
         self._session_job_ids: list[str] = []
+        self._monitor_followed_active_id: str | None = None
         self._initial_expand_done = False
         self.thread_pool = QThreadPool.globalInstance()
         self._job_poll_timer = QTimer(self)
@@ -220,14 +234,17 @@ class MainWindow(QMainWindow):
         self.detail.keySelected.connect(self._focus_key_from_detail)
         self._build_ui()
         self.resize(1400, 850)
-        self.setMinimumSize(980, 600)
+        self.setMinimumSize(980, max(600, self.minimumHeight()))
         if auto_load:
             self.reload()
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Screenshot Crawler — 作品管理（閲覧専用）")
         root = QWidget(self)
-        outer = QVBoxLayout(root)
+        root_layout = QVBoxLayout(root)
+        upper = QWidget(root)
+        outer = QVBoxLayout(upper)
+        outer.setContentsMargins(0, 0, 0, 0)
 
         paths = QHBoxLayout()
         paths.addWidget(QLabel("Catalog"))
@@ -359,8 +376,62 @@ class MainWindow(QMainWindow):
         self.error_label.setWordWrap(True)
         self.error_label.setStyleSheet("color:#a33; padding:3px;")
         outer.addWidget(self.error_label)
+        vertical = QSplitter(Qt.Orientation.Vertical)
+        vertical.setObjectName("execution_vertical_splitter")
+        # Keep the existing inventory/detail content intact while allowing its
+        # viewport to shrink when the user gives the lower monitor more room.
+        upper_scroll = QScrollArea()
+        upper_scroll.setObjectName("execution_upper_scroll")
+        upper_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        upper_scroll.setWidgetResizable(True)
+        upper_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        upper_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        upper_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        upper_scroll.setMinimumSize(0, 0)
+        upper.setMinimumHeight(upper.minimumSizeHint().height())
+        upper_scroll.setWidget(upper)
+        vertical.addWidget(upper_scroll)
+        vertical.setCollapsible(0, False)
+        # Keep the monitor heading reachable when the user drags the handle;
+        # its own toggle hides the body while retaining the lower-pane header.
+        self.execution_monitor = ExecutionMonitor(parent=self)
+        self.execution_monitor.setMinimumHeight(26)
+        vertical.addWidget(self.execution_monitor)
+        vertical.setCollapsible(1, False)
+        vertical.setStretchFactor(0, 1)
+        vertical.setStretchFactor(1, 0)
+        vertical.setSizes([620, 230])
+        root_layout.addWidget(vertical)
         self.setCentralWidget(root)
+        # The upper content keeps its existing minimum inside the scroll area;
+        # only the viewport participates in the window minimum.
+        self.setMinimumHeight(600)
         self.statusBar().showMessage("読み込み待ち")
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        splitter = self.findChild(QSplitter, "execution_vertical_splitter")
+        if splitter is None:
+            return
+        upper_scroll = splitter.widget(0)
+        monitor = splitter.widget(1)
+        if upper_scroll is None or monitor is None:
+            return
+        # Do not reset a user's splitter ratio during ordinary resize/poll.
+        # The content widget keeps its original minimum and QScrollArea makes
+        # the upper controls reachable when its viewport is shorter.
+        upper = upper_scroll.widget() if isinstance(upper_scroll, QScrollArea) else upper_scroll
+        if upper is not None:
+            hint = upper.minimumSizeHint().height()
+            if upper.minimumHeight() < hint:
+                upper.setMinimumHeight(hint)
+
+    def showEvent(self, event: Any) -> None:
+        super().showEvent(event)
+        # QScrollArea may recalculate the child geometry after the first
+        # polish pass; apply the populated content minimum once that pass is
+        # complete so the viewport scrolls instead of squeezing the content.
+        QTimer.singleShot(0, self._sync_upper_geometry_minimum)
 
     # --- loading ---------------------------------------------------------------
 
@@ -445,7 +516,7 @@ class MainWindow(QMainWindow):
         self.model.set_snapshot(snapshot)
         self.detail.set_snapshot(snapshot)
         if not self._initial_expand_done:
-            self.tree.expandToDepth(1)
+            self.tree.collapseAll()
             self._initial_expand_done = True
         else:
             self._restore_expanded(expanded_ids)
@@ -454,8 +525,24 @@ class MainWindow(QMainWindow):
             focus = next((node for node in self.model._nodes.values() if node.kind == "work" and node.work_key == old_focus_work), None)
         if focus is not None:
             self.model.focus_node(focus)
+        self._sync_upper_geometry_minimum()
+        QTimer.singleShot(0, self._sync_upper_geometry_minimum)
         self._on_checked_changed(self.model.checked_keys)
         self._refresh_site_resource_controls()
+
+    def _sync_upper_geometry_minimum(self) -> None:
+        """Refresh the upper-pane clamp after detail content changes."""
+
+        splitter = self.findChild(QSplitter, "execution_vertical_splitter")
+        if splitter is None:
+            return
+        upper_scroll = splitter.widget(0)
+        upper = upper_scroll.widget() if isinstance(upper_scroll, QScrollArea) else upper_scroll
+        if upper is None:
+            return
+        hint = upper.minimumSizeHint().height()
+        if upper.minimumHeight() < hint:
+            upper.setMinimumHeight(hint)
 
     def _refresh_site_resource_controls(self) -> None:
         """Show resource selectors only for currently selected sites."""
@@ -588,6 +675,7 @@ class MainWindow(QMainWindow):
             return
         key = self.model.key_inventory(node.key_identity) if node.kind == "key" and node.key_identity else None
         self.detail.set_node(node, key, self.model.summary_for(node))
+        self._sync_upper_geometry_minimum()
 
     def _focus_key_from_detail(self, identity: str) -> None:
         node = self.model.node_by_key_identity(identity)
@@ -759,8 +847,17 @@ class MainWindow(QMainWindow):
         job_id = controller.queue(request, original_job_id=self._rerun_original_id)
         self._session_job_ids.append(job_id)
         self._rerun_original_id = None
+        # Queueing and worker start are the safety boundary.  A passive view
+        # may be unavailable while the controller is still healthy; it must
+        # never prevent the confirmed job from starting.
+        try:
+            self.execution_monitor.clear_manual_selection()
+            self.execution_monitor.follow_job(job_id)
+        except Exception:
+            LOGGER.debug("execution monitor follow failed", exc_info=True)
         if controller.active_job_id is None:
             controller.start_job(job_id)
+        self._monitor_followed_active_id = controller.active_job_id
         self.statusBar().showMessage(f"ジョブをキューしました: {job_id}")
 
     @Slot(str)
@@ -783,14 +880,24 @@ class MainWindow(QMainWindow):
             self._job_store = JobStore(self.management_path)
             self._job_controller = JobController(self._job_store)
             self._job_controller.reconcile()
-            self._jobs_page = JobsPage(self._job_store, self._job_controller, self)
-            self._jobs_page.rerunRequested.connect(self._rerun_job)
+            try:
+                self.execution_monitor.set_store(self._job_store)
+            except Exception:
+                LOGGER.debug("execution monitor initialization failed", exc_info=True)
+            try:
+                self._jobs_page = JobsPage(self._job_store, self._job_controller, self)
+                self._jobs_page.rerunRequested.connect(self._rerun_job)
+            except Exception:
+                self._jobs_page = None
+                LOGGER.debug("jobs page initialization failed", exc_info=True)
             self._job_poll_timer.start()
         return self._job_controller
 
     def _open_jobs(self) -> None:
         self._ensure_jobs()
-        assert self._jobs_page is not None
+        if self._jobs_page is None:
+            self.error_label.setText("Job history view unavailable; supervisor remains active")
+            return
         self._jobs_page.refresh()
         self._jobs_page.resize(900, 650)
         self._jobs_page.show()
@@ -801,8 +908,23 @@ class MainWindow(QMainWindow):
         if self._job_controller is None:
             return
         state = self._job_controller.poll()
-        if self._jobs_page is not None:
-            self._jobs_page.refresh()
+        # Views are observers only.  A malformed event, missing log, or widget
+        # failure must never prevent controller state handling or queue advance.
+        try:
+            self.execution_monitor.refresh_jobs()
+            active_job_id = self._job_controller.active_job_id
+            if active_job_id != self._monitor_followed_active_id:
+                self._monitor_followed_active_id = active_job_id
+                if active_job_id is not None:
+                    self.execution_monitor.follow_job(active_job_id)
+            self.execution_monitor.refresh()
+        except Exception:
+            LOGGER.debug("execution monitor refresh failed", exc_info=True)
+        try:
+            if self._jobs_page is not None:
+                self._jobs_page.refresh()
+        except Exception:
+            LOGGER.debug("jobs page refresh failed", exc_info=True)
         if state is not None:
             self._on_checked_changed(self.model.selected_keys)
             self.statusBar().showMessage(f"ジョブ終了: {state}")
@@ -818,6 +940,11 @@ class MainWindow(QMainWindow):
                     try:
                         if self._job_store is not None and self._job_store.get_job(queued_id)["state"] == "queued":
                             self._job_controller.start_job(queued_id)
+                            self._monitor_followed_active_id = queued_id
+                            try:
+                                self.execution_monitor.follow_job(queued_id)
+                            except Exception:
+                                LOGGER.debug("execution monitor follow failed", exc_info=True)
                             break
                     except (KeyError, RuntimeError):
                         continue

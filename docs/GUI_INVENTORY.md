@@ -118,3 +118,26 @@ load, model projection and search. CLI must work when Qt imports are blocked.
 
 Affected Catalog/Watchlist/Scope/Policy/CLI tests run; browser, live and Research
 are unnecessary because P1 never opens a browser or external site.
+
+## Execution history monitor integration
+
+The Jobs history view is an observer of the same management store and
+controller used by the main window. Its embedded monitor reuses the bounded
+log tail and immutable result Presenter. The list retains the selected
+`job_id` and viewport across unchanged refreshes; details retain a manual
+scroll position when content changes. Latest events are read with a descending
+bounded SQL query and displayed chronologically, avoiding the old first-500
+window.
+
+The queue supervisor owns all execution and safety decisions. Monitor or
+history initialization and refresh errors are isolated from queue advancement,
+while controller/database failures remain fail-closed. This GUI behavior is
+validated with synthetic jobs and offscreen/native Windows captures only.
+
+
+Phase 04 live-monitor evidence uses only synthetic management jobs. The lower
+monitor and Jobs history share the existing controller/store, preserve their
+independent selections and scroll positions, and expose bounded raw logs plus
+structured summaries/problems for all three actions. Native screenshots and
+`gui-screenshots/phase4-live-monitor.actual.json` are the current visual
+record; empty-monitor captures from earlier phases are historical diagnostics.
