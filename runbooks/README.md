@@ -76,3 +76,7 @@ This avoids noisy rename diffs and broken instructions during an in-progress inv
 - [Windows GUI — 常設実行モニターとサマリ](gui-live-monitor/README.md) —
   既存GUI上部を維持しつつ、CUI同等のログ逐次表示、スクロール固定、
   Discover/Batch/Grant-onlyの共通サマリ、ジョブ履歴表示の改善を段階実装（planned）。
+
+- [Windows GUI — Watchlist一覧・話数チェックでscope編集](gui-watchlist-scope-editor/README.md) —
+  サイト別/作品別のWatchlist編集、完全話数一覧から連続範囲＋個別除外を指定、
+  read-only事前プレビュー、Full DiscoveryとScope同期の段階適用（planned）。
