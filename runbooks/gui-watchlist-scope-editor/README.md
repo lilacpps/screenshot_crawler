@@ -59,6 +59,7 @@ targets:
 - `excluded_external_ids` のみも許可（全体を候補とし一部を除外）。scope構造は空にしない。全選択時はscope省略可能。
 - 1件以上の**明示的に取得対象とする話**が必要。「全部チェック解除」は初期版で適用不可（`enabled=false` と全話取得対象外は意味が違う）。UIで理由を表示する。将来専用`exclude_all`等を追加する場合は別仕様として決定。
 - 未知ID、別作品・別listingのID、範囲外ID、重複IDは黙って無視しない。候補作成/Full証拠/同期ではfail-closed。site-native IDが変更された場合は再取得・再確認を促す。
+- **既存Adapter互換性の特記事項**: 現行のbounded Adapterは両境界が`null`でも`discovery_scope`が存在する場合にエラーとするものがある。除外のみの設定では基本区間をunboundedとして安全に列挙しつつ、**除外付きFull proofの取得条件は維持**するAdapter/Service調整が必要。Magapokeから検証し、他サイトで未確認なら当該設定の実行・反映を拒否する（scopeをsilent ignoreしない）。
 - 現在の1キー=単一連続基本範囲を維持。飛び飛び選択は「最初と最後の選択話を両端（canonical order）にし、間の非選択IDを除外」として表現。新着話の扱いは既存片端/両端境界の意味に従う。将来の新着話まで固定除外する保証はしない。
 - `work_key`は異サイトの作品を束ねるが、Site-native Sourceは自動名寄せ・所属key移動しない。同一サイト複数key間の対象重複は事前検証でブロックする。
 - `archive_order`は同じwork_keyの全keyに設定するか全未指定。個別checkbox/除外変更は番号を動かし得るが自動改名しない。
