@@ -14,6 +14,7 @@
 ## Full/Proof integration
 1. Discovery Adapter側のbounded基本区間判定を維持し、site-neutral Core側でexcluded IDだけをCatalog upsert/refresh対象から除外する。**別keyのSourceをreparent/updateしない**。既存同keyで除外されたSourceと履歴は保持。
 2. Complete-listing証拠の`in_scope`は基本区間内かつnot excludedに補正する。除外IDは同じcomplete listingにあり、要求境界内で、重複しないことを検証。in_scope未登録SourceはFullで作成済であることを証明。site-native位置、snapshot digest、`target_scope_fingerprint`で証拠を封印。
+   - **excluded-only**（`from_url/through_url`なし）時、現行Adapterの「scopeはあるが境界なし→不正」を放置しない。基本区間を全範囲としてAdapterから列挙できるようにし、除外付き設定のcomplete listing/proofを取得する。特にKadocomi等のopt-in listing pathを単純なscope=Noneへの置換で誤って解除しない。サイトごとに能力確認し、未対応は明示ブロック。
 3. `Full`が完了しても`scope-sync --apply`完了とは見なさない。現行の部分`apply_discovery_acquisition_flags`動作で`acquisition_enabled`が変わり得ること、古いsync marker/差分がBatchを止めることを検証する。
 4. Preview用に`ScopeReconciler`の純粋な分類規則を適度に分離し、**提案ターゲット＋read-only listing＋Catalog snapshot**から予測を計算。旧`preview()`を偽Watchlist/偽Catalogで直接呼び出さない。正式applyは既存の`ScopeReconciler.preview/apply`へ戻し、CAS/lock/fingerprintをそのまま用いる。
 5. 対象範囲外/除外行は`acquisition_enabled=0`に最終同期し、normal Batch/explicit grant-only/deferred resolver/replanで候補にならないことを確認。欠落証拠ならfail closedし、1話だけでも勝手に例外通過させない。
