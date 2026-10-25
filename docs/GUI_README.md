@@ -16,17 +16,26 @@ screenshot-crawler-gui --catalog catalog.sqlite --watchlist watchlist.yaml --run
 
 ## Watchlist管理・話数選択
 
-ツールバーの「Watchlist管理」から専用ウィンドウを開きます。サイト別／作品別ツリー、
+ツールバーの「Watchlist管理」から専用ウィンドウを開きます。既定は作品→サイト→keyのツリーで、
 検索・状態フィルタ、key一覧、選択keyの編集フォームを使います。key一覧は参照用で、
 編集はフォームから行います。label・enabledの変更と新規key登録はローカルで行えます。
 編集中の話数チェックは、実行画面のkeyチェックとは別に保持します。
+上の作品／keyペインと下の編集領域の境界を上下へドラッグすると、作品ペインの高さを変更できます。
+上のkey一覧と下の話一覧は、選択した同一作品に属する全サイト／keyを表示します。
+話一覧にsite・key・取得状態・話名の出典を併記し、編集中key以外は参照専用です。
+未Discoveryのkeyも「未Discover / 一覧未取得」の行として残します。
 
-「全話一覧を取得（CDP読取専用）」は共通Crawler Chromeへ接続し、Adapterの完全一覧
+「作品内の話名・全話一覧を一時取得（読取専用）」は共通Crawler Chromeへ接続し、Adapterの完全一覧
 機能だけを呼び出します。現在の対応サイトはMagapokeです。未対応サイトは接続前に停止し、
 Catalogの参照一覧を表示します。URL・scope・archive_orderの変更保存には、対応する完全一覧と
 Catalogに結び付いたプレビューが必要です。label・enabledだけの編集は一覧非対応でも可能です。
+作品内のkeyを順番に読み取り、一時取得した話名をtitle列に表示します。取得した一覧はウィンドウ内だけで
+保持し、WatchlistやCatalogへ保存しません。Catalog参照ではDiscoveryが保存する`order_label`を優先します。
+positionはサイト上の並び順で、実際の「第何話」とは区別します。話名不明は未確認のままです。
 
 話数は個別チェック、全選択／全解除、サイト上のpositionによる範囲選択で指定できます。
+編集中keyの行を右クリックし「開始 from_url に設定」「終了 through_url に設定」で境界を入力できます。
+別keyの行では「このkeyを編集」で切り替えられ、未保存変更があれば破棄確認します。URLコピーも利用できます。
 非空の選択を連続範囲＋内側の`excluded_external_ids`へ変換します。「変更プレビュー」で
 追加・維持・除外・未Catalog・不明、取得担当、Catalog反映前後、archive番号の差分と
 既存ZIPの現在名／予測名・改名の必要性を確認します。詳細は下部テキストをスクロールして確認できます。
@@ -39,7 +48,10 @@ Catalogに結び付いたプレビューが必要です。label・enabledだけ�
 
 穴の除外は保存後すぐにBatch／Grant-onlyで拒否されます。除外IDの所属が証明できないkeyも停止します。
 外側の境界変更は、Full／Scope適用まで以前のCatalog担当フラグが有効です。
-「Full Discovery」は明示keyだけを既存の実行前確認へ送り、実行画面の選択を変更しません。
+「Full Discovery」はまず同一作品の話名を一時取得し、明示keyだけを既存の実行前確認へ送ります。
+確認をキャンセルしても一時取得した話名はウィンドウ内に残ります。実行画面の選択は変更しません。
+一時取得の非対応・失敗はCatalog参照へ戻し、停止理由を表示します。実行確認へは進めますが、
+取得中のWatchlist変更や実行Job開始を検出した場合はFull確認も停止します。
 新規keyも最新Inventoryを再読込して確認します。Full完了だけでwork全体のScope同期済みとは扱いません。
 「Scope preview」「Scope apply」は別操作で、適用前に差分を確認し、Catalog job lockとrevisionを再検証します。
 既存ZIPは保存・Full・Scope適用では改名しません。必要な改名は既存のmaintenance機能で別途行います。

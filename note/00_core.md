@@ -67,9 +67,9 @@ A standalone reload reads Inventory asynchronously and updates the shared tree;
 MainWindow refresh invalidates both edit and Scope-sync previews, including any
 in-flight preview result. Obsolete apply completion triggers a fresh read because the mutation may already have committed; it never labels an older snapshot as current.
 Controls are disabled during jobs/workers, and closing/rebinding waits for active
-editor operations. Reopening creates a fresh editor. Complete-list and Catalog-only
-reference tables are distinct: only complete-list rows are checkable. Position range
-selection and a scrollable editing area support large lists and small Windows sizes.
+editor operations. Reopening creates a fresh editor. The Work comparison combines
+complete-list and Catalog-only rows while only the active key's complete-list rows
+are checkable. Position range selection and a scrollable editing area support large lists and small Windows sizes.
 The listing worker closes its CDP session even if page creation fails. Unsupported
 capabilities are rejected before CDP connection.
 
@@ -81,6 +81,34 @@ Catalog registration, one-sided boundaries, snapshot/worker races, active jobs a
 new-key Full without changing execution checks. Native Windows captures use synthetic
 1,000-row inputs at logical 980x700 and 1400x1000, DPR 1.5. No real site or CDP account
 was used for verification.
+
+The 2026-10-25 UX follow-up defaults navigation to Work / Site / Key, filters the
+key summary to that Work, and adds a vertical splitter so the navigation can grow.
+The lower WorkEpisodeModel shows all sites/keys of the same Work with independent
+identity, status, title origin and unknown placeholders. It never merges same-ID
+episodes across sites or keys. Siblings are read-only; their context action switches
+the active editor through the existing dirty guard. Checkbox changes update cells
+without resetting scroll; structural changes focus the active key.
+
+Catalog chapter text uses Item.order_label before item_title, fixing blank/misleading
+titles where Discovery already retained a native episode label. Read-only listing
+previews supply temporary display_title for all rows, including non-Catalog rows.
+The per-key memory cache is bound to site/key/URL and retains observation time for
+existing freshness gates. No schema or Discovery persistence change is made.
+The listing button reads all keys of the current Work sequentially; unsupported
+capabilities stop before CDP and keep Catalog references. Full first runs this same
+no-write listing flow, then emits only its explicit key to the existing execution
+confirmation. Canceling confirmation leaves temporary names visible. Active jobs,
+dirty edits or Watchlist revision changes prevent an unsafe continuation. Discovery
+and capture execution semantics are otherwise unchanged.
+
+The episode context menu copies URLs or assigns from_url / through_url for the
+active key. It resolves site/key/external ID/URL again after its nested event loop,
+so a moved row cannot assign another episode. Explicit boundaries replace an
+unsaved checkbox proposal, preserve saved holes, support one-sided intervals and
+reject reversed/missing boundaries. They still require the same preview/CAS before
+save. Tests and native captures use isolated synthetic data; no new live-site claim
+is made. The comparison module and editor tests cover these UX boundaries.
 
 ## Read-only complete listing preview Stage 02 (2026-10-25)
 

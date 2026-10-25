@@ -12,7 +12,7 @@
 | 01 Watchlist model/edit API | COMPLETE | Approved after independent review. Implemented exclusions, canonicalization, legacy-compatible fingerprints/config restoration, lossless ordinary-block YAML edits, CAS/atomic replacement, and tests. |
 | 02 Read-only listing | COMPLETE | Independent review approved. Catalog-free ListingPreviewService, shared DTOs/digest, Magapoke capability, unsupported blockers, and synthetic Chromium no-write coverage are complete. |
 | 03 Scope selection/sync | COMPLETE | Pure checkbox and Catalog diff planning, exclusion preflight/masking, exact Batch/Grant-only deny overlay, immutable archive facts, and shared full-stem prediction are implemented. Independent review and the root full gate approved the stage. |
-| 04 GUI integration/E2E | COMPLETE | Independent final review APPROVED / BLOCKING 0. Final affected suite 259 passed; final GUI/model/smoke 67 passed; independent editor suite 25 passed. Native Windows 1,000-row rendering and isolated full workflow passed. |
+| 04 GUI integration/E2E | COMPLETE | Independent review APPROVED / BLOCKING 0. Original gates: affected 259 passed, GUI/model/smoke 67 passed. Latest Work-focused UX follow-up: affected 182 passed; independent editor 33 passed. Native Windows large-list rendering and isolated full workflow passed. |
 
 ## Stage 00 audit decisions
 
@@ -52,6 +52,7 @@
 ## Changed files
 
 - `src/screenshot_crawler/gui/watchlist_editor.py`
+- `src/screenshot_crawler/gui/watchlist_comparison.py` (UX follow-up)
 - `src/screenshot_crawler/gui/main_window.py`
 - `src/screenshot_crawler/watchlist/models.py`
 - `src/screenshot_crawler/watchlist/service.py`
@@ -87,3 +88,56 @@
 - `runbooks/gui-watchlist-scope-editor/02-readonly-listing/README.md`
 - `runbooks/gui-watchlist-scope-editor/03-scope-planning/README.md`
 - `runbooks/gui-watchlist-scope-editor/04-gui-integration/README.md`
+
+## Work-focused UX follow-up — 2026-10-25
+
+Base: `05e4bb6`, same dedicated feature branch. The user clarified that comparison
+means multiple sites/keys within the **same Work**, not a cross-Work episode list.
+Root remained the single writer; `/root/reviewer` independently approved the final
+diff with **BLOCKING 0**.
+
+- Navigation defaults to Work / Site / Key. A vertical splitter makes the upper
+  Work/key panes taller, independently of the lower scrollable editor. The key
+  summary and lower comparison show the active Work only.
+- The comparison includes site, key, native ID, chapter title, URL, access,
+  Catalog status, current/proposed scope and title origin. Same IDs across sites
+  remain separate. Only the active key's complete-list rows allow checkbox edits;
+  sibling rows provide a guarded editor switch. Undiscovered keys remain visible
+  as unknown placeholders. Checkbox changes preserve list scroll position.
+- Investigation confirmed that Discovery already stores native chapter labels
+  in `Item.order_label`; the old GUI consulted `item_title` and missed them.
+  Catalog display now prefers `order_label`. No Catalog/schema/Adapter change or
+  inferred chapter number was introduced; position remains site order.
+- Read-only title fetch processes the Work's keys sequentially and holds each
+  identity-bound complete listing in window memory. Full performs this same
+  temporary read before opening the existing explicit-key execution confirmation.
+  Canceling confirmation retains names; unsupported/failed keys retain Catalog
+  references with visible reasons. Dirty edits, changed Watchlist revision or
+  active jobs prevent unsafe Full continuation.
+- The episode context menu copies URL, assigns from_url / through_url, or switches
+  keys. Boundary actions resolve immutable episode identity after the menu event
+  loop and cannot use sibling URLs. One-sided boundaries and moved rows are covered.
+  All mutations still require preview and existing CAS/lock safeguards.
+- Final root affected gate: **182 passed, 73 warnings, 0 skipped, 62.05s**.
+  Selection: editor, existing GUI model/smoke, Watchlist, listing/selection, Scope
+  Reconciler and Batch acquisition-scope tests. XML: `.tmp/gwse-ux-final.xml`.
+  Independent editor gate: **33 passed, 2 warnings**. `ruff check src tests` and
+  `git diff --check` passed. An initial new assertion used an invalid empty Source
+  ID; it was replaced by checking the empty site Source list. Modal-menu test
+  harnesses were bounded with an injected menu controller.
+- Native Windows QA rendered **1,044 comparison rows**, DPR 1.5, logical
+  1400x1000 and 980x700. The navigation expanded to splitter sizes `[466, 307]`;
+  lower content remained scrollable and site/title/URL columns were inspected.
+  Local captures: `.tmp/gwse-ux-visual-01/work-comparison-large.png`,
+  `navigation-expanded.png`, `work-comparison-small.png`, `work-comparison-small-bottom.png`.
+- Final tests disable real CDP connections by default and inject synthetic listing
+  workers/sessions. No real-site verification was performed. Browser-backed site
+  Integration, Research and a new full-suite run were not repeated because this
+  follow-up changes only GUI projection/orchestration, not Adapter/Core/DB/Batch
+  contracts. Existing full-suite qualifications above remain unchanged.
+- Updated six files: GUI editor, new comparison model, editor tests, GUI README,
+  `note/00_core.md`, and this progress record. Existing user config hashes remain
+  unchanged. Main and operational Catalog/Watchlist/ZIP are untouched.
+- Remaining limits: complete-list capability is still Magapoke-only; other
+  sites use known Catalog chapter labels until their capability exists. ZIP
+  renaming remains separate. No unresolved blocking issue.

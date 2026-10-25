@@ -27,6 +27,7 @@ from PySide6.QtCore import (
     Slot,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -52,6 +54,7 @@ from screenshot_crawler.catalog.service import CatalogService
 from screenshot_crawler.discovery.base import DiscoveryAdapter
 from screenshot_crawler.discovery.listing import ListingPreview, ListingRow
 from screenshot_crawler.gui.model import InventoryTreeModel, StatusFilter, ViewMode
+from screenshot_crawler.gui.watchlist_comparison import WorkEpisodeModel, WorkEpisodeRow
 from screenshot_crawler.management.catalog_reader import CatalogInventoryReader
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.management.models import InventorySnapshot
@@ -532,6 +535,10 @@ class WatchlistEditorPage(QWidget):
         self._active_job = False
         self._catalog_guard = self._path_guard(self.catalog_path)
         self._listing: ListingPreview | None = None
+        self._work_listings: dict[str, ListingPreview] = {}
+        self._listing_queue: list[WatchlistTarget] = []
+        self._listing_errors: list[str] = []
+        self._full_after_listing: str | None = None
         self._last_scope_preview: ScopeSyncPreview | None = None
         self._listing_worker: _ListingWorker | None = None
         self._scope_worker: _ScopeWorker | None = None
@@ -570,23 +577,38 @@ class WatchlistEditorPage(QWidget):
     def _build_ui(self) -> None:
         self.setWindowTitle("Watchlist管理・編集")
         outer = QVBoxLayout(self)
+        self.editor_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.editor_splitter.setObjectName("watchlist_vertical_splitter")
+        self.editor_splitter.setChildrenCollapsible(False)
+        navigation = QWidget()
+        navigation.setMinimumHeight(150)
+        navigation_layout = QVBoxLayout(navigation)
         scroll = QScrollArea(self)
+        scroll.setMinimumHeight(200)
         scroll.setWidgetResizable(True)
         content = QWidget()
         layout = QVBoxLayout(content)
         scroll.setWidget(content)
-        outer.addWidget(scroll, 1)
+        self.editor_splitter.addWidget(navigation)
+        self.editor_splitter.addWidget(scroll)
+        self.editor_splitter.setStretchFactor(0, 1)
+        self.editor_splitter.setStretchFactor(1, 2)
+        self.editor_splitter.setSizes([280, 450])
+        outer.addWidget(self.editor_splitter, 1)
         self.target_model = WatchlistEditorModel(parent=self)
         self.target_table = QTableView()
         self.target_table.setModel(self.target_model)
         self.target_table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self.target_table.setAlternatingRowColors(True)
-        self.target_table.setMinimumHeight(160)
+        for column, width in {0: 150, 1: 200, 2: 90, 4: 220, 5: 260}.items():
+            self.target_table.setColumnWidth(column, width)
+        self.target_table.setMinimumHeight(90)
         self.target_table.clicked.connect(self._select_target_row)
         self.inventory_model = InventoryTreeModel(self.snapshot, parent=self)
-        self.inventory_model.set_view_mode(ViewMode.SITE)
+        self.inventory_model.set_view_mode(ViewMode.WORK)
         self.inventory_tree = QTreeView()
         self.inventory_tree.setModel(self.inventory_model)
+        self.inventory_tree.setColumnWidth(0, 260)
         self.inventory_tree.setAlternatingRowColors(True)
         self.inventory_tree.setMinimumWidth(260)
         self.inventory_tree.expandToDepth(1)
@@ -596,7 +618,7 @@ class WatchlistEditorPage(QWidget):
         projection.addWidget(self.target_table)
         projection.setStretchFactor(0, 1)
         projection.setStretchFactor(1, 3)
-        layout.addWidget(projection)
+        navigation_layout.addWidget(projection, 1)
         controls = QHBoxLayout()
         self.target_search = QLineEdit()
         self.target_search.setMinimumWidth(180)
@@ -611,10 +633,10 @@ class WatchlistEditorPage(QWidget):
         )
         controls.addWidget(self.inventory_filter)
         self.inventory_view_mode = QComboBox()
-        self.inventory_view_mode.addItem("Site / Work / Key", ViewMode.SITE)
         self.inventory_view_mode.addItem("Work / Site / Key", ViewMode.WORK)
+        self.inventory_view_mode.addItem("Site / Work / Key", ViewMode.SITE)
         self.inventory_view_mode.currentIndexChanged.connect(
-            lambda index: self.inventory_model.set_view_mode(self.inventory_view_mode.itemData(index))
+            self._change_inventory_view
         )
         controls.addWidget(self.inventory_view_mode)
         self.inventory_search = QLineEdit()
@@ -622,7 +644,7 @@ class WatchlistEditorPage(QWidget):
         self.inventory_search.setPlaceholderText("Catalog tree search")
         self.inventory_search.textChanged.connect(self.inventory_model.set_search)
         controls.addWidget(self.inventory_search, 2)
-        layout.addLayout(controls)
+        navigation_layout.addLayout(controls)
         target_controls = QHBoxLayout()
         self.target_combo = QComboBox()
         self.target_combo.setMinimumWidth(220)
@@ -660,7 +682,7 @@ class WatchlistEditorPage(QWidget):
         layout.addLayout(form)
         self.listing_label = QLabel("Catalog参考一覧（scope対応adapterのみ）")
         layout.addWidget(self.listing_label)
-        self.fetch_listing_button = QPushButton("全話一覧を取得（CDP読取専用）")
+        self.fetch_listing_button = QPushButton("作品内の話名・全話一覧を一時取得（読取専用）")
         self.fetch_listing_button.clicked.connect(self.fetch_listing)
         layout.addWidget(self.fetch_listing_button)
         scope_controls = QHBoxLayout()
@@ -685,10 +707,18 @@ class WatchlistEditorPage(QWidget):
         layout.addLayout(scope_controls)
         self.scope_model = ScopeChecklistModel(parent=self)
         self.scope_model.changed.connect(self._scope_check_changed)
+        self.comparison_model = WorkEpisodeModel(self.scope_model, self)
+        self.scope_model.modelReset.connect(self._refresh_comparison)
+        self.scope_model.layoutChanged.connect(self._refresh_comparison)
+        self.scope_model.dataChanged.connect(self._refresh_comparison)
         self.scope_table = QTableView()
-        self.scope_table.setModel(self.scope_model)
+        self.scope_table.setModel(self.comparison_model)
         self.scope_table.setMinimumHeight(180)
         self.scope_table.setAlternatingRowColors(True)
+        self.scope_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.scope_table.customContextMenuRequested.connect(self._episode_context_menu)
+        for column, width in {0: 50, 1: 90, 2: 130, 3: 110, 4: 75, 5: 240, 6: 260}.items():
+            self.scope_table.setColumnWidth(column, width)
         layout.addWidget(self.scope_table)
         buttons = QHBoxLayout()
         self.preview_button = QPushButton("変更プレビュー")
@@ -696,6 +726,7 @@ class WatchlistEditorPage(QWidget):
         self.save_button = QPushButton("保存")
         self.save_button.clicked.connect(self.save_edit)
         self.full_button = QPushButton("Full Discovery")
+        self.full_button.setToolTip("作品内の対応keyから話名を一時取得した後、編集中keyのFull実行前確認を開きます")
         self.full_button.clicked.connect(self.request_full)
         self.scope_preview_button = QPushButton("Scope preview")
         self.scope_preview_button.clicked.connect(self.preview_scope_sync)
@@ -729,11 +760,13 @@ class WatchlistEditorPage(QWidget):
 
     def _filter_targets(self, text: str) -> None:
         needle = text.strip().casefold()
+        active = self._selected_target()
         for row in range(self.target_model.rowCount()):
             target = self.target_model.target_at(row)
             visible = not needle or target is not None and needle in (
                 f"{target.key} {target.work_key} {target.site} {target.label}"
             ).casefold()
+            visible = visible and (active is None or target.work_key == active.work_key)
             self.target_table.setRowHidden(row, not visible)
 
     def _add_key(self) -> None:
@@ -801,9 +834,20 @@ class WatchlistEditorPage(QWidget):
     def _select_inventory_key(self, index: QModelIndex) -> None:
         node = index.internalPointer()
         key = getattr(node, "key_identity", None)
+        if key is None:
+            work_key = getattr(node, "work_key", None)
+            active = self._selected_target()
+            if active is not None and active.work_key == work_key:
+                return
+            target = next((target for target in self.target_model.targets if target.work_key == work_key), None)
+            key = target.key if target is not None else None
         position = self.target_combo.findData(key)
         if position >= 0:
             self.target_combo.setCurrentIndex(position)
+
+    def _change_inventory_view(self, index: int) -> None:
+        self.inventory_model.set_view_mode(self.inventory_view_mode.itemData(index))
+        self.inventory_tree.expandToDepth(1)
 
     def _select_range(self) -> None:
         if self._listing is None:
@@ -905,18 +949,27 @@ class WatchlistEditorPage(QWidget):
         self.enabled_edit.blockSignals(True)
         self.enabled_edit.setChecked(target.enabled)
         self.enabled_edit.blockSignals(False)
-        if self._listing is None:
+        cached = self._work_listings.get(target.key)
+        if cached is not None and cached.site == target.site and cached.target_url == target.url:
+            self.set_listing(cached, checked=self._checked_for_target(target, listing=cached))
+        else:
+            self._listing = None
             self._show_catalog_reference(target)
+        self._filter_targets(self.target_search.text())
+        self._refresh_comparison()
 
     def _select_target_row(self, index: QModelIndex) -> None:
         target = self.target_model.target_at(index.row())
         if target is not None:
-            self.target_combo.setCurrentText(f"{target.key} — {target.label}")
+            self.target_combo.setCurrentIndex(self.target_combo.findData(target.key))
 
     @Slot()
     def _mark_dirty(self) -> None:
         self._dirty = True
         self._pending_preview = None
+        self._scope_edit_preview = None
+        self.scope_model.catalog_details = {}
+        self.scope_model.layoutChanged.emit()
         self._last_scope_preview = None
         self._scope_preview_revision = None
         self.status.setPlainText("未保存の変更があります")
@@ -926,7 +979,7 @@ class WatchlistEditorPage(QWidget):
         self._scope_checkbox_dirty = True
         self._mark_dirty()
 
-    def _show_catalog_reference(self, target: WatchlistTarget) -> None:
+    def _catalog_reference(self, target: WatchlistTarget) -> tuple[ListingPreview, dict[str, str]]:
         rows = []
         labels = {}
         if self.snapshot is not None:
@@ -937,16 +990,111 @@ class WatchlistEditorPage(QWidget):
                 locators = self.snapshot.source_targets.get(source.id, ())
                 rows.append(ListingRow(
                     source.external_id, locators[0].locator if locators else "",
-                    source.display_position or 0, (item.item_title or "") if item else "",
+                    source.display_position or 0, (item.order_label or item.item_title or "未確認") if item else "未確認",
                     source.access_mode, "catalog-reference",
                 ))
                 labels[source.external_id] = item.status if item else "unknown"
         rows.sort(key=lambda row: row.site_position, reverse=True)
-        self.scope_model.set_listing(
-            ListingPreview(target.site, target.key, target.url, "catalog-reference", tuple(rows),
-                           False, datetime.now(UTC), None, ("Catalog reference only",)),
-            catalog_labels=labels,
+        return ListingPreview(target.site, target.key, target.url, "catalog-reference", tuple(rows),
+                              False, datetime.now(UTC), None, ("Catalog reference only",)), labels
+
+    def _show_catalog_reference(self, target: WatchlistTarget) -> None:
+        listing, labels = self._catalog_reference(target)
+        self.scope_model.set_listing(listing, catalog_labels=labels)
+
+    def _refresh_comparison(self, *args: Any) -> None:
+        active = self._selected_target()
+        if active is None:
+            self.comparison_model.set_rows([])
+            return
+        members = sorted(
+            (target for target in self.target_model.targets if target.work_key == active.work_key),
+            key=lambda target: (target.archive_order is None, target.archive_order or 0, target.key),
         )
+        sources = {
+            (source.site, source.discovery_key, source.external_id): source
+            for source in (self.snapshot.sources.values() if self.snapshot else ())
+        }
+        rows = []
+        for target in members:
+            cached = self._work_listings.get(target.key)
+            if cached is not None and (cached.site != target.site or cached.target_url != target.url):
+                cached = None
+            if target.key == active.key:
+                episodes = self.scope_model.rows
+                temporary = self._listing is not None
+            elif cached is not None:
+                episodes, temporary = cached.rows, True
+            else:
+                reference, _labels = self._catalog_reference(target)
+                episodes, temporary = reference.rows, False
+            if not episodes:
+                rows.append(WorkEpisodeRow(
+                    target, ListingRow("", "", 0, "未Discover / 一覧未取得", "unknown", "catalog-reference"),
+                    "未Discover / 一覧未取得", None, "未取得",
+                ))
+            for index, episode in enumerate(episodes):
+                source = sources.get((target.site, target.key, episode.external_id))
+                item = self.snapshot.items.get(source.item_id) if source is not None and self.snapshot else None
+                rows.append(WorkEpisodeRow(
+                    target, episode, item.status if item is not None else "unregistered",
+                    source.acquisition_enabled if source else None,
+                    "一時取得" if temporary else "Catalog",
+                    index if target.key == active.key else None,
+                ))
+        reset = self.comparison_model.set_rows(rows)
+        if reset:
+            first_active = next((index for index, row in enumerate(rows) if row.target.key == active.key), None)
+            if first_active is not None:
+                self.scope_table.scrollTo(self.comparison_model.index(first_active, 0), QTableView.ScrollHint.PositionAtTop)
+        self.listing_label.setText(
+            f"作品 {active.work_key}: {len(members)} keys / {len(rows)}行　編集中: {active.site} / {active.key}"
+        )
+
+    def _episode_context_menu(self, position) -> None:
+        index = self.scope_table.indexAt(position)
+        entry = self.comparison_model.entry(index)
+        if entry is None:
+            return
+        menu = QMenu(self.scope_table)
+        if entry.episode.url:
+            menu.addAction("URLをコピー", lambda: QApplication.clipboard().setText(entry.episode.url))
+        editable = bool(entry.episode.url) and entry.target.key == self._active_key and not self._busy() and not self._active_job
+        if editable:
+            menu.addAction("開始 from_url に設定", lambda: self.set_boundary_for_episode(entry, "from"))
+            menu.addAction("終了 through_url に設定", lambda: self.set_boundary_for_episode(entry, "through"))
+        elif not self._busy():
+            menu.addAction("このkeyを編集", lambda: self.target_combo.setCurrentIndex(self.target_combo.findData(entry.target.key)))
+        menu.exec(self.scope_table.viewport().mapToGlobal(position))
+
+    def set_boundary_for_episode(self, entry: WorkEpisodeRow, boundary: str) -> bool:
+        # A context menu runs a nested event loop; resolve immutable identity
+        # again in case a snapshot refresh moved its original row index.
+        identity = entry.target.site, entry.target.key, entry.episode.external_id, entry.episode.url
+        for index, current in enumerate(self.comparison_model.rows):
+            if (current.target.site, current.target.key, current.episode.external_id, current.episode.url) == identity:
+                return self.set_boundary_from_row(index, boundary)
+        return False
+
+    def set_boundary_from_row(self, row: int, boundary: str) -> bool:
+        entry = self.comparison_model.entry(self.comparison_model.index(row, 0))
+        if (entry is None or entry.target.key != self._active_key or not entry.episode.url
+                or boundary not in {"from", "through"} or self._busy() or self._active_job):
+            return False
+        field = self.from_edit if boundary == "from" else self.through_edit
+        field.setText(entry.episode.url)
+        self._scope_checkbox_dirty = False  # The explicit boundary now owns this draft.
+        if self._listing is not None:
+            target = self._selected_target()
+            scope = DiscoveryScope(
+                from_url=self.from_edit.text().strip() or None,
+                through_url=self.through_edit.text().strip() or None,
+                excluded_external_ids=target.discovery_scope.excluded_external_ids if target.discovery_scope else (),
+            )
+            self.scope_model.checked = set(self._checked_for_target(replace(target, discovery_scope=scope)))
+            self.scope_model.layoutChanged.emit()
+        self._mark_dirty()
+        return True
 
     def _selection_affecting_change(self, proposed: Iterable[WatchlistTarget]) -> bool:
         """Return whether this draft changes discovery membership or numbering."""
@@ -977,11 +1125,17 @@ class WatchlistEditorPage(QWidget):
         for sibling in proposed:
             if sibling.key == self._listing.target_key:
                 continue
-            if sibling.site != self._listing.site or sibling.url != self._listing.target_url:
+            if sibling.site != self._listing.site:
                 continue
-            selected = frozenset(self._checked_for_target(sibling))
+            evidence = self._work_listings.get(sibling.key)
+            if evidence is None and sibling.url == self._listing.target_url:
+                evidence = replace(self._listing, target_key=sibling.key)
+            if (evidence is None or evidence.site != sibling.site or evidence.target_key != sibling.key
+                    or evidence.target_url != sibling.url):
+                continue
+            selected = frozenset(self._checked_for_target(sibling, listing=evidence))
             listings[sibling.key] = replace(
-                self._listing,
+                evidence,
                 target_key=sibling.key,
                 target_url=sibling.url,
             )
@@ -1017,34 +1171,18 @@ class WatchlistEditorPage(QWidget):
                 boundaries = [value for value in (from_url, through_url) if value]
                 if any(value not in rows_by_url for value in boundaries):
                     raise ValueError("Manual scope boundaries must match complete-listing URLs")
-                positions = [rows_by_url[value].site_position for value in boundaries]
-                if positions:
-                    low, high = min(positions), max(positions)
-                    checked_ids = {
-                        row.external_id for row in self._listing.rows
-                        if low <= row.site_position <= high
-                    }
-                else:
-                    checked_ids = {row.external_id for row in self._listing.rows}
-                if saved_scope is not None:
-                    checked_ids.difference_update(saved_scope.excluded_external_ids)
+                draft_scope = DiscoveryScope(
+                    from_url=from_url or None, through_url=through_url or None,
+                    excluded_external_ids=saved_scope.excluded_external_ids if saved_scope else (),
+                )
+                checked_ids = set(self._checked_for_target(replace(selected, discovery_scope=draft_scope)))
             else:
                 # The URL changed and the newly fetched listing is authoritative;
                 # map the saved range onto it before constructing the new scope.
                 boundaries = [value for value in (saved_from, saved_through) if value]
                 if any(value not in rows_by_url for value in boundaries):
                     raise ValueError("Saved scope boundaries are absent from the complete listing")
-                positions = [rows_by_url[value].site_position for value in boundaries]
-                if positions:
-                    low, high = min(positions), max(positions)
-                    checked_ids = {
-                        row.external_id for row in self._listing.rows
-                        if low <= row.site_position <= high
-                    }
-                else:
-                    checked_ids = {row.external_id for row in self._listing.rows}
-                if saved_scope is not None:
-                    checked_ids.difference_update(saved_scope.excluded_external_ids)
+                checked_ids = set(self._checked_for_target(selected))
             self._draft_checked_ids = frozenset(checked_ids)
             plan = SelectionPlanner().plan(self._listing, checked_ids)
             if not plan.ready:
@@ -1320,6 +1458,7 @@ class WatchlistEditorPage(QWidget):
 
     def set_listing(self, listing: ListingPreview, *, checked: Iterable[str] = ()) -> None:
         self._listing = listing
+        self._work_listings[listing.target_key] = listing
         labels = {}
         if self.snapshot is not None:
             for source in self.snapshot.sources.values():
@@ -1327,7 +1466,7 @@ class WatchlistEditorPage(QWidget):
                     labels[source.external_id] = "Catalog登録済み"
         self.scope_model.set_listing(listing, checked=checked, catalog_labels=labels)
         self._scope_checkbox_dirty = False
-        self.listing_label.setText(f"全話一覧: {len(listing.rows)}件（チェック状態は実行選択と独立）")
+        self._refresh_comparison()
 
     def set_active_job(self, active: bool) -> None:
         self._active_job = active
@@ -1351,7 +1490,7 @@ class WatchlistEditorPage(QWidget):
         if self._dirty:
             self.status.setPlainText("Save or discard unsaved edits before Full Discovery")
             return
-        self.fullRequested.emit(target.key)
+        self.fetch_listing(for_full=target.key)
 
     def preview_scope_sync(self) -> ScopeSyncPreview | None:
         if self._busy():
@@ -1574,17 +1713,33 @@ class WatchlistEditorPage(QWidget):
         self._finish_worker("_save_worker")
         event.accept()
 
-    def fetch_listing(self) -> None:
+    def fetch_listing(self, *, for_full: str | None = None) -> None:
         target = self._selected_target()
         if target is None or self._active_job or self._busy():
             self.status.setPlainText("keyを選択し、実行中Jobがない状態で一覧を取得してください")
             return
-        self.fetch_listing_button.setEnabled(False)
-        self.listing_label.setText("全話一覧を取得中（Catalog/Watchlist/権利は変更しません）")
+        if self._scope_checkbox_dirty:
+            self.status.setPlainText("チェック編集中です。保存または破棄してから話名を再取得してください")
+            return
+        self._full_after_listing = for_full
+        self._listing_errors = []
+        self._listing_queue = [
+            replace(row, url=self.url_edit.text().strip()) if row.key == target.key else row
+            for row in self.target_model.targets if row.work_key == target.work_key
+        ]
         self._generation += 1
-        draft_url = self.url_edit.text().strip()
-        if draft_url != target.url:
-            target = replace(target, url=draft_url)
+        self._advance_listing_queue()
+
+    def _advance_listing_queue(self) -> None:
+        if self._active_job:
+            self._listing_queue = []
+            self._full_after_listing = None
+            self._listing_errors.append("実行Jobが開始されたため一時一覧の続行を停止しました")
+        if not self._listing_queue:
+            self._complete_listing_queue()
+            return
+        target = self._listing_queue.pop(0)
+        self.status.setPlainText(f"話名を一時取得中: {target.site} / {target.key}（残り{len(self._listing_queue)} keys）")
         worker = _ListingWorker(target, self._generation)
         self._listing_worker = worker
         worker.signals.succeeded.connect(self._listing_succeeded, Qt.ConnectionType.QueuedConnection)
@@ -1601,30 +1756,52 @@ class WatchlistEditorPage(QWidget):
         generation, listing = listing
         if generation != self._generation:
             return
-        self._finish_worker("_listing_worker")
-        self.fetch_listing_button.setEnabled(True)
         if not isinstance(listing, ListingPreview):
             self._listing_failed("Discovery adapter returned an invalid listing preview")
             return
-        target = self._selected_target()
-        draft_url = self.url_edit.text().strip() if target is not None else ""
-        if target is None or listing.site != target.site or listing.target_key != target.key or listing.target_url != draft_url:
+        target = self._listing_worker.target if self._listing_worker is not None else self._selected_target()
+        expected_url = target.url if self._listing_worker is not None else self.url_edit.text().strip()
+        if target is None or listing.site != target.site or listing.target_key != target.key or listing.target_url != expected_url:
             self._listing_failed("Complete listing identity does not match the selected Watchlist key")
             return
-        self.set_listing(listing, checked=self._checked_for_target(target, listing=listing))
+        self._work_listings[listing.target_key] = listing
+        self._finish_worker("_listing_worker")
         if listing.blockers:
-            self.status.setPlainText("一覧取得は未確定です: " + " / ".join(listing.blockers))
-        else:
-            self.status.setPlainText(f"全話一覧を取得しました: {len(listing.rows)}件。チェック後にプレビューしてください")
+            self._listing_errors.append(f"{target.key}: " + " / ".join(listing.blockers))
+        self._advance_listing_queue()
 
     @Slot(str)
     def _listing_failed(self, message: str) -> None:
         if self._closed:
             return
+        key = self._listing_worker.target.key if self._listing_worker is not None else self._active_key
+        if key is not None:
+            self._work_listings.pop(key, None)
+        self._listing_errors.append(f"{key}: {message}")
         self._finish_worker("_listing_worker")
-        self.fetch_listing_button.setEnabled(True)
-        self.listing_label.setText("Catalog参考一覧（scope対応adapterのみ）")
-        self.status.setPlainText("一覧取得停止: " + message)
+        self._advance_listing_queue()
+
+    def _complete_listing_queue(self) -> None:
+        target = self._selected_target()
+        if target is not None:
+            listing = self._work_listings.get(target.key)
+            self._listing = None
+            if listing is not None and listing.target_url == self.url_edit.text().strip() and listing.site == target.site:
+                self.set_listing(listing, checked=self._checked_for_target(target, listing=listing))
+            else:
+                self._show_catalog_reference(target)
+        self._refresh_comparison()
+        self.set_active_job(self._active_job)
+        message = "話名の一時取得が完了しました。保存していません。positionはサイト内の順序です。"
+        if self._listing_errors:
+            message += "\n未対応・取得停止（Catalog参照のまま）: " + " / ".join(self._listing_errors)
+        self.status.setPlainText(message)
+        full_key, self._full_after_listing = self._full_after_listing, None
+        if full_key is not None and (self._dirty or self.service.revision() != self.revision):
+            self.status.append("Watchlistが変わったためFull確認を停止しました。再読込して確認してください。")
+            return
+        if full_key is not None and not self._active_job:
+            self.fullRequested.emit(full_key)
 
     def _checked_for_target(
         self, target: WatchlistTarget, *, listing: ListingPreview | None = None

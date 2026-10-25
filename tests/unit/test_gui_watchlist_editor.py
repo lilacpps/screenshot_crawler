@@ -4,6 +4,7 @@ import os
 import sqlite3
 import time
 import zipfile
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from screenshot_crawler.discovery import (
     DiscoveryService,
 )
 from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
+from screenshot_crawler.gui.model import ViewMode
 from screenshot_crawler.gui.watchlist_editor import WatchlistEditorPage
 from screenshot_crawler.management.inventory import InventoryService
 from screenshot_crawler.site_policies import MagapokeSitePolicy, SitePolicyRegistry
@@ -46,7 +48,13 @@ def qt_app():
 
 
 @pytest.fixture(autouse=True)
-def dispose_editors(qt_app):
+def dispose_editors(qt_app, monkeypatch):
+    from screenshot_crawler.core.browser import BrowserSession
+
+    async def deny_live_cdp(*args, **kwargs):
+        raise RuntimeError("Synthetic GUI test: live CDP is disabled")
+
+    monkeypatch.setattr(BrowserSession, "connect", deny_live_cdp)
     yield
     from PySide6.QtCore import QCoreApplication, QEvent
     for widget in QApplication.topLevelWidgets():
@@ -164,6 +172,7 @@ def test_editor_full_signal_does_not_change_inventory_selection(qt_app, tmp_path
     received: list[str] = []
     editor.fullRequested.connect(received.append)
     editor.request_full()
+    _wait(lambda: bool(received), editor)
     assert received == ["one"]
     editor.close()
 
@@ -507,6 +516,7 @@ def test_gui_save_full_scope_apply_and_batch_end_to_end(qt_app, tmp_path):
     requested = []
     editor.fullRequested.connect(requested.append)
     editor.full_button.click()
+    _wait(lambda: bool(requested), editor)
     assert requested == ["one"]
     registry = DiscoveryAdapterRegistry()
     registry.register("magapoke", _SyntheticFullAdapter)
@@ -559,3 +569,187 @@ def test_snapshot_refresh_during_apply_rereads_committed_state(qt_app, tmp_path,
     assert editor._reload_worker is None
     assert refreshed == [True]
     assert editor.snapshot.keys[0].summary.sync_status == "synced"
+
+
+def _add_comparison_key(editor, catalog, *, key="two", site="mangaone", work_key="work"):
+    service = WatchlistService(editor.watchlist_path)
+    target = service.add(key=key, work_key=work_key, site=site,
+                        url=f"https://example.invalid/{key}", label=key,
+                        archive_order=2 if work_key == "work" else 1)
+    work = catalog.find_work(work_key) or catalog.create_work(WorkInput(work_key=work_key, title=work_key))
+    item = catalog.create_item(ItemInput(order_label="Chapter 42 — native title", item_title="", status="completed"), work_id=work.id)
+    source = catalog.create_source(SourceInput(site=site, external_id=f"{key}-episode-1" if site == "magapoke" else "episode-1", discovery_key=key,
+                                  display_position=1, access_mode="free", available=True), item_id=item.id)
+    catalog.create_source_target(SourceTargetInput(backend="web", locator=f"https://example.invalid/{key}/42"), source_id=source.id)
+    editor.reload()
+    _wait(lambda: editor._reload_worker is None, editor)
+    return target
+
+
+def test_work_default_vertical_resize_and_comparison_identity(qt_app, tmp_path):
+    editor, catalog = _catalog_editor(tmp_path)
+    _add_comparison_key(editor, catalog)
+    other = _add_comparison_key(editor, catalog, key="other", site="bookwalker", work_key="other-work")
+    assert editor.inventory_model.view_mode == ViewMode.WORK
+    editor.resize(1100, 850)
+    editor.show()
+    QApplication.processEvents()
+    editor.editor_splitter.setSizes([190, 450])
+    QApplication.processEvents()
+    before = editor.inventory_tree.height()
+    editor.editor_splitter.setSizes([390, 250])
+    QApplication.processEvents()
+    assert editor.inventory_tree.height() > before + 50
+    rows = editor.comparison_model.rows
+    assert {row.target.key for row in rows} == {"one", "two"}
+    duplicate_id_rows = [row for row in rows if row.episode.external_id == "episode-1"]
+    assert {row.target.site for row in duplicate_id_rows} == {"magapoke", "mangaone"}
+    foreign_index = next(index for index, row in enumerate(rows) if row.target.key == "two")
+    foreign = editor.comparison_model.index(foreign_index, 0)
+    assert not editor.comparison_model.flags(foreign) & Qt.ItemFlag.ItemIsUserCheckable
+    assert not editor.comparison_model.setData(foreign, Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+    assert editor.comparison_model.data(editor.comparison_model.index(foreign_index, 5)) == "Chapter 42 — native title"
+    assert editor.comparison_model.data(editor.comparison_model.index(foreign_index, 8)) == "completed"
+    work_node = next(node for node in editor.inventory_model.root.children if node.work_key == other.work_key)
+    editor._select_inventory_key(editor.inventory_model.index_for_node(work_node.node_id))
+    assert editor._selected_target().work_key == other.work_key
+    assert {row.target.work_key for row in editor.comparison_model.rows} == {other.work_key}
+
+
+def test_context_boundary_maps_partial_range_and_rejects_sibling(qt_app, tmp_path, monkeypatch):
+    editor, catalog = _catalog_editor(tmp_path)
+    _add_comparison_key(editor, catalog)
+    editor.set_listing(_listing(), checked=("episode-1", "episode-2", "episode-3"))
+    rows = editor.comparison_model.rows
+    foreign_row = next(index for index, row in enumerate(rows) if row.target.key == "two")
+    assert not editor.set_boundary_from_row(foreign_row, "from")
+    active_row = next(index for index, row in enumerate(rows) if row.target.key == "one" and row.episode.external_id == "episode-2")
+    before = editor.watchlist_path.read_bytes(), catalog.path.read_bytes()
+    editor.show()
+    QApplication.processEvents()
+    active_index = editor.comparison_model.index(active_row, 0)
+    editor.scope_table.scrollTo(active_index)
+
+    import screenshot_crawler.gui.watchlist_editor as module
+
+    class Menu:
+        def __init__(self, parent):
+            self.actions = {}
+
+        def addAction(self, text, callback):
+            self.actions[text] = callback
+
+        def exec(self, position):
+            self.actions["開始 from_url に設定"]()
+
+    monkeypatch.setattr(module, "QMenu", Menu)
+    editor._episode_context_menu(editor.scope_table.visualRect(active_index).center())
+    assert editor.from_edit.text().endswith("/2")
+    assert editor.scope_model.checked == {"episode-2", "episode-1"}
+    draft = editor._collect_targets()[0]
+    assert draft.discovery_scope.from_url.endswith("/2")
+    assert draft.discovery_scope.through_url.endswith("/1")
+    assert (editor.watchlist_path.read_bytes(), catalog.path.read_bytes()) == before
+    editor.preview_edit()
+    _wait(lambda: editor._preview_worker is None, editor)
+    assert editor.scope_edit_preview.selected_count == 2
+    assert editor.scope_edit_preview.ready, editor.status.toPlainText()
+
+
+def test_full_fetches_work_titles_temporarily_before_execution_confirmation(qt_app, tmp_path, monkeypatch):
+    import screenshot_crawler.gui.watchlist_editor as module
+    editor, catalog = _catalog_editor(tmp_path)
+    _add_comparison_key(editor, catalog, site="magapoke")
+    calls = []
+
+    class FakeListingWorker(module._ListingWorker):
+        def run(self):
+            calls.append(self.target.key)
+            self.signals.succeeded.emit((self.generation, replace(_listing(),
+                target_key=self.target.key, target_url=self.target.url)))
+
+    monkeypatch.setattr(module, "_ListingWorker", FakeListingWorker)
+    before = editor.watchlist_path.read_bytes(), catalog.path.read_bytes()
+    confirmed = []
+    editor.fullRequested.connect(lambda key: confirmed.append((key, len(editor._work_listings))))
+    editor.full_button.click()
+    _wait(lambda: bool(confirmed), editor)
+    assert calls == ["one", "two"]
+    assert confirmed == [("one", 2)]
+    assert {row.target.key for row in editor.comparison_model.rows} == {"one", "two"}
+    assert {row.title_origin for row in editor.comparison_model.rows} == {"一時取得"}
+    assert (editor.watchlist_path.read_bytes(), catalog.path.read_bytes()) == before
+    editor.target_combo.setCurrentIndex(editor.target_combo.findData("two"))
+    assert editor._listing.target_key == "two"
+    assert len(editor.comparison_model.rows) == 6
+    assert editor.scope_model.checked == {"episode-1", "episode-2", "episode-3"}
+
+
+def test_readonly_listing_queue_stops_before_full_if_job_starts(qt_app, tmp_path, monkeypatch):
+    editor, catalog = _catalog_editor(tmp_path)
+    _add_comparison_key(editor, catalog)
+    workers, requested = [], []
+    monkeypatch.setattr(editor.thread_pool, "start", workers.append)
+    editor.fullRequested.connect(requested.append)
+    editor.request_full()
+    assert len(workers) == 1
+    editor.set_active_job(True)
+    editor._listing_succeeded((workers[0].generation, _listing()))
+    assert requested == []
+    assert editor._listing_queue == []
+    assert editor._listing_worker is None
+
+
+def test_context_action_keeps_episode_identity_after_rows_move(qt_app, tmp_path):
+    editor, _catalog = _catalog_editor(tmp_path)
+    original = next(row for row in editor.comparison_model.rows if row.episode.external_id == "episode-2")
+    old = _listing()
+    rows = (ListingRow("episode-4", "https://example.invalid/4", 4, "Episode 4", "free", "fixture"), *old.rows)
+    editor.set_listing(replace(old, rows=rows, digest=listing_digest("fixture", rows)), checked=())
+    assert editor.set_boundary_for_episode(original, "from")
+    assert editor.from_edit.text() == "https://example.invalid/2"
+
+
+def test_comparison_checkbox_preserves_scrolled_position(qt_app, tmp_path):
+    path = tmp_path / "watchlist.yaml"
+    _watchlist(path)
+    editor = WatchlistEditorPage(path)
+    old = _listing()
+    rows = tuple(ListingRow(str(n), f"https://example.invalid/{n}", n, f"Episode {n}", "free", "fixture") for n in range(1000, 0, -1))
+    editor.set_listing(replace(old, rows=rows, digest=listing_digest("fixture", rows)), checked=())
+    editor.resize(1100, 850)
+    editor.show()
+    QApplication.processEvents()
+    editor.scope_table.scrollTo(editor.comparison_model.index(800, 0))
+    QApplication.processEvents()
+    before = editor.scope_table.verticalScrollBar().value()
+    assert before > 0
+    assert editor.comparison_model.setData(editor.comparison_model.index(800, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+    QApplication.processEvents()
+    assert editor.scope_table.verticalScrollBar().value() == before
+
+
+def test_work_comparison_keeps_undiscovered_sibling_visible(qt_app, tmp_path):
+    editor, catalog = _catalog_editor(tmp_path)
+    WatchlistService(editor.watchlist_path).add(key="empty", work_key="work", site="jumpplus",
+        url="https://example.invalid/empty", label="Empty", archive_order=2)
+    editor.reload()
+    _wait(lambda: editor._reload_worker is None, editor)
+    rows = [row for row in editor.comparison_model.rows if row.target.key == "empty"]
+    assert len(rows) == 1
+    assert rows[0].episode.display_title == "未Discover / 一覧未取得"
+    assert rows[0].episode.url == ""
+    assert rows[0].active_row is None
+    assert catalog.list_sources(site="jumpplus") == []
+
+
+def test_full_title_fetch_rechecks_watchlist_revision(qt_app, tmp_path, monkeypatch):
+    editor, _catalog = _catalog_editor(tmp_path)
+    workers, requested = [], []
+    monkeypatch.setattr(editor.thread_pool, "start", workers.append)
+    editor.fullRequested.connect(requested.append)
+    editor.request_full()
+    WatchlistService(editor.watchlist_path).update_target("one", label="External edit")
+    editor._listing_succeeded((workers[0].generation, _listing()))
+    assert requested == []
+    assert "Full" in editor.status.toPlainText()
