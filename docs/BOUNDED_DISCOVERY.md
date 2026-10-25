@@ -10,13 +10,20 @@ uses the site's validated native work listing; its legacy unordered path stays
 public-list-only and does not infer positions. Comic DAYS boundary validation
 uses its validated series listing and canonical episode IDs. Each bounded
 Adapter validates boundaries with its own stable listing identity; unsupported
-scoped synchronization fails closed. `discovery_scope` is also the
-acquisition-scope authority, but
-Discovery does not itself apply acquisition flags: `watch scope-sync`
-separately reconciles the Catalog after complete evidence is available. The
-shared Catalog is schema v7 and Batch checks the synchronized
-`acquisition_enabled` flags. See
-`docs/DISCOVERY_AND_BATCH.md` and the affected site notes for current details.
+scoped synchronization fails closed. `discovery_scope` is the acquisition-scope
+authority, while ordinary Discovery and Batch retain the established per-key
+`acquisition_enabled` flag behavior. A saved outer-boundary edit can therefore
+remain pending until Full or explicit scope apply.
+
+The Watchlist scope editor represents a checked complete listing as an
+inclusive range plus sorted `excluded_external_ids` holes. Exclusion runs need
+a complete, identity-bound listing proof before any Work or Source upsert;
+currently Magapoke is the first adapter that supports the required one-shot
+complete-list replay. Unknown, out-of-range, stale, or unsupported exclusions
+fail closed. Batch adds a narrow exact exclusion deny before Policy and
+Executor/resolver entry, including grant-only passes, without imposing a
+global scope-sync gate. See `docs/DISCOVERY_AND_BATCH.md` and affected site
+notes for current details.
 
 この文書は `docs/DISCOVERY_AND_BATCH.md` のDiscovery仕様を補足する詳細仕様である。
 
@@ -239,7 +246,7 @@ one discovered site record
 
 cross-site equivalenceは作らない。同じ `work_key` 配下に内容が実質同一の別site Itemが複数存在してよい。その結果、同じ内容を別siteから複数回crawlする場合があるが、初期仕様では許容する。
 
-Batch Planner / Executorはsite-native boundaryを再判定しない。Watchlist `discovery_scope` をScope Reconcilerが `sources.acquisition_enabled` へ同期し、Batchは同期fingerprintとSource flagsを検証する。取得担当外SourceはSite Policy/quota候補の前に除外するが、quota履歴の集計には全Sourceを残す。`enabled: false`はDiscovery実行設定のままで、既存Sourceの担当状態を変えない。
+Batch Planner / Executor does not re-resolve site-native boundaries. Normal Batch uses current per-key acquisition flags and does not impose a global sync-fingerprint gate. Newly saved exact external-ID exclusions are denied before Policy/quota selection; unproven exclusion keys fail closed before Policy. Executor, resolver, grant-only, and replan paths repeat the deny.
 
 ## 9. 責務分担
 
@@ -268,7 +275,7 @@ AdapterはCatalogへ直接read/writeしない。
 - Discovery自体はCatalogを暗黙migrationしない。Scope Reconciler / acquisition Batch gateを使う前に、明示的な `catalog migrate` でschema v7へ移行する
 - unbounded fullのmissing-source reconciliationは現行どおり
 - unbounded incrementalのknown-streak / stop-hook behaviorは現行どおり
-- BatchはWatchlist境界を解析せず、Scope Reconcilerが保存した担当flag/sync snapshotだけを検証する
+- Batch does not resolve Watchlist boundaries online. Normal execution uses current acquisition flags; a newly saved exact exclusion uses the narrow fail-closed overlay.
 - Discoveryはexisting Sourceのlocal completed stateを変更しない
 
 ## 11. Acceptance criteria / tests
@@ -289,7 +296,7 @@ AdapterはCatalogへ直接read/writeしない。
 12. scope未対応Adapterがscopeをsilent ignoreしない
 13. Watchlist rewriteでscopeを保持する
 14. Discovery runがCatalog schemaを自動migrationしない。取得担当同期を使うCatalogは事前に明示移行済みv7である
-15. Batch / Crawlコードにboundary URL解決を持ち込まない。担当flag未同期ならBatchはfail-closed
+15. Batch / Crawl code must not resolve boundary URLs. Unsynchronized legacy flags do not globally stop normal Batch, but an unproven exclusion key fails closed before Policy.
 
 必要なtest category:
 
@@ -316,3 +323,21 @@ cross-site重複が運用上大きな問題になった場合でも、最初の�
 physical Item mergeはequivalence方式では不足することが実運用で確認された場合のみ再検討する。実装する場合はmergeだけでなく、誤mergeを安全にundo / repairするproduction DB toolingを同時に仕様化する。
 
 この将来拡張は現Phaseの実装対象外である。
+
+
+## Current implementation addendum (2026-10-25)
+
+The GUI scope editor adds `excluded_external_ids` as a canonical sorted hole
+list inside an inclusive boundary. Exclusion-bearing Discovery validates the
+complete listing, target identity, canonical order, boundaries, and all hole
+IDs before any Catalog upsert, then replays that same adapter-bound listing
+once. Magapoke is currently the supported exclusion replay adapter; other
+adapters fail closed before Work creation when exclusions are requested.
+
+Normal Batch retains the current per-key Catalog acquisition flags and does
+not use a global scope-sync/fingerprint gate. A newly saved exact exclusion is
+denied before Policy/quota selection and rechecked before adapter, resolver,
+reader, grant-only, replan, or capture entry. Missing or unproven exclusion
+evidence blocks the affected key. Outer boundary changes remain visibly
+pending until Full or explicit scope apply, preserving the existing temporary
+flag behavior for unrelated rows and keys.

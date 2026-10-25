@@ -11,6 +11,7 @@ class DiscoveryScope:
 
     from_url: str | None = None
     through_url: str | None = None
+    excluded_external_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

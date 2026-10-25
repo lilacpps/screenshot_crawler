@@ -412,6 +412,92 @@ def test_acquisition_exclusion_precedes_policy_but_keeps_quota_history(
     )
 
 
+def test_watchlist_exclusion_overlay_denies_before_policy_and_preserves_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="series", title="Series"))
+    sources = []
+    for index in (1, 2, 3):
+        item = catalog.create_item(ItemInput(), work_id=work.id)
+        source = catalog.create_source(
+            SourceInput(
+                site="mangaone", external_id=f"chapter-{index}",
+                discovery_key="chapters", access_mode="free",
+                display_position=index,
+            ),
+            item_id=item.id,
+        )
+        catalog.create_source_target(
+            SourceTargetInput(backend="web", locator=f"https://example.invalid/chapter-{index}"),
+            source_id=source.id,
+        )
+        sources.append(source)
+    catalog.apply_discovery_acquisition_flags(
+        work_id=work.id,
+        site="mangaone",
+        discovery_key="chapters",
+        flags_by_external_id={"chapter-2": False},
+    )
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="chapters", work_key=work.work_key, site="mangaone",
+        url="https://example.invalid/list", label="Series", archive_order=1,
+        discovery_scope=DiscoveryScope(
+            from_url="https://example.invalid/chapter-1",
+            through_url="https://example.invalid/chapter-3",
+            excluded_external_ids=("chapter-1",),
+        ),
+    )
+    evaluated: list[int] = []
+    original_evaluate = MangaOneSitePolicy.evaluate
+
+    def record_evaluation(self, source, *, now, quota_available):
+        evaluated.append(source.id)
+        return original_evaluate(self, source, now=now, quota_available=quota_available)
+
+    monkeypatch.setattr(MangaOneSitePolicy, "evaluate", record_evaluation)
+    policies = SitePolicyRegistry()
+    policies.register("mangaone", MangaOneSitePolicy)
+    plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="mangaone", now=NOW
+    )
+
+    # The exclusion is an immediate acquisition deny, but naming still uses
+    # the last reflected Catalog flags until Full/apply.  The remaining
+    # candidate therefore keeps the prefix for the excluded row.
+    assert [candidate.source_id for candidate in plan.candidates] == [sources[2].id]
+    assert plan.candidates[0].artifact_prefix == "002"
+    assert evaluated == [sources[2].id]
+    assert any(
+        skipped.source_id == sources[0].id and skipped.reason == "acquisition_excluded"
+        for skipped in plan.skipped
+    )
+    assert any(
+        skipped.source_id == sources[1].id and skipped.reason == "acquisition_disabled"
+        for skipped in plan.skipped
+    )
+    assert catalog.get_source(sources[0].id).acquisition_enabled is True
+    watchlist.update_target(
+        "chapters",
+        discovery_scope=DiscoveryScope(
+            from_url="https://example.invalid/chapter-1",
+            through_url="https://example.invalid/chapter-3",
+            excluded_external_ids=("missing-episode",),
+        ),
+    )
+    unknown_plan = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="mangaone", now=NOW
+    )
+    assert unknown_plan.candidates == []
+    assert evaluated == [sources[2].id]
+    assert any(
+        skipped.source_id == sources[0].id
+        and skipped.reason == "acquisition_exclusion_unproven"
+        for skipped in unknown_plan.skipped
+    )
+
+
 def test_planner_uses_last_flags_after_watchlist_edit_without_reading_scope_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -522,6 +608,104 @@ async def test_resolver_rejects_forged_target_before_adapter_creation(tmp_path: 
             object(), [forged], "work_ticket"
         ):
             pytest.fail("A forged candidate reached the access resolver")
+
+
+async def test_resolver_rejects_candidate_newly_excluded_by_watchlist(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="series", title="Series"))
+    item = catalog.create_item(ItemInput(), work_id=work.id)
+    source = catalog.create_source(
+        SourceInput(
+            site="magapoke", external_id="episode-1", discovery_key="chapters",
+            access_mode="quota",
+        ),
+        item_id=item.id,
+    )
+    catalog.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/episode-1"),
+        source_id=source.id,
+    )
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="chapters", work_key=work.work_key, site="magapoke",
+        url="https://example.invalid/list", label="Series",
+    )
+    policies = SitePolicyRegistry()
+    policies.register("magapoke", MagapokeSitePolicy)
+    candidate = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="magapoke", now=NOW, quota_resource="work_ticket"
+    ).candidates[0]
+    watchlist.update_target(
+        "chapters",
+        discovery_scope=DiscoveryScope(
+            from_url="https://example.invalid/episode-1",
+            through_url="https://example.invalid/episode-1",
+            excluded_external_ids=("episode-1",),
+        ),
+    )
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        AdapterRegistry(),
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+    )
+    with pytest.raises(BatchExecutionError, match="excluded"):
+        async with executor.prepare_access_resource_candidates(
+            object(), [candidate], "work_ticket"
+        ):
+            pytest.fail("A newly excluded candidate reached the access resolver")
+
+
+async def test_resolver_rejects_candidate_when_new_exclusion_is_unproven(
+    tmp_path: Path,
+) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="series", title="Series"))
+    item = catalog.create_item(ItemInput(), work_id=work.id)
+    source = catalog.create_source(
+        SourceInput(
+            site="magapoke", external_id="episode-1", discovery_key="chapters",
+            access_mode="quota",
+        ),
+        item_id=item.id,
+    )
+    catalog.create_source_target(
+        SourceTargetInput(backend="web", locator="https://example.invalid/episode-1"),
+        source_id=source.id,
+    )
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    watchlist.add(
+        key="chapters", work_key=work.work_key, site="magapoke",
+        url="https://example.invalid/list", label="Series",
+    )
+    policies = SitePolicyRegistry()
+    policies.register("magapoke", MagapokeSitePolicy)
+    candidate = BatchPlanner(catalog, policies, watchlist=watchlist).plan(
+        site="magapoke", now=NOW, quota_resource="work_ticket"
+    ).candidates[0]
+    watchlist.update_target(
+        "chapters",
+        discovery_scope=DiscoveryScope(
+            from_url="https://example.invalid/episode-1",
+            through_url="https://example.invalid/episode-1",
+            excluded_external_ids=("unknown-episode",),
+        ),
+    )
+    executor = BatchExecutor(
+        catalog,
+        policies,
+        AdapterRegistry(),
+        watchlist=watchlist,
+        library_dir=tmp_path / "Books",
+    )
+    with pytest.raises(BatchExecutionError, match="unproven"):
+        async with executor.prepare_access_resource_candidates(
+            object(), [candidate], "work_ticket"
+        ):
+            pytest.fail("An unproven exclusion reached the access resolver")
 
 
 async def test_grant_only_all_skips_browser_when_every_source_is_out_of_scope(

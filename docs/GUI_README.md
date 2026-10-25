@@ -1,4 +1,4 @@
-# Windows 作品管理GUI（P2・選択実行 / P3・ジョブ管理）
+# Windows 作品管理GUI（P2・選択実行 / P3・ジョブ管理 / Watchlist編集）
 
 Python 3.12以上とPySide6を使うローカルアプリです。Catalog v7とWatchlistを表示し、
 チェックしたWatchlist keyだけを実行対象に
@@ -13,6 +13,41 @@ Grant-onlyでは権利・チケット・Quotaを消費する可能性を明示�
 python -m pip install -e ".[gui,dev]"
 screenshot-crawler-gui --catalog catalog.sqlite --watchlist watchlist.yaml --runtime crawler.yaml
 ```
+
+## Watchlist管理・話数選択
+
+ツールバーの「Watchlist管理」から専用ウィンドウを開きます。サイト別／作品別ツリー、
+検索・状態フィルタ、key一覧、選択keyの編集フォームを使います。key一覧は参照用で、
+編集はフォームから行います。label・enabledの変更と新規key登録はローカルで行えます。
+編集中の話数チェックは、実行画面のkeyチェックとは別に保持します。
+
+「全話一覧を取得（CDP読取専用）」は共通Crawler Chromeへ接続し、Adapterの完全一覧
+機能だけを呼び出します。現在の対応サイトはMagapokeです。未対応サイトは接続前に停止し、
+Catalogの参照一覧を表示します。URL・scope・archive_orderの変更保存には、対応する完全一覧と
+Catalogに結び付いたプレビューが必要です。label・enabledだけの編集は一覧非対応でも可能です。
+
+話数は個別チェック、全選択／全解除、サイト上のpositionによる範囲選択で指定できます。
+非空の選択を連続範囲＋内側の`excluded_external_ids`へ変換します。「変更プレビュー」で
+追加・維持・除外・未Catalog・不明、取得担当、Catalog反映前後、archive番号の差分と
+既存ZIPの現在名／予測名・改名の必要性を確認します。詳細は下部テキストをスクロールして確認できます。
+プレビューはWatchlist・Catalog・ZIP・管理DBを書き換えず、ticketやquotaを消費しません。
+
+「保存」はWatchlistのlock・ハッシュCAS・atomic replaceで基本項目と範囲・作品内の順序を
+まとめて保存します。空選択、重複担当、不完全／古い一覧、Catalogの変更、未確定の採番は停止します。
+明示archive_orderの作品で未登録話の番号を予測できない場合も停止し、番号を捏造しません。
+通常のブロック形式YAMLのコメント・未知キー・CRLFを保持し、安全に修正できない複雑な構文は停止します。
+
+穴の除外は保存後すぐにBatch／Grant-onlyで拒否されます。除外IDの所属が証明できないkeyも停止します。
+外側の境界変更は、Full／Scope適用まで以前のCatalog担当フラグが有効です。
+「Full Discovery」は明示keyだけを既存の実行前確認へ送り、実行画面の選択を変更しません。
+新規keyも最新Inventoryを再読込して確認します。Full完了だけでwork全体のScope同期済みとは扱いません。
+「Scope preview」「Scope apply」は別操作で、適用前に差分を確認し、Catalog job lockとrevisionを再検証します。
+既存ZIPは保存・Full・Scope適用では改名しません。必要な改名は既存のmaintenance機能で別途行います。
+
+未保存編集の切替・再読込・終了には破棄確認があります。非同期処理中、実行Job中、path切替時の
+不安全な変更を止め、Catalog再読込で以前のプレビューを無効化します。
+小さい画面では編集領域をスクロールできます。1,000行の合成一覧をWindows/DPR 1.5で描画し、
+980×700と1400×1000の論理サイズを確認しています。実サイトの確認や権利消費は行っていません。
 
 この作業環境の既存`.venv`にはインストール済みです。直接起動できます。
 
@@ -117,7 +152,8 @@ workerはPIDだけでなくtoken・OS開始identity・heartbeatを記録しま�
 
 実行前確認は読み取り専用です。実行開始後は既存のCrawler、Chrome/CDP、Catalog job lock、
 Site Policyに従ってworkerを動かします。management DBはCatalogとは別に管理されます。
-Watchlist編集、Scope apply、Rename、スケジューラは対象外です。
+Rename and scheduler remain outside the P2/P3 execution contract. Watchlist編集
+and Scope apply are provided by the separate Watchlist management section above.
 
 直近履歴はItemごとの最大Run ID、ArtifactはItem/種別/形式/backendごとの最新記録です。
 過去のrunning記録を現在実行中とは判断しません。物理ファイル検証はしません。

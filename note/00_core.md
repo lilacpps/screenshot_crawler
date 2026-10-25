@@ -23,6 +23,111 @@ read-only/copy evidence are detailed in `note/09_piccoma.md`.
 An initially over-broad full-suite attempt was stopped before completion; no
 full-suite pass is claimed for this bounded default-false display extension.
 
+## Watchlist scope editor Stage 01 (2026-10-25)
+
+The Watchlist model now accepts DiscoveryScope.excluded_external_ids as canonical, sorted site-native external ID strings. A scope containing only exclusions is valid; an empty exclusion list is omitted. Duplicate, empty, and non-string IDs fail closed. Scope and work fingerprints plus persisted configuration JSON include the canonical exclusion list, and saved configuration restoration rejects malformed boundaries or duplicate exclusions.
+
+WatchlistService provides read-only revision/preview support, update_target, and work-atomic update_work_archive_order. Mutations use a per-Watchlist path lock, revision compare-and-swap, durable temporary-file flush, and atomic replace. Ordinary block YAML edits patch source spans so unrelated comments, root keys, and target keys survive; ambiguous flow/multiline or nested-scope-comment cases fail without writing. These APIs do not write Catalog, ZIP, or scope-sync state. Stage 03 now provides the narrow Batch safety overlay for newly saved exclusions; outer-boundary edits still carry the GUI Full/Apply warning until scope reflection.
+
+Validation status: Watchlist unit tests cover legacy/boundary/exclusion forms, canonicalization, comment and unknown-key preservation, preview no-write, CAS/concurrency, archive ordering, and fail-closed syntax. No live-site or operational data verification was performed.
+
+## Watchlist GUI scope editor Stage 04 (2026-10-25)
+
+The Windows GUI now opens an independent WatchlistEditorPage from the
+existing MainWindow toolbar. Its read-only Watchlist summary and selected-key form edit label, enabled, URL, scope, and all keys in a Work's archive order while its complete listing checkbox model remains separate from Inventory execution selection. Label/enabled-only edits remain usable without a listing capability; URL, scope, and archive-order changes require a fresh complete listing and Catalog-bound preview.
+The editor includes the existing hierarchical InventoryTreeModel projection
+with search/status filtering, while its Watchlist and episode checkbox models
+remain independent from execution selection. The listing button checks adapter
+capability before connecting to CDP, then uses the shared endpoint in a worker
+and delegates the catalog-free ListingPreviewService; adapter-owned navigation
+performs the site read. The GUI never performs a generic target navigation.
+Unsupported sites remain Catalog-reference only and cannot commit a checkbox
+scope. Synthetic listings can be injected with `set_listing(listing,
+checked=...)` for offscreen tests.
+
+Preview is read-only and binds the current Watchlist revision/path pair and
+one immutable CatalogInventoryReader snapshot. Save requires a fresh
+ScopeEditPreview for every selection-affecting draft and calls the
+single-lock/CAS `WatchlistService.apply_edit` operation, so basic fields, scope,
+and Work archive order cannot be partially written. The worker re-reads the
+Catalog inside the Catalog job lock, compares its content identity and the
+preview's target token/age, and rejects changed or ambiguous source/run/artifact
+joins. `Scope preview` and `Scope apply` run in workers; apply reuses the Catalog
+job lock and reconciliation revision CAS. Full Discovery sends the editor's
+explicit key to the existing execution preview without altering the Inventory
+check set. Dirty editors, changed paths, active jobs, stale listings, empty
+checkbox selections, unsupported scope capability, sibling overlap, and
+unresolved ownership stop safely. Existing CRLF Watchlists retain their raw
+line endings and byte-based revision hash. No live-site or operational data
+verification was performed.
+
+The saved target tuple remains the baseline while reordering/adding modifies only
+the draft. Discard restores the full saved tuple; cancel restores the selected key.
+A standalone reload reads Inventory asynchronously and updates the shared tree;
+MainWindow refresh invalidates both edit and Scope-sync previews, including any
+in-flight preview result. Obsolete apply completion triggers a fresh read because the mutation may already have committed; it never labels an older snapshot as current.
+Controls are disabled during jobs/workers, and closing/rebinding waits for active
+editor operations. Reopening creates a fresh editor. Complete-list and Catalog-only
+reference tables are distinct: only complete-list rows are checkable. Position range
+selection and a scrollable editing area support large lists and small Windows sizes.
+The listing worker closes its CDP session even if page creation fails. Unsupported
+capabilities are rejected before CDP connection.
+
+The isolated Qt/Catalog E2E covers no-write preview, atomic hole save, synthetic Full
+through DiscoveryService, stale Scope apply rejection/retry, final Batch selection,
+and unchanged bytes of an existing valid ZIP. Other regressions cover same-size/
+same-mtime Catalog changes and new CrawlRuns, Watchlist CAS, same-site overlap before
+Catalog registration, one-sided boundaries, snapshot/worker races, active jobs and
+new-key Full without changing execution checks. Native Windows captures use synthetic
+1,000-row inputs at logical 980x700 and 1400x1000, DPR 1.5. No real site or CDP account
+was used for verification.
+
+## Read-only complete listing preview Stage 02 (2026-10-25)
+
+The shared Discovery layer defines ListingRow and ListingPreview DTOs plus a stable digest over listing identity, ordered site-native external IDs, and authoritative positions. DiscoveryService.preview_complete_listing delegates only to an adapter optional capability; unsupported sites and incomplete adapters return visible blockers. The method does not acquire Catalog job locks, call normal Discovery synchronization, or write Catalog, Watchlist, ZIP, or management state.
+
+Magapoke implements the capability by reusing its existing complete episode-list expansion and parsing helpers. This Stage does not add GUI behavior or scope application. Synthetic Chromium and unit validation cover complete rows, canonical IDs/positions, digest behavior, unsupported-site blockers, and zero operational files. No live-site or paid-resource verification was performed.
+
+## Watchlist scope selection and exclusion safety Stage 03 (2026-10-25)
+
+`SelectionPlanner` maps a non-empty checked set from a complete listing to an
+inclusive `DiscoveryScope` boundary plus sorted inner
+`excluded_external_ids`. It validates listing identity, digest, unique IDs,
+positions, URLs, and checked IDs before producing a proposal. `ScopeEditPreview`
+joins that pure proposal to a caller-provided read-only Catalog snapshot and
+reports each row as keep/enable/exclude/add/owner-conflict, including unknown
+new rows. The preview binds listing identity/digest, Watchlist revision and
+content SHA, Catalog snapshot identity, and observation time in a token; it
+does not open Catalog or write any state. Archive numbering uses the existing
+pure work-wide planner when a complete snapshot is supplied. Before/after
+number changes are shown only when current archive positions and an immutable
+source-joined snapshot of existing artifact/collision facts are supplied by a
+read-only caller. Expected artifact stems are generated with the shared
+`catalog_archive_stem` naming primitive, including hyphenated title/order/
+author components; duplicate joins, unknown Sources, colliding locators,
+missing positions, and incomplete facts remain explicit UNKNOWN blockers.
+
+Discovery exclusion runs are fail-closed before the Work is created or any
+Source is upserted. The adapter must opt into exclusion support and replay the
+same complete listing that was used for the preflight. Core checks target
+identity, row identity, digest, duplicate IDs/positions/URLs, boundary order,
+and that every excluded ID lies inside the base interval. Magapoke replays its
+validated complete episode parse, bound to the Page identity, full target,
+scope, and a short TTL, then filters exclusions before Catalog
+upsert and writes false acquisition flags only for known same-key excluded
+Sources. Unknown or out-of-range IDs and unsupported adapters stop visibly.
+Outer boundary edits without exclusions retain the established last-Catalog
+flag behavior until Full/scope apply.
+
+Batch Planner applies the same exact `(site, discovery_key, external_id)` deny
+overlay before Site Policy and quota selection while preserving existing
+`acquisition_enabled` flags for all other Sources. Executor candidate
+revalidation checks the current Watchlist before reader, resolver, grant, or
+capture entry, so a newly excluded candidate cannot consume access resources.
+Other keys and their historical Sources remain untouched. Synthetic unit and
+Chromium tests cover hole shrink/re-expand, owner conflict, preflight no-write,
+Batch/grant protection, and stale candidate rejection; no live-site or paid
+resource verification was performed.
 ## Minimal acquisition and numbering contract (2026-10-24)
 
 Current DB stays v7; no schema/migration or JSON field is added. Normal GUI,

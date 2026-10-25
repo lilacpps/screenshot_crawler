@@ -1,6 +1,6 @@
 # Stage 01 — Watchlistモデル・編集API
 
-> Status: **PLANNED**。Stage00の設計固定とHEAD再確認が前提。
+> Status: **COMPLETE / REVIEW APPROVED**。実行結果は [PROGRESS.md](../PROGRESS.md) を参照。以下は実行契約。Stage00の設計固定とHEAD再確認が前提。
 
 ## Objective / 変更範囲
 対象: `watchlist/models.py`、`service.py`、`fingerprints.py`、関連Unit/CLI（必要なら）。**Catalog schemaやAdapterはこのStageで変えない**。

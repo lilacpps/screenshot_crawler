@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
 from playwright.async_api import Error as PlaywrightError
@@ -16,6 +17,8 @@ from screenshot_crawler.catalog import (
     WorkInput,
 )
 from screenshot_crawler.catalog.models import CatalogRecord, Item
+from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
+from screenshot_crawler.discovery.listing_service import ListingPreviewService
 from screenshot_crawler.discovery.models import (
     DiscoveredRecord,
     DiscoveryMode,
@@ -50,6 +53,14 @@ class DiscoveryService:
     def __init__(self, catalog: CatalogService, registry: DiscoveryAdapterRegistry) -> None:
         self.catalog = catalog
         self.registry = registry
+        self.listing_previews = ListingPreviewService(registry)
+
+    async def preview_complete_listing(
+        self, page: Page, target: WatchlistTarget
+    ) -> ListingPreview:
+        """Read a site's complete listing without Catalog or Watchlist writes."""
+
+        return await self.listing_previews.preview_complete_listing(page, target)
 
     async def discover(
         self,
@@ -94,6 +105,51 @@ class DiscoveryService:
                     warnings=(),
                     error="Discovery adapter does not support bounded scope",
                 )
+            if (
+                target.discovery_scope.from_url is None
+                and target.discovery_scope.through_url is None
+                and not getattr(adapter, "supports_exclusion_only_scope", False)
+            ):
+                return DiscoveryResult(
+                    mode=mode,
+                    target_key=target.key,
+                    observed_count=0,
+                    new_count=0,
+                    known_count=0,
+                    complete=False if mode == "full" else None,
+                    stopped_reason="incomplete",
+                    warnings=(),
+                    error="Discovery adapter does not support exclusion-only scope",
+                )
+            if target.discovery_scope.excluded_external_ids:
+                if getattr(adapter, "supports_exclusion_replay", False) is not True:
+                    return DiscoveryResult(
+                        mode=mode,
+                        target_key=target.key,
+                        observed_count=0,
+                        new_count=0,
+                        known_count=0,
+                        complete=False if mode == "full" else None,
+                        stopped_reason="incomplete",
+                        warnings=(),
+                        error=(
+                            "Exclusion scope requires an adapter that replays the "
+                            "validated complete listing"
+                        ),
+                    )
+                preflight_error = await self._preflight_exclusion_scope(page, target, adapter)
+                if preflight_error is not None:
+                    return DiscoveryResult(
+                        mode=mode,
+                        target_key=target.key,
+                        observed_count=0,
+                        new_count=0,
+                        known_count=0,
+                        complete=False if mode == "full" else None,
+                        stopped_reason="incomplete",
+                        warnings=(),
+                        error=preflight_error,
+                    )
 
         # The Watchlist label is only the initial title for a new Work.
         work = self.catalog.find_work(target.work_key)
@@ -135,6 +191,8 @@ class DiscoveryService:
 
         try:
             async for record in adapter.iter_records(page, target, mode):
+                if self._is_excluded_from_acquisition(record, target):
+                    continue
                 processed_records.append(record)
                 existing = self.catalog.find_source(target.site, record.source.external_id)
                 previous = initial_sources.get(record.source.external_id)
@@ -396,6 +454,10 @@ class DiscoveryService:
         flags = {external_id: True for external_id in observed_external_ids}
         if mode == "full" and inventory is not None:
             flags.update({row.external_id: row.in_scope for row in inventory.positions})
+        if target.discovery_scope is not None:
+            flags.update(
+                {external_id: False for external_id in target.discovery_scope.excluded_external_ids}
+            )
         try:
             self.catalog.apply_discovery_acquisition_flags(
                 work_id=work.id,
@@ -577,6 +639,72 @@ class DiscoveryService:
             )
         global_position_hints[source_id] = hint
         source_ids_by_global_position[hint] = source_id
+
+    @staticmethod
+    def _is_excluded_from_acquisition(record: DiscoveredRecord, target: WatchlistTarget) -> bool:
+        scope = target.discovery_scope
+        return scope is not None and record.source.external_id in scope.excluded_external_ids
+
+    async def _preflight_exclusion_scope(self, page, target, adapter) -> str | None:
+        """Prove exclusion IDs exist in a complete listing before any upsert."""
+
+        previewer = getattr(adapter, "prepare_exclusion_preview", None)
+        if not callable(previewer):
+            return "Exclusion scope requires a complete read-only listing capability"
+        try:
+            preview = await previewer(page, target)
+        except (DiscoveryIncompleteError, PlaywrightError, TimeoutError) as exc:
+            return f"Exclusion scope preflight failed closed: {exc}"
+        if not preview.ready:
+            return "Exclusion scope requires a complete listing before Catalog upsert"
+        if (
+            preview.site != target.site
+            or preview.target_key != target.key
+            or preview.target_url != target.url
+            or not preview.listing_identity
+            or not all(isinstance(row, ListingRow) for row in preview.rows)
+        ):
+            return "Exclusion scope listing identity is not tied to the Watchlist target"
+        rows = tuple(preview.rows)
+        if (
+            len({row.external_id for row in rows}) != len(rows)
+            or len({row.site_position for row in rows}) != len(rows)
+            or len({row.url for row in rows}) != len(rows)
+            or any(row.site_position < 1 for row in rows)
+            or any(row.listing_identity != preview.listing_identity for row in rows)
+            or preview.digest != listing_digest(preview.listing_identity, rows)
+            or [row.site_position for row in rows]
+            != sorted((row.site_position for row in rows), reverse=True)
+            or any(
+                left - right != 1
+                for left, right in pairwise(row.site_position for row in rows)
+            )
+        ):
+            return "Exclusion scope complete listing proof is invalid"
+        ids = {row.external_id for row in rows}
+        missing = sorted(set(target.discovery_scope.excluded_external_ids) - ids)
+        if missing:
+            return "Excluded IDs are absent from the complete listing: " + ", ".join(missing[:5])
+        row_index = {row.url: index for index, row in enumerate(rows)}
+        from_index = row_index.get(target.discovery_scope.from_url, 0)
+        through_index = row_index.get(
+            target.discovery_scope.through_url, len(rows) - 1
+        )
+        if target.discovery_scope.from_url is not None and target.discovery_scope.from_url not in row_index:
+            return "Discovery scope boundary is absent from the complete listing"
+        if target.discovery_scope.through_url is not None and target.discovery_scope.through_url not in row_index:
+            return "Discovery scope boundary is absent from the complete listing"
+        if from_index > through_index:
+            return "Discovery scope boundaries are reversed"
+        excluded_indices = {
+            row.external_id: index for index, row in enumerate(rows)
+        }
+        if any(
+            not (from_index <= excluded_indices[external_id] <= through_index)
+            for external_id in target.discovery_scope.excluded_external_ids
+        ):
+            return "Excluded IDs must fall inside the inclusive discovery range"
+        return None
 
     @staticmethod
     def _ensure_existing_source_is_safe(source, target: WatchlistTarget) -> None:

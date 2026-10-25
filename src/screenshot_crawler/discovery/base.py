@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, ClassVar
 
+from screenshot_crawler.discovery.listing import ListingPreview, blocked_listing_preview
 from screenshot_crawler.discovery.models import (
     CompleteListingInventory,
     CompleteListingPosition,
@@ -25,6 +26,11 @@ class DiscoveryAdapter(ABC):
     """Enumerate site-specific listing results without knowing Catalog."""
 
     supports_bounded_discovery: ClassVar[bool] = False
+    supports_exclusion_only_scope: ClassVar[bool] = False
+    # Exclusion discovery must process the exact complete listing that was
+    # validated before Catalog writes. Adapters supporting that path must
+    # replay their validated read, rather than silently re-reading a live page.
+    supports_exclusion_replay: ClassVar[bool] = False
     allow_inferred_display_positions: ClassVar[bool] = True
 
     @property
@@ -166,3 +172,23 @@ class DiscoveryAdapter(ABC):
 
         del page, target, missing_external_ids, observed_records
         return ()
+
+    async def preview_complete_listing(
+        self, page: Page, target: WatchlistTarget
+    ) -> ListingPreview:
+        """Optionally enumerate a complete listing without Catalog writes."""
+
+        del page
+        return blocked_listing_preview(
+            site=target.site,
+            target_key=target.key,
+            target_url=target.url,
+            reason=f"Site {target.site!r} does not support read-only complete listing preview",
+        )
+
+    async def prepare_exclusion_preview(
+        self, page: Page, target: WatchlistTarget
+    ) -> ListingPreview:
+        """Return the proof used immediately by an exclusion Discovery run."""
+
+        return await self.preview_complete_listing(page, target)

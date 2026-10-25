@@ -687,3 +687,40 @@ ZIP/status pair and hashing or Catalog finalization then fails, keep that pair f
 than restoring the old sidecar over it. Explicit strict renumber remains a
 separate operator-controlled maintenance operation.
 
+---
+
+## D-038 Watchlist exclusions use a bounded safety overlay
+
+### Decision
+
+The Watchlist scope editor stores a checked complete listing as an inclusive
+range plus sorted `excluded_external_ids`. Exclusion-bearing Discovery must
+prove one complete, identity-bound listing and validate every exclusion before
+creating a Work or upserting a Catalog Source. The validated observation is
+replayed once by an adapter that explicitly supports the capability; unknown,
+out-of-range, stale, or unsupported exclusions fail closed. Magapoke is the
+first supported adapter.
+
+Normal Batch continues to use the last reflected per-key Catalog flags. A
+newly saved exact exclusion receives a narrow deny overlay before Policy,
+quota allocation, adapter creation, resolver, reader, grant-only, replan, or
+capture entry. An exclusion whose ownership or complete-inventory proof is
+unknown blocks the affected key before Policy. Other keys and historical
+Sources remain untouched. This does not restore a global scope-sync or
+Watchlist-fingerprint execution gate; outer boundary edits remain visibly
+pending until Full or explicit scope apply.
+
+### Tradeoff
+
+The overlay closes the immediate rights-consumption hole created by saving a
+new exclusion without changing the established legacy behavior for temporary
+outer-range edits. It accepts a short-lived Catalog/Watchlist mismatch until
+Full or scope apply and adds adapter-bound proof/replay complexity. A global
+sync gate would be simpler but would stop unrelated keys and contradict the
+adopted current-flag Batch contract.
+
+Preview remains read-only: it does not mutate Watchlist, Catalog, ZIPs, quota,
+tickets, or access resources. Archive-number predictions require an immutable
+source-joined Artifact/collision snapshot and the shared full-stem naming
+primitive; missing or ambiguous facts are reported as UNKNOWN.
+

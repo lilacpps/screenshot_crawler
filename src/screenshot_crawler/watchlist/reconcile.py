@@ -74,6 +74,22 @@ class ScopeReconciliationError(RuntimeError):
     """Raised when a preview is blocked or stale at apply time."""
 
 
+def classify_scope_source(
+    source: Source,
+    *,
+    target_site: str,
+    target_key: str,
+    selected_external_ids: set[str] | frozenset[str] = frozenset(),
+) -> str:
+    """Share the site/key ownership rule between sync and GUI prediction."""
+
+    if source.site != target_site:
+        return "other_site"
+    if source.discovery_key != target_key:
+        return "foreign_owner"
+    return "retained" if source.external_id in selected_external_ids else "removed"
+
+
 class ScopeReconciler:
     """Preview or apply one Work's acquisition flags without accessing sites."""
 
@@ -250,9 +266,29 @@ class ScopeReconciler:
                     source_by_key.setdefault(source.discovery_key or "", []).append(source)
                 continue
             target = target_by_key[source.discovery_key]
-            if source.site != target.site:
+            classification = classify_scope_source(
+                source,
+                target_site=target.site,
+                target_key=target.key,
+                # This loop is classifying ownership.  The source is already
+                # present in the current Catalog snapshot, so include its id
+                # to keep the helper's selected/removed dimension out of this
+                # ownership check.
+                selected_external_ids={source.external_id},
+            )
+            if classification != "retained":
+                if classification == "other_site":
+                    message = (
+                        f"Source {source.id} site does not match "
+                        f"Watchlist key {target.key!r}"
+                    )
+                else:
+                    message = (
+                        f"Source {source.id} is owned by an unexpected "
+                        f"Watchlist key for {target.key!r}"
+                    )
                 blockers.append(
-                    f"Source {source.id} site does not match Watchlist key {target.key!r}"
+                    message
                 )
                 continue
             source_by_key.setdefault(target.key, []).append(source)
@@ -626,9 +662,26 @@ class ScopeReconciler:
             if scope_value is None:
                 scope = None
             elif isinstance(scope_value, dict):
+                excluded_value = scope_value.get("excluded_external_ids", [])
+                if not isinstance(excluded_value, list) or any(
+                    not isinstance(item, str) or not item for item in excluded_value
+                ):
+                    raise ArchiveOrderPlanningError("Saved Watchlist exclusions are malformed")
+                if len(excluded_value) != len(set(excluded_value)):
+                    raise ArchiveOrderPlanningError("Saved Watchlist exclusions contain duplicates")
+                from_url = scope_value.get("from_url")
+                through_url = scope_value.get("through_url")
+                if any(
+                    value is not None and (not isinstance(value, str) or not value.strip())
+                    for value in (from_url, through_url)
+                ):
+                    raise ArchiveOrderPlanningError("Saved Watchlist boundaries are malformed")
+                if from_url is None and through_url is None and not excluded_value:
+                    raise ArchiveOrderPlanningError("Saved Watchlist scope is empty")
                 scope = DiscoveryScope(
-                    from_url=scope_value.get("from_url"),
-                    through_url=scope_value.get("through_url"),
+                    from_url=from_url,
+                    through_url=through_url,
+                    excluded_external_ids=tuple(sorted(excluded_value)),
                 )
             else:
                 raise ArchiveOrderPlanningError("Saved Watchlist scope is malformed")

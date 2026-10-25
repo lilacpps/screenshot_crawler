@@ -198,6 +198,72 @@ async def test_magapoke_full_discovery_expands_validates_and_syncs_catalog(
     ]
 
 
+async def test_magapoke_complete_listing_preview_is_read_only(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    await _install_route(browser_page, _listing_html())
+    adapter = MagapokeDiscoveryAdapter()
+    preview = await adapter.preview_complete_listing(browser_page, _target())
+
+    assert preview.ready is True
+    assert preview.site == "magapoke"
+    assert preview.listing_identity == "magapoke-title:00695"
+    assert [row.external_id for row in preview.rows] == [
+        "244819",
+        "244818",
+        "244817",
+        "244816",
+        "244815",
+    ]
+    assert [row.site_position for row in preview.rows] == [5, 4, 3, 2, 1]
+    assert len(preview.digest or "") == 64
+    assert not (tmp_path / "catalog.sqlite").exists()
+    assert not (tmp_path / "watchlist.yaml").exists()
+
+
+async def test_magapoke_exclusion_only_scope_preflights_and_skips_catalog_upsert(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    await _install_route(browser_page, _listing_html())
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    registry = DiscoveryAdapterRegistry()
+    registry.register("magapoke", MagapokeDiscoveryAdapter)
+    result = await DiscoveryService(catalog, registry).discover(
+        browser_page,
+        _target(discovery_scope=DiscoveryScope(excluded_external_ids=("244817",))),
+        "full",
+    )
+
+    assert result.complete is True
+    assert [source.external_id for source in catalog.list_sources()] == [
+        "244819",
+        "244818",
+        "244816",
+        "244815",
+    ]
+
+
+async def test_magapoke_unknown_exclusion_fails_before_catalog_creation(
+    browser_page,
+    tmp_path: Path,
+) -> None:
+    await _install_route(browser_page, _listing_html())
+    catalog_path = tmp_path / "catalog.sqlite"
+    registry = DiscoveryAdapterRegistry()
+    registry.register("magapoke", MagapokeDiscoveryAdapter)
+    result = await DiscoveryService(CatalogService(catalog_path), registry).discover(
+        browser_page,
+        _target(discovery_scope=DiscoveryScope(excluded_external_ids=("missing",))),
+        "full",
+    )
+
+    assert result.complete is False
+    assert result.error is not None and "absent" in result.error
+    assert not catalog_path.exists()
+
+
 async def test_magapoke_incremental_uses_generic_known_streak(
     browser_page,
     tmp_path: Path,

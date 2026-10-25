@@ -1,6 +1,6 @@
 # Stage 02 — 完全一覧の読み取り専用Preview
 
-> Status: **PLANNED**。Stage01/Stage00確定後。第一対応siteはMagapoke、他サイトはcapabilityが揃ってから。
+> Status: **COMPLETE / REVIEW APPROVED**。実行結果は [PROGRESS.md](../PROGRESS.md) を参照。以下は実行契約。Stage01/Stage00確定後。第一対応siteはMagapoke、他サイトはcapabilityが揃ってから。
 
 ## Objective / API
 共通Coreからサイトの話一覧を**Catalog書込なし**で取得。通常`DiscoveryService.discover`をGUIプレビューへ呼ばない。

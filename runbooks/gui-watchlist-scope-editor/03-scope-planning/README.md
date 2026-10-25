@@ -1,6 +1,6 @@
 # Stage 03 — チェック選択/除外/Full/Scope同期を整合させる
 
-> Status: **PLANNED**。Stage01/02とMagapoke read-only一覧の証拠が前提。
+> Status: **COMPLETE / REVIEW APPROVED**。実行結果は [PROGRESS.md](../PROGRESS.md) を参照。以下は実行契約。Stage01/02とMagapoke read-only一覧の証拠が前提。
 
 ## Objective
 一覧上の任意の**非空集合**を、サイト順序に基づく`from_url/through_url`＋`excluded_external_ids`へ写像。Catalogが旧状態のままでも保存前に候補差分を見せ、Full後には既存Reconcilerで厳密に適用可能にする。

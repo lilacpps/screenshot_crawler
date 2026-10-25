@@ -42,8 +42,9 @@ def _target_mapping(target: WatchlistTarget) -> dict[str, object]:
             for key, item in (
                 ("from_url", target.discovery_scope.from_url),
                 ("through_url", target.discovery_scope.through_url),
+                ("excluded_external_ids", list(target.discovery_scope.excluded_external_ids)),
             )
-            if item is not None
+            if item is not None and item != []
         }
     return value
 
@@ -57,6 +58,30 @@ def _write_targets(path: Path, targets: tuple[WatchlistTarget, ...]) -> None:
 
 def _write_target(path: Path, target: WatchlistTarget) -> None:
     _write_targets(path, (target,))
+
+
+def test_saved_legacy_bounded_configuration_restores_without_exclusions() -> None:
+    targets = ScopeReconciler._targets_from_saved_configuration(
+        json.dumps(
+            [
+                {
+                    "key": "one",
+                    "work_key": "series",
+                    "site": "mangaone",
+                    "url": "https://example.invalid/one",
+                    "discovery_scope": {
+                        "from_url": "https://example.invalid/from",
+                        "through_url": "https://example.invalid/through",
+                    },
+                    "archive_order": 1,
+                }
+            ]
+        )
+    )
+    assert targets[0].discovery_scope == DiscoveryScope(
+        from_url="https://example.invalid/from",
+        through_url="https://example.invalid/through",
+    )
 
 
 def _catalog_with_sources(path: Path, external_ids: tuple[str, ...]):
@@ -347,14 +372,18 @@ def test_scope_shrink_and_reexpand_preserve_catalog_graph_and_history(tmp_path: 
     shrunk = WatchlistTarget(
         "chapters", "series", "zeblack", "https://example.test/list", "Series",
         discovery_scope=DiscoveryScope(
-            from_url=f"{base_url}1", through_url=f"{base_url}100"
+            from_url=f"{base_url}1", through_url=f"{base_url}100",
+            excluded_external_ids=("ch-50", "ch-51"),
         ),
     )
     _write_target(watchlist_path, shrunk)
-    _record_full_proof(catalog, shrunk, (True,) * 100 + (False,) * 40)
+    _record_full_proof(
+        catalog, shrunk,
+        tuple(index not in {49, 50} for index in range(100)) + (False,) * 40,
+    )
     reconciler.apply(reconciler.preview(work.work_key))
     assert [catalog.get_source(source.id).acquisition_enabled for source in sources] == (
-        [True] * 100 + [False] * 40
+        [True] * 49 + [False] * 2 + [True] * 49 + [False] * 40
     )
 
     _write_target(watchlist_path, full)

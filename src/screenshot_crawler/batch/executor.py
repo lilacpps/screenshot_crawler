@@ -27,6 +27,7 @@ from screenshot_crawler.batch.archive_guard import (
     CandidateOutputPreflight,
     validate_candidate_output_paths,
 )
+from screenshot_crawler.batch.exclusions import unproven_target_exclusions
 from screenshot_crawler.batch.models import (
     BatchCandidate,
     BatchExecutionError,
@@ -943,6 +944,21 @@ class BatchExecutor:
                 binding.work_key != work.work_key or binding.site != source.site
             ):
                 raise BatchExecutionError("stale batch candidate: Watchlist Work/site identity")
+            if binding is not None:
+                unproven = unproven_target_exclusions(self.catalog, binding, work_sources)
+                if unproven:
+                    raise BatchExecutionError(
+                        "stale batch candidate: Watchlist exclusions are unproven: "
+                        + ", ".join(unproven[:5])
+                    )
+            if (
+                binding is not None
+                and binding.discovery_scope is not None
+                and source.external_id in binding.discovery_scope.excluded_external_ids
+            ):
+                raise BatchExecutionError(
+                    "stale batch candidate: source is excluded by the current Watchlist scope"
+                )
             current_targets = [
                 row
                 for row in watchlist_targets

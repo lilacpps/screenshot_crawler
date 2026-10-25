@@ -1,6 +1,6 @@
 # Stage 00 — 現行契約監査と境界設計
 
-> Status: **PLANNED**。実装は行わない。開始HEAD/branchと並行`gui-live-monitor`を確認。
+> Status: **COMPLETE / REVIEW APPROVED**。実行結果は [PROGRESS.md](../PROGRESS.md) を参照。以下は実行契約。実装は行わない。開始HEAD/branchと並行`gui-live-monitor`を確認。
 
 ## Objective / 入力
 `AGENTS.md`、`docs/SPEC.md`、`docs/ARCHITECTURE.md`、`docs/BOUNDED_DISCOVERY.md`、`docs/DISCOVERY_AND_BATCH.md`、`docs/TEST_STRATEGY.md`、`watchlist/{models,service,fingerprints,reconcile}.py`、`discovery/{base,service,models}.py`、`catalog/{models,service}.py`、`gui/{main_window,model,details}.py`、Magapoke discovery、関連テストを照合する。

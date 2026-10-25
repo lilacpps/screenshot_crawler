@@ -6,6 +6,7 @@ import re
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import Error as PlaywrightError
@@ -13,6 +14,7 @@ from playwright.async_api import Locator, Page
 
 from screenshot_crawler.catalog.service import JST
 from screenshot_crawler.discovery.base import DiscoveryAdapter
+from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -137,6 +139,9 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate every episode from one Magapoke episode URL."""
 
     supports_bounded_discovery = True
+    supports_exclusion_only_scope = True
+    supports_exclusion_replay = True
+    _EXCLUSION_PREVIEW_TTL_SECONDS = 30.0
 
     async def iter_records(
         self,
@@ -145,12 +150,118 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
         mode: DiscoveryMode,
     ) -> AsyncIterator[DiscoveredRecord]:
         self.reset_complete_listing_inventory()
+        cached = getattr(self, "_exclusion_preview_cache", None)
+        cache_key = self._exclusion_cache_key(page, target)
+        if (
+            cached is not None
+            and cached["key"] == cache_key
+            and monotonic() <= cached["expires_at"]
+        ):
+            target_parts, all_records = cached["target_parts"], cached["records"]
+            self._exclusion_preview_cache = None
+        else:
+            self._exclusion_preview_cache = None
+            target_parts, _canonical_title, all_records = await self._load_complete_records(
+                page, target
+            )
+        records = all_records
+        if target.discovery_scope is not None:
+            records = self._with_positions(records)
+            records = self._apply_discovery_scope(
+                records,
+                target_parts,
+                target.discovery_scope,
+            )
+        if mode == "full":
+            self.capture_complete_listing_inventory(
+                target=target,
+                all_records=all_records,
+                selected_records=records,
+                listing_identity=f"magapoke-title:{target_parts.title_id}",
+            )
+
+        for record in records:
+            yield record
+
+    async def preview_complete_listing(
+        self, page: Page, target: WatchlistTarget
+    ) -> ListingPreview:
+        """Read every visible Magapoke episode without invoking Catalog logic."""
+
+        self._exclusion_preview_cache = None
+        return await self._preview_complete_listing(page, target, cache_for_exclusion=False)
+
+    async def prepare_exclusion_preview(
+        self, page: Page, target: WatchlistTarget
+    ) -> ListingPreview:
+        """Bind one complete listing for the immediately following Discovery."""
+
+        return await self._preview_complete_listing(page, target, cache_for_exclusion=True)
+
+    async def _preview_complete_listing(
+        self, page: Page, target: WatchlistTarget, *, cache_for_exclusion: bool
+    ) -> ListingPreview:
+
+        target_parts, _canonical_title, records = await self._load_complete_records(
+            page, target
+        )
+        listing_identity = f"magapoke-title:{target_parts.title_id}"
+        positioned = self._with_positions(records)
+        rows = tuple(
+            ListingRow(
+                external_id=record.source.external_id,
+                url=record.source.url,
+                site_position=record.source.global_display_position or 0,
+                display_title=record.item.order_label or "",
+                access_observation=record.source.access_mode,
+                listing_identity=listing_identity,
+            )
+            for record in positioned
+        )
+        if any(row.site_position < 1 for row in rows):
+            raise DiscoveryIncompleteError(
+                "Magapoke complete listing has no authoritative positions"
+            )
+        if cache_for_exclusion:
+            self._exclusion_preview_cache = {
+                "key": self._exclusion_cache_key(page, target),
+                "target_parts": target_parts,
+                "records": records,
+                "expires_at": monotonic() + self._EXCLUSION_PREVIEW_TTL_SECONDS,
+            }
+        return ListingPreview(
+            site=target.site,
+            target_key=target.key,
+            target_url=target.url,
+            listing_identity=listing_identity,
+            rows=rows,
+            complete=True,
+            observed_at=datetime.now(UTC),
+            digest=listing_digest(listing_identity, rows),
+        )
+
+    @staticmethod
+    def _exclusion_cache_key(page: Page, target: WatchlistTarget) -> tuple[object, ...]:
+        scope = target.discovery_scope
+        return (
+            id(page),
+            target.site,
+            target.key,
+            target.work_key,
+            target.url,
+            None if scope is None else scope.from_url,
+            None if scope is None else scope.through_url,
+            () if scope is None else tuple(sorted(scope.excluded_external_ids)),
+        )
+
+    async def _load_complete_records(
+        self, page: Page, target: WatchlistTarget
+    ) -> tuple[MagapokeEpisodeParts, str, list[DiscoveredRecord]]:
         target_parts = parse_magapoke_episode_url(target.url)
         if target_parts is None:
             raise DiscoveryIncompleteError(
                 "Watchlist target must be an HTTPS Magapoke episode URL"
             )
-
         try:
             await page.goto(
                 target.url,
@@ -166,39 +277,26 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
                 target_parts,
                 canonical_title,
             )
-            all_records = records
-            if target.discovery_scope is not None:
-                records = [
-                    replace(
-                        record,
-                        source=replace(
-                            record.source,
-                            global_display_position=len(records) - index,
-                        ),
-                    )
-                    for index, record in enumerate(records)
-                ]
-                records = self._apply_discovery_scope(
-                    records,
-                    target_parts,
-                    target.discovery_scope,
-                )
-            if mode == "full":
-                self.capture_complete_listing_inventory(
-                    target=target,
-                    all_records=all_records,
-                    selected_records=records,
-                    listing_identity=f"magapoke-title:{target_parts.title_id}",
-                )
         except DiscoveryIncompleteError:
             raise
         except (PlaywrightError, TimeoutError) as exc:
             raise DiscoveryIncompleteError(
                 "Magapoke episode listing did not load or advance"
             ) from exc
+        return target_parts, canonical_title, records
 
-        for record in records:
-            yield record
+    @staticmethod
+    def _with_positions(records: list[DiscoveredRecord]) -> list[DiscoveredRecord]:
+        return [
+            replace(
+                record,
+                source=replace(
+                    record.source,
+                    global_display_position=len(records) - index,
+                ),
+            )
+            for index, record in enumerate(records)
+        ]
 
     @staticmethod
     def _apply_discovery_scope(
@@ -208,10 +306,6 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
     ) -> list[DiscoveredRecord]:
         """Select an inclusive range in the already-parsed listing order."""
 
-        if scope.from_url is None and scope.through_url is None:
-            raise DiscoveryIncompleteError(
-                "Magapoke bounded Discovery scope has no boundary"
-            )
         boundary_indices: dict[str, int] = {}
         record_indices = {
             record.source.external_id: index for index, record in enumerate(records)
@@ -245,7 +339,9 @@ class MagapokeDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError(
                 "Magapoke bounded Discovery boundaries are reversed"
             )
-        return records[from_index : through_index + 1]
+        selected = records[from_index : through_index + 1]
+        excluded = set(scope.excluded_external_ids)
+        return [record for record in selected if record.source.external_id not in excluded]
 
     async def _wait_for_episode_list(self, page: Page) -> Locator:
         elapsed = 0

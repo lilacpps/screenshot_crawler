@@ -1,6 +1,6 @@
 # Stage 04 — Windows GUI統合・保存/反映E2E
 
-> Status: **PLANNED**。Stage01〜03を個別に完了・Reviewer承認後。
+> Status: **COMPLETE / REVIEW APPROVED**。Stage00〜04の結果・制約は [PROGRESS.md](../PROGRESS.md) を参照。以下は実行契約。
 
 ## UX/変更範囲
 `src/screenshot_crawler/gui`配下にWatchlist専用Page/Model/Editorを追加。既存Inventoryページ、実行ボタン、チェック選択、`gui-live-monitor`に変更が入っても**実行画面の配置/用途を維持**。既存`InventorySnapshot`とsite別/work別projectionを再利用できる部分は再利用するが、編集用QAbstractTableModelは実行選択checkboxと別state。

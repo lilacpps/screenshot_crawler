@@ -11,14 +11,31 @@ from screenshot_crawler.watchlist.models import WatchlistTarget
 
 def target_scope_definition(target: WatchlistTarget) -> dict[str, object]:
     scope = target.discovery_scope
+    if scope is not None:
+        excluded = tuple(scope.excluded_external_ids)
+        if any(not isinstance(value, str) or not value.strip() for value in excluded):
+            raise ValueError("discovery_scope.excluded_external_ids must contain non-empty strings")
+        if len(excluded) != len(set(excluded)):
+            raise ValueError("discovery_scope.excluded_external_ids contains duplicates")
+        excluded = tuple(sorted(excluded))
+        if scope.from_url is None and scope.through_url is None and not excluded:
+            scope = None
+    scope_definition: dict[str, object] | None
+    if scope is None:
+        scope_definition = None
+    else:
+        scope_definition = {
+            "from_url": scope.from_url,
+            "through_url": scope.through_url,
+        }
+        if excluded:
+            scope_definition["excluded_external_ids"] = list(excluded)
     return {
         "work_key": target.work_key,
         "key": target.key,
         "site": target.site,
         "url": target.url,
-        "discovery_scope": None
-        if scope is None
-        else {"from_url": scope.from_url, "through_url": scope.through_url},
+        "discovery_scope": scope_definition,
     }
 
 

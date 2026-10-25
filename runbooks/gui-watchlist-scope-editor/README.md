@@ -1,8 +1,8 @@
 # Windows GUI — Watchlist管理・話数チェックによるDiscovery Scope編集 Runbook
 
-> **PLANNED / DOCUMENTATION ONLY — 2026-10-25**
->
-> 対象: `lilacpps/screenshot_crawler` の既存 PySide6 GUI / Watchlist / Catalog v7 / Discovery / Scope Reconciler。現時点では設計・実装契約のみで、実装・実サイト検証・本番データ更新は行っていない。
+> **STAGE 00–04 COMPLETE / INDEPENDENT REVIEW APPROVED — 2026-10-25**
+> 全Stageの受入条件・独立レビューは完了（BLOCKING 0）。テスト結果・full suiteの留保・既知の制約は [PROGRESS.md](PROGRESS.md) を参照。実サイト検証・運用データ更新は行っていない。
+> 対象: `lilacpps/screenshot_crawler` の既存 PySide6 GUI / Watchlist / Catalog v7 / Discovery / Scope Reconciler。実装・テストの実行状況は [PROGRESS.md](PROGRESS.md) を参照。実サイト検証・本番データ更新は行っていない。
 >
 > Authority: `AGENTS.md` → `docs/SPEC.md` → `docs/ARCHITECTURE.md` → `docs/DISCOVERY_AND_BATCH.md` / `docs/BOUNDED_DISCOVERY.md` → `docs/DECISIONS.md` → `docs/TEST_STRATEGY.md` → code/tests。実装時に相違があれば文書だけを根拠に挙動を変更しない。
 >
@@ -23,7 +23,7 @@
 
 初期段階の対象外: ブラウザ拡張/ブックマークレット（後続workstream）、サイト横断Item名寄せ、自動ZIP renumber、DB schema移行、チケット消費ルール変更、話別のresource/policy指定、任意条件DSL。
 
-## 1. 現状確認済みの根拠（2026-10-25 main）
+## 1. 着手前の調査根拠（2026-10-25 main / 779df98）
 
 - `src/screenshot_crawler/watchlist/models.py`: `DiscoveryScope(from_url,through_url)`。`WatchlistTarget`に `key,work_key,site,url,label,enabled,discovery_scope,archive_order`。
 - `watchlist/service.py`: parse/validate/list/get/add/remove/enable/disable、atomic replace。**コメント付きYAMLはenabled値だけのパッチを許し、scope/order/追加等の構造変更を安全側で拒否**。編集API追加と保存方式の整備が必要。

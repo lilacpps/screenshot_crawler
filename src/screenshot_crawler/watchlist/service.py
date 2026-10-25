@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from screenshot_crawler.catalog.job_lock import CatalogJobLock
 from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
 
 
@@ -27,6 +31,23 @@ class DuplicateWatchlistKeyError(WatchlistError):
 
 class WatchlistTargetNotFoundError(WatchlistError):
     """Raised when an operation refers to an unknown target."""
+
+
+@dataclass(frozen=True, slots=True)
+class WatchlistEditPreview:
+    """Read-only result for a proposed Watchlist edit."""
+
+    current_revision: str
+    targets: tuple[WatchlistTarget, ...]
+    changed_keys: tuple[str, ...]
+    blockers: tuple[str, ...] = ()
+
+    @property
+    def ready(self) -> bool:
+        return not self.blockers
+
+
+_UNSET = object()
 
 
 class WatchlistService:
@@ -56,6 +77,75 @@ class WatchlistService:
                 return target
         raise WatchlistTargetNotFoundError(f"Watchlist target not found: {key}")
 
+    def revision(self) -> str:
+        """Return the SHA-256 revision of the current file contents."""
+
+        return self._content_digest(self._read_content())
+
+    content_digest = revision
+
+    def edit_lock(self) -> CatalogJobLock:
+        """Return the per-Watchlist CAS/replace lock.
+
+        The shared lock primitive is path-keyed and works across processes on
+        Windows and POSIX.  It is used only for Watchlist file edits; no
+        Catalog data is touched.
+        """
+
+        return CatalogJobLock(self.path)
+
+    def preview_edit(
+        self,
+        targets: Iterable[WatchlistTarget],
+        *,
+        expected_revision: str | None = None,
+    ) -> WatchlistEditPreview:
+        """Validate a proposed target set without writing or touching Catalog."""
+
+        current_content = self._read_content()
+        current_revision = self._content_digest(current_content)
+        blockers: list[str] = []
+        if expected_revision is not None and expected_revision != current_revision:
+            blockers.append("Watchlist changed since the edit was started; reload and retry")
+        proposed = list(targets)
+        try:
+            proposed = self._validate_targets(proposed)
+        except WatchlistError as exc:
+            blockers.append(str(exc))
+        current = self._load()
+        changed = tuple(
+            target.key
+            for target in proposed
+            if next((row for row in current if row.key == target.key), None) != target
+        )
+        changed += tuple(row.key for row in current if row.key not in {t.key for t in proposed})
+        changed += tuple(row.key for row in proposed if row.key not in {t.key for t in current})
+        return WatchlistEditPreview(
+            current_revision=current_revision,
+            targets=tuple(proposed),
+            changed_keys=tuple(dict.fromkeys(changed)),
+            blockers=tuple(dict.fromkeys(blockers)),
+        )
+
+    def apply_edit(
+        self,
+        targets: Iterable[WatchlistTarget],
+        *,
+        expected_revision: str | None = None,
+    ) -> tuple[WatchlistTarget, ...]:
+        """Atomically save a complete editor proposal under one Watchlist CAS."""
+
+        with self.edit_lock():
+            expected_content = self._content_for_revision(expected_revision)
+            current = self._load_content(expected_content)
+            proposed = self._validate_targets(list(targets))
+            if proposed == current:
+                return tuple(current)
+            self._write(proposed, previous=current, expected_content=expected_content)
+            return tuple(proposed)
+
+    update_targets = apply_edit
+
     def add(
         self,
         *,
@@ -65,56 +155,158 @@ class WatchlistService:
         url: str,
         label: str,
         enabled: bool = True,
+        discovery_scope: DiscoveryScope | None = None,
         archive_order: int | None = None,
+        expected_revision: str | None = None,
     ) -> WatchlistTarget:
         """Add a target, rejecting an already-used stable key."""
 
         target = self._validate_target(
             WatchlistTarget(
                 key=key, work_key=work_key, site=site, url=url, label=label,
-                enabled=enabled, archive_order=archive_order,
+                enabled=enabled, discovery_scope=discovery_scope,
+                archive_order=archive_order,
             ),
             source="new target",
         )
-        targets = self._load()
-        if any(existing.key == target.key for existing in targets):
-            raise DuplicateWatchlistKeyError(f"Duplicate watchlist key: {target.key}")
-        targets.append(target)
-        self._write(targets, previous=targets[:-1])
+        with self.edit_lock():
+            expected_content = self._content_for_revision(expected_revision)
+            targets = self._load_content(expected_content)
+            if any(existing.key == target.key for existing in targets):
+                raise DuplicateWatchlistKeyError(f"Duplicate watchlist key: {target.key}")
+            targets.append(target)
+            self._write(targets, previous=targets[:-1], expected_content=expected_content)
         return target
 
-    def remove(self, key: str) -> WatchlistTarget:
-        """Remove a target without touching any Catalog data."""
+    def update_target(
+        self,
+        key: str,
+        *,
+        label: str | object = _UNSET,
+        url: str | object = _UNSET,
+        enabled: bool | object = _UNSET,
+        discovery_scope: DiscoveryScope | None | object = _UNSET,
+        expected_revision: str | None = None,
+    ) -> WatchlistTarget:
+        """Update editable fields of one key using an optimistic revision check."""
 
-        targets = self._load()
-        for index, target in enumerate(targets):
-            if target.key == key:
-                removed = targets.pop(index)
-                previous = [*targets[:index], removed, *targets[index:]]
-                self._write(targets, previous=previous)
-                return removed
+        with self.edit_lock():
+            expected_content = self._content_for_revision(expected_revision)
+            targets = self._load_content(expected_content)
+            for index, current in enumerate(targets):
+                if current.key != key:
+                    continue
+                updated = WatchlistTarget(
+                    key=current.key,
+                    work_key=current.work_key,
+                    site=current.site,
+                    url=current.url if url is _UNSET else url,  # type: ignore[arg-type]
+                    label=current.label if label is _UNSET else label,  # type: ignore[arg-type]
+                    enabled=current.enabled if enabled is _UNSET else enabled,  # type: ignore[arg-type]
+                    discovery_scope=(
+                        current.discovery_scope
+                        if discovery_scope is _UNSET
+                        else discovery_scope  # type: ignore[arg-type]
+                    ),
+                    archive_order=current.archive_order,
+                )
+                updated = self._validate_target(updated, source=f"target {key!r}")
+                if updated == current:
+                    return current
+                targets[index] = updated
+                self._write(
+                    targets,
+                    previous=[*targets[:index], current, *targets[index + 1:]],
+                    expected_content=expected_content,
+                )
+                return updated
         raise WatchlistTargetNotFoundError(f"Watchlist target not found: {key}")
 
-    def set_enabled(self, key: str, enabled: bool) -> WatchlistTarget:
-        """Enable or disable a target without touching any Catalog data."""
+    def update_work_archive_order(
+        self,
+        work_key: str,
+        orders: Mapping[str, int | None] | Sequence[str],
+        *,
+        expected_revision: str | None = None,
+    ) -> tuple[WatchlistTarget, ...]:
+        """Atomically update every key's archive order within one Work."""
 
-        targets = self._load()
-        for index, target in enumerate(targets):
-            if target.key == key:
-                updated = WatchlistTarget(
+        with self.edit_lock():
+            expected_content = self._content_for_revision(expected_revision)
+            targets = self._load_content(expected_content)
+            members = [target for target in targets if target.work_key == work_key]
+            if not members:
+                raise WatchlistTargetNotFoundError(f"Watchlist work not found: {work_key}")
+            if isinstance(orders, Mapping):
+                if set(orders) != {target.key for target in members}:
+                    raise InvalidWatchlistError(
+                        f"archive_order update must cover every key in work_key {work_key!r}"
+                    )
+                values = dict(orders)
+            else:
+                order_keys = list(orders)
+                if set(order_keys) != {target.key for target in members} or len(order_keys) != len(members):
+                    raise InvalidWatchlistError(
+                        f"archive_order update must cover every key in work_key {work_key!r}"
+                    )
+                values = {key: index for index, key in enumerate(order_keys, start=1)}
+            updated = [
+                WatchlistTarget(
                     key=target.key,
                     work_key=target.work_key,
                     site=target.site,
                     url=target.url,
                     label=target.label,
-                    enabled=enabled,
+                    enabled=target.enabled,
                     discovery_scope=target.discovery_scope,
-                    archive_order=target.archive_order,
+                    archive_order=values[target.key],
                 )
-                targets[index] = updated
-                previous = [*targets[:index], target, *targets[index + 1 :]]
-                self._write(targets, previous=previous)
-                return updated
+                if target.work_key == work_key else target
+                for target in targets
+            ]
+            updated = self._validate_targets(updated)
+            if updated == targets:
+                return tuple(members)
+            self._write(updated, previous=targets, expected_content=expected_content)
+            return tuple(target for target in updated if target.work_key == work_key)
+
+    def remove(self, key: str) -> WatchlistTarget:
+        """Remove a target without touching any Catalog data."""
+
+        with self.edit_lock():
+            expected_content = self._content_for_revision(None)
+            targets = self._load_content(expected_content)
+            for index, target in enumerate(targets):
+                if target.key == key:
+                    removed = targets.pop(index)
+                    previous = [*targets[:index], removed, *targets[index:]]
+                    self._write(targets, previous=previous, expected_content=expected_content)
+                    return removed
+        raise WatchlistTargetNotFoundError(f"Watchlist target not found: {key}")
+
+    def set_enabled(self, key: str, enabled: bool) -> WatchlistTarget:
+        """Enable or disable a target without touching any Catalog data."""
+
+        with self.edit_lock():
+            expected_content = self._content_for_revision(None)
+            targets = self._load_content(expected_content)
+            for index, target in enumerate(targets):
+                if target.key == key:
+                    updated = WatchlistTarget(
+                        key=target.key,
+                        work_key=target.work_key,
+                        site=target.site,
+                        url=target.url,
+                        label=target.label,
+                        enabled=enabled,
+                        discovery_scope=target.discovery_scope,
+                        archive_order=target.archive_order,
+                    )
+                    updated = self._validate_target(updated, source=f"target {key!r}")
+                    targets[index] = updated
+                    previous = [*targets[:index], target, *targets[index + 1 :]]
+                    self._write(targets, previous=previous, expected_content=expected_content)
+                    return updated
         raise WatchlistTargetNotFoundError(f"Watchlist target not found: {key}")
 
     def enable(self, key: str) -> WatchlistTarget:
@@ -128,11 +320,46 @@ class WatchlistService:
     enable_target = enable
     disable_target = disable
 
+    def _read_content(self) -> str:
+        if not self.path.exists():
+            return ""
+        try:
+            # Preserve CRLF bytes for CAS/revision and lossless YAML patches.
+            return self.path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise InvalidWatchlistError(f"Cannot read watchlist {self.path}: {exc}") from exc
+
+    @staticmethod
+    def _content_digest(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def _content_for_revision(self, expected_revision: str | None) -> str | None:
+        content = self._read_content()
+        if expected_revision is not None and self._content_digest(content) != expected_revision:
+            raise WatchlistError(
+                "Watchlist changed since the edit was started; reload and retry"
+            )
+        return content
+
+    def _validate_targets(self, targets: list[WatchlistTarget]) -> list[WatchlistTarget]:
+        keys: set[str] = set()
+        normalized: list[WatchlistTarget] = []
+        for index, target in enumerate(targets):
+            target = self._validate_target(target, source=f"targets[{index}]")
+            if target.key in keys:
+                raise DuplicateWatchlistKeyError(f"Duplicate watchlist key: {target.key}")
+            keys.add(target.key)
+            normalized.append(target)
+        self._validate_archive_orders(normalized)
+        return normalized
+
     def _load(self) -> list[WatchlistTarget]:
+        return self._load_content(self._read_content())
+
+    def _load_content(self, content: str) -> list[WatchlistTarget]:
         if not self.path.exists():
             return []
         try:
-            content = self.path.read_text(encoding="utf-8")
             # Content comparison also catches same-size edits and atomic replacements.
             cached = self._cached_document
             if cached is not None and content == cached[0]:
@@ -217,11 +444,53 @@ class WatchlistService:
 
         from_url = WatchlistService._parse_scope_url(raw_scope, "from_url", index)
         through_url = WatchlistService._parse_scope_url(raw_scope, "through_url", index)
-        if from_url is None and through_url is None:
+        excluded = WatchlistService._parse_excluded_external_ids(raw_scope, index)
+        if from_url is None and through_url is None and not excluded:
+            if "excluded_external_ids" in raw_scope:
+                return None
             raise InvalidWatchlistError(
-                f"targets[{index}].discovery_scope must contain from_url or through_url"
+                f"targets[{index}].discovery_scope must contain from_url, through_url, "
+                "or excluded_external_ids"
             )
-        return DiscoveryScope(from_url=from_url, through_url=through_url)
+        return DiscoveryScope(
+            from_url=from_url,
+            through_url=through_url,
+            excluded_external_ids=excluded,
+        )
+
+    @staticmethod
+    def _parse_excluded_external_ids(
+        raw_scope: Mapping[str, Any], index: int
+    ) -> tuple[str, ...]:
+        if "excluded_external_ids" not in raw_scope:
+            return ()
+        value = raw_scope["excluded_external_ids"]
+        if value is None:
+            raise InvalidWatchlistError(
+                f"targets[{index}].discovery_scope.excluded_external_ids must be a list"
+            )
+        if not isinstance(value, (list, tuple)):
+            raise InvalidWatchlistError(
+                f"targets[{index}].discovery_scope.excluded_external_ids must be a list"
+            )
+        return WatchlistService._normalize_excluded_external_ids(
+            value, source=f"targets[{index}].discovery_scope.excluded_external_ids"
+        )
+
+    @staticmethod
+    def _normalize_excluded_external_ids(
+        values: Iterable[object], *, source: str
+    ) -> tuple[str, ...]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not isinstance(value, str) or not value.strip():
+                raise InvalidWatchlistError(f"{source} must contain non-empty strings")
+            if value in seen:
+                raise InvalidWatchlistError(f"{source} contains duplicate ID {value!r}")
+            seen.add(value)
+            normalized.append(value)
+        return tuple(sorted(normalized))
 
     @staticmethod
     def _parse_scope_url(
@@ -253,16 +522,30 @@ class WatchlistService:
         if target.discovery_scope is not None:
             if not isinstance(target.discovery_scope, DiscoveryScope):
                 raise InvalidWatchlistError(f"{source}.discovery_scope must be a DiscoveryScope")
-            if target.discovery_scope.from_url is None and target.discovery_scope.through_url is None:
-                raise InvalidWatchlistError(
-                    f"{source}.discovery_scope must contain from_url or through_url"
-                )
             for field in ("from_url", "through_url"):
                 value = getattr(target.discovery_scope, field)
                 if value is not None and (not isinstance(value, str) or not value.strip()):
                     raise InvalidWatchlistError(
                         f"{source}.discovery_scope.{field} must be a non-empty string"
                     )
+            normalized = WatchlistService._normalize_excluded_external_ids(
+                target.discovery_scope.excluded_external_ids,
+                source=f"{source}.discovery_scope.excluded_external_ids",
+            )
+            if (
+                target.discovery_scope.from_url is None
+                and target.discovery_scope.through_url is None
+                and not normalized
+            ):
+                return replace(target, discovery_scope=None)
+            target = replace(
+                target,
+                discovery_scope=DiscoveryScope(
+                    from_url=target.discovery_scope.from_url,
+                    through_url=target.discovery_scope.through_url,
+                    excluded_external_ids=normalized,
+                ),
+            )
         return target
 
     @staticmethod
@@ -287,12 +570,18 @@ class WatchlistService:
         targets: list[WatchlistTarget],
         *,
         previous: list[WatchlistTarget] | None = None,
+        expected_content: str | None = None,
     ) -> None:
         self._validate_archive_orders(targets)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        current_content = self._read_content()
+        if expected_content is not None and current_content != expected_content:
+            raise WatchlistError(
+                "Watchlist changed while saving; reload and retry the edit"
+            )
         if self.path.exists() and previous is not None:
-            original = self.path.read_text(encoding="utf-8")
-            if self._contains_comments(original):
+            original = current_content
+            if self._needs_lossless_patch(original):
                 patched = self._patch_existing_yaml(original, previous, targets)
                 if patched is None:
                     raise WatchlistError(
@@ -300,9 +589,9 @@ class WatchlistService:
                         "edit the target mapping directly"
                     )
                 self._validate_written_content(patched, targets)
-                self._atomic_write(patched)
+                self._atomic_write(self._preserve_eol(patched, original))
                 return
-            content = self._serialize_targets(targets)
+            content = self._preserve_eol(self._serialize_targets(targets), original)
             self._validate_written_content(content, targets)
             self._atomic_write(content)
             return
@@ -317,6 +606,37 @@ class WatchlistService:
         # patches remain safe, while structural rewrites must not risk erasing
         # comment-like or quoted source text.
         return "#" in content
+
+    @classmethod
+    def _needs_lossless_patch(cls, content: str) -> bool:
+        if cls._contains_comments(content):
+            return True
+        try:
+            raw = yaml.safe_load(content)
+        except yaml.YAMLError:
+            return True
+        if not isinstance(raw, dict):
+            return True
+        if set(raw) - {"targets"}:
+            return True
+        targets = raw.get("targets")
+        if not isinstance(targets, list):
+            return False
+        known = {
+            "key", "work_key", "site", "url", "enabled", "label",
+            "discovery_scope", "archive_order",
+        }
+        for value in targets:
+            if not isinstance(value, dict):
+                continue
+            if set(value) - known:
+                return True
+            scope = value.get("discovery_scope")
+            if isinstance(scope, dict) and set(scope) - {
+                "from_url", "through_url", "excluded_external_ids"
+            }:
+                return True
+        return False
 
     def _serialize_targets(self, targets: list[WatchlistTarget]) -> str:
         serialized_targets: list[dict[str, Any]] = []
@@ -337,7 +657,8 @@ class WatchlistService:
             if len(keys) != len(set(keys)):
                 raise InvalidWatchlistError("written Watchlist has duplicate keys")
             self._validate_archive_orders(actual)
-            if actual != expected:
+            expected_normalized = self._validate_targets(list(expected))
+            if actual != expected_normalized:
                 raise InvalidWatchlistError("written Watchlist does not match the requested targets")
         except (yaml.YAMLError, InvalidWatchlistError) as exc:
             raise WatchlistError(
@@ -355,11 +676,15 @@ class WatchlistService:
             "label": target.label,
         }
         if target.discovery_scope is not None:
-            scope: dict[str, str] = {}
+            scope: dict[str, Any] = {}
             if target.discovery_scope.from_url is not None:
                 scope["from_url"] = target.discovery_scope.from_url
             if target.discovery_scope.through_url is not None:
                 scope["through_url"] = target.discovery_scope.through_url
+            if target.discovery_scope.excluded_external_ids:
+                scope["excluded_external_ids"] = list(
+                    target.discovery_scope.excluded_external_ids
+                )
             value["discovery_scope"] = scope
         if target.archive_order is not None:
             value["archive_order"] = target.archive_order
@@ -371,7 +696,12 @@ class WatchlistService:
         previous: list[WatchlistTarget],
         targets: list[WatchlistTarget],
     ) -> str | None:
-        """Patch only changed target spans so comments and formatting survive."""
+        """Patch ordinary block YAML while retaining unrelated comments/keys.
+
+        PyYAML is used only for source spans.  We intentionally reject flow
+        collections and ambiguous mappings; callers then leave the original
+        file untouched instead of silently reserializing it.
+        """
 
         try:
             root = yaml.compose(original)
@@ -380,83 +710,258 @@ class WatchlistService:
         if not isinstance(root, yaml.MappingNode):
             return None
         sequence = next(
-            (value for key, value in root.value if isinstance(key, yaml.ScalarNode) and key.value == "targets"),
+            (
+                value
+                for key, value in root.value
+                if isinstance(key, yaml.ScalarNode) and key.value == "targets"
+            ),
             None,
         )
-        if not isinstance(sequence, yaml.SequenceNode):
-            return None
-        if sequence.flow_style:
+        if not isinstance(sequence, yaml.SequenceNode) or sequence.flow_style:
             return None
         old_by_key = {target.key: target for target in previous}
         new_by_key = {target.key: target for target in targets}
-        removed = set(old_by_key) - set(new_by_key)
-        added = set(new_by_key) - set(old_by_key)
-        if removed or added:
+        if len(old_by_key) != len(previous) or len(new_by_key) != len(targets):
             return None
-        edits: list[tuple[int, int, str]] = []
-        node_by_key: dict[str, yaml.MappingNode] = {}
+
+        lines = original.splitlines(keepends=True)
+        starts = self._line_starts(lines)
+        item_infos: dict[str, tuple[yaml.MappingNode, int, int, int]] = {}
+        item_starts: list[int] = []
         for node in sequence.value:
-            if not isinstance(node, yaml.MappingNode):
+            if not isinstance(node, yaml.MappingNode) or node.flow_style:
+                return None
+            if any(
+                isinstance(value, yaml.ScalarNode)
+                and (
+                    "\n" in str(value.value)
+                    or value.style in {"|", ">"}
+                    or "\n" in original[value.start_mark.index : value.end_mark.index]
+                )
+                for _key, value in node.value
+            ):
                 return None
             key_node = next(
-                (value for key, value in node.value if isinstance(key, yaml.ScalarNode) and key.value == "key"),
+                (
+                    value
+                    for key, value in node.value
+                    if isinstance(key, yaml.ScalarNode) and key.value == "key"
+                ),
                 None,
             )
-            if not isinstance(key_node, yaml.ScalarNode):
+            if not isinstance(key_node, yaml.ScalarNode) or not isinstance(key_node.value, str):
                 return None
-            node_by_key[key_node.value] = node
+            key_line = self._line_for_index(starts, key_node.start_mark.index)
+            item_line = key_line
+            while item_line >= 0 and not re.match(r"^\s*-\s+", lines[item_line]):
+                item_line -= 1
+            if item_line < 0:
+                return None
+            item_starts.append(item_line)
+            item_infos[key_node.value] = (node, item_line, 0, len(lines))
+        item_starts_sorted = sorted(item_starts)
+        for key, (node, item_line, _unused, _end) in list(item_infos.items()):
+            next_line = next((line for line in item_starts_sorted if line > item_line), len(lines))
+            dash_indent = len(lines[item_line]) - len(lines[item_line].lstrip())
+            field_indent = dash_indent + 2
+            item_infos[key] = (node, item_line, field_indent, next_line)
 
-        changed_fields = {"enabled"}
-        for key in set(old_by_key) & set(new_by_key):
+        edits: list[tuple[int, int, str]] = []
+        removed_keys = set(old_by_key) - set(new_by_key)
+        added_keys = set(new_by_key) - set(old_by_key)
+        for key in removed_keys:
+            info = item_infos.get(key)
+            if info is None:
+                return None
+            _node, start_line, _indent, end_line = info
+            kept = [
+                line
+                for line in lines[start_line:end_line]
+                if not line.strip() or line.lstrip().startswith("#")
+            ]
+            edits.append((starts[start_line], starts[end_line] if end_line < len(starts) else len(original), "".join(kept)))
+
+        for key in sorted(added_keys):
+            if not item_starts_sorted:
+                append_at = sequence.start_mark.index
+                indent = 0
+            else:
+                append_at = sequence.end_mark.index
+                indent = len(lines[item_starts_sorted[0]]) - len(lines[item_starts_sorted[0]].lstrip())
+            rendered = self._render_target_item(new_by_key[key], indent)
+            edits.append((append_at, append_at, rendered))
+
+        for key in sorted(set(old_by_key) & set(new_by_key)):
             old, new = old_by_key[key], new_by_key[key]
             if old == new:
                 continue
-            if old.archive_order != new.archive_order:
+            if any(getattr(old, field) != getattr(new, field) for field in ("key", "work_key", "site")):
                 return None
-            if any(
-                getattr(old, field) != getattr(new, field)
-                for field in ("key", "work_key", "site", "url", "label", "discovery_scope")
-            ):
+            info = item_infos.get(key)
+            if info is None:
                 return None
-            node = node_by_key.get(key)
-            if node is None:
-                return None
-            for field in changed_fields:
+            node, start_line, field_indent, end_line = info
+            direct_nodes = {
+                str(field.value): value
+                for field, value in node.value
+                if isinstance(field, yaml.ScalarNode)
+            }
+            additions: list[str] = []
+            for field in ("url", "label", "enabled", "archive_order"):
                 old_value = getattr(old, field)
                 new_value = getattr(new, field)
                 if old_value == new_value:
                     continue
-                pair = next(
-                    ((k, v) for k, v in node.value if isinstance(k, yaml.ScalarNode) and k.value == field),
-                    None,
+                field_span = self._field_span(lines, starts, start_line, end_line, field, field_indent)
+                value_node = direct_nodes.get(field)
+                if new_value is None:
+                    if field_span is None:
+                        return None
+                    edits.append(field_span)
+                elif isinstance(value_node, yaml.ScalarNode) and field_span is not None:
+                    edits.append((value_node.start_mark.index, value_node.end_mark.index, self._render_scalar(new_value)))
+                else:
+                    additions.extend(self._render_field(field, new_value, field_indent))
+
+            if old.discovery_scope != new.discovery_scope:
+                scope_span = self._field_span(
+                    lines, starts, start_line, end_line, "discovery_scope", field_indent
                 )
-                if pair is None:
-                    return None
-                value_node = pair[1]
-                if not isinstance(value_node, yaml.ScalarNode):
-                    return None
-                rendered = "true" if new_value is True else "false" if new_value is False else str(new_value)
-                edits.append((value_node.start_mark.index, value_node.end_mark.index, rendered))
+                if old.discovery_scope is None and new.discovery_scope is not None:
+                    additions.extend(self._render_scope(new.discovery_scope, field_indent))
+                elif new.discovery_scope is None:
+                    if scope_span is None:
+                        return None
+                    edits.append(scope_span)
+                else:
+                    if scope_span is None:
+                        additions.extend(self._render_scope(new.discovery_scope, field_indent))
+                    else:
+                        scope_node = direct_nodes.get("discovery_scope")
+                        if isinstance(scope_node, yaml.MappingNode) and any(
+                            not isinstance(field, yaml.ScalarNode)
+                            or str(field.value)
+                            not in {"from_url", "through_url", "excluded_external_ids"}
+                            for field, _value in scope_node.value
+                        ):
+                            return None
+                        if "#" in original[scope_span[0] : scope_span[1]]:
+                            return None
+                        edits.append((scope_span[0], scope_span[1], "".join(self._render_scope(new.discovery_scope, field_indent))))
+            if additions:
+                insert_at = starts[end_line] if end_line < len(starts) else len(original)
+                edits.append((insert_at, insert_at, "".join(additions)))
 
         patched = original
-        for start, end, replacement in sorted(edits, reverse=True):
+        for start, end, replacement in sorted(edits, key=lambda item: (item[0], item[1]), reverse=True):
+            if start > end or start < 0 or end > len(patched):
+                return None
             patched = patched[:start] + replacement + patched[end:]
+        if not targets:
+            patched = re.sub(
+                r"(?m)^(?P<indent>\s*)targets:\s*(?P<comment>#.*)?\r?\n",
+                lambda match: (
+                    f"{match.group('indent')}targets: []"
+                    + (f" {match.group('comment')}" if match.group('comment') else "")
+                    + "\n"
+                ),
+                patched,
+                count=1,
+            )
         return patched
+
+    @staticmethod
+    def _line_starts(lines: list[str]) -> list[int]:
+        result: list[int] = []
+        offset = 0
+        for line in lines:
+            result.append(offset)
+            offset += len(line)
+        return result
+
+    @staticmethod
+    def _line_for_index(starts: list[int], index: int) -> int:
+        for line, start in enumerate(starts):
+            if start > index:
+                return max(0, line - 1)
+        return max(0, len(starts) - 1)
+
+    @classmethod
+    def _field_span(
+        cls,
+        lines: list[str],
+        starts: list[int],
+        item_start: int,
+        item_end: int,
+        field: str,
+        indent: int,
+    ) -> tuple[int, int, str] | None:
+        pattern = re.compile(rf"^{' ' * indent}{re.escape(field)}\s*:")
+        line = next(
+            (index for index in range(item_start, item_end) if pattern.match(lines[index])),
+            None,
+        )
+        if line is None:
+            return None
+        end = line + 1
+        while end < item_end:
+            current = lines[end]
+            stripped = current.strip()
+            if stripped and not stripped.startswith("#"):
+                current_indent = len(current) - len(current.lstrip())
+                if current_indent <= indent:
+                    break
+            end += 1
+        return starts[line], starts[end] if end < len(starts) else sum(len(value) for value in lines), ""
+
+    @staticmethod
+    def _render_scalar(value: object) -> str:
+        rendered = yaml.safe_dump(value, allow_unicode=True, default_flow_style=True)
+        return " ".join(line.strip() for line in rendered.splitlines() if line.strip() != "...")
+
+    @classmethod
+    def _render_scope(cls, scope: DiscoveryScope, indent: int) -> list[str]:
+        prefix = " " * indent
+        nested = " " * (indent + 2)
+        lines = [f"{prefix}discovery_scope:\n"]
+        if scope.from_url is not None:
+            lines.append(f"{nested}from_url: {cls._render_scalar(scope.from_url)}\n")
+        if scope.through_url is not None:
+            lines.append(f"{nested}through_url: {cls._render_scalar(scope.through_url)}\n")
+        if scope.excluded_external_ids:
+            lines.append(f"{nested}excluded_external_ids:\n")
+            lines.extend(
+                f"{' ' * (indent + 4)}- {cls._render_scalar(value)}\n"
+                for value in scope.excluded_external_ids
+            )
+        return lines
+
+    @classmethod
+    def _render_field(cls, field: str, value: object, indent: int) -> list[str]:
+        return [f"{' ' * indent}{field}: {cls._render_scalar(value)}\n"]
+
+    @classmethod
+    def _render_target_item(cls, target: WatchlistTarget, indent: int) -> str:
+        serialized = yaml.safe_dump(
+            {"targets": [cls._target_mapping(target)]},
+            allow_unicode=True,
+            sort_keys=False,
+        )
+        body = serialized.split("targets:\n", 1)[1]
+        return "".join(" " * indent + line if line.strip() else line for line in body.splitlines(keepends=True))
 
     def _atomic_write(self, content: str) -> None:
         temporary_path: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                newline="\n",
+                mode="wb",
                 dir=self.path.parent,
                 prefix=f".{self.path.name}.",
                 suffix=".tmp",
                 delete=False,
             ) as temporary:
                 temporary_path = temporary.name
-                temporary.write(content)
+                temporary.write(content.encode("utf-8"))
                 temporary.flush()
                 os.fsync(temporary.fileno())
             os.replace(temporary_path, self.path)
@@ -469,3 +974,11 @@ class WatchlistService:
                     os.unlink(temporary_path)
                 except FileNotFoundError:
                     pass
+
+    @staticmethod
+    def _preserve_eol(content: str, original: str) -> str:
+        """Use the existing file's newline convention for generated text."""
+
+        if "\r\n" in original:
+            return content.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+        return content.replace("\r\n", "\n").replace("\r", "\n")

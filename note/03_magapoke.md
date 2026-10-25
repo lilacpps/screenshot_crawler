@@ -1,5 +1,38 @@
 # 03. Magapoke
 
+## Read-only complete listing preview (2026-10-25)
+
+MagapokeDiscoveryAdapter now exposes optional preview_complete_listing(page, target). It reuses the existing episode-list navigation, bounded expansion, identity validation, title parsing, and access observation helpers, then returns site-neutral ListingPreview/ListingRow DTOs. Rows carry the site-native episode ID, canonical URL, authoritative latest-first position, display title, access observation, and listing identity. The digest includes listing identity plus ordered IDs and positions.
+
+This capability only reads the shared Page. It does not call DiscoveryService.discover, acquire tickets, enter viewers, write Catalog/Watchlist/ZIP, or create a management job. Sites without the optional capability return an explicit blocker through DiscoveryService.preview_complete_listing. Synthetic Chromium validation passed for the complete five-row fixture with zero operational files created. No live Magapoke session or paid-resource operation was used.
+
+## Exclusion scope replay (2026-10-25)
+
+Magapoke opts into exclusion-only scope and complete-listing replay. The
+Watchlist exclusion preflight expands and validates the full episode list,
+including site-native IDs, positions, canonical URLs, listing identity, and
+digest, before Discovery creates a Work or writes any Catalog row. It also
+checks that excluded IDs and both inclusive boundaries are in the same base
+interval. The validated parsed records are cached on that adapter instance and
+replayed once by the subsequent Discovery iterator, bound to the Page and full
+Watchlist target with a short TTL, avoiding a second live listing
+observation between validation and upsert. The iterator filters excluded IDs
+before item/source/target writes; known same-key excluded Sources receive a
+false acquisition flag while their history is retained. Unknown or
+out-of-range IDs fail closed. No ticket, quota, reader, ZIP, or live-site
+verification was used by this implementation.
+
+The Stage 04 GUI uses the existing hierarchical Inventory projection and checks
+the adapter capability before connecting, then uses this same read-only listing
+capability from a worker via the shared crawler Chrome/CDP session;
+adapter-owned navigation handles the target URL. The editor keeps episode
+checkboxes separate from Inventory execution selection and requires a fresh
+Catalog-bound preview before a selection-affecting Watchlist CAS save.
+Unsupported adapters remain Catalog-reference only; the Magapoke path is the
+first synthetically verified checkbox-scope path. GUI preview and scope-sync preview do not
+enter a reader or consume tickets/quota. The save worker rechecks the immutable
+Catalog content identity inside the Catalog job lock and rejects ambiguous
+run/artifact joins.
 ## Shared work-key scope inventory (2026-10-22)
 
 Magapoke Discovery supplies complete site-listing identity/position evidence

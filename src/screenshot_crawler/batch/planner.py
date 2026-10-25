@@ -16,6 +16,7 @@ from screenshot_crawler.batch.archive_guard import (
     CandidateOutputPathError,
     validate_candidate_output_paths,
 )
+from screenshot_crawler.batch.exclusions import unproven_target_exclusions
 from screenshot_crawler.batch.models import (
     BatchCandidate,
     BatchPlan,
@@ -90,6 +91,7 @@ class BatchPlanner:
             # pool below, before any source or quota allocation takes place.
             site_sources = [source for source in all_sources if source.site == site]
             sources = site_sources
+            excluded_source_ids: set[int] = set()
             selected_key_values = (
                 None if selected_keys is None else tuple(selected_keys)
             )
@@ -142,6 +144,18 @@ class BatchPlanner:
                 for target in watchlist_targets:
                     targets_by_work[target.work_key].append(target)
                 target_by_key = {target.key: target for target in watchlist_targets}
+                unproven_exclusion_keys = {
+                    target.key
+                    for target in watchlist_targets
+                    if unproven_target_exclusions(self.catalog, target, site_sources)
+                }
+                excluded_source_ids = {
+                    source.id
+                    for source in site_sources
+                    if (binding := target_by_key.get(source.discovery_key)) is not None
+                    and binding.discovery_scope is not None
+                    and source.external_id in binding.discovery_scope.excluded_external_ids
+                }
                 work_keys: set[str] = set()
                 sources_by_work_key: dict[str, dict[int, Source]] = defaultdict(dict)
                 for source in sources:
@@ -226,6 +240,16 @@ class BatchPlanner:
 
                 enabled_sources = []
                 for source in item_sources:
+                    if source.discovery_key in unproven_exclusion_keys:
+                        plan.skipped.append(
+                            BatchSkipped(item.id, source.id, "acquisition_exclusion_unproven")
+                        )
+                        continue
+                    if source.id in excluded_source_ids:
+                        plan.skipped.append(
+                            BatchSkipped(item.id, source.id, "acquisition_excluded")
+                        )
+                        continue
                     if source.id in unmanaged_source_ids:
                         plan.skipped.append(
                             BatchSkipped(item.id, source.id, "acquisition_unmanaged")

@@ -2111,6 +2111,27 @@ other keys/sites/Works remain untouched. Complete evidence still invalidates
 on failed Full runs and structural changes for precise maintenance operations.
 No work-wide sync marker is claimed by this per-key automatic update.
 
+### Saved exclusion safety overlay
+
+The Watchlist scope editor maps a checked complete listing to an inclusive
+`from_url`/`through_url` range plus sorted `excluded_external_ids` holes. An
+exclusion-bearing Discovery run must first prove the complete listing, target
+identity, canonical positions, boundaries, and every excluded ID before it
+creates a Work or upserts a Catalog Source. The proof and the subsequent
+iterator are one adapter-bound observation; unsupported adapters and unknown,
+out-of-range, stale, or malformed IDs fail closed. Magapoke is currently the
+first adapter with the required exclusion-only capability and one-shot replay.
+
+Saving an outer boundary can remain pending until Full or explicit scope apply;
+the existing Catalog flags continue to govern that temporary state. A newly
+saved exact exclusion receives a narrow safety deny in Batch Planner before
+Site Policy/quota selection. Executor rechecks the same site/key/external ID
+before adapter, reader, resolver, grant, or capture entry. The deny also
+covers explicit grant-only, deferred resolver, replan, and later resource
+passes. If an excluded ID is not proven by the exact Source or a matching
+complete inventory proof, the affected key is skipped before Policy. This does
+not restore a global scope-sync/fingerprint gate or affect other keys' Sources.
+
 Acquisition scope is eventually reflected: temporary extra acquisitions and
 temporary archive-number drift are accepted. Removing a key alone keeps its
 Catalog flags until optional explicit reconciliation; changing a scope is

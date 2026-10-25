@@ -1,5 +1,6 @@
 from dataclasses import replace
 from pathlib import Path
+from threading import Barrier, Thread
 
 import pytest
 
@@ -11,6 +12,10 @@ from screenshot_crawler.watchlist import (
     WatchlistError,
     WatchlistService,
     WatchlistTargetNotFoundError,
+)
+from screenshot_crawler.watchlist.fingerprints import (
+    target_scope_definition,
+    target_scope_fingerprint,
 )
 
 
@@ -343,9 +348,9 @@ def test_watchlist_mutations_preserve_unrelated_comments(tmp_path: Path) -> None
     assert "# keep trailing comment" in after
     assert "enabled: false" in after
 
-    with pytest.raises(WatchlistError, match="edit the target mapping directly"):
-        add_target(service, key="two", work_key="work-two", label="Two")
-    assert path.read_text(encoding="utf-8") == after
+    add_target(service, key="two", work_key="work-two", label="Two")
+    assert path.read_text(encoding="utf-8").startswith(after)
+    assert service.get("two").label == "Two"
 
 
 @pytest.mark.parametrize("removed_key", ["one", "two", "three"])
@@ -382,7 +387,7 @@ def test_remove_first_middle_or_last_target_preserves_other_targets(
     ]
 
 
-def test_remove_from_comment_bearing_watchlist_fails_without_writing(tmp_path: Path) -> None:
+def test_remove_from_comment_bearing_watchlist_preserves_comments(tmp_path: Path) -> None:
     path = tmp_path / "watchlist.yaml"
     original = (
         "# keep me\n"
@@ -394,9 +399,12 @@ def test_remove_from_comment_bearing_watchlist_fails_without_writing(tmp_path: P
         "    label: One\n"
     )
     path.write_text(original, encoding="utf-8")
-    with pytest.raises(WatchlistError, match="edit the target mapping directly"):
-        WatchlistService(path).remove("one")
-    assert path.read_text(encoding="utf-8") == original
+    service = WatchlistService(path)
+    service.remove("one")
+    after = path.read_text(encoding="utf-8")
+    assert "# keep me" in after
+    assert "targets: []" in after
+    assert service.list_targets() == []
 
 
 def test_adding_all_archive_orders_roundtrips_for_commentless_watchlist(
@@ -431,7 +439,7 @@ def test_adding_all_archive_orders_roundtrips_for_commentless_watchlist(
     assert written.count("archive_order:") == 2
 
 
-def test_adding_archive_order_to_commented_watchlist_fails_without_writing(
+def test_adding_archive_order_to_commented_watchlist_preserves_comments(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "watchlist.yaml"
@@ -456,9 +464,11 @@ def test_adding_archive_order_to_commented_watchlist_fails_without_writing(
         replace(previous[0], archive_order=10),
         replace(previous[1], archive_order=20),
     ]
-    with pytest.raises(WatchlistError, match="edit the target mapping directly"):
-        service._write(updated, previous=previous)
-    assert path.read_text(encoding="utf-8") == original
+    service._write(updated, previous=previous)
+    after = path.read_text(encoding="utf-8")
+    assert "# preserve me" in after
+    assert "archive_order: 10" in after
+    assert "archive_order: 20" in after
 
 
 def test_multiline_quoted_hash_blocks_structural_rewrite_without_writing(
@@ -481,6 +491,275 @@ def test_multiline_quoted_hash_blocks_structural_rewrite_without_writing(
     with pytest.raises(WatchlistError, match="edit the target mapping directly"):
         add_target(service, key="two", work_key="work-two", label="Two")
     assert path.read_text(encoding="utf-8") == original
+
+
+def test_excluded_external_ids_are_canonicalized_and_roundtrip(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    label: One\n"
+        "    discovery_scope:\n"
+        "      excluded_external_ids: [episode-2, episode-1]\n",
+        encoding="utf-8",
+    )
+    service = WatchlistService(path)
+    assert service.get("one").discovery_scope == DiscoveryScope(
+        excluded_external_ids=("episode-1", "episode-2")
+    )
+    assert "- episode-1" in path.read_text(encoding="utf-8") or "episode-1" in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["[episode-1, episode-1]", "['']", "[123]", "episode-1"],
+)
+def test_invalid_excluded_external_ids_are_rejected(tmp_path: Path, value: str) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    label: One\n"
+        "    discovery_scope:\n"
+        f"      excluded_external_ids: {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(InvalidWatchlistError, match="excluded_external_ids"):
+        WatchlistService(path).list_targets()
+
+
+def test_update_target_scope_preview_and_cas_are_read_only_until_commit(tmp_path: Path) -> None:
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    add_target(service)
+    before = service.path.read_text(encoding="utf-8")
+    revision = service.revision()
+    proposed = replace(
+        service.get("one"),
+        discovery_scope=DiscoveryScope(
+            from_url="https://example.invalid/from",
+            through_url="https://example.invalid/through",
+            excluded_external_ids=("episode-2",),
+        ),
+    )
+    preview = service.preview_edit([proposed], expected_revision=revision)
+    assert preview.ready is True
+    assert preview.changed_keys == ("one",)
+    assert service.path.read_text(encoding="utf-8") == before
+    updated = service.update_target(
+        "one", discovery_scope=proposed.discovery_scope, expected_revision=revision
+    )
+    assert updated.discovery_scope == proposed.discovery_scope
+    assert WatchlistService(service.path).get("one") == updated
+    with pytest.raises(WatchlistError, match="changed"):
+        service.update_target("one", label="stale", expected_revision=revision)
+
+
+def test_update_work_archive_order_is_atomic_and_preserves_comments(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "# retain\n"
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: shared\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    label: One\n"
+        "  - key: two\n"
+        "    work_key: shared\n"
+        "    site: bookwalker\n"
+        "    url: https://example.invalid/two\n"
+        "    label: Two\n",
+        encoding="utf-8",
+    )
+    service = WatchlistService(path)
+    revision = service.revision()
+    result = service.update_work_archive_order("shared", ["two", "one"], expected_revision=revision)
+    assert [(item.key, item.archive_order) for item in result] == [("one", 2), ("two", 1)]
+    assert "# retain" in path.read_text(encoding="utf-8")
+    assert [item.archive_order for item in service.list_targets()] == [2, 1]
+
+
+def test_crlf_revision_and_lossless_edit_preserve_line_endings(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_bytes(
+        b"# retain\r\n"
+        b"targets:\r\n"
+        b"  - key: one\r\n"
+        b"    work_key: work-one\r\n"
+        b"    site: mangaone\r\n"
+        b"    url: https://example.invalid/one\r\n"
+        b"    label: One\r\n"
+    )
+    service = WatchlistService(path)
+    before = service.revision()
+    service.update_target("one", label="Updated", expected_revision=before)
+    written = path.read_bytes()
+    assert b"\r\n" in written
+    assert b"\n" not in written.replace(b"\r\n", b"")
+    assert b"# retain\r\n" in written
+    assert WatchlistService(path).get("one").label == "Updated"
+
+
+def test_apply_edit_combines_scope_and_work_order_in_one_replace(tmp_path: Path, monkeypatch) -> None:
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    add_target(service, key="one", work_key="shared", archive_order=1)
+    add_target(service, key="two", work_key="shared", archive_order=2)
+    current = service.list_targets()
+    proposed = [
+        replace(
+            target,
+            archive_order=3 - target.archive_order,
+            discovery_scope=DiscoveryScope(from_url="https://example.invalid/from")
+            if target.key == "one"
+            else target.discovery_scope,
+        )
+        for target in current
+    ]
+    writes = []
+    original = service._atomic_write
+    monkeypatch.setattr(service, "_atomic_write", lambda content: (writes.append(content), original(content))[1])
+    service.apply_edit(proposed, expected_revision=service.revision())
+    assert len(writes) == 1
+    assert service.get("one").discovery_scope is not None
+    assert service.get("one").archive_order == 2
+
+
+def test_exclusion_order_is_fingerprint_stable(tmp_path: Path) -> None:
+    first = add_target(
+        WatchlistService(tmp_path / "one.yaml"),
+        discovery_scope=DiscoveryScope(excluded_external_ids=("b", "a")),
+    )
+    second = add_target(
+        WatchlistService(tmp_path / "two.yaml"),
+        discovery_scope=DiscoveryScope(excluded_external_ids=("a", "b")),
+    )
+    assert first.discovery_scope == second.discovery_scope
+    assert target_scope_fingerprint(first) == target_scope_fingerprint(second)
+
+
+def test_legacy_bounded_scope_definition_has_stable_fingerprint_shape(tmp_path: Path) -> None:
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    target = add_target(
+        service,
+        discovery_scope=DiscoveryScope(from_url="https://example.invalid/from"),
+    )
+    assert target_scope_definition(target)["discovery_scope"] == {
+        "from_url": "https://example.invalid/from",
+        "through_url": None,
+    }
+
+
+def test_empty_exclusion_scope_is_omitted_on_write(tmp_path: Path) -> None:
+    service = WatchlistService(tmp_path / "watchlist.yaml")
+    target = add_target(service, discovery_scope=DiscoveryScope())
+    assert target.discovery_scope is None
+    assert "discovery_scope" not in service.path.read_text(encoding="utf-8")
+
+
+def test_unknown_root_and_target_keys_survive_structural_edit(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    path.write_text(
+        "metadata: retain-me\n"
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    label: One\n"
+        "    custom_field: retain-target\n",
+        encoding="utf-8",
+    )
+    service = WatchlistService(path)
+    service.update_target("one", label="Updated")
+    written = path.read_text(encoding="utf-8")
+    assert "metadata: retain-me" in written
+    assert "custom_field: retain-target" in written
+    assert service.get("one").label == "Updated"
+
+
+def test_nested_scope_comments_fail_closed_without_data_loss(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    original = (
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    label: One\n"
+        "    discovery_scope:\n"
+        "      from_url: https://example.invalid/from # keep\n"
+    )
+    path.write_text(original, encoding="utf-8")
+    service = WatchlistService(path)
+    with pytest.raises(WatchlistError, match="edit the target mapping directly"):
+        service.update_target(
+            "one",
+            discovery_scope=DiscoveryScope(through_url="https://example.invalid/through"),
+        )
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_unknown_nested_scope_key_survives_scalar_edit_and_blocks_scope_replace(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "watchlist.yaml"
+    original = (
+        "targets:\n"
+        "  - key: one\n"
+        "    work_key: work-one\n"
+        "    site: mangaone\n"
+        "    url: https://example.invalid/one\n"
+        "    label: One\n"
+        "    discovery_scope:\n"
+        "      from_url: https://example.invalid/from\n"
+        "      custom_nested: retain\n"
+    )
+    path.write_text(original, encoding="utf-8")
+    service = WatchlistService(path)
+    service.update_target("one", label="Updated")
+    written = path.read_text(encoding="utf-8")
+    assert "custom_nested: retain" in written
+    with pytest.raises(WatchlistError, match="edit the target mapping directly"):
+        service.update_target(
+            "one",
+            discovery_scope=DiscoveryScope(through_url="https://example.invalid/through"),
+        )
+    assert path.read_text(encoding="utf-8") == written
+
+
+def test_same_revision_writers_are_serialized_and_one_fails_cas(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.yaml"
+    first = WatchlistService(path)
+    add_target(first)
+    second = WatchlistService(path)
+    revision = first.revision()
+    barrier = Barrier(2)
+    results: list[object] = []
+
+    def worker(service: WatchlistService, label: str) -> None:
+        barrier.wait()
+        try:
+            results.append(service.update_target("one", label=label, expected_revision=revision))
+        except Exception as exc:  # noqa: BLE001 - assert the exact CAS outcome below
+            results.append(exc)
+
+    threads = [
+        Thread(target=worker, args=(first, "first")),
+        Thread(target=worker, args=(second, "second")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sum(isinstance(value, Exception) for value in results) == 1
+    assert sum(not isinstance(value, Exception) for value in results) == 1
+    assert WatchlistService(path).get("one").label in {"first", "second"}
 
 
 def test_enable_disable_preserves_identity_fields(tmp_path: Path) -> None:
