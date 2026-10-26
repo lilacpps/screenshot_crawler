@@ -53,7 +53,57 @@ behavior for those historical runs, not current Batch eligibility or a current
 operational procedure. Current verification must use an explicit matching
 Watchlist; scope-sync is optional maintenance.
 
-## Current verification snapshot (2026-10-24)
+## Current verification snapshot (2026-10-26)
+
+### Initial blank, odd body and one trailing PR: Item/Source 36917
+
+The free direct Batch failed before capture with `Younganimal PR-tail body
+mapping changed`. Its initial-blank/single-PR branch supported even bodies
+only; the 20-second wait could not resolve a stable unsupported odd shape.
+The bounded shared-CDP public-seek probe reproduced the rejection at all nine
+seeks on `0677335912071` and rewound to 17. Observed roles are top PR 0,
+exact empty lead 1, eleven bodies 2-12, CI 13, PR 14, Good 15 and Last 16.
+Seek min=1/max=17/step=2 has first+top-PR at 17 (centers 0/1), body pairs
+without phase flags at 15..7, final body/CI with CI+PR at 5 (12/13),
+PR/Good with PR at 3 (14/15), and Last-only at 1 (16). Last is the unique
+visible/centered terminal marker only at minimum seek.
+
+`top_empty_single_pr_odd_body` derives odd B=N-6>=5 and max=N, separately
+from even B>=4/max=N-1. Python parsing, native layout proof, CI geometry
+and resumed-entry rewind use the same variant. Exact roles/capabilities,
+phase/center/range checks, initial blank skip, frozen body coverage before
+END, native replay/node/write/epoch/post-encode checks and atomic PNG fallback
+remain mandatory. No counts/IDs are allowlisted. Shorter unobserved shapes,
+arbitrary PR counts and drift fail closed. No CLI/config, timeout, pacing,
+access/resource, shared Core, Batch or schema change is introduced;
+`note/00_core.md` needs no update. The original Batch command can be rerun.
+
+Production Batch on an online-backup Catalog with an explicit copied matching
+Watchlist completed eleven bodies through END and ZIP at max_pages=11
+(CrawlRun 14870). All members are ordered native 848x1200 lossless VP8L WebPs.
+Full decode, unique hashes, manifest/frozen slot coverage, CRC, Artifact
+SHA-256/size and isolated Item completion checks passed; ZIP size 5,306,399
+bytes. Pages 1/6/11 were visually checked without missing regions or viewer
+chrome. The normal Item/Source/runs/artifacts were checked unchanged and Item
+36917 remains pending for the user's normal rerun. The request guard blocked
+35 mutating requests and observed no checkout attempt; baseline probe blocked
+36. This is production-proof/output verification, without an independent
+live source-RGBA equality claim. Other episodes/layouts remain unverified.
+Sanitized evidence and isolated scripts are ignored under
+`output/younganimal-fix-36917/`; no real-site fixtures or credentials are added.
+
+Validation: capture Unit 478, packaging 26 and selected browser Integration
+143 (104 layout/drift/post-encode cases plus 39 existing native Runner cases)
+passed, 647 distinct cases, zero failed/skipped in the final selections.
+New B=11/B=5 synthetic cases cover complete ordered source-RGBA equality,
+native and forced rendered fallback, resumed END entry/rewind, draw before
+translation, final single body, CI-widget stability, END/ZIP, structural drift
+and post-encoding replacement/seek rejection. Initial setup failures from
+the default pytest temporary directory and Windows long paths were resolved
+using dedicated writable/short temporary paths; no production change was
+made for them. Existing asyncio deprecation warnings remain. Global Ruff and
+scoped diff checks passed. Full repository, unrelated browser, Discovery,
+Policy/access and Research suites were not run for this site-local layout fix.
 
 ### Coin-only paid classification (2026-10-24)
 
@@ -109,8 +159,8 @@ recognized only three PRs and fell through to the two-PR tail check.
 positive top-empty/horizontal/spread/RTL and PR/CI/Good capabilities, no
 vertical/single modes, exact canvas-free top PR/blank/CI/PR/Good/Last roles,
 and contiguous known even body B=N-6>=4. The exact public range is
-min=1/max=N-1/step=2. Counts and IDs are derived, not allowlisted. Odd body
-with this blank/single-PR combination, shorter unobserved shapes, arbitrary
+min=1/max=N-1/step=2. Counts and IDs are derived, not allowlisted. The odd-body
+counterpart is supported separately above. Shorter unobserved shapes, arbitrary
 PR counts, missing roles, wrong ranges/phases/centers and non-body canvases
 remain rejected. Previous single-PR/three-PR and two-PR profiles are retained.
 
@@ -2260,6 +2310,13 @@ phase/center, native/CI proof and full body coverage gates remain; see the
 slot 1, even B=N-6>=4, and max=N-1: the first ordinary seek step selects
 body 2/3, seek 3 is CI/PR, and seek 1 is Good/Last with Last+PR. The
 36943 section above records all phase, proof, coverage and live checks.
+
+`top_empty_single_pr_odd_body` retains that exact blank and tail with odd
+B=N-6>=5/max=N. Seek 5 selects final body/CI with CI+PR, 3 selects PR/Good
+with PR, and 1 selects only Last with Last-only. Initialization/rewind prove
+the initial blank before the first body pair. The 36917 section records the
+live evidence; all frozen role/coverage, source/replay and geometry guards
+remain shared with the even-body counterpart.
 
 ### Horizontal layout with three trailing PRs
 

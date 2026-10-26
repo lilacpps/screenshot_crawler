@@ -338,7 +338,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   };
   const exactPrTailLayout = (viewer, pages, children, seek, prCount) => {
     // Prove the observed PR-tail families, including blank and body-parity variants.
-    // Without an initial blank, odd single-PR bodies start at B>=5.
+    // With or without an initial blank, odd single-PR bodies start at B>=5.
     const topEmpty = viewer.classList.contains('mode-has-top-emptypage');
     const bodyStart = topEmpty ? 2 : 1, ci = children.length - prCount - 3;
     const bodyCount = ci - bodyStart;
@@ -347,7 +347,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const value = Number(seek.value), max = children.length - (compactEnd ? 1 : 0);
     const ciSeek = prCount + (compactEnd ? 2 : 4);
     if (![1, 3].includes(prCount) ||
-        (topEmpty ? (prCount === 1 ? bodyCount < 4 || bodyCount % 2 !== 0 : bodyCount < 3 || bodyCount % 2 !== 1)
+        (topEmpty ? (prCount === 1 ? bodyCount < 4 : bodyCount < 3 || bodyCount % 2 !== 1)
           : oddBody ? bodyCount < (prCount === 1 ? 5 : 3) : bodyCount < 4) ||
         !viewer.contains(pages) || !viewer.contains(seek) ||
         !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
@@ -1137,7 +1137,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
         if required.difference(viewer_classes) or {"mode-v", "mode-single"}.intersection(viewer_classes):
             raise UnknownPageStateError("Younganimal PR-tail capability markers changed")
         layout_variant = (
-            "top_empty_single_pr_even_body" if pr_tail_top_empty and pr_tail_count == 1
+            ("top_empty_single_pr_odd_body" if len(slots) % 2 else "top_empty_single_pr_even_body") if pr_tail_top_empty and pr_tail_count == 1
             else "top_empty_three_pr" if pr_tail_top_empty
             else "standard_single_pr_odd_body" if pr_tail_odd_body and pr_tail_count == 1
             else "standard_three_pr_odd_body" if pr_tail_odd_body
@@ -1283,7 +1283,7 @@ def _parse_viewer_observation(raw: object, *, expected_url: str) -> ViewerObserv
     if pr_tail_profile and (
         (pr_tail_top_empty and (
             body_start != 2
-            or (pr_tail_count == 1 and (len(body_slots) < 4 or len(body_slots) % 2 != 0))
+            or (pr_tail_count == 1 and len(body_slots) < 4)
             or (pr_tail_count == 3 and (len(body_slots) < 3 or len(body_slots) % 2 != 1))
         ))
         or (pr_tail_odd_body and (body_start != 1 or len(body_slots) < (5 if pr_tail_count == 1 else 3) or len(body_slots) % 2 != 1))

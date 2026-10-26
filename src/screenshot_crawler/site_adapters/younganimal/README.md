@@ -160,6 +160,51 @@ and B=15 evidence and synthetic B=9 coverage do not authorize arbitrary odd
 layouts. The narrow CI exception applies only to observed class pairs with the
 existing geometry, identity, and active-body proof.
 
+## Initial blank, odd body and one trailing PR (2026-10-26)
+
+Item/Source 36917 (`0677335912071`, 第22話②) failed with `Younganimal
+PR-tail body mapping changed`: the initial-blank/single-PR branch required
+even body count. A bounded shared-CDP public-seek probe reproduced the
+rejection at all nine seeks. Its seventeen wrappers are top PR 0, exact
+empty lead 1, eleven bodies 2-12, CI 13, PR 14, Good 15 and Last 16.
+Seek is min=1/max=17/step=2: maximum centers 0/1 with first+top-PR;
+15..7 select body pairs without phase flags; 5 selects final body/CI with
+CI+PR; 3 selects PR/Good with PR; 1 selects Last alone with Last-only
+and a unique visible/centered terminal marker. The probe rewound to 17.
+
+`top_empty_single_pr_odd_body` supports this observed family, deriving odd
+B=N-6>=5 and max=N. Python, native JavaScript, CI mutation geometry and
+resumed-entry rewind share this map. The existing even-body B>=4 variant
+retains max=N-1 and its Good/Last terminal spread. Exact positive horizontal,
+spread, RTL, top-empty, PR/CI/Good capabilities, roles, centers and phases
+remain mandatory. Unknown shorter shapes, arbitrary PR counts and structural
+drift fail closed. Initial blank skipping, complete frozen body coverage
+before END, native replay/source/node/write/epoch/post-encode proof and
+atomic PNG fallback are unchanged. There is no new CLI/config, timeout,
+access/resource, pacing, Core, Batch or schema change.
+
+An isolated production Batch with an online-backup Catalog and copied matching
+Watchlist completed all eleven bodies through END and ZIP at max_pages=11
+(CrawlRun 14870). All ordered members are native 848x1200 lossless VP8L WebPs;
+decode, unique fingerprints, frozen slot coverage, CRC, manifest order,
+Artifact SHA/size and isolated completion checks passed. ZIP size is
+5,306,399 bytes. Pages 1/6/11 were visually checked without missing regions
+or viewer chrome. The guard blocked 35 mutating requests and observed zero
+checkout attempts; the baseline probe blocked 36. Normal Item/Source/runs/
+artifacts were checked unchanged, leaving the Item pending for a normal
+rerun. This verifies production proof/output, without a separate live source
+RGBA equality claim. Evidence/scripts remain ignored under
+`output/younganimal-fix-36917/`. Use the original `batch run --site younganimal`
+command; other episodes and layouts have not been live-verified in this fix.
+
+Validation passed 478 capture Unit, 26 packaging and 143 selected browser
+Integration cases (647 total, zero skipped), including odd B=11/B=5 full
+source-RGBA/PNG fallback equality, resumed entry, final single-body capture,
+END/ZIP, drift and post-encode rejection. Temporary-directory/Windows-path
+setup failures were resolved with dedicated writable/short paths. Global
+Ruff and scoped diff checks passed; full repository, unrelated browser,
+Discovery/Policy/access and Research suites were not run for this local fix.
+
 ## Initial blank plus one trailing PR (2026-10-23)
 
 Item/Source 36943 (`9537ccc6e3c6e`, ペンと手錠と事実婚 / 第1話)
@@ -175,8 +220,8 @@ recognized only three PRs and fell through to the two-PR tail check.
 positive top-empty/horizontal/spread/RTL and PR/CI/Good capabilities, no
 vertical/single modes, exact canvas-free top PR/blank/CI/PR/Good/Last roles,
 and contiguous known even body B=N-6>=4. The exact public range is
-min=1/max=N-1/step=2. Counts and IDs are derived, not allowlisted. Odd body
-with this blank/single-PR combination, shorter unobserved shapes, arbitrary
+min=1/max=N-1/step=2. Counts and IDs are derived, not allowlisted. The odd-body
+counterpart is supported separately above. Shorter unobserved shapes, arbitrary
 PR counts, missing roles, wrong ranges/phases/centers and non-body canvases
 remain rejected. Previous single-PR/three-PR and two-PR profiles are retained.
 

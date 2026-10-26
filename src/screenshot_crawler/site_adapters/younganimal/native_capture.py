@@ -293,7 +293,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
   };
   const exactPrTailLayout = (viewer, pages, children, seek, prCount, forDraw) => {
     // Prove the observed PR-tail families, including blank and body-parity variants.
-    // Without an initial blank, odd single-PR bodies start at B>=5.
+    // With or without an initial blank, odd single-PR bodies start at B>=5.
     const topEmpty = viewer.classList.contains('mode-has-top-emptypage');
     const bodyStart = topEmpty ? 2 : 1, ci = children.length - prCount - 3;
     const bodyCount = ci - bodyStart;
@@ -302,7 +302,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
     const value = Number(seek.value), max = children.length - (compactEnd ? 1 : 0);
     const ciSeek = prCount + (compactEnd ? 2 : 4);
     if (![1, 3].includes(prCount) ||
-        (topEmpty ? (prCount === 1 ? bodyCount < 4 || bodyCount % 2 !== 0 : bodyCount < 3 || bodyCount % 2 !== 1)
+        (topEmpty ? (prCount === 1 ? bodyCount < 4 : bodyCount < 3 || bodyCount % 2 !== 1)
           : oddBody ? bodyCount < (prCount === 1 ? 5 : 3) : bodyCount < 4) ||
         !viewer.contains(pages) || !viewer.contains(seek) ||
         !['mode-h', 'mode-spread', 'mode-dir-rtl', 'mode-nav-dir-rtl', 'mode-has-pr',
@@ -464,7 +464,7 @@ OBSERVER_INIT_SCRIPT = r"""(() => {
       ? [null, bodyEnd, bodyEnd + 1, bodyEnd + 2, bodyEnd + 3]
       : [ci, ci + 1, ci + 2, ci + 3, ci + 4];
     return {viewer, pages, seek, children, ci, bodyStart, bodyEnd, roles,
-      variant: noLeadCi ? (bodyEnd % 2 === 0 ? 'no_lead_ci_even_body' : 'no_lead_ci_odd_body') : oneBody ? 'standard_one_body' : twoBody ? 'standard_two_body' : prCount === 3 ? (hasTopEmptyPage ? 'top_empty_three_pr' : children.length % 2 === 0 ? 'standard_three_pr_odd_body' : 'standard_three_pr') : prCount === 1 ? (hasTopEmptyPage ? 'top_empty_single_pr_even_body' : children.length % 2 === 0 ? 'standard_single_pr_odd_body' : 'standard_single_pr') : topEmptyNoCi ? (bodyStart === 0 ? (noCiEvenWrappers ? 'no_lead_no_ci_even_body' : 'no_lead_no_ci') : noCiEvenWrappers ? 'top_empty_no_ci_odd_body' : 'top_empty_no_ci') : noTopPrOddBody ? 'top_empty_no_pr_odd_body' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
+      variant: noLeadCi ? (bodyEnd % 2 === 0 ? 'no_lead_ci_even_body' : 'no_lead_ci_odd_body') : oneBody ? 'standard_one_body' : twoBody ? 'standard_two_body' : prCount === 3 ? (hasTopEmptyPage ? 'top_empty_three_pr' : children.length % 2 === 0 ? 'standard_three_pr_odd_body' : 'standard_three_pr') : prCount === 1 ? (hasTopEmptyPage ? (children.length % 2 ? 'top_empty_single_pr_odd_body' : 'top_empty_single_pr_even_body') : children.length % 2 === 0 ? 'standard_single_pr_odd_body' : 'standard_single_pr') : topEmptyNoCi ? (bodyStart === 0 ? (noCiEvenWrappers ? 'no_lead_no_ci_even_body' : 'no_lead_no_ci') : noCiEvenWrappers ? 'top_empty_no_ci_odd_body' : 'top_empty_no_ci') : noTopPrOddBody ? 'top_empty_no_pr_odd_body' : standardOddBody ? 'standard_odd_body' : noTopPr ? 'top_empty_no_pr' : hasTopEmptyPage ? 'top_emptypage' : 'standard', min, max, step, value, active,
       path: location.pathname, dom: mutationState.domGeneration,
       captureDom: mutationState.captureDomGeneration,
       viewport: {width: innerWidth, height: innerHeight, dpr: devicePixelRatio}};
