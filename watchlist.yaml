@@ -650,6 +650,27 @@ targets:
     enabled: true
     label: "ゲーム中盤で死ぬ悪役貴族に転生したので、外れスキル〖テイム〗を駆使して最強を目指してみた"
 
+  - key: imouto-wa-shitteiru
+    work_key: imouto-wa-shitteiru
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/02682/episode/406950
+    enabled: true
+    label: "妹は知っている"
+
+  - key: prison-school
+    work_key: prison-school
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/00516/episode/204450
+    enabled: true
+    label: "監獄学園"
+
+  - key: mokushiroku-no-yonkishi
+    work_key: mokushiroku-no-yonkishi
+    site: magapoke
+    url: https://pocket.shonenmagazine.com/title/01320/episode/316984
+    enabled: true
+    label: "黙示録の四騎士"
+
   - key: runorita
     work_key: runorita
     site: jumpplus
@@ -881,6 +902,20 @@ targets:
     enabled: false
     label: "カラダ探し"
 
+  - key: ghost-fixers
+    work_key: ghost-fixers
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9324103658562874562
+    enabled: false
+    label: "ゴーストフィクサーズ"
+
+  - key: slapshot-girls
+    work_key: slapshot-girls
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/9253191256784141548
+    enabled: true
+    label: "スラップショットガールズ"
+
   - key: kono-oto-tomare
     work_key: kono-oto-tomare
     site: zeblack
@@ -964,18 +999,42 @@ targets:
     url: https://zebrack-comic.shueisha.co.jp/title/56/chapter/list
     enabled: true
     label: "カラダ探し 解"
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/56/chapter/5475/viewer
+    archive_segments:
+      - order: 1
+        end_external_id: '5475'
 
+  - key: karada-sagashi-kai-jumpplus
+    work_key: karada-sagashi-kai
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/13932016480029260549
+    enabled: true
+    label: "カラダ探し 解"
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/10834108156638129203
+    archive_segments:
+      - order: 2
+        start_external_id: '10834108156638129203'
+
+  - key: yozakura-san-chi-no-daisakusen
+    work_key: yozakura-san-chi-no-daisakusen
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/3957/chapter/list
+    enabled: true
+    label: "夜桜さんちの大作戦"
 
   # ふつうの軽音部
   - key: futsuu-no-keionbu-jumpplus-001-030
     work_key: futsuu-no-keionbu
     site: jumpplus
     url: https://shonenjumpplus.com/episode/16457717013869519536
-    enabled: false
+    enabled: true
     label: "ふつうの軽音部"
     # 範囲: ～第30話
     discovery_scope:
       from_url: https://shonenjumpplus.com/episode/17106371891889388410
+    archive_order: 1
 
   - key: futsuu-no-keionbu-zeblack
     work_key: futsuu-no-keionbu
@@ -989,6 +1048,7 @@ targets:
     discovery_scope:
       from_url: https://zebrack-comic.shueisha.co.jp/title/71629/chapter/9221433/viewer
       through_url: https://zebrack-comic.shueisha.co.jp/title/71629/chapter/746714/viewer
+    archive_order: 2
 
   - key: futsuu-no-keionbu-jumpplus-122-latest
     work_key: futsuu-no-keionbu
@@ -999,6 +1059,7 @@ targets:
     # 範囲: 第122話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/9253191256479734451
+    archive_order: 3
 
 
   # 幼稚園WARS
@@ -1006,11 +1067,12 @@ targets:
     work_key: youchien-wars
     site: jumpplus
     url: https://shonenjumpplus.com/episode/4855956445109234830
-    enabled: false
+    enabled: true
     label: "幼稚園WARS"
     # 範囲: ～第21話
     discovery_scope:
       from_url: https://shonenjumpplus.com/episode/4856001361001118304
+    archive_order: 1
 
   - key: youchien-wars-zeblack
     work_key: youchien-wars
@@ -1024,6 +1086,7 @@ targets:
     discovery_scope:
       from_url: https://zebrack-comic.shueisha.co.jp/title/44156/chapter/9264564/viewer
       through_url: https://zebrack-comic.shueisha.co.jp/title/44156/chapter/659740/viewer
+    archive_order: 2
 
   - key: youchien-wars-jumpplus-140-latest
     work_key: youchien-wars
@@ -1034,6 +1097,7 @@ targets:
     # 範囲: 第140話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/9253191256637716200
+    archive_order: 3
 
 
   # ダンダダン
@@ -1048,6 +1112,7 @@ targets:
     #       Zeblackで配信されたらfrom_urlを新しい話まで延長して、この空白を埋める。
     discovery_scope:
       from_url: https://zebrack-comic.shueisha.co.jp/title/8423/chapter/1039249/viewer
+    archive_order: 1
 
   - key: dandadan-jumpplus
     work_key: dandadan
@@ -1058,6 +1123,7 @@ targets:
     # 範囲: 第245話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/9253191256195089604
+    archive_order: 2
 
 
   # マリッジトキシン
@@ -1071,7 +1137,8 @@ targets:
     # TODO: 第163～176話は現在Discovery対象外。
     #       Zeblackで配信されたらfrom_urlを新しい話まで延長して、この空白を埋める。
     discovery_scope:
-      from_url: https://zebrack-comic.shueisha.co.jp/title/23461/chapter/9255972/viewer
+      from_url: https://zebrack-comic.shueisha.co.jp/title/23461/chapter/9255987/viewer
+    archive_order: 1
 
   - key: marriage-toxin-jumpplus
     work_key: marriage-toxin
@@ -1082,6 +1149,7 @@ targets:
     # 範囲: 第177話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/9253191256195089711
+    archive_order: 2
 
   # エクソシストを堕とせない
   - key: exorcist-wo-otosenai-zeblack
@@ -1093,6 +1161,7 @@ targets:
     # 範囲: ～第117話
     discovery_scope:
       from_url: https://zebrack-comic.shueisha.co.jp/title/21356/chapter/9220011/viewer
+    archive_order: 1
 
   - key: exorcist-wo-otosenai-jumpplus
     work_key: exorcist-wo-otosenai
@@ -1103,6 +1172,7 @@ targets:
     # 範囲: 第118話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/9253191254350319442
+    archive_order: 2
 
   # ジャンケットバンク
   - key: junket-bank-zeblack
@@ -1114,6 +1184,7 @@ targets:
     # 範囲: ～第217話
     discovery_scope:
       from_url: https://zebrack-comic.shueisha.co.jp/title/5106/chapter/9261669/viewer
+    archive_order: 1
 
   - key: junket-bank-jumpplus
     work_key: junket-bank
@@ -1124,6 +1195,7 @@ targets:
     # 範囲: 第218話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/9253191255561725732
+    archive_order: 2
 
   # 魔都精兵のスレイブ
   - key: mato-seihei-no-slave-zeblack
@@ -1135,6 +1207,7 @@ targets:
     # 範囲: ～第178話
     discovery_scope:
       from_url: https://zebrack-comic.shueisha.co.jp/title/3662/chapter/1039363/viewer
+    archive_order: 1
 
   - key: mato-seihei-no-slave-jumpplus
     work_key: mato-seihei-no-slave
@@ -1145,6 +1218,7 @@ targets:
     # 範囲: 第179話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/17107419589696004719
+    archive_order: 2
 
   # 忘却バッテリー
   - key: boukyaku-battery-zeblack
@@ -1156,6 +1230,7 @@ targets:
     # 範囲: ～第189話
     discovery_scope:
       from_url: https://zebrack-comic.shueisha.co.jp/title/3421/chapter/9264501/viewer
+    archive_order: 1
 
   - key: boukyaku-battery-jumpplus
     work_key: boukyaku-battery
@@ -1166,6 +1241,7 @@ targets:
     # 範囲: 第190話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/9253191254640655460
+    archive_order: 2
 
   # SPY×FAMILY
   - key: spy-family-zeblack
@@ -1177,6 +1253,7 @@ targets:
     # 範囲: ～SHORT MISSION：3（10P）
     discovery_scope:
       from_url: https://zebrack-comic.shueisha.co.jp/title/3790/chapter/65475/viewer
+    archive_order: 1
 
   - key: spy-family-jumpplus
     work_key: spy-family
@@ -1187,6 +1264,7 @@ targets:
     # 範囲: 第139話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/9253191255607512279
+    archive_order: 2
 
   # 〖推しの子〗
 
@@ -1199,6 +1277,7 @@ targets:
     # 範囲: ～第120話
     discovery_scope:
       from_url: https://zebrack-comic.shueisha.co.jp/title/4558/chapter/523496/viewer
+    archive_order: 1
 
   - key: oshi-no-ko-jumpplus
     work_key: oshi-no-ko
@@ -1209,6 +1288,30 @@ targets:
     # 範囲: 第121話～最新話
     discovery_scope:
       through_url: https://shonenjumpplus.com/episode/4856001361361801015
+    archive_order: 2
+
+  # あやかしトライアングル：第1話～第115話
+  # TODO: 第115話のZeblack個別viewer URLを設定してから enabled: true にする
+  - key: ayakashi-triangle-zeblack
+    work_key: ayakashi-triangle
+    site: zeblack
+    url: https://zebrack-comic.shueisha.co.jp/title/4930/chapter/list
+    enabled: true
+    archive_order: 1
+    label: "あやかしトライアングル"
+    discovery_scope:
+      from_url: https://zebrack-comic.shueisha.co.jp/title/4930/chapter/489308/viewer
+
+  # あやかしトライアングル：第116話～最終話
+  - key: ayakashi-triangle-jumpplus
+    work_key: ayakashi-triangle
+    site: jumpplus
+    url: https://shonenjumpplus.com/episode/3269754496856861013
+    enabled: true
+    archive_order: 2
+    label: "あやかしトライアングル"
+    discovery_scope:
+      through_url: https://shonenjumpplus.com/episode/316190247077453786
 
   - key: uchuu-kyoudai
     work_key: uchuu-kyoudai
@@ -1273,9 +1376,471 @@ targets:
     enabled: true
     label: "税金で買った本"
 
+  - key: genshiken
+    work_key: genshiken
+    site: comicdays
+    url: https://comic-days.com/episode/13932016480030171954
+    enabled: true
+    label: "げんしけん"
+
+  - key: berserk
+    work_key: berserk
+    site: piccoma
+    url: https://piccoma.com/web/viewer/28600/1910027
+    enabled: true
+    label: "ベルセルク"
+
+  - key: monkey-turn
+    work_key: monkey-turn
+    site: piccoma
+    url: https://piccoma.com/web/viewer/6913/2769949
+    enabled: false
+    label: "モンキーターン"
+
+  - key: golden-kamuy
+    work_key: golden-kamuy
+    site: piccoma
+    url: https://piccoma.com/web/viewer/4230/882423
+    enabled: true
+    label: "ゴールデンカムイ"
+
+  - key: konjiki-no-gash
+    work_key: konjiki-no-gash
+    site: piccoma
+    url: https://piccoma.com/web/viewer/13565/662546
+    enabled: true
+    label: "金色のガッシュ！！完全版"
+
+  - key: gakkou-gurashi
+    work_key: gakkou-gurashi
+    site: piccoma
+    url: https://piccoma.com/web/viewer/15876/1222985
+    enabled: true
+    label: "がっこうぐらし！"
+
+  - key: akatsuki-no-yona
+    work_key: akatsuki-no-yona
+    site: piccoma
+    url: https://piccoma.com/web/viewer/13590/670124
+    enabled: false
+    label: "暁のヨナ"
+
+  - key: seichou-cheat-mushoku
+    work_key: seichou-cheat-mushoku
+    site: piccoma
+    url: https://piccoma.com/web/viewer/11191/1317625
+    enabled: true
+    label: "成長チートでなんでもできるようになったが、無職だけは辞められないようです"
+
+  - key: special-a
+    work_key: special-a
+    site: hanayume
+    url: https://hanayume.com/episodes/8c6f15923caa0
+    enabled: true
+    label: "S・A(スペシャル・エー)"
+
+  - key: akatsuki-no-yona-hanayume
+    work_key: akatsuki-no-yona
+    site: hanayume
+    url: https://hanayume.com/episodes/98310df5b64a5
+    enabled: true
+    label: "暁のヨナ"
+
+  - key: colette-wa-shinu-koto-ni-shita
+    work_key: colette-wa-shinu-koto-ni-shita
+    site: hanayume
+    url: https://hanayume.com/episodes/653d488d93d01
+    enabled: true
+    label: "コレットは死ぬことにした"
+
+  - key: soredemo-sekai-wa-utsukushii
+    work_key: soredemo-sekai-wa-utsukushii
+    site: hanayume
+    url: https://hanayume.com/episodes/3b837fd6c64a6
+    enabled: true
+    label: "それでも世界は美しい"
+
+  - key: tenshi-kinryouku-tokyo-chronos
+    work_key: tenshi-kinryouku-tokyo-chronos
+    site: hanayume
+    url: https://hanayume.com/episodes/b19c766d6814c
+    enabled: true
+    label: "天使禁猟区-東京クロノス-"
+
+  - key: tenshi-kinryouku
+    work_key: tenshi-kinryouku
+    site: hanayume
+    url: https://hanayume.com/episodes/52b908ff2362a
+    enabled: true
+    label: "天使禁猟区"
+
+  - key: palace-meidi
+    work_key: palace-meidi
+    site: hanayume
+    url: https://hanayume.com/episodes/0dd5bc98f11a6
+    enabled: true
+    label: "パレス・メイヂ"
+
+  - key: w-juliet
+    work_key: w-juliet
+    site: hanayume
+    url: https://hanayume.com/episodes/b88465e4a84f8
+    enabled: true
+    label: "Wジュリエット"
+
+  - key: gin-no-romantic-wahaha
+    work_key: gin-no-romantic-wahaha
+    site: hanayume
+    url: https://hanayume.com/episodes/92beb419900ae
+    enabled: true
+    label: "銀のロマンティック…わはは"
+
+  - key: tokyo-crazy-paradise
+    work_key: tokyo-crazy-paradise
+    site: hanayume
+    url: https://hanayume.com/episodes/7d00cf82cf2ee
+    enabled: true
+    label: "東京クレイジーパラダイス"
+
+  - key: nante-suteki-ni-japanesque
+    work_key: nante-suteki-ni-japanesque
+    site: hanayume
+    url: https://hanayume.com/episodes/8d50d2bb001dc
+    enabled: true
+    label: "なんて素敵にジャパネスク"
+
+  - key: koucha-ouji
+    work_key: koucha-ouji
+    site: hanayume
+    url: https://hanayume.com/episodes/5b11ffe50ee60
+    enabled: true
+    label: "紅茶王子"
+
+  - key: fruits-basket
+    work_key: fruits-basket
+    site: hanayume
+    url: https://hanayume.com/episodes/044cae405251a
+    enabled: true
+    label: "フルーツバスケット"
+
+  - key: fruits-basket-another
+    work_key: fruits-basket-another
+    site: hanayume
+    url: https://hanayume.com/episodes/f7b7ff5ea5c4d
+    enabled: true
+    label: "フルーツバスケットanother"
+
+  - key: namaikizakari
+    work_key: namaikizakari
+    site: hanayume
+    url: https://hanayume.com/episodes/c1af410475c17
+    enabled: true
+    label: "なまいきざかり。"
+
+  - key: golden-days
+    work_key: golden-days
+    site: hanayume
+    url: https://hanayume.com/episodes/63dd4e6aff01e
+    enabled: true
+    label: "ゴールデン・デイズ"
+
+  - key: takane-no-hana
+    work_key: takane-no-hana
+    site: hanayume
+    url: https://hanayume.com/episodes/488b49b262fa7
+    enabled: true
+    label: "高嶺の花"
+
+  - key: koi-ni-mudaguchi
+    work_key: koi-ni-mudaguchi
+    site: hanayume
+    url: https://hanayume.com/episodes/c5399d37d929b
+    enabled: true
+    label: "恋に無駄口"
+
+  - key: fukumenkei-noise
+    work_key: fukumenkei-noise
+    site: hanayume
+    url: https://hanayume.com/episodes/b10f9f1c48f1b
+    enabled: true
+    label: "覆面系ノイズ"
+
+  - key: otomen
+    work_key: otomen
+    site: hanayume
+    url: https://hanayume.com/episodes/cddc4b642c683
+    enabled: true
+    label: "オトメン（乙男）"
+
+  - key: tsuiraku-jk-to-haijin-kyoushi
+    work_key: tsuiraku-jk-to-haijin-kyoushi
+    site: hanayume
+    url: https://hanayume.com/episodes/b7cac6c4ba1c1
+    enabled: true
+    label: "墜落ＪＫと廃人教師"
+
   - key: ng-life
     work_key: ng-life
     site: hanayume
     url: https://hanayume.com/episodes/5fa301a1e55e3
     enabled: true
     label: "NGライフ"
+
+  - key: boku-no-chikyuu-wo-mamotte
+    work_key: boku-no-chikyuu-wo-mamotte
+    site: hanayume
+    url: https://hanayume.com/episodes/6fea00b3c36da
+    enabled: true
+    label: "ぼくの地球を守って"
+
+  - key: souryuu-no-sobayounin
+    work_key: souryuu-no-sobayounin
+    site: hanayume
+    url: https://hanayume.com/episodes/a55da187c9322
+    enabled: true
+    label: "蒼竜の側用人"
+
+  - key: gakuen-alice
+    work_key: gakuen-alice
+    site: hanayume
+    url: https://hanayume.com/episodes/c415fbeec4019
+    enabled: true
+    label: "学園アリス"
+
+  - key: shitsuji-kuroboshi-wa-kashizukanai
+    work_key: shitsuji-kuroboshi-wa-kashizukanai
+    site: hanayume
+    url: https://hanayume.com/episodes/6361fcfe6ffb3
+    enabled: true
+    label: "執事・黒星は傅かない"
+
+  - key: spica
+    work_key: spica
+    site: younganimal
+    url: https://younganimal.com/series/d0db50aef43dd
+    enabled: true
+    label: "スピカ～羽海野チカ初期短編集～"
+
+  - key: holyland
+    work_key: holyland
+    site: younganimal
+    url: https://younganimal.com/series/ce92c1172487c
+    enabled: true
+    label: "ホーリーランド"
+
+  - key: jisatsutou
+    work_key: jisatsutou
+    site: younganimal
+    url: https://younganimal.com/series/26f84ff0b2666
+    enabled: true
+    label: "自殺島"
+
+  - key: muhoutou
+    work_key: muhoutou
+    site: younganimal
+    url: https://younganimal.com/series/f0918b40a7c8d
+    enabled: true
+    label: "無法島"
+
+  - key: sousei-no-taiga
+    work_key: sousei-no-taiga
+    site: younganimal
+    url: https://younganimal.com/series/94d9f27c19815
+    enabled: true
+    label: "創世のタイガ"
+
+  - key: peliliu-rakuen-no-guernica
+    work_key: peliliu-rakuen-no-guernica
+    site: younganimal
+    url: https://younganimal.com/series/8246f8b8b2e6c
+    enabled: true
+    label: "ペリリュー─楽園のゲルニカ─"
+
+  - key: peliliu-gaiden
+    work_key: peliliu-gaiden
+    site: younganimal
+    url: https://younganimal.com/series/237023c6ddd7f
+    enabled: true
+    label: "ペリリュー外伝"
+
+  - key: nobunaga-no-shinobi
+    work_key: nobunaga-no-shinobi
+    site: younganimal
+    url: https://younganimal.com/series/d7434db184901
+    enabled: true
+    label: "信長の忍び"
+
+  - key: heion-sedai-no-idatentachi
+    work_key: heion-sedai-no-idatentachi
+    site: younganimal
+    url: https://younganimal.com/series/c7fef92ebd9af
+    enabled: true
+    label: "平穏世代の韋駄天達"
+
+  - key: air-master
+    work_key: air-master
+    site: younganimal
+    url: https://younganimal.com/series/1e9aa7195570b
+    enabled: true
+    label: "エアマスター"
+
+  - key: asobi-asobase
+    work_key: asobi-asobase
+    site: younganimal
+    url: https://younganimal.com/series/61580be25d2c1
+    enabled: true
+    label: "あそびあそばせ"
+
+  - key: ueno-san-wa-bukiyou
+    work_key: ueno-san-wa-bukiyou
+    site: younganimal
+    url: https://younganimal.com/series/e101fc840f060
+    enabled: true
+    label: "上野さんは不器用"
+
+  - key: tada-rikon-shitenai-dake
+    work_key: tada-rikon-shitenai-dake
+    site: younganimal
+    url: https://younganimal.com/series/03ee167b12331
+    enabled: true
+    label: "ただ離婚してないだけ"
+
+  - key: ai-yori-aoshi
+    work_key: ai-yori-aoshi
+    site: younganimal
+    url: https://younganimal.com/series/7103c2c1e9f08
+    enabled: true
+    label: "藍より青し"
+
+  - key: ore-wa-nando-demo-omae-wo-tsuihou-suru
+    work_key: ore-wa-nando-demo-omae-wo-tsuihou-suru
+    site: younganimal
+    url: https://younganimal.com/series/e594f5430dabe
+    enabled: true
+    label: "俺は何度でもお前を追放する"
+
+  - key: hachimitsu-to-clover
+    work_key: hachimitsu-to-clover
+    site: younganimal
+    url: https://younganimal.com/series/889960761d08b
+    enabled: true
+    label: "ハチミツとクローバー"
+
+  - key: gyakusatsu-happy-end
+    work_key: gyakusatsu-happy-end
+    site: younganimal
+    url: https://younganimal.com/series/55ce944ea77e6
+    enabled: true
+    label: "虐殺ハッピーエンド"
+
+  - key: rhapsody-in-red
+    work_key: rhapsody-in-red
+    site: younganimal
+    url: https://younganimal.com/series/2021bfca96ab9
+    enabled: true
+    label: "ラプソディ・イン・レッド"
+
+  - key: nana-to-kaoru
+    work_key: nana-to-kaoru
+    site: younganimal
+    url: https://younganimal.com/series/b10a2a258e602
+    enabled: true
+    label: "ナナとカオル"
+
+  - key: nana-to-kaoru-blacklabel
+    work_key: nana-to-kaoru-blacklabel
+    site: younganimal
+    url: https://younganimal.com/series/5efcd3de30036
+    enabled: true
+    label: "ナナとカオルBlackLabel"
+
+  - key: nana-to-kaoru-lastyear
+    work_key: nana-to-kaoru-lastyear
+    site: younganimal
+    url: https://younganimal.com/series/932cedf273921
+    enabled: true
+    label: "ナナとカオルLastYear"
+
+  - key: arisu-tsubasa-no-tantei-kitan
+    work_key: arisu-tsubasa-no-tantei-kitan
+    site: younganimal
+    url: https://younganimal.com/series/f84cb27ae698e
+    enabled: true
+    label: "有栖ツバサの探偵奇譚"
+
+  - key: usotsuki-paradox
+    work_key: usotsuki-paradox
+    site: younganimal
+    url: https://younganimal.com/series/b3a7e90ee680a
+    enabled: true
+    label: "うそつきパラドクス"
+
+  - key: usotsuki-paradox-shanai-fuuki-no-midashikata
+    work_key: usotsuki-paradox-shanai-fuuki-no-midashikata
+    site: younganimal
+    url: https://younganimal.com/series/c90adbd082b78
+    enabled: true
+    label: "うそつきパラドクス-社内風紀のみだしかた-"
+
+  - key: tokyo-yamimushi
+    work_key: tokyo-yamimushi
+    site: younganimal
+    url: https://younganimal.com/series/c9b28f28185f2
+    enabled: true
+    label: "東京闇虫"
+
+  - key: tokyo-yamimushi-2nd-scenario-pandora
+    work_key: tokyo-yamimushi-2nd-scenario-pandora
+    site: younganimal
+    url: https://younganimal.com/series/0df7dcc3803ee
+    enabled: true
+    label: "東京闇虫-2nd scenario-パンドラ"
+
+  - key: pen-to-tejou-to-jijitsukon
+    work_key: pen-to-tejou-to-jijitsukon
+    site: younganimal
+    url: https://younganimal.com/series/2a1c114334a86
+    enabled: true
+    label: "ペンと手錠と事実婚"
+
+  - key: fuufu-ijou-koibito-miman
+    work_key: fuufu-ijou-koibito-miman
+    site: kadocomi
+    url: https://comic-walker.com/detail/KC_004915_S?episodeType=first
+    enabled: true
+    label: "夫婦以上、恋人未満。"
+
+  - key: midori-no-uta-shuushuu-gunfuu
+    work_key: midori-no-uta-shuushuu-gunfuu
+    site: kadocomi
+    url: https://comic-walker.com/detail/KC_011605_S?episodeType=first
+    enabled: false
+    label: "緑の歌-収集群風"
+
+  - key: sukima
+    work_key: sukima
+    site: kadocomi
+    url: https://comic-walker.com/detail/KC_006322_S?episodeType=first
+    enabled: false
+    label: "隙間"
+
+  - key: plus-teki-isekai-no-sugoshikata
+    work_key: plus-teki-isekai-no-sugoshikata
+    site: kadocomi
+    url: https://comic-walker.com/detail/KC_008463_S?episodeType=first
+    enabled: true
+    label: "プラス的 異世界の過ごし方"
+
+  - key: gimai-5nin-iru
+    work_key: gimai-5nin-iru
+    site: kadocomi
+    url: https://comic-walker.com/detail/KC_008719_S?episodeType=first
+    enabled: true
+    label: "義妹５人いる"
+
+  - key: afternoon-tea-wa-ikaga-desuka
+    work_key: afternoon-tea-wa-ikaga-desuka
+    site: kadocomi
+    url: https://comic-walker.com/detail/KC_007220_S?episodeType=first
+    enabled: true
+    label: "アフタヌーンティーはいかがですか？ 私と先輩の、不純で一途なふたり暮らし"
