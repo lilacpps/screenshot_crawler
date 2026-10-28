@@ -15,6 +15,15 @@ class DiscoveryScope:
 
 
 @dataclass(frozen=True, slots=True)
+class ArchiveSegment:
+    """An oldest-first interval placed in a Work's explicit archive sequence."""
+
+    order: int
+    start_external_id: str | None = None
+    end_external_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WatchlistTarget:
     """One human-managed Discovery starting point."""
 
@@ -26,3 +35,4 @@ class WatchlistTarget:
     enabled: bool = True
     discovery_scope: DiscoveryScope | None = None
     archive_order: int | None = None
+    archive_segments: tuple[ArchiveSegment, ...] | None = None

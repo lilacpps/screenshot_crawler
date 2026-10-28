@@ -18,8 +18,8 @@ remain pending until Full or explicit scope apply.
 The Watchlist scope editor represents a checked complete listing as an
 inclusive range plus sorted `excluded_external_ids` holes. Exclusion runs need
 a complete, identity-bound listing proof before any Work or Source upsert;
-currently Magapoke is the first adapter that supports the required one-shot
-complete-list replay. Unknown, out-of-range, stale, or unsupported exclusions
+Magapoke, Zeblack, Jump+ and Comic DAYS support the required one-shot complete-list replay.
+Unknown, out-of-range, stale, or unsupported exclusions
 fail closed. Batch adds a narrow exact exclusion deny before Policy and
 Executor/resolver entry, including grant-only passes, without imposing a
 global scope-sync gate. See `docs/DISCOVERY_AND_BATCH.md` and affected site
@@ -331,7 +331,7 @@ The GUI scope editor adds `excluded_external_ids` as a canonical sorted hole
 list inside an inclusive boundary. Exclusion-bearing Discovery validates the
 complete listing, target identity, canonical order, boundaries, and all hole
 IDs before any Catalog upsert, then replays that same adapter-bound listing
-once. Magapoke is currently the supported exclusion replay adapter; other
+once. Magapoke, Zeblack, Jump+ and Comic DAYS support exclusion replay; other
 adapters fail closed before Work creation when exclusions are requested.
 
 Normal Batch retains the current per-key Catalog acquisition flags and does

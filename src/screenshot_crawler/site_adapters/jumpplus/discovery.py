@@ -12,8 +12,9 @@ import json
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from itertools import pairwise
+from time import monotonic
 from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
 
@@ -21,6 +22,7 @@ from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from screenshot_crawler.discovery.base import DiscoveryAdapter
+from screenshot_crawler.discovery.listing import ListingPreview, ListingRow, listing_digest
 from screenshot_crawler.discovery.models import (
     DiscoveredItem,
     DiscoveredRecord,
@@ -263,6 +265,9 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
     """Enumerate Jump+ episode rows safely in latest-first order."""
 
     supports_bounded_discovery = True
+    supports_exclusion_only_scope = True
+    supports_exclusion_replay = True
+    _EXCLUSION_PREVIEW_TTL_SECONDS = 30.0
 
     async def iter_records(
         self,
@@ -274,6 +279,57 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
         target_episode_id = parse_jumpplus_episode_url(target.url)
         if target_episode_id is None:
             raise DiscoveryIncompleteError("Watchlist target must be a Jump+ episode URL")
+
+        cached = getattr(self, "_exclusion_preview_cache", None)
+        cache_key = self._exclusion_cache_key(page, target)
+        if (
+            cached is not None
+            and cached["key"] == cache_key
+            and monotonic() <= cached["expires_at"]
+        ):
+            self._exclusion_preview_cache = None
+            records = list(cached["records"])
+            if target.discovery_scope is not None:
+                records = self._apply_discovery_scope(records, target.discovery_scope)
+            if mode == "full":
+                self.capture_complete_listing_inventory(
+                    target=target,
+                    all_records=list(cached["all_records"]),
+                    selected_records=records,
+                    listing_identity=cached["listing_identity"],
+                )
+            for record in records:
+                yield record
+            return
+        if (
+            target.discovery_scope is not None
+            and target.discovery_scope.excluded_external_ids
+        ):
+            self._exclusion_preview_cache = None
+            raise DiscoveryIncompleteError(
+                "Jump+ exclusion Discovery requires a fresh prepared complete listing"
+            )
+        self._exclusion_preview_cache = None
+
+        # Full and bounded runs must buffer the complete validated listing so
+        # boundary/exclusion errors occur before Catalog receives a record.
+        # Keep the legacy range-by-range path below for unbounded incremental
+        # runs, which intentionally yields known rows as they are observed.
+        if mode == "full" or target.discovery_scope is not None:
+            series_id, all_records = await self._load_complete_records(page, target)
+            records = all_records
+            if target.discovery_scope is not None:
+                records = self._apply_discovery_scope(records, target.discovery_scope)
+            if mode == "full":
+                self.capture_complete_listing_inventory(
+                    target=target,
+                    all_records=all_records,
+                    selected_records=records,
+                    listing_identity=f"jumpplus-series:{series_id}",
+                )
+            for record in records:
+                yield record
+            return
 
         observer = _StructuredStateObserver()
         observer.attach(page)
@@ -297,6 +353,7 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
                 self._validate_range_order(ranges)
             else:
                 ranges = [None]
+            range_episode_ids: set[str] = set()
 
             for range_info in ranges:
                 if range_info is not None:
@@ -305,6 +362,24 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
                 self._validate_scope(range_snapshot, target_episode_id, series_id)
                 self._validate_network_scope(observer, series_id)
                 rows = await self._expand_range(page, target_episode_id, series_id)
+                episode_ids = [str(row.get("episode_id") or "") for row in rows]
+                if not episode_ids or any(not episode_id for episode_id in episode_ids):
+                    raise DiscoveryIncompleteError(
+                        "Jump+ range contains a row without a native episode identity"
+                    )
+                if len(set(episode_ids)) != len(episode_ids):
+                    raise DiscoveryIncompleteError(
+                        "Jump+ range "
+                        f"{range_info.label if range_info is not None else '<single>'!r} "
+                        "contains duplicate episode identities"
+                    )
+                overlap = range_episode_ids.intersection(episode_ids)
+                if overlap:
+                    raise DiscoveryIncompleteError(
+                        "Jump+ episode identity appears in multiple ranges: "
+                        + ", ".join(sorted(overlap)[:5])
+                    )
+                range_episode_ids.update(episode_ids)
                 expected = (
                     range_info.first - range_info.last + 1
                     if range_info and range_info.first is not None and range_info.last is not None
@@ -380,22 +455,244 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
         finally:
             await observer.close()
 
+    async def preview_complete_listing(
+        self, page: Page, target: WatchlistTarget
+    ) -> ListingPreview:
+        """Read every episode in the series without invoking Catalog logic."""
+
+        self._exclusion_preview_cache = None
+        series_id, records = await self._load_complete_records(page, target)
+        listing_identity = f"jumpplus-series:{series_id}"
+        rows = tuple(
+            ListingRow(
+                external_id=record.source.external_id,
+                url=record.source.url,
+                site_position=record.source.global_display_position or 0,
+                display_title=record.item.order_label or "",
+                access_observation=record.source.access_mode,
+                listing_identity=listing_identity,
+            )
+            for record in records
+        )
+        if any(row.site_position < 1 for row in rows):
+            raise DiscoveryIncompleteError(
+                "Jump+ complete listing has no authoritative positions"
+            )
+        return ListingPreview(
+            site=target.site,
+            target_key=target.key,
+            target_url=target.url,
+            listing_identity=listing_identity,
+            rows=rows,
+            complete=True,
+            observed_at=datetime.now(UTC),
+            digest=listing_digest(listing_identity, rows),
+        )
+
+    async def prepare_exclusion_preview(
+        self, page: Page, target: WatchlistTarget
+    ) -> ListingPreview:
+        """Bind one complete listing for the immediately following Discovery."""
+
+        self._exclusion_preview_cache = None
+        series_id, records = await self._load_complete_records(page, target)
+        listing_identity = f"jumpplus-series:{series_id}"
+        rows = tuple(
+            ListingRow(
+                external_id=record.source.external_id,
+                url=record.source.url,
+                site_position=record.source.global_display_position or 0,
+                display_title=record.item.order_label or "",
+                access_observation=record.source.access_mode,
+                listing_identity=listing_identity,
+            )
+            for record in records
+        )
+        if any(row.site_position < 1 for row in rows):
+            raise DiscoveryIncompleteError(
+                "Jump+ complete listing has no authoritative positions"
+            )
+        self._exclusion_preview_cache = {
+            "key": self._exclusion_cache_key(page, target),
+            "records": records,
+            "all_records": records,
+            "listing_identity": listing_identity,
+            "expires_at": monotonic() + self._EXCLUSION_PREVIEW_TTL_SECONDS,
+        }
+        return ListingPreview(
+            site=target.site,
+            target_key=target.key,
+            target_url=target.url,
+            listing_identity=listing_identity,
+            rows=rows,
+            complete=True,
+            observed_at=datetime.now(UTC),
+            digest=listing_digest(listing_identity, rows),
+        )
+
+    @staticmethod
+    def _exclusion_cache_key(page: Page, target: WatchlistTarget) -> tuple[object, ...]:
+        scope = target.discovery_scope
+        return (
+            id(page),
+            target.site,
+            target.key,
+            target.work_key,
+            target.url,
+            None if scope is None else scope.from_url,
+            None if scope is None else scope.through_url,
+            () if scope is None else tuple(sorted(scope.excluded_external_ids)),
+        )
+
+    async def _load_complete_records(
+        self, page: Page, target: WatchlistTarget
+    ) -> tuple[str, list[DiscoveredRecord]]:
+        """Collect all ranges while preserving the adapter's latest-first order."""
+
+        target_episode_id = parse_jumpplus_episode_url(target.url)
+        if target_episode_id is None:
+            raise DiscoveryIncompleteError("Watchlist target must be a Jump+ episode URL")
+
+        observer = _StructuredStateObserver()
+        observer.attach(page)
+        records_by_id: dict[str, DiscoveredRecord] = {}
+        try:
+            try:
+                await page.goto(
+                    canonical_jumpplus_episode_url(target.url),
+                    wait_until="domcontentloaded",
+                    timeout=WAIT_TIMEOUT_MS,
+                )
+            except (PlaywrightTimeoutError, TimeoutError) as exc:
+                raise DiscoveryIncompleteError("Jump+ episode page did not load") from exc
+
+            initial = await self._load_initial_listing(page, target_episode_id)
+            series_id = self._validate_scope(initial, target_episode_id, None)
+            self._validate_network_scope(observer, series_id)
+            ranges = self._ranges(initial)
+            if ranges:
+                self._validate_range_order(ranges)
+                self._validate_complete_range_order(ranges)
+            else:
+                ranges = [None]
+            range_episode_ids: set[str] = set()
+            expected_range_total = sum(
+                item.first - item.last + 1
+                for item in ranges
+                if item is not None and item.first is not None and item.last is not None
+            )
+
+            for range_info in ranges:
+                if range_info is not None:
+                    await self._switch_range(page, target_episode_id, range_info, series_id)
+                range_snapshot = await self._wait_for_listing(page, target_episode_id)
+                self._validate_scope(range_snapshot, target_episode_id, series_id)
+                self._validate_network_scope(observer, series_id)
+                rows = await self._expand_range(page, target_episode_id, series_id)
+                episode_ids = [str(row.get("episode_id") or "") for row in rows]
+                if not episode_ids or any(not episode_id for episode_id in episode_ids):
+                    raise DiscoveryIncompleteError(
+                        "Jump+ range contains a row without a native episode identity"
+                    )
+                if len(set(episode_ids)) != len(episode_ids):
+                    raise DiscoveryIncompleteError(
+                        "Jump+ range "
+                        f"{range_info.label if range_info is not None else '<single>'!r} "
+                        "contains duplicate episode identities"
+                    )
+                overlap = range_episode_ids.intersection(episode_ids)
+                if overlap:
+                    raise DiscoveryIncompleteError(
+                        "Jump+ episode identity appears in multiple ranges: "
+                        + ", ".join(sorted(overlap)[:5])
+                    )
+                range_episode_ids.update(episode_ids)
+                expected = (
+                    range_info.first - range_info.last + 1
+                    if range_info
+                    and range_info.first is not None
+                    and range_info.last is not None
+                    else None
+                )
+                if expected is not None and len(rows) != expected:
+                    raise DiscoveryIncompleteError(
+                        "Jump+ range "
+                        f"{range_info.label if range_info is not None else '<single>'!r} "
+                        f"has {len(rows)} rows; expected {expected}"
+                    )
+                # Range labels count listing slots, not the chapter numbers in
+                # titles. Validate counts and native identities above; prologues,
+                # specials and split chapters can offset or repeat title numbers.
+                for row in rows:
+                    record = self._record_from_row(
+                        row,
+                        range_snapshot,
+                        observer.states,
+                        target_episode_id,
+                    )
+                    existing = records_by_id.get(record.source.external_id)
+                    if existing is not None:
+                        if self._record_fingerprint(existing) != self._record_fingerprint(record):
+                            raise DiscoveryIncompleteError(
+                                "Jump+ duplicate episode has conflicting metadata: "
+                                f"{record.source.external_id}"
+                            )
+                        continue
+                    records_by_id[record.source.external_id] = record
+
+            if not records_by_id:
+                raise DiscoveryIncompleteError("Jump+ episode listing contained no episodes")
+            if expected_range_total and len(records_by_id) != expected_range_total:
+                raise DiscoveryIncompleteError(
+                    "Jump+ range identity union count disagrees with numeric ranges: "
+                    f"{len(records_by_id)} vs {expected_range_total}"
+                )
+            if observer.total_counts and len(observer.total_counts) == 1:
+                expected_total = next(iter(observer.total_counts))
+                if expected_total and len(records_by_id) != expected_total:
+                    raise DiscoveryIncompleteError(
+                        f"Jump+ pagination total {expected_total} disagrees with DOM count "
+                        f"{len(records_by_id)}"
+                    )
+            records = list(records_by_id.values())
+            records = [
+                replace(
+                    record,
+                    source=replace(
+                        record.source,
+                        global_display_position=len(records) - index,
+                    ),
+                )
+                for index, record in enumerate(records)
+            ]
+            return series_id, records
+        finally:
+            await observer.close()
+
     @staticmethod
     def _apply_discovery_scope(
         records: list[DiscoveredRecord],
         scope: DiscoveryScope,
     ) -> list[DiscoveredRecord]:
         """Select an inclusive range from the validated canonical records."""
-
-        if scope.from_url is None and scope.through_url is None:
+        if (
+            scope.from_url is None
+            and scope.through_url is None
+            and not scope.excluded_external_ids
+        ):
             raise DiscoveryIncompleteError(
                 "Jump+ bounded Discovery scope has no boundary"
             )
-
         record_indices = {
             record.source.external_id: index
             for index, record in enumerate(records)
         }
+        unknown_exclusions = set(scope.excluded_external_ids) - set(record_indices)
+        if unknown_exclusions:
+            raise DiscoveryIncompleteError(
+                "Jump+ excluded episode was not found: "
+                + ", ".join(sorted(unknown_exclusions)[:5])
+            )
         boundary_indices: dict[str, int] = {}
         for boundary_name, boundary_url in (
             ("from", scope.from_url),
@@ -421,7 +718,16 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError(
                 "Jump+ bounded Discovery boundaries are reversed"
             )
-        return records[from_index : through_index + 1]
+        excluded = set(scope.excluded_external_ids)
+        if any(
+            not (from_index <= record_indices[external_id] <= through_index)
+            for external_id in excluded
+        ):
+            raise DiscoveryIncompleteError(
+                "Jump+ excluded episodes must fall inside the inclusive discovery range"
+            )
+        selected = records[from_index : through_index + 1]
+        return [record for record in selected if record.source.external_id not in excluded]
 
     @staticmethod
     def _ranges(snapshot: dict[str, Any]) -> list[JumpPlusRange]:
@@ -447,6 +753,16 @@ class JumpPlusDiscoveryAdapter(DiscoveryAdapter):
             raise DiscoveryIncompleteError("Jump+ range DOM order is not latest-first")
         if any(item.first < item.last for item in ranges):
             raise DiscoveryIncompleteError("Jump+ range label has reversed bounds")
+
+    @staticmethod
+    def _validate_complete_range_order(ranges: list[JumpPlusRange]) -> None:
+        """Require numeric ranges to form one contiguous, latest-first cover."""
+
+        for previous, current in pairwise(ranges):
+            if previous.last != current.first + 1:
+                raise DiscoveryIncompleteError(
+                    "Jump+ range intervals overlap or have a gap"
+                )
 
     async def _switch_range(
         self,

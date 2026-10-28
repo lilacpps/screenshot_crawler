@@ -88,6 +88,18 @@ class ScopeEditPreview:
                 "label": self.proposed_target.label,
                 "enabled": self.proposed_target.enabled,
                 "archive_order": self.proposed_target.archive_order,
+                "archive_segments": (
+                    None
+                    if self.proposed_target.archive_segments is None
+                    else [
+                        {
+                            "order": segment.order,
+                            "start_external_id": segment.start_external_id,
+                            "end_external_id": segment.end_external_id,
+                        }
+                        for segment in self.proposed_target.archive_segments
+                    ]
+                ),
                 "discovery_scope": (
                     None
                     if self.proposed_target.discovery_scope is None

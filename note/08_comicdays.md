@@ -1,5 +1,55 @@
 # Comic DAYS
 
+## Work editor complete listing and exclusions (2026-10-28)
+
+The GUI's complete-listing preview now calls the same validated reader as normal
+Discovery: canonical episode/series identity, full/free Atom feeds, pagination
+total, ordered readable-product pages and first-party access classification.
+It returns every native episode latest-first, positions N..1 and a digest under
+`comicdays-series:<id>` without writing Catalog or consuming an access resource.
+The reader preserves the existing fail-closed network/count/order/access checks.
+
+Discovery scopes support inclusive boundaries plus `excluded_external_ids`,
+including exclusion-only scopes. Unknown IDs or IDs outside the selected interval
+fail before yielding. Prepared exclusion observations are bound to Page, site,
+key, Work, URL and scope for 30 seconds and consumed once. Missing, mismatched
+or expired proof stops an exclusion run without rereading. Preview/preparation
+does not publish Full inventory; normal Full exhaustion does, including replay.
+Work editing can therefore interleave Comic DAYS segments within Magapoke without
+moving Item/Source identities, completion state or archives.
+
+Read-only shared-Chrome verification used new pages for the registered Magapoke
+Planetes target and an unsaved Comic DAYS target at episode
+`13932016480029865789`. Both production ListingPreviewService results were ready
+and complete:
+
+- Magapoke: 26 rows, `magapoke-title:01539`, digest
+  `67ac77939c1a582aab7d1aa4afc8c55c2fdfd447799580bae8ff238277878b64`.
+  PHASE24/25/26 native IDs: `331464`, `331465`, `331466`.
+- Comic DAYS: 27 rows, `comicdays-series:13932016480029851126`, digest
+  `55d4382057ce1ed95d5611e8f0b9b8ee1f36d61e885b347b28443dbbab450acf`.
+  PHASE24/25/26 native IDs: `13932016480029898555`, `13932016480029899623`,
+  `13932016480029900571`. PHASE24/25 were quota candidates; PHASE26 was paid.
+
+The requested draft sequence is Magapoke PHASE1..23, Comic DAYS PHASE24..25,
+Magapoke PHASE26. Native chapter choices remain operator-selected; different
+site listing totals do not imply automatic title matching. Pages were closed;
+no ticket/purchase action, capture or operational Catalog/Watchlist/ZIP write was
+performed. GUI button interaction and final Batch download are not live-verified.
+
+Validation uses artificial data and dedicated temporary Watchlist/Catalog/output:
+Comic DAYS Discovery/policy/Batch/access, listing preview, Work editor, cross-site
+replacement, artificial-browser listing and existing Work Ticket entry regressions
+passed 202 tests (zero skipped) under a short OS TEMP base. The earlier long
+workspace basetemp run passed 199 and failed one unchanged grant-only test because
+its diagnostic entry_trace.json was absent; the whole selected group passed on
+the shorter base. The final isolated replacement test was also rerun after test
+cleanup and passed, including post-Full Source IDs/history/ZIP preservation.
+Full pytest and Research were not rerun for this site-local capability addition.
+`ruff check src tests` and diff checks passed. Independent review passed after
+adding preview-start cache invalidation and successful/failed-preview stale-proof
+regressions; the final review reported no blocking findings.
+
 ## Shared Catalog v7 / automatic acquisition scope (2026-10-23)
 
 The site behavior below uses Catalog v7 and an explicit matching Watchlist.
@@ -14,10 +64,12 @@ See `note/00_core.md` for the current shared contract. This common change has
 synthetic/local-browser coverage; it has not been live-verified on this site.
 
 Current shared simplification (2026-10-24): GUI/Batch/audit/renumber use current
-acquisition flags and key order directly, with archive_order applied at ZIP naming.
+acquisition flags and key order directly, with archive_order or archive_segments
+applied at ZIP naming.
 No sync stamp or complete-listing proof gates ordinary operation or final renumber;
 intermediate numbers may be provisional. Explicit scope-sync remains for deletions
-and repair. DB stays v7 and no JSON fields are added. File/identity safeguards and
+and repair. DB stays v7; optional archive_segments extends saved configuration
+JSON without a schema change. File/identity safeguards and
 site-specific access/capture behavior are retained; no new live claim is made.
 
 Comic DAYS provides complete-listing evidence and site-native bounded

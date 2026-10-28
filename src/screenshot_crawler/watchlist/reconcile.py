@@ -21,7 +21,7 @@ from screenshot_crawler.watchlist.fingerprints import (
     work_definition_fingerprint,
     work_scope_fingerprint,
 )
-from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.models import ArchiveSegment, DiscoveryScope, WatchlistTarget
 from screenshot_crawler.watchlist.service import WatchlistService
 
 
@@ -247,7 +247,11 @@ class ScopeReconciler:
             if isinstance(value, dict) and isinstance(value.get("key"), str)
         }
         prior_core_by_key = {
-            key: {name: value for name, value in binding.items() if name != "archive_order"}
+            key: {
+                name: value
+                for name, value in binding.items()
+                if name not in {"archive_order", "archive_segments"}
+            }
             for key, binding in prior_by_key.items()
         }
         source_by_key: dict[str, list[Source]] = {}
@@ -307,7 +311,10 @@ class ScopeReconciler:
                     f"{owned.source.site!r}"
                 )
 
-        has_archive_order = any(target.archive_order is not None for target in targets)
+        has_archive_order = any(
+            target.archive_order is not None or target.archive_segments is not None
+            for target in targets
+        )
         has_scope = any(target.discovery_scope is not None for target in targets)
         no_previous_binding = snapshot.sync is None
         legacy_bootstrap = (
@@ -486,7 +493,10 @@ class ScopeReconciler:
         future_flags: dict[int, bool],
         blockers: list[str],
     ) -> dict[str, Any] | None:
-        if not any(target.archive_order is not None for target in targets):
+        if not any(
+            target.archive_order is not None or target.archive_segments is not None
+            for target in targets
+        ):
             return None
         result: dict[str, Any] = {
             "ready": False,
@@ -685,6 +695,41 @@ class ScopeReconciler:
                 )
             else:
                 raise ArchiveOrderPlanningError("Saved Watchlist scope is malformed")
+            archive_segments_value = value.get("archive_segments")
+            if archive_segments_value is None:
+                archive_segments = None
+            elif isinstance(archive_segments_value, list):
+                archive_segments_rows: list[ArchiveSegment] = []
+                for index, segment_value in enumerate(archive_segments_value):
+                    if not isinstance(segment_value, dict):
+                        raise ArchiveOrderPlanningError(
+                            "Saved Watchlist archive segment is malformed"
+                        )
+                    order = segment_value.get("order")
+                    if isinstance(order, bool) or not isinstance(order, int) or order < 1:
+                        raise ArchiveOrderPlanningError(
+                            "Saved Watchlist archive segment order is malformed"
+                        )
+                    start = segment_value.get("start_external_id")
+                    end = segment_value.get("end_external_id")
+                    if any(
+                        boundary is not None
+                        and (not isinstance(boundary, str) or not boundary.strip())
+                        for boundary in (start, end)
+                    ):
+                        raise ArchiveOrderPlanningError(
+                            "Saved Watchlist archive segment boundary is malformed"
+                        )
+                    archive_segments_rows.append(
+                        ArchiveSegment(
+                            order=order,
+                            start_external_id=start,
+                            end_external_id=end,
+                        )
+                    )
+                archive_segments = tuple(archive_segments_rows)
+            else:
+                raise ArchiveOrderPlanningError("Saved Watchlist archive segments are malformed")
             try:
                 targets.append(
                     WatchlistTarget(
@@ -695,6 +740,7 @@ class ScopeReconciler:
                         label="",
                         discovery_scope=scope,
                         archive_order=value.get("archive_order"),
+                        archive_segments=archive_segments,
                     )
                 )
             except (KeyError, TypeError, ValueError) as exc:

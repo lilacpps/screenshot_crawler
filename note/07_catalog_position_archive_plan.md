@@ -21,6 +21,13 @@
 
 ## 1. Purpose
 
+Current extension (2026-10-27): the Work editor and optional per-target
+archive_segments support manually interleaved replacements while keeping
+existing key/Source ownership. This extends ordering/configuration JSON without
+a schema change. Current contracts, validation and operational limits are in
+note/00_core.md and docs/DISCOVERY_AND_BATCH.md; legacy P1-P5 behavior below
+remains unchanged for non-segment Works. No operational renumber was performed.
+
 The next Catalog revision bundles three related changes that should be implemented together:
 
 1. persist a site/discovery-scope display position for each Source,

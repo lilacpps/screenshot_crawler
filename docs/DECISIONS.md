@@ -689,6 +689,27 @@ separate operator-controlled maintenance operation.
 
 ---
 
+## D-039 Work editing and explicit archive segments
+
+Accepted 2026-10-27. Work-level registration and scope editing can be saved
+before the first Full Discovery. Complete site-native listing proof validates
+selection; absence of Catalog identities or final ZIP names alone does not block
+Watchlist save. Existing unknown ownership and proof checks remain fail-closed.
+
+Use optional per-target archive_segments (order, oldest-first start/end external
+IDs) to interleave one site's intervals around another site's replacement.
+Do not split existing keys or reparent Sources. Segments are all-or-none within
+a Work and cannot mix with archive_order. The shared numbering plan requires
+exactly-once placement of enabled Sources and fails closed on unresolved anchors.
+Ordering fields extend existing configuration JSON without a DB schema migration;
+they do not change site scope fingerprints. Legacy ordering remains compatible.
+
+Replacement selects both intervals manually, permits unequal counts and never
+propagates completion. Existing history and files remain. Save is Watchlist-only;
+the user can approve Full once after save to register/reflect changes using the
+existing job/fingerprint/lock path. Neither automatic scope apply nor archive
+deletion/rename is coupled to this flow.
+
 ## D-038 Watchlist exclusions use a bounded safety overlay
 
 ### Decision
@@ -698,8 +719,9 @@ range plus sorted `excluded_external_ids`. Exclusion-bearing Discovery must
 prove one complete, identity-bound listing and validate every exclusion before
 creating a Work or upserting a Catalog Source. The validated observation is
 replayed once by an adapter that explicitly supports the capability; unknown,
-out-of-range, stale, or unsupported exclusions fail closed. Magapoke is the
-first supported adapter.
+out-of-range, stale, or unsupported exclusions fail closed. Magapoke, Zeblack,
+Jump+ and Comic DAYS support this capability. Zeblack/Jump+/Comic DAYS replay requires the live,
+matching one-shot cache; expired or missing preflight proof is rejected.
 
 Normal Batch continues to use the last reflected per-key Catalog flags. A
 newly saved exact exclusion receives a narrow deny overlay before Policy,

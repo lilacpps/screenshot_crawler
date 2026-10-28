@@ -37,7 +37,7 @@ from screenshot_crawler.site_policies import (
     ZeblackSitePolicy,
 )
 from screenshot_crawler.watchlist.fingerprints import target_scope_fingerprint
-from screenshot_crawler.watchlist.models import DiscoveryScope, WatchlistTarget
+from screenshot_crawler.watchlist.models import ArchiveSegment, DiscoveryScope, WatchlistTarget
 from screenshot_crawler.watchlist.reconcile import ScopeReconciler
 from screenshot_crawler.watchlist.service import WatchlistService
 
@@ -84,6 +84,158 @@ def test_batch_provisional_order_accepts_missing_duplicate_and_removed_key_posit
     assert catalog.path.read_bytes() == before
     with pytest.raises(ArchiveOrderPlanningError):
         build_work_archive_position_plan(work, [target], catalog.list_items(), sources)
+
+
+def test_archive_segments_assign_oldest_first_positions_across_keys(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="segments", title="Segments"))
+    watchlist = WatchlistService(tmp_path / "watchlist.yaml")
+    first = watchlist.add(
+        key="first", work_key=work.work_key, site="mangaone",
+        url="https://example.invalid/first", label="First",
+        archive_segments=(ArchiveSegment(order=1, end_external_id="a2"),),
+    )
+    second = watchlist.add(
+        key="second", work_key=work.work_key, site="zeblack",
+        url="https://example.invalid/second", label="Second",
+        archive_segments=(ArchiveSegment(order=2),),
+    )
+    sources = []
+    for key, site, external_id, position in (
+        ("first", "mangaone", "a1", 1),
+        ("first", "mangaone", "a2", 2),
+        ("second", "zeblack", "b1", 1),
+    ):
+        item = catalog.create_item(ItemInput(), work_id=work.id)
+        sources.append(
+            catalog.create_source(
+                SourceInput(
+                    site=site, external_id=external_id, discovery_key=key,
+                    access_mode="free", display_position=position,
+                ),
+                item_id=item.id,
+            )
+        )
+    plan = build_work_archive_position_plan(
+        work, [first, second], catalog.list_items(work_id=work.id), sources
+    )
+    assert plan is not None
+    assert plan.ordered_source_ids == tuple(source.id for source in sources)
+    assert plan.positions_by_source_id == {
+        sources[0].id: 1, sources[1].id: 2, sources[2].id: 3,
+    }
+
+
+def test_archive_segments_reject_unplaced_or_disabled_boundary_source(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="segments", title="Segments"))
+    target = WatchlistTarget(
+        key="first", work_key=work.work_key, site="mangaone",
+        url="https://example.invalid/first", label="First",
+        archive_segments=(ArchiveSegment(order=1, start_external_id="a2"),),
+    )
+    other = WatchlistTarget(
+        key="second", work_key=work.work_key, site="zeblack",
+        url="https://example.invalid/second", label="Second",
+        archive_segments=(ArchiveSegment(order=2),),
+    )
+    item = catalog.create_item(ItemInput(), work_id=work.id)
+    source = catalog.create_source(
+        SourceInput(
+            site="mangaone", external_id="a1", discovery_key="first",
+            access_mode="free", display_position=1,
+        ), item_id=item.id,
+    )
+    with pytest.raises(ArchiveOrderPlanningError, match="boundary .* unknown"):
+        build_work_archive_position_plan(
+            work, [target, other], catalog.list_items(work_id=work.id), [source]
+        )
+
+
+def test_archive_segments_ignore_unpositioned_disabled_rows(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="segments", title="Segments"))
+    target = WatchlistTarget(
+        key="first", work_key=work.work_key, site="mangaone",
+        url="https://example.invalid/first", label="First",
+        archive_segments=(ArchiveSegment(order=1),),
+    )
+    enabled_item = catalog.create_item(ItemInput(), work_id=work.id)
+    enabled = catalog.create_source(
+        SourceInput(
+            site="mangaone", external_id="a1", discovery_key="first",
+            access_mode="free", display_position=1,
+        ), item_id=enabled_item.id,
+    )
+    disabled_item = catalog.create_item(ItemInput(), work_id=work.id)
+    disabled = catalog.create_source(
+        SourceInput(
+            site="mangaone", external_id="replaced", discovery_key="first",
+            access_mode="free", display_position=None,
+        ), item_id=disabled_item.id,
+    )
+    disabled = replace(disabled, acquisition_enabled=False)
+
+    plan = build_work_archive_position_plan(
+        work, [target], catalog.list_items(work_id=work.id), [enabled, disabled]
+    )
+
+    assert plan is not None
+    assert plan.ordered_source_ids == (enabled.id,)
+    assert plan.positions_by_source_id == {enabled.id: 1}
+
+
+def test_archive_segments_reject_unresolved_open_segment_without_sources(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="segments", title="Segments"))
+    unresolved = WatchlistTarget(
+        key="new", work_key=work.work_key, site="mangaone",
+        url="https://example.invalid/new", label="New",
+        archive_segments=(ArchiveSegment(order=1),),
+    )
+    existing = WatchlistTarget(
+        key="existing", work_key=work.work_key, site="zeblack",
+        url="https://example.invalid/existing", label="Existing",
+        archive_segments=(ArchiveSegment(order=2),),
+    )
+    item = catalog.create_item(ItemInput(), work_id=work.id)
+    source = catalog.create_source(
+        SourceInput(
+            site="zeblack", external_id="existing-1", discovery_key="existing",
+            access_mode="free", display_position=1,
+        ), item_id=item.id,
+    )
+
+    with pytest.raises(ArchiveOrderPlanningError, match="no acquisition-enabled sources"):
+        build_work_archive_position_plan(
+            work, [unresolved, existing], catalog.list_items(work_id=work.id), [source]
+        )
+
+
+def test_archive_segments_empty_mode_allows_disabled_unpositioned_rows(tmp_path: Path) -> None:
+    catalog = CatalogService(tmp_path / "catalog.sqlite")
+    work = catalog.create_work(WorkInput(work_key="segments", title="Segments"))
+    target = WatchlistTarget(
+        key="replaced", work_key=work.work_key, site="mangaone",
+        url="https://example.invalid/replaced", label="Replaced",
+        archive_segments=(),
+    )
+    item = catalog.create_item(ItemInput(), work_id=work.id)
+    source = catalog.create_source(
+        SourceInput(
+            site="mangaone", external_id="old", discovery_key="replaced",
+            access_mode="free", display_position=None,
+        ), item_id=item.id,
+    )
+    source = replace(source, acquisition_enabled=False)
+
+    plan = build_work_archive_position_plan(
+        work, [target], catalog.list_items(work_id=work.id), [source]
+    )
+
+    assert plan is not None
+    assert plan.ordered_source_ids == ()
+    assert plan.positions_by_source_id == {}
 
 
 def test_cross_site_archive_order_assigns_zeblack_100_then_bookwalker_2(

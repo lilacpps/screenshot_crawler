@@ -12,6 +12,7 @@ from screenshot_crawler.discovery import (
 )
 from screenshot_crawler.site_adapters.zeblack.discovery import (
     ZeblackDiscoveryAdapter,
+    _DomChapter,
     parse_zeblack_chapter_list_url,
     parse_zeblack_order_label,
 )
@@ -406,3 +407,92 @@ async def test_zeblack_dom_and_protobuf_sets_must_match_before_yield(
         ):
             yielded.append(record)
     assert yielded == []
+
+
+@pytest.mark.asyncio
+async def test_zeblack_complete_listing_preview_is_latest_first_and_read_only() -> None:
+    payload = _payload(
+        _chapter(101, label="#1"),
+        _chapter(202, label="#2"),
+        _chapter(303, label="bonus"),
+    )
+    preview = await ZeblackDiscoveryAdapter().preview_complete_listing(
+        _FakePage(["101", "202", "303"], [_FakeResponse(payload)]), _target()
+    )
+    assert preview.ready
+    assert preview.listing_identity == "zeblack-title:5123"
+    assert [row.external_id for row in preview.rows] == ["303", "202", "101"]
+    assert [row.site_position for row in preview.rows] == [3, 2, 1]
+    assert [row.display_title for row in preview.rows] == ["bonus", "#2", "#1"]
+    assert preview.digest
+
+
+@pytest.mark.asyncio
+async def test_zeblack_exclusion_preview_is_replayed_once_without_rereading() -> None:
+    payload = _payload(_chapter(101, label="#1"), _chapter(202, label="#2"))
+    page = _FakePage(["101", "202"], [_FakeResponse(payload)])
+    target = _target(scope=DiscoveryScope(excluded_external_ids=("202",)))
+    adapter = ZeblackDiscoveryAdapter()
+    calls = 0
+    original = adapter._load_listing
+
+    async def load_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await original(*args, **kwargs)
+
+    adapter._load_listing = load_once  # type: ignore[method-assign]
+    await adapter.prepare_exclusion_preview(page, target)
+    records = [record async for record in adapter.iter_records(page, target, "full")]
+    assert calls == 1
+    assert [record.source.external_id for record in records] == ["101"]
+
+
+@pytest.mark.asyncio
+async def test_zeblack_unknown_exclusion_fails_before_yield() -> None:
+    payload = _payload(_chapter(101, label="#1"), _chapter(202, label="#2"))
+    yielded: list[object] = []
+    with pytest.raises(DiscoveryIncompleteError, match="fresh prepared"):
+        async for record in ZeblackDiscoveryAdapter().iter_records(
+            _FakePage(["101", "202"], [_FakeResponse(payload)]),
+            _target(scope=DiscoveryScope(excluded_external_ids=("999",))),
+            "full",
+        ):
+            yielded.append(record)
+    assert yielded == []
+
+
+@pytest.mark.asyncio
+async def test_zeblack_exclusion_replay_requires_fresh_matching_preparation() -> None:
+    payload = _payload(_chapter(101, label="#1"), _chapter(202, label="#2"))
+    page = _FakePage(["101", "202"], [_FakeResponse(payload)])
+    target = _target(scope=DiscoveryScope(excluded_external_ids=("202",)))
+    adapter = ZeblackDiscoveryAdapter()
+    with pytest.raises(DiscoveryIncompleteError, match="fresh prepared"):
+        _ = [record async for record in adapter.iter_records(page, target, "full")]
+    await adapter.prepare_exclusion_preview(page, target)
+    adapter._exclusion_preview_cache["expires_at"] = 0
+    with pytest.raises(DiscoveryIncompleteError, match="fresh prepared"):
+        _ = [record async for record in adapter.iter_records(page, target, "full")]
+
+
+def test_zeblack_exclusion_outside_boundaries_is_rejected() -> None:
+    records = ZeblackDiscoveryAdapter._build_records(
+        [_DomChapter("101", 0), _DomChapter("202", 1)],
+        decode_zeblack_chapter_records(
+            _payload(_chapter(101, label="#1"), _chapter(202, label="#2")),
+            expected_title_id="5123",
+        ),
+        target=_target(),
+        target_identity=parse_zeblack_chapter_list_url(_target().url),
+    )
+    with pytest.raises(DiscoveryIncompleteError, match="inside"):
+        ZeblackDiscoveryAdapter._apply_discovery_scope(
+            records,
+            "5123",
+            DiscoveryScope(
+                from_url="https://zebrack-comic.shueisha.co.jp/title/5123/chapter/202/viewer",
+                through_url="https://zebrack-comic.shueisha.co.jp/title/5123/chapter/202/viewer",
+                excluded_external_ids=("101",),
+            ),
+        )

@@ -77,7 +77,8 @@ def _scope_change_reason(target, proof, sync, sources=()) -> str:
                 raise TypeError("Saved configuration is not a list")
             prior = next((row for row in previous if row.get("key") == target.key), None)
             if prior is not None and {
-                key: value for key, value in prior.items() if key != "archive_order"
+                key: value for key, value in prior.items()
+                if key not in {"archive_order", "archive_segments"}
             } != target_scope_definition(target):
                 return "取得範囲の設定が以前の記録と異なります：Full Discoveryで反映を確認してください"
         except (ValueError, AttributeError, TypeError):

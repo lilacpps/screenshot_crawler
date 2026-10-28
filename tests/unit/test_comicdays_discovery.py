@@ -1,5 +1,6 @@
 import json
 import textwrap
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -195,6 +196,106 @@ class _FakePage:
 
     def locator(self, _selector: str) -> _FakeLocator:
         return _FakeLocator()
+
+
+@pytest.fixture
+def comicdays_listing(monkeypatch):
+    calls = []
+    entries = [{"episode_id": str(i), "url": f"https://comic-days.com/episode/{i}", "title": f"第{i}話"}
+               for i in (3, 2, 1)]
+
+    async def atom(_page, _series, *, free_only):
+        calls.append("free" if free_only else "full")
+        return entries[1:] if free_only else entries
+
+    async def total(*_args):
+        calls.append("total")
+        return 3
+
+    async def readable(*_args, **_kwargs):
+        calls.append("readable")
+        return [_row("3", paid=True), _row("2", free=True), _row("1", free=True)]
+
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_atom", atom)
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_listing_total", total)
+    monkeypatch.setattr(discovery_module, "fetch_comicdays_readable_products", readable)
+    return calls, WatchlistTarget("comic", "work", "comicdays", "https://comic-days.com/episode/1", "Work")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["full", "incremental"])
+async def test_complete_preview_and_exclusion_replay_use_one_validated_read(comicdays_listing, mode):
+    calls, target = comicdays_listing
+    adapter = discovery_module.ComicDaysDiscoveryAdapter()
+    page = _FakePage()
+    target = replace(target, discovery_scope=DiscoveryScope(excluded_external_ids=("2",)))
+    preview = await adapter.preview_complete_listing(page, target)
+    assert preview.ready and preview.listing_identity == "comicdays-series:42"
+    assert [row.external_id for row in preview.rows] == ["3", "2", "1"]
+    assert [row.site_position for row in preview.rows] == [3, 2, 1]
+    assert adapter.complete_listing_inventory is None
+    assert len(calls) == 4
+    prepared = await adapter.prepare_exclusion_preview(page, target)
+    assert prepared.digest == preview.digest
+    rows = [row async for row in adapter.iter_records(page, target, mode)]
+    assert [row.source.external_id for row in rows] == ["3", "1"]
+    assert len(calls) == 8  # Replay never navigates or rereads a live listing.
+    inventory = adapter.complete_listing_inventory
+    if mode == "full":
+        assert [(row.external_id, row.in_scope) for row in inventory.positions] == [
+            ("3", True), ("2", False), ("1", True),
+        ]
+    else:
+        assert inventory is None
+    with pytest.raises(DiscoveryIncompleteError, match="fresh prepared"):
+        _ = [row async for row in adapter.iter_records(page, target, "full")]
+    assert len(calls) == 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["missing", "expired", "page", "scope", "work", "preview", "failed-preview"])
+async def test_exclusion_replay_rejects_missing_stale_or_mismatched_proof(comicdays_listing, invalid, monkeypatch):
+    calls, target = comicdays_listing
+    target = replace(target, discovery_scope=DiscoveryScope(excluded_external_ids=("2",)))
+    adapter = discovery_module.ComicDaysDiscoveryAdapter()
+    page = _FakePage()
+    if invalid != "missing":
+        await adapter.prepare_exclusion_preview(page, target)
+        if invalid == "expired":
+            adapter._exclusion_preview_cache["expires_at"] = 0
+        elif invalid == "page":
+            page = _FakePage()
+        elif invalid == "scope":
+            target = replace(target, discovery_scope=DiscoveryScope(excluded_external_ids=("1",)))
+        elif invalid == "work":
+            target = replace(target, work_key="other")
+        elif invalid == "preview":
+            await adapter.preview_complete_listing(page, target)
+        elif invalid == "failed-preview":
+            async def fail(*_args):
+                raise DiscoveryIncompleteError("incomplete preview")
+            monkeypatch.setattr(adapter, "_load_complete_records", fail)
+            with pytest.raises(DiscoveryIncompleteError, match="incomplete preview"):
+                await adapter.preview_complete_listing(page, target)
+    before = len(calls)
+    with pytest.raises(DiscoveryIncompleteError, match="fresh prepared"):
+        _ = [row async for row in adapter.iter_records(page, target, "full")]
+    assert len(calls) == before
+    assert adapter.complete_listing_inventory is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope,error", [
+    (DiscoveryScope(excluded_external_ids=("unknown",)), "not in the listing"),
+    (DiscoveryScope(from_url="https://comic-days.com/episode/2", excluded_external_ids=("3",)), "outside"),
+])
+async def test_exclusion_preparation_rejects_unknown_or_out_of_scope_ids(comicdays_listing, scope, error):
+    _calls, target = comicdays_listing
+    adapter = discovery_module.ComicDaysDiscoveryAdapter()
+    with pytest.raises(DiscoveryIncompleteError, match=error):
+        await adapter.prepare_exclusion_preview(_FakePage(), replace(target, discovery_scope=scope))
+    assert adapter._exclusion_preview_cache is None
+    assert adapter.complete_listing_inventory is None
 
 
 class _Response:

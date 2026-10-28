@@ -66,11 +66,14 @@ Existing listing fingerprints and saved bindings can reveal pending range edits;
 known deleted keys show explicit scope-sync as the needed action. These warnings
 are key-local and do not prevent using saved flags. Invalid ownership remains
 blocking. Proof freshness, position changes and archive_order alone never cause
-an acquisition warning. No schema, JSON field, per-key sync record or digest is added.
+an acquisition warning. No schema, per-key sync record or digest is added.
+Optional archive_segments extends existing saved configuration JSON only.
 
 Archive positions use the same provisional pure numbering plan as Batch. Keys are
 ordered by archive_order, their enabled Sources by existing display_position;
-missing/duplicate positions retain deterministic Batch fallback. Intermediate
+missing/duplicate positions retain deterministic Batch fallback in legacy mode.
+Segment mode uses explicit interval order and requires resolved placement.
+Intermediate
 numbering need not be final. Operators can renumber once after acquisition, without
 first applying scope-sync or obtaining fresh complete listing proof. Actual file
 and identity safety checks remain in maintenance. GUI never stats/renames ZIPs.
@@ -86,6 +89,15 @@ and paid/paid. All eleven reject unavailable; unsupported modes stay unknown.
 The existing registry membership is tested against CLI to detect registration drift.
 
 ## UI contract
+
+The `新規登録・範囲・置換` toolbar action opens a separate Work-level editor
+for unsaved registration, side-by-side oldest-first lists, continuous scopes and
+explicit replacements. Its complete-list draft preview/save is separate from
+Inventory execution selection and the legacy artifact-bound key editor. Save
+writes only Watchlist; fresh Inventory then drives one Full Yes/No confirmation.
+Optional archive_segments enables interval interleaving through the shared
+numbering plan. See GUI_README.md for the operator flow and note/00_core.md for
+proof/CAS/race behavior. No Catalog schema migration or ZIP mutation occurs.
 
 1400×850 main window; path controls and reload above view/search/filter toolbar;
 QSplitter holds a QTreeView (about 70%) and detail pane. Site → Work → key and

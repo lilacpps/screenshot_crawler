@@ -164,7 +164,10 @@ target viewerへ遷移せずresource-unavailableとして終了する。
 Normal GUI/Batch/renumber use saved acquisition flags, per-key order and
 archive_order. Sync stamps and full-listing proof are not execution/numbering
 gates. Intermediate ordinals are provisional; one final renumber aligns archives.
-DB stays v7 without new JSON fields. Explicit scope-sync remains for deletion
+DB stays v7. Optional archive_segments extends the existing saved configuration
+JSON for manually interleaved ranges; segment-managed Works validate exact
+placement through the shared archive_order module. Legacy configuration remains
+compatible. Explicit scope-sync remains for deletion
 and repair; identity and file safety checks remain in force.
 
 Watchlist targetからitem/source候補を列挙する。

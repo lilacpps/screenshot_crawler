@@ -218,7 +218,9 @@ def audit_existing_archives(
             targets = targets_by_work.get(work.work_key, [])
             snapshot = catalog.read_acquisition_scope_snapshot(work.work_key)
             managed = any(
-                target.archive_order is not None or target.discovery_scope is not None
+                target.archive_order is not None
+                or target.archive_segments is not None
+                or target.discovery_scope is not None
                 for target in targets
             ) or (snapshot is not None and (
                 snapshot.sync is not None or bool(snapshot.inventory_evidence)

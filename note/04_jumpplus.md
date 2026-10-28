@@ -10,6 +10,71 @@ resource pass: paid episodes are eligible only when Discovery observed an
 active manual rental grant. Point purchase, rental automation, ticket access,
 and login automation remain out of scope.
 
+## Complete listing preview and exclusion replay (2026-10-27)
+
+Jump+ Discovery now exposes a read-only complete series-listing preview for
+the Watchlist editor. It reuses the range traversal and bounded expansion
+validation, preserves newest-first order, and assigns contiguous site
+positions without Catalog writes. A prepared exclusion preview binds that
+observation to one immediately following Discovery for a bounded 30-second
+TTL and is consumed once. Unknown excluded episode IDs and exclusions outside
+the inclusive boundary fail closed before the first record is yielded. This
+synthetic browser coverage exercises preview/replay/expiry; a read-only live
+listing shape check is recorded below. The GUI Watchlist editor itself has not
+been live-verified. Complete/bounded traversal also requires numeric range
+intervals to be contiguous and native episode identities to be disjoint across
+ranges; gaps, overlaps, and union-count mismatches fail before yielding.
+Range numbers count listing slots, not title chapter numbers. The adapter checks
+range continuity, row counts, native identity uniqueness/union totals, and series
+identity, without equating those slots to parsed title numbers. Numeric titles
+may be offset or repeat for split chapters; complete-list positions still come
+only from the canonical identity order.
+
+## Range slots versus chapter titles (2026-10-28)
+
+The Work editor preview for `exorcist-wo-otosenai-jumpplus`, using episode
+`9253191256784141807`, failed because an added check equated range slot numbers
+to parsed chapter numbers. Shared-Chrome read-only observation reproduced it:
+range `129 - 80` held exactly 50 unique native IDs with title numbers 128..79.
+The unsupported title-number equality check was removed; all count, identity,
+range continuity, URL and series checks remain. Offset numbers and repeated
+split-chapter numbers are covered by artificial unit/browser tests.
+
+The corrected production ListingPreviewService (the GUI worker's entry point)
+returned ready/complete with no blockers for both saved targets:
+
+- Jump+: 129 rows, `jumpplus-series:3269754496649675670`, newest ID
+  `9253191257538010199`, oldest `3269754496649675685`, digest
+  `4c9a27120943d6732351a255567c5fae8a7201bcfbf734ebef8d69ca386ad0cd`.
+- Zeblack: 117 rows, `zeblack-title:21356`, newest ID `9220011`, oldest `369394`,
+  digest `09302a6be5a86a987d259d06afcdcbf21c600bd51347d97c123901119065bf1e`.
+
+Only new listing pages and bounded range/list controls were used; each page was
+closed afterward. No purchase/rental/access action, capture, Discovery Catalog
+write, Watchlist edit or ZIP change occurred. This verifies current listing
+behavior, not future site stability or a live click through the GUI itself.
+Validation: Jump+ Discovery plus artificial browser listing tests passed 44
+cases; listing-preview/Work-editor/Jump+ viewer-policy regressions passed 108
+cases (zero skipped across both runs). Independent review passed. Full pytest
+and Research probes were not rerun for this site-local listing validation fix.
+
+## Read-only live listing verification (2026-10-27)
+
+Using a newly opened shared-Chrome page for
+`https://shonenjumpplus.com/episode/13932016480029260549`, the episode-list
+DOM reported one series identity: `13932016480029260546`. After one bounded
+`もっと見る` expansion, the list contained 44 unique rows, newest-first:
+`10834108156643513896` (`43話 最終日 解`) through the href-less current
+prologue row `13932016480029260549` (`プロローグ`). No episode viewer,
+purchase, rental, point, Catalog, or Watchlist write was performed. A new page
+in the same shared Chrome was passed through the production
+`JumpPlusDiscoveryAdapter` entry point `preview_complete_listing`:
+`ready=true`, `complete=true`,
+`listing_identity=jumpplus-series:13932016480029260546`, `count=44`,
+`digest=c5086065894d2f7bb8b6994182e7c4784af38793020ae009b232cb05c467747d`.
+The returned first/last IDs were `10834108156643513896` and
+`13932016480029260549`. This does not establish future listing stability.
+
 ## Shared work-key scope inventory (2026-10-22)
 
 Jump+ Full Discovery provides a complete listing identity/position inventory
@@ -28,10 +93,13 @@ The split-target regression is covered with synthetic Discovery/Catalog tests;
 the corrected Full traversal has not been live-verified.
 
 Current shared simplification (2026-10-24): GUI/Batch/audit/renumber use current
-acquisition flags and key order directly, with archive_order applied at ZIP naming.
+acquisition flags and key order directly, with archive_order or optional
+archive_segments applied at ZIP naming. The Work editor can interleave this
+key's ranges around another site's ranges without moving Source ownership.
 No sync stamp or complete-listing proof gates ordinary operation or final renumber;
 intermediate numbers may be provisional. Explicit scope-sync remains for deletions
-and repair. DB stays v7 and no JSON fields are added. File/identity safeguards and
+and repair. DB stays v7; archive_segments optionally extends saved configuration
+JSON as documented in note/00_core.md. File/identity safeguards and
 site-specific access/capture behavior are retained; no new live claim is made.
 
 このファイルのJ0 probe記録はviewer構造を調査した時点の履歴であり、現在の
